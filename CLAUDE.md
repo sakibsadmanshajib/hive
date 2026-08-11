@@ -2,7 +2,7 @@
 
 Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md` every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files. Check .wolf/decisions.md before any design, spec, plan, or implementation, and inject the relevant decisions into every subagent brief (detail lives in the vault, this is the terse index).
 
-**.wolf/ state files.** Tracked and curated: `cerebrum.md`, `decisions.md`, `buglog.jsonl`, `GOAL.md`, `fleet.json`, `cost-ledger.md`, `hooks/*.js`. Untracked telemetry, hook-owned and gitignored: `anatomy.md`, `memory.md`, `token-ledger.json`, `hooks/_session.json`, `buglog.json`. Never hand-edit or commit telemetry and never `git add -f` it: the hooks rewrite it on every tool call, which blocks `git pull --ff-only` on the shared checkout and produces competing versions across parallel worktrees. Bug memory is appended to `.wolf/buglog.jsonl`, one JSON object per line, `merge=union` per `.gitattributes`. Full protocol: `.claude/rules/openwolf.md`.
+**.wolf/ state files.** Tracked and curated: `cerebrum.md`, `decisions.md`, `buglog.jsonl`, `GOAL.md`, `fleet.json`, `cost-ledger.md`, `hooks/*.js`. Untracked telemetry, hook-owned and gitignored: `anatomy.md`, `memory.md`, `token-ledger.json`, `hooks/_session.json`, `buglog.json`. Never hand-edit or commit telemetry and never `git add -f` it: the hooks rewrite it on every tool call, which blocks `git pull --ff-only` on the shared checkout and produces competing versions across parallel worktrees. Bug memory is appended to `.wolf/buglog.jsonl`, one JSON object per line. Logging every fixed bug, error, failed test or failed build is still mandatory, but the line never lands on a feature branch: carry it in the fix PR body under a "Buglog entry" heading, then append it to `main` in a separate buglog-only PR once the fix has merged, one such PR open at a time. `merge=union` in `.gitattributes` resolves concurrent appends locally but is ignored by GitHub's server-side merge, so branch appends conflict serially and an unmergeable PR gets no `pull_request` CI run at all (issue #873). Full protocol: `.claude/rules/openwolf.md`.
 
 ## Orchestrator Contract
 
@@ -45,9 +45,9 @@ docker compose --env-file ../../.env --profile local up --build
 # Full demo surface (agent subsystem): core + agent-console sidecar (chat) +
 # agent-engine (agent) + in-stack Redis (local), in ONE command. RAG query
 # embeddings run serverless via LiteLLM (EMBEDDING_BASE_URL default). Live
-# agent-task sandbox launch additionally needs a built Apptainer runtime image
-# (HIVE_AGENT_SIF_PATH); build it from deploy/apptainer/agent-engine.def on a
-# host with apptainer (unavailable on WSL2), then set HIVE_AGENT_SIF_PATH in .env.
+# agent-task sandbox launch additionally needs the host launcher running and
+# HIVE_AGENT_ENGINE_SOCKET set (see section 4); the `agent` profile's
+# agent-engine service is a build and smoke-test container only.
 docker compose --env-file ../../.env --profile local --profile chat --profile agent up --build
 
 # Hive Cloud (hosted SaaS): core services expecting managed Upstash Redis.
@@ -76,27 +76,50 @@ supabase db push                    # If Supabase CLI is linked
 # Or apply supabase/migrations/ files in order via SQL editor
 ```
 
-### 4. Agent-engine runtime image (Apptainer)
+### 4. Agent-engine runtime (Apptainer sandbox)
 
-The agent-engine service launches each agent session inside an Apptainer
-sandbox built from `deploy/apptainer/agent-engine.def`. It needs a prebuilt
-`.sif` and reads its path from `HIVE_AGENT_SIF_PATH`. The image is `linux/amd64`
-only and cannot be built on the WSL2 dev box.
+Each agent session runs inside an Apptainer sandbox built from
+`deploy/apptainer/agent-engine.def`. The image is `linux/amd64` only and cannot
+be built on the WSL2 dev box, so take it from CI (`gh run download -n
+agent-engine-sif -D /opt/hive`) or build it on an apptainer host with
+`make agent-sif`.
 
-```bash
-# Demo/prod host with apptainer installed:
-make agent-sif                       # -> deploy/apptainer/agent-engine.sif
-export HIVE_AGENT_SIF_PATH=$(pwd)/deploy/apptainer/agent-engine.sif
+What actually gates a task launch is in `buildAgentEngine`
+(`apps/control-plane/cmd/server/main.go`), and it has two arms, checked in this
+order.
 
-# No local apptainer: download the CI-built image instead.
-gh workflow run "agent-engine SIF"   # or use the latest successful run
-gh run download -n agent-engine-sif -D /opt/hive
-export HIVE_AGENT_SIF_PATH=/opt/hive/agent-engine.sif
-```
+**Socket arm, which is what the demo box runs.** If `HIVE_AGENT_ENGINE_SOCKET`
+is set, control-plane hands every launch to the unprivileged host launcher over
+that Unix socket, authenticating with `CONTROL_PLANE_INTERNAL_TOKEN`, and none
+of the path variables below are read at all. Control-plane cannot exec Apptainer
+itself (Alpine base, no `/dev/fuse`, no `CAP_SYS_ADMIN`), and granting it that
+privilege was refused deliberately, so this is the only arm that runs a real
+task on any deployment this repo ships. Stand the launcher up with
+`scripts/install-agent-engine-host.sh`; it reads its own variable set in
+`apps/agent-engine/cmd/agent-engine/serve.go`, including the four paths and
+`HIVE_AGENT_ENGINE_LLM_MODEL`, `HIVE_AGENT_ENGINE_LLM_BASE_URL` and
+`HIVE_AGENT_ENGINE_LLM_API_KEY`.
 
-The `agent-engine SIF` workflow builds the `.sif` in CI (which also validates
-the def) and uploads it as the `agent-engine-sif` artifact. Full detail:
-`deploy/apptainer/README.md`.
+**In-process arm.** With no socket set, control-plane tries to exec Apptainer
+itself. That needs a non-nil egress service (so, a live DB pool) plus five
+variables, all of them: `HIVE_AGENT_ENGINE_SIF_PATH`,
+`HIVE_AGENT_ENGINE_PACKS_DIR`, `HIVE_AGENT_ENGINE_WORKSPACE_ROOT`,
+`HIVE_AGENT_ENGINE_RUN_DIR`, `HIVE_AGENT_ENGINE_PROFILE_ID`. Miss any one and
+the engine falls back to `NotConfiguredEngine`, every submitted task fails
+immediately, and a boot WARN names what was missing
+(`docker compose logs control-plane | grep "agent engine not configured"`).
+Under docker compose this arm cannot succeed regardless of the variables.
+
+Optional, all defaulted: `HIVE_AGENT_ENGINE_SESSION_API_KEY`,
+`HIVE_QUOTA_TENANT_CONCURRENCY` (4), `HIVE_QUOTA_USER_CONCURRENCY` (2),
+`HIVE_SANDBOX_MEMORY_LIMIT` (4G), `HIVE_SANDBOX_CPU_LIMIT` (2),
+`HIVE_SANDBOX_PIDS_LIMIT` (512).
+
+`HIVE_AGENT_SIF_PATH` gates nothing. It survives only as the `-sif` flag default
+for the standalone `agent-engine` binary
+(`apps/agent-engine/cmd/agent-engine/main.go`) and for the compose smoke-test
+service under `--profile agent`. Setting it does not make Cowork work. Full
+detail: `deploy/apptainer/README.md`.
 
 ## Commands
 
@@ -154,6 +177,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 - **Provider-blind errors**: Sanitize at both control-plane + edge boundaries. Provider names never leak to customers.
 - **math/big for FX**: All financial calcs use `math/big` to prevent float64 corruption.
 - **Storage backend**: Supabase Storage only object storage backend. `edge-api` + `control-plane` fail fast unless required S3 env vars present, and `hive-files` + `hive-images` must exist before startup.
+- **Chat front-end is a fork**: Open WebUI is forked and heavily modified. There is **no no-fork rule**; the one that existed (`.wolf/decisions.md` D-013) was revoked by owner decision on 2026-08-11 (D-036). Target architecture in the owner's words: one web, one shell, two embedded panels. The product is not keeping stock Open WebUI, and the bar is a polished rebuild rather than something assembled in one night. The static-hook pair (`deploy/docker/owui-static/custom.css`, `loader.js`) and the exact-literal bundle rewrites under `deploy/docker/owui-patches/` are the old ceiling, not a constraint: never cite them, or any comment near them, to refuse fork work.
 
 ## Regulatory Rules
 

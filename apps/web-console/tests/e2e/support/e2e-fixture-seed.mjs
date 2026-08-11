@@ -305,6 +305,60 @@ async function seedTenantsAndMemberships(admin, ids, users) {
   }
 }
 
+// The credits each fixture tenant is funded with. Session chat takes a flat
+// 10000 credit hold before it dispatches, so an account below that figure is
+// refused on quota and never reaches a provider. This is deliberately several
+// holds' worth: a spec that sends more than one turn must not start failing on
+// the second.
+const FIXTURE_GRANT_CREDITS = 1_000_000;
+
+// seedBilling maps each fixture tenant to the account it settles against and
+// funds that account.
+//
+// Before #746 the session chat path took no hold and issued no charge, so a
+// fixture tenant with no tenant_billing_accounts row and no credits still got
+// served. It is now refused with billing_not_configured, which is the correct
+// production behaviour and the wrong fixture: a test tenant that cannot be
+// billed does not exercise a billing gateway at all, it exercises the refusal
+// in front of it. Seeding the mapping and the balance makes the suite run the
+// metered path the way a real tenant does, hold and settlement included.
+//
+// Both writes are upserts on their natural keys, so a re-seed of the fixed
+// local identity is idempotent and never double funds an account. The grant's
+// idempotency key is per account and carries no run entropy for exactly that
+// reason: the unique index on (account_id, entry_type, idempotency_key) is
+// what makes a repeated seed a no-op instead of a second million credits.
+//
+// Runs after seedAccountsAndMemberships and seedTenantsAndMemberships, because
+// tenant_billing_accounts has a foreign key into each.
+async function seedBilling(admin, ids) {
+  const pairs = [
+    { tenant_id: ids.verifiedTenantId, account_id: ids.verifiedPrimaryAccountId },
+    { tenant_id: ids.unverifiedTenantId, account_id: ids.unverifiedAccountId },
+  ];
+
+  const { error: mapErr } = await admin
+    .from("tenant_billing_accounts")
+    .upsert(pairs, { onConflict: "tenant_id" });
+  if (mapErr) {
+    throw new Error(`tenant_billing_accounts upsert failed: ${mapErr.message}`);
+  }
+
+  const { error: grantErr } = await admin.from("credit_ledger_entries").upsert(
+    pairs.map((pair) => ({
+      account_id: pair.account_id,
+      entry_type: "grant",
+      credits_delta: FIXTURE_GRANT_CREDITS,
+      idempotency_key: `e2e-fixture-grant:${pair.account_id}`,
+      metadata: { source: "e2e-fixture-seed" },
+    })),
+    { onConflict: "account_id,entry_type,idempotency_key", ignoreDuplicates: true }
+  );
+  if (grantErr) {
+    throw new Error(`credit_ledger_entries grant upsert failed: ${grantErr.message}`);
+  }
+}
+
 async function seedAccountsAndMemberships(admin, ids, users) {
   const { verifiedUser, unverifiedUser, inviterUser } = users;
 
@@ -499,13 +553,20 @@ async function resetProfilesAndInvitation(
   // COALESCEs every column, so a missing row after this delete reads back as
   // blank fields, never ErrNotFound — there is nothing here for a concurrent
   // read to observe as broken. And there is no concurrent read to begin with:
-  // the fixture CLI runs via execFileSync (fully synchronous — it blocks the
-  // calling test's beforeEach until the child process exits) from a single
-  // Playwright worker (playwright.config.ts pins workers: 1 for exactly this
-  // reason). No spec's page load can ever land inside this function's
-  // execution window, in this run or a concurrent one (account ids are
-  // namespaced per E2E_RUN_KEY, so two jobs never touch the same row). Revisit
-  // if workers ever goes above 1 or this CLI is invoked without blocking.
+  // the fixture CLI runs as a child process that every caller awaits to
+  // completion before its test body starts (tests/e2e/support/fixture-reset.ts)
+  // from a single Playwright worker (playwright.config.ts pins workers: 1 for
+  // exactly this reason), and the context/page fixtures are not built until
+  // after the last beforeEach returns. No spec's page load can ever land inside
+  // this function's execution window, in this run or a concurrent one (account
+  // ids are namespaced per E2E_RUN_KEY, so two jobs never touch the same row).
+  //
+  // This used to say "runs via execFileSync, fully synchronous". It no longer
+  // does: blocking the worker's event loop also froze Playwright's timeout
+  // timer, so a test could overrun its deadline and still be reported as
+  // passed. The guarantee above never depended on the loop being blocked, only
+  // on the await and on workers: 1. Revisit if workers ever goes above 1, or if
+  // a caller stops awaiting this CLI before touching a page.
   const accountIds = [
     ids.verifiedPrimaryAccountId,
     ids.verifiedSecondaryAccountId,
@@ -586,6 +647,23 @@ async function sweepStaleFixtureRuns(admin) {
   const stale = oldAccounts.filter((a) => staleAccountIds.has(a.id));
 
   for (const acct of stale) {
+    // tenant_billing_accounts.account_id is ON DELETE RESTRICT on purpose:
+    // deleting an account that still funds a live tenant must fail loudly
+    // rather than orphan that tenant into unmetered service. A swept fixture
+    // account is the one case where dropping the mapping is correct, so the
+    // sweep unmaps it explicitly. Without this the account delete below fails
+    // the foreign key, the loop logs and skips, and stale fixture rows
+    // accumulate forever.
+    const { error: delMapErr } = await admin
+      .from("tenant_billing_accounts")
+      .delete()
+      .eq("account_id", acct.id);
+    if (delMapErr) {
+      console.error(
+        `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+      );
+      continue;
+    }
     // accounts.id cascades to every account-scoped table (memberships,
     // profiles, billing, invitations, credits, api keys). Deleting it first
     // is what makes the user delete below legal: accounts.owner_user_id has
@@ -657,6 +735,7 @@ export async function seedFixtures(admin, opts) {
   const users = { verifiedUser, unverifiedUser, inviterUser };
   await seedAccountsAndMemberships(admin, ids, users);
   await seedTenantsAndMemberships(admin, ids, users);
+  await seedBilling(admin, ids);
   await resetProfilesAndInvitation(
     admin,
     ids,

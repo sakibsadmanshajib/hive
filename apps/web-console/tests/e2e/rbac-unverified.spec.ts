@@ -9,7 +9,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 import {
   E2E_UNVERIFIED_EMAIL as UNVERIFIED_EMAIL,
   E2E_UNVERIFIED_PASSWORD as UNVERIFIED_PASSWORD,
@@ -34,20 +34,8 @@ async function signIn(
 // Fixture reset mutates global Supabase state — run serially to avoid flapping.
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async () => {
-  try {
-    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
-    process.stderr.write(
-      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
-    );
-    throw err;
-  }
+test.beforeEach(async ({}, testInfo) => {
+  await reseedFixtures(testInfo);
 });
 
 test.describe("RBAC: unverified user blocked from sensitive routes", () => {

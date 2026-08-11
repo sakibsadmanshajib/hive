@@ -89,20 +89,67 @@ function dispatchesToLiteLLM(source) {
 // packagesGivenTheLiteLLMTarget returns the package qualifiers that receive the
 // LiteLLM address or master key at the wiring site, e.g. "chat" from
 // `chat.NewDispatch(chat.Deps{ ... LiteLLMURL: resolveLiteLLMBaseURL() ... })`.
-// It walks back from each resolver call to the nearest constructor or composite
-// literal, which is a heuristic but a stable one: Go composite literals name
-// their type, and the wiring site is a flat list of them.
+//
+// Attribution is to the type of the composite literal or call that LEXICALLY
+// ENCLOSES the resolver, found by walking back with a brace/paren counter to the
+// opener's exact line AND column, then reading the qualified type immediately to
+// its left. Column accuracy is load bearing: on a single-line literal the last
+// qualifier anywhere on the line is a sibling field's expression, not the
+// literal's own type. The
+// earlier version took the nearest package qualifier on any preceding line
+// instead, which is unsound in the direction that matters: adding an unrelated
+// package-qualified sibling field above the credential line moved attribution
+// off the real recipient and onto that sibling. That is a false positive on the
+// sibling AND a false negative on the package actually handed the credential,
+// which is the entire point of this rule. See the self-test cases below.
+function enclosingOpener(lines, fromLine, fromColumn) {
+  let depth = 0;
+  for (let back = fromLine; back >= 0; back--) {
+    const line = back === fromLine ? lines[back].slice(0, fromColumn) : lines[back];
+    for (let i = line.length - 1; i >= 0; i--) {
+      const ch = line[i];
+      if (ch === "}" || ch === ")") depth++;
+      else if (ch === "{" || ch === "(") {
+        if (depth === 0) return { line: back, column: i };
+        depth--;
+      }
+    }
+  }
+  return null;
+}
+
+// qualifierBefore returns the package qualifier of the type or function named
+// immediately to the left of an opener, e.g. "rogue" for the `{` in
+// `rogue.NewHandler(rogue.Deps{`. Matching on the whole line instead would pick
+// the last qualifier anywhere on it, which on a single-line literal is a
+// sibling field's expression rather than the literal's own type.
+function qualifierBefore(line, column) {
+  const candidates = [...line.matchAll(PACKAGE_QUALIFIER)].filter(
+    (m) => m.index + m[0].length <= column,
+  );
+  return candidates.length > 0 ? candidates[candidates.length - 1][1] : null;
+}
+
 function packagesGivenTheLiteLLMTarget(source) {
   const lines = source.split("\n");
   const packages = new Set();
   lines.forEach((line, index) => {
-    if (!WIRING_RESOLVERS.test(line)) return;
-    for (let back = index; back >= Math.max(0, index - 20); back--) {
-      const matches = [...lines[back].matchAll(PACKAGE_QUALIFIER)];
-      if (matches.length > 0) {
-        packages.add(matches[matches.length - 1][1]);
+    const at = line.search(WIRING_RESOLVERS);
+    if (at < 0) return;
+    // Walk outward through nested literals until one names a package-qualified
+    // type. `Billing: &metering.PGBillingAccountResolver{...}` sitting above or
+    // beside the credential is a sibling field, never the recipient; the
+    // recipient is the literal both fields belong to.
+    let cursor = { line: index, column: at };
+    while (cursor) {
+      const opener = enclosingOpener(lines, cursor.line, cursor.column);
+      if (!opener) return;
+      const pkg = qualifierBefore(lines[opener.line], opener.column);
+      if (pkg) {
+        packages.add(pkg);
         return;
       }
+      cursor = opener;
     }
   });
   return packages;
@@ -173,6 +220,83 @@ function selfTest() {
     wired.has("rogue"),
     true,
     "wiring-site rule no longer attributes the LiteLLM address to the package that receives it",
+  );
+
+  // ...and it must still name the recipient when an unrelated package-qualified
+  // field sits between the literal's opening line and the credential. This is
+  // the shape that broke the previous nearest-preceding-qualifier rule: it
+  // attributed the credential to `telemetry`, which is both a false positive on
+  // a package that never receives it and, worse, a false negative on `rogue`,
+  // which does. A guard that can be pointed away from the real recipient by
+  // inserting a sibling field is a guard that can be silenced on purpose.
+  const wiringWithSibling = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{
+		Metrics:     telemetry.NewCounter(),
+		UpstreamURL: resolveLiteLLMBaseURL(),
+		UpstreamKey: resolveLiteLLMMasterKey(),
+	})
+  `;
+  const wiredWithSibling = packagesGivenTheLiteLLMTarget(wiringWithSibling);
+  assert.equal(
+    wiredWithSibling.has("rogue"),
+    true,
+    "a package-qualified sibling field moves attribution off the package handed the credential",
+  );
+  assert.equal(
+    wiredWithSibling.has("telemetry"),
+    false,
+    "attribution leaks onto a sibling field's package, which never receives the credential",
+  );
+
+  // A nested literal between the two is the same trap one level deeper.
+  const wiringWithNestedSibling = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{
+		Billing: &metering.PGBillingAccountResolver{
+			Pool: dbPool,
+		},
+		UpstreamURL: resolveLiteLLMBaseURL(),
+	})
+  `;
+  const wiredNested = packagesGivenTheLiteLLMTarget(wiringWithNestedSibling);
+  assert.equal(
+    wiredNested.has("rogue"),
+    true,
+    "a nested sibling literal moves attribution off the package handed the credential",
+  );
+  assert.equal(
+    wiredNested.has("metering"),
+    false,
+    "attribution leaks onto a nested sibling literal's package",
+  );
+
+  // The same trap written on ONE line, where the sibling's qualifier sits to
+  // the left of the credential rather than above it. Selecting the last
+  // qualifier on the line records `telemetry` and lets `rogue` dispatch
+  // unrouted forever.
+  const wiringSameLine = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{Metrics: telemetry.NewCounter(), UpstreamURL: resolveLiteLLMBaseURL()})
+  `;
+  const wiredSameLine = packagesGivenTheLiteLLMTarget(wiringSameLine);
+  assert.equal(
+    wiredSameLine.has("rogue"),
+    true,
+    "a same-line sibling expression moves attribution off the package handed the credential",
+  );
+  assert.equal(
+    wiredSameLine.has("telemetry"),
+    false,
+    "attribution leaks onto a same-line sibling expression's package",
+  );
+
+  // A credential passed straight into a call rather than a struct literal is
+  // still attributed to the callee.
+  const wiringPositional = `
+	rogueHandler := rogue.NewHandler(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
+  `;
+  assert.equal(
+    packagesGivenTheLiteLLMTarget(wiringPositional).has("rogue"),
+    true,
+    "a positional constructor argument is no longer attributed to its callee",
   );
 }
 

@@ -1,0 +1,11 @@
+label: before
+url: https://chat-hive.scubed.co/
+settings.ui.ctrlEnterToSend: true
+POST /api/chat/completions after Enter: 0
+composer after Enter: "Reply with exactly: HIVE ENTER PROBE\n\n\n"
+assistant answer after Enter: ""
+ENTER SENT AND ANSWERED: false
+POST /api/chat/completions after Shift+Enter: 0
+composer after Shift+Enter: "Reply with exactly: HIVE ENTER PROBE\n\nfirst line\n\nsecond line"
+SHIFT+ENTER MADE A NEWLINE AND DID NOT SEND: true
+cleanup: deleted 6 chat(s) [baef0144=200, e94a4bcc=200, f8906d4e=200, b61a198e=200, 00618bd3=200, 2d6b59b2=200]

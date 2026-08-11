@@ -317,6 +317,26 @@ describe("TaskConsole states", () => {
     expect(screen.queryByText(ENGINE_UNAVAILABLE_MESSAGE)).toBeNull();
   });
 
+  it("engine unavailable: an older blocked task does not contradict a newer one that ran", async () => {
+    stubFetch({
+      tasks: [
+        { ...QUEUED_TASK, id: "newer", status: "succeeded" },
+        {
+          ...QUEUED_TASK,
+          id: "older",
+          status: "failed",
+          error_message: ENGINE_UNAVAILABLE_MESSAGE,
+        },
+      ],
+    });
+    render(<TaskConsole />);
+
+    await screen.findByText("Done");
+    expect(
+      screen.queryByText("The agent runtime is not configured on this deployment"),
+    ).toBeNull();
+  });
+
   it("engine launch failure: blocked, without claiming the deployment is unconfigured", async () => {
     stubFetch({
       tasks: [

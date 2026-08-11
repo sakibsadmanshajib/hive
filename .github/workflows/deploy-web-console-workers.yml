@@ -37,6 +37,7 @@ jobs:
   deploy-workers:
     name: Deploy web-console to Cloudflare Workers (OpenNext)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     defaults:

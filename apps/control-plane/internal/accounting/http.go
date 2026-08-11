@@ -234,6 +234,8 @@ type internalFinalizeReservationRequest struct {
 	ActualCredits          int64  `json:"actual_credits"`
 	TerminalUsageConfirmed bool   `json:"terminal_usage_confirmed"`
 	Status                 string `json:"status"`
+	InputTokens            int64  `json:"input_tokens"`
+	OutputTokens           int64  `json:"output_tokens"`
 }
 
 type internalReleaseReservationRequest struct {
@@ -305,6 +307,8 @@ func (h *Handler) handleInternalFinalizeReservation(w http.ResponseWriter, r *ht
 		ActualCredits:          req.ActualCredits,
 		TerminalUsageConfirmed: req.TerminalUsageConfirmed,
 		Status:                 req.Status,
+		InputTokens:            req.InputTokens,
+		OutputTokens:           req.OutputTokens,
 	})
 	if err != nil {
 		writeAccountingError(w, err)

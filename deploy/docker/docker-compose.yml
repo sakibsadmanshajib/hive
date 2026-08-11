@@ -114,10 +114,13 @@ services:
     # the placeholder tenant/user do not exist in this database (egress
     # policy resolution 500s for an unknown tenant) -- expected for a
     # placeholder ID, not a regression. Real per-task sandbox launches do
-    # not go through this container at all: apps/control-plane embeds
-    # apps/agent-engine/engineapi in-process (see cmd/server/main.go's
-    # buildAgentEngine) and calls it directly on whatever host runs
-    # control-plane.
+    # not go through this container at all: when HIVE_AGENT_ENGINE_SOCKET is
+    # set, control-plane sends them to the unprivileged host daemon
+    # (apps/agent-engine/cmd/agent-engine -serve, installed by
+    # scripts/install-agent-engine-host.sh) over that Unix socket; see
+    # cmd/server/main.go's buildAgentEngine. Only a deployment where
+    # control-plane itself can exec Apptainer falls back to the in-process
+    # engineapi wiring below that branch.
     command:
       - "-tenant=00000000-0000-0000-0000-000000000000"
       - "-user=00000000-0000-0000-0000-000000000000"
@@ -279,6 +282,10 @@ services:
       # access). control-plane calls POST /containers/<name>/restart over the
       # Unix socket directly via net/http; no docker CLI binary is needed.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Issue #780 — the agent-engine launch daemon's socket directory on the
+      # host. Empty on a host that runs no daemon, in which case
+      # HIVE_AGENT_ENGINE_SOCKET is unset too and nothing reads this mount.
+      - ${HIVE_AGENT_ENGINE_SOCKET_DIR:-/tmp/hive-agent-engine}:/run/hive-agent
     environment:
       # SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY:
       # Enterprise profile: SUPABASE_URL must point at GoTrue, not PostgREST.
@@ -371,19 +378,25 @@ services:
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
-      # Agent task execution (issue #305). See .env.example for the full
-      # explanation: buildAgentEngine (cmd/server/main.go) needs all five of
-      # these non-empty to launch real Apptainer sandboxes; any empty and
-      # tasks stay queued forever by design (agenttask.NotConfiguredEngine).
-      # These were previously documented in .env.example but never forwarded
-      # into this container's environment, so setting them in .env alone did
-      # nothing. Forwarding them here is necessary but not sufficient: this
-      # service still runs inside a golang:1.24-alpine dev container, which
+      # Agent task execution. THE variable that matters on a containerised
+      # deployment is this one (issue #780): the path, inside this container,
+      # of the Unix socket the unprivileged host launch daemon
+      # (apps/agent-engine/cmd/agent-engine -serve) listens on, bind-mounted
+      # from HIVE_AGENT_ENGINE_SOCKET_DIR below. When it is set,
+      # buildAgentEngine ignores every HIVE_AGENT_ENGINE_* path variable
+      # below and forwards launches to that daemon.
+      #
+      # Why: this service runs inside a golang:1.24-alpine container, which
       # cannot exec the host's Apptainer directly (glibc-linked binary, no
       # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
       # privilege on the service holding Stripe/Supabase/payment secrets).
-      # Real sandbox launches require control-plane to run as a bare host
-      # process on whatever box executes agent tasks, not this container.
+      # The daemon keeps that privilege question off this container entirely:
+      # it runs as an ordinary host user with no added capabilities.
+      HIVE_AGENT_ENGINE_SOCKET: ${HIVE_AGENT_ENGINE_SOCKET:-}
+      # The five path variables below only apply when control-plane itself
+      # runs as a bare host process next to an Apptainer install (no compose
+      # topology in this repo does). They are still forwarded so that
+      # deployment stays possible without a code change.
       HIVE_AGENT_ENGINE_SIF_PATH: ${HIVE_AGENT_ENGINE_SIF_PATH:-}
       HIVE_AGENT_ENGINE_PACKS_DIR: ${HIVE_AGENT_ENGINE_PACKS_DIR:-}
       HIVE_AGENT_ENGINE_WORKSPACE_ROOT: ${HIVE_AGENT_ENGINE_WORKSPACE_ROOT:-}
@@ -848,7 +861,29 @@ services:
       # crash-looped this container and returned 502 on chat-hive.scubed.co.
       PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL_LIBPQ:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
-      ENABLE_RAG_HYBRID_SEARCH: "true"
+      # Off by default because this deployment configures no reranking model,
+      # and Open WebUI's hybrid path is not merely "vector plus BM25" without
+      # one. retrieval/utils.py builds a RerankCompressor for every hybrid
+      # query, and when reranking_function is None that compressor re-embeds
+      # the query and every retrieved document through the same embedder just
+      # to compute cosine similarity, which the vector search has already
+      # produced. One question therefore costs three gateway embedding round
+      # trips instead of one. Measured live on the demo box (issue #832): each
+      # embedding call takes 7 to 17 seconds through the gateway, so a single
+      # /api/v1/retrieval/query/collection took longer than Caddyfile.owui's
+      # 60s response_header_timeout and every knowledge-backed answer died as a
+      # 504 before the model was ever called. With this off the same query
+      # returns in about 29 seconds and a knowledge-backed chat answer arrives
+      # in about 35 seconds with its citation.
+      #
+      # Set OWUI_RAG_HYBRID_SEARCH=true to turn it back on, which is the right
+      # move once a reranking model exists in the catalog: with a real reranker
+      # the compressor calls that instead of re-embedding, and hybrid recall is
+      # worth the one extra call. Reconciled on every boot by
+      # owui-patches/hive_rag_env_config.py for the same first-boot-wins reason
+      # as the keys above, so flipping it here reaches a deployment that has
+      # already booted.
+      ENABLE_RAG_HYBRID_SEARCH: ${OWUI_RAG_HYBRID_SEARCH:-false}
       DATA_DIR: "/data"
       STATIC_DIR: "/data/static"
       OWUI_E2E_MODE: ${OWUI_E2E_MODE:-false}
@@ -863,17 +898,36 @@ services:
       # Docker can refuse individual file-level binds onto a path that
       # doesn't exist yet inside an empty named volume; one directory bind
       # creates /data/static itself, sidestepping that.
-      # PNG/ICO assets render the same mark as favicon.svg (cream badge,
-      # forest-green outline + inner cell); sizes are not per-purpose
-      # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
-      # size, not the ideal one for each use). No dark-mode splash variant --
-      # same asset for both. custom.css and loader.js are the only supported
-      # hooks for changing a pinned, unforked Open WebUI image, and both now
-      # carry real overrides: the agent-workspace launcher in OWUI's header
-      # band, and a replacement for the emoji glyph upstream uses to anchor its
-      # Workspace empty states. Dockerfile.open-webui asserts the markup
-      # contract the second override depends on. Known gap: FONTS_DIR under
-      # STATIC_DIR is still unseeded.
+      # The light PNG/ICO assets render the same mark as favicon.svg (charcoal
+      # badge, gold hexagon); the dark pair below inverts it. All of them are generated by
+      # owui-static/generate-brand-assets.py from the palette and hexagon that
+      # https://scubed.co/hive publishes, so a rebrand is one edit and a re-run
+      # rather than a dozen hand-made binaries. Each file is now rendered at the
+      # size its consumer actually declares; favicon-96x96.png used to be a
+      # 128px image, apple-touch-icon.png a 256px one, and logo.png was 256px
+      # while manifest.json advertised it as 500x500, which is grounds for a
+      # browser to reject the icon and substitute one of its own. favicon-dark
+      # and splash-dark are real dark variants (cream tile) rather than copies,
+      # because a charcoal tile on a near-black page is close to invisible;
+      # favicon-dark.png in particular was absent entirely, and OWUI's /auth
+      # page requests it on every dark-theme load. web-app-manifest-192x192.png
+      # and web-app-manifest-512x512.png were absent for the same reason; they
+      # are the maskable PWA install icons, full-bleed with a wider safe margin
+      # because the platform crops a maskable icon to a circle. They are wired
+      # into /manifest.json by owui-patches/apply_manifest_patch.py, which is
+      # the single source of truth for the manifest: upstream also ships an
+      # unreferenced static/site.webmanifest, and shipping our own copy would
+      # leave two manifests disagreeing while only the linked one counts.
+      # custom.css and loader.js change the pinned upstream
+      # image without rebuilding its bundle, and both now carry real overrides:
+      # the agent-workspace launcher in OWUI's header band, and a replacement
+      # for the emoji glyph upstream uses to anchor its Workspace empty states.
+      # Dockerfile.open-webui asserts the markup contract the second override
+      # depends on. Known gap: FONTS_DIR under STATIC_DIR is still unseeded.
+      # These two were previously described as the only supported hooks because
+      # forking Open WebUI was forbidden under D-013. That rule is revoked
+      # (owner 2026-08-11, .wolf/decisions.md D-036): Open WebUI is forked and
+      # heavily modified, so this pair is the old ceiling, not a constraint.
       #
       # #712: user.png (the same badge mark as the rest) is included here too.
       # open_webui.routers.users.get_user_profile_image_by_id falls back to

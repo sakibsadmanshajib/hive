@@ -76,6 +76,25 @@ func CreditsForTokens(route SelectRouteResult, inputTokens, outputTokens int64) 
 	return credits
 }
 
+// ChatSettlementCredits is the session chat path's entry point into the same
+// settlement arithmetic the API-key streaming path uses (settlementCredits in
+// stream.go), so the two surfaces cannot price identical usage differently.
+// It exists rather than exporting the pieces because promptText's endpoint
+// argument and the raw request body are exactly the two details a second
+// caller could get wrong: the raw bytes carry field names, sampling params and
+// tool schemas, and counting those as tokens is issue #602's overcharge.
+//
+// credits is derived from route's catalog row, never from a token total and
+// never from the flat hold. confirmed is true only when the upstream itself
+// reported token counts. delivered is false only when nothing was produced at
+// all, in which case the caller must release its hold in full rather than
+// charge anything.
+func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, inputTokens, outputTokens int64,
+	requestBody []byte, content string) (credits int64, confirmed bool, delivered bool) {
+	return settlementCredits(route, hasUsage, inputTokens, outputTokens,
+		promptText(EndpointChatCompletions, requestBody), content)
+}
+
 // requireTokenPricing refuses a request whose resolved alias is not priced in
 // tokens, before any hold is taken and before the request reaches a provider
 // (D-034). Converting a per-second or per-character price into a per-token one

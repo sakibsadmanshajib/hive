@@ -62,7 +62,11 @@ SBOM-npm.json
 /apps/edge-api/internal/generated/
 __pycache__/
 /apps/web-console/playwright-report/
-/apps/web-console/test-results/
+# Playwright's output dir. The glob, not the exact name: `--output=<dir>` is
+# how you keep two runs' traces apart when measuring flakiness, and a run
+# named anything other than test-results/ was landing traces and videos in
+# `git status` where an `add -A` could commit them.
+/apps/web-console/test-results*/
 # Added by code-review-graph
 .code-review-graph/
 
@@ -86,6 +90,21 @@ supabase/.temp/
 /v-*.png
 /r1-*.png
 /rev-*.png
+
+# Playwright/browser storage-state fixtures. writeStorageState() in
+# tests/e2e/support/live-auth.mjs (and the older phase-19 auth.setup.ts) dumps
+# a live GoTrue session (access_token + refresh_token JWTs) into one of
+# these at runtime. The two known .auth/ directories already carry their own
+# local .gitignore, but that protection is per-directory, not repo-wide: a
+# 2026-08-09 scratch run wrote the same shape of file (shot-state.json)
+# outside any .auth/ dir, and it stayed off git only because it was outside
+# the repo tree, not because anything here would have stopped it. Ignored
+# globally so no future storage-state dump, wherever it lands inside the
+# repo, is ever stageable.
+**/.auth/
+**/*storageState*.json
+**/*storage-state*.json
+**/*-state.json
 
 # OpenWolf per-tool-call telemetry. The hooks in .wolf/hooks/ rewrite these on
 # every Read, Write, and Edit, so tracking them makes every session dirty the

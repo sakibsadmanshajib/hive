@@ -43,9 +43,21 @@ that the guard strings survived, so a digest bump fails the build loudly
 instead of silently restoring a removed surface. Each entry records the
 upstream source it compiles from so the next person can re-derive it.
 
+The table also carries a second, smaller job (#833): the accessibility names
+that Open WebUI's chat sidebar toggle and its neighbouring navbar controls do
+not have. Those rewrites remove nothing and add only attributes, and they are
+grouped at the end of REWRITES under their own comment.
+
 ponytail: exact strings, no minified-AST parser. A parser would survive a
 digest bump that these strings do not, but it would also be the thing nobody
 can review, and a loud build failure is the cheaper outcome.
+
+This whole exact-literal patch layer exists because forking Open WebUI was
+forbidden under D-013. That rule is revoked (owner 2026-08-11,
+.wolf/decisions.md D-036): Open WebUI is forked and heavily modified, so the
+patch layer is transitional, not the required approach, and nothing in this
+module may be cited to refuse fork work or to argue that a surface can only be
+changed by rewriting a prebuilt bundle.
 """
 
 from dataclasses import dataclass
@@ -274,6 +286,127 @@ REWRITES = (
         upstream='src/lib/components/chat/Settings/About.svelte, the $i18n.t("Created by") label',
         find=',()=>l().t("Created by")]',
         replace=',()=>""]',
+    ),
+    # ----------------------------------------------------------------- #833
+    # Accessibility, not removal. Every entry above takes a surface away; the
+    # six below leave every surface exactly where it is and only add
+    # attributes. test_the_accessibility_rewrites_only_add_attributes proves
+    # that byte for byte: strip the added attributes back out of `replace` and
+    # what is left must equal `find`, so none of these can move a node, change
+    # a class or touch a handler.
+    #
+    # The control that opens the chat sidebar had no accessible name in either
+    # layout, so a screen reader announced it as a bare "button" with no
+    # indication of what it opens. That is the defect. It also left the
+    # sidebar impossible to pin open from an automated pass, which is why four
+    # chat surfaces sit outside the coverage denominator.
+    #
+    # Open WebUI 0.10.2 writes the names of the neighbouring controls as
+    # static attributes in these same templates (aria-label="New Chat",
+    # aria-label="Controls", and aria-label="Chat Menu" on the sidebar's own
+    # chat rows), so these follow that convention rather than introducing a
+    # second, runtime-translated naming mechanism into markup that has none.
+    # The tooltips beside them stay translated exactly as before.
+    Rewrite(
+        # The collapsed rail on a wide viewport. The whole rail column is one
+        # <button> and it carries the click handler, and that button was
+        # nameless. The small logo button nested inside it is the one upstream
+        # labelled, and it has no handler of its own (its clicks reach the
+        # sidebar only by bubbling out to this element), so the control a
+        # keyboard or screen reader user actually operates is this one. It
+        # renders only under `!$mobile && !$showSidebar`, which is what makes
+        # the collapsed state safe to state as a literal.
+        surface="sidebar-toggle-rail",
+        upstream="src/lib/components/layout/Sidebar.svelte, the collapsed rail's outer <button>",
+        find='id="sidebar"><button><div class="pb-1.5">',
+        replace=(
+            'id="sidebar"><button aria-label="Open Sidebar" aria-expanded="false">'
+            '<div class="pb-1.5">'
+        ),
+    ),
+    Rewrite(
+        # The same control on a narrow viewport, where the rail is not rendered
+        # at all and this navbar button is the only way to open the sidebar.
+        # Nothing named it, so on a phone the page carried no named sidebar
+        # control anywhere. Rendered only under `$mobile && !$showSidebar`, so
+        # again the state is a literal.
+        surface="sidebar-toggle-navbar",
+        upstream=(
+            "src/lib/components/chat/Navbar.svelte, "
+            "the {#if showSidebarToggle && !$showSidebar} button"
+        ),
+        find=(
+            '<button class=" cursor-pointer flex rounded-lg hover:bg-gray-100 '
+            'dark:hover:bg-gray-850 transition"><div class=" self-center p-1.5">'
+            "<!></div></button>"
+        ),
+        replace=(
+            '<button class=" cursor-pointer flex rounded-lg hover:bg-gray-100 '
+            'dark:hover:bg-gray-850 transition" aria-label="Open Sidebar" '
+            'aria-expanded="false"><div class=" self-center p-1.5"><!></div></button>'
+        ),
+    ),
+    Rewrite(
+        # The other half of the disclosure: the collapse button in the expanded
+        # sidebar's header. Upstream already names this one (it binds
+        # aria-label to the translated "Close Sidebar"), so only the state was
+        # missing. Its whole subtree renders under `$showSidebar`, so "true"
+        # holds for as long as the element exists. Without it a screen reader
+        # could hear that the sidebar was collapsed but never that it opened.
+        surface="sidebar-toggle-expanded-state",
+        upstream=(
+            "src/lib/components/layout/Sidebar.svelte, "
+            "the collapse button in the expanded sidebar header"
+        ),
+        find='<button><div class=" self-center p-1.5"><!></div></button>',
+        replace='<button aria-expanded="true"><div class=" self-center p-1.5"><!></div></button>',
+    ),
+    Rewrite(
+        # The three below are the toggle's immediate siblings in the same
+        # navbar cluster, nameless for the same reason: their label lived in a
+        # tooltip, which is not an accessible name. New Chat and Controls sit
+        # in that same row and were already labelled upstream, which is where
+        # the wording and the form of these three come from. Scope stops at
+        # this cluster.
+        surface="navbar-temporary-chat-button",
+        upstream="src/lib/components/chat/Navbar.svelte, the Temporary Chat toggle",
+        find=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="temporary-chat-button">'
+        ),
+        replace=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="temporary-chat-button" '
+            'aria-label="Temporary Chat">'
+        ),
+    ),
+    Rewrite(
+        surface="navbar-save-chat-button",
+        upstream="src/lib/components/chat/Navbar.svelte, the Save Chat button",
+        find=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="save-temporary-chat-button">'
+        ),
+        replace=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="save-temporary-chat-button" '
+            'aria-label="Save Chat">'
+        ),
+    ),
+    Rewrite(
+        # "Chat Menu" is upstream's own name for the same menu on a sidebar
+        # chat row, so this makes the navbar copy of it read identically.
+        surface="navbar-chat-menu-button",
+        upstream="src/lib/components/chat/Navbar.svelte, the chat context menu trigger",
+        find=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="chat-context-menu-button">'
+        ),
+        replace=(
+            '<button class="flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 '
+            'dark:hover:bg-gray-850 transition" id="chat-context-menu-button" '
+            'aria-label="Chat Menu">'
+        ),
     ),
 )
 

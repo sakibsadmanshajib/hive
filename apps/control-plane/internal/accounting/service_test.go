@@ -864,3 +864,130 @@ func projectedBudgetWindow(calls []apiKeyDeltaCall, apiKeyID uuid.UUID, budgetKi
 	}
 	return projection
 }
+
+// TestFinalizeReservationTwiceChargesOnce is the structural half of "exactly
+// one settled entry per served request" (#746). usage_events carries no unique
+// index on (request_id, event_type), so nothing in the schema stops a second
+// settlement row; what stops it is this replay guard, and a retried or
+// duplicated finalize is the ordinary way it gets exercised.
+func TestFinalizeReservationTwiceChargesOnce(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	usageSvc := &usageStub{}
+	svc := NewService(repo, ledgerSvc, usageSvc)
+
+	accountID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		ReservationKey:   "req_replay:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  10000,
+	}
+
+	input := FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          22,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+		InputTokens:            111,
+		OutputTokens:           70,
+	}
+	if _, err := svc.FinalizeReservation(context.Background(), input); err != nil {
+		t.Fatalf("first FinalizeReservation returned error: %v", err)
+	}
+	if _, err := svc.FinalizeReservation(context.Background(), input); err != nil {
+		t.Fatalf("second FinalizeReservation returned error: %v", err)
+	}
+
+	if len(ledgerSvc.chargeCalls) != 1 {
+		t.Fatalf("expected exactly one charge across two finalize calls, got %#v", ledgerSvc.chargeCalls)
+	}
+	if ledgerSvc.chargeCalls[0].credits != 22 {
+		t.Fatalf("expected a 22-credit charge, got %d", ledgerSvc.chargeCalls[0].credits)
+	}
+
+	var settlements []usage.RecordEventInput
+	for _, event := range usageSvc.eventCalls {
+		if event.EventType == usage.UsageEventCompleted {
+			settlements = append(settlements, event)
+		}
+	}
+	if len(settlements) != 1 {
+		t.Fatalf("expected exactly one settlement usage event, got %d", len(settlements))
+	}
+	// The settled row carries the metered quantities alongside the negative
+	// credit delta, so the console reads real tokens rather than zero (#856).
+	if settlements[0].InputTokens != 111 || settlements[0].OutputTokens != 70 {
+		t.Fatalf("settlement event lost the metered tokens: %+v", settlements[0])
+	}
+	if settlements[0].HiveCreditDelta != -22 {
+		t.Fatalf("expected a -22 credit delta, got %d", settlements[0].HiveCreditDelta)
+	}
+}
+
+// TestFinalizeClampsNegativeProviderTokenCounts: the token counts on a
+// settlement originate in a provider response, so they are external input on a
+// money path. CreditsForTokens already clamps them before pricing, so a
+// negative count cannot reduce a charge, but an unclamped count reaching
+// usage_events would sit in the console's analytics beside a non-negative
+// credit delta and make a SUM over that column understate consumption.
+func TestFinalizeClampsNegativeProviderTokenCounts(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	usageSvc := &usageStub{}
+	svc := NewService(repo, ledgerSvc, usageSvc)
+
+	accountID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		ReservationKey:   "req_negative:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  10000,
+	}
+
+	if _, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          22,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+		InputTokens:            -111,
+		OutputTokens:           -70,
+	}); err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	// The charge itself, not only the number reported next to it: a regression
+	// that skipped ChargeUsage entirely would still record -22 on the event.
+	if len(ledgerSvc.chargeCalls) != 1 {
+		t.Fatalf("expected exactly one ledger charge, got %#v", ledgerSvc.chargeCalls)
+	}
+	if ledgerSvc.chargeCalls[0].credits != 22 {
+		t.Fatalf("expected a 22-credit charge, got %d", ledgerSvc.chargeCalls[0].credits)
+	}
+
+	var settlements []usage.RecordEventInput
+	for _, event := range usageSvc.eventCalls {
+		if event.EventType == usage.UsageEventCompleted {
+			settlements = append(settlements, event)
+		}
+	}
+	if len(settlements) != 1 {
+		t.Fatalf("expected exactly one settlement usage event, got %d", len(settlements))
+	}
+	if settlements[0].InputTokens != 0 || settlements[0].OutputTokens != 0 {
+		t.Fatalf("negative provider token counts reached usage_events: %+v", settlements[0])
+	}
+	if settlements[0].HiveCreditDelta != -22 {
+		t.Fatalf("expected a -22 credit delta, got %d", settlements[0].HiveCreditDelta)
+	}
+}

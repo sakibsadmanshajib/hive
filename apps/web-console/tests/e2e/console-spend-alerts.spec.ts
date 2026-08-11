@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 import {
   E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
   E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
@@ -26,21 +26,9 @@ async function signIn(page: Page, email: string, password: string) {
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   if (!HAS_CREDS) return;
-  try {
-    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
-    process.stderr.write(
-      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`,
-    );
-    throw err;
-  }
+  await reseedFixtures(testInfo);
 });
 
 test.describe("/console/billing/alerts — spend alert thresholds (Phase 14)", () => {

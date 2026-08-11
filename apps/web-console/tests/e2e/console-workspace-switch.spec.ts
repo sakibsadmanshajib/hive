@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 
 import {
   E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
@@ -43,23 +43,17 @@ async function signIn(page: Page): Promise<void> {
   });
 }
 
-test.describe.configure({ mode: "serial" });
+// Every test here drives several full server-rendered navigations (sign-in,
+// the console, a switch, a reload), each one a control-plane round trip. The
+// 30s default is a budget for a single page, so on a slower runner the clock
+// runs out before the assertions are reached and the result is decided by
+// machine speed rather than by the product. A larger budget cannot turn a
+// failing assertion green; it only stops a timeout from standing in for one.
+test.describe.configure({ mode: "serial", timeout: 120_000 });
 
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   if (!HAS_CREDS) return;
-  try {
-    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
-    process.stderr.write(
-      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
-    );
-    throw err;
-  }
+  await reseedFixtures(testInfo);
 });
 
 test.describe("sidebar workspace switcher (issue #794)", () => {

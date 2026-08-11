@@ -20,7 +20,7 @@ Projects work well with optional memory/context tools. **None required.** Detect
 
 - **Before start work:** claude-mem available? Run `mem-search` for prior work same area. OpenWolf available? Check `.wolf/anatomy.md` before Reading project files and `.wolf/cerebrum.md` Do-Not-Repeat before generating code.
 - **After user correction:** update active memory store — OpenWolf `cerebrum.md`, or Claude Code auto-memory (`feedback_*.md`), or both. Never persist corrections to multiple stores inconsistently.
-- **After fix bug:** `.wolf/buglog.json` exists? Append bug entry per OpenWolf schema. Else skip.
+- **After fix bug:** `.wolf/` exists? Recording an entry is mandatory, but on a feature branch it goes in the PR body, not into `.wolf/buglog.jsonl`. It is appended to `main` afterwards in a separate buglog-only PR. Protocol: `.claude/rules/openwolf.md`. Else skip.
 - **Large-output shell or web fetch:** prefer `ctx_batch_execute` / `ctx_fetch_and_index` over raw Bash/WebFetch when context-mode present.
 - **Session wrap:** OpenWolf active? Append line to `.wolf/memory.md`. claude-mem active? Capture automatic — no manual action.
 

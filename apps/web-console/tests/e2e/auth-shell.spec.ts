@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 import {
   E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
   E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
@@ -28,20 +28,8 @@ async function signIn(
 // session flapping when parallel workers reset mid-test.
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async () => {
-  try {
-    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
-    process.stderr.write(
-      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
-    );
-    throw err;
-  }
+test.beforeEach(async ({}, testInfo) => {
+  await reseedFixtures(testInfo);
 });
 
 test.describe("unverified members page stays locked", () => {
@@ -82,35 +70,14 @@ test.describe("accepting an invitation keeps current workspace until switcher ch
   });
 });
 
-test.describe("workspace switcher persists selected account", () => {
-  test.skip(!VERIFIED_EMAIL || !VERIFIED_PASSWORD, "E2E_VERIFIED_EMAIL/PASSWORD not set");
-
-  test("workspace switcher persists selected account", async ({ page }) => {
-    await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
-    await page.goto("/console");
-
-    const switcher = page.locator("select[name='account_id']");
-    const options = await switcher.locator("option").all();
-
-    if (options.length < 2) {
-      test.skip();
-      return;
-    }
-
-    // Get the second option value (switch away from current)
-    const secondValue = await options[1].getAttribute("value");
-    if (!secondValue) {
-      test.skip();
-      return;
-    }
-
-    // Select the second workspace — triggers auto-submit → POST account-switch → 303 → reload
-    await switcher.selectOption(secondValue);
-
-    // Poll until the newly rendered switcher reflects the selected account.
-    // Using toHaveValue auto-waits for the post-redirect DOM.
-    await expect(page.locator("select[name='account_id']")).toHaveValue(
-      secondValue
-    );
-  });
-});
+// A test named "workspace switcher persists selected account" used to live
+// here. It was deleted rather than repaired: `selectOption(value)` sets that
+// value on the element client-side, so the `toHaveValue(value)` that followed
+// was true the moment it was called, before any navigation. It could not fail,
+// while reading as though it proved persistence. It also skipped itself when
+// the account had fewer than two workspaces, and hand-rolled the switch
+// instead of using support/workspace-switch.ts.
+//
+// The coverage lives in console-workspace-switch.spec.ts, "switching workspace
+// takes effect and survives a reload", which switches by name, reloads, and
+// asserts the value the server rendered from the cookie, in both directions.

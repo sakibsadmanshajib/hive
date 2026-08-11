@@ -70,24 +70,42 @@ func New(socketPath string, sessionAPIKey string) *Client {
 	}
 }
 
-// WaitReady blocks until socketPath is dialable (the in-SIF shim has
-// created its listening socket, see apps/agent-engine/internal/sandbox's
-// package doc) or ctx is done, whichever comes first. The shim's startup
-// time is unpredictable but usually sub-second, so this retries on a short
-// fixed interval rather than anything more elaborate.
+// WaitReady blocks until the agent-server behind socketPath answers an HTTP
+// request, or ctx is done, whichever comes first.
+//
+// Dialability alone is NOT readiness, and treating it as such is what made
+// the first real launch on the demo box fail. The socat shim inside the SIF
+// creates its listening socket immediately (it is the first line of the
+// image's runscript), while the Python agent-server it forwards to takes
+// tens of seconds to import its dependencies and bind its port. In that
+// window the socket connects and the shim's forward attempt fails, so the
+// very next request dies with a bare EOF. Requiring a real HTTP response
+// closes that window: any status code proves the far end is a live HTTP
+// server, and only a transport failure counts as not-yet-ready.
 func WaitReady(ctx context.Context, socketPath string) error {
-	dialer := &net.Dialer{}
-	ticker := time.NewTicker(50 * time.Millisecond)
+	client := New(socketPath, "")
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	var lastErr error
 	for {
-		conn, err := dialer.DialContext(ctx, "unix", socketPath)
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, controlBaseURL+"/health", nil)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("controlclient: build readiness probe: %w", err)
+		}
+		resp, err := client.http.Do(req)
 		if err == nil {
-			_ = conn.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+			_ = resp.Body.Close()
+			cancel()
 			return nil
 		}
+		lastErr = err
+		cancel()
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("controlclient: control socket %s never became ready: %w", socketPath, ctx.Err())
+			return fmt.Errorf("controlclient: agent-server on %s never became ready (last error: %v): %w", socketPath, lastErr, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -160,7 +178,36 @@ type SendMessageRequest struct {
 type StartConversationRequest struct {
 	Workspace      Workspace           `json:"workspace"`
 	AgentProfileID *uuid.UUID          `json:"agent_profile_id,omitempty"`
+	AgentSettings  *AgentSettings      `json:"agent_settings,omitempty"`
 	InitialMessage *SendMessageRequest `json:"initial_message,omitempty"`
+}
+
+// AgentSettings is the inline alternative to AgentProfileID: the subset of
+// vendor/openhands/openhands-sdk's OpenHandsAgentSettings
+// (openhands/sdk/settings/model.py) needed to launch a conversation without
+// a profile stored server-side. StartConversationRequest's own validator
+// (openhands/sdk/conversation/request.py) treats agent_profile_id and
+// agent_settings as mutually exclusive, and requires one of them.
+//
+// This exists because a sandbox launched with --containall has no persisted
+// profile store at all: every session starts from a fresh, empty container
+// filesystem, so an agent_profile_id can only ever resolve to
+// ProfileNotFound there. The credentials travel over the per-session Unix
+// control socket, never over a network, and are never written to disk by
+// this client.
+type AgentSettings struct {
+	AgentKind string      `json:"agent_kind"`
+	LLM       LLMSettings `json:"llm"`
+}
+
+// LLMSettings mirrors the LLM fields (openhands/sdk/llm/llm.py) an
+// OpenAI-compatible gateway needs. Every other field on that model has a
+// default, so this is the whole shape a Hive-gateway-backed launch sets.
+type LLMSettings struct {
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
+	UsageID string `json:"usage_id,omitempty"`
 }
 
 // ConversationInfo is the subset of

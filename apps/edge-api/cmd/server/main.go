@@ -34,6 +34,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/middleware"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
 	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
@@ -148,8 +149,14 @@ func main() {
 	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient)
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
-		Pool:       dbPool,
-		Routing:    routingClient,
+		Pool:    dbPool,
+		Routing: routingClient,
+		// Session chat settles through the same control-plane accounting the
+		// API-key path uses (#746). Without these two the handler refuses
+		// every request: serving inference that cannot be charged is the
+		// defect this wiring closes, not a degraded mode to fall back to.
+		Accounting: accountingClient,
+		Billing:    &metering.PGBillingAccountResolver{Pool: dbPool},
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
@@ -530,13 +537,13 @@ func main() {
 
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
-	// TODO(phase-19-plan-03): budgetGate still resolves the workspace
-	// identity from the API-key bearer token via authzClient.Resolve.
-	// Non-hk_ Bearer JWTs do not map there today, so quota enforcement is
-	// inert for JWT-authenticated traffic — the JWT path remains
-	// pre-billing in Plan 02 by design. Plan 03 will introduce a
-	// ctx-aware budget resolver that reads auth.UserFrom before falling
-	// back to the API-key path.
+	// budgetGate resolves the workspace identity from the API-key bearer
+	// token via authzClient.Resolve, so it stays inert for JWT-authenticated
+	// traffic. That is no longer a hole: session chat takes a real credit
+	// hold before dispatch (chat.startSettlement), so an account with no
+	// credits is refused by the reservation itself rather than by this
+	// middleware. A ctx-aware budget resolver would move that refusal
+	// earlier, it would not add one that is missing.
 	handler = budgetGate.Wrap(handler)
 	if jwtMW != nil {
 		// Auth selector sits inside metrics/CompatHeaders so 401s are still
