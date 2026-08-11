@@ -41,6 +41,22 @@ export default defineConfig({
     {
       name: "chromium",
       testDir: "./tests/e2e",
+      // The CI job selects this project rather than naming files (issue
+      // #813), so anything left in this directory runs there. tests/e2e/_probe
+      // must not: those specs point at deployed staging hosts, and two of
+      // their tests carry no credential gate, so against a locally booted
+      // stack they fail on DNS rather than on anything the change under test
+      // did. They keep their own project below so they stay runnable by hand.
+      testIgnore: /_probe\//,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // Manual staging probes. Run with `--project=probe` against a deployed
+      // environment, with the HIVE_QA_* identities set. No workflow invokes
+      // this, which is why its two spec files are carried as justified debt in
+      // tests/dark-spec-allowlist.json rather than silently ignored.
+      name: "probe",
+      testDir: "./tests/e2e/_probe",
       use: { ...devices["Desktop Chrome"] },
     },
     {

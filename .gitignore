@@ -62,7 +62,11 @@ SBOM-npm.json
 /apps/edge-api/internal/generated/
 __pycache__/
 /apps/web-console/playwright-report/
-/apps/web-console/test-results/
+# Playwright's output dir. The glob, not the exact name: `--output=<dir>` is
+# how you keep two runs' traces apart when measuring flakiness, and a run
+# named anything other than test-results/ was landing traces and videos in
+# `git status` where an `add -A` could commit them.
+/apps/web-console/test-results*/
 # Added by code-review-graph
 .code-review-graph/
 
