@@ -391,7 +391,16 @@ export function TaskConsole() {
   // A stale list outranks a one-off create or cancel error.
   const alertMessage = loadFailure ?? error;
 
-  const engineUnavailable = tasks.some(isEngineUnavailable);
+  /*
+   * Current state, not history. `tasks` is newest first, so the newest task
+   * is the only one that says anything about how this deployment is
+   * configured right now. Asking whether ANY task was ever engine-blocked
+   * made the notice permanent: the day the runtime came up on the demo box,
+   * a task ran to completion while the banner above it still told the user
+   * there was no sandbox to run it in, because tasks from the day before
+   * were blocked.
+   */
+  const engineUnavailable = tasks.length > 0 && isEngineUnavailable(tasks[0]);
   const selectedPack = PACKS.find((p) => p.value === pack) ?? PACKS[0];
   const nearLimit = instructions.length > MAX_INSTRUCTIONS * 0.8;
 

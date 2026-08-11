@@ -57,7 +57,7 @@ jobs:
           existing="${existing%\"}"; existing="${existing#\"}"
           eval "$(python3 /home/sakib/hive/scripts/derive-pooler-dsn.py --dsn "$existing" | sed 's/^/export /')"
           docker compose -p hive --env-file /home/sakib/hive/.env \
-            --profile local --profile chat up -d --build control-plane
+            --profile local --profile chat up -d --build control-plane agent-console
 
       - name: Daemon and control-plane logs
         env:
