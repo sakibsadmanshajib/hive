@@ -420,7 +420,13 @@ jobs:
             # server backends and so needs HIVE_TEST_DB_URL. Listing it in the
             # -short step above instead would have skipped it silently, which
             # is the same never-runs trap as issues #701 and #708.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform/db/...
+            # ./internal/platform (the package itself, not the tree) carries
+            # the membership-status guards for IsPlatformAdmin and
+            # IsWorkspaceOwner plus the tenant_users RLS suite. Both need a
+            # live database, and neither ran anywhere before: the package was
+            # absent from this list, so the escalation those guards catch
+            # would have shipped again with the suite reporting green.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
