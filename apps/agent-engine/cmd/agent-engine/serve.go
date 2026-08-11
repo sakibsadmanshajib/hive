@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"net/url"
 	"os/signal"
 	"syscall"
 	"time"
@@ -111,7 +112,31 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		}
 	}
 
+	llmBaseURL := os.Getenv("HIVE_AGENT_ENGINE_LLM_BASE_URL")
+	llmHost, err := hostOf(llmBaseURL)
+	if err != nil {
+		return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_LLM_BASE_URL: %w", err)
+	}
+
 	egress := egressclient.New(controlPlaneURL, controlPlaneToken)
+	// The tenant's effective egress policy governs what the agent's own
+	// shell may reach. The model endpoint is not that: it is Hive's own
+	// metered gateway, the sandbox has no other way to reach a model, and
+	// egress.Effective returns an empty (deny-all) allowlist for any tenant
+	// with no policy row, which would make every task fail on its first LLM
+	// call. So the model host is appended to whatever the policy resolves
+	// to, and nothing else is.
+	resolveEgressHosts := func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error) {
+		hosts, err := egress.Effective(ctx, tenantID, userID)
+		if err != nil {
+			return nil, err
+		}
+		if llmHost == "" {
+			return hosts, nil
+		}
+		return append(hosts, llmHost), nil
+	}
+
 	engine := engineapi.New(engineapi.Config{
 		SIFPath:       sifPath,
 		PacksDir:      packsDir,
@@ -120,10 +145,10 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		// Fails the launch when the policy cannot be resolved, exactly as
 		// the in-process wiring does: never launch with an unknown egress
 		// policy.
-		ResolveEgressHosts: egress.Effective,
+		ResolveEgressHosts: resolveEgressHosts,
 		AgentProfileID:     profileID,
 		LLMModel:           llmModel,
-		LLMBaseURL:         os.Getenv("HIVE_AGENT_ENGINE_LLM_BASE_URL"),
+		LLMBaseURL:         llmBaseURL,
 		LLMAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
 		SessionAPIKey:      os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
 		QuotaTenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
@@ -231,6 +256,27 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return err
 	}
 	return nil
+}
+
+// hostOf returns the hostname of an absolute http(s) URL, or "" for an empty
+// input. Anything else is an error: a mistyped base URL must fail at start-up
+// rather than silently leaving the model endpoint off the allowlist and
+// failing every task later with an opaque proxy denial.
+func hostOf(rawURL string) (string, error) {
+	if rawURL == "" {
+		return "", nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("expected an http(s) URL, got %q", rawURL)
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("no host in %q", rawURL)
+	}
+	return u.Hostname(), nil
 }
 
 // authorized enforces the shared internal token when one is configured.
