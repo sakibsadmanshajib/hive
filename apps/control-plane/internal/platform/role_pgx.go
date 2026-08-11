@@ -48,8 +48,13 @@ func NewPgxTenantRoleStore(pool *pgxpool.Pool) TenantRoleStore {
 // The status filter is load bearing, not cosmetic (issue #803). This predicate
 // backs IsWorkspaceOwner, which gates PermBillingWrite on PUT /api/v1/budgets/
 // and POST /api/v1/spend-alerts/. Without it a row with role=owner and a non
-// active status authorized a billing write, and every sibling query in this
-// codebase already constrains status.
+// active status authorized a billing write.
+//
+// Not every sibling query constrains status. GetTenantRole below does, on the
+// tenant_users table. IsPlatformAdmin does not, and neither does the account
+// membership lookup in internal/accounts/repository.go. Whether either of
+// those is a defect is a separate question from this one, and is not settled
+// here.
 func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceID uuid.UUID) (MembershipRole, error) {
 	// First confirm the workspace (account) exists.
 	var exists bool

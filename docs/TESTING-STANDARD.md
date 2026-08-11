@@ -2,12 +2,18 @@
 
 What counts as a real test in this repository, and what does not.
 
-This document exists because twelve shipped defects were each concealed by
-something that read as coverage inside a green run. Every shape catalogued
-below is a real instance from this repository, not a hypothetical. If you are
-writing or reviewing a test, the question is never "does it pass". It is
+This document exists because each of the fifteen shapes catalogued below
+concealed a defect that shipped from this repository, inside a green run. Every
+one is a real instance, not a hypothetical, and the instance is named. If you
+are writing or reviewing a test, the question is never "does it pass". It is
 "what would have to break for this to fail, and is that the thing I care
 about".
+
+Every number in this document is one the tooling produces today. Where a figure
+has been superseded, the old one is left visible beside the new one with the
+commit it was true at, because a correction that erases the wrong number
+teaches nothing. If you cannot reproduce a figure here with the command next to
+it, the document is wrong and the fix belongs in the same change that noticed.
 
 ## The one non negotiable rule
 
@@ -150,16 +156,24 @@ func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 Found repeatedly. `CATALOG_TEST_DB_URL`, `LITELLM_TEST_DB_URL` and
 `PROVIDERS_TEST_DB_URL` appeared nowhere under `.github/`, so a query against
 a column that does not exist on `provider_routes` shipped and never failed a
-single run (#701, #708). Twelve control-plane packages carrying
-`HIVE_TEST_DB_URL` gates were absent from the RLS step's explicit package
-list, so they skipped in the plain step, where the variable is exported after
-the step that needed it, and were never invoked in the live step (#659,
-#797).
+single run (#701, #708).
+
+The second half is subtler and is the one that keeps recurring. Twenty four
+control-plane packages carry a `*_TEST_DB_URL` gate. The plain `go test ./...`
+step names all of them and runs before the bootstrap step that exports the
+variable, so everything gated on it skips there. The later step that does have
+the variable names its packages in an explicit list, so a package missing from
+that list is never invoked at all. A package can therefore look covered twice
+and execute nothing, which is what `./internal/platform/...` did until #803.
+Ten control-plane packages are still in that state, and they are listed by
+name in `tools/lint-go-db-test-wiring.mjs` (#659, #797).
 
 **Instead:** the gate must be a hard failure, not a skip, when the suite is
-supposed to run. Pair every env gated suite with a workflow line that names
-it, and treat "the variable is set but the package is not in the list" as the
-same bug.
+supposed to run. Pair every env gated suite with a workflow step that both
+names its package and has the variable in scope at that point in the job, and
+treat "the variable is set somewhere in the workflow" as no evidence at all.
+`node tools/lint-go-db-test-wiring.mjs` enforces exactly that pairing and
+prints the ten packages still carrying the debt.
 
 ### 2. An inverted assertion, demanding behaviour that was removed
 
@@ -371,18 +385,27 @@ that guards money, authorization, or data loss.
 Nothing skips. There is no variable to blame. The file simply is never passed
 to any runner, and an uninvoked file emits no signal at all.
 
-`web-e2e` invokes Playwright by explicit file path and names seven of the
-thirty four spec files in the tree. The rest are collected by a project's
-`testDir`, so `npx playwright test` locally runs the lot, which is why this is
-invisible to anyone working on the specs. **Sixteen of thirty four spec
-files have never run in CI**, including `billing-fx-zero-leak.spec.ts`,
-written to enforce what was at the time a regulatory constraint (#813).
+The tree holds thirty four spec files. `node tools/verify-spec-wiring.mjs`
+reports what happens to them today:
 
-**Instead:** run the directory, not a file list. Where a file list is
-unavoidable, add a guard that fails when a spec exists that no workflow runs,
-with an allowlist whose every entry names a justification, an owner and a
-tracking issue. `apps/web-console/scripts/verify-spec-wiring.mjs` is that
-guard.
+| State | Count | Which |
+| --- | --- | --- |
+| runs on a pull request | 13 | the `chromium` project, run by `web-e2e` as `npx playwright test --project=chromium` |
+| runs only on a trigger a pull request cannot fire | 18 | the `phase-19`, `owui` and `owui-perf` projects, run by `owui-nightly.yml` on a schedule, a manual dispatch, or a labelled pull request |
+| runs nowhere | 3 | the two `_probe` specs and `owui/deployed-login.spec.ts`, whose projects no workflow invokes |
+
+Those three have never executed anywhere, which is the shape in its pure
+form. The eighteen are the more interesting half: they run, they are real, and
+they protect nothing on the merge path, so counting them alongside the
+thirteen produces a number that sounds like coverage and gates nothing. The
+guard reports the two separately for that reason, and the twenty one that are
+not pull-request gated are declared in
+`apps/web-console/tests/dark-spec-allowlist.json`.
+
+**Instead:** run the directory or the project, not a file list. Add a guard
+that fails when a spec is not selected by a pull-request run, with a ledger
+whose every group names a justification, an owner and a tracking issue.
+`tools/verify-spec-wiring.mjs` is that guard.
 
 #### Resolve wiring by asking the runner, never by matching filenames
 
@@ -398,35 +421,51 @@ recording because the mistake is inviting and it looks like it works:
   runs all eleven through `npm run e2e:owui` and `e2e:owui:perf`. Those
   select by `--project`, so no filename ever appears in the workflow.
 
-It reported 6 wired and 27 dark. Measured correctly at that commit the answer
-was 15 and 18, and after #808 wired three more it is 18 run and 16 dark. A
-guard that miscounts in both directions is worse than no guard, because it
-manufactures confidence in a number nobody checked.
+It reported 6 wired and 27 dark. Measured correctly at that same commit the
+answer was 15 and 18. Both figures are historical, from a tree before #808 and
+before the phase-19 project was wired into the nightly; the current figures are
+in the table above. A guard that miscounts in both directions is worse than no
+guard, because it manufactures confidence in a number nobody checked.
 
 The root cause is structural: workflows select tests by project and by
 config, so any filename based detection is measuring something the runner does
 not use. This is camouflage shape 5, a weaker duplicate of the real predicate,
 appearing inside the tooling built to catch camouflage.
 
-The corrected guard runs `playwright test --list --reporter=json` for every
-invocation a workflow actually makes, and unions the collected files. Three
-details are load bearing:
+Wiring is resolved instead through `playwright-spec-manifest.json`, which pins
+every spec file to the projects that collect it and is verified against a real
+`playwright test --list --reporter=json` by
+`apps/web-console/scripts/verify-spec-collection.mjs` in the same required job.
+Three details are load bearing:
 
 1. `spec.file` in that report is relative to `config.rootDir`, which differs
    per config. Resolve against it or the owui specs silently fail to match.
 2. The owui config chooses its `testMatch` from credential environment
-   variables and collects **zero** files without them. The guard supplies
-   placeholders, because the question is whether the workflow runs the spec
-   when it has its secrets.
-3. An invocation that collects zero files is a **failure**, not an empty
+   variables and collects **zero** files without them. The collection guard
+   supplies placeholders, because the question is whether the workflow selects
+   the spec when it has its secrets.
+3. An invocation that selects zero files is a **failure**, not an empty
    result. That is the phase-19 `testMatch` bug, and treating it as "no specs
    here" is how a broken selector reports success.
 
-A collection guard certifies that files are found, not that they run. Phase
-19 is dark twice over: no workflow runs the project, `ci.yml` only collects
-it, and `E2E_TENANT_B_ID`, `E2E_EXPIRED_JWT` and `E2E_ORPHAN_JWT` appear in
-zero workflow files, so even if it were invoked, four of its specs would
-`test.skip` on their first line. Both halves have to be closed.
+#### Selection is not execution
+
+A guard of this kind certifies that a runner would pick the file up. It cannot
+see a test that skips itself once it starts. Phase 19 is the live example, and
+it moved between two halves of this shape rather than out of it: the project is
+now run by `owui-nightly.yml`, so it is no longer dark, but `E2E_TENANT_B_ID`,
+`E2E_USER_A_SECOND_TENANT_ID`, `E2E_EXPIRED_JWT` and `E2E_ORPHAN_JWT` appear in
+no workflow, so five of its seven specs `test.skip` themselves by name and two
+actually execute assertions. That is shape 1 wearing shape 14's clothes, and
+the workflow step says so in its own comment rather than leaving the reader to
+find out. Provisioning a second tenant and the two crafted JWTs is tracked on
+#708.
+
+The same caveat applies to the thirteen pull-request specs. `openai-sdk.spec.ts`
+is selected by `chromium` and skips itself on `EDGE_BASE_URL`, which `web-e2e`
+deliberately does not set. Counting a selected file as a covered one is
+generous in exactly the direction that flatters, so treat the wiring figure as
+an upper bound and read the per surface proven-effect numbers for the real one.
 
 ### 15. A coverage metric that measures the wrong artifact
 
@@ -446,31 +485,66 @@ directions at once:
   as dark.
 
 Both errors are silent, and they partly cancel, so the total looks plausible.
-It reported 6 of 33 where the truth was 15.
+It reported 6 of 33 where the truth at that commit was 15.
 
 The tell is always the same: **the metric reads a different artifact than the
 system does.** The runner never reads workflow text looking for filenames, so
 nothing that does can agree with it except by coincidence.
 
 **Instead:** measure by asking the system the same question it asks itself.
-Here that means running `playwright test --list --reporter=json` for every
-invocation a workflow makes and unioning what comes back. Same idea elsewhere:
+Here that means resolving each invocation to the projects it selects and each
+project to the files Playwright's own `--list` puts in it. Same idea elsewhere:
 
 | Question | Wrong artifact | Right artifact |
 | --- | --- | --- |
-| Does this spec run in CI? | filenames in workflow text | what `--list` collects for each real invocation |
+| Does this spec run in CI? | filenames in workflow text | the projects an invocation selects, against what `--list` collects for each |
+| Does it run on a pull request? | any workflow mentioning it | the triggers and job conditions of the workflow that selects it |
 | Is this route authorized? | the middleware's own tests | a request through the registered mux |
 | Was the user charged correctly? | the price table | the ledger row |
 | Did the toggle save? | the DOM after clicking | the value after a reload |
-| Does this Go package run? | the test file existing | the package named in a workflow step |
+| Does this Go package run? | the test file existing | a workflow step that names the package and has its DSN variable in scope |
+
+#### The second version measured a real thing and still shipped a bad number
+
+Worth its own note, because the fix looked complete. That version asked
+Playwright the right question, and then counted the answers in a way that
+could not go down:
+
+- **A trigger-blind count.** It treated a nightly, a manual dispatch and a
+  labelled run as identical to a pull request run. Eleven of the eighteen it
+  called wired came from a workflow no pull request can fire, and none of the
+  eighteen gated a merge. That number could be improved without running a
+  single additional test, by adding a `workflow_dispatch` workflow and deleting
+  a ledger entry. A metric with a cheap fake move is not a metric.
+- **Two different sets.** The numerator came from what the runner collected
+  and the denominator from walking two hardcoded directories for one filename
+  pattern. The ratio could exceed one, and a spec in a third directory was
+  invisible to it forever.
+- **Arguments dropped on the floor.** It re-ran an npm script bare, so a
+  workflow narrowing a run with `--grep` was measured as if it ran everything.
+
+The rule those three share: **when a measurement can only move in the
+flattering direction, it is not measuring.** Ask what the cheapest way to
+improve the number is. If that way involves no extra test executing, fix the
+metric before you read it again.
 
 A second rule follows: **do not hardcode the list of things being measured.**
-The corrected guard discovers workflow invocations by parsing the `run:` blocks
-rather than carrying a table of them. The first attempt at the fix did carry a
-table, and it broke within a day, because #808 wired three more specs and
-rewrote the line the table was keyed on. A measurement that needs hand editing
-whenever the thing it measures changes is a measurement that will be stale
-exactly when it matters.
+The guard discovers workflow invocations by parsing the workflows, and takes
+both sides of its ratio from `playwright-spec-manifest.json`, which the
+collection guard pins to what is on disk. The first attempt at the fix carried
+a hand written table of invocations and broke within a day, because #808 wired
+three more specs and rewrote the line the table was keyed on. The second
+attempt derived the numerator and hardcoded the denominator, which is the same
+mistake wearing half a fix. A measurement that needs hand editing whenever the
+thing it measures changes will be stale exactly when it matters.
+
+A third, learned from a security review of the same file: **a measurement runs
+in a required check, so treat its inputs as untrusted.** The second version
+handed a `--config` path parsed out of a workflow `run:` line to
+`npx playwright test --list`, and Playwright imports config files, so editing a
+workflow line was arbitrary code execution inside a required job. Reading an
+artifact another guard already certified is both safer and less code than
+executing the thing you are measuring.
 
 And the corollary that applies to this document as much as to the code: when a
 peer disproves a number, the number was wrong, not the peer. The correction

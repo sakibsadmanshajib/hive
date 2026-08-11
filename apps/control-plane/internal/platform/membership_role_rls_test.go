@@ -19,9 +19,8 @@ import (
 // The unit tests for it stub RoleStore, which proves the service maps the
 // owner role to true and says nothing about the SQL underneath. The SQL is
 // where issue #803 lives: GetMembershipRole selected role without constraining
-// account_memberships.status, while every sibling query in the codebase
-// constrains it. A row with role=owner and status=invited therefore passed the
-// owner check on a billing write.
+// account_memberships.status, so a row with role=owner and status=invited
+// passed the owner check on a billing write.
 //
 // These tests connect on an unscoped pool rather than SET ROLE hive_app, unlike
 // the tenant_users suite in role_rls_test.go. hive_app holds no grant on
@@ -68,8 +67,19 @@ func newAccountRoleTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// seedAccountMembership inserts one auth user, one account it owns, and one
-// account_memberships row carrying the given role and status.
+// seedAccountMembership inserts the subject user, a separate user who created
+// and owns the account, the account itself, and one account_memberships row
+// putting the subject on that account with the given role and status.
+//
+// The creator is a separate user deliberately. An earlier version of this
+// fixture set accounts.owner_user_id to the subject and then inserted the same
+// subject as status='invited', so the two rows contradicted each other: the
+// account said the user owned it outright while the membership said the
+// invitation was still outstanding. A test asserting "not an owner" against a
+// row that also says "owner" proves nothing about which of the two the
+// predicate reads. Here every case is one shape, a user added to somebody
+// else's workspace, and the only variable is the role and status on the
+// membership row, which is the predicate under test.
 func seedAccountMembership(t *testing.T, accountID, userID uuid.UUID, role, status string) {
 	t.Helper()
 	dsn := requireAccountRoleTestDSN(t)
@@ -81,12 +91,15 @@ func seedAccountMembership(t *testing.T, accountID, userID uuid.UUID, role, stat
 	}
 	defer setup.Close()
 
-	if _, err := setup.Exec(ctx, insertUserSQL, userID,
-		"membership-role-"+userID.String()+"@hive-test.invalid"); err != nil {
-		t.Fatalf(errSeedUser, err)
+	creatorID := uuid.New()
+	for _, seeded := range []uuid.UUID{creatorID, userID} {
+		if _, err := setup.Exec(ctx, insertUserSQL, seeded,
+			"membership-role-"+seeded.String()+"@hive-test.invalid"); err != nil {
+			t.Fatalf(errSeedUser, err)
+		}
 	}
 	if _, err := setup.Exec(ctx, insertAccountSQL, accountID,
-		"membership-role-"+accountID.String(), userID); err != nil {
+		"membership-role-"+accountID.String(), creatorID); err != nil {
 		t.Fatalf(errSeedAccount, err)
 	}
 	if _, err := setup.Exec(ctx, insertMembershipSQL, accountID, userID, role, status); err != nil {
@@ -103,6 +116,7 @@ func seedAccountMembership(t *testing.T, accountID, userID uuid.UUID, role, stat
 		// references auth.users, so the account row goes first.
 		_, _ = cleanup.Exec(context.Background(), dropAccountSQL, accountID)
 		_, _ = cleanup.Exec(context.Background(), dropUserSQL, userID)
+		_, _ = cleanup.Exec(context.Background(), dropUserSQL, creatorID)
 	})
 }
 
