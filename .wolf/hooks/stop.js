@@ -127,7 +127,7 @@ function checkForMissingBugLogs(wolfDir, session) {
     // a hook guess cannot satisfy a check that is about the durable log.
     const buglogWritten = readBugs(wolfDir).length > (session.buglog_entries_at_start ?? 0);
     if (!buglogWritten) {
-        process.stderr.write(`⚠️ OpenWolf: Files edited 3+ times this session (${multiEditFiles.join(", ")}) but buglog.jsonl was not updated. If you fixed bugs, please log them.\n`);
+        process.stderr.write(`⚠️ OpenWolf: Files edited 3+ times this session (${multiEditFiles.join(", ")}) but buglog.jsonl was not updated. If you fixed bugs, record them. On a feature branch the entry goes in the PR body, not into buglog.jsonl (.claude/rules/openwolf.md).\n`);
     }
 }
 /**

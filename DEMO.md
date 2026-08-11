@@ -30,18 +30,37 @@ docker compose \
 
 Optional local inference: set `OLLAMA_BASE_URL=http://ollama:11434` in `.env` and uncomment the ollama entries in `deploy/litellm/config.yaml`.
 
-### Agent-engine SIF (required for agent/coding surfaces)
+### Agent-engine runtime (required for agent/coding surfaces)
 
 The agent-engine runs each session inside an Apptainer SIF built from `deploy/apptainer/agent-engine.def`. It is `linux/amd64` only and cannot be built on WSL2.
 
+Control-plane never execs Apptainer itself. It hands each launch to an unprivileged host launcher over a Unix socket, so the SIF has to sit on the host beside that launcher, not inside a container.
+
 ```bash
-# On an apptainer host:
-make agent-sif          # -> deploy/apptainer/agent-engine.sif
-# Or pull the CI-built image:
-gh run download -n agent-engine-sif -D /opt/hive
+# On the host, once per deploy, run from the repository root (the compose step
+# above leaves the shell in deploy/docker). Fetches the CI-built .sif if the
+# host has none, builds the launcher, and restarts its systemd user unit.
+# RUNTIME_DIR defaults to /home/sakib/agent-runtime inside the script, so set
+# it explicitly and reuse the same path in HIVE_AGENT_ENGINE_SOCKET_DIR below.
+cd "$(git rev-parse --show-toplevel)"
+RUNTIME_DIR="$HOME/agent-runtime" \
+HIVE_AGENT_ENGINE_LLM_MODEL=openai/hive-default \
+HIVE_AGENT_ENGINE_LLM_BASE_URL=https://api-hive.scubed.co/v1 \
+HIVE_AGENT_ENGINE_LLM_API_KEY=REPLACE_WITH_GATEWAY_KEY \
+CONTROL_PLANE_INTERNAL_TOKEN=REPLACE_WITH_INTERNAL_TOKEN \
+  bash scripts/install-agent-engine-host.sh
 ```
 
-Set `HIVE_AGENT_SIF_PATH` in `.env` to the resulting `.sif` path.
+Then point control-plane at the socket in `.env`. A dotenv file does no shell
+expansion, so write the same absolute path the installer used, with `/run`
+appended (for example `/home/hive/agent-runtime/run`):
+
+```dotenv
+HIVE_AGENT_ENGINE_SOCKET_DIR=/home/REPLACE_WITH_HOST_USER/agent-runtime/run
+HIVE_AGENT_ENGINE_SOCKET=/run/hive-agent/engine.sock
+```
+
+`deploy-demo-box.yml` already does both on every deploy. `HIVE_AGENT_SIF_PATH` is a different variable that gates nothing here: it only feeds the standalone binary's `-sif` default and the compose smoke-test service. Full detail, including the in-process fallback arm and its five variables: `deploy/apptainer/README.md`.
 
 ### Verify
 
