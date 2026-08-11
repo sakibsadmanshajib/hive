@@ -1,14 +1,22 @@
 // Source of truth for E2E test credentials shared between Playwright specs
 // and the fixture CLI (`e2e-auth-fixtures.mjs`).
 //
-// Defaults + min-length constants live in `e2e-auth-defaults.json` so both
-// the TS module (consumed by specs) and the sibling ESM fixture entrypoint
-// (consumed by `execFileSync` from `beforeEach`) read the same values.
+// Non-secret defaults (addresses and min-length constants) live in
+// `e2e-auth-defaults.json` so both the TS module (consumed by specs) and the
+// sibling ESM fixture entrypoint (consumed by `execFileSync` from
+// `beforeEach`) read the same values.
 //
-// Test-only fixtures target dedicated `e2e-*@hive-ci.test` accounts in the
-// staging Supabase project. Env overrides (`E2E_*`) are honored when they
-// meet minimum length checks; empty / unset env vars silently fall back to
-// defaults, non-empty-but-too-short values emit a warning.
+// NO CREDENTIAL HAS A COMMITTED DEFAULT, and none may ever be added back.
+// This repository is public, and the two passwords plus the invitation token
+// used to sit in that JSON file in plaintext for live accounts that hold a
+// tenant OWNER role, which the seeder then wrote back onto those accounts on
+// every credential-less run. The three values below are therefore read from
+// the environment only, and a missing one throws by name rather than falling
+// back or skipping quietly: a silent fallback is what kept the committed
+// values live for months. See docs/live-test-auth.md.
+//
+// The two addresses stay: an address is not a credential, and specs need a
+// stable identity to seed. Env overrides are honored for them.
 
 import defaults from "./e2e-auth-defaults.json" with { type: "json" };
 
@@ -17,9 +25,6 @@ type AuthDefaults = {
   minTokenLength: number;
   verifiedEmail: string;
   unverifiedEmail: string;
-  verifiedPassword: string;
-  unverifiedPassword: string;
-  invitationToken: string;
 };
 
 const DEFAULTS: AuthDefaults = defaults as AuthDefaults;
@@ -31,17 +36,11 @@ function isValidEmail(value: string): boolean {
 function envOrDefault(
   name: string,
   fallback: string,
-  opts: { minLength?: number; validator?: (value: string) => boolean } = {}
+  opts: { validator?: (value: string) => boolean } = {}
 ): string {
-  const { minLength = 0, validator } = opts;
+  const { validator } = opts;
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (minLength > 0 && raw.length < minLength) {
-    console.warn(
-      `[e2e-auth-creds] ${name} is set but too short (${raw.length} < ${minLength}); using fallback`
-    );
     return fallback;
   }
   if (validator && !validator(raw)) {
@@ -49,6 +48,28 @@ function envOrDefault(
       `[e2e-auth-creds] ${name} is set but failed validation; using fallback`
     );
     return fallback;
+  }
+  return raw;
+}
+
+// requiredSecretEnv is the only way a credential enters this suite. It throws
+// instead of returning a fallback, and the message names the variable and how
+// to set it, so a developer who runs the suite with nothing configured gets an
+// instruction rather than a run that quietly seeds shared live accounts.
+export function requiredSecretEnv(name: string, minLength: number): string {
+  const raw = process.env[name] ?? "";
+  if (raw === "") {
+    throw new Error(
+      `[e2e-auth-creds] ${name} is required and has no default. Set it in ` +
+        "your shell (or as a CI secret) before running the E2E suite. " +
+        "Credentials are never committed to this repository; see " +
+        "docs/live-test-auth.md."
+    );
+  }
+  if (raw.length < minLength) {
+    throw new Error(
+      `[e2e-auth-creds] ${name} is set but too short (${raw.length} < ${minLength}).`
+    );
   }
   return raw;
 }
@@ -63,18 +84,15 @@ export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   DEFAULTS.unverifiedEmail,
   { validator: isValidEmail }
 );
-export const E2E_VERIFIED_PASSWORD = envOrDefault(
+export const E2E_VERIFIED_PASSWORD = requiredSecretEnv(
   "E2E_VERIFIED_PASSWORD",
-  DEFAULTS.verifiedPassword,
-  { minLength: DEFAULTS.minPasswordLength }
+  DEFAULTS.minPasswordLength
 );
-export const E2E_UNVERIFIED_PASSWORD = envOrDefault(
+export const E2E_UNVERIFIED_PASSWORD = requiredSecretEnv(
   "E2E_UNVERIFIED_PASSWORD",
-  DEFAULTS.unverifiedPassword,
-  { minLength: DEFAULTS.minPasswordLength }
+  DEFAULTS.minPasswordLength
 );
-export const E2E_INVITATION_TOKEN = envOrDefault(
+export const E2E_INVITATION_TOKEN = requiredSecretEnv(
   "E2E_INVITATION_TOKEN",
-  DEFAULTS.invitationToken,
-  { minLength: DEFAULTS.minTokenLength }
+  DEFAULTS.minTokenLength
 );
