@@ -39,12 +39,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               -o "$RUNTIME_DIR/sif.zip" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${SIF_ARTIFACT_ID}/zip"
-            python3 -c "
-import zipfile, sys
-z = zipfile.ZipFile('$RUNTIME_DIR/sif.zip')
-print(z.namelist())
-z.extractall('$RUNTIME_DIR')
-"
+            python3 -c "import zipfile;z=zipfile.ZipFile('$RUNTIME_DIR/sif.zip');print(z.namelist());z.extractall('$RUNTIME_DIR')"
             rm -f "$RUNTIME_DIR/sif.zip"
             ls -l "$RUNTIME_DIR"
             [ -s "$sif" ] || mv "$RUNTIME_DIR"/*.sif "$sif"
@@ -70,13 +65,7 @@ z.extractall('$RUNTIME_DIR')
           # socket at this path before apptainer starts. It answers nothing;
           # this step only proves the sandbox comes up and its control
           # channel answers.
-          python3 - "$egress" <<'PY' &
-import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.bind(sys.argv[1]); s.listen(8)
-while True:
-    c, _ = s.accept(); c.close()
-PY
+          python3 -c "import socket,sys;s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.bind(sys.argv[1]);s.listen(8);[s.accept()[0].close() for _ in iter(int,1)]" "$egress" &
           egress_pid=$!
           for _ in $(seq 1 50); do [ -S "$egress" ] && break; sleep 0.1; done
 
