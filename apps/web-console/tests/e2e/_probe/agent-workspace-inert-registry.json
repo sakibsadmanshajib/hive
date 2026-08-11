@@ -1,5 +1,5 @@
 {
   "surface": "agent-workspace (Cowork, apps/agent-console)",
-  "description": "Controls deliberately excluded from live proof, each with a one-line justification and an owner. Empty today: nothing on this surface qualifies as deliberately inert. Every enumerated control in agent-workspace-controls.json is either proven live or unproven-and-blocked (see agent-workspace-coverage.json); blocked is not the same as inert and must not be filed here to make the ratio look better. A control only belongs in this file when someone has decided, on purpose, that it will never be exercised.",
+  "description": "Controls deliberately excluded from live proof, each with a one-line justification and an owner. Empty today: nothing on this surface qualifies as deliberately inert. Every control in agent-workspace-controls.json is either proven live or unproven with a named reason in the generated coverage ledger. Blocked is not the same as inert and must not be filed here to make the ratio look better: a control only belongs in this file when someone has decided, on purpose, that it will never be exercised.",
   "entries": []
 }

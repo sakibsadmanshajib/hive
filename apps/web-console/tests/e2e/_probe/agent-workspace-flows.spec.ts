@@ -346,8 +346,15 @@ test.describe("authenticated task console", () => {
      * created is still cancelled at the end rather than left holding a sandbox
      * on a shared box.
      *
+     * A soft failure makes Playwright append a second, spurious error reading
+     * "Test timeout of 30000ms exceeded" even when the body ran to completion
+     * well inside the raised timeout above. Confirmed against a throwaway spec
+     * that logged testInfo.timeout as 120000 and printed its last line before
+     * the runner reported the same 30000. Ignore that line and read the
+     * assertion error underneath it.
+     *
      * It fails against the demo box today, and the cause is a real defect
-     * rather than a flake: edge-api's control-plane client has a 15 second
+     * rather than a flake (issue #881): edge-api's control-plane client has a 15 second
      * timeout (apps/edge-api/internal/agenttask/client.go) while
      * control-plane's CreateTask blocks inline on Engine.Launch with a five
      * minute bound (apps/control-plane/internal/agenttask/service.go). Any
@@ -361,7 +368,7 @@ test.describe("authenticated task console", () => {
       .soft(
         response.status(),
         "POST /v1/agent/tasks must answer 201. A 500 here, with the task still appearing in " +
-          "the list below, is the edge-api create timeout described above.",
+          "the list below, is issue #881, the edge-api create timeout described above.",
       )
       .toBe(201);
 
