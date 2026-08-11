@@ -69,6 +69,12 @@ selector. Going below 768px needs Open WebUI to clamp that selector, which means
 a fork or an upstream fix, so below 768px the per-message "Open Agent Workspace"
 Action stays the entry point exactly as before.
 
+> Note added 2026-08-11: "a fork" was ruled out on the capture date by D-013.
+> That rule is revoked (owner 2026-08-11, `.wolf/decisions.md` D-036) and Open
+> WebUI is now forked and heavily modified, so the clamp this paragraph calls
+> out is buildable. The captures are unchanged, since they record what the stack
+> did that day.
+
 ## Client-side navigation and the token race
 
 | File | Shows |

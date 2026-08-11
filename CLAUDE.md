@@ -154,6 +154,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 - **Provider-blind errors**: Sanitize at both control-plane + edge boundaries. Provider names never leak to customers.
 - **math/big for FX**: All financial calcs use `math/big` to prevent float64 corruption.
 - **Storage backend**: Supabase Storage only object storage backend. `edge-api` + `control-plane` fail fast unless required S3 env vars present, and `hive-files` + `hive-images` must exist before startup.
+- **Chat front-end is a fork**: Open WebUI is forked and heavily modified. There is **no no-fork rule**; the one that existed (`.wolf/decisions.md` D-013) was revoked by owner decision on 2026-08-11 (D-036). Target architecture in the owner's words: one web, one shell, two embedded panels. The product is not keeping stock Open WebUI, and the bar is a polished rebuild rather than something assembled in one night. The static-hook pair (`deploy/docker/owui-static/custom.css`, `loader.js`) and the exact-literal bundle rewrites under `deploy/docker/owui-patches/` are the old ceiling, not a constraint: never cite them, or any comment near them, to refuse fork work.
 
 ## Regulatory Rules
 

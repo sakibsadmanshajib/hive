@@ -51,6 +51,13 @@ grouped at the end of REWRITES under their own comment.
 ponytail: exact strings, no minified-AST parser. A parser would survive a
 digest bump that these strings do not, but it would also be the thing nobody
 can review, and a loud build failure is the cheaper outcome.
+
+This whole exact-literal patch layer exists because forking Open WebUI was
+forbidden under D-013. That rule is revoked (owner 2026-08-11,
+.wolf/decisions.md D-036): Open WebUI is forked and heavily modified, so the
+patch layer is transitional, not the required approach, and nothing in this
+module may be cited to refuse fork work or to argue that a surface can only be
+changed by rewriting a prebuilt bundle.
 """
 
 from dataclasses import dataclass
