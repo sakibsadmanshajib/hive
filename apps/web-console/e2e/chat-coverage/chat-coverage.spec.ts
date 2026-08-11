@@ -6,26 +6,32 @@
 // observable effect against a running deployment. It reports a ratio, writes a
 // machine-readable file so the number can be tracked between runs, and fails
 // loudly on any control that does nothing.
+//
+// Everything here needs a live deployment and a session. The checks that need
+// neither live in break-proof.spec.ts.
 import fs from "node:fs";
 import path from "node:path";
 
 import { test, expect, type Page } from "@playwright/test";
 
+import { EXCLUSIONS, FLOORS, REGISTRY, REMOVED } from "./data";
 import {
+  checkWithoutFiring,
   enumerate,
   exclusionFailures,
-  expiredExclusions,
   floorFailures,
   flip,
+  isDeferred,
+  isDestructive,
   isStateful,
   locate,
   proveByClick,
   readState,
+  sampleChatter,
   summarise,
   type Control,
-  type Floors,
   type Result,
-  type SurfaceExclusion,
+  type Swept,
 } from "./lib";
 import {
   STATIC_SURFACES,
@@ -39,54 +45,20 @@ import {
 } from "./surfaces";
 
 const REPORT_DIR = path.join(__dirname, "../../chat-coverage-report");
-const REGISTRY = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "inert-registry.json"), "utf8"),
-) as { allowed: Array<{ key?: string; justification?: string }> };
-const FLOOR_COMMENT =
-  "Minimum control count per surface, recorded from a live run. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. Regenerate deliberately with COV_FLOORS=update and commit the result with a reason.";
-const FLOOR_FILE = path.join(__dirname, "surface-floors.json");
-const FLOORS = JSON.parse(fs.readFileSync(FLOOR_FILE, "utf8")).surfaces as Floors;
-const EXCLUSIONS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "surface-exclusions.json"), "utf8"),
-).surfaces as SurfaceExclusion[];
-const REMOVED = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "removed-surfaces.json"), "utf8"),
-) as {
-  forbiddenControls: Array<{ surface: string; label: string; issue: string }>;
-  forbiddenRoutes: Array<{ path: string; issue: string }>;
-};
 
-// Anything that could destroy demo data. The gate still clicks these -- an
-// untested destructive control is exactly what the owner is complaining about --
-// but the write is intercepted at the network layer, so the request itself is
-// the proof and nothing is actually deleted.
-const DESTRUCTIVE = /delete|archive|clear|reset|remove|unshare|erase/i;
-
+/**
+ * Safety net, and deliberately not a source of proof.
+ *
+ * Destructive controls are recognised by their label and never clicked (see
+ * checkWithoutFiring). This second guard exists for the control whose label
+ * says nothing about what it does: its write is aborted at the network layer
+ * so the demo account's data survives, and the control it came from is then
+ * recorded as not-fired rather than as proven, because an aborted request
+ * never reaches the server and so has no verdict to read.
+ */
 function isDestructiveRequest(method: string, url: string): boolean {
   if (method === "DELETE") return true;
   return /\/(delete|archive|clear|reset|unshare)/i.test(url);
-}
-
-async function withDestructiveGuard<T>(
-  page: Page,
-  fn: () => Promise<T>,
-): Promise<{ value: T; blocked: string[] }> {
-  const blocked: string[] = [];
-  await page.route("**/*", async (route) => {
-    const req = route.request();
-    if (isDestructiveRequest(req.method(), req.url())) {
-      blocked.push(`${req.method()} ${req.url()}`);
-      await route.abort();
-      return;
-    }
-    await route.continue();
-  });
-  try {
-    const value = await fn();
-    return { value, blocked };
-  } finally {
-    await page.unroute("**/*");
-  }
 }
 
 async function saveIfPresent(page: Page): Promise<void> {
@@ -96,6 +68,28 @@ async function saveIfPresent(page: Page): Promise<void> {
     await page.waitForTimeout(1500);
   }
 }
+
+/**
+ * Failures that say nothing about the control.
+ *
+ * The demo box has gone unreachable for minutes at a time mid-run (#815), and
+ * a click that lands in that window is indistinguishable from a dead control.
+ * Only these retry. A clean verdict of "this control does nothing" is final on
+ * the first attempt: retrying it until it passes is how an in-test loop turns
+ * itself into the retries the config sets to zero on purpose.
+ */
+function isInfrastructural(result: Result): boolean {
+  return /surface would not re-open|was not there when the surface was re-opened|no verdict within/.test(
+    result.detail,
+  );
+}
+
+type PassContext = {
+  /** Request signatures the page emits on its own, sampled while idle. */
+  chatter: ReadonlySet<string>;
+  /** Writes the safety net aborted, appended to for the whole run. */
+  blockedWrites: string[];
+};
 
 /**
  * Click pass: one control at a time, re-opening the surface when an action
@@ -108,24 +102,26 @@ async function clickPass(
   surface: Surface,
   controls: Control[],
   results: Result[],
+  ctx: PassContext,
 ): Promise<void> {
   for (const ctl of controls) {
-    let res: Result | null = null;
+    let res: Result = {
+      key: ctl.key,
+      surface: surface.id,
+      name: ctl.label || ctl.name,
+      role: ctl.role || ctl.tag,
+      proven: false,
+      proof: "none",
+      detail: "the pass produced no verdict for this control",
+    };
 
-    // Two attempts. The demo box has gone unreachable for minutes at a time
-    // mid-run and recovered on its own (#815); a click that lands in that
-    // window is indistinguishable from a dead control, so only a control that
-    // does nothing twice from a clean surface is reported as one.
-    for (let attempt = 0; attempt < 2 && !res?.proven; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       let target: Control | undefined;
       try {
         target = await relocate(page, surface, ctl.key);
       } catch (err) {
         res = {
-          key: ctl.key,
-          surface: surface.id,
-          name: ctl.label || ctl.name,
-          role: ctl.role || ctl.tag,
+          ...res,
           proven: false,
           proof: "none",
           detail: `surface would not re-open: ${String(err).split("\n")[0].slice(0, 120)}`,
@@ -134,10 +130,7 @@ async function clickPass(
       }
       if (!target) {
         res = {
-          key: ctl.key,
-          surface: surface.id,
-          name: ctl.label || ctl.name,
-          role: ctl.role || ctl.tag,
+          ...res,
           proven: false,
           proof: "none",
           detail: "control was not there when the surface was re-opened",
@@ -145,23 +138,29 @@ async function clickPass(
         continue;
       }
 
-      if (DESTRUCTIVE.test(target.label || target.name)) {
-        const { value, blocked } = await withDestructiveGuard(page, () =>
-          proveByClick(page, target!),
-        );
-        res =
-          blocked.length > 0 && !value.proven
-            ? { ...value, proven: true, proof: "network", detail: `blocked write: ${blocked[0]}` }
-            : value;
-        await page.keyboard.press("Escape").catch(() => {});
+      if (isDestructive(target)) {
+        res = await checkWithoutFiring(page, target);
       } else {
-        res = await proveByClick(page, target);
+        const before = ctx.blockedWrites.length;
+        res = await proveByClick(page, target, { ignoreRequests: ctx.chatter });
+        if (ctx.blockedWrites.length > before) {
+          // It fired a write the safety net stopped. Whatever the positive
+          // channels saw, the server never answered, so there is no verdict
+          // to record and this is not proof.
+          res = {
+            ...res,
+            proven: false,
+            proof: "not-fired",
+            detail: `fired a write that was intercepted (${ctx.blockedWrites[before]}), so the server never answered it`,
+          };
+        }
       }
+      if (res.proven || isDeferred(res) || !isInfrastructural(res)) break;
     }
 
-    results.push(res!);
+    results.push(res);
     // eslint-disable-next-line no-console
-    console.log(`[control] ${res!.proven ? res!.proof : "UNPROVEN"} :: ${res!.key}`);
+    console.log(`[control] ${res.proven ? res.proof : res.proof === "not-fired" ? "NOT-FIRED" : "UNPROVEN"} :: ${res.key}`);
   }
 }
 
@@ -181,13 +180,11 @@ async function persistencePass(
 
   let live = await enumerateSurface(page, surface);
   const baselines = new Map<string, string | null>();
-  const covIds = new Map<string, string>();
 
   for (const ctl of statefuls) {
     const target = live.find((c) => c.key === ctl.key);
     if (!target) continue;
     baselines.set(ctl.key, target.state);
-    covIds.set(ctl.key, target.covId);
     await flip(page, target).catch(() => {});
     await page.waitForTimeout(200);
   }
@@ -335,28 +332,6 @@ async function valuePass(
   }
 }
 
-const SELF_TEST_HTML = `
-<main style="min-height:400px">
-  <div id="out">idle</div>
-  <div id="toast" role="alert"></div>
-  <button aria-label="Wired">Wired</button>
-  <button aria-label="Dead">Dead</button>
-  <button aria-label="Failing">Failing</button>
-  <button aria-label="Toasty">Toasty</button>
-</main>
-<script>
-  const out = document.getElementById('out');
-  const toast = document.getElementById('toast');
-  const at = (n) => document.querySelector('[aria-label="' + n + '"]');
-  at('Wired').addEventListener('click', () => { out.textContent = 'the wired button did something'; });
-  at('Failing').addEventListener('click', async () => {
-    try { await fetch('/api/save', { method: 'POST' }); } catch (e) {}
-    toast.textContent = 'Something went wrong, please try again';
-  });
-  at('Toasty').addEventListener('click', () => { toast.textContent = 'Error: could not save'; });
-</script>
-`;
-
 test.describe("chat interaction coverage", () => {
   test("every rendered chat control has a proven live effect", async ({ page }) => {
     test.setTimeout(45 * 60_000);
@@ -373,16 +348,16 @@ test.describe("chat interaction coverage", () => {
           window.addEventListener(
             type,
             (e) => {
-              const el = (e.target as HTMLElement | null)?.closest(
-                "button, a, [role=button], [role=tab], [role=switch]",
-              );
+              const el =
+                e.target instanceof HTMLElement
+                  ? e.target.closest("button, a, [role=button], [role=tab], [role=switch]")
+                  : null;
               if (!el) return;
               const text = (el.getAttribute("aria-label") || el.textContent || "").trim();
               if (text.toLowerCase() === needle.toLowerCase()) {
                 e.stopImmediatePropagation();
                 e.preventDefault();
-                const w = window as unknown as { __covBlocked?: number };
-                w.__covBlocked = (w.__covBlocked ?? 0) + 1;
+                window.__covBlocked = (window.__covBlocked ?? 0) + 1;
               }
             },
             true,
@@ -395,16 +370,46 @@ test.describe("chat interaction coverage", () => {
       // eslint-disable-next-line no-console
       console.log(`[stage ${new Date().toISOString().slice(11, 19)}] ${msg}`);
     };
+
+    // Safety net for the whole run. Nothing that reaches this is proof of
+    // anything; see isDestructiveRequest.
+    const blockedWrites: string[] = [];
+    await page.route("**/*", async (route) => {
+      const req = route.request();
+      if (isDestructiveRequest(req.method(), req.url())) {
+        blockedWrites.push(`${req.method()} ${req.url()}`);
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    });
+
     stage("opening the chat surface");
     await gotoHome(page);
 
+    const errors: string[] = [];
+    errors.push(...exclusionFailures(EXCLUSIONS));
+
     // Surface list is assembled live. Settings tabs and Workspace sections come
     // from the DOM, so this run covers whatever the deployment actually renders.
+    // A discovery that finds nothing throws rather than returning an empty
+    // list; it is recorded and the sweep continues, so the run still produces a
+    // ledger, and the floor guard below fails on every surface it lost.
     stage("discovering settings tabs");
-    const settings = await discoverSettingsTabs(page);
+    let settings: Surface[] = [];
+    try {
+      settings = await discoverSettingsTabs(page);
+    } catch (err) {
+      errors.push(`settings discovery failed: ${String(err).split("\n")[0]}`);
+    }
     await page.keyboard.press("Escape").catch(() => {});
     stage(`discovering workspace sections (settings tabs: ${settings.length})`);
-    const workspace = await discoverWorkspaceTabs(page);
+    let workspace: Surface[] = [];
+    try {
+      workspace = await discoverWorkspaceTabs(page);
+    } catch (err) {
+      errors.push(`workspace discovery failed: ${String(err).split("\n")[0]}`);
+    }
     stage(`workspace sections: ${workspace.length}`);
     const allSurfaces: Surface[] = [
       ...STATIC_SURFACES.filter((s) => s.id !== "user-menu"),
@@ -419,18 +424,19 @@ test.describe("chat interaction coverage", () => {
     const filter = process.env.COV_SURFACES ? new RegExp(process.env.COV_SURFACES) : null;
     // Exclusions are enumerated, owned, and tied to an open issue, and they
     // leave the denominator entirely rather than counting as covered. The
-    // expiry test below fails once the blocking issue closes, so an exclusion
-    // cannot quietly outlive its reason.
+    // expiry test in break-proof.spec.ts fails once the blocking issue closes,
+    // so an exclusion cannot quietly outlive its reason.
     const excludedIds = new Set(EXCLUSIONS.map((e) => e.id));
-    const surfaces = (filter ? allSurfaces.filter((s) => filter.test(s.id)) : allSurfaces).filter(
-      (s) => !excludedIds.has(s.id),
-    );
+    const inScope = (id: string) => !excludedIds.has(id) && (filter === null || filter.test(id));
+    const surfaces = allSurfaces.filter((s) => inScope(s.id));
     expect(surfaces.length, "surface filter matched nothing").toBeGreaterThan(0);
+    // A sliced run measures a slice. It still writes a ledger and still fails
+    // on any control that does nothing, but it must never print a percentage
+    // of the whole, because its denominator is not the whole.
+    const partial = filter !== null;
 
     const results: Result[] = [];
-    const errors: string[] = [];
-    const swept: Array<{ surface: string; enumerated: number }> = [];
-    errors.push(...exclusionFailures(EXCLUSIONS));
+    const swept: Swept[] = [];
 
     for (const surface of surfaces) {
       let controls: Control[] = [];
@@ -450,8 +456,15 @@ test.describe("chat interaction coverage", () => {
       const stateful = controls.filter(isStateful);
       const clickable = controls.filter((c) => !isStateful(c));
 
+      // What this surface does while nobody is touching it. Anything in here
+      // cannot be counted as a control's network proof.
+      const chatter = await sampleChatter(page, 1500);
+      if (chatter.size > 0) {
+        stage(`${surface.id}: ignoring ${chatter.size} background request signature(s)`);
+      }
+
       try {
-        await clickPass(page, surface, clickable, results);
+        await clickPass(page, surface, clickable, results, { chatter, blockedWrites });
       } catch (err) {
         errors.push(`${surface.id}: click pass aborted (${String(err).split("\n")[0]})`);
       }
@@ -479,44 +492,36 @@ test.describe("chat interaction coverage", () => {
 
     if (sabotage) {
       const blocked = await page
-        .evaluate(() => (window as unknown as { __covBlocked?: number }).__covBlocked ?? 0)
+        .evaluate(() => window.__covBlocked ?? 0)
         .catch(() => 0);
       stage(`sabotage "${sabotage}" intercepted ${blocked} events on the last page`);
     }
 
-    // Denominator guard, before anything is said about the ratio.
-    if (process.env.COV_FLOORS === "update") {
-      const next: Floors = { ...FLOORS };
-      // A surface that enumerated nothing measured nothing, so it gets no
-      // floor. Recording a floor of zero would be a bar nothing can fail.
-      for (const entry of swept) {
-        if (entry.enumerated > 0) next[entry.surface] = entry.enumerated;
-      }
-      const ordered: Floors = {};
-      for (const key of Object.keys(next).sort()) ordered[key] = next[key];
-      const body = { "$comment": FLOOR_COMMENT, surfaces: ordered };
-      fs.writeFileSync(FLOOR_FILE, JSON.stringify(body, null, 2) + "\n");
-      // eslint-disable-next-line no-console
-      console.log("[coverage] surface-floors.json rewritten from this run");
-    } else {
-      errors.push(...floorFailures(FLOORS, swept));
-    }
+    // Denominator guard, before anything is said about the ratio. This run only
+    // ever reads the floors. Raising or lowering them is a separate, deliberate
+    // operation: scripts/update-chat-coverage-floors.mjs, run against a
+    // recorded ledger, in its own commit, with a reason. A run that could
+    // rewrite its own bar in the same pass that checks it has no bar at all,
+    // which is how a real degradation was once ratified as the new baseline.
+    errors.push(...floorFailures(FLOORS, swept, inScope));
 
     const summary = summarise(results);
     const registryHits = new Map<string, string>();
-    for (const entry of REGISTRY.allowed) {
+    for (const entry of REGISTRY) {
       if (!entry.key) continue;
-      registryHits.set(entry.key, (entry.justification ?? "").trim());
+      registryHits.set(entry.key, entry.justification.trim());
     }
     const excused = results.filter(
       (r) =>
         !r.proven &&
+        !isDeferred(r) &&
         [...registryHits.entries()].some(
           ([key, justification]) => r.key.includes(key) && justification.length > 0,
         ),
     );
+    const deferred = results.filter(isDeferred);
     const failures = results.filter(
-      (r) => !r.proven && !excused.some((e) => e.key === r.key),
+      (r) => !r.proven && !isDeferred(r) && !excused.some((e) => e.key === r.key),
     );
 
     fs.mkdirSync(REPORT_DIR, { recursive: true });
@@ -525,9 +530,13 @@ test.describe("chat interaction coverage", () => {
       generatedAt,
       target: process.env.CHAT_URL ?? process.env.OWUI_URL ?? "",
       surfaceFilter: process.env.COV_SURFACES ?? null,
+      partial,
       sabotage: sabotage || null,
       summary,
+      swept,
       excused: excused.map((r) => r.key),
+      deferred: deferred.map((r) => r.key),
+      blockedWrites,
       surfaceErrors: errors,
       results,
     };
@@ -539,9 +548,7 @@ test.describe("chat interaction coverage", () => {
     // Tracker. Assertions below judge this run only; this file carries the
     // running total across sliced runs so the ratio is comparable over time.
     const trackerPath = path.join(REPORT_DIR, "coverage.json");
-    const tracker: Record<string, Result & { lastSeen: string }> = fs.existsSync(trackerPath)
-      ? (JSON.parse(fs.readFileSync(trackerPath, "utf8")).controls ?? {})
-      : {};
+    const tracker = readTracker(trackerPath);
     // Drop stale keys before merging. A surface swept in this run is fully
     // described by this run, so anything it used to contain and no longer does
     // has to go, or a control that was removed (or an enumeration bug that has
@@ -568,29 +575,41 @@ test.describe("chat interaction coverage", () => {
         2,
       ),
     );
+    const headline = partial
+      ? [
+          `Partial run: surfaces matching ${String(process.env.COV_SURFACES)} only.`,
+          `Proven ${summary.identitiesProven} of the ${summary.identities} distinct control identities on those surfaces. No percentage is reported for a slice, because its denominator is not the app.`,
+        ]
+      : [
+          `Proven ${summary.identitiesProven}/${summary.identities} distinct control identities (${(summary.identityRatio * 100).toFixed(1)}%)`,
+          ``,
+          `Secondary, not comparable between runs: ${summary.proven}/${summary.total} raw instances (${(summary.ratio * 100).toFixed(1)}%). Instance counts move with account data, for example the number of chat rows, so only the identity figure above should be compared over time.`,
+        ];
     const lines = [
       `# Chat interaction coverage`,
       ``,
-      `Proven ${summary.identitiesProven}/${summary.identities} distinct control identities (${(summary.identityRatio * 100).toFixed(1)}%)`,
+      ...headline,
       ``,
-      `Secondary, not comparable between runs: ${summary.proven}/${summary.total} raw instances (${(summary.ratio * 100).toFixed(1)}%). Instance counts move with account data, for example the number of chat rows, so only the identity figure above should be compared over time.`,
+      `Checked but deliberately not activated: ${summary.identitiesDeferred} identities (${summary.deferred} instances). A control whose label says it destroys data is asserted present, enabled and named, and never clicked. That is not coverage and is never counted as proof.`,
       ``,
-      `| surface | proven | total |`,
-      `| --- | ---: | ---: |`,
+      `| surface | proven | not fired | total |`,
+      `| --- | ---: | ---: | ---: |`,
       ...Object.entries(summary.surfaces).map(
-        ([s, v]) => `| ${s} | ${v.proven} | ${v.total} |`,
+        ([s, v]) => `| ${s} | ${v.proven} | ${v.deferred} | ${v.total} |`,
       ),
       ``,
       `## Unproven`,
       ...(failures.length === 0
         ? ["none"]
-        : failures.map((f) => `- \`${f.key}\` — ${f.detail}`)),
+        : failures.map((f) => `- \`${f.key}\`: ${f.detail}`)),
     ];
     fs.writeFileSync(path.join(REPORT_DIR, "coverage.md"), lines.join("\n"));
 
     // eslint-disable-next-line no-console
     console.log(
-      `[coverage] TOTAL ${summary.identitiesProven}/${summary.identities} identities (${(summary.identityRatio * 100).toFixed(1)}%), ${summary.proven}/${summary.total} instances`,
+      partial
+        ? `[coverage] PARTIAL slice ${String(process.env.COV_SURFACES)}: ${summary.identitiesProven}/${summary.identities} identities on the swept surfaces, ${summary.deferred} instances not fired. No total for a slice.`
+        : `[coverage] TOTAL ${summary.identitiesProven}/${summary.identities} identities (${(summary.identityRatio * 100).toFixed(1)}%), ${summary.proven}/${summary.total} instances, ${summary.deferred} not fired`,
     );
 
     expect(errors, `surfaces that could not be swept: ${errors.join(" | ")}`).toEqual([]);
@@ -600,81 +619,44 @@ test.describe("chat interaction coverage", () => {
     ).toEqual([]);
   });
 
-  test("the prover tells a working control from a broken one", async ({ page }) => {
-    test.setTimeout(120_000);
-    // A gate nobody has watched fail is worth nothing. Four buttons that look
-    // alike: wired does something and must be proven; dead has no handler and
-    // must be unproven; failing calls an endpoint that answers 500 and shows a
-    // toast and must be unproven, which is the case that used to come back
-    // proven twice over; toasty only shows an error and must be unproven.
-    //
-    // An intercepted origin rather than setContent, so the failing button has a
-    // same-origin endpoint whose status the prover can actually read.
-    await page.route("https://cov.selftest/**", async (route) => {
-      if (route.request().url().endsWith("/index")) {
-        await route.fulfill({ contentType: "text/html", body: SELF_TEST_HTML });
-        return;
-      }
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "boom" }),
-      });
-    });
-    await page.goto("https://cov.selftest/index");
-
-    const controls = await enumerate(page, "self-test");
-    const byName = (name: string) => controls.find((c) => c.name === name);
-    for (const name of ["Wired", "Dead", "Failing", "Toasty"]) {
-      expect(byName(name), "the fixture must render " + name).toBeTruthy();
-    }
-
-    const wired = await proveByClick(page, byName("Wired")!);
-    const dead = await proveByClick(page, byName("Dead")!);
-    const failing = await proveByClick(page, byName("Failing")!);
-    const toasty = await proveByClick(page, byName("Toasty")!);
-
-    expect(wired.proven, "a working control was reported as broken: " + wired.detail).toBe(true);
-    expect(dead.proven, "a control with no handler was reported as working: " + dead.detail).toBe(
-      false,
-    );
-    expect(
-      failing.proven,
-      "a control whose endpoint answered 500 was reported as working: " + failing.detail,
-    ).toBe(false);
-    expect(failing.detail).toContain("500");
-    expect(
-      toasty.proven,
-      "a control that only raised an error was reported as working: " + toasty.detail,
-    ).toBe(false);
-    expect(toasty.detail).toContain("raised an error");
-  });
-
   test("surfaces removed from upstream Open WebUI stay absent", async ({ page }) => {
     test.setTimeout(10 * 60_000);
     await gotoHome(page);
 
     const found: string[] = [];
     const seen: Array<{ surface: string; label: string }> = [];
+    const enumerated = new Map<string, number>();
+
+    const collect = async (surface: string) => {
+      const controls = await enumerate(page, surface);
+      enumerated.set(surface, controls.length);
+      for (const c of controls) {
+        seen.push({ surface, label: (c.name || c.label).trim() });
+      }
+    };
 
     await openSettings(page);
-    for (const c of await enumerate(page, "settings")) {
-      seen.push({ surface: "settings:", label: (c.name || c.label).trim() });
-    }
+    await collect("settings:");
     await page.keyboard.press("Escape").catch(() => {});
 
     await gotoHome(page);
     await page.getByRole("button", { name: /user menu/i }).first().click();
     await page.waitForTimeout(1200);
-    for (const c of await enumerate(page, "user-menu")) {
-      seen.push({ surface: "user-menu", label: (c.name || c.label).trim() });
-    }
+    await collect("user-menu");
     await page.keyboard.press("Escape").catch(() => {});
 
     await page.goto("/workspace", { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
-    for (const c of await enumerate(page, "workspace")) {
-      seen.push({ surface: "workspace", label: (c.name || c.label).trim() });
+    await collect("workspace");
+
+    // Absence only means something if the enumeration happened. A settings
+    // modal that never opened produces the same empty list as a settings modal
+    // with nothing forbidden in it, and this test used to call that a pass.
+    for (const [surface, count] of enumerated) {
+      expect(
+        count,
+        `${surface} enumerated no controls at all, so it proves nothing about what was removed from it`,
+      ).toBeGreaterThan(0);
     }
 
     for (const rule of REMOVED.forbiddenControls) {
@@ -690,46 +672,82 @@ test.describe("chat interaction coverage", () => {
     for (const route of REMOVED.forbiddenRoutes) {
       await page.goto(route.path, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(2500);
+      const landed = new URL(page.url()).pathname;
+      // A bounce to the sign-in page is a dead session, not a removed route.
+      // Treating it as removal is how this test would pass against an app
+      // nobody is signed in to.
+      expect(
+        landed.startsWith("/auth"),
+        `${route.path} redirected to the sign-in page, so the session died and absence proves nothing`,
+      ).toBe(false);
       const body = (await page.locator("body").innerText()).toLowerCase();
+      expect(
+        body.trim().length,
+        `${route.path} rendered an empty document, so absence proves nothing`,
+      ).toBeGreaterThan(0);
       const gone =
-        body.includes("not found") ||
-        body.includes("404") ||
-        !new URL(page.url()).pathname.startsWith(route.path);
+        body.includes("not found") || body.includes("404") || !landed.startsWith(route.path);
       if (!gone) found.push(`${route.path} still renders a page (${route.issue})`);
     }
 
     expect(found, "removed upstream surfaces are still reachable").toEqual([]);
   });
-
-  test("every inert-registry entry carries a justification", async () => {
-    const bad = REGISTRY.allowed.filter(
-      (e) => !e.key || !(e.justification ?? "").trim(),
-    );
-    expect(
-      bad.map((e) => e.key ?? "(no key)"),
-      "registry entries without a key or a justification",
-    ).toEqual([]);
-    expect(exclusionFailures(EXCLUSIONS), "malformed surface exclusions").toEqual([]);
-  });
-
-  // An exclusion ends when the thing blocking it is fixed, and the only
-  // authority on that is the issue tracker. Without a token the state cannot be
-  // read, so this reports that it could not run rather than passing quietly.
-  test("no excluded surface waits on an issue that already closed", async ({ request }) => {
-    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
-    test.skip(token === "", "GITHUB_TOKEN is required to read issue state");
-    const repo = process.env.GITHUB_REPOSITORY ?? "sakibsadmanshajib/hive";
-    const closed = new Set<number>();
-    for (const entry of EXCLUSIONS) {
-      if (entry.issue === undefined) continue;
-      const url =
-        "https://api.github.com/repos/" + repo + "/issues/" + String(entry.issue);
-      const headers = { authorization: "Bearer " + token, accept: "application/vnd.github+json" };
-      const response = await request.get(url, { headers });
-      if (!response.ok()) continue;
-      const body = (await response.json()) as { state?: string };
-      if (body.state === "closed") closed.add(entry.issue);
-    }
-    expect(expiredExclusions(EXCLUSIONS, closed)).toEqual([]);
-  });
 });
+
+type TrackedResult = Result & { lastSeen: string };
+
+/**
+ * The running tracker from a previous slice, if there is one. Read defensively:
+ * a truncated or hand-edited file is not worth failing a 45 minute sweep over,
+ * and starting from empty only costs this run its cross-slice history.
+ */
+function readTracker(file: string): Record<string, TrackedResult> {
+  if (!fs.existsSync(file)) return {};
+  const out: Record<string, TrackedResult> = {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return out;
+  }
+  if (typeof parsed !== "object" || parsed === null) return out;
+  const controls = Object.entries(parsed).find(([name]) => name === "controls")?.[1];
+  if (typeof controls !== "object" || controls === null) return out;
+  for (const [key, value] of Object.entries(controls)) {
+    if (typeof value !== "object" || value === null) continue;
+    const entry = new Map(Object.entries(value));
+    const surface = entry.get("surface");
+    const proofValue = entry.get("proof");
+    if (typeof surface !== "string" || typeof proofValue !== "string") continue;
+    out[key] = {
+      key,
+      surface,
+      name: String(entry.get("name") ?? ""),
+      role: String(entry.get("role") ?? ""),
+      proven: entry.get("proven") === true,
+      proof: proofOf(proofValue),
+      detail: String(entry.get("detail") ?? ""),
+      lastSeen: String(entry.get("lastSeen") ?? ""),
+    };
+  }
+  return out;
+}
+
+const PROOF_NAMES = [
+  "navigate",
+  "network",
+  "dom",
+  "overlay",
+  "download",
+  "filechooser",
+  "value",
+  "persisted",
+  "disabled-with-reason",
+  "not-fired",
+  "none",
+] as const;
+
+function proofOf(value: string): Result["proof"] {
+  const match = PROOF_NAMES.find((name) => name === value);
+  return match ?? "none";
+}

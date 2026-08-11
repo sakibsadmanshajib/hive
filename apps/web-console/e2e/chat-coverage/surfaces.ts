@@ -1,11 +1,11 @@
 // Surface openers. These are navigation recipes only: how to get the app into
 // the state where a group of controls is on screen. They deliberately contain
-// no list of controls -- what is on screen is read from the DOM by lib.ts, so
-// a control added to any of these surfaces later is picked up without editing
-// this file.
+// no list of controls, because what is on screen is read from the DOM by
+// lib.ts, so a control added to any of these surfaces later is picked up
+// without editing this file.
 import type { Page } from "@playwright/test";
 
-import { enumerate, type Control } from "./lib";
+import { enumerate, redactUrl, type Control } from "./lib";
 
 export type Surface = {
   id: string;
@@ -56,8 +56,11 @@ export async function gotoHome(page: Page): Promise<void> {
               .slice(0, 12),
           )
           .catch(() => []);
+        // Redacted, because this message is written to the ledger and to CI
+        // logs. If the app bounced the run through its OAuth callback, the raw
+        // URL here would publish a live `code` and `state`.
         throw new Error(
-          `could not get back to the chat home. url=${page.url()} visible=${JSON.stringify(names)}`,
+          `could not get back to the chat home. url=${redactUrl(page.url())} visible=${JSON.stringify(names)}`,
         );
       }
       await page.waitForTimeout(20_000);
@@ -207,9 +210,17 @@ export const STATIC_SURFACES: Surface[] = [
 export async function discoverSettingsTabs(page: Page): Promise<Surface[]> {
   await openSettings(page);
   const tabs = await page.getByRole("tab").allInnerTexts();
-  return tabs
-    .map((t) => t.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
+  const named = tabs.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+  // Discovering nothing is a broken modal, not a deployment with no settings.
+  // Returning an empty list quietly would drop every settings tab out of the
+  // denominator and report the remaining surfaces as the whole app.
+  if (named.length === 0) {
+    throw new Error(
+      "settings discovery found no tabs; the settings modal did not render, so its controls " +
+        "would silently leave the denominator",
+    );
+  }
+  return named
     .map((tab, index) => ({
       id: `settings:${tab}`,
       persists: true,
@@ -238,6 +249,15 @@ export async function discoverWorkspaceTabs(page: Page): Promise<Surface[]> {
     .evaluateAll((els) =>
       [...new Set(els.map((e) => e.getAttribute("href") ?? ""))].filter(Boolean),
     );
+  // Same reasoning as the settings tabs above. An empty result here used to be
+  // returned silently, which took every workspace section out of the
+  // denominator without a word in the report.
+  if (hrefs.length === 0) {
+    throw new Error(
+      "workspace discovery found no sections; /workspace rendered no links, so every " +
+        "workspace:* control would silently leave the denominator",
+    );
+  }
   return hrefs.map((href) => ({
     id: `workspace:${href.replace("/workspace/", "")}`,
     delta: true,

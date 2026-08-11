@@ -9,6 +9,16 @@
 // the exact failure mode the owner named.
 import type { Page, Locator } from "@playwright/test";
 
+declare global {
+  interface Window {
+    /** Mutation records counted by the watcher below. */
+    __covMut?: number;
+    __covObs?: MutationObserver;
+    /** Events the sabotage hook intercepted, for the self-test. */
+    __covBlocked?: number;
+  }
+}
+
 // Everything a user can reach with a mouse or a keyboard. Roles are included
 // alongside tags because Open WebUI builds switches, tabs and menu items out of
 // plain <button>s with ARIA roles.
@@ -35,6 +45,62 @@ export const SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
+/**
+ * Query and fragment parameters that are a login on their own.
+ *
+ * Mirrors the list in tools/lint-no-token-in-proof-captures.mjs, which is the
+ * CI guard for the same class of leak. Kept as a local copy rather than an
+ * import because that file is an .mjs, and Playwright compiles spec imports to
+ * CommonJS, which cannot load it.
+ */
+const CREDENTIAL_PARAMS = [
+  "access_token",
+  "refresh_token",
+  "token_hash",
+  "hashed_token",
+  "email_otp",
+  "token",
+  "code",
+  "state",
+];
+
+/**
+ * Strips credential-bearing parameters out of an URL before it is written
+ * anywhere: an error message, the ledger, a console line, a report.
+ *
+ * The OAuth hop that signs this suite in carries `code` and `state` in the
+ * callback URL, and both are live credentials until consumed. Fragments are
+ * covered as well as query strings, because the implicit-flow form of the same
+ * callback puts them after the hash.
+ */
+export function redactUrl(url: string): string {
+  const scrub = (search: string): string => {
+    const params = new URLSearchParams(search);
+    let touched = false;
+    for (const name of CREDENTIAL_PARAMS) {
+      if (params.has(name)) {
+        params.set(name, "REDACTED");
+        touched = true;
+      }
+    }
+    return touched ? params.toString() : search;
+  };
+  try {
+    const parsed = new URL(url);
+    parsed.search = scrub(parsed.search.replace(/^\?/, ""));
+    parsed.hash = parsed.hash.includes("=")
+      ? "#" + scrub(parsed.hash.replace(/^#/, ""))
+      : parsed.hash;
+    return parsed.toString();
+  } catch {
+    // Not an absolute URL. Redact the whole thing rather than guess: a bare
+    // token pasted into a message has no structure to parse.
+    return CREDENTIAL_PARAMS.some((name) => url.includes(name + "="))
+      ? url.replace(/([?&#][a-z_]*(?:token|code|state|otp)[a-z_]*=)[^&#\s]+/gi, "$1REDACTED")
+      : url;
+  }
+}
+
 export type Control = {
   key: string;
   surface: string;
@@ -60,7 +126,14 @@ export type Proof =
   | "filechooser"
   | "value"
   | "persisted"
-  | "disabled-with-reason";
+  | "disabled-with-reason"
+  // Checked but deliberately never activated: a control whose label says it
+  // destroys data. Its own category because it is NOT proof that the control
+  // works. Firing it and aborting the write at the network layer used to be
+  // recorded as proof, which is worse than no coverage: the abort means the
+  // server never answers, so a control pointing at an endpoint that is gone
+  // (the #846 defect class) came back green.
+  | "not-fired";
 
 export type Result = {
   key: string;
@@ -71,6 +144,15 @@ export type Result = {
   proof: Proof | "none";
   detail: string;
 };
+
+/**
+ * A control that was checked but not activated. Not proven, and not a
+ * failure either: it is carried in its own bucket so it can never be read as
+ * coverage, and so the count of controls nobody dares fire is visible.
+ */
+export function isDeferred(result: Result): boolean {
+  return result.proof === "not-fired";
+}
 
 /**
  * Assets and background chatter never count as evidence that a control did
@@ -94,6 +176,51 @@ function isMeaningfulRequest(url: string): boolean {
   if (/\/_app\/|\/static\/|\/favicon/i.test(url)) return false;
   if (/\/socket\.io\/|\/ws(\/|$)|\/__nextjs/i.test(url)) return false;
   return true;
+}
+
+/**
+ * The shape of a request, with everything that varies between two otherwise
+ * identical calls removed: the query string, and every id-looking path
+ * segment. Two polls of the same endpoint collapse to one signature, so a poll
+ * observed while nothing was happening can be recognised again when it lands
+ * inside a control's settle window.
+ */
+export function requestSignature(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const path = parsed.pathname
+    .split("/")
+    .map((segment) =>
+      /^[0-9a-f-]{8,}$/i.test(segment) || /^\d+$/.test(segment) ? "#" : segment,
+    )
+    .join("/");
+  return parsed.origin + path;
+}
+
+/**
+ * Requests the page makes on its own, sampled with nobody touching it.
+ *
+ * Open WebUI polls REST endpoints as well as socket.io, and any poll that
+ * lands inside a control's settle window used to be counted as that control's
+ * network proof. Only socket.io was excluded, by name, which covered one
+ * poller out of several. Sampling the idle page instead names them all, for
+ * whatever the deployment actually does, and nothing that fires while nobody
+ * is clicking can be evidence that a click did something.
+ */
+export async function sampleChatter(page: Page, ms: number): Promise<Set<string>> {
+  const seen = new Set<string>();
+  const onRequest = (r: { url: () => string }) => {
+    const u = r.url();
+    if (isMeaningfulRequest(u)) seen.add(requestSignature(u));
+  };
+  page.on("request", onRequest);
+  await page.waitForTimeout(ms);
+  page.off("request", onRequest);
+  return seen;
 }
 
 // Runs inside the page. Tags every visible interactive element with a
@@ -206,11 +333,10 @@ export function locate(page: Page, ctl: Control): Locator {
 
 async function startWatch(page: Page): Promise<() => Promise<{ mutations: number }>> {
   await page.evaluate(() => {
-    const w = window as unknown as { __covMut?: number; __covObs?: MutationObserver };
-    w.__covObs?.disconnect();
-    w.__covMut = 0;
+    window.__covObs?.disconnect();
+    window.__covMut = 0;
     const obs = new MutationObserver((records) => {
-      w.__covMut = (w.__covMut ?? 0) + records.length;
+      window.__covMut = (window.__covMut ?? 0) + records.length;
     });
     obs.observe(document.body, {
       subtree: true,
@@ -218,13 +344,12 @@ async function startWatch(page: Page): Promise<() => Promise<{ mutations: number
       attributes: true,
       characterData: true,
     });
-    w.__covObs = obs;
+    window.__covObs = obs;
   });
   return async () => {
     const mutations = await page.evaluate(() => {
-      const w = window as unknown as { __covMut?: number; __covObs?: MutationObserver };
-      const n = w.__covMut ?? 0;
-      w.__covObs?.disconnect();
+      const n = window.__covMut ?? 0;
+      window.__covObs?.disconnect();
       return n;
     });
     return { mutations };
@@ -293,10 +418,21 @@ async function visibleSignature(page: Page): Promise<string> {
  * non-trivial DOM mutation. No consequence at all is a failure, which is the
  * whole point of the gate.
  */
+export type ProveOptions = {
+  settleMs?: number;
+  budgetMs?: number;
+  /**
+   * Request signatures the page produces on its own, from sampleChatter. A
+   * request whose signature is in here is background noise and can never be
+   * this control's proof.
+   */
+  ignoreRequests?: ReadonlySet<string>;
+};
+
 export async function proveByClick(
   page: Page,
   ctl: Control,
-  opts: { settleMs?: number; budgetMs?: number } = {},
+  opts: ProveOptions = {},
 ): Promise<Result> {
   // Hard budget. A single control that wedges the page (a native dialog, a
   // beforeunload prompt, a permission request) must not be able to consume the
@@ -325,7 +461,7 @@ export async function proveByClick(
 async function proveByClickInner(
   page: Page,
   ctl: Control,
-  opts: { settleMs?: number } = {},
+  opts: ProveOptions = {},
 ): Promise<Result> {
   const base = { key: ctl.key, surface: ctl.surface, name: ctl.label || ctl.name, role: ctl.role || ctl.tag };
   if (ctl.disabled) {
@@ -335,10 +471,13 @@ async function proveByClickInner(
       : { ...base, proven: false, proof: "none", detail: "disabled with no reason attribute" };
   }
 
+  const chatter = opts.ignoreRequests ?? new Set<string>();
   const requests: string[] = [];
   const onRequest = (r: { url: () => string }) => {
     const u = r.url();
-    if (isMeaningfulRequest(u)) requests.push(u);
+    if (!isMeaningfulRequest(u)) return;
+    if (chatter.has(requestSignature(u))) return;
+    requests.push(u);
   };
   page.on("request", onRequest);
   // Statuses, not just URLs. This file never registered a response listener at
@@ -352,7 +491,8 @@ async function proveByClickInner(
   }) => {
     const u = r.url();
     if (!isMeaningfulRequest(u)) return;
-    if (r.status() >= 400) failed.push(String(r.status()) + " " + r.request().method() + " " + u);
+    if (r.status() >= 400)
+      failed.push(String(r.status()) + " " + r.request().method() + " " + redactUrl(u));
   };
   page.on("response", onResponse);
   let download = false;
@@ -444,25 +584,98 @@ async function proveByClickInner(
   if (filechooser) return { ...base, proven: true, proof: "filechooser", detail: "file chooser opened" };
   if (popup) return { ...base, proven: true, proof: "navigate", detail: "opened a new tab" };
   if (urlAfter !== urlBefore)
-    return { ...base, proven: true, proof: "navigate", detail: `${urlBefore} -> ${urlAfter}` };
+    return {
+      ...base,
+      proven: true,
+      proof: "navigate",
+      detail: `${redactUrl(urlBefore)} -> ${redactUrl(urlAfter)}`,
+    };
   // Either direction. Closing a modal is as real an effect as opening one, and
   // an increase-only check reported every close button as dead.
   if (overlaysAfter !== overlaysBefore)
     return { ...base, proven: true, proof: "overlay", detail: `overlays ${overlaysBefore} -> ${overlaysAfter}` };
   if (requests.length > 0)
-    return { ...base, proven: true, proof: "network", detail: requests.slice(0, 3).join(", ").slice(0, 200) };
+    return {
+      ...base,
+      proven: true,
+      proof: "network",
+      detail: requests.slice(0, 3).map(redactUrl).join(", ").slice(0, 200),
+    };
   if (signatureAfter !== signatureBefore)
     return { ...base, proven: true, proof: "dom", detail: "what is on screen changed" };
-  // Last resort. A settings tab switch emits 6 or 7 mutation records, so any
-  // threshold that filtered idle churn also swallowed it; the signature above
-  // is the real test and this only catches changes too subtle to render.
-  if (mutations > 8)
-    return { ...base, proven: true, proof: "dom", detail: `${mutations} mutations` };
+  // Deliberately no mutation-count fallback. A "more than eight records"
+  // threshold used to sit here, and nothing ever measured what an idle page
+  // emits in the same window, so it was a number that could pass a control on
+  // background churn. The rendered-text signature above is the measured test;
+  // the count survives only in the failure detail, where it explains rather
+  // than decides.
   return {
     ...base,
     proven: false,
     proof: "none",
     detail: clickError || `no effect (mutations=${mutations})`,
+  };
+}
+
+/**
+ * Anything whose label says it destroys data.
+ *
+ * Matched on the label rather than on the request, because the decision has to
+ * be taken before the click.
+ */
+export const DESTRUCTIVE = /delete|archive|clear|reset|remove|unshare|erase/i;
+
+export function isDestructive(ctl: Control): boolean {
+  return DESTRUCTIVE.test(ctl.label || ctl.name);
+}
+
+/**
+ * The check a destructive control gets instead of a click.
+ *
+ * It cannot be activated: the account is shared and the data is the demo's.
+ * It cannot be activated with its write aborted at the network layer either,
+ * which is what this suite used to do, because an aborted request has no
+ * server verdict at all, so a button wired to an endpoint that no longer
+ * exists came back proven. What is left that is worth asserting is that the
+ * control is there, that it is offered to the user rather than sitting inert
+ * and disabled with no explanation, and that it carries a name and, if it is
+ * a link, a destination. That is recorded as "not-fired", never as proof.
+ */
+export async function checkWithoutFiring(page: Page, ctl: Control): Promise<Result> {
+  const base = {
+    key: ctl.key,
+    surface: ctl.surface,
+    name: ctl.label || ctl.name,
+    role: ctl.role || ctl.tag,
+  };
+  const el = locate(page, ctl);
+  const visible = await el.isVisible().catch(() => false);
+  if (!visible) {
+    return { ...base, proven: false, proof: "none", detail: "destructive control is not on screen" };
+  }
+  if (ctl.disabled) {
+    const reason = ctl.reason.trim();
+    return reason
+      ? { ...base, proven: true, proof: "disabled-with-reason", detail: reason.slice(0, 120) }
+      : { ...base, proven: false, proof: "none", detail: "disabled with no reason attribute" };
+  }
+  if ((ctl.label || ctl.name).trim() === "") {
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail: "destructive control carries no accessible name, so nobody can tell what it destroys",
+    };
+  }
+  if (ctl.tag === "a" && ctl.href.trim() === "") {
+    return { ...base, proven: false, proof: "none", detail: "destructive link has no href" };
+  }
+  return {
+    ...base,
+    proven: false,
+    proof: "not-fired",
+    detail:
+      "destructive by label, so it was checked (present, enabled, named) and deliberately not activated",
   };
 }
 
@@ -540,43 +753,56 @@ export function identityOf(key: string): string {
 }
 
 export function summarise(results: Result[]) {
-  const bySurface = new Map<string, { total: number; proven: number; unproven: string[] }>();
+  const bySurface = new Map<
+    string,
+    { total: number; proven: number; deferred: number; unproven: string[] }
+  >();
   for (const r of results) {
-    const s = bySurface.get(r.surface) ?? { total: 0, proven: 0, unproven: [] };
+    const s = bySurface.get(r.surface) ?? { total: 0, proven: 0, deferred: 0, unproven: [] };
     s.total += 1;
     if (r.proven) s.proven += 1;
+    else if (isDeferred(r)) s.deferred += 1;
     else s.unproven.push(`${r.name || "(unnamed)"} [${r.role}] :: ${r.detail}`);
     bySurface.set(r.surface, s);
   }
   const total = results.length;
   const proven = results.filter((r) => r.proven).length;
+  const deferred = results.filter(isDeferred).length;
   // Primary figure. An identity counts as proven only when every instance of
   // it proved, so a control that works on the first chat row and fails on the
   // seventh is unproven, and the gate fails on the failing instance anyway
   // because it fails on any unproven result at all.
-  const byIdentity = new Map<string, { instances: number; proven: number }>();
+  const byIdentity = new Map<string, { instances: number; proven: number; deferred: number }>();
   for (const r of results) {
     const id = identityOf(r.key);
-    const cell = byIdentity.get(id) ?? { instances: 0, proven: 0 };
+    const cell = byIdentity.get(id) ?? { instances: 0, proven: 0, deferred: 0 };
     cell.instances += 1;
     if (r.proven) cell.proven += 1;
+    if (isDeferred(r)) cell.deferred += 1;
     byIdentity.set(id, cell);
   }
   const identityTotal = byIdentity.size;
   const identityProven = [...byIdentity.values()].filter(
     (cell) => cell.proven === cell.instances,
   ).length;
+  // An identity every instance of which was deliberately not fired. Counted
+  // apart from both proven and failing, so the headline can never absorb it.
+  const identityDeferred = [...byIdentity.values()].filter(
+    (cell) => cell.deferred === cell.instances,
+  ).length;
   return {
     // Primary. Distinct control identities, independent of how many rows of
     // repeated chrome the account happens to render.
     identities: identityTotal,
     identitiesProven: identityProven,
+    identitiesDeferred: identityDeferred,
     identityRatio:
       identityTotal === 0 ? 0 : Number((identityProven / identityTotal).toFixed(4)),
     // Secondary, and not comparable between runs: raw instances, whose count
     // moves with account data rather than with the product.
     total,
     proven,
+    deferred,
     ratio: total === 0 ? 0 : Number((proven / total).toFixed(4)),
     surfaces: Object.fromEntries(bySurface),
     identityInstances: Object.fromEntries(byIdentity),
@@ -597,11 +823,34 @@ export function summarise(results: Result[]) {
  */
 export type Floors = Record<string, number>;
 
+export type Swept = { surface: string; enumerated: number };
+
+/**
+ * @param floors committed minimum control count per surface
+ * @param swept what this run actually enumerated
+ * @param scope surfaces this run was asked to cover. A floor key outside it is
+ *   not checked; a floor key inside it that never got swept is a failure,
+ *   because iterating the swept list alone means a surface that vanishes takes
+ *   its own floor with it and the denominator shrinks in silence.
+ */
 export function floorFailures(
   floors: Floors,
-  swept: Array<{ surface: string; enumerated: number }>,
+  swept: Swept[],
+  scope: (surface: string) => boolean = () => true,
 ): string[] {
   const out: string[] = [];
+  const sweptIds = new Set(swept.map((entry) => entry.surface));
+  for (const surface of Object.keys(floors).sort()) {
+    if (sweptIds.has(surface) || !scope(surface)) continue;
+    out.push(
+      surface +
+        ": has a floor of " +
+        String(floors[surface]) +
+        " in surface-floors.json but this run never swept it, so its controls left the" +
+        " denominator entirely. Sweep it, exclude it deliberately in surface-exclusions.json," +
+        " or drop its floor with a reason",
+    );
+  }
   for (const entry of swept) {
     const floor = floors[entry.surface];
     if (floor === undefined) {
@@ -661,6 +910,120 @@ export function exclusionFailures(exclusions: SurfaceExclusion[]): string[] {
     }
   }
   return out;
+}
+
+// --- Reading the committed data files ---------------------------------------
+//
+// Hand-written validators rather than a cast on JSON.parse. A cast asserts a
+// shape the compiler cannot check and the file cannot be made to honour, so a
+// floors file whose numbers were saved as strings, or an exclusions file
+// missing its array, would sail past the type system and turn into undefined
+// at the point where the gate is deciding whether to fail.
+
+function fields(value: unknown, where: string): Map<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${where}: expected a JSON object`);
+  }
+  return new Map(Object.entries(value));
+}
+
+function items(value: unknown, where: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${where}: expected a JSON array`);
+  return value;
+}
+
+function requiredString(map: Map<string, unknown>, name: string, where: string): string {
+  const value = map.get(name);
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${where}: "${name}" must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(map: Map<string, unknown>, name: string, where: string): string | undefined {
+  const value = map.get(name);
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`${where}: "${name}" must be a string`);
+  return value;
+}
+
+export function parseFloors(value: unknown): Floors {
+  const surfaces = fields(fields(value, "surface-floors.json").get("surfaces"), "surface-floors.json surfaces");
+  const out: Floors = {};
+  for (const [surface, count] of surfaces) {
+    if (typeof count !== "number" || !Number.isInteger(count) || count <= 0) {
+      throw new Error(`surface-floors.json: floor for ${surface} must be a positive integer`);
+    }
+    out[surface] = count;
+  }
+  return out;
+}
+
+export function parseExclusions(value: unknown): SurfaceExclusion[] {
+  const raw = items(fields(value, "surface-exclusions.json").get("surfaces"), "surface-exclusions.json surfaces");
+  return raw.map((entry, index) => {
+    const where = `surface-exclusions.json entry ${index}`;
+    const map = fields(entry, where);
+    const issue = map.get("issue");
+    if (issue !== undefined && typeof issue !== "number") {
+      throw new Error(`${where}: "issue" must be a number`);
+    }
+    const permanent = map.get("permanent");
+    if (permanent !== undefined && typeof permanent !== "boolean") {
+      throw new Error(`${where}: "permanent" must be a boolean`);
+    }
+    return {
+      id: requiredString(map, "id", where),
+      reason: optionalString(map, "reason", where),
+      owner: optionalString(map, "owner", where),
+      issue,
+      permanent,
+    };
+  });
+}
+
+export type InertEntry = { key: string; justification: string };
+
+export function parseRegistry(value: unknown): InertEntry[] {
+  const raw = items(fields(value, "inert-registry.json").get("allowed"), "inert-registry.json allowed");
+  return raw.map((entry, index) => {
+    const where = `inert-registry.json entry ${index}`;
+    const map = fields(entry, where);
+    return {
+      key: optionalString(map, "key", where) ?? "",
+      justification: optionalString(map, "justification", where) ?? "",
+    };
+  });
+}
+
+export type RemovedSurfaces = {
+  forbiddenControls: Array<{ surface: string; label: string; issue: string }>;
+  forbiddenRoutes: Array<{ path: string; issue: string }>;
+};
+
+export function parseRemoved(value: unknown): RemovedSurfaces {
+  const top = fields(value, "removed-surfaces.json");
+  const controls = items(top.get("forbiddenControls"), "removed-surfaces.json forbiddenControls");
+  const routes = items(top.get("forbiddenRoutes"), "removed-surfaces.json forbiddenRoutes");
+  return {
+    forbiddenControls: controls.map((entry, index) => {
+      const where = `removed-surfaces.json forbiddenControls entry ${index}`;
+      const map = fields(entry, where);
+      return {
+        surface: requiredString(map, "surface", where),
+        label: requiredString(map, "label", where),
+        issue: requiredString(map, "issue", where),
+      };
+    }),
+    forbiddenRoutes: routes.map((entry, index) => {
+      const where = `removed-surfaces.json forbiddenRoutes entry ${index}`;
+      const map = fields(entry, where);
+      return {
+        path: requiredString(map, "path", where),
+        issue: requiredString(map, "issue", where),
+      };
+    }),
+  };
 }
 
 export function expiredExclusions(
