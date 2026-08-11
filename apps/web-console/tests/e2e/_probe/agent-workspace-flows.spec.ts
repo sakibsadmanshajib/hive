@@ -311,6 +311,14 @@ test.describe("authenticated task console", () => {
      * would mean launching several real sandboxes on a shared demo box for no
      * extra coverage. The task is cancelled at the end rather than left to run
      * its full course.
+     *
+     * Do not read a second run inside the same quarter hour as a flake. Cancel
+     * is a database transition only: it never reaches the engine, so the
+     * sandbox keeps running and keeps its concurrency slot until it ends on its
+     * own (issue #886). Two runs in quick succession exhaust
+     * HIVE_QUOTA_USER_CONCURRENCY, and the third create then genuinely fails
+     * with "agent engine could not start the task", which the row renders as
+     * Blocked. That is the deployment answering honestly, not this test.
      */
     test.setTimeout(360_000);
     await signIn(page);
@@ -410,10 +418,20 @@ test.describe("authenticated task console", () => {
     await expect(
       page.getByRole("status").filter({ hasText: "The agent runtime is not configured" }),
     ).toHaveCount(0);
-    // Non-terminal, so the row offers Cancel. "Blocked" is what a failed
-    // launch reads as, and asserting against it here is what catches a
-    // regression back to the unconfigured state.
-    await expect(row).not.toContainText("Blocked");
+    /*
+     * Non-terminal, so the row offers Cancel. "Blocked" is what both engine
+     * sentinels read as, and there are exactly two ways to get one:
+     * the runtime is unconfigured on this deployment, which the notice
+     * asserted just above would also show; or the launcher refused this
+     * particular launch, which on a repeated run is the held quota slot in
+     * issue #886.
+     */
+    await expect(
+      row,
+      "the task must reach a non-terminal state so cancel is exercisable. Blocked means the " +
+        "launcher refused it: either no runtime is configured, or the user's concurrency slots " +
+        "are still held by earlier cancelled tasks (issue #886).",
+    ).not.toContainText("Blocked");
     const cancel = row.getByRole("button", { name: "Cancel" });
     await expect(cancel).toBeVisible();
 
