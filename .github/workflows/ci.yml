@@ -1397,7 +1397,18 @@ jobs:
         # locally booted stack they fail on DNS rather than on the change
         # under test. They keep their own `probe` project and are carried
         # as justified debt in tests/dark-spec-allowlist.json.
-        run: npx playwright test --project=chromium
+        #
+        # --trace=off, and it is a security setting rather than a speed one.
+        # This job's report is uploaded as an artifact, this repository is
+        # public, and a trace records every request header verbatim, including
+        # the Authorization bearer of the Supabase session these specs sign in
+        # with. Deleting trace zips from the upload is not enough on its own:
+        # the HTML reporter inlines its whole data directory into index.html as
+        # base64, so the material survives inside a file that does not look
+        # like an attachment. Not producing the trace is the only version of
+        # this that cannot be got wrong later. Screenshots and video stay: they
+        # are pixels of rendered pages, not headers.
+        run: npx playwright test --project=chromium --trace=off
 
       # ------------------------------------------------------------------
       # Phase-19 tenant-isolation specs (issue #659). These are the specs
@@ -1514,13 +1525,13 @@ jobs:
           path: apps/web-console/playwright-report/
           if-no-files-found: ignore
           # This repository is public, so anyone with the run URL can
-          # download this. A Playwright trace records request headers
-          # verbatim, including the Authorization bearer of whatever session
-          # the suite held, and `::add-mask::` only ever redacts log text,
-          # never an uploaded file. The phase-19 project turns tracing off
-          # for that reason (see playwright.config.ts); this bounds the
-          # window for everything else in the report to a day, well inside
-          # a Supabase access token's own lifetime.
+          # download this. Neither suite in this job produces a trace any
+          # more (the phase-19 project sets trace: "off" in
+          # playwright.config.ts, the UI step passes --trace=off), which is
+          # what keeps Authorization headers out of the upload: `::add-mask::`
+          # redacts log text only, never a file, and the HTML reporter inlines
+          # its data directory into index.html as base64, so filtering by
+          # extension would miss it. The short retention is the second belt.
           retention-days: 1
 
       - name: Tear down stack

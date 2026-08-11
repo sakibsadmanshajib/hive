@@ -218,6 +218,30 @@ def strip_memberships(rest, headers, user_id: str) -> None:
         sys.exit(1)
 
 
+def assert_token_works(gotrue, anon_key: str, token: str, email: str) -> None:
+    """Fail here rather than in a spec if the token is not usable.
+
+    control-plane authenticates every request by calling this exact endpoint
+    (apps/control-plane/internal/auth/client.go, LookupUser) and answers 401 on
+    any error, so a token that fails here reaches the specs as a bare 401 that
+    reads like a broken assertion. Checking it at the source names the fault.
+    """
+    status, body = request(
+        gotrue,
+        {"apikey": anon_key, "Authorization": f"Bearer {token}"},
+        "GET",
+        "/user",
+    )
+    if status != 200:
+        print(
+            f"error: the session minted for {email} is not accepted by "
+            f"GET /auth/v1/user ({status}); every authenticated call the specs "
+            f"make would answer 401. Body: {body}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def mint_session(gotrue, headers, anon_key: str, email: str) -> tuple[str, str]:
     """Mint a live session the way a magic-link login does.
 
@@ -288,8 +312,17 @@ def main() -> None:
 
     # The user id comes back from the session mint rather than from an admin
     # user listing, which keeps this script off the endpoint in issue #791.
+    #
+    # Two mints for user A, deliberately. The first only learns the id; the
+    # second produces the token the specs carry, and it is taken AFTER the
+    # metadata write. An admin update of a user ends that user's sessions, so a
+    # token minted before the write is already dead by the time a spec presents
+    # it, and every authenticated call answers 401. That is what the first live
+    # run of these specs showed (issue #659). The orphan needs no second mint:
+    # the only write after its mint is to public.tenant_users, which is not an
+    # auth.users change.
     ensure_user(gotrue, headers, USER_A_EMAIL)
-    user_a_jwt, user_a_id = mint_session(gotrue, headers, anon_key, USER_A_EMAIL)
+    _, user_a_id = mint_session(gotrue, headers, anon_key, USER_A_EMAIL)
     if not user_a_id:
         print("error: verify returned no user id for user A", file=sys.stderr)
         sys.exit(1)
@@ -298,6 +331,8 @@ def main() -> None:
     set_user_metadata(gotrue, headers, user_a_id, {"selected_tenant_id": tenant_a})
     upsert_membership(rest, headers, tenant_a, user_a_id, USER_A_ROLE)
     upsert_membership(rest, headers, tenant_a2, user_a_id, USER_A_ROLE)
+    user_a_jwt, _ = mint_session(gotrue, headers, anon_key, USER_A_EMAIL)
+    assert_token_works(gotrue, anon_key, user_a_jwt, USER_A_EMAIL)
 
     ensure_user(gotrue, headers, ORPHAN_EMAIL)
     orphan_jwt, orphan_id = mint_session(gotrue, headers, anon_key, ORPHAN_EMAIL)
@@ -305,6 +340,7 @@ def main() -> None:
         print("error: verify returned no user id for the orphan", file=sys.stderr)
         sys.exit(1)
     strip_memberships(rest, headers, orphan_id)
+    assert_token_works(gotrue, anon_key, orphan_jwt, ORPHAN_EMAIL)
 
     print(f"TENANT_A_ID={tenant_a}")
     print(f"TENANT_A2_ID={tenant_a2}")
