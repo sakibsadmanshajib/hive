@@ -1,101 +1,77 @@
 {
-  "comment": "Debt ledger for docs/TESTING-STANDARD.md shape 14. Every entry is a spec file no workflow runs, resolved by scripts/verify-spec-wiring.mjs asking Playwright what each discovered workflow invocation collects. Entries are debt: remove one by running the spec from a workflow. The guard fails on a stale entry, so this list cannot outlive the problem.",
-  "entries": [
+  "$doc": [
+    "Debt ledger for docs/TESTING-STANDARD.md shape 14. Every spec file here is one that no pull",
+    "request run selects, resolved by tools/verify-spec-wiring.mjs from playwright-spec-manifest.json.",
+    "",
+    "Two states are declarable, and the guard fails when the declared one and the measured one",
+    "disagree, in either direction:",
+    "  other  some workflow selects it, but only on a trigger a pull request cannot fire: a nightly",
+    "         schedule, a manual dispatch, or a labelled run",
+    "  dark   no workflow selects it at all",
+    "",
+    "What the guard enforces, stated plainly so nobody reads more into this file than is true: the",
+    "state, that a reason, owner and integer issue number are present, and that no spec is declared",
+    "twice. It does NOT check that the issue is still open, because that needs a network call inside",
+    "a required check. Issue 813 was closed on 2026-08-11 while eight entries here still cited it, so",
+    "a stale reference is a real failure mode this file does not catch on its own; re-read the",
+    "references when you touch a group.",
+    "",
+    "Specs are grouped by shared cause rather than listed one by one with a free-text reason each.",
+    "An earlier version demanded a reason of at least 25 characters per entry, which is a threshold",
+    "set at whatever the current value happened to be: seven entries then carried one byte-identical",
+    "sentence and passed it."
+  ],
+  "groups": [
     {
-      "spec": "e2e/phase-19/01-signin-google.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "state": "other",
+      "specs": [
+        "e2e/phase-19/01-signin-google.spec.ts",
+        "e2e/phase-19/02-first-chat.spec.ts",
+        "e2e/phase-19/03-tenant-isolation.spec.ts",
+        "e2e/phase-19/04-tenant-switch.spec.ts",
+        "e2e/phase-19/05-jwt-expiry.spec.ts",
+        "e2e/phase-19/06-no-tenant-block.spec.ts",
+        "e2e/phase-19/07-cross-tenant-attack.spec.ts"
+      ],
+      "reason": "The phase-19 project runs in owui-nightly.yml, which fires on a schedule, a manual dispatch, or a pull request carrying the run-owui-e2e label. An ordinary pull request selects none of it. Worse than that for coverage purposes: 03 through 07 skip themselves by name on E2E_TENANT_B_ID, E2E_USER_A_SECOND_TENANT_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT, which no environment provides, so two of these seven actually execute assertions anywhere. Provisioning a second tenant and the two crafted JWTs is the remaining half of the issue below.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
-      "spec": "e2e/phase-19/02-first-chat.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "state": "other",
+      "specs": [
+        "e2e/phase-19/owui/01-chat-send-stream.spec.ts",
+        "e2e/phase-19/owui/02-chat-multi-turn.spec.ts",
+        "e2e/phase-19/owui/03-chat-model-switch.spec.ts",
+        "e2e/phase-19/owui/04-rag-personal-pdf-upload.spec.ts",
+        "e2e/phase-19/owui/05-rag-personal-citation.spec.ts",
+        "e2e/phase-19/owui/06-tenant-model-visibility.spec.ts",
+        "e2e/phase-19/owui/07-image-upload-vision.spec.ts",
+        "e2e/phase-19/owui/08-signout.spec.ts",
+        "e2e/phase-19/owui/09-agent-workspace-launcher.spec.ts",
+        "e2e/phase-19/owui/performance/embed-latency.spec.ts",
+        "e2e/phase-19/owui/performance/ttfb.spec.ts"
+      ],
+      "reason": "The owui and owui-perf projects run in owui-nightly.yml, on the same schedule, dispatch and labelled-run triggers. They do execute for real against a booted Open WebUI with provisioned OAuth secrets, and they spend real provider credit doing it, which is why they are nightly rather than per pull request. They protect nothing on the merge path until that changes, and moving them there is the coverage programme tracked below.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "dark",
+      "specs": ["e2e/phase-19/owui/deployed-login.spec.ts"],
+      "reason": "Sits alone in the owui-deployed-login project, which no workflow invokes. owui-nightly.yml selects owui and owui-perf only, so this file has never executed anywhere. Either wire the project or delete the spec; carrying it is what makes the tree look better covered than it is.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
-      "spec": "e2e/phase-19/03-tenant-isolation.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "state": "dark",
+      "specs": [
+        "tests/e2e/_probe/agent-workspace-flows.spec.ts",
+        "tests/e2e/_probe/staging-flows.spec.ts"
+      ],
+      "reason": "Manual staging probes in the probe project, which no workflow invokes and the chromium project ignores by testDir. They target deployed hosts by name and are gated on HIVE_QA variables that appear in no workflow, so against a locally booted stack they fail on DNS rather than on the change under test. The open decision is whether they become a scheduled suite against the demo box or a documented manual tool.",
       "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "e2e/phase-19/04-tenant-switch.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
-      "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "e2e/phase-19/05-jwt-expiry.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
-      "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "e2e/phase-19/06-no-tenant-block.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
-      "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "e2e/phase-19/07-cross-tenant-attack.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
-      "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "e2e/phase-19/owui/deployed-login.spec.ts",
-      "reason": "Belongs to the owui-deployed-login project, which owui-nightly.yml does not invoke. Only the owui and owui-perf projects run there.",
-      "owner": "sakibsadmanshajib",
-      "issue": 708
-    },
-    {
-      "spec": "tests/e2e/_probe/agent-workspace-flows.spec.ts",
-      "reason": "Manual staging probe gated on HIVE_QA variables that appear in no workflow. Decide whether it becomes a CI suite or a documented manual tool.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/_probe/staging-flows.spec.ts",
-      "reason": "Manual staging probe gated on HIVE_QA variables that appear in no workflow. Decide whether it becomes a CI suite or a documented manual tool.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/billing-fx-zero-leak.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/console-billing.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/console-invoices.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/console-spend-alerts.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/i18n-bengali.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/openai-sdk.spec.ts",
-      "reason": "Deliberate and documented in ci.yml: it needs a real completion round trip and that path is covered by the Live integration job instead. Listed so the decision stays visible.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
+      "issue": 821
     }
   ]
 }

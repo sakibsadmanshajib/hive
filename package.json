@@ -16,6 +16,8 @@
     "lint:pgx-dsn": "node tools/lint-no-pgx-dsn-for-libpq.mjs",
     "lint:no-client-cost-fields": "node tools/lint-no-client-cost-fields.mjs",
     "lint:sync-child-process": "node tools/lint-no-sync-child-process-in-tests.mjs",
+    "lint:spec-wiring": "node tools/verify-spec-wiring.mjs",
+    "lint:go-db-test-wiring": "node tools/lint-go-db-test-wiring.mjs",
     "soc2:report": "node tools/soc2-coverage-report.mjs",
     "soc2:check": "node tools/soc2-coverage-report.mjs --check",
     "cloudflare:check": "node deploy/cloudflare/reconcile-tunnel-dns.mjs",

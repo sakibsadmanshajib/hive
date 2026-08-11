@@ -638,6 +638,21 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:no-client-cost-fields
 
+      # Issue #813. A Playwright spec that no workflow runs emits no signal at
+      # all, and one that only a nightly runs protects nothing on the merge
+      # path. This reports the two separately and holds the difference in
+      # apps/web-console/tests/dark-spec-allowlist.json. It lives here, not in
+      # web-unit, because it reads workflow YAML and the pinned spec manifest
+      # and needs neither browsers nor the web console's dependencies.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:spec-wiring
+
+      # Issue #659, #797. A Go package carrying a database-gated test skips
+      # silently when it is absent from the RLS step's package list, which is
+      # how the platform package went from never running to green in one line.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:go-db-test-wiring
+
       # Self-checks for the provisioning scripts (pure python, no network, no
       # framework). Wired into CI here because nothing ran them before: the
       # `make test-scripts` target existed but no workflow invoked it, so every
@@ -718,15 +733,6 @@ jobs:
       - name: Spec collection guard
         if: needs.changes.outputs.run != 'false'
         run: npm run e2e:verify-collection
-
-      # Guard for issue #813. A spec file that no workflow names never
-      # runs and emits no signal at all, so a required E2E job would
-      # protect nothing while those stay dark. Fails on a spec that is
-      # neither wired nor carried as justified debt in
-      # apps/web-console/tests/dark-spec-allowlist.json.
-      - name: Spec wiring guard (no dark spec files)
-        if: needs.changes.outputs.run != 'false'
-        run: npm run test:spec-wiring
 
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'

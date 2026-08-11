@@ -367,8 +367,13 @@ const invocationCount = { pr: 0, other: 0 };
 for (const file of workflowFiles()) {
 	const doc = parse(readFileSync(file, "utf8"));
 	for (const step of runSteps(file, doc)) {
+		// `npm run <script>` resolves against the package.json of the directory it
+		// runs in, so only expand scripts for a step that runs in the web console.
+		// A direct `npx playwright test` is still read from anywhere, and fails
+		// below on its working directory rather than being quietly ignored.
+		const visibleScripts = step.workingDirectory === WEB_CONSOLE ? scripts : {};
 		for (const command of shellCommands(step.run)) {
-			for (const invocation of playwrightInvocations(command, scripts)) {
+			for (const invocation of playwrightInvocations(command, visibleScripts)) {
 				if (step.workingDirectory !== WEB_CONSOLE) {
 					fail(
 						`${step.where}: \`${invocation.shown}\` runs with working-directory ` +

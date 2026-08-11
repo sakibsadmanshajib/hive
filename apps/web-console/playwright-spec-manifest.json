@@ -12,8 +12,21 @@
     "",
     "Project names come from playwright.config.ts and e2e/phase-19/owui/playwright.owui.config.ts.",
     "The owui projects gate their testMatch on credentials, so the guard lists that config",
-    "with placeholders to keep collection deterministic everywhere."
+    "with placeholders to keep collection deterministic everywhere.",
+    "",
+    "`configs` pins each config to the projects it declares, verified by the same guard from the",
+    "same listing. tools/verify-spec-wiring.mjs reads it to resolve a workflow's `--config` and",
+    "`--project` arguments into a set of spec files without importing any config file itself."
   ],
+  "configs": {
+    "playwright.config.ts": ["chromium", "phase-19", "phase-19-setup", "probe"],
+    "e2e/phase-19/owui/playwright.owui.config.ts": [
+      "owui",
+      "owui-deployed-login",
+      "owui-perf",
+      "owui-setup"
+    ]
+  },
   "specs": {
     "e2e/phase-19/01-signin-google.spec.ts": ["phase-19"],
     "e2e/phase-19/02-first-chat.spec.ts": ["phase-19"],
