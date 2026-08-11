@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -140,10 +141,16 @@ func (r *Remote) post(ctx context.Context, path string, body any, out any) error
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		if e.Error == "" {
-			e.Error = string(raw)
+		detail := e.Error
+		if detail == "" {
+			detail = string(raw)
 		}
-		return fmt.Errorf("agentengine: %s: status %d: %s", path, resp.StatusCode, e.Error)
+		// The daemon's own text names sandbox paths, egress hosts and the
+		// model provider behind a failed call. That detail belongs in this
+		// container's log, not in a value callers may surface, so the
+		// returned error carries only the operation and the status code.
+		log.Printf("agentengine: %s: status %d: %s", path, resp.StatusCode, detail)
+		return fmt.Errorf("agentengine: %s: status %d", path, resp.StatusCode)
 	}
 	if out == nil {
 		return nil

@@ -22,7 +22,7 @@ What it shows, and why each part could not appear on the previous build:
 
 Observed timeline for the run in the screenshot, from the capture log:
 
-```
+```text
 12:04:33  Queued    waiting for a sandbox
 12:04:56  Running   sandbox up, conversation started
 12:20:29  Done      result returned

@@ -31,8 +31,8 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -80,31 +80,28 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 	packsDir := os.Getenv("HIVE_AGENT_ENGINE_PACKS_DIR")
 	workspaceRoot := os.Getenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
 	runDir := os.Getenv("HIVE_AGENT_ENGINE_RUN_DIR")
+	// An agent profile ID is deliberately not accepted here. The sandbox runs
+	// with --containall, so the agent-server resolves a profile against a
+	// profile store on a filesystem that is a fresh empty container every
+	// session and can never hold one. Inline agent settings, which need a
+	// model alias, are the only shape that works, so require it outright
+	// rather than let a profile-only launch report healthy and fail on every
+	// task.
 	llmModel := os.Getenv("HIVE_AGENT_ENGINE_LLM_MODEL")
-	profileIDRaw := os.Getenv("HIVE_AGENT_ENGINE_PROFILE_ID")
 	var missing []string
 	for name, v := range map[string]string{
 		"HIVE_AGENT_ENGINE_SIF_PATH":       sifPath,
 		"HIVE_AGENT_ENGINE_PACKS_DIR":      packsDir,
 		"HIVE_AGENT_ENGINE_WORKSPACE_ROOT": workspaceRoot,
 		"HIVE_AGENT_ENGINE_RUN_DIR":        runDir,
+		"HIVE_AGENT_ENGINE_LLM_MODEL":      llmModel,
 	} {
 		if v == "" {
 			missing = append(missing, name)
 		}
 	}
-	if llmModel == "" && profileIDRaw == "" {
-		missing = append(missing, "HIVE_AGENT_ENGINE_LLM_MODEL (or HIVE_AGENT_ENGINE_PROFILE_ID)")
-	}
 	if len(missing) > 0 {
 		return fmt.Errorf("agent-engine: -serve needs %v", missing)
-	}
-	var profileID uuid.UUID
-	if profileIDRaw != "" {
-		var err error
-		if profileID, err = uuid.Parse(profileIDRaw); err != nil {
-			return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_PROFILE_ID: %w", err)
-		}
 	}
 	for _, dir := range []string{workspaceRoot, runDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -134,7 +131,9 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		if llmHost == "" {
 			return hosts, nil
 		}
-		return append(hosts, llmHost), nil
+		// Copied rather than appended in place: append can write into the
+		// backing array egress.Effective returned.
+		return append(append([]string(nil), hosts...), llmHost), nil
 	}
 
 	engine := engineapi.New(engineapi.Config{
@@ -145,12 +144,11 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		// Fails the launch when the policy cannot be resolved, exactly as
 		// the in-process wiring does: never launch with an unknown egress
 		// policy.
-		ResolveEgressHosts: resolveEgressHosts,
-		AgentProfileID:     profileID,
-		LLMModel:           llmModel,
-		LLMBaseURL:         llmBaseURL,
-		LLMAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
-		SessionAPIKey:      os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
+		ResolveEgressHosts:     resolveEgressHosts,
+		LLMModel:               llmModel,
+		LLMBaseURL:             llmBaseURL,
+		LLMAPIKey:              os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
+		SessionAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
 		QuotaTenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
 		QuotaUserConcurrency:   envInt("HIVE_QUOTA_USER_CONCURRENCY", 2),
 		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
@@ -241,7 +239,17 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return fmt.Errorf("agent-engine: chmod %s: %w", socketPath, err)
 	}
 
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Every request body here is one small JSON object capped at 1 MiB by
+	// decode, so a read that takes longer than this is a stuck peer rather
+	// than a slow one. WriteTimeout is deliberately left unset: /launch
+	// legitimately holds the response open while the sandbox starts and the
+	// conversation is submitted, which takes minutes on a cold container.
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {

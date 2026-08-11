@@ -97,24 +97,29 @@ echo "binary: $BIN_PATH"
 # Configuration. Written 0600 and read only by the unit below, so the API key
 # never reaches a command line, a unit property, or a log line.
 # ---------------------------------------------------------------------------
+#
+# The unit entry point below sources this file, so every value is written
+# through printf %q, Bash's own shell-safe quoting. A key or URL that happens
+# to contain whitespace, a quote, a newline or $(...) is then read back as
+# data rather than executed as the deploying user.
 umask 077
-cat > "$ENV_FILE" <<EOF
-HIVE_AGENT_ENGINE_SIF_PATH=$SIF_PATH
-HIVE_AGENT_ENGINE_PACKS_DIR=$REPO_DIR/apps/agent-engine/packs
-HIVE_AGENT_ENGINE_WORKSPACE_ROOT=$RUNTIME_DIR/workspaces
-HIVE_AGENT_ENGINE_RUN_DIR=$RUNTIME_DIR/sessions
-HIVE_AGENT_ENGINE_LLM_MODEL=$HIVE_AGENT_ENGINE_LLM_MODEL
-HIVE_AGENT_ENGINE_LLM_BASE_URL=$HIVE_AGENT_ENGINE_LLM_BASE_URL
-HIVE_AGENT_ENGINE_LLM_API_KEY=$HIVE_AGENT_ENGINE_LLM_API_KEY
-HIVE_AGENT_ENGINE_SESSION_API_KEY=${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}
-CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-http://127.0.0.1:8081}
-CONTROL_PLANE_INTERNAL_TOKEN=$CONTROL_PLANE_INTERNAL_TOKEN
-HIVE_QUOTA_TENANT_CONCURRENCY=${HIVE_QUOTA_TENANT_CONCURRENCY:-4}
-HIVE_QUOTA_USER_CONCURRENCY=${HIVE_QUOTA_USER_CONCURRENCY:-2}
-HIVE_SANDBOX_MEMORY_LIMIT=${HIVE_SANDBOX_MEMORY_LIMIT:-4G}
-HIVE_SANDBOX_CPU_LIMIT=${HIVE_SANDBOX_CPU_LIMIT:-2}
-HIVE_SANDBOX_PIDS_LIMIT=${HIVE_SANDBOX_PIDS_LIMIT:-512}
-EOF
+{
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_SIF_PATH "$SIF_PATH"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_PACKS_DIR "$REPO_DIR/apps/agent-engine/packs"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_WORKSPACE_ROOT "$RUNTIME_DIR/workspaces"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_RUN_DIR "$RUNTIME_DIR/sessions"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_LLM_MODEL "$HIVE_AGENT_ENGINE_LLM_MODEL"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_LLM_BASE_URL "$HIVE_AGENT_ENGINE_LLM_BASE_URL"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_LLM_API_KEY "$HIVE_AGENT_ENGINE_LLM_API_KEY"
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_SESSION_API_KEY "${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}"
+  printf '%s=%q\n' CONTROL_PLANE_URL "${CONTROL_PLANE_URL:-http://127.0.0.1:8081}"
+  printf '%s=%q\n' CONTROL_PLANE_INTERNAL_TOKEN "$CONTROL_PLANE_INTERNAL_TOKEN"
+  printf '%s=%q\n' HIVE_QUOTA_TENANT_CONCURRENCY "${HIVE_QUOTA_TENANT_CONCURRENCY:-4}"
+  printf '%s=%q\n' HIVE_QUOTA_USER_CONCURRENCY "${HIVE_QUOTA_USER_CONCURRENCY:-2}"
+  printf '%s=%q\n' HIVE_SANDBOX_MEMORY_LIMIT "${HIVE_SANDBOX_MEMORY_LIMIT:-4G}"
+  printf '%s=%q\n' HIVE_SANDBOX_CPU_LIMIT "${HIVE_SANDBOX_CPU_LIMIT:-2}"
+  printf '%s=%q\n' HIVE_SANDBOX_PIDS_LIMIT "${HIVE_SANDBOX_PIDS_LIMIT:-512}"
+} > "$ENV_FILE"
 chmod 0600 "$ENV_FILE"
 
 # Apptainer enforces this sandbox's --memory/--cpus/--pids-limit through
