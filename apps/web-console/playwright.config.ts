@@ -82,10 +82,17 @@ export default defineConfig({
     // Interaction coverage gate (see tests/interaction/README.md). Origin is
     // configurable so the same run targets the composed stack in CI and the
     // deployed box for a live run.
+    //
+    // Both projects run with retries: 0, against the repository default of two.
+    // A retry here is worse than useless: the sweep is one test that walks the
+    // whole console for tens of minutes, so a retry re-walks all of it, and a
+    // control that only works on the second attempt is exactly the defect this
+    // gate exists to report rather than to absorb.
     {
       name: "interaction-setup",
       testDir: "./tests/interaction",
       testMatch: /auth\.setup\.ts$/,
+      retries: 0,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: INTERACTION_BASE_URL,
@@ -98,6 +105,7 @@ export default defineConfig({
       name: "interaction",
       testDir: "./tests/interaction",
       testMatch: /interaction-coverage\.spec\.ts$/,
+      retries: 0,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: INTERACTION_BASE_URL,
