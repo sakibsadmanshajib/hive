@@ -35,11 +35,23 @@ export function collectExclusions(
 ): Exclusion[] {
   const out: Exclusion[] = [];
   for (const [route, fixture] of Object.entries(fixtures.routes)) {
-    if (fixture.skip === undefined || fixture.skip === "") {
+    // `expectRedirect` is an exclusion, and it was not being treated as one.
+    // A route that declares it is never enumerated: the sweep records the
+    // redirect and moves on, so every control the route would have rendered
+    // leaves the denominator. That is the same effect as a skip, reached by a
+    // different field, and it was reachable with no issue, no owner and no
+    // expiry at all.
+    const excluded = [
+      fixture.skip !== undefined && fixture.skip !== "" ? "skip" : "",
+      fixture.expectRedirect !== undefined && fixture.expectRedirect !== ""
+        ? "expectRedirect"
+        : "",
+    ].filter((value) => value !== "");
+    if (excluded.length === 0) {
       continue;
     }
     out.push({
-      what: `route-fixtures.json skip of ${route}`,
+      what: `route-fixtures.json ${excluded.join(" and ")} of ${route}`,
       issue: fixture.issue ?? null,
       permanent: fixture.permanent === true,
       owner: fixture.owner ?? "",

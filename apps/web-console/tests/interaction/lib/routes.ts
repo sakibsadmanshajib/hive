@@ -91,17 +91,94 @@ export function fillPattern(
   });
 }
 
-export function loadRouteFixtures(file: string): RouteFixtureFile {
-  const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("routes" in parsed) ||
-    typeof (parsed as { routes: unknown }).routes !== "object"
-  ) {
-    throw new Error(`${file} must be an object with a "routes" map`);
+const FIXTURE_FIELDS: ReadonlySet<string> = new Set([
+  "query",
+  "skip",
+  "owner",
+  "issue",
+  "permanent",
+  "params",
+  "auth",
+  "expectRedirect",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown, where: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  return parsed as RouteFixtureFile;
+  if (typeof value !== "string") {
+    throw new Error(`${where} must be a string`);
+  }
+  return value;
+}
+
+/**
+ * Reads the fixture file into the shape the sweep expects.
+ *
+ * Field by field rather than by asserting the parsed JSON is already of this
+ * type: a typo in a key name, or an issue number written as a string, would
+ * otherwise be a silently ignored field, and every field here either widens or
+ * narrows what gets measured.
+ */
+export function parseRouteFixtures(raw: string, source: string): RouteFixtureFile {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !isRecord(parsed.routes)) {
+    throw new Error(`${source} must be an object with a "routes" map`);
+  }
+  const routes: Record<string, RouteFixture> = {};
+  for (const [pattern, value] of Object.entries(parsed.routes)) {
+    if (!isRecord(value)) {
+      throw new Error(`${source} entry for "${pattern}" must be an object`);
+    }
+    const where = `${source} entry for "${pattern}"`;
+    for (const field of Object.keys(value)) {
+      if (!FIXTURE_FIELDS.has(field)) {
+        throw new Error(`${where} carries unknown field "${field}"`);
+      }
+    }
+    let params: Record<string, string> | undefined;
+    if (value.params !== undefined) {
+      if (!isRecord(value.params)) {
+        throw new Error(`${where} has a params field that is not an object`);
+      }
+      params = {};
+      for (const [name, param] of Object.entries(value.params)) {
+        if (typeof param !== "string") {
+          throw new Error(`${where} has a non-string value for param "${name}"`);
+        }
+        params[name] = param;
+      }
+    }
+    const auth = optionalString(value.auth, `${where} auth`);
+    if (auth !== undefined && auth !== "user" && auth !== "anon") {
+      throw new Error(`${where} auth must be "user" or "anon"`);
+    }
+    if (value.issue !== undefined && !Number.isInteger(value.issue)) {
+      throw new Error(`${where} issue must be an integer issue number`);
+    }
+    if (value.permanent !== undefined && typeof value.permanent !== "boolean") {
+      throw new Error(`${where} permanent must be a boolean`);
+    }
+    routes[pattern] = {
+      query: optionalString(value.query, `${where} query`),
+      skip: optionalString(value.skip, `${where} skip`),
+      owner: optionalString(value.owner, `${where} owner`),
+      issue: typeof value.issue === "number" ? value.issue : undefined,
+      permanent: value.permanent === true,
+      params,
+      auth,
+      expectRedirect: optionalString(value.expectRedirect, `${where} expectRedirect`),
+    };
+  }
+  return { routes };
+}
+
+export function loadRouteFixtures(file: string): RouteFixtureFile {
+  return parseRouteFixtures(readFileSync(file, "utf8"), file);
 }
 
 /**
