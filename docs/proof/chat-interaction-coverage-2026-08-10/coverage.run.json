@@ -1,0 +1,2560 @@
+{
+  "generatedAt": "2026-08-10T23:37:11.819Z",
+  "target": "https://chat-hive.scubed.co",
+  "surfaceFilter": null,
+  "sabotage": null,
+  "summary": {
+    "total": 270,
+    "proven": 248,
+    "ratio": 0.9185,
+    "surfaces": {
+      "home": {
+        "total": 28,
+        "proven": 25,
+        "unproven": [
+          "(unnamed) [button] :: control was not there when the surface was re-opened",
+          "(unnamed) [button] :: control was not there when the surface was re-opened",
+          "(unnamed) [div] :: not present on re-open"
+        ]
+      },
+      "model-picker": {
+        "total": 15,
+        "proven": 13,
+        "unproven": [
+          "All [button] :: no effect (mutations=0)",
+          "External [button] :: no effect (mutations=4)"
+        ]
+      },
+      "composer-more": {
+        "total": 6,
+        "proven": 5,
+        "unproven": [
+          "Upload Files [button] :: raised an error to the user: File not found."
+        ]
+      },
+      "composer-integrations": {
+        "total": 2,
+        "proven": 2,
+        "unproven": []
+      },
+      "search": {
+        "total": 106,
+        "proven": 106,
+        "unproven": []
+      },
+      "workspace": {
+        "total": 12,
+        "proven": 10,
+        "unproven": [
+          "Open Sidebar [button] :: control was not there when the surface was re-opened",
+          "Knowledge [a] :: no effect (mutations=2)"
+        ]
+      },
+      "settings:General": {
+        "total": 16,
+        "proven": 12,
+        "unproven": [
+          "General [tab] :: no effect (mutations=0)",
+          "Admin Settings [a] :: called an endpoint that is not mounted or that failed: 404 GET https://chat-hive.scubed.co/api/v1/auths/admin/config",
+          "Show [button] :: no effect (mutations=3)",
+          "Off [switch] :: changed in the UI but reverted to false after reload"
+        ]
+      },
+      "settings:Interface": {
+        "total": 48,
+        "proven": 44,
+        "unproven": [
+          "Floating Quick Actions [switch] :: not present on a clean re-open",
+          "Image Compression [switch] :: not present on a clean re-open",
+          "Allow User Location [switch] :: changed in the UI but reverted to false after reload",
+          "Auto-Copy Response to Clipboard [switch] :: changed in the UI but reverted to false after reload"
+        ]
+      },
+      "settings:Personalization": {
+        "total": 2,
+        "proven": 2,
+        "unproven": []
+      },
+      "settings:Audio": {
+        "total": 7,
+        "proven": 5,
+        "unproven": [
+          "Off [switch] :: not present on a clean re-open",
+          "Voice [select] :: changed in the UI but reverted to  after reload"
+        ]
+      },
+      "settings:Data Controls": {
+        "total": 7,
+        "proven": 5,
+        "unproven": [
+          "Archive All [button] :: no effect (mutations=3)",
+          "Delete All [button] :: no effect (mutations=3)"
+        ]
+      },
+      "settings:Account": {
+        "total": 5,
+        "proven": 5,
+        "unproven": []
+      },
+      "settings:About": {
+        "total": 5,
+        "proven": 4,
+        "unproven": [
+          "See what's new [button] :: no effect (mutations=0)"
+        ]
+      },
+      "workspace:knowledge/create": {
+        "total": 6,
+        "proven": 5,
+        "unproven": [
+          "Create Knowledge [button] :: no effect (mutations=0)"
+        ]
+      },
+      "user-menu": {
+        "total": 5,
+        "proven": 5,
+        "unproven": []
+      }
+    }
+  },
+  "excused": [],
+  "surfaceErrors": [
+    "sidebar: enumerated zero controls",
+    "chat-item-menu: could not open (TimeoutError: locator.click: Timeout 20000ms exceeded.)",
+    "chat-message-actions: could not open (TimeoutError: locator.click: Timeout 20000ms exceeded.)",
+    "workspace:knowledge: enumerated zero controls",
+    "user-menu: click pass aborted (Error: page.evaluate: Execution context was destroyed, most likely because of a navigation)"
+  ],
+  "results": [
+    {
+      "key": "home::button::Open Sidebar",
+      "surface": "home",
+      "name": "Open Sidebar",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/chats/all/tags"
+    },
+    {
+      "key": "home::button::Open Sidebar#2",
+      "surface": "home",
+      "name": "Open Sidebar",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/chats/all/tags"
+    },
+    {
+      "key": "home::a::New Chat",
+      "surface": "home",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "home::button::Search",
+      "surface": "home",
+      "name": "Search",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::a::Workspace",
+      "surface": "home",
+      "name": "Workspace",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/workspace/knowledge"
+    },
+    {
+      "key": "home::button::User menu",
+      "surface": "home",
+      "name": "User menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::Selected model: hive-auto",
+      "surface": "home",
+      "name": "Selected model: hive-auto",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::Add Model",
+      "surface": "home",
+      "name": "Add Model",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "home::button::Selected model: hive-auto#2",
+      "surface": "home",
+      "name": "Selected model: hive-auto",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::Remove Model",
+      "surface": "home",
+      "name": "Remove Model",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "home::button::Set as default",
+      "surface": "home",
+      "name": "Set as default",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/users/user/settings/update"
+    },
+    {
+      "key": "home::button::Temporary Chat",
+      "surface": "home",
+      "name": "Temporary Chat",
+      "role": "button",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/?temporary-chat=true"
+    },
+    {
+      "key": "home::button::Controls",
+      "surface": "home",
+      "name": "Controls",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "home::button::User menu#2",
+      "surface": "home",
+      "name": "User menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::(unnamed)",
+      "surface": "home",
+      "name": "",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "control was not there when the surface was re-opened"
+    },
+    {
+      "key": "home::button::(unnamed)#2",
+      "surface": "home",
+      "name": "",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "control was not there when the surface was re-opened"
+    },
+    {
+      "key": "home::listitem::Show me a code snippet of a website's sticky header",
+      "surface": "home",
+      "name": "Show me a code snippet of a website's sticky header",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/6d2e3e7b-00bb-483a-aacc-d48e409a3928"
+    },
+    {
+      "key": "home::listitem::Tell me a fun fact about the Roman Empire",
+      "surface": "home",
+      "name": "Tell me a fun fact about the Roman Empire",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/2dc66df1-db56-435e-b0fe-308affd06315"
+    },
+    {
+      "key": "home::listitem::Explain options trading if I'm familiar with buying and selling stocks",
+      "surface": "home",
+      "name": "Explain options trading if I'm familiar with buying and selling stocks",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/3ad77117-ede7-429a-8a2a-cf760d5bf866"
+    },
+    {
+      "key": "home::listitem::Overcome procrastination give me tips",
+      "surface": "home",
+      "name": "Overcome procrastination give me tips",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/5f832d14-78a0-4c79-ac1b-5b9d5c999ff4"
+    },
+    {
+      "key": "home::listitem::Give me ideas for what to do with my kids' art",
+      "surface": "home",
+      "name": "Give me ideas for what to do with my kids' art",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/e24d2d5f-5a70-48c8-af13-405e2a148bf7"
+    },
+    {
+      "key": "home::listitem::Help me study vocabulary for a college entrance exam",
+      "surface": "home",
+      "name": "Help me study vocabulary for a college entrance exam",
+      "role": "listitem",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/2deec651-99b2-4b62-b86f-7c2a08f3916c"
+    },
+    {
+      "key": "home::button::More",
+      "surface": "home",
+      "name": "More",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::Integrations",
+      "surface": "home",
+      "name": "Integrations",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "home::button::Voice Input",
+      "surface": "home",
+      "name": "Voice Input",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "13 mutations"
+    },
+    {
+      "key": "home::button::Voice mode",
+      "surface": "home",
+      "name": "Voice mode",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "13 mutations"
+    },
+    {
+      "key": "home::a::Open the Hive agent workspace",
+      "surface": "home",
+      "name": "Open the Hive agent workspace",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/agent-workspace/auth/sign-in"
+    },
+    {
+      "key": "home::div::(unnamed)",
+      "surface": "home",
+      "name": "",
+      "role": "div",
+      "proven": false,
+      "proof": "none",
+      "detail": "not present on re-open"
+    },
+    {
+      "key": "model-picker::button::All",
+      "surface": "model-picker",
+      "name": "All",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=0)"
+    },
+    {
+      "key": "model-picker::button::External",
+      "surface": "model-picker",
+      "name": "External",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=4)"
+    },
+    {
+      "key": "model-picker::option::Select hive-auto model",
+      "surface": "model-picker",
+      "name": "Select hive-auto model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::option::Select hive-default model",
+      "surface": "model-picker",
+      "name": "Select hive-default model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options#2",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::option::Select hive-embedding-default model",
+      "surface": "model-picker",
+      "name": "Select hive-embedding-default model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options#3",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::option::Select hive-fast model",
+      "surface": "model-picker",
+      "name": "Select hive-fast model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options#4",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::option::Select hive-stt model",
+      "surface": "model-picker",
+      "name": "Select hive-stt model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options#5",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::option::Select hive-tts model",
+      "surface": "model-picker",
+      "name": "Select hive-tts model",
+      "role": "option",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "model-picker::button::More Options#6",
+      "surface": "model-picker",
+      "name": "More Options",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "model-picker::input::Search In Models",
+      "surface": "model-picker",
+      "name": "Search In Models",
+      "role": "input",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-50560"
+    },
+    {
+      "key": "composer-more::button::Upload Files",
+      "surface": "composer-more",
+      "name": "Upload Files",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "raised an error to the user: File not found."
+    },
+    {
+      "key": "composer-more::button::Capture",
+      "surface": "composer-more",
+      "name": "Capture",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "composer-more::button::Attach Webpage",
+      "surface": "composer-more",
+      "name": "Attach Webpage",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "composer-more::button::Attach Files",
+      "surface": "composer-more",
+      "name": "Attach Files",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/files/search?filename=*&skip=0&limit=50&content=false"
+    },
+    {
+      "key": "composer-more::button::Attach Knowledge",
+      "surface": "composer-more",
+      "name": "Attach Knowledge",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/knowledge/?page=1"
+    },
+    {
+      "key": "composer-more::button::Reference Chats",
+      "surface": "composer-more",
+      "name": "Reference Chats",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/chats/?page=1&include_folders=true&include_pinned=true"
+    },
+    {
+      "key": "composer-integrations::button::Enable Code Interpreter",
+      "surface": "composer-integrations",
+      "name": "Enable Code Interpreter",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "composer-integrations::switch::Code Interpreter",
+      "surface": "composer-integrations",
+      "name": "Code Interpreter",
+      "role": "switch",
+      "proven": true,
+      "proof": "value",
+      "detail": "false -> true"
+    },
+    {
+      "key": "search::button::Start a new conversation",
+      "surface": "search",
+      "name": "Start a new conversation",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "search::a::Help me study vocabulary: write a sentence for me to fill in the blank",
+      "surface": "search",
+      "name": "Help me study vocabulary: write a sentence for me to fill in the blank",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/2deec651-99b2-4b62-b86f-7c2a08f3916c"
+    },
+    {
+      "key": "search::button::Chat Menu",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::What are 5 creative things I could do with my kids' art? I don't want ",
+      "surface": "search",
+      "name": "What are 5 creative things I could do with my kids' art? I don't want ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/e24d2d5f-5a70-48c8-af13-405e2a148bf7"
+    },
+    {
+      "key": "search::button::Chat Menu#2",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Could you start by asking me about instances when I procrastinate the ",
+      "surface": "search",
+      "name": "Could you start by asking me about instances when I procrastinate the ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/5f832d14-78a0-4c79-ac1b-5b9d5c999ff4"
+    },
+    {
+      "key": "search::button::Chat Menu#3",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Explain options trading in simple terms if I'm familiar with buying an",
+      "surface": "search",
+      "name": "Explain options trading in simple terms if I'm familiar with buying an",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/3ad77117-ede7-429a-8a2a-cf760d5bf866"
+    },
+    {
+      "key": "search::button::Chat Menu#4",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Tell me a random fun fact about the Roman Empire",
+      "surface": "search",
+      "name": "Tell me a random fun fact about the Roman Empire",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/2dc66df1-db56-435e-b0fe-308affd06315"
+    },
+    {
+      "key": "search::button::Chat Menu#5",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Show me a code snippet of a website's sticky header in CSS and JavaScr",
+      "surface": "search",
+      "name": "Show me a code snippet of a website's sticky header in CSS and JavaScr",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/6d2e3e7b-00bb-483a-aacc-d48e409a3928"
+    },
+    {
+      "key": "search::button::Chat Menu#6",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#2",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/1edc7506-b968-4647-bc10-180de4fefade"
+    },
+    {
+      "key": "search::button::Chat Menu#7",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#3",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/21d94be1-1b84-48a1-9cad-95f2c8a5f91a"
+    },
+    {
+      "key": "search::button::Chat Menu#8",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#4",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/c7ad889c-e3f4-467a-8d52-e5e09d221160"
+    },
+    {
+      "key": "search::button::Chat Menu#9",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#5",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/8af16816-bc92-4cb6-bd57-5f78516930e0"
+    },
+    {
+      "key": "search::button::Chat Menu#10",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#6",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/97697dc2-e902-4fa8-ba6e-7b5fd62c701c"
+    },
+    {
+      "key": "search::button::Chat Menu#11",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#7",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/b7cb0bab-577b-4b82-90a8-74ebd8e2f113"
+    },
+    {
+      "key": "search::button::Chat Menu#12",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Show me a code snippet of a website's sticky header in CSS and JavaScr#2",
+      "surface": "search",
+      "name": "Show me a code snippet of a website's sticky header in CSS and JavaScr",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/039b5a2d-e6a9-4bf3-bc8f-23691108658f"
+    },
+    {
+      "key": "search::button::Chat Menu#13",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Tell me a random fun fact about the Roman Empire#2",
+      "surface": "search",
+      "name": "Tell me a random fun fact about the Roman Empire",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/a2697ce6-7bda-42a0-8640-010ac3a58a2a"
+    },
+    {
+      "key": "search::button::Chat Menu#14",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Could you start by asking me about instances when I procrastinate the #2",
+      "surface": "search",
+      "name": "Could you start by asking me about instances when I procrastinate the ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/eadc50ac-08c1-4735-b3c2-6bf5b7027933"
+    },
+    {
+      "key": "search::button::Chat Menu#15",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Explain options trading in simple terms if I'm familiar with buying an#2",
+      "surface": "search",
+      "name": "Explain options trading in simple terms if I'm familiar with buying an",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/646a375b-7e39-4c54-8c9b-dac10ede6e3e"
+    },
+    {
+      "key": "search::button::Chat Menu#16",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::What are 5 creative things I could do with my kids' art? I don't want #2",
+      "surface": "search",
+      "name": "What are 5 creative things I could do with my kids' art? I don't want ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/e64e721e-9424-4947-aca3-df83e9136dfe"
+    },
+    {
+      "key": "search::button::Chat Menu#17",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Help me study vocabulary: write a sentence for me to fill in the blank#2",
+      "surface": "search",
+      "name": "Help me study vocabulary: write a sentence for me to fill in the blank",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/7ed3130a-5881-4683-8bcc-a7e06f165979"
+    },
+    {
+      "key": "search::button::Chat Menu#18",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#8",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/0e00e197-ae7c-4957-aa9a-4eb877985d73"
+    },
+    {
+      "key": "search::button::Chat Menu#19",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#9",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/3528e1ae-932e-48a4-9ca0-d8d5a5a69564"
+    },
+    {
+      "key": "search::button::Chat Menu#20",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#10",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/4af4dd72-8889-4b25-8d9f-e61c4f94021a"
+    },
+    {
+      "key": "search::button::Chat Menu#21",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#11",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/e6df67ac-675c-437e-ac51-14c0d237985f"
+    },
+    {
+      "key": "search::button::Chat Menu#22",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#12",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/3c927328-37f1-46aa-951a-ca6dea7b8253"
+    },
+    {
+      "key": "search::button::Chat Menu#23",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#13",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/999a46e8-3e89-4c54-84b6-85b2b1e66574"
+    },
+    {
+      "key": "search::button::Chat Menu#24",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Explain options trading in simple terms if I'm familiar with buying an#3",
+      "surface": "search",
+      "name": "Explain options trading in simple terms if I'm familiar with buying an",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/ccbcf9fd-1322-4671-9dcf-4c4be93b9db1"
+    },
+    {
+      "key": "search::button::Chat Menu#25",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::What are 5 creative things I could do with my kids' art? I don't want #3",
+      "surface": "search",
+      "name": "What are 5 creative things I could do with my kids' art? I don't want ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/c6cd4f82-bc14-4abe-9921-eb86ca8fee5b"
+    },
+    {
+      "key": "search::button::Chat Menu#26",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Tell me a random fun fact about the Roman Empire#3",
+      "surface": "search",
+      "name": "Tell me a random fun fact about the Roman Empire",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/1a93beac-d252-4e9b-81d8-2111586c90c4"
+    },
+    {
+      "key": "search::button::Chat Menu#27",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Help me study vocabulary: write a sentence for me to fill in the blank#3",
+      "surface": "search",
+      "name": "Help me study vocabulary: write a sentence for me to fill in the blank",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/96247d19-381b-41a0-8544-5be5d65104f8"
+    },
+    {
+      "key": "search::button::Chat Menu#28",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#14",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/60ac348e-3429-4093-879e-a4099f763623"
+    },
+    {
+      "key": "search::button::Chat Menu#29",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#15",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/0181abe8-d73e-4e03-8f6c-1c8459f16bdc"
+    },
+    {
+      "key": "search::button::Chat Menu#30",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#16",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/cabc7209-5713-4bd6-b2d5-5310b52a5dde"
+    },
+    {
+      "key": "search::button::Chat Menu#31",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#17",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/17e6c2fd-4d8d-45c9-93a2-ba09a477e365"
+    },
+    {
+      "key": "search::button::Chat Menu#32",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#18",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/ee2f8652-4d7b-4ee3-9a78-1fd6048cda33"
+    },
+    {
+      "key": "search::button::Chat Menu#33",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Help me study vocabulary: write a sentence for me to fill in the blank#4",
+      "surface": "search",
+      "name": "Help me study vocabulary: write a sentence for me to fill in the blank",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/d337a76b-8c15-4c5c-8899-5209679173da"
+    },
+    {
+      "key": "search::button::Chat Menu#34",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::What are 5 creative things I could do with my kids' art? I don't want #4",
+      "surface": "search",
+      "name": "What are 5 creative things I could do with my kids' art? I don't want ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/4ac32b33-7d87-41b9-a7a3-0a526bc1e8cb"
+    },
+    {
+      "key": "search::button::Chat Menu#35",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Tell me a random fun fact about the Roman Empire#4",
+      "surface": "search",
+      "name": "Tell me a random fun fact about the Roman Empire",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/fe2151d4-1eb5-47b5-acd1-b0256aa9027d"
+    },
+    {
+      "key": "search::button::Chat Menu#36",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Could you start by asking me about instances when I procrastinate the #3",
+      "surface": "search",
+      "name": "Could you start by asking me about instances when I procrastinate the ",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/a03b10d0-b9f2-4d07-b21e-81cbd8fe2314"
+    },
+    {
+      "key": "search::button::Chat Menu#37",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Show me a code snippet of a website's sticky header in CSS and JavaScr#3",
+      "surface": "search",
+      "name": "Show me a code snippet of a website's sticky header in CSS and JavaScr",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/1b33a303-c5c3-4c49-b832-8609b6b879f5"
+    },
+    {
+      "key": "search::button::Chat Menu#38",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Explain options trading in simple terms if I'm familiar with buying an#4",
+      "surface": "search",
+      "name": "Explain options trading in simple terms if I'm familiar with buying an",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/316610f2-8b39-4eca-b39b-3163b5c09cf0"
+    },
+    {
+      "key": "search::button::Chat Menu#39",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#19",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/8fde4ca4-de47-442c-a445-df14ed2617f6"
+    },
+    {
+      "key": "search::button::Chat Menu#40",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#20",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/a64c1513-55f9-43fd-97e9-ac193d61774d"
+    },
+    {
+      "key": "search::button::Chat Menu#41",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#21",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/00e4ceb1-b58b-4fa5-a74b-2686a6f4e28b"
+    },
+    {
+      "key": "search::button::Chat Menu#42",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#22",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/6076075e-a8df-4d82-a968-8763a3432d8b"
+    },
+    {
+      "key": "search::button::Chat Menu#43",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#23",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/7f429ba9-406d-476d-9242-71f33448e2af"
+    },
+    {
+      "key": "search::button::Chat Menu#44",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#24",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/5c7a9637-b843-4c6d-bc79-c717146f861f"
+    },
+    {
+      "key": "search::button::Chat Menu#45",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#25",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/d30db07d-fe4c-4a5c-8d90-1849d12f0669"
+    },
+    {
+      "key": "search::button::Chat Menu#46",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::New Chat#26",
+      "surface": "search",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/ae125ae5-0d7b-4e19-8bbe-e09db6f78227"
+    },
+    {
+      "key": "search::button::Chat Menu#47",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Reply with exactly: ALPHA",
+      "surface": "search",
+      "name": "Reply with exactly: ALPHA",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/f8906d4e-80e1-4cbd-a75c-e2c28b55e6ba"
+    },
+    {
+      "key": "search::button::Chat Menu#48",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Reply with exactly: SIERRA",
+      "surface": "search",
+      "name": "Reply with exactly: SIERRA",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/b61a198e-2a2c-4970-a029-553f24fbc602"
+    },
+    {
+      "key": "search::button::Chat Menu#49",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Reply with exactly: ALPHA#2",
+      "surface": "search",
+      "name": "Reply with exactly: ALPHA",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/00618bd3-5d66-4f24-8ff0-394e3509faaf"
+    },
+    {
+      "key": "search::button::Chat Menu#50",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::Reply with exactly: PONYTAILTEST42",
+      "surface": "search",
+      "name": "Reply with exactly: PONYTAILTEST42",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/2d6b59b2-d455-43ef-b9b8-af7f875b199a"
+    },
+    {
+      "key": "search::button::Chat Menu#51",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::a::ping",
+      "surface": "search",
+      "name": "ping",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/c/811a056d-b9fb-4062-bf4e-71292c15fb7a"
+    },
+    {
+      "key": "search::button::Chat Menu#52",
+      "surface": "search",
+      "name": "Chat Menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "search::input::Search",
+      "surface": "search",
+      "name": "Search",
+      "role": "input",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-27203"
+    },
+    {
+      "key": "workspace::button::Open Sidebar",
+      "surface": "workspace",
+      "name": "Open Sidebar",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/folders/, https://chat-hive.scubed.co/api/v1/chats/all/tags"
+    },
+    {
+      "key": "workspace::button::Open Sidebar#2",
+      "surface": "workspace",
+      "name": "Open Sidebar",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "control was not there when the surface was re-opened"
+    },
+    {
+      "key": "workspace::a::New Chat",
+      "surface": "workspace",
+      "name": "New Chat",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/workspace/knowledge -> https://chat-hive.scubed.co/"
+    },
+    {
+      "key": "workspace::button::Search",
+      "surface": "workspace",
+      "name": "Search",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "workspace::a::Workspace",
+      "surface": "workspace",
+      "name": "Workspace",
+      "role": "a",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/knowledge/search?page=1"
+    },
+    {
+      "key": "workspace::button::User menu",
+      "surface": "workspace",
+      "name": "User menu",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "workspace::a::Knowledge",
+      "surface": "workspace",
+      "name": "Knowledge",
+      "role": "a",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=2)"
+    },
+    {
+      "key": "workspace::a::New Knowledge",
+      "surface": "workspace",
+      "name": "New Knowledge",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/workspace/knowledge -> https://chat-hive.scubed.co/workspace/knowledge/create"
+    },
+    {
+      "key": "workspace::button::Select view",
+      "surface": "workspace",
+      "name": "Select view",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "9 mutations"
+    },
+    {
+      "key": "workspace::a::Open the Hive agent workspace",
+      "surface": "workspace",
+      "name": "Open the Hive agent workspace",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/workspace/knowledge -> https://chat-hive.scubed.co/agent-workspace/auth/sign-in"
+    },
+    {
+      "key": "workspace::input::Search Knowledge",
+      "surface": "workspace",
+      "name": "Search Knowledge",
+      "role": "input",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-91628"
+    },
+    {
+      "key": "workspace::select::All Sources Local Connected",
+      "surface": "workspace",
+      "name": "All Sources Local Connected",
+      "role": "select",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> local"
+    },
+    {
+      "key": "settings:General::button::Close settings modal",
+      "surface": "settings:General",
+      "name": "Close settings modal",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 0"
+    },
+    {
+      "key": "settings:General::tab::General",
+      "surface": "settings:General",
+      "name": "General",
+      "role": "tab",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=0)"
+    },
+    {
+      "key": "settings:General::tab::Interface",
+      "surface": "settings:General",
+      "name": "Interface",
+      "role": "tab",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "settings:General::tab::Personalization",
+      "surface": "settings:General",
+      "name": "Personalization",
+      "role": "tab",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "settings:General::tab::Audio",
+      "surface": "settings:General",
+      "name": "Audio",
+      "role": "tab",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "settings:General::tab::Data Controls",
+      "surface": "settings:General",
+      "name": "Data Controls",
+      "role": "tab",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "settings:General::tab::Account",
+      "surface": "settings:General",
+      "name": "Account",
+      "role": "tab",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/auths/"
+    },
+    {
+      "key": "settings:General::tab::About",
+      "surface": "settings:General",
+      "name": "About",
+      "role": "tab",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/ollama/api/version"
+    },
+    {
+      "key": "settings:General::a::Admin Settings",
+      "surface": "settings:General",
+      "name": "Admin Settings",
+      "role": "a",
+      "proven": false,
+      "proof": "none",
+      "detail": "called an endpoint that is not mounted or that failed: 404 GET https://chat-hive.scubed.co/api/v1/auths/admin/config"
+    },
+    {
+      "key": "settings:General::button::Show",
+      "surface": "settings:General",
+      "name": "Show",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=3)"
+    },
+    {
+      "key": "settings:General::button::Save",
+      "surface": "settings:General",
+      "name": "Save",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/models?, https://chat-hive.scubed.co/api/v1/users/user/settings/update"
+    },
+    {
+      "key": "settings:General::select::Select a theme",
+      "surface": "settings:General",
+      "name": "Select a theme",
+      "role": "select",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "system -> dark survived a reload"
+    },
+    {
+      "key": "settings:General::select::Select a language",
+      "surface": "settings:General",
+      "name": "Select a language",
+      "role": "select",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> en-US survived a reload"
+    },
+    {
+      "key": "settings:General::textarea::Enter system prompt here",
+      "surface": "settings:General",
+      "name": "Enter system prompt here",
+      "role": "textarea",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> hive-coverage-41507 survived a reload"
+    },
+    {
+      "key": "settings:General::switch::Off",
+      "surface": "settings:General",
+      "name": "Off",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "changed in the UI but reverted to false after reload"
+    },
+    {
+      "key": "settings:General::input::Search",
+      "surface": "settings:General",
+      "name": "Search",
+      "role": "input",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-82555"
+    },
+    {
+      "key": "settings:Interface::button::Default#33",
+      "surface": "settings:Interface",
+      "name": "Default",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "settings:Interface::button::RTL",
+      "surface": "settings:Interface",
+      "name": "RTL",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/models?"
+    },
+    {
+      "key": "settings:Interface::button::Chat",
+      "surface": "settings:Interface",
+      "name": "Chat",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/models?, https://chat-hive.scubed.co/api/v1/users/user/settings/update"
+    },
+    {
+      "key": "settings:Interface::button::Upload",
+      "surface": "settings:Interface",
+      "name": "Upload",
+      "role": "button",
+      "proven": true,
+      "proof": "filechooser",
+      "detail": "file chooser opened"
+    },
+    {
+      "key": "settings:Interface::button::Default#34",
+      "surface": "settings:Interface",
+      "name": "Default",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/models?, https://chat-hive.scubed.co/api/v1/users/user/settings/update"
+    },
+    {
+      "key": "settings:Interface::button::Enter to Send",
+      "surface": "settings:Interface",
+      "name": "Enter to Send",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/models?, https://chat-hive.scubed.co/api/v1/users/user/settings/update"
+    },
+    {
+      "key": "settings:Interface::switch::High Contrast Mode",
+      "surface": "settings:Interface",
+      "name": "High Contrast Mode",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Display Chat Title in Tab",
+      "surface": "settings:Interface",
+      "name": "Display Chat Title in Tab",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Notification Sound",
+      "surface": "settings:Interface",
+      "name": "Notification Sound",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Haptic Feedback (Android)",
+      "surface": "settings:Interface",
+      "name": "Haptic Feedback (Android)",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Copy Formatted Text",
+      "surface": "settings:Interface",
+      "name": "Copy Formatted Text",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Toast Notifications for New Updates",
+      "surface": "settings:Interface",
+      "name": "Toast Notifications for New Updates",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Show \"What's New\" Modal on Login",
+      "surface": "settings:Interface",
+      "name": "Show \"What's New\" Modal on Login",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Enable Message Queue",
+      "surface": "settings:Interface",
+      "name": "Enable Message Queue",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Chat Bubble UI",
+      "surface": "settings:Interface",
+      "name": "Chat Bubble UI",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Widescreen Mode",
+      "surface": "settings:Interface",
+      "name": "Widescreen Mode",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Temporary Chat by Default",
+      "surface": "settings:Interface",
+      "name": "Temporary Chat by Default",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Fade Effect for Streaming Text",
+      "surface": "settings:Interface",
+      "name": "Fade Effect for Streaming Text",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Render Markdown in User Messages",
+      "surface": "settings:Interface",
+      "name": "Render Markdown in User Messages",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Render Markdown in Assistant Messages",
+      "surface": "settings:Interface",
+      "name": "Render Markdown in Assistant Messages",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Title Auto-Generation",
+      "surface": "settings:Interface",
+      "name": "Title Auto-Generation",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Follow-Up Auto-Generation",
+      "surface": "settings:Interface",
+      "name": "Follow-Up Auto-Generation",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Chat Tags Auto-Generation",
+      "surface": "settings:Interface",
+      "name": "Chat Tags Auto-Generation",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Insert Suggestion Prompt to Input",
+      "surface": "settings:Interface",
+      "name": "Insert Suggestion Prompt to Input",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Keep Follow-Up Prompts in Chat",
+      "surface": "settings:Interface",
+      "name": "Keep Follow-Up Prompts in Chat",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Insert Follow-Up Prompt to Input",
+      "surface": "settings:Interface",
+      "name": "Insert Follow-Up Prompt to Input",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Regenerate Menu",
+      "surface": "settings:Interface",
+      "name": "Regenerate Menu",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Always Collapse Code Blocks",
+      "surface": "settings:Interface",
+      "name": "Always Collapse Code Blocks",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Always Expand Details",
+      "surface": "settings:Interface",
+      "name": "Always Expand Details",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Render Markdown in Previews",
+      "surface": "settings:Interface",
+      "name": "Render Markdown in Previews",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Display Multi-model Responses in Tabs",
+      "surface": "settings:Interface",
+      "name": "Display Multi-model Responses in Tabs",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Scroll On Branch Change",
+      "surface": "settings:Interface",
+      "name": "Scroll On Branch Change",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Show Files on Terminal Select",
+      "surface": "settings:Interface",
+      "name": "Show Files on Terminal Select",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Stylized PDF Export",
+      "surface": "settings:Interface",
+      "name": "Stylized PDF Export",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Rich Text Input for Chat",
+      "surface": "settings:Interface",
+      "name": "Rich Text Input for Chat",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Paste Large Text as File",
+      "surface": "settings:Interface",
+      "name": "Paste Large Text as File",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Detect Artifacts Automatically",
+      "surface": "settings:Interface",
+      "name": "Detect Artifacts Automatically",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::iframe Sandbox Allow Same Origin",
+      "surface": "settings:Interface",
+      "name": "iframe Sandbox Allow Same Origin",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::iframe Sandbox Allow Forms",
+      "surface": "settings:Interface",
+      "name": "iframe Sandbox Allow Forms",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Allow Voice Interruption in Call",
+      "surface": "settings:Interface",
+      "name": "Allow Voice Interruption in Call",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Display Emoji in Call",
+      "surface": "settings:Interface",
+      "name": "Display Emoji in Call",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Always Play Notification Sound",
+      "surface": "settings:Interface",
+      "name": "Always Play Notification Sound",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Floating Quick Actions",
+      "surface": "settings:Interface",
+      "name": "Floating Quick Actions",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "not present on a clean re-open"
+    },
+    {
+      "key": "settings:Interface::switch::Show Formatting Toolbar",
+      "surface": "settings:Interface",
+      "name": "Show Formatting Toolbar",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Insert Prompt as Rich Text",
+      "surface": "settings:Interface",
+      "name": "Insert Prompt as Rich Text",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Interface::switch::Image Compression",
+      "surface": "settings:Interface",
+      "name": "Image Compression",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "not present on a clean re-open"
+    },
+    {
+      "key": "settings:Interface::switch::Allow User Location",
+      "surface": "settings:Interface",
+      "name": "Allow User Location",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "changed in the UI but reverted to false after reload"
+    },
+    {
+      "key": "settings:Interface::switch::Auto-Copy Response to Clipboard",
+      "surface": "settings:Interface",
+      "name": "Auto-Copy Response to Clipboard",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "changed in the UI but reverted to false after reload"
+    },
+    {
+      "key": "settings:Personalization::button::Manage",
+      "surface": "settings:Personalization",
+      "name": "Manage",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "settings:Personalization::switch::Memory EXPERIMENTAL",
+      "surface": "settings:Personalization",
+      "name": "Memory EXPERIMENTAL",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "true -> false survived a reload"
+    },
+    {
+      "key": "settings:Audio::select::Speech-to-Text Engine",
+      "surface": "settings:Audio",
+      "name": "Speech-to-Text Engine",
+      "role": "select",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> web survived a reload"
+    },
+    {
+      "key": "settings:Audio::input::Speech-to-Text Language",
+      "surface": "settings:Audio",
+      "name": "Speech-to-Text Language",
+      "role": "input",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> hive-coverage-61646 survived a reload"
+    },
+    {
+      "key": "settings:Audio::select::Text-to-Speech Engine",
+      "surface": "settings:Audio",
+      "name": "Text-to-Speech Engine",
+      "role": "select",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> browser-kokoro survived a reload"
+    },
+    {
+      "key": "settings:Audio::input::Speech Playback Speed",
+      "surface": "settings:Audio",
+      "name": "Speech Playback Speed",
+      "role": "input",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "1 -> 2 survived a reload"
+    },
+    {
+      "key": "settings:Audio::switch::Off#2",
+      "surface": "settings:Audio",
+      "name": "Off",
+      "role": "switch",
+      "proven": false,
+      "proof": "none",
+      "detail": "not present on a clean re-open"
+    },
+    {
+      "key": "settings:Audio::select::Voice",
+      "surface": "settings:Audio",
+      "name": "Voice",
+      "role": "select",
+      "proven": false,
+      "proof": "none",
+      "detail": "changed in the UI but reverted to  after reload"
+    },
+    {
+      "key": "settings:Audio::switch::Allow non-local voices",
+      "surface": "settings:Audio",
+      "name": "Allow non-local voices",
+      "role": "switch",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "false -> true survived a reload"
+    },
+    {
+      "key": "settings:Data Controls::button::Import",
+      "surface": "settings:Data Controls",
+      "name": "Import",
+      "role": "button",
+      "proven": true,
+      "proof": "filechooser",
+      "detail": "file chooser opened"
+    },
+    {
+      "key": "settings:Data Controls::button::Export",
+      "surface": "settings:Data Controls",
+      "name": "Export",
+      "role": "button",
+      "proven": true,
+      "proof": "download",
+      "detail": "download started"
+    },
+    {
+      "key": "settings:Data Controls::button::Manage",
+      "surface": "settings:Data Controls",
+      "name": "Manage",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "settings:Data Controls::button::Manage#2",
+      "surface": "settings:Data Controls",
+      "name": "Manage",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "settings:Data Controls::button::Archive All",
+      "surface": "settings:Data Controls",
+      "name": "Archive All",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=3)"
+    },
+    {
+      "key": "settings:Data Controls::button::Delete All",
+      "surface": "settings:Data Controls",
+      "name": "Delete All",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=3)"
+    },
+    {
+      "key": "settings:Data Controls::button::Manage#3",
+      "surface": "settings:Data Controls",
+      "name": "Manage",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 1 -> 2"
+    },
+    {
+      "key": "settings:Account::button::Remove Initials Gravatar",
+      "surface": "settings:Account",
+      "name": "Remove Initials Gravatar",
+      "role": "button",
+      "proven": true,
+      "proof": "filechooser",
+      "detail": "file chooser opened"
+    },
+    {
+      "key": "settings:Account::input::Name",
+      "surface": "settings:Account",
+      "name": "Name",
+      "role": "input",
+      "proven": true,
+      "proof": "persisted",
+      "detail": "demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"
+    },
+    {
+      "key": "settings:Account::textarea::Bio",
+      "surface": "settings:Account",
+      "name": "Bio",
+      "role": "textarea",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> hive-coverage-78092 survived a reload"
+    },
+    {
+      "key": "settings:Account::select::Gender",
+      "surface": "settings:Account",
+      "name": "Gender",
+      "role": "select",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> male survived a reload"
+    },
+    {
+      "key": "settings:Account::input::Birth Date",
+      "surface": "settings:Account",
+      "name": "Birth Date",
+      "role": "input",
+      "proven": true,
+      "proof": "persisted",
+      "detail": " -> 1990-01-01 survived a reload"
+    },
+    {
+      "key": "settings:About::button::See what's new",
+      "surface": "settings:About",
+      "name": "See what's new",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=0)"
+    },
+    {
+      "key": "settings:About::a::Twemoji",
+      "surface": "settings:About",
+      "name": "Twemoji",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "opened a new tab"
+    },
+    {
+      "key": "settings:About::a::CC-BY 4.0",
+      "surface": "settings:About",
+      "name": "CC-BY 4.0",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "opened a new tab"
+    },
+    {
+      "key": "settings:About::a::Hive",
+      "surface": "settings:About",
+      "name": "Hive",
+      "role": "a",
+      "proven": true,
+      "proof": "dom",
+      "detail": "28 mutations"
+    },
+    {
+      "key": "settings:About::a::All rights reserved.",
+      "surface": "settings:About",
+      "name": "All rights reserved.",
+      "role": "a",
+      "proven": true,
+      "proof": "dom",
+      "detail": "26 mutations"
+    },
+    {
+      "key": "workspace:knowledge/create::button::Back",
+      "surface": "workspace:knowledge/create",
+      "name": "Back",
+      "role": "button",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/workspace/knowledge/create -> https://chat-hive.scubed.co/workspace/knowledge"
+    },
+    {
+      "key": "workspace:knowledge/create::button::Add Access",
+      "surface": "workspace:knowledge/create",
+      "name": "Add Access",
+      "role": "button",
+      "proven": true,
+      "proof": "overlay",
+      "detail": "overlays 0 -> 1"
+    },
+    {
+      "key": "workspace:knowledge/create::button::Create Knowledge",
+      "surface": "workspace:knowledge/create",
+      "name": "Create Knowledge",
+      "role": "button",
+      "proven": false,
+      "proof": "none",
+      "detail": "no effect (mutations=0)"
+    },
+    {
+      "key": "workspace:knowledge/create::input::Name your knowledge base",
+      "surface": "workspace:knowledge/create",
+      "name": "Name your knowledge base",
+      "role": "input",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-91247"
+    },
+    {
+      "key": "workspace:knowledge/create::textarea::Describe your knowledge base and objectives",
+      "surface": "workspace:knowledge/create",
+      "name": "Describe your knowledge base and objectives",
+      "role": "textarea",
+      "proven": true,
+      "proof": "value",
+      "detail": " -> hive-coverage-91775"
+    },
+    {
+      "key": "workspace:knowledge/create::select::Private Public",
+      "surface": "workspace:knowledge/create",
+      "name": "Private Public",
+      "role": "select",
+      "proven": true,
+      "proof": "value",
+      "detail": "private -> public"
+    },
+    {
+      "key": "user-menu::button::Update your status",
+      "surface": "user-menu",
+      "name": "Update your status",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "user-menu::button::Settings",
+      "surface": "user-menu",
+      "name": "Settings",
+      "role": "button",
+      "proven": true,
+      "proof": "dom",
+      "detail": "what is on screen changed"
+    },
+    {
+      "key": "user-menu::a::Admin Panel",
+      "surface": "user-menu",
+      "name": "Admin Panel",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/admin/users/overview"
+    },
+    {
+      "key": "user-menu::button::Archived Chats",
+      "surface": "user-menu",
+      "name": "Archived Chats",
+      "role": "button",
+      "proven": true,
+      "proof": "network",
+      "detail": "https://chat-hive.scubed.co/api/v1/chats/archived?page=1"
+    },
+    {
+      "key": "user-menu::a::Workspace#2",
+      "surface": "user-menu",
+      "name": "Workspace",
+      "role": "a",
+      "proven": true,
+      "proof": "navigate",
+      "detail": "https://chat-hive.scubed.co/ -> https://chat-hive.scubed.co/workspace/knowledge"
+    }
+  ]
+}

@@ -1,3 +1,20 @@
 {
-  "surfaces": {}
+  "$comment": "Minimum control count per surface, recorded from a live run. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. Regenerate deliberately with COV_FLOORS=update and commit the result with a reason.",
+  "surfaces": {
+    "composer-integrations": 2,
+    "composer-more": 6,
+    "home": 28,
+    "model-picker": 15,
+    "search": 106,
+    "settings:About": 5,
+    "settings:Account": 5,
+    "settings:Audio": 7,
+    "settings:Data Controls": 7,
+    "settings:General": 16,
+    "settings:Interface": 48,
+    "settings:Personalization": 2,
+    "user-menu": 6,
+    "workspace": 12,
+    "workspace:knowledge/create": 6
+  }
 }

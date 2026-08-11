@@ -487,7 +487,11 @@ test.describe("chat interaction coverage", () => {
     // Denominator guard, before anything is said about the ratio.
     if (process.env.COV_FLOORS === "update") {
       const next: Floors = { ...FLOORS };
-      for (const entry of swept) next[entry.surface] = entry.enumerated;
+      // A surface that enumerated nothing measured nothing, so it gets no
+      // floor. Recording a floor of zero would be a bar nothing can fail.
+      for (const entry of swept) {
+        if (entry.enumerated > 0) next[entry.surface] = entry.enumerated;
+      }
       const ordered: Floors = {};
       for (const key of Object.keys(next).sort()) ordered[key] = next[key];
       const body = { "$comment": FLOOR_COMMENT, surfaces: ordered };
