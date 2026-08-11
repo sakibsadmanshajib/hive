@@ -151,7 +151,7 @@ describe("the committed floors", () => {
     JSON.parse(readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8")),
   );
   const recorded = JSON.parse(
-    readFileSync(join(COVERAGE_DIR, "results/2026-08-08-live-run.json"), "utf8"),
+    readFileSync(join(COVERAGE_DIR, "results/2026-08-10-morning-live-run.json"), "utf8"),
   );
 
   // The regression this file exists for. A run once rewrote the floors from

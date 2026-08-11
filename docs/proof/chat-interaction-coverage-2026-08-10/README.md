@@ -45,8 +45,11 @@ fails on any unproven result at all, so collapsing instances cannot hide a
 broken one. Each identity carries its instance count in the ledger under
 `summary.identityInstances`.
 
-The 2026-08-08 run recorded 196 of 222 instances, 88.3 percent. It predates the
-identity metric and is not comparable to either figure above.
+The earlier run the same day recorded 196 of 222 instances, 88.3 percent. It
+predates the identity metric and is not comparable to either figure above. Its
+ledger is `apps/web-console/e2e/chat-coverage/results/2026-08-10-morning-live-run.json`,
+renamed from `2026-08-08-live-run.json`, which was simply wrong: its own
+`generatedAt` reads 2026-08-10T07:31Z.
 
 ## Two controls the old predicate called proven are broken
 
