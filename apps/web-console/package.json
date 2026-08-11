@@ -12,6 +12,7 @@
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "e2e:phase-19": "playwright test --project=phase-19",
+    "e2e:agent-workspace": "playwright test --project=agent-workspace --reporter=list,json,./tests/e2e/support/flake-reporter.ts",
     "e2e:verify-collection": "node scripts/verify-spec-collection.mjs",
     "e2e:owui": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui",
     "e2e:owui:perf": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui-perf",

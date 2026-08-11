@@ -41,7 +41,7 @@
     "e2e/phase-19/owui/owui.setup.ts": ["owui-setup"],
     "e2e/phase-19/owui/performance/embed-latency.spec.ts": ["owui-perf"],
     "e2e/phase-19/owui/performance/ttfb.spec.ts": ["owui-perf"],
-    "tests/e2e/_probe/agent-workspace-flows.spec.ts": ["probe"],
+    "tests/e2e/_probe/agent-workspace-flows.spec.ts": ["agent-workspace"],
     "tests/e2e/_probe/staging-flows.spec.ts": ["probe"],
     "tests/e2e/auth-shell.spec.ts": ["chromium"],
     "tests/e2e/billing-fx-zero-leak.spec.ts": ["chromium"],

@@ -340,11 +340,54 @@ test.describe("authenticated task console", () => {
         "would be asserting against an unauthenticated 401",
     ).toBe(true);
 
+    /*
+     * C15. Soft, and the only soft assertion in this file. It still fails the
+     * test, so nothing is hidden, but the body continues and the task this
+     * created is still cancelled at the end rather than left holding a sandbox
+     * on a shared box.
+     *
+     * It fails against the demo box today, and the cause is a real defect
+     * rather than a flake: edge-api's control-plane client has a 15 second
+     * timeout (apps/edge-api/internal/agenttask/client.go) while
+     * control-plane's CreateTask blocks inline on Engine.Launch with a five
+     * minute bound (apps/control-plane/internal/agenttask/service.go). Any
+     * launch slower than 15 seconds answers the browser with a 500 while the
+     * task is created and runs to completion, so the composer says "Could not
+     * start the task" about a task that is running. Measured live on
+     * 2026-08-11: 18.0s to a 500, and the task reached `succeeded`.
+     */
     const response = await createResponse;
-    expect(response.status()).toBe(201);
-    const created: { id?: unknown; status?: unknown } = await response.json();
-    const createdId = typeof created.id === "string" ? created.id : "";
-    expect(createdId, "create must return the task id the cancel route needs").not.toBe("");
+    expect
+      .soft(
+        response.status(),
+        "POST /v1/agent/tasks must answer 201. A 500 here, with the task still appearing in " +
+          "the list below, is the edge-api create timeout described above.",
+      )
+      .toBe(201);
+
+    /*
+     * The create's proof of effect is read from the server rather than from
+     * the create response body, so it holds whatever the status code was: the
+     * row is persisted and comes back from the list. That is also a stronger
+     * claim than trusting the body the create echoed.
+     */
+    const listResponse = page.waitForResponse(
+      (res) =>
+        res.url().includes("/v1/agent/tasks") &&
+        res.request().method() === "GET" &&
+        res.status() === 200,
+      { timeout: 60_000 },
+    );
+    await page.reload();
+    const listed: { tasks?: Array<{ id?: unknown; instructions?: unknown }> } = await (
+      await listResponse
+    ).json();
+    const match = (listed.tasks ?? []).find((task) => task.instructions === brief);
+    const createdId = typeof match?.id === "string" ? match.id : "";
+    expect(
+      createdId,
+      "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
+    ).not.toBe("");
 
     const tasks = page.getByRole("region", { name: "Tasks" });
     const row = tasks.getByRole("listitem").filter({ hasText: brief }).first();

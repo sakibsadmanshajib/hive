@@ -20,6 +20,12 @@ dist/
 tests/e2e/.auth/
 e2e/**/.auth/
 
+# Coverage ledgers built from a live probe run by
+# scripts/build-agent-workspace-coverage.mjs. Generated, never committed: a
+# checked-in snapshot reports the same ratio forever, including after the
+# coverage it describes has changed. CI uploads it as a run artifact instead.
+tests/e2e/_probe/*-coverage.json
+
 # Vercel
 .vercel
 

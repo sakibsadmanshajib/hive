@@ -61,10 +61,27 @@ export default defineConfig({
     {
       // Manual staging probes. Run with `--project=probe` against a deployed
       // environment, with the HIVE_QA_* identities set. No workflow invokes
-      // this, which is why its two spec files are carried as justified debt in
-      // tests/dark-spec-allowlist.json rather than silently ignored.
+      // this one yet, so its remaining spec is carried as known debt.
+      //
+      // The agent-workspace probe is deliberately NOT in here any more: it has
+      // its own project below so a workflow can select it by name rather than
+      // by file path (issue #813), without dragging console-hive's staging
+      // flows into the same job.
       name: "probe",
       testDir: "./tests/e2e/_probe",
+      testIgnore: /agent-workspace-flows\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // Interaction-coverage probe for the agent workspace (Cowork), run
+      // against the deployed chat host after every deploy by
+      // .github/workflows/deploy-demo-box.yml. It needs SUPABASE_URL,
+      // SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY to mint a session
+      // (tests/e2e/support/live-auth.mjs) and skips itself, loudly and by
+      // name in the coverage ledger, without them.
+      name: "agent-workspace",
+      testDir: "./tests/e2e/_probe",
+      testMatch: /agent-workspace-flows\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"] },
     },
     {
