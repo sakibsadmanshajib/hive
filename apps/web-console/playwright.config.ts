@@ -96,6 +96,20 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: INTERACTION_BASE_URL,
+        // No trace and no video for this suite, for two independent reasons.
+        //
+        // Leak: the sweep types into password fields, and a trace carries the
+        // Authorization header of every XHR the console made. Issue #554 is
+        // the same problem in the HTML report's ARIA snapshots, which is why
+        // the CI job already refuses to upload that. An artifact nobody may
+        // upload is not worth recording.
+        //
+        // Cost: a failing run of a whole-application sweep spent over ten
+        // minutes after the verdict finalizing artifacts, on a job with a 60
+        // minute cap. The evidence this gate produces is its own JSON ledger,
+        // which is written after every route and uploaded unconditionally.
+        trace: "off",
+        video: "off",
       },
       // A live origin over the public internet signs in slower than a local
       // stack; the default 30s cut the wait off mid-redirect.
@@ -109,6 +123,20 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: INTERACTION_BASE_URL,
+        // No trace and no video for this suite, for two independent reasons.
+        //
+        // Leak: the sweep types into password fields, and a trace carries the
+        // Authorization header of every XHR the console made. Issue #554 is
+        // the same problem in the HTML report's ARIA snapshots, which is why
+        // the CI job already refuses to upload that. An artifact nobody may
+        // upload is not worth recording.
+        //
+        // Cost: a failing run of a whole-application sweep spent over ten
+        // minutes after the verdict finalizing artifacts, on a job with a 60
+        // minute cap. The evidence this gate produces is its own JSON ledger,
+        // which is written after every route and uploaded unconditionally.
+        trace: "off",
+        video: "off",
       },
       dependencies: ["interaction-setup"],
       timeout: 3 * 60 * 60 * 1000,
