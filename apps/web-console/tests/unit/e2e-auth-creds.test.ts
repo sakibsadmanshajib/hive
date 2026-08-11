@@ -51,6 +51,7 @@ describe("requiredSecretEnv", () => {
     vi.stubEnv("E2E_VERIFIED_PASSWORD", "set-for-import-only");
     vi.stubEnv("E2E_UNVERIFIED_PASSWORD", "set-for-import-only");
     vi.stubEnv("E2E_INVITATION_TOKEN", "set-for-import-only-token");
+    vi.stubEnv("E2E_RUN_KEY", "unit-test");
     const { requiredSecretEnv } = await import(
       "../e2e/support/e2e-auth-creds"
     );
@@ -72,6 +73,41 @@ describe("requiredSecretEnv", () => {
     vi.stubEnv("E2E_PRESENT_FIXTURE_VAR", "long-enough-value");
     expect(requiredSecretEnv("E2E_PRESENT_FIXTURE_VAR", 12)).toBe(
       "long-enough-value"
+    );
+
+    vi.unstubAllEnvs();
+  });
+});
+
+// Seeding writes a password to whatever address it is given. Before this
+// guard, a run with no run key targeted the two shared live tenant-OWNER
+// accounts, so every local run revoked the sessions of every other run.
+describe("runScopedEmail", () => {
+  it("refuses to resolve an address without a run key, and namespaces once", async () => {
+    vi.stubEnv("E2E_VERIFIED_PASSWORD", "set-for-import-only");
+    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", "set-for-import-only");
+    vi.stubEnv("E2E_INVITATION_TOKEN", "set-for-import-only-token");
+    vi.stubEnv("E2E_RUN_KEY", "unit-test");
+    const { runScopedEmail } = await import("../e2e/support/e2e-auth-creds");
+
+    expect(() => runScopedEmail("e2e-verified@scubed.com.bd", "")).toThrow(
+      /E2E_RUN_KEY is required and has no default/
+    );
+
+    // A shared base address becomes this run's own address.
+    expect(runScopedEmail("e2e-verified@scubed.com.bd", "99-1")).toBe(
+      "e2e-verified+99-1@scubed.com.bd"
+    );
+
+    // Idempotent: CI already passes a namespaced address alongside the same
+    // key, and doubling the suffix would seed an account no spec signs in as.
+    expect(runScopedEmail("e2e-verified+99-1@scubed.com.bd", "99-1")).toBe(
+      "e2e-verified+99-1@scubed.com.bd"
+    );
+
+    // Two runs never resolve to the same account.
+    expect(runScopedEmail("e2e-verified@scubed.com.bd", "99-1")).not.toBe(
+      runScopedEmail("e2e-verified@scubed.com.bd", "99-2")
     );
 
     vi.unstubAllEnvs();

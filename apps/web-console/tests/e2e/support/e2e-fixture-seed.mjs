@@ -54,10 +54,12 @@ const LOCAL_IDS = {
   slugSuffix: "",
 };
 
-const DEFAULT_EMAILS = {
-  verified: "e2e-verified@scubed.com.bd",
-  unverified: "e2e-unverified@scubed.com.bd",
-};
+// No DEFAULT_EMAILS constant lives here any more. It used to supply the two
+// shared live addresses whenever a caller passed none, which made every
+// credential-less local run write a password onto a shared tenant-OWNER
+// account through ensureUser below and revoke every session a concurrent run
+// was holding. A default that silently targets a shared account is the bug, so
+// there is no default: see runScopedEmail.
 
 function sha256Hex(input) {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -87,6 +89,32 @@ export function withRunKey(email, runKey) {
   const at = email.indexOf("@");
   if (at === -1) return `${email}+${runKey}`;
   return `${email.slice(0, at)}+${runKey}${email.slice(at)}`;
+}
+
+// runScopedEmail is the gate on every address this module writes a password
+// to. ensureUser sends `password:` on both of its update paths, so an address
+// that is not scoped to this run means overwriting the credential of an
+// account other runs are signed in as. There is no fallback and no shared
+// default: an empty run key throws, and an address that does not already carry
+// the key gets it. Idempotent, because ci.yml passes an address that is
+// already namespaced alongside the same key.
+export function runScopedEmail(email, runKey) {
+  if (typeof email !== "string" || email === "") {
+    throw new Error(
+      "E2E fixture seeding requires an explicit address for every fixture " +
+        "user. It has no default, because the default was a shared live account."
+    );
+  }
+  if (!runKey) {
+    throw new Error(
+      "E2E fixture seeding requires E2E_RUN_KEY. Without it the fixtures " +
+        "target shared live accounts, and seeding overwrites their passwords, " +
+        "which revokes every session other runs are holding (see " +
+        "docs/live-test-auth.md). Export any unique value, for example " +
+        "E2E_RUN_KEY=$(whoami)-$(date +%s)."
+    );
+  }
+  return email.includes(`+${runKey}@`) ? email : withRunKey(email, runKey);
 }
 
 // buildIds returns LOCAL_IDS unchanged when runKey is empty, or a full set of
@@ -705,8 +733,10 @@ async function sweepStaleFixtureRuns(admin) {
 export async function seedFixtures(admin, opts) {
   const runKey = typeof opts.runKey === "string" ? opts.runKey.trim() : "";
   const ids = buildIds(runKey);
-  const verifiedEmail = opts.verifiedEmail ?? DEFAULT_EMAILS.verified;
-  const unverifiedEmail = opts.unverifiedEmail ?? DEFAULT_EMAILS.unverified;
+  // Throws on an empty run key, so LOCAL_IDS above is now only ever reached by
+  // a caller that has already been rejected here.
+  const verifiedEmail = runScopedEmail(opts.verifiedEmail, runKey);
+  const unverifiedEmail = runScopedEmail(opts.unverifiedEmail, runKey);
 
   await sweepStaleFixtureRuns(admin);
 

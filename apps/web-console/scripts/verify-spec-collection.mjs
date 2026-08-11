@@ -53,8 +53,23 @@ const OWUI_LIST_ENV = {
   SUPABASE_OAUTH_CLIENT_SECRET: "unused-collection-guard-placeholder",
 };
 
+// tests/e2e/support/e2e-auth-creds.ts resolves its three credentials at module
+// scope and throws when one is missing, deliberately: they have no committed
+// default any more, and a spec that runs without them would otherwise seed a
+// shared live account or skip in silence. Listing loads those modules, so this
+// guard needs the variables present but does not need them to be real. Same
+// reasoning and same shape as OWUI_LIST_ENV above: listing never dials out.
+const WEB_CONSOLE_LIST_ENV = {
+  E2E_VERIFIED_PASSWORD: "unused-collection-guard-placeholder",
+  E2E_UNVERIFIED_PASSWORD: "unused-collection-guard-placeholder",
+  E2E_INVITATION_TOKEN: "unused-collection-guard-placeholder",
+  // Required too: every fixture address is namespaced with it so a run can
+  // only touch accounts it created (runScopedEmail in e2e-fixture-seed.mjs).
+  E2E_RUN_KEY: "collection-guard",
+};
+
 const CONFIGS = [
-  { label: "playwright.config.ts", args: [], env: {} },
+  { label: "playwright.config.ts", args: [], env: WEB_CONSOLE_LIST_ENV },
   {
     label: "e2e/phase-19/owui/playwright.owui.config.ts",
     args: ["--config=e2e/phase-19/owui/playwright.owui.config.ts"],

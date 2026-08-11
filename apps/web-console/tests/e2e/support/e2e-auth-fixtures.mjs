@@ -9,8 +9,8 @@
 //   node tests/e2e/support/e2e-auth-fixtures.mjs
 //   node tests/e2e/support/e2e-auth-fixtures.mjs reset-profile <email>
 //
-// Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and (for the default
-// seeding action) E2E_VERIFIED_PASSWORD, E2E_UNVERIFIED_PASSWORD and
+// Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, E2E_RUN_KEY, and (for the
+// default seeding action) E2E_VERIFIED_PASSWORD, E2E_UNVERIFIED_PASSWORD and
 // E2E_INVITATION_TOKEN. None has a
 // fallback: seeding used to POST to a deployed `e2e-fixtures` Supabase Edge
 // Function and quietly no-op when its URL and secret were absent, which is
@@ -25,6 +25,7 @@ import {
   createAdminClient,
   redactSecrets,
   resetProfileComplete,
+  runScopedEmail,
   seedFixtures,
 } from "./e2e-fixture-seed.mjs";
 
@@ -82,24 +83,25 @@ function isValidEmail(value) {
 
 // Resolved credentials — mirror `e2e-auth-creds.ts` exactly so the spec side
 // (which imports those constants) and this CLI always agree.
-export const E2E_VERIFIED_EMAIL = envOrDefault(
-  "E2E_VERIFIED_EMAIL",
-  DEFAULTS.verifiedEmail,
-  { validator: isValidEmail }
+// Set by CI to one value per job attempt, and required everywhere else too:
+// runScopedEmail throws without it. See its comment in e2e-fixture-seed.mjs.
+export const E2E_RUN_KEY = (process.env.E2E_RUN_KEY ?? "").trim();
+
+export const E2E_VERIFIED_EMAIL = runScopedEmail(
+  envOrDefault("E2E_VERIFIED_EMAIL", DEFAULTS.verifiedEmail, {
+    validator: isValidEmail,
+  }),
+  E2E_RUN_KEY
 );
-export const E2E_UNVERIFIED_EMAIL = envOrDefault(
-  "E2E_UNVERIFIED_EMAIL",
-  DEFAULTS.unverifiedEmail,
-  { validator: isValidEmail }
+export const E2E_UNVERIFIED_EMAIL = runScopedEmail(
+  envOrDefault("E2E_UNVERIFIED_EMAIL", DEFAULTS.unverifiedEmail, {
+    validator: isValidEmail,
+  }),
+  E2E_RUN_KEY
 );
 // The three credentials are resolved inside prepareE2EAuthFixtures rather
 // than at module scope, so the `reset-profile <email>` action (which needs no
 // credential at all) still runs when they are unset.
-// Set by CI to one value per job attempt (see .github/workflows/ci.yml),
-// e.g. `${{ github.run_id }}-${{ github.run_attempt }}`. Empty for local and
-// manual runs, which means "no run key": the seeder then uses the single
-// shared fixture identity instead of a namespaced one.
-export const E2E_RUN_KEY = process.env.E2E_RUN_KEY || undefined;
 
 function maskEmail(value) {
   const [local = "", domain = ""] = value.split("@");
