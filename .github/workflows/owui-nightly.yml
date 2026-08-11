@@ -63,8 +63,10 @@ jobs:
             --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
       - name: Seed OWUI e2e test user
         # Self-provisions the owui-e2e tenant, GoTrue user, membership, and a
-        # real "hk_" Hive API key used as OWUI_SHIM_KEY (idempotent, password
-        # and key rotated every run). Runs BEFORE "Materialize .env.ci" now
+        # real "hk_" Hive API key used as OWUI_SHIM_KEY. Idempotent. Passwords
+        # are NOT rotated: the run key below gives this run its own users
+        # instead, because rotating a shared account revokes the sessions of
+        # every concurrent run (docs/live-test-auth.md). Runs BEFORE "Materialize .env.ci" now
         # (moved from after it) because that step consumes the minted
         # OWUI_SHIM_KEY. Removes the need for hand-managed OWUI_E2E_EMAIL /
         # OWUI_E2E_PASSWORD repo secrets.
@@ -89,14 +91,25 @@ jobs:
           OWUI_E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          out=$(python3 scripts/seed-owui-e2e-user.py)
-          email=$(printf '%s\n' "$out" | grep '^EMAIL=' | cut -d= -f2-)
-          password=$(printf '%s\n' "$out" | grep '^PASSWORD=' | cut -d= -f2-)
-          shim_key=$(printf '%s\n' "$out" | grep '^SHIM_KEY=' | cut -d= -f2-)
-          bootstrap_email=$(printf '%s\n' "$out" | grep '^BOOTSTRAP_EMAIL=' | cut -d= -f2-)
-          bootstrap_password=$(printf '%s\n' "$out" | grep '^BOOTSTRAP_PASSWORD=' | cut -d= -f2-)
+          # Both guards below exist to produce a readable failure, so neither
+          # may be pre-empted by set -e. A non-zero exit from the seeder used
+          # to abort the step before its own ::error:: line, and each grep
+          # returns 1 when the line it wants is absent, which under pipefail
+          # killed the step at the assignment rather than at the check. The
+          # missing-line case is the normal way this seeder now declines to
+          # rotate an existing account's password, so it has to say so.
+          if ! out=$(python3 scripts/seed-owui-e2e-user.py); then
+            echo "::error::seed-owui-e2e-user.py failed; its stderr is above"
+            exit 1
+          fi
+          field() { printf '%s\n' "$out" | grep "^$1=" | cut -d= -f2- || true; }
+          email=$(field EMAIL)
+          password=$(field PASSWORD)
+          shim_key=$(field SHIM_KEY)
+          bootstrap_email=$(field BOOTSTRAP_EMAIL)
+          bootstrap_password=$(field BOOTSTRAP_PASSWORD)
           if [ -z "$email" ] || [ -z "$password" ] || [ -z "$shim_key" ] || [ -z "$bootstrap_email" ] || [ -z "$bootstrap_password" ]; then
-            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD/SHIM_KEY/BOOTSTRAP_EMAIL/BOOTSTRAP_PASSWORD"
+            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD/SHIM_KEY/BOOTSTRAP_EMAIL/BOOTSTRAP_PASSWORD. A missing PASSWORD line means the account already existed and the seeder refused to rotate it: see its stderr above, and docs/live-test-auth.md."
             exit 1
           fi
           echo "::add-mask::$password"
@@ -416,8 +429,14 @@ jobs:
           # slow or missing request across layers means lining these logs up
           # against Playwright's wall-clock trace, which is impossible for a
           # service whose lines carry no time (run 31042840516).
+          # Piped through the redactor before it becomes a public artifact.
+          # open-webui's uvicorn access lines print the OAuth callback verbatim,
+          # so an unfiltered dump publishes GET /oauth/oidc/callback?code=... for
+          # a real account, and edge-api logs carry the shim key.
           docker compose --env-file ../../.env.ci logs --no-color --timestamps --tail 2000 \
-            open-webui litellm edge-api control-plane > $GITHUB_WORKSPACE/compose-logs.txt 2>&1 || true
+            open-webui litellm edge-api control-plane 2>&1 \
+            | python3 $GITHUB_WORKSPACE/scripts/redact-log-credentials.py \
+            > $GITHUB_WORKSPACE/compose-logs.txt || true
       - name: SOC2 coverage report
         if: always()
         run: |
@@ -427,25 +446,30 @@ jobs:
         if: always()
         with:
           name: owui-playwright-report
-          # Traces (.zip) and videos (.webm) are excluded, and the repository
-          # is public, so anyone with a run URL can download what is left.
-          # These specs walk the full OAuth journey for a seeded account: a
-          # trace holds every request header (Authorization: Bearer), every
+          # Traces (.zip), videos (.webm) and index.html are excluded, and the
+          # repository is public, so anyone with a run URL can download what is
+          # left. These specs walk the full OAuth journey for a seeded account:
+          # a trace holds every request header (Authorization: Bearer), every
           # sb-*-auth-token cookie, and the callback URLs whose query string
-          # and fragment carry code= and access_token=. The HTML report,
-          # screenshots and error text remain, which is what triage actually
-          # reads. Nothing here can be scrubbed by a text linter: a trace is a
-          # zip of binary resources.
+          # and fragment carry code= and access_token=. index.html carries the
+          # same material by another route: the HTML reporter base64-inlines
+          # the whole report payload into it, stdout, stderr and error text
+          # included, and a waitForURL timeout enumerates every URL it
+          # navigated, fragment and all. Neither is inspectable by a text
+          # linter. Screenshots remain, and the failing test names and error
+          # text are already in this job's own log.
           path: |
             apps/web-console/playwright-report-owui
             !apps/web-console/playwright-report-owui/**/*.zip
             !apps/web-console/playwright-report-owui/**/*.webm
+            !apps/web-console/playwright-report-owui/index.html
           retention-days: 5
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: owui-compose-logs
           path: compose-logs.txt
+          retention-days: 5
       - name: Slack on failure
         if: failure() && env.SLACK_WEBHOOK_URL != ''
         env:
