@@ -2,7 +2,6 @@ package auth_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/testdb"
 )
 
 // newPool mirrors internal/chat/dispatch_test.go's helper of the same
@@ -20,19 +20,7 @@ import (
 // job / local docker-compose test profile).
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		// CI wires HIVE_TEST_DB_URL at the job level (issue #708), but only
-		// for the RLS step, which does not pass -short. The plain `go test
-		// ./... -short` step compiles this package too and runs first,
-		// before that DSN ever exists, so testing.Short() is required here
-		// to tell "the RLS step forgot the DSN" (real bug) apart from "this
-		// is the earlier -short step, which never has it" (expected).
-		if os.Getenv("CI") != "" && !testing.Short() {
-			t.Fatal("HIVE_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
-		}
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	dsn := testdb.DSN(t)
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditarchive"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // newRLSTestPool connects and SET ROLE hive_app -- the same NOT-BYPASSRLS role
@@ -30,13 +31,7 @@ import (
 // connects as the raw superuser and bypasses RLS.
 func newRLSTestPool(t *testing.T, role string) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

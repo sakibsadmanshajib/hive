@@ -71,5 +71,33 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       dependencies: ["phase-19-setup"],
     },
+    {
+      // The API-only subset of the phase-19 specs (issue #659). Specs 03
+      // through 07 assert an HTTP contract against control-plane or edge-api
+      // and need no browser session, so they do not depend on
+      // phase-19-setup, which signs in through Open WebUI. That dependency
+      // is a large part of why the whole suite stayed dark: the per-push
+      // job boots control-plane, edge-api and Next.js but not Open WebUI,
+      // so nothing that needs an Open WebUI session can run there. Specs 01
+      // and 02 genuinely do drive that UI and stay out of this project.
+      name: "phase-19-api",
+      testDir: "./e2e/phase-19",
+      // Everything in the directory except the two that drive Open WebUI,
+      // rather than an enumerated 03 through 07. An enumerated list is how a
+      // spec goes dark by being added: 08 would have matched nothing and run
+      // nowhere, with no error. Adding a spec here now needs a deliberate
+      // testIgnore edit to keep it out.
+      testMatch: /\/phase-19\/[^/]+\.spec\.ts$/,
+      testIgnore: /\/phase-19\/0[12]-[^/]+\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        // No browser is driven here, and a trace records request headers
+        // verbatim, so retaining one would put a live Supabase bearer token
+        // into an artifact that anyone can download from this public
+        // repository. `::add-mask::` redacts log text only, never files.
+        trace: "off",
+        video: "off",
+      },
+    },
   ],
 });

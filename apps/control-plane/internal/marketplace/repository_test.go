@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // newRLSTestPool connects as the hive_app role — NOT BYPASSRLS in production
@@ -20,13 +20,7 @@ import (
 // helper of the same name; see there for the full MaxConns=1 rationale.
 func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -42,6 +36,25 @@ func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, "SET ROLE hive_app"); err != nil {
 		pool.Close()
 		t.Skipf("SET ROLE hive_app failed (is hive_app provisioned + migrations applied on this test DB?): %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// newCatalogPool connects without SET ROLE, which is the posture the catalog
+// half of this repository actually runs under.
+//
+// public.marketplace_entries is deliberately not granted to hive_app
+// (20260716_01_marketplace_catalog.sql: "No RLS and no GRANT to authenticated:
+// this is shared platform catalog data, not tenant data"), so driving entry
+// CRUD through the hive_app pool asserts the opposite of the shipped trust
+// posture and fails on "permission denied for table marketplace_entries". The
+// tenant-enablement half, which is RLS-scoped, keeps using newRLSTestPool.
+func newCatalogPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), testdb.RequireTestDSN(t))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool
@@ -78,8 +91,7 @@ func seedTenant(t *testing.T, id uuid.UUID) {
 }
 
 func TestRepository_CatalogCRUD_RoundTrip(t *testing.T) {
-	pool := newRLSTestPool(t)
-	repo := marketplace.NewPgxRepository(pool)
+	repo := marketplace.NewPgxRepository(newCatalogPool(t))
 	ctx := context.Background()
 
 	created, err := repo.CreateEntry(ctx, marketplace.Entry{
@@ -117,12 +129,33 @@ func TestRepository_CatalogCRUD_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestRepository_TenantEnablement_RLSIsolation(t *testing.T) {
-	pool := newRLSTestPool(t)
-	repo := marketplace.NewPgxRepository(pool)
+// TestRepository_CatalogWriteDeniedToTenantRole pins the grant posture the
+// catalog migration describes in prose: hive_app, the role every tenant-scoped
+// query runs as, cannot write the global catalog. A migration that granted it
+// by accident would otherwise show up only as a privilege escalation nobody
+// tested for.
+func TestRepository_CatalogWriteDeniedToTenantRole(t *testing.T) {
+	repo := marketplace.NewPgxRepository(newRLSTestPool(t))
 	ctx := context.Background()
 
-	entry, err := repo.CreateEntry(ctx, marketplace.Entry{
+	if _, err := repo.CreateEntry(ctx, marketplace.Entry{
+		Kind:   marketplace.KindMCPServer,
+		Name:   "repo-test-denied-" + uuid.NewString(),
+		Config: json.RawMessage(`{"command":"npx"}`),
+	}); err == nil {
+		t.Fatal("hive_app wrote public.marketplace_entries; the catalog is platform data and must not be writable by the tenant role")
+	}
+}
+
+func TestRepository_TenantEnablement_RLSIsolation(t *testing.T) {
+	// The catalog row is created with the platform's own pool, the
+	// enablement rows through the RLS-scoped one, which is how the two halves
+	// are reached in production.
+	catalog := marketplace.NewPgxRepository(newCatalogPool(t))
+	repo := marketplace.NewPgxRepository(newRLSTestPool(t))
+	ctx := context.Background()
+
+	entry, err := catalog.CreateEntry(ctx, marketplace.Entry{
 		Kind:   marketplace.KindMCPServer,
 		Name:   "repo-test-rls-" + uuid.NewString(),
 		Config: json.RawMessage(`{"command":"npx"}`),
@@ -130,12 +163,17 @@ func TestRepository_TenantEnablement_RLSIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	t.Cleanup(func() { _ = repo.DeleteEntry(context.Background(), entry.ID) })
+	t.Cleanup(func() { _ = catalog.DeleteEntry(context.Background(), entry.ID) })
 
 	tenantA, tenantB := uuid.New(), uuid.New()
 	seedTenant(t, tenantA)
 	seedTenant(t, tenantB)
-	actor := uuid.New()
+	// uuid.Nil writes enabled_by as NULL. A random UUID would be a
+	// non-existent auth.users id and fail the enabled_by foreign key, which
+	// this suite would then read as "the entry does not exist" (SetEnabled
+	// maps any 23503 to ErrNotFound). Seeding a real auth user buys nothing
+	// here: no assertion below looks at enabled_by.
+	actor := uuid.Nil
 
 	if err := repo.SetEnabled(ctx, tenantA, entry.ID, true, actor); err != nil {
 		t.Fatalf("SetEnabled(tenantA): %v", err)
@@ -179,7 +217,10 @@ func TestRepository_SetEnabled_UnknownEntry_ForeignKeyViolation(t *testing.T) {
 	tenantID := uuid.New()
 	seedTenant(t, tenantID)
 
-	err := repo.SetEnabled(ctx, tenantID, uuid.New(), true, uuid.New())
+	// The actor is uuid.Nil so the only foreign key that can fail is the one
+	// this test is named after, entry_id. A random actor would fail the
+	// enabled_by key instead and pass the assertion for the wrong reason.
+	err := repo.SetEnabled(ctx, tenantID, uuid.New(), true, uuid.Nil)
 	if err == nil {
 		t.Fatal("expected an error enabling a non-existent entry")
 	}

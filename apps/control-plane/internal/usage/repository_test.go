@@ -2,12 +2,11 @@ package usage
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // newAttemptTestPool connects with the privileged role that HIVE_TEST_DB_URL
@@ -16,13 +15,7 @@ import (
 // test end.
 func newAttemptTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
