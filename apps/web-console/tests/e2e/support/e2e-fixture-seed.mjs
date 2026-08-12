@@ -18,7 +18,10 @@
 // Nothing here is browser code. The service-role key stays in this Node
 // process and its callers, never reaches page context, and must never be
 // written to stdout, stderr, a screenshot, or an artifact. Route any error
-// text that could embed it through `redactSecrets` first.
+// text that could embed it through `redactSecrets` first. That is a rule
+// about every printing site in this file, not only the ones at the CLI
+// boundary: the sweep below relays raw client-library messages, and those
+// messages are exactly where a key or a token ends up embedded.
 
 import { createHash, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -51,10 +54,12 @@ const LOCAL_IDS = {
   slugSuffix: "",
 };
 
-const DEFAULT_EMAILS = {
-  verified: "e2e-verified@scubed.com.bd",
-  unverified: "e2e-unverified@scubed.com.bd",
-};
+// No DEFAULT_EMAILS constant lives here any more. It used to supply the two
+// shared live addresses whenever a caller passed none, which made every
+// credential-less local run write a password onto a shared tenant-OWNER
+// account through ensureUser below and revoke every session a concurrent run
+// was holding. A default that silently targets a shared account is the bug, so
+// there is no default: see runScopedEmail.
 
 function sha256Hex(input) {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -84,6 +89,32 @@ export function withRunKey(email, runKey) {
   const at = email.indexOf("@");
   if (at === -1) return `${email}+${runKey}`;
   return `${email.slice(0, at)}+${runKey}${email.slice(at)}`;
+}
+
+// runScopedEmail is the gate on every address this module writes a password
+// to. ensureUser sends `password:` on both of its update paths, so an address
+// that is not scoped to this run means overwriting the credential of an
+// account other runs are signed in as. There is no fallback and no shared
+// default: an empty run key throws, and an address that does not already carry
+// the key gets it. Idempotent, because ci.yml passes an address that is
+// already namespaced alongside the same key.
+export function runScopedEmail(email, runKey) {
+  if (typeof email !== "string" || email === "") {
+    throw new Error(
+      "E2E fixture seeding requires an explicit address for every fixture " +
+        "user. It has no default, because the default was a shared live account."
+    );
+  }
+  if (!runKey) {
+    throw new Error(
+      "E2E fixture seeding requires E2E_RUN_KEY. Without it the fixtures " +
+        "target shared live accounts, and seeding overwrites their passwords, " +
+        "which revokes every session other runs are holding (see " +
+        "docs/live-test-auth.md). Export any unique value, for example " +
+        "E2E_RUN_KEY=$(whoami)-$(date +%s)."
+    );
+  }
+  return email.includes(`+${runKey}@`) ? email : withRunKey(email, runKey);
 }
 
 // buildIds returns LOCAL_IDS unchanged when runKey is empty, or a full set of
@@ -660,7 +691,9 @@ async function sweepStaleFixtureRuns(admin) {
       .eq("account_id", acct.id);
     if (delMapErr) {
       console.error(
-        `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+        redactSecrets(
+          `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+        )
       );
       continue;
     }
@@ -675,7 +708,7 @@ async function sweepStaleFixtureRuns(admin) {
       .eq("id", acct.id);
     if (delAcctErr) {
       console.error(
-        `sweep: delete account ${acct.id} failed: ${delAcctErr.message}`
+        redactSecrets(`sweep: delete account ${acct.id} failed: ${delAcctErr.message}`)
       );
       continue;
     }
@@ -684,7 +717,9 @@ async function sweepStaleFixtureRuns(admin) {
     );
     if (delUserErr) {
       console.error(
-        `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        redactSecrets(
+          `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        )
       );
     }
   }
@@ -698,8 +733,10 @@ async function sweepStaleFixtureRuns(admin) {
 export async function seedFixtures(admin, opts) {
   const runKey = typeof opts.runKey === "string" ? opts.runKey.trim() : "";
   const ids = buildIds(runKey);
-  const verifiedEmail = opts.verifiedEmail ?? DEFAULT_EMAILS.verified;
-  const unverifiedEmail = opts.unverifiedEmail ?? DEFAULT_EMAILS.unverified;
+  // Throws on an empty run key, so LOCAL_IDS above is now only ever reached by
+  // a caller that has already been rejected here.
+  const verifiedEmail = runScopedEmail(opts.verifiedEmail, runKey);
+  const unverifiedEmail = runScopedEmail(opts.unverifiedEmail, runKey);
 
   await sweepStaleFixtureRuns(admin);
 

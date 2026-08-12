@@ -8,6 +8,7 @@ rotation from revoking a deployment's key. No framework, no network: mocks
 urllib.request.urlopen and exercises the functions directly.
 Run: python3 scripts/test_seed_owui_e2e_user.py
 """
+import datetime
 import importlib.util
 import io
 import json
@@ -528,6 +529,102 @@ def test_account_slug_defaults_to_ci_and_is_overridable() -> None:
     print("ok: --account-slug defaults to the CI account and can be overridden")
 
 
+def test_password_is_never_rotated_on_an_existing_account() -> None:
+    """An account that already exists keeps its password unless the caller
+    explicitly supplies one. This script runs unattended from the nightly
+    workflow, and rotating a shared account revokes every session that any
+    concurrent run is holding on it (docs/live-test-auth.md). Mirrors the
+    same guard in scripts/test_seed_demo_owner.py."""
+    password_to_set = seed_owui_e2e_user.password_to_set
+    assert password_to_set(True, "", "generated-pw") is None
+    assert password_to_set(True, "   ", "generated-pw") is None
+    assert password_to_set(True, "explicit-pw", "generated-pw") == "explicit-pw"
+
+    # A brand-new account has no session to break and no credential to keep.
+    assert password_to_set(False, "", "generated-pw") == "generated-pw"
+    assert password_to_set(False, "explicit-pw", "generated-pw") == "explicit-pw"
+    print("ok: password_to_set never rotates an existing account by default")
+
+
+def test_run_key_namespaces_the_fixture_addresses() -> None:
+    """A run key gives each run its own users, so the guard above never has to
+    refuse anything in CI: there is no shared account left to rotate."""
+    with_run_key = seed_owui_e2e_user.with_run_key
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "") == "owui-e2e@hive-e2e.invalid"
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "  ") == "owui-e2e@hive-e2e.invalid"
+    assert (
+        with_run_key("owui-e2e@hive-e2e.invalid", "12345-1")
+        == "owui-e2e+12345-1@hive-e2e.invalid"
+    )
+    # Two attempts of the same workflow run must not collide.
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "12345-1") != with_run_key(
+        "owui-e2e@hive-e2e.invalid", "12345-2"
+    )
+    print("ok: with_run_key namespaces the fixture addresses per run")
+
+
+def test_stale_key_cutoff_is_backdated_not_now() -> None:
+    """The shim key delete is bounded by age, not by "everything except mine".
+    Two runs overlap (the schedule and a labelled pull request are in different
+    concurrency groups), and an identity-bounded delete had each revoking the
+    other's key mid-flight, which is the outage in .wolf/cerebrum.md."""
+    now = datetime.datetime(2026, 8, 11, 12, 0, tzinfo=datetime.timezone.utc)
+    cutoff = seed_owui_e2e_user.stale_key_cutoff_iso(now)
+    assert cutoff == "2026-08-11T06:00:00+00:00", cutoff
+    # A key minted seconds ago sorts after the cutoff, so PostgREST's
+    # created_at=lt.<cutoff> filter cannot match it.
+    assert now.isoformat() > cutoff
+    print("ok: stale_key_cutoff_iso spares a concurrent run's fresh key")
+
+
+def test_sweep_only_deletes_stale_run_scoped_fixture_users() -> None:
+    """The sweep must never reach the shared base address or a real account,
+    and never this run's own users."""
+    old = "2020-01-01T00:00:00+00:00"
+    fresh = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    users = [
+        {"id": "stale", "email": "owui-e2e+111-1@hive-e2e.invalid", "created_at": old},
+        {"id": "stale-bootstrap", "email": "owui-e2e-bootstrap+111-1@hive-e2e.invalid", "created_at": old},
+        {"id": "mine", "email": "owui-e2e+222-1@hive-e2e.invalid", "created_at": old},
+        {"id": "recent", "email": "owui-e2e+333-1@hive-e2e.invalid", "created_at": fresh},
+        {"id": "shared-base", "email": "owui-e2e@hive-e2e.invalid", "created_at": old},
+        {"id": "customer", "email": "owui-e2e+x@real-customer.example", "created_at": old},
+        {"id": "lookalike", "email": "owui-e2e-someone-else@hive-e2e.invalid", "created_at": old},
+    ]
+    deleted = []
+
+    def fake_request(base, headers, method, path, body=None, params=None, prefer=None):
+        if method == "GET":
+            return 200, {"users": users}
+        assert method == "DELETE", method
+        deleted.append(path.rsplit("/", 1)[-1])
+        return 204, None
+
+    original = seed_owui_e2e_user.request
+    seed_owui_e2e_user.request = fake_request
+    try:
+        seed_owui_e2e_user.sweep_stale_fixture_users("gotrue", {}, "222-1")
+    finally:
+        seed_owui_e2e_user.request = original
+
+    assert sorted(deleted) == ["stale", "stale-bootstrap"], deleted
+    print("ok: sweep removes only stale run-scoped fixture users")
+
+
+def test_sweep_is_a_no_op_without_a_run_key() -> None:
+    """No run key means the shared identity, and nothing about it is sweepable."""
+    def explode(*args, **kwargs):
+        raise AssertionError("sweep must not call out without a run key")
+
+    original = seed_owui_e2e_user.request
+    seed_owui_e2e_user.request = explode
+    try:
+        seed_owui_e2e_user.sweep_stale_fixture_users("gotrue", {}, "")
+    finally:
+        seed_owui_e2e_user.request = original
+    print("ok: sweep is inert without a run key")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -556,6 +653,11 @@ def main() -> None:
     test_billing_mapping_accepts_a_lost_race_on_the_same_pairing()
     test_billing_mapping_still_fails_when_the_race_winner_is_another_account()
     test_tenant_slug_defaults_to_ci_and_is_overridable()
+    test_password_is_never_rotated_on_an_existing_account()
+    test_run_key_namespaces_the_fixture_addresses()
+    test_stale_key_cutoff_is_backdated_not_now()
+    test_sweep_only_deletes_stale_run_scoped_fixture_users()
+    test_sweep_is_a_no_op_without_a_run_key()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]
