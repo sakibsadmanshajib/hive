@@ -210,6 +210,11 @@ func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.
 //
 // Zero rows affected therefore means there is no membership row at all, which
 // surfaces as ErrNotFound.
+//
+// The ceiling: status is 'active' or 'invited' and nothing else, which is what
+// makes an unconditional SET status = 'active' safe here. If a third status is
+// ever added (a suspension, a soft removal), this statement has to exclude it
+// explicitly or acceptance will quietly reinstate it.
 func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.account_memberships
