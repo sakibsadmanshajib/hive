@@ -44,5 +44,17 @@ Skip a stage only when it plainly does not apply (a one-line typo fix has no mea
 
 Gate compliance (fulfilling a fact-forcing or skill-prerequisite gate instead of routing around it) is a cross-project rule, defined once in the global `~/.claude/CLAUDE.md`'s Gate Compliance section. Applies here without restatement.
 
+## Autonomous execution and fallbacks
+
+Every pipeline stage that touches GitHub (opening a PR, posting review comments, resolving threads, merging) is fully automatic. No stage pauses to ask the owner or the orchestrator for permission to do any of this; the owner authorized this standing, for hive specifically, on 2026-08-12. The one gate that stays, deliberately: hive's branch protection on `main` (PR required, CI must be green, threads resolved), since a push to `main` auto-deploys the live demo box via `deploy-demo-box.yml` with no other check in front of it. That gate is a machine check, not a human approval (`required_pull_request_reviews` is null on this repo), so it never blocks autonomous operation, only a genuinely broken commit.
+
+Known failure modes and their automatic fallback, so a dispatch brief never needs to restate them:
+
+- `gh pr merge` errors or behaves unexpectedly (stale local branch state, an ambiguous current-branch error): fall back to `gh api -X PUT repos/{owner}/{repo}/pulls/{number}/merge -f merge_method=squash`, which also surfaces the real rejection reason when merge is genuinely blocked. Delete the remote branch after, if the merge call did not already.
+- A review stream fails to run (CodeRabbit CLI rate limited, unauthenticated, or returns an auth or organization error; any other stream's tool unavailable): skip that one stream, say so explicitly as SKIPPED in the posted review, and proceed with every other stream that did run. Never block the pipeline on one unavailable stream, and never treat its absence as a clean pass.
+- Required CI checks are still running: poll (`gh pr checks <n>` on a bounded retry loop, or the Monitor tool) until they resolve. Do not end the turn on a vague "waiting" status and hope to be resumed; actually wait and retry within the same dispatch where the harness allows it.
+- A dispatched agent goes idle without delivering its report content: this is a known harness quirk, not evidence the work did not happen. Every implementer and reviewer writes its full report to a named file rather than relying on the reply message alone; verify completion against that file and against real git or `gh` state (`git ls-remote`, `gh pr view`), not just whether a message was delivered.
+- A hook denies a tool call: per the Gate Compliance rule above, fulfill it and retry. That is itself the fallback, not an escalation.
+
 ## Repetitive work
 When a task pattern repeats three or more times, mint a repo-local skill via skill-creator. Use claude-md-management skills for CLAUDE.md upkeep. Hooks for anything that must fire automatically.
