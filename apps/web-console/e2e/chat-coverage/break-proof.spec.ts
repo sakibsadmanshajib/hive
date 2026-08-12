@@ -11,9 +11,11 @@ import { test, expect } from "@playwright/test";
 
 import { EXCLUSIONS, REGISTRY } from "./data";
 import {
+  checkWithoutFiring,
   enumerate,
   exclusionFailures,
   expiredExclusions,
+  isDeferred,
   proveByClick,
   sampleChatter,
 } from "./lib";
@@ -27,6 +29,10 @@ const SELF_TEST_HTML = `
   <button aria-label="Failing">Failing</button>
   <button aria-label="Toasty">Toasty</button>
   <button aria-label="Pollster">Pollster</button>
+  <button aria-label="Hanging">Hanging</button>
+  <button aria-label="Cut Off">Cut Off</button>
+  <button aria-label="Delete Everything">Delete Everything</button>
+  <button aria-label="Locked" title="finish the form first" disabled>Locked</button>
 </main>
 <script>
   const out = document.getElementById('out');
@@ -38,6 +44,11 @@ const SELF_TEST_HTML = `
     toast.textContent = 'Something went wrong, please try again';
   });
   at('Toasty').addEventListener('click', () => { toast.textContent = 'Error: could not save'; });
+  // Sends a request nothing ever answers. The old rule proved a control on the
+  // request alone, so a button wired to a hanging endpoint was covered for ever.
+  at('Hanging').addEventListener('click', () => { fetch('/api/hang').catch(() => {}); });
+  // Its request dies in transport, which emits requestfailed and no response.
+  at('Cut Off').addEventListener('click', () => { fetch('/api/cut').catch(() => {}); });
   // Polls on its own, exactly like Open WebUI does, and its button does
   // nothing. Without the idle sample the poll lands inside the settle window
   // and is counted as this button's network proof.
@@ -65,6 +76,15 @@ test.describe("chat coverage gate self-checks", () => {
       }
       if (url.endsWith("/api/poll")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+        return;
+      }
+      if (url.endsWith("/api/hang")) {
+        // Never fulfilled and never aborted: the request stays open past the
+        // settle window, exactly like an endpoint that accepts and hangs.
+        return;
+      }
+      if (url.endsWith("/api/cut")) {
+        await route.abort("connectionreset");
         return;
       }
       await route.fulfill({
@@ -115,6 +135,35 @@ test.describe("chat coverage gate self-checks", () => {
       pollster.proven,
       "a dead control was proven by the page's own background polling: " + pollster.detail,
     ).toBe(false);
+
+    const hanging = await proveByClick(page, byName("Hanging"), { ignoreRequests: chatter });
+    expect(
+      hanging.proven,
+      "a control whose request nothing answered was reported as working: " + hanging.detail,
+    ).toBe(false);
+    expect(hanging.detail).toContain("nothing answered");
+
+    const cutOff = await proveByClick(page, byName("Cut Off"), { ignoreRequests: chatter });
+    expect(
+      cutOff.proven,
+      "a control whose request died in transport was reported as working: " + cutOff.detail,
+    ).toBe(false);
+    expect(cutOff.detail).toContain("never reached a server");
+
+    // Destructive and disabled controls are checked, not fired, and the
+    // verdict is never proof. Both used to count as coverage: the disabled one
+    // outright, which meant a broken control could be "fixed" by disabling it.
+    const destructive = await checkWithoutFiring(page, byName("Delete Everything"));
+    expect(destructive.proven, "a destructive control was reported as proven").toBe(false);
+    expect(destructive.proof).toBe("not-fired");
+    expect(isDeferred(destructive)).toBe(true);
+
+    const locked = await proveByClick(page, byName("Locked"), { ignoreRequests: chatter });
+    expect(locked.proven, "a disabled control was reported as proven: " + locked.detail).toBe(
+      false,
+    );
+    expect(locked.proof).toBe("not-fired");
+    expect(locked.detail).toContain("finish the form first");
   });
 
   test("every inert-registry entry carries a justification", async () => {

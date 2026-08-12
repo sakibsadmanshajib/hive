@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  exclusionFailures,
+  expiredExclusions,
   floorFailures,
   identityOf,
   isDestructive,
@@ -97,8 +99,10 @@ describe("summarise", () => {
     expect(summary.identitiesProven).toBe(1);
     expect(summary.identitiesDeferred).toBe(1);
     expect(summary.surfaces.settings.deferred).toBe(1);
-    // A not-fired control is not an unproven one either: it never reaches the
-    // failure list the gate asserts on.
+    // Counted apart from proven so it can never be read as coverage. It is
+    // still a failure at the gate unless inert-registry.json justifies the
+    // key, which the spec decides; this column only keeps the two apart in the
+    // report.
     expect(summary.surfaces.settings.unproven).toEqual([]);
   });
 
@@ -150,25 +154,62 @@ describe("the committed floors", () => {
   const floors = parseFloors(
     JSON.parse(readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8")),
   );
-  const recorded = JSON.parse(
-    readFileSync(join(COVERAGE_DIR, "results/2026-08-10-morning-live-run.json"), "utf8"),
-  );
 
-  // The regression this file exists for. A run once rewrote the floors from
-  // itself and skipped checking them in the same pass, so three surfaces that
-  // had genuinely degraded (Interface 56 -> 48, General 17 -> 16, Audio 8 -> 7)
-  // had the smaller numbers written in as the new baseline. Floors are now
-  // updated by a separate program, and this keeps the committed file honest
-  // against the highest count any recorded run has ever seen.
-  it("is never below what a recorded live run enumerated", () => {
+  // EVERY recorded run, not one of them. Comparing against the morning ledger
+  // alone left `search` pinned at 50 while the committed floor says 106, so a
+  // fifth of the whole denominator could have been signed away and this test
+  // would still have passed. Highest wins: a floor is the most a surface has
+  // ever been seen to render.
+  function highestRecorded(): Map<string, number> {
+    const seen = new Map<string, number>();
+    const ledgers = [
+      JSON.parse(readFileSync(join(COVERAGE_DIR, "results/2026-08-10-morning-live-run.json"), "utf8")),
+      JSON.parse(
+        readFileSync(
+          join(COVERAGE_DIR, "../../../../docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json"),
+          "utf8",
+        ),
+      ),
+    ];
+    for (const ledger of ledgers) {
+      const surfaces = ledger.summary?.surfaces ?? ledger.surfaces ?? {};
+      for (const [surface, counts] of Object.entries(surfaces)) {
+        const total = Number(new Map(Object.entries(counts ?? {})).get("total"));
+        if (!Number.isFinite(total)) continue;
+        seen.set(surface, Math.max(seen.get(surface) ?? 0, total));
+      }
+    }
+    return seen;
+  }
+
+  it("is never below what any recorded live run enumerated", () => {
     const below: string[] = [];
-    for (const [surface, seen] of Object.entries(recorded.surfaces)) {
-      const total = Number(new Map(Object.entries(seen ?? {})).get("total"));
+    for (const [surface, total] of highestRecorded()) {
       const floor = floors[surface];
-      if (floor === undefined) continue;
+      // A missing key is the failure, not a reason to skip. Deleting a floor
+      // line is exactly how a surface leaves the denominator quietly, and
+      // `continue` here made that invisible.
+      if (floor === undefined) {
+        below.push(`${surface}: no floor at all, though a recorded run enumerated ${total}`);
+        continue;
+      }
       if (floor < total) below.push(`${surface}: floor ${floor} < recorded ${total}`);
     }
     expect(below).toEqual([]);
+  });
+
+  it("keeps a floor for every surface that must exist even when it does not sweep", () => {
+    // sidebar, chat-item-menu, chat-message-actions and workspace:knowledge
+    // enumerate nothing today. Their floors are what turn "the entry point was
+    // deleted" into a failure rather than into a green run over a smaller app.
+    for (const surface of [
+      "sidebar",
+      "chat-item-menu",
+      "chat-message-actions",
+      "workspace:knowledge",
+    ]) {
+      expect(floors[surface], `${surface} lost its floor`).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -212,10 +253,55 @@ describe("requestSignature", () => {
 });
 
 describe("isDestructive", () => {
-  it("matches on the label a user reads", () => {
-    expect(isDestructive(control({ label: "Delete All Chats" }))).toBe(true);
-    expect(isDestructive(control({ label: "Archive" }))).toBe(true);
-    expect(isDestructive(control({ label: "New Chat" }))).toBe(false);
+  it("matches the control's own accessible name", () => {
+    expect(isDestructive(control({ name: "Delete All Chats" }))).toBe(true);
+    expect(isDestructive(control({ name: "Archive All" }))).toBe(true);
+    expect(isDestructive(control({ name: "New Chat" }))).toBe(false);
+  });
+
+  it("never matches on text lifted from an ancestor", () => {
+    // `label` falls back to up to 140 characters of the surrounding panel, so
+    // matching it made every button under a "Delete All Chats" heading
+    // destructive: two controls the ledger proves dead would have been hidden
+    // behind not-fired, and three genuinely proven ones thrown away.
+    const inThePanel = control({
+      name: "Import Chats",
+      label: "Import Chats Export Chats Archive All Chats Delete All Chats",
+    });
+    expect(isDestructive(inThePanel)).toBe(false);
+  });
+
+  it("does not match a word that merely contains one", () => {
+    expect(isDestructive(control({ name: "Undeleted items" }))).toBe(false);
+    expect(isDestructive(control({ name: "Archived Chats" }))).toBe(false);
+  });
+});
+
+describe("exclusion bookkeeping", () => {
+  // Asserted against deliberately BROKEN input, not only against the committed
+  // file. Every earlier assertion here was "the valid file produces no
+  // complaints", which stays green if the function is gutted to return [].
+  const valid = { id: "composer-controls", reason: "panel will not open", owner: "@x", issue: 844 };
+
+  it("names every missing field", () => {
+    expect(exclusionFailures([{ ...valid, reason: "" }]).join(" ")).toContain("no reason");
+    expect(exclusionFailures([{ ...valid, owner: undefined }]).join(" ")).toContain("no owner");
+    expect(exclusionFailures([{ ...valid, issue: undefined }]).join(" ")).toContain(
+      "names no blocking issue",
+    );
+    expect(exclusionFailures([{ ...valid, permanent: true }]).join(" ")).toContain(
+      "one or the other",
+    );
+    expect(exclusionFailures([valid])).toEqual([]);
+  });
+
+  it("expires an exclusion the day its issue closes", () => {
+    expect(expiredExclusions([valid], new Set([844]))).toHaveLength(1);
+    expect(expiredExclusions([valid], new Set([844]))[0]).toContain("844");
+    expect(expiredExclusions([valid], new Set([999]))).toEqual([]);
+    expect(expiredExclusions([{ ...valid, issue: undefined, permanent: true }], new Set([844]))).toEqual(
+      [],
+    );
   });
 });
 

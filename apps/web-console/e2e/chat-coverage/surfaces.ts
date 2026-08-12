@@ -287,8 +287,18 @@ export async function discoverWorkspaceTabs(page: Page): Promise<Surface[]> {
  * exactly one surface and counted once.
  */
 export async function enumerateSurface(page: Page, surface: Surface): Promise<Control[]> {
-  const signature = (key: string) => key.slice(key.indexOf("::"));
-  let baseline = new Set<string>();
+  // Signature without the instance ordinal, subtracted as a multiset.
+  //
+  // Subtracting a set of full keys looked right and was not: the ordinal is
+  // positional, so an overlay that injects or hides one identically-keyed
+  // element shifts every later one. A base control then carried an ordinal the
+  // baseline never held, survived the subtraction, and was clicked as though
+  // the surface had added it; a genuinely new control could be cancelled by a
+  // base entry whose ordinal it inherited. Counting instead of matching keys
+  // makes the arithmetic mean what it says: the surface adds however many more
+  // of a thing than the page underneath already had.
+  const signature = (key: string) => key.slice(key.indexOf("::")).replace(/#\d+$/, "");
+  const remaining = new Map<string, number>();
   if (surface.delta) {
     if (surface.id.startsWith("settings:")) {
       if (surface.chrome) {
@@ -307,11 +317,19 @@ export async function enumerateSurface(page: Page, surface: Surface): Promise<Co
       await gotoHome(page);
       await ensureSidebar(page, false);
     }
-    baseline = new Set(
-      (await enumerate(page, "__base")).map((c) => signature(c.key)),
-    );
+    for (const control of await enumerate(page, "__base")) {
+      const sig = signature(control.key);
+      remaining.set(sig, (remaining.get(sig) ?? 0) + 1);
+    }
   }
   await surface.open(page);
   const all = await enumerate(page, surface.id);
-  return surface.delta ? all.filter((c) => !baseline.has(signature(c.key))) : all;
+  if (!surface.delta) return all;
+  return all.filter((c) => {
+    const sig = signature(c.key);
+    const left = remaining.get(sig) ?? 0;
+    if (left === 0) return true;
+    remaining.set(sig, left - 1);
+    return false;
+  });
 }

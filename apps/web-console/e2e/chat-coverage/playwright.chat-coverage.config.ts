@@ -9,6 +9,12 @@ const CHAT = process.env.CHAT_URL ?? process.env.OWUI_URL ?? "";
 const hasTarget = Boolean(CHAT);
 // live-auth.mjs mints the session, so what is needed is an account to mint for
 // and the keys it uses. No password is involved at any point.
+//
+// Reading the service-role key here is a presence check, and it is also the
+// honest statement of where that key lives: in this process's environment,
+// like any other job-level variable. The mint happens in a child process so
+// nothing derived from the key is in scope for a spec to hand to a page, but
+// the value itself is not isolated from the worker.
 const hasCreds = Boolean(
   (process.env.OWUI_E2E_EMAIL || process.env.HIVE_QA_AGENT_EMAIL) &&
     process.env.SUPABASE_URL &&
@@ -31,7 +37,14 @@ export default defineConfig({
   retries: 0,
   reporter: [
     ["list"],
-    ["json", { outputFile: "../../chat-coverage-report/playwright.json" }],
+    // Both of these land OUTSIDE chat-coverage-report/, which is the directory
+    // CI uploads. Playwright's own reports embed raw error text and stdout,
+    // and a failure in the sign-in hop can quote the OAuth callback URL with a
+    // live code and state in it. redactUrl cannot reach text the framework
+    // produced, and tools/lint-no-token-in-proof-captures.mjs only scans
+    // docs/proof/, so the only safe answer is to keep them out of the
+    // artifact entirely.
+    ["json", { outputFile: "../../playwright-report-chat-coverage/playwright.json" }],
     ["html", { outputFolder: "../../playwright-report-chat-coverage", open: "never" }],
   ],
   use: {

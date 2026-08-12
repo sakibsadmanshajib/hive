@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { BrowserContext, Page } from "@playwright/test";
 
+import { redactText } from "./redact";
+
 const execFileAsync = promisify(execFile);
 
 // Spec-side entry to live-auth.mjs, which is the single implementation (see
@@ -14,8 +16,15 @@ const execFileAsync = promisify(execFile);
 // reset-profile.ts: Playwright's transform compiles spec imports to CommonJS,
 // and importing a .mjs from a spec makes Node evaluate that CJS output in ES
 // module scope ("exports is not defined"); and a child process keeps the
-// service-role key out of the Playwright worker's own module graph, so it can
-// never reach a page, a trace, or a video.
+// service-role key out of this module's own graph, so no value derived from it
+// is in scope where a spec could pass one into page.evaluate.
+//
+// What that does NOT mean, and what an earlier version of this comment claimed
+// wrongly: the key is not absent from the worker. It is ordinary job-level
+// environment, playwright.chat-coverage.config.ts reads SUPABASE_SERVICE_ROLE_KEY
+// to decide whether the live projects can run, and the spawn below forwards the
+// whole of process.env to the child. Anything in this process that dumps
+// process.env dumps the key with it. Only its USE is isolated.
 
 export interface LiveSessionOptions {
   /** An existing account. Its password is neither needed nor modified. */
@@ -103,6 +112,23 @@ export interface ChatSessionOptions {
  * real "Continue with Hive" hop, which is what a user does.
  */
 export async function signInToChat(
+  context: BrowserContext,
+  options: ChatSessionOptions,
+): Promise<Page> {
+  try {
+    return await walkChatHop(context, options);
+  } catch (err: unknown) {
+    // Playwright writes the URLs it navigated through into a waitForURL
+    // timeout, and this function walks an OAuth callback, so the framework's
+    // own failure text can carry a live `code` and `state`. That text reaches
+    // the JSON report, the HTML report and the CI log, none of which any
+    // per-URL redaction can reach after the fact. Redact here, where the
+    // credential is still inside a string this code owns.
+    throw new Error(redactText(err instanceof Error ? err.message : String(err)));
+  }
+}
+
+async function walkChatHop(
   context: BrowserContext,
   options: ChatSessionOptions,
 ): Promise<Page> {

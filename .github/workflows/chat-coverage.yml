@@ -112,11 +112,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chat-coverage-ledger
-          # The ledger and the markdown summary only. Traces and videos are off
-          # in this config (see its `use` block): both record the session's
-          # cookies, and a trace of the sign-in hop records the OAuth callback's
-          # code and state, none of which the text lint in
-          # tools/lint-no-token-in-proof-captures.mjs can see inside.
-          path: apps/web-console/chat-coverage-report/
+          # Two named files, never a directory. Everything this suite writes
+          # itself goes through redactUrl, but a directory upload also sweeps
+          # up whatever the framework wrote beside them: Playwright's JSON and
+          # HTML reports carry raw error text, and a sign-in that outruns its
+          # ninety second wait quotes the OAuth callback with a live code and
+          # state in the timeout message. Those reports are configured to land
+          # outside this directory, and naming the files here means a future
+          # reporter added to the config cannot quietly rejoin the artifact.
+          # Traces and videos are off for the same reason and cannot be
+          # inspected by the text lint at all.
+          path: |
+            apps/web-console/chat-coverage-report/coverage.run.json
+            apps/web-console/chat-coverage-report/coverage.md
           if-no-files-found: error
           retention-days: 14
