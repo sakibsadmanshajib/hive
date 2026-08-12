@@ -218,6 +218,35 @@ func createSettled(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.U
 	return settled
 }
 
+// createWithoutWaiting creates a task against an engine whose launch is
+// gated open, and fails the test if the create call does not return promptly.
+// It runs the call on its own goroutine so a create that blocks on the launch
+// (issue #881) fails this one test with a legible message instead of hanging
+// the whole package until the go test timeout.
+func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.UUID) agenttask.Task {
+	t.Helper()
+	type result struct {
+		task agenttask.Task
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+		done <- result{task: task, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("CreateTask: %v", got.err)
+		}
+		return got.task
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreateTask blocked on the engine launch (issue #881): edge-api gives up at 15s and reports a failure for a task that is in fact starting")
+		return agenttask.Task{}
+	}
+}
+
 func TestService_CreateTask_InvalidPack(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{})
 	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "")
@@ -430,10 +459,7 @@ func TestService_CancelDuringLaunch_ReleasesTheSlotThatLaunchTook(t *testing.T) 
 	svc := agenttask.NewService(newFakeRepository(), eng)
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
+	created := createWithoutWaiting(t, svc, tenantID, userID)
 	if created.Status != agenttask.StatusQueued {
 		t.Fatalf("expected a queued task while the launch is in flight, got %v", created.Status)
 	}
@@ -498,28 +524,9 @@ func TestService_CreateTask_DoesNotBlockOnLaunch(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), eng)
 	tenantID, userID := uuid.New(), uuid.New()
 
-	type result struct {
-		task agenttask.Task
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
-		done <- result{task: task, err: err}
-	}()
-
-	var created agenttask.Task
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("CreateTask: %v", got.err)
-		}
-		if got.task.Status != agenttask.StatusQueued {
-			t.Fatalf("expected the caller to get a queued task, got %v", got.task.Status)
-		}
-		created = got.task
-	case <-time.After(2 * time.Second):
-		t.Fatal("CreateTask blocked on the engine launch (issue #881): the caller times out and is told the task failed while it is in fact starting")
+	created := createWithoutWaiting(t, svc, tenantID, userID)
+	if created.Status != agenttask.StatusQueued {
+		t.Fatalf("expected the caller to get a queued task, got %v", created.Status)
 	}
 
 	close(eng.launchGate)
