@@ -453,8 +453,30 @@ test.describe("chat interaction coverage", () => {
         errors.push(`${surface.id}: enumerated zero controls`);
         continue;
       }
-      const stateful = controls.filter(isStateful);
-      const clickable = controls.filter((c) => !isStateful(c));
+      // Destructive first, whatever kind of control it is. flip() fills every
+      // text input and then clicks Save, so a stateful control named "Clear
+      // memories" or a "Reset to default" select was being activated for real
+      // while only the click pass consulted isDestructive.
+      const destructive = controls.filter(isDestructive);
+      const rest = controls.filter((c) => !isDestructive(c));
+      const stateful = rest.filter(isStateful);
+      const clickable = rest.filter((c) => !isStateful(c));
+      for (const ctl of destructive) {
+        const target = await relocate(page, surface, ctl.key).catch(() => undefined);
+        results.push(
+          target
+            ? await checkWithoutFiring(page, target)
+            : {
+                key: ctl.key,
+                surface: surface.id,
+                name: ctl.label || ctl.name,
+                role: ctl.role || ctl.tag,
+                proven: false,
+                proof: "none",
+                detail: "destructive control was not there when the surface was re-opened",
+              },
+        );
+      }
 
       // What this surface does while nobody is touching it. Anything in here
       // cannot be counted as a control's network proof.
@@ -511,17 +533,23 @@ test.describe("chat interaction coverage", () => {
       if (!entry.key) continue;
       registryHits.set(entry.key, entry.justification.trim());
     }
+    // A control nobody fired is not coverage, and it is not a free pass
+    // either. It fails the gate exactly like a dead control unless
+    // inert-registry.json carries a justification for its key, which is the
+    // same escape hatch every other unfireable control uses and which someone
+    // has to write down and sign. An earlier version dropped every not-fired
+    // result from the failure list, which would have turned two controls this
+    // repository's own ledger proves dead into a green gate.
     const excused = results.filter(
       (r) =>
         !r.proven &&
-        !isDeferred(r) &&
         [...registryHits.entries()].some(
           ([key, justification]) => r.key.includes(key) && justification.length > 0,
         ),
     );
     const deferred = results.filter(isDeferred);
     const failures = results.filter(
-      (r) => !r.proven && !isDeferred(r) && !excused.some((e) => e.key === r.key),
+      (r) => !r.proven && !excused.some((e) => e.key === r.key),
     );
 
     fs.mkdirSync(REPORT_DIR, { recursive: true });
@@ -546,9 +574,20 @@ test.describe("chat interaction coverage", () => {
     );
 
     // Tracker. Assertions below judge this run only; this file carries the
-    // running total across sliced runs so the ratio is comparable over time.
+    // running total across sliced runs.
+    //
+    // It is written from a full sweep only. A slice used to merge into it and
+    // then print summarise() over the merged set as though it were a total,
+    // mixing this run's verdicts with whatever a previous run happened to
+    // leave behind and labelling the result with no marker at all. A number
+    // built half from now and half from an unknown then is worse than no
+    // number.
     const trackerPath = path.join(REPORT_DIR, "coverage.json");
-    const tracker = readTracker(trackerPath);
+    const tracker = partial ? {} : readTracker(trackerPath);
+    if (partial) {
+      // eslint-disable-next-line no-console
+      console.log("[coverage] partial run: coverage.json left untouched");
+    }
     // Drop stale keys before merging. A surface swept in this run is fully
     // described by this run, so anything it used to contain and no longer does
     // has to go, or a control that was removed (or an enumeration bug that has
@@ -560,21 +599,22 @@ test.describe("chat interaction coverage", () => {
         delete tracker[key];
       }
     }
-    for (const r of results) tracker[r.key] = { ...r, lastSeen: generatedAt };
-    const trackedResults = Object.values(tracker);
-    fs.writeFileSync(
-      trackerPath,
-      JSON.stringify(
-        {
-          generatedAt,
-          target: report.target,
-          summary: summarise(trackedResults),
-          controls: tracker,
-        },
-        null,
-        2,
-      ),
-    );
+    if (!partial) {
+      for (const r of results) tracker[r.key] = { ...r, lastSeen: generatedAt };
+      fs.writeFileSync(
+        trackerPath,
+        JSON.stringify(
+          {
+            generatedAt,
+            target: report.target,
+            summary: summarise(Object.values(tracker)),
+            controls: tracker,
+          },
+          null,
+          2,
+        ),
+      );
+    }
     const headline = partial
       ? [
           `Partial run: surfaces matching ${String(process.env.COV_SURFACES)} only.`,
@@ -742,7 +782,6 @@ const PROOF_NAMES = [
   "filechooser",
   "value",
   "persisted",
-  "disabled-with-reason",
   "not-fired",
   "none",
 ] as const;

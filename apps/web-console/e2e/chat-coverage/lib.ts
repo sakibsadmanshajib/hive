@@ -9,6 +9,10 @@
 // the exact failure mode the owner named.
 import type { Page, Locator } from "@playwright/test";
 
+import { redactText, redactUrl } from "../../tests/e2e/support/redact";
+
+export { redactText, redactUrl };
+
 declare global {
   interface Window {
     /** Mutation records counted by the watcher below. */
@@ -45,62 +49,6 @@ export const SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
-/**
- * Query and fragment parameters that are a login on their own.
- *
- * Mirrors the list in tools/lint-no-token-in-proof-captures.mjs, which is the
- * CI guard for the same class of leak. Kept as a local copy rather than an
- * import because that file is an .mjs, and Playwright compiles spec imports to
- * CommonJS, which cannot load it.
- */
-const CREDENTIAL_PARAMS = [
-  "access_token",
-  "refresh_token",
-  "token_hash",
-  "hashed_token",
-  "email_otp",
-  "token",
-  "code",
-  "state",
-];
-
-/**
- * Strips credential-bearing parameters out of an URL before it is written
- * anywhere: an error message, the ledger, a console line, a report.
- *
- * The OAuth hop that signs this suite in carries `code` and `state` in the
- * callback URL, and both are live credentials until consumed. Fragments are
- * covered as well as query strings, because the implicit-flow form of the same
- * callback puts them after the hash.
- */
-export function redactUrl(url: string): string {
-  const scrub = (search: string): string => {
-    const params = new URLSearchParams(search);
-    let touched = false;
-    for (const name of CREDENTIAL_PARAMS) {
-      if (params.has(name)) {
-        params.set(name, "REDACTED");
-        touched = true;
-      }
-    }
-    return touched ? params.toString() : search;
-  };
-  try {
-    const parsed = new URL(url);
-    parsed.search = scrub(parsed.search.replace(/^\?/, ""));
-    parsed.hash = parsed.hash.includes("=")
-      ? "#" + scrub(parsed.hash.replace(/^#/, ""))
-      : parsed.hash;
-    return parsed.toString();
-  } catch {
-    // Not an absolute URL. Redact the whole thing rather than guess: a bare
-    // token pasted into a message has no structure to parse.
-    return CREDENTIAL_PARAMS.some((name) => url.includes(name + "="))
-      ? url.replace(/([?&#][a-z_]*(?:token|code|state|otp)[a-z_]*=)[^&#\s]+/gi, "$1REDACTED")
-      : url;
-  }
-}
-
 export type Control = {
   key: string;
   surface: string;
@@ -126,13 +74,13 @@ export type Proof =
   | "filechooser"
   | "value"
   | "persisted"
-  | "disabled-with-reason"
-  // Checked but deliberately never activated: a control whose label says it
-  // destroys data. Its own category because it is NOT proof that the control
-  // works. Firing it and aborting the write at the network layer used to be
-  // recorded as proof, which is worse than no coverage: the abort means the
-  // server never answers, so a control pointing at an endpoint that is gone
-  // (the #846 defect class) came back green.
+  // Checked but deliberately never activated: a control whose own name says it
+  // destroys data, or one the app renders disabled. Its own category because
+  // it is NOT proof that the control works, and it is NOT excused either: the
+  // gate fails on it unless inert-registry.json carries a justification for
+  // that key. Two earlier versions of this file counted both as coverage, and
+  // a disabled control with a title attribute was worth as much as a working
+  // one, so #846 could have been "fixed" by disabling Admin Settings.
   | "not-fired";
 
 export type Result = {
@@ -307,11 +255,10 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
       label,
       disabled:
         el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
-      reason:
-        el.getAttribute("title") ??
-        el.getAttribute("aria-describedby") ??
-        el.getAttribute("data-disabled-reason") ??
-        "",
+      // Human-readable text only. aria-describedby used to be read here, and
+      // it holds an element id, so "tooltip-7" was accepted as an explanation
+      // of why a control is disabled.
+      reason: el.getAttribute("title") ?? el.getAttribute("data-disabled-reason") ?? "",
       state: stateOf(el),
       href: el.getAttribute("href") ?? "",
       contentEditable: el.getAttribute("contenteditable") === "true",
@@ -472,10 +419,17 @@ async function proveByClickInner(
 ): Promise<Result> {
   const base = { key: ctl.key, surface: ctl.surface, name: ctl.label || ctl.name, role: ctl.role || ctl.tag };
   if (ctl.disabled) {
+    // Never proof. A disabled control demonstrates nothing about whether the
+    // thing behind it works, and counting one as coverage means a broken
+    // control can be "fixed" by disabling it and the ratio goes UP. It needs a
+    // justification in inert-registry.json like any other unfireable control.
     const reason = ctl.reason.trim();
-    return reason
-      ? { ...base, proven: true, proof: "disabled-with-reason", detail: reason.slice(0, 120) }
-      : { ...base, proven: false, proof: "none", detail: "disabled with no reason attribute" };
+    return {
+      ...base,
+      proven: false,
+      proof: "not-fired",
+      detail: reason ? `disabled: ${reason.slice(0, 100)}` : "disabled with no stated reason",
+    };
   }
 
   const chatter = opts.ignoreRequests ?? new Set<string>();
@@ -491,6 +445,12 @@ async function proveByClickInner(
   // all, so a click that answered 500 and rendered an error toast came back
   // proven twice over, once on the request and once on the toast.
   const failed: string[] = [];
+  // Answered, and answered well. A request on its own is not evidence that
+  // anything happened at the other end: a control pointing at an endpoint that
+  // hangs emits a request, never gets a response, and used to be proven for
+  // ever on the strength of the request alone. That is the same "no server
+  // verdict" hole that aborted writes had.
+  const answered: string[] = [];
   const onResponse = (r: {
     status: () => number;
     url: () => string;
@@ -498,8 +458,12 @@ async function proveByClickInner(
   }) => {
     const u = r.url();
     if (!isMeaningfulRequest(u)) return;
-    if (r.status() >= 400)
+    if (chatter.has(requestSignature(u))) return;
+    if (r.status() >= 400) {
       failed.push(String(r.status()) + " " + r.request().method() + " " + redactUrl(u));
+      return;
+    }
+    answered.push(String(r.status()) + " " + r.request().method() + " " + redactUrl(u));
   };
   page.on("response", onResponse);
   // A request that never reaches a server emits `request` and then
@@ -647,12 +611,26 @@ async function proveByClickInner(
   // an increase-only check reported every close button as dead.
   if (overlaysAfter !== overlaysBefore)
     return { ...base, proven: true, proof: "overlay", detail: `overlays ${overlaysBefore} -> ${overlaysAfter}` };
-  if (requests.length > 0)
+  // A request only counts once a server has answered it, and answered without
+  // an error. Accepting the request alone proved a control pointing at a
+  // hanging endpoint for ever, which is the same missing verdict that made an
+  // aborted write look like proof. Needing a 2xx or 3xx costs no per-control
+  // inventory: it is the same generic rule for every control on every surface.
+  if (answered.length > 0)
     return {
       ...base,
       proven: true,
       proof: "network",
-      detail: requests.slice(0, 3).map(redactUrl).join(", ").slice(0, 200),
+      detail: answered.slice(0, 3).join(", ").slice(0, 200),
+    };
+  if (requests.length > 0 && signatureAfter === signatureBefore)
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail:
+        "sent a request that nothing answered inside the settle window: " +
+        requests.slice(0, 2).map(redactUrl).join(", ").slice(0, 160),
     };
   if (signatureAfter !== signatureBefore)
     return { ...base, proven: true, proof: "dom", detail: "what is on screen changed" };
@@ -672,15 +650,24 @@ async function proveByClickInner(
 }
 
 /**
- * Anything whose label says it destroys data.
+ * A control whose OWN name says it destroys data.
  *
- * Matched on the label rather than on the request, because the decision has to
- * be taken before the click.
+ * Matched on the name rather than on the request, because the decision has to
+ * be taken before the click. Matched on the control's own accessible name and
+ * never on the ambient text lifted from an ancestor: `label` falls back to up
+ * to 140 characters of the surrounding panel, so a single "Delete All Chats"
+ * heading in Settings > Data Controls made every button in that panel
+ * destructive, which both hid two controls the same ledger proves dead and
+ * threw away three controls that were genuinely proven.
+ *
+ * A control with no accessible name at all is not classified as destructive:
+ * unnamed and destructive is its own defect, and the gate reports it as an
+ * unnamed control rather than quietly declining to test it.
  */
-export const DESTRUCTIVE = /delete|archive|clear|reset|remove|unshare|erase/i;
+export const DESTRUCTIVE = /\b(delete|archive|clear|reset|remove|unshare|erase|wipe)\b/i;
 
 export function isDestructive(ctl: Control): boolean {
-  return DESTRUCTIVE.test(ctl.label || ctl.name);
+  return DESTRUCTIVE.test(ctl.name);
 }
 
 /**
@@ -709,11 +696,14 @@ export async function checkWithoutFiring(page: Page, ctl: Control): Promise<Resu
   }
   if (ctl.disabled) {
     const reason = ctl.reason.trim();
-    return reason
-      ? { ...base, proven: true, proof: "disabled-with-reason", detail: reason.slice(0, 120) }
-      : { ...base, proven: false, proof: "none", detail: "disabled with no reason attribute" };
+    return {
+      ...base,
+      proven: false,
+      proof: "not-fired",
+      detail: reason ? `destructive and disabled: ${reason.slice(0, 90)}` : "destructive and disabled with no stated reason",
+    };
   }
-  if ((ctl.label || ctl.name).trim() === "") {
+  if (ctl.name.trim() === "") {
     return {
       ...base,
       proven: false,
@@ -729,7 +719,7 @@ export async function checkWithoutFiring(page: Page, ctl: Control): Promise<Resu
     proven: false,
     proof: "not-fired",
     detail:
-      "destructive by label, so it was checked (present, enabled, named) and deliberately not activated",
+      "destructive by its own name, so it was checked (present, enabled, named) and deliberately not activated",
   };
 }
 
