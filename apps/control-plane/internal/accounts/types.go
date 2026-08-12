@@ -147,9 +147,14 @@ var ErrSelfRoleChange = errors.New("accounts: cannot change your own role")
 var ErrLastOwner = errors.New("accounts: workspace must keep at least one owner")
 
 // ErrNoActiveWorkspace is returned when a viewer holds no active membership and
-// workspace provisioning did not produce one. The message carries no
-// identifiers because the viewer handler writes it straight to the client.
+// workspace provisioning did not produce one.
 var ErrNoActiveWorkspace = errors.New("accounts: no active workspace available")
+
+// ErrMembershipActivation is returned when accepting an invitation fails to
+// activate the invitee's pending membership row. It is deliberately distinct
+// from ErrNotFound, which the HTTP layer reports as an invalid invitation link:
+// the link was valid, the write behind it was not.
+var ErrMembershipActivation = errors.New("accounts: could not activate the invited membership")
 
 // Supported membership roles. The database enforces the same set via a CHECK
 // constraint on public.account_memberships.role.

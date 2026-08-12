@@ -67,7 +67,7 @@ func (h *Handler) handleGetViewer(w http.ResponseWriter, r *http.Request) {
 
 	vc, err := h.svc.EnsureViewerContext(r.Context(), viewer, requestedAccountID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not load your workspace", err)
 		return
 	}
 
@@ -86,7 +86,7 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 
 	vc, err := h.svc.EnsureViewerContext(r.Context(), viewer, requestedAccountID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not load your workspace", err)
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, err := h.svc.ListMembers(r.Context(), vc.CurrentAccount.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not list workspace members", err)
 		return
 	}
 
@@ -166,7 +166,7 @@ func (h *Handler) handleCreateInvitation(w http.ResponseWriter, r *http.Request)
 
 	vc, err := h.svc.EnsureViewerContext(r.Context(), viewer, requestedAccountID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not load your workspace", err)
 		return
 	}
 
@@ -347,6 +347,15 @@ func writeAcceptInvitationError(w http.ResponseWriter, r *http.Request, err erro
 			"error": "this invitation was sent to a different email address",
 			"code":  "invitation_email_mismatch",
 		})
+	// Above the ErrNotFound case on purpose. The invitation was valid and the
+	// membership write behind it failed, so telling the invitee their link is
+	// not valid would send them chasing a problem they cannot fix.
+	case errors.Is(err, ErrMembershipActivation):
+		slog.ErrorContext(r.Context(), "accounts: invitation accepted but membership activation failed",
+			slog.String("err", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not accept the invitation",
+		})
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "this invitation link is not valid",
@@ -377,6 +386,18 @@ func parseAccountHeader(r *http.Request) uuid.UUID {
 		return uuid.Nil
 	}
 	return id
+}
+
+// writeInternal logs the real failure and answers with a fixed message.
+//
+// Nothing from an error string belongs in a response body here. These errors
+// carry raw pgx text, and the workspace provisioning path underneath
+// EnsureViewerContext can fail on a unique constraint over a slug built from
+// the viewer's own name or email local part, which would put both the schema
+// detail and that identifier in front of whoever made the request.
+func writeInternal(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	slog.ErrorContext(r.Context(), msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -87,9 +88,9 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 		}
 	}
 
-	// Resolve current account. Only active memberships are candidates; the
-	// summaries below still list invited ones so the console can render a
-	// pending invitation.
+	// Resolve current account. Only active memberships are candidates. The
+	// summaries below still report every row with its status, which is what the
+	// console filters on before offering a workspace as switchable.
 	active := activeMemberships(memberships)
 	if len(active) == 0 {
 		// Unreachable unless provisioning above wrote nothing. The identifier
@@ -335,27 +336,48 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		grantedRole = RoleMember
 	}
 
-	now := time.Now()
-	if err := s.repo.AcceptInvitation(ctx, inv.ID, now); err != nil {
-		return uuid.Nil, fmt.Errorf("accounts: accept invitation: %w", err)
-	}
-
+	// Order matters, and this order is the safe one. The membership is written
+	// first and the invitation is consumed second, so a failure between the two
+	// leaves a redeemable invitation rather than a consumed one over an inert
+	// seat. The reverse order can strand the invitee permanently: token spent,
+	// status still invited, no authority, recoverable only by issuing a fresh
+	// invitation. That is the same lockout this change exists to close.
+	//
+	// The two writes are not one transaction. The repository exposes single
+	// statement operations, and the only outcome of a partial failure here is a
+	// redeemable invitation for somebody who is already a member, which the
+	// already-a-member branch above answers truthfully on retry.
 	if pending {
 		if err := s.repo.ActivateMembership(ctx, inv.AccountID, viewer.UserID, grantedRole); err != nil {
-			return uuid.Nil, fmt.Errorf("accounts: activate membership: %w", err)
+			// Deliberately not wrapped with ErrNotFound: the HTTP layer maps
+			// that to "this invitation link is not valid", which would be a lie
+			// told to someone whose invitation was perfectly good.
+			log.Printf("accounts: activate membership failed account=%s: %v", inv.AccountID, err)
+			return uuid.Nil, ErrMembershipActivation
 		}
-		return inv.AccountID, nil
+	} else {
+		membership := Membership{
+			ID:        uuid.New(),
+			AccountID: inv.AccountID,
+			UserID:    viewer.UserID,
+			Role:      grantedRole,
+			Status:    StatusActive,
+		}
+		if err := s.repo.CreateMembership(ctx, membership); err != nil {
+			return uuid.Nil, fmt.Errorf("accounts: create member membership: %w", err)
+		}
 	}
 
-	membership := Membership{
-		ID:        uuid.New(),
-		AccountID: inv.AccountID,
-		UserID:    viewer.UserID,
-		Role:      grantedRole,
-		Status:    StatusActive,
-	}
-	if err := s.repo.CreateMembership(ctx, membership); err != nil {
-		return uuid.Nil, fmt.Errorf("accounts: create member membership: %w", err)
+	// Consume the invitation. A concurrent acceptance (a double-clicked link,
+	// a console retry) can pass the AcceptedAt check above and reach here
+	// twice; the loser's conditional update matches no row. The caller is a
+	// member either way, so that race is logged rather than surfaced as a
+	// failure to someone who has just been let in.
+	if err := s.repo.AcceptInvitation(ctx, inv.ID, time.Now()); err != nil {
+		if !errors.Is(err, ErrAlreadyAccepted) {
+			return uuid.Nil, fmt.Errorf("accounts: accept invitation: %w", err)
+		}
+		log.Printf("accounts: invitation %s was consumed concurrently, membership is active", inv.ID)
 	}
 
 	return inv.AccountID, nil
@@ -481,11 +503,10 @@ func (s *Service) resolveWorkspaceActor(ctx context.Context, accountID uuid.UUID
 // --- helpers ---
 
 // activeMemberships filters out the rows that carry no authority.
-// ListMembershipsByUserID deliberately returns invited rows too (the console
-// renders pending invitations, and AcceptInvitation checks against every row to
-// detect an already-joined workspace), so callers making an authorization
-// decision filter here rather than the repository dropping the rows for
-// everyone.
+// ListMembershipsByUserID deliberately returns invited rows too, because
+// AcceptInvitation checks against every row to tell an already-joined workspace
+// from a seat it should activate, so callers making an authorization decision
+// filter here rather than the repository dropping the rows for everyone.
 func activeMemberships(memberships []Membership) []Membership {
 	active := make([]Membership, 0, len(memberships))
 	for _, m := range memberships {

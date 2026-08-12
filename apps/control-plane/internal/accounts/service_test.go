@@ -83,9 +83,14 @@ func (s *stubRepo) FindInvitationByTokenHash(_ context.Context, tokenHash string
 	return inv, nil
 }
 
+// AcceptInvitation mirrors the production statement's accepted_at IS NULL
+// predicate: consuming an already consumed invitation matches no row.
 func (s *stubRepo) AcceptInvitation(_ context.Context, invitationID uuid.UUID, acceptedAt time.Time) error {
 	for _, inv := range s.invitations {
 		if inv.ID == invitationID {
+			if inv.AcceptedAt != nil {
+				return accounts.ErrAlreadyAccepted
+			}
 			inv.AcceptedAt = &acceptedAt
 			s.acceptCalled = true
 			return nil

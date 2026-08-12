@@ -28,10 +28,15 @@ type AdminChecker interface {
 // A membership carries its role only while it is active. Every workspace-scoped
 // permission in authz.Policy is granted on Role being owner or member, so
 // blanking the role here denies the entire workspace surface for a seat that was
-// merely offered. This is the single funnel every handler builds its actor
-// through, which is why the check lives here: a handler that starts passing a
-// row loaded straight from the database cannot reopen the escalation by
-// forgetting to filter first.
+// merely offered.
+//
+// This is defence in depth and nothing more. It is not what protects the
+// thirteen call sites today: every one of them either passes StatusActive as a
+// literal or has already filtered to an active row, so this branch is currently
+// unreachable in production. The real protection is EnsureViewerContext, which
+// chooses only active memberships, and GetMembershipRole, which reads only
+// active rows. This exists so that a future handler which starts passing a row
+// straight from the database gets a denial instead of an escalation.
 //
 // The platform-admin overlay is deliberately untouched. It comes from its own
 // query, which applies its own active-membership predicate, and it is not a

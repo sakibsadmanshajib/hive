@@ -42,12 +42,11 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 //
 // The absence of a status predicate here is deliberate: this is a listing
 // primitive, not an authorization primitive. AcceptInvitation needs the invited
-// row so it can activate it rather than dead-ending on it, and the viewer
-// context reports each membership's status on the wire so the console can tell
-// a joined workspace from a pending invitation (the account switch route in
-// apps/web-console filters on exactly that field). Callers making an access
-// decision filter with activeMemberships instead; an invited row grants
-// nothing.
+// row so it can activate it rather than dead-ending on it. Callers making an
+// access decision filter with activeMemberships instead, and the two consumers
+// on the console side (the account switch route and the workspace switcher)
+// filter on the status this list reports. An invited row grants nothing
+// anywhere.
 //
 // Without an explicit ORDER BY, Postgres may return rows for the
 // same user in a different order across calls (heap/index layout shifts on
@@ -175,29 +174,49 @@ func (r *pgxRepository) FindInvitationByTokenHash(ctx context.Context, tokenHash
 	return &inv, nil
 }
 
+// AcceptInvitation consumes an invitation exactly once.
+//
+// The accepted_at IS NULL predicate makes the write the arbiter of the race the
+// service's own AcceptedAt read cannot settle: a double-clicked link sends two
+// requests that both read an unaccepted invitation, and only one of them may
+// consume it. The loser matches no row and gets ErrAlreadyAccepted, which its
+// caller treats as benign because the membership write already succeeded.
 func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.UUID, acceptedAt time.Time) error {
-	_, err := r.pool.Exec(ctx, `
+	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.account_invitations
 		SET accepted_at = $1
 		WHERE id = $2
+		  AND accepted_at IS NULL
 	`, acceptedAt, invitationID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAlreadyAccepted
+	}
+	return nil
 }
 
 // ActivateMembership turns an invited membership row into an active one and
 // stamps the role the invitation granted.
 //
-// The statement matches only an invited row, so it can neither resurrect a
-// removed member nor re-stamp the role of somebody who is already active. Zero
-// rows affected therefore means there was nothing pending to accept, which
+// Two properties the WHERE and the CASE carry between them. The row must
+// already exist, so this cannot resurrect a member whose row was deleted. The
+// role is rewritten only while the row is still invited, so an active member's
+// role cannot be re-stamped by a replayed acceptance. Matching an already
+// active row rather than excluding it makes the call idempotent, which is what
+// keeps a concurrent second acceptance from reporting failure for a seat that
+// is in fact active.
+//
+// Zero rows affected therefore means there is no membership row at all, which
 // surfaces as ErrNotFound.
 func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.account_memberships
-		SET role = $3, status = 'active'
+		SET role = CASE WHEN status = 'invited' THEN $3 ELSE role END,
+		    status = 'active'
 		WHERE account_id = $1
 		  AND user_id = $2
-		  AND status = 'invited'
 	`, accountID, userID, role)
 	if err != nil {
 		return err
