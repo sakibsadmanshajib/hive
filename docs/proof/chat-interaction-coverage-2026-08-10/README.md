@@ -4,52 +4,53 @@ Re-measurement after the engine was taught to read HTTP statuses. Run against
 https://chat-hive.scubed.co, signed in through the shared live-auth helper,
 which mints a session without touching any password.
 
-**144 of 165 distinct control identities proven, 87.3 percent.**
+**No coverage figure is claimed for this run any more.**
 
-Secondary and not comparable between runs: 248 of 270 raw instances. The
-instance figure is the one this file first carried and it is superseded,
-because an instance count moves with how many chat rows the account holds
-rather than with the product.
+What this directory holds is the ledger of a real sweep, and it is kept for
+what it records rather than for a headline. The number that was here (144 of
+165 identities, 87.3 percent) is withdrawn, for two reasons that are both
+fatal on their own.
 
-## Where the identity figure comes from, exactly
+That run predates the rework in this pull request, and no shipped code path
+can produce its figure. Its proven count includes destructive controls that
+were clicked with the write aborted and then recorded as proven, which is
+exactly the practice removed here, and it includes controls proven by a
+request that no server ever answered, which no longer counts either. The
+identity figure was derived offline from those results by a script that had
+none of the guards the floor updater has: it printed a percentage from a
+ledger carrying five surface errors, which also violates four of the floors
+this pull request restores. That script is deleted rather than hardened,
+because a number derived from a run the gate would reject is not evidence of
+anything.
 
-The run itself was taken before the identity metric existed, so its ledger
-recorded only the instance counts. It was not re-run to produce the headline:
-the demo box is single tenant and another agent is on it. The identity numbers
-above and the `summary` block in `coverage.run.json` were recomputed from that
-run's own per-control results, offline, by the gate's own `summarise()`:
+The figure returns when a sweep runs against the deployment under the rules in
+this pull request, writes its own summary, and passes its own floor and error
+checks. The workflow to run it is here (`npm run e2e:chat-coverage`, or the
+Chat coverage live sweep job), and it was deliberately not run for this pull
+request because the demo box is single tenant and another agent is on it.
 
-```
-cd apps/web-console
-npx vite-node scripts/summarise-chat-coverage-ledger.ts -- \
-  ../../docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json
-144/165 identities (87.3%), 248/270 instances (91.8%), 0 not fired
-```
-
-A summary is a pure function of the results in the same file, so this is a
-derivation and not a new measurement. The function that produces it now has
-unit cover (`apps/web-console/tests/unit/chat-coverage-lib.test.ts`), which
-runs in the required "Web console" CI job.
-
-The `0 not fired` above is real and expected for this run: the not-fired
-category did not exist when it was taken. Every destructive control in it was
-clicked with its write aborted at the network layer and recorded as proven,
-which is exactly the practice this pull request removes. A run taken after
-that change will show a non-zero not-fired count and a correspondingly lower
-proven count, and that is a more honest number rather than a regression.
-
-An identity counts as proven only when every instance of it proved, so a
-control that works on the first chat row and fails on the seventh is
-unproven. The gate fails on the failing instance regardless, because it
-fails on any unproven result at all, so collapsing instances cannot hide a
-broken one. Each identity carries its instance count in the ledger under
+When a figure does come back, it is the identity figure: distinct control
+identities rather than raw instances, where an identity counts as proven only
+when every instance of it proved, so a control that works on the first chat
+row and fails on the seventh is unproven. The gate fails on the failing
+instance regardless, so collapsing instances cannot hide a broken one, and
+each identity carries its instance count in the ledger under
 `summary.identityInstances`.
 
-The earlier run the same day recorded 196 of 222 instances, 88.3 percent. It
-predates the identity metric and is not comparable to either figure above. Its
-ledger is `apps/web-console/e2e/chat-coverage/results/2026-08-10-morning-live-run.json`,
+That figure has a known ceiling worth stating rather than hiding: an identity
+is keyed on the control's rendered name, and the chat list names its rows
+after the chats, so an account with a hundred differently titled chats reports
+a hundred identities on that surface. Instance counts have the same problem
+more loudly. Neither number is a product measurement until the chat list is
+keyed by row shape rather than by row content, which is not in this pull
+request.
+
+The earlier run the same day recorded 196 of 222 instances. Its ledger is
+`apps/web-console/e2e/chat-coverage/results/2026-08-10-morning-live-run.json`,
 renamed from `2026-08-08-live-run.json`, which was simply wrong: its own
-`generatedAt` reads 2026-08-10T07:31Z.
+`generatedAt` reads 2026-08-10T07:31Z. It is kept because the floors are
+pinned against what it and the evening run enumerated, which is enumeration
+rather than verdicts and is unaffected by the rework.
 
 ## Two controls the old predicate called proven are broken
 
@@ -104,7 +105,7 @@ it.
 
 ## The break proof
 
-The self test carries five buttons, and it is the check that fails if the
+The self test carries nine buttons, and it is the check that fails if the
 detector breaks. It needs no deployment and no credentials, so it runs in CI
 on every pull request that touches the gate:
 
@@ -115,11 +116,15 @@ on every pull request that touches the gate:
 | Failing, endpoint answers 500 then a toast | unproven | unproven, detail names the 500 |
 | Toasty, error toast only | unproven | unproven, raised an error to the user |
 | Pollster, dead button on a page that polls underneath it | unproven | unproven, the poll was excluded by the idle sample |
+| Hanging, sends a request nothing ever answers | unproven | unproven, "nothing answered" |
+| Cut Off, request dies in transport | unproven | unproven, "never reached a server" |
+| Delete Everything, destructive by its own name | not fired | not fired, never clicked |
+| Locked, disabled with a title | not fired | not fired, and never proof |
 
 ```
 cd apps/web-console
 npm run e2e:chat-coverage:self-check
-3 passed (12.1s)
+3 passed
 ```
 
 Those three are the prover break-proof, the inert-registry and exclusion
