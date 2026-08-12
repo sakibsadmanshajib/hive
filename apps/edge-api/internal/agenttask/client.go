@@ -24,6 +24,17 @@ type Client struct {
 }
 
 // NewClient creates a Client pointing at the control-plane base URL.
+//
+// The 15 second timeout is deliberate and is not the bound on a sandbox
+// launch. Create used to block control-plane side on the launch itself (up to
+// five minutes), so a cold sandbox routinely outlived this timeout and the
+// browser was told 500 for a task that then ran to completion (issue #881).
+// Control-plane now answers create with the persisted queued task and
+// launches in the background, so every call this client makes is a short
+// database operation plus, for cancel, a bounded stop call to the launcher
+// (agenttask.engineCancelTimeout, 10 seconds, deliberately under this
+// budget). Raising this to match a blocking server call would only have made
+// an interactive request able to hang for five minutes.
 func NewClient(controlPlaneURL string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(controlPlaneURL, "/"),

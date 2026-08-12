@@ -155,6 +155,7 @@ func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
 	var created map[string]any
 	_ = json.NewDecoder(createW.Body).Decode(&created)
 	taskID := created["id"].(string)
+	svc.WaitForLaunches()
 
 	listReq := httptest.NewRequest(http.MethodGet, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String(), nil)
 	listW := httptest.NewRecorder()
@@ -203,6 +204,9 @@ func TestHandler_Cancel_HappyPath(t *testing.T) {
 	var created map[string]any
 	_ = json.NewDecoder(createW.Body).Decode(&created)
 	taskID := created["id"].(string)
+	// Cancel a task whose launch has landed, so this covers the running-task
+	// path rather than racing the background launch.
+	svc.WaitForLaunches()
 
 	cancelReq := httptest.NewRequest(http.MethodPost, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+taskID+"/cancel", nil)
 	cancelW := httptest.NewRecorder()

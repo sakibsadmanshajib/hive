@@ -55,7 +55,7 @@ by the authenticated caller, never round-tripped.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/v1/agent/tasks` | `{"pack": "...", "instructions": "..."}` | 201 with the created Task; `instructions` is optional |
+| POST | `/v1/agent/tasks` | `{"pack": "...", "instructions": "..."}` | 201 with the created Task in `queued`; `instructions` is optional |
 | GET | `/v1/agent/tasks` | — | `{"tasks": [Task, ...]}`, newest first, scoped to the caller |
 | GET | `/v1/agent/tasks/{id}` | — | 404 if the task belongs to a different user or does not exist |
 | POST | `/v1/agent/tasks/{id}/cancel` | — | 409 if the task already reached a terminal state |
@@ -85,10 +85,57 @@ untrusted client input.
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}` | — |
 | POST | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/cancel` | — |
 
+## Create is asynchronous over the launch (issue #881)
+
+`POST` returns the persisted `queued` task as soon as the row exists. The
+sandbox launch runs on a background goroutine and moves the task to `running`
+(or to `failed`, with a sanitized `error_message`) on its own; callers learn
+the outcome from the same poll they already use for every later state change.
+
+Create used to block on the launch, which is bounded at five minutes because a
+cold sandbox mount routinely takes tens of seconds. edge-api's control-plane
+client gives up at 15 seconds, so a create measured live on 2026-08-11 answered
+`500` after 18.0 seconds for a task that reached `succeeded`. Aligning the two
+timeouts was rejected: it would make an interactive request legitimately able
+to hang for five minutes, and every intermediate proxy is free to cut it
+anyway.
+
+## Cancel stops the launcher session (issue #886)
+
+`Service.Cancel` transitions the row first, because that UPDATE is the atomic
+gate that decides which caller owns the cancellation, and only the winner then
+calls `Engine.Cancel(ctx, engine_session_ref)`. Stopping the session is what
+frees the launcher's per-tenant and per-user concurrency slot
+(`apps/agent-engine/internal/quota`): the slot belongs to the live sandbox and
+is released when that session ends, so a cancel that only wrote a row left the
+slot held until the sandbox finished on its own, about sixteen minutes on the
+demo box. Two cancels therefore exhausted `HIVE_QUOTA_USER_CONCURRENCY` and
+every later create was refused.
+
+Orderings, all three settled deliberately:
+
+- **Double cancel.** The second loses the row's terminal guard, returns
+  `ErrTerminalState` (HTTP 409) and never reaches the engine.
+- **Cancel racing a completion.** Whichever transition commits first wins. If
+  the poller already recorded a terminal status, the cancel is rejected and
+  the engine is left alone, which is correct because a terminal status is
+  exactly what makes the launcher reap that session itself.
+- **Cancel before the launch finishes.** The row has no
+  `engine_session_ref` yet, so there is nothing to stop at cancel time. The
+  in-flight launch goroutine finds the task already terminal when it tries to
+  record `running`, and stops the session it just started. The same path
+  covers a launch whose `running` transition fails for any other reason: an
+  unrecorded session can never be polled or cancelled by anything else, so it
+  is torn down rather than left holding a slot.
+
+An engine stop failure is logged for the operator and never returned to the
+caller: the cancellation itself is already recorded, and a stuck launcher is
+not something a customer can act on.
+
 ## Engine seam
 
-`Service.CreateTask` calls `Engine.Launch(ctx, task)` right after persisting
-a `queued` row. Issue #305 closes the control-channel half of this gap:
+`Service.CreateTask` hands the task to `Engine.Launch(ctx, task)` right after
+persisting a `queued` row, on a background goroutine. Issue #305 closes the control-channel half of this gap:
 `apps/agent-engine/internal/sandbox` bind-mounts a second Unix socket (the
 control channel) alongside the existing egress-proxy one, so the host can
 now reach the agent-server's REST API inside the sandbox
@@ -110,11 +157,12 @@ Apptainer, which requires an Apptainer install and a built SIF on whatever
 host runs this process — not true of every `control-plane` deployment today
 (task tracked separately: "Live Apptainer validation of agent-engine on
 x86-64 host"). Without that env var, `NotConfiguredEngine` is still wired,
-and `Service.CreateTask` transitions the task immediately to `StatusFailed`
-with a sanitized generic customer message. Callers receive HTTP 201 with the
-failed task body rather than a queued task. Startup logs a WARN naming each
-empty `HIVE_AGENT_ENGINE_*` variable individually. The `Service` and HTTP
-surface do change in this scenario; the alternative is only the `Engine`
+and the background launch transitions the task to `StatusFailed` with a
+sanitized generic customer message. Callers receive HTTP 201 with the queued
+task and see the failure on their next read, rather than polling a task that
+will never move. Startup logs a WARN naming each empty
+`HIVE_AGENT_ENGINE_*` variable individually. Neither the `Service` nor the
+HTTP surface changes in this scenario; the only difference is the `Engine`
 implementation passed to `NewService`.
 
 **Implemented** (issue #311 follow-up): `Poller` (`poller.go`) periodically
