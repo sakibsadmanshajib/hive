@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  parseDataDriven,
   parseExclusions,
   parseFloors,
   parseRegistry,
@@ -26,6 +27,7 @@ function read(file: string): unknown {
 }
 
 export const FLOORS: Floors = parseFloors(read("surface-floors.json"));
+export const DATA_DRIVEN: Set<string> = parseDataDriven(read("surface-floors.json"));
 export const EXCLUSIONS: SurfaceExclusion[] = parseExclusions(read("surface-exclusions.json"));
 export const REGISTRY: InertEntry[] = parseRegistry(read("inert-registry.json"));
 export const REMOVED: RemovedSurfaces = parseRemoved(read("removed-surfaces.json"));

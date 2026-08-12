@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   exclusionFailures,
+  parseDataDriven,
   expiredExclusions,
   floorFailures,
   identityOf,
@@ -148,6 +149,14 @@ describe("floorFailures", () => {
     const failures = floorFailures({}, [{ surface: "brand-new", enumerated: 4 }]);
     expect(failures[0]).toContain("no floor in surface-floors.json");
   });
+
+  it("asks for no floor on a surface whose size is account data", () => {
+    // The chat list enumerated 50 controls one run and 106 the next with no
+    // product change: one row per chat. A floor there goes red when somebody
+    // deletes chats, and the fix everyone reaches for is to lower the floor.
+    const failures = floorFailures({}, [{ surface: "search", enumerated: 4 }], () => true, new Set(["search"]));
+    expect(failures).toEqual([]);
+  });
 });
 
 describe("the committed floors", () => {
@@ -183,8 +192,12 @@ describe("the committed floors", () => {
   }
 
   it("is never below what any recorded live run enumerated", () => {
+    const dataDriven = parseDataDriven(
+      JSON.parse(readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8")),
+    );
     const below: string[] = [];
     for (const [surface, total] of highestRecorded()) {
+      if (dataDriven.has(surface)) continue;
       const floor = floors[surface];
       // A missing key is the failure, not a reason to skip. Deleting a floor
       // line is exactly how a surface leaves the denominator quietly, and

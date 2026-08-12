@@ -881,6 +881,7 @@ export function floorFailures(
   floors: Floors,
   swept: Swept[],
   scope: (surface: string) => boolean = () => true,
+  dataDriven: ReadonlySet<string> = new Set(),
 ): string[] {
   const out: string[] = [];
   const sweptIds = new Set(swept.map((entry) => entry.surface));
@@ -896,6 +897,10 @@ export function floorFailures(
     );
   }
   for (const entry of swept) {
+    // A surface whose control count is account data carries no floor on
+    // purpose, and asking for one would red the gate every time the account's
+    // chats are groomed. See $dataDrivenComment in surface-floors.json.
+    if (dataDriven.has(entry.surface)) continue;
     const floor = floors[entry.surface];
     if (floor === undefined) {
       out.push(
@@ -1001,6 +1006,20 @@ export function parseFloors(value: unknown): Floors {
     out[surface] = count;
   }
   return out;
+}
+
+/** Surfaces deliberately carrying no floor, because their size is account data. */
+export function parseDataDriven(value: unknown): Set<string> {
+  const listed = fields(value, "surface-floors.json").get("dataDriven");
+  if (listed === undefined) return new Set();
+  return new Set(
+    items(listed, "surface-floors.json dataDriven").map((entry, index) => {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new Error(`surface-floors.json dataDriven entry ${index} must be a surface id`);
+      }
+      return entry;
+    }),
+  );
 }
 
 export function parseExclusions(value: unknown): SurfaceExclusion[] {

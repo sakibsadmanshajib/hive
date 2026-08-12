@@ -1,5 +1,9 @@
 {
   "$comment": "Minimum control count per surface, the highest count a live run has ever enumerated there. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. A floor key this run never swept fails too, which is what stops a red surface being turned green by deleting the link that reaches it: the four surfaces sitting at 1 (sidebar, chat-item-menu, chat-message-actions, workspace:knowledge) do not sweep today, and their floor of 1 says the surface must exist and render something, so removing its entry point fails the gate instead of silently emptying the denominator. Raising or lowering a floor is a separate, deliberate commit made with scripts/update-chat-coverage-floors.mjs against a recorded ledger, never by the run that checks them.",
+  "dataDriven": [
+    "search"
+  ],
+  "$dataDrivenComment": "Surfaces whose control count is account data rather than product surface, and which therefore carry no floor at all. The chat list renders one row per chat, so it enumerated 50 controls on one run and 106 on the next with no product change between them. A floor there goes red whenever someone grooms the chat list, and the fix everyone reaches for is to lower the floor, which is exactly the ratchet this file exists to stop. A surface listed here is still swept and every control on it still has to prove itself; only the denominator guard is off.",
   "surfaces": {
     "chat-item-menu": 1,
     "chat-message-actions": 1,
@@ -7,7 +11,6 @@
     "composer-more": 6,
     "home": 28,
     "model-picker": 15,
-    "search": 106,
     "settings:About": 5,
     "settings:Account": 5,
     "settings:Audio": 8,

@@ -14,7 +14,7 @@ import path from "node:path";
 
 import { test, expect, type Page } from "@playwright/test";
 
-import { EXCLUSIONS, FLOORS, REGISTRY, REMOVED } from "./data";
+import { DATA_DRIVEN, EXCLUSIONS, FLOORS, REGISTRY, REMOVED } from "./data";
 import {
   checkWithoutFiring,
   enumerate,
@@ -525,7 +525,7 @@ test.describe("chat interaction coverage", () => {
     // recorded ledger, in its own commit, with a reason. A run that could
     // rewrite its own bar in the same pass that checks it has no bar at all,
     // which is how a real degradation was once ratified as the new baseline.
-    errors.push(...floorFailures(FLOORS, swept, inScope));
+    errors.push(...floorFailures(FLOORS, swept, inScope, DATA_DRIVEN));
 
     const summary = summarise(results);
     const registryHits = new Map<string, string>();
