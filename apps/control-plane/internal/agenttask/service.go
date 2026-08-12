@@ -176,8 +176,18 @@ func (s *Service) stopEngineSession(ctx context.Context, taskID uuid.UUID, sessi
 
 // WaitForLaunches blocks until every background launch this Service started
 // has finished. Nothing on the request path calls it; it exists so tests can
-// assert on a settled task, and so a graceful drain can let in-flight
-// launches record their outcome before the process exits.
+// assert on a settled task, and so a drain can let in-flight launches record
+// their outcome before the process exits.
+//
+// Deliberately not wired into cmd/server's shutdown: a launch is bounded at
+// launchTimeout (five minutes) and container stop is bounded far lower, so
+// waiting there would only trade a clean stop for a SIGKILL. A process that
+// dies mid-launch leaves its task queued with no engine_session_ref, which
+// Repository.ListActive excludes, so the poller never advances it. That
+// window is unchanged by making the launch asynchronous: the launch always
+// outlived the caller's context, so a restart always stranded it. A sweep for
+// stale queued rows is the fix if it ever shows up in practice; nothing has
+// asked for one yet (ponytail).
 func (s *Service) WaitForLaunches() { s.launches.Wait() }
 
 // Get returns one task, scoped to (tenantID, userID) so a task started by
