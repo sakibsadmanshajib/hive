@@ -150,12 +150,21 @@ describe("floorFailures", () => {
     expect(failures[0]).toContain("no floor in surface-floors.json");
   });
 
-  it("asks for no floor on a surface whose size is account data", () => {
+  it("keeps a data-driven surface at a presence bar rather than a pinned count", () => {
     // The chat list enumerated 50 controls one run and 106 the next with no
-    // product change: one row per chat. A floor there goes red when somebody
-    // deletes chats, and the fix everyone reaches for is to lower the floor.
-    const failures = floorFailures({}, [{ surface: "search", enumerated: 4 }], () => true, new Set(["search"]));
-    expect(failures).toEqual([]);
+    // product change: one row per chat. Pinning that count reds the gate when
+    // somebody deletes chats. A floor of 1 still catches the surface
+    // disappearing, which is the case that matters.
+    const dataDriven = parseDataDriven(
+      JSON.parse(readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8")),
+    );
+    const floors = parseFloors(
+      JSON.parse(readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8")),
+    );
+    for (const surface of dataDriven) {
+      expect(floors[surface], `${surface} must keep a presence bar`).toBe(1);
+    }
+    expect(floorFailures(floors, [{ surface: "search", enumerated: 40 }], (s) => s === "search")).toEqual([]);
   });
 });
 
@@ -197,6 +206,8 @@ describe("the committed floors", () => {
     );
     const below: string[] = [];
     for (const [surface, total] of highestRecorded()) {
+      // A data-driven surface keeps a presence bar of 1 rather than a pinned
+      // count, so the recorded totals are deliberately not enforced for it.
       if (dataDriven.has(surface)) continue;
       const floor = floors[surface];
       // A missing key is the failure, not a reason to skip. Deleting a floor

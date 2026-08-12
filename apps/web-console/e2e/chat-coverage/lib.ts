@@ -881,7 +881,6 @@ export function floorFailures(
   floors: Floors,
   swept: Swept[],
   scope: (surface: string) => boolean = () => true,
-  dataDriven: ReadonlySet<string> = new Set(),
 ): string[] {
   const out: string[] = [];
   const sweptIds = new Set(swept.map((entry) => entry.surface));
@@ -897,10 +896,6 @@ export function floorFailures(
     );
   }
   for (const entry of swept) {
-    // A surface whose control count is account data carries no floor on
-    // purpose, and asking for one would red the gate every time the account's
-    // chats are groomed. See $dataDrivenComment in surface-floors.json.
-    if (dataDriven.has(entry.surface)) continue;
     const floor = floors[entry.surface];
     if (floor === undefined) {
       out.push(
