@@ -27,6 +27,8 @@ import {
   locate,
   proveByClick,
   readState,
+  redactText,
+  redactUrl,
   sampleChatter,
   summarise,
   type Control,
@@ -377,7 +379,9 @@ test.describe("chat interaction coverage", () => {
     await page.route("**/*", async (route) => {
       const req = route.request();
       if (isDestructiveRequest(req.method(), req.url())) {
-        blockedWrites.push(`${req.method()} ${req.url()}`);
+        // Redacted, because this list is written into the ledger and the
+        // ledger is uploaded as a CI artifact.
+        blockedWrites.push(`${req.method()} ${redactUrl(req.url())}`);
         await route.abort();
         return;
       }
@@ -387,6 +391,10 @@ test.describe("chat interaction coverage", () => {
     stage("opening the chat surface");
     await gotoHome(page);
 
+    // Everything pushed here goes through redactText on the way out (see the
+    // ledger write below): these strings are mostly Playwright's own error
+    // messages, which quote the URLs a failed navigation walked through, and
+    // this suite signs in through an OAuth callback.
     const errors: string[] = [];
     errors.push(...exclusionFailures(EXCLUSIONS));
 
@@ -565,7 +573,7 @@ test.describe("chat interaction coverage", () => {
       excused: excused.map((r) => r.key),
       deferred: deferred.map((r) => r.key),
       blockedWrites,
-      surfaceErrors: errors,
+      surfaceErrors: errors.map(redactText),
       results,
     };
     fs.writeFileSync(
@@ -652,7 +660,13 @@ test.describe("chat interaction coverage", () => {
         : `[coverage] TOTAL ${summary.identitiesProven}/${summary.identities} identities (${(summary.identityRatio * 100).toFixed(1)}%), ${summary.proven}/${summary.total} instances, ${summary.deferred} not fired`,
     );
 
-    expect(errors, `surfaces that could not be swept: ${errors.join(" | ")}`).toEqual([]);
+    // Redacted here too: a failing assertion's message is the one string that
+    // reaches the CI log, the JSON report and the HTML report at once.
+    const reportedErrors = errors.map(redactText);
+    expect(
+      reportedErrors,
+      `surfaces that could not be swept: ${reportedErrors.join(" | ")}`,
+    ).toEqual([]);
     expect(
       failures.map((f) => `${f.key} :: ${f.detail}`),
       "controls with no proven effect and no registry justification",

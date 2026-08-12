@@ -434,10 +434,17 @@ async function proveByClickInner(
 
   const chatter = opts.ignoreRequests ?? new Set<string>();
   const requests: string[] = [];
+  // The request objects seen during THIS control's window, so a response can
+  // be matched back to a request the click caused. Without the identity check
+  // below, a response to something the page had already started before the
+  // click (a slow fetch from opening the surface) landed inside the settle
+  // window and was counted as this control's proof.
+  const mine = new Set<object>();
   const onRequest = (r: { url: () => string }) => {
     const u = r.url();
     if (!isMeaningfulRequest(u)) return;
     if (chatter.has(requestSignature(u))) return;
+    mine.add(r);
     requests.push(u);
   };
   page.on("request", onRequest);
@@ -459,6 +466,7 @@ async function proveByClickInner(
     const u = r.url();
     if (!isMeaningfulRequest(u)) return;
     if (chatter.has(requestSignature(u))) return;
+    if (!mine.has(r.request())) return;
     if (r.status() >= 400) {
       failed.push(String(r.status()) + " " + r.request().method() + " " + redactUrl(u));
       return;
