@@ -192,7 +192,7 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
       el.getAttribute("aria-label") ||
       el.getAttribute("placeholder") ||
       el.getAttribute("title") ||
-      (el as HTMLElement).innerText ||
+      (el instanceof HTMLElement ? el.innerText : "") ||
       el.getAttribute("name") ||
       ""
     )
@@ -202,7 +202,8 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
   const ambient = (el: Element): string => {
     let node: Element | null = el.parentElement;
     for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
-      const text = (node as HTMLElement).innerText?.replace(/\s+/g, " ").trim() ?? "";
+      const text =
+        node instanceof HTMLElement ? node.innerText.replace(/\s+/g, " ").trim() : "";
       if (text.length > 0 && text.length < 140) return text.slice(0, 70);
     }
     return "";
@@ -210,20 +211,18 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
   const stateOf = (el: Element): string | null => {
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute("role") ?? "";
-    if (el.getAttribute("contenteditable") === "true") {
-      return (el as HTMLElement).innerText;
-    }
+    const text = el instanceof HTMLElement ? el.innerText : "";
+    if (el.getAttribute("contenteditable") === "true") return text;
     if (role === "switch" || role === "checkbox") {
-      return el.getAttribute("aria-checked") ?? (el as HTMLElement).innerText.trim();
+      return el.getAttribute("aria-checked") ?? text.trim();
     }
-    if (tag === "select") return (el as HTMLSelectElement).value;
-    if (tag === "input") {
-      const input = el as HTMLInputElement;
-      if (input.type === "checkbox" || input.type === "radio") return String(input.checked);
-      if (input.type === "file") return null;
-      return input.value;
+    if (el instanceof HTMLSelectElement) return el.value;
+    if (el instanceof HTMLInputElement) {
+      if (el.type === "checkbox" || el.type === "radio") return String(el.checked);
+      if (el.type === "file") return null;
+      return el.value;
     }
-    if (tag === "textarea") return (el as HTMLTextAreaElement).value;
+    if (el instanceof HTMLTextAreaElement) return el.value;
     return null;
   };
   const seen = new Map<string, number>();
@@ -357,7 +356,7 @@ async function visibleSignature(page: Page): Promise<string> {
         document.querySelector('[role="dialog"]') ??
         document.querySelector("main") ??
         document.body;
-      const text = (scope as HTMLElement).innerText ?? "";
+      const text = scope instanceof HTMLElement ? scope.innerText : "";
       // Digits are stripped because relative timestamps ("2d", "3m ago") tick
       // on their own; without this a control that did nothing still came back
       // proven whenever a clock in the sidebar rolled over during its click.
@@ -748,7 +747,7 @@ export async function flip(page: Page, ctl: Control): Promise<string | null> {
   }
   if (ctl.tag === "select") {
     const values = await el.evaluate((node) =>
-      [...(node as HTMLSelectElement).options].map((o) => o.value),
+      node instanceof HTMLSelectElement ? [...node.options].map((o) => o.value) : [],
     );
     const next = values.find((v) => v !== ctl.state);
     if (next === undefined) return null;
@@ -777,16 +776,16 @@ export async function readState(page: Page, covId: string): Promise<string | nul
     if (!el) return null;
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute("role") ?? "";
-    if (el.getAttribute("contenteditable") === "true") return (el as HTMLElement).innerText;
+    const text = el instanceof HTMLElement ? el.innerText : "";
+    if (el.getAttribute("contenteditable") === "true") return text;
     if (role === "switch" || role === "checkbox")
-      return el.getAttribute("aria-checked") ?? (el as HTMLElement).innerText.trim();
-    if (tag === "select") return (el as HTMLSelectElement).value;
-    if (tag === "input") {
-      const input = el as HTMLInputElement;
-      if (input.type === "checkbox" || input.type === "radio") return String(input.checked);
-      return input.value;
+      return el.getAttribute("aria-checked") ?? text.trim();
+    if (el instanceof HTMLSelectElement) return el.value;
+    if (el instanceof HTMLInputElement) {
+      if (el.type === "checkbox" || el.type === "radio") return String(el.checked);
+      return el.value;
     }
-    if (tag === "textarea") return (el as HTMLTextAreaElement).value;
+    if (el instanceof HTMLTextAreaElement) return el.value;
     return null;
   }, covId);
 }
