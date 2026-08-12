@@ -259,6 +259,13 @@ def sweep_stale_fixture_users(gotrue, headers, run_key: str) -> None:
     prefixes = tuple(f"{email.split('@')[0].lower()}+" for email in (USER_EMAIL, BOOTSTRAP_EMAIL))
     domains = tuple(email.split("@")[1].lower() for email in (USER_EMAIL, BOOTSTRAP_EMAIL))
 
+    # ponytail: one page, no pagination. The sweep is best effort and the leak
+    # it clears is two users per nightly, so a single page of 1000 is ample
+    # today. The ceiling is real though: on a project whose auth.users grows
+    # past that page, stale fixture users fall outside it and are never swept,
+    # silently, because this function never fails a run. Upgrade path when that
+    # matters: loop `page` until a short page comes back, and keep the same
+    # both-halves address match so a real account can never be a candidate.
     status, body = request(gotrue, headers, "GET", "/admin/users", params={"per_page": "1000"})
     if status != 200 or not isinstance(body, dict):
         print(f"note: fixture sweep skipped (user listing returned {status})", file=sys.stderr)

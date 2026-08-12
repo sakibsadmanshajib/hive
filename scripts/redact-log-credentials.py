@@ -46,8 +46,17 @@ CREDENTIAL_PARAMS = [
 ]
 
 # Longest names first so `provider_refresh_token` never degrades to `token`.
+#
+# The optional leading `[A-Za-z0-9_]*` matters more than it looks. `\b` treats
+# `_` as a word character, so a bare `\bpassword=` does NOT match
+# `RAG_VERIFY_PASSWORD=`, and environment-variable spelling is the dominant
+# shape of a credential in a container log dump, which is precisely what this
+# script is pointed at. Without the prefix the redactor would miss the case it
+# meets most often.
 CREDENTIAL_PARAM_RE = re.compile(
-    r"\b(" + "|".join(sorted(CREDENTIAL_PARAMS, key=len, reverse=True)) + r")=([^&#\s\"'\\]+)",
+    r"\b([A-Za-z0-9_]*(?:"
+    + "|".join(sorted(CREDENTIAL_PARAMS, key=len, reverse=True))
+    + r"))=([^&#\s\"'\\]+)",
     re.IGNORECASE,
 )
 
@@ -81,6 +90,18 @@ def selfcheck() -> None:
     # Longest-name-first: the specific name survives, the value does not.
     out = redact("provider_refresh_token=zzz")
     assert out == "provider_refresh_token=<redacted>", out
+
+    # Environment-variable spelling. `\b` treats `_` as a word character, so a
+    # bare `\bpassword=` misses these, and they are the common shape in a
+    # container log dump and in what verify-rag-roundtrip.py prints.
+    for line in (
+        "export RAG_VERIFY_PASSWORD=hunter2live",
+        "OWUI_E2E_PASSWORD=hunter2live",
+        "E2E_VERIFIED_PASSWORD=hunter2live",
+    ):
+        out = redact(line)
+        assert "hunter2live" not in out, out
+        assert "PASSWORD=<redacted>" in out, out
 
     # Bare tokens with no parameter name around them.
     jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.dBjftJeZ4CVPmB92K27uhbUJU1p1r"

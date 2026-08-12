@@ -141,7 +141,22 @@ export async function prepareE2EAuthFixtures() {
 }
 
 export async function resetProfileBetweenSpecs(email) {
-  return resetProfileComplete(createAdminClient(), email || E2E_VERIFIED_EMAIL);
+  const target = email || E2E_VERIFIED_EMAIL;
+  // The address arrives on argv, so it is the one fixture write that is not
+  // derived from runScopedEmail. It sets a profile flag rather than a
+  // credential, so it cannot revoke a session, but it is still a write, and
+  // this change's whole invariant is that a fixture write belongs to the run.
+  // E2E_RUN_KEY is non-empty by the time this runs: module scope resolves the
+  // two addresses through runScopedEmail, which throws without it.
+  if (!target.includes(`+${E2E_RUN_KEY}@`)) {
+    throw new Error(
+      `[e2e-auth-fixtures] refusing to reset the profile of ${target}: it is ` +
+        `not scoped to this run (E2E_RUN_KEY=${E2E_RUN_KEY}). Fixture writes ` +
+        "target accounts this run created, never a shared one. See " +
+        "docs/live-test-auth.md."
+    );
+  }
+  return resetProfileComplete(createAdminClient(), target);
 }
 
 function runCli(argv) {

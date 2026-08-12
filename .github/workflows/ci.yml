@@ -1303,6 +1303,12 @@ jobs:
         # Random per job, and masked, because the seeder stores its sha256 as a
         # live pending invitation. A value anybody can derive from the public
         # run page is a published credential for as long as the run lasts.
+        #
+        # 24 bytes gives 48 hex characters. The floor it has to clear is
+        # minTokenLength in tests/e2e/support/e2e-auth-defaults.json, which
+        # requiredSecretEnv enforces at 16, so do not shorten this below that
+        # without moving both: the failure would otherwise surface far from
+        # here, naming a variable this step does not mention.
         run: |
           set -euo pipefail
           token="$(openssl rand -hex 24)"
