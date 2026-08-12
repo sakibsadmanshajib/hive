@@ -8,6 +8,8 @@ Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md`
 
 The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.
 
+This repo also carries project-level skills under `.claude/skills/` (`memory-tools`, `review-changes`, `refactor-safely`, `debug-issue`, `explore-codebase`), routed only here since the global skill router cannot enumerate every project's local skills. Check that directory for a match before reaching for a global equivalent.
+
 
 # Hive
 
