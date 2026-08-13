@@ -90,7 +90,17 @@ docker run --rm \
   -e CGO_ENABLED=0 \
   golang:1.24-alpine \
   go build -o /out/agent-engine ./apps/agent-engine/cmd/agent-engine
-chmod 0755 "$BIN_PATH"
+# `go build` already emits 0755, so this is belt and braces for an odd umask.
+# It is allowed to fail: under rootful Docker (every GitHub-hosted runner) the
+# build ran as root and the binary is not ours to chmod, which used to abort
+# the install with "Operation not permitted" even though the file was already
+# correct. What has to hold is that it ends up executable, so assert that
+# rather than trusting either the chmod or the builder.
+chmod 0755 "$BIN_PATH" 2>/dev/null || true
+if [ ! -x "$BIN_PATH" ]; then
+  echo "::error::$BIN_PATH is not executable after the build"
+  exit 1
+fi
 echo "binary: $BIN_PATH"
 
 # ---------------------------------------------------------------------------
