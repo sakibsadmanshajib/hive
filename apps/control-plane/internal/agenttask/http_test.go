@@ -21,7 +21,7 @@ import (
 //
 // Both helpers return the Service alongside the Handler because create is now
 // asynchronous over the launch (issue #881): any assertion about a launch
-// outcome has to wait for it with Service.WaitForLaunches first.
+// outcome has to wait for it with Service.WaitIdle first.
 func newTestHandler() (*agenttask.Handler, *agenttask.Service) {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
 	return agenttask.NewHandler(svc), svc
@@ -62,7 +62,7 @@ func TestHandler_Create_HappyPath(t *testing.T) {
 	}
 
 	// The launch still lands, it just lands on the read path.
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 	getW := httptest.NewRecorder()
 	h.InternalMux().ServeHTTP(getW, httptest.NewRequest(http.MethodGet,
 		"/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+resp["id"].(string), nil))
@@ -99,7 +99,7 @@ func TestHandler_Create_EngineNotConfigured_FailsVisibly(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 	getW := httptest.NewRecorder()
 	h.InternalMux().ServeHTTP(getW, httptest.NewRequest(http.MethodGet,
 		"/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+created["id"].(string), nil))
@@ -155,7 +155,7 @@ func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
 	var created map[string]any
 	_ = json.NewDecoder(createW.Body).Decode(&created)
 	taskID := created["id"].(string)
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 
 	listReq := httptest.NewRequest(http.MethodGet, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String(), nil)
 	listW := httptest.NewRecorder()
@@ -206,7 +206,7 @@ func TestHandler_Cancel_HappyPath(t *testing.T) {
 	taskID := created["id"].(string)
 	// Cancel a task whose launch has landed, so this covers the running-task
 	// path rather than racing the background launch.
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 
 	cancelReq := httptest.NewRequest(http.MethodPost, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+taskID+"/cancel", nil)
 	cancelW := httptest.NewRecorder()

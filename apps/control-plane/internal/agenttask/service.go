@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -18,7 +19,7 @@ type Service struct {
 	engine Engine
 
 	// launches counts the background launch goroutines CreateTask starts.
-	// Nothing on the request path waits on it; see WaitForLaunches.
+	// Nothing on the request path waits on it; see WaitIdle.
 	launches sync.WaitGroup
 }
 
@@ -102,13 +103,39 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	// Worse, the Transition calls would inherit the same dead context and
 	// fail too, leaving the row queued forever.
 	opCtx := context.WithoutCancel(ctx)
+	s.background(func() { s.launch(opCtx, t) }, func() {
+		// Panic path. Before this work ran on its own goroutine it ran inside
+		// the HTTP handler, where net/http's per-connection recover contained a
+		// panic to one connection; a bare goroutine would instead take the
+		// whole process down, every tenant with it. Recovering keeps the blast
+		// radius at one task and still records that task as failed, so the
+		// customer is not left watching a queued row that will never move.
+		s.recordLaunchFailure(opCtx, t, engineLaunchFailedMessage)
+	})
+
+	return t, nil
+}
+
+// background runs work on a goroutine tracked by WaitIdle, recovering any
+// panic so one bad launch or stop cannot take the process down. onPanic runs
+// after the panic is logged and may be nil.
+func (s *Service) background(work func(), onPanic func()) {
 	s.launches.Add(1)
 	go func() {
 		defer s.launches.Done()
-		s.launch(opCtx, t)
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			slog.Default().Error("agenttask: recovered panic in background work",
+				"panic", r, "stack", string(debug.Stack()))
+			if onPanic != nil {
+				onPanic()
+			}
+		}()
+		work()
 	}()
-
-	return t, nil
 }
 
 // launch performs one launch attempt and records its outcome. Runs on a
@@ -126,15 +153,24 @@ func (s *Service) launch(ctx context.Context, t Task) {
 			// The session started but its reference could not be recorded, so
 			// nothing can ever poll or stop it and it would hold its
 			// concurrency slot for its full natural life. Stop it here.
+			s.stopEngineSession(ctx, t.ID, sessionRef)
+
 			// ErrTerminalState is the expected case: a cancel won the race
 			// while this launch was still in flight, and it had no session
 			// reference to stop at the time, so this goroutine owns the
-			// teardown.
-			if !errors.Is(terr, ErrTerminalState) {
-				slog.Default().WarnContext(ctx, "agenttask: could not record a launched session, stopping it",
-					"task_id", t.ID, "error", terr)
+			// teardown. The task's terminal state is already correct.
+			if errors.Is(terr, ErrTerminalState) {
+				return
 			}
-			s.stopEngineSession(ctx, t.ID, sessionRef)
+			// Anything else is a real database failure, and leaving the row
+			// queued with no session reference would strand it: ListActive
+			// excludes exactly that shape, so the poller would never touch it
+			// and the customer would watch a task that can never move and
+			// carries no error. Record the failure instead. Best effort by
+			// definition, since the same database just refused a write.
+			slog.Default().WarnContext(ctx, "agenttask: could not record a launched session, stopped it and failing the task",
+				"task_id", t.ID, "error", terr)
+			s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
 		}
 	case errors.Is(err, ErrEngineNotConfigured):
 		s.recordLaunchFailure(ctx, t, engineUnavailableMessage)
@@ -174,21 +210,31 @@ func (s *Service) stopEngineSession(ctx context.Context, taskID uuid.UUID, sessi
 	}
 }
 
-// WaitForLaunches blocks until every background launch this Service started
-// has finished. Nothing on the request path calls it; it exists so tests can
-// assert on a settled task, and so a drain can let in-flight launches record
-// their outcome before the process exits.
+// WaitIdle blocks until every background launch and engine stop this Service
+// started has finished. Nothing on the request path calls it; it exists so
+// tests can assert on a settled task, and so a drain could let in-flight work
+// record its outcome before the process exits.
 //
-// Deliberately not wired into cmd/server's shutdown: a launch is bounded at
-// launchTimeout (five minutes) and container stop is bounded far lower, so
-// waiting there would only trade a clean stop for a SIGKILL. A process that
-// dies mid-launch leaves its task queued with no engine_session_ref, which
-// Repository.ListActive excludes, so the poller never advances it. That
-// window is unchanged by making the launch asynchronous: the launch always
-// outlived the caller's context, so a restart always stranded it. A sweep for
-// stale queued rows is the fix if it ever shows up in practice; nothing has
-// asked for one yet (ponytail).
-func (s *Service) WaitForLaunches() { s.launches.Wait() }
+// Deliberately not wired into cmd/server's shutdown, and the shutdown window
+// this leaves is genuinely worse than before, so it is written down rather
+// than glossed. Previously the launch ran inside the HTTP handler, so
+// srv.Shutdown's 10 second budget (cmd/server/main.go) waited on that
+// connection and an in-flight launch had up to 10 seconds of grace. The
+// handler now returns as soon as the row is persisted, so Shutdown has
+// nothing to wait for and the background goroutine is killed with
+// approximately none.
+//
+// A task stranded that way sits queued with no engine_session_ref, which
+// Repository.ListActive excludes, so the poller never advances it. Waiting on
+// WaitIdle in Shutdown is not the fix: a launch is bounded at launchTimeout
+// (five minutes) while container stop is bounded far lower, so it would only
+// trade a clean exit for a SIGKILL at the same point. The fix, when a
+// mid-deploy stranded task actually shows up, is a sweep that fails queued
+// rows older than launchTimeout, which needs a change to the
+// agent_tasks_list_active() function and therefore a migration. Not built here
+// (ponytail), and named so the next person does not reason from a false
+// premise.
+func (s *Service) WaitIdle() { s.launches.Wait() }
 
 // Get returns one task, scoped to (tenantID, userID) so a task started by
 // one user is never resumable by a different user in the same tenant.
@@ -233,6 +279,16 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (T
 	// An empty EngineSessionRef means the launch has not reported back yet;
 	// the in-flight launch goroutine sees this task is already terminal and
 	// tears its own session down (see launch).
-	s.stopEngineSession(ctx, id, cancelled.EngineSessionRef)
+	//
+	// The stop runs in the background for the same reason create no longer
+	// waits on a launch (issue #881). Blocking here put up to
+	// engineCancelTimeout (10 seconds) plus the database write inside a request
+	// edge-api abandons at 15 seconds, and the box where this matters is by
+	// definition the loaded one. The caller's answer does not depend on the
+	// stop anyway: the cancellation is already committed, and a stop failure is
+	// logged for an operator rather than returned. Tests wait on WaitIdle.
+	sessionRef := cancelled.EngineSessionRef
+	stopCtx := context.WithoutCancel(ctx)
+	s.background(func() { s.stopEngineSession(stopCtx, id, sessionRef) }, nil)
 	return cancelled, nil
 }

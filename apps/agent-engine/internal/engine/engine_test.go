@@ -491,11 +491,18 @@ func TestSandboxEngine_Cancel_CleansUpDirs(t *testing.T) {
 	assertDirEmpty(t, e.cfg.WorkspaceRoot)
 }
 
-// The launcher half of issue #886. Control-plane now calls Cancel when a task
-// is cancelled, and the only reason that helps is this: the cancelled
-// session's concurrency slot has to go back to the pool immediately, not
-// whenever the sandbox happens to finish on its own (roughly sixteen minutes
-// on the demo box, which is how two cancels exhausted a user's ceiling).
+// Characterisation test for pre-existing behaviour, NOT regression coverage
+// for issue #886. Nothing in this package changed in that fix, so every
+// assertion below passes with the fix fully reverted; it exists to pin the
+// invariant control-plane now depends on, which is that ending a session
+// through Cancel returns its slot to the pool immediately rather than whenever
+// the sandbox finishes on its own (roughly sixteen minutes on the demo box).
+//
+// The actual regression coverage for issue #886 is in
+// apps/control-plane/internal/agenttask/service_test.go, where
+// TestService_Cancel_ReleasesEngineConcurrencySlot and its two siblings fail
+// on revert because they drive Service.Cancel and assert on counters that only
+// move when Service reaches the engine.
 func TestSandboxEngine_Cancel_FreesQuotaSlot(t *testing.T) {
 	var fake *fakeAgentServer
 	e := newTestEngineWithQuota(t, &fake, 1, 1)

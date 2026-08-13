@@ -23,6 +23,14 @@ import (
 type fakeRepository struct {
 	mu    sync.Mutex
 	tasks map[uuid.UUID]agenttask.Task
+
+	// failTransitionTo makes Transition return failTransitionErr for that
+	// target status, standing in for a real database failure (pool exhausted,
+	// statement timeout, connectivity blip) rather than a state-machine
+	// rejection. Without it no test could reach the branches that only a
+	// non-ErrTerminalState error takes.
+	failTransitionTo  agenttask.Status
+	failTransitionErr error
 }
 
 func newFakeRepository() *fakeRepository {
@@ -65,6 +73,9 @@ func (f *fakeRepository) List(_ context.Context, tenantID, userID uuid.UUID) ([]
 func (f *fakeRepository) Transition(_ context.Context, tenantID, userID, id uuid.UUID, status agenttask.Status, sessionRef, resultSummaryRef, errMsg string) (agenttask.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failTransitionErr != nil && status == f.failTransitionTo {
+		return agenttask.Task{}, f.failTransitionErr
+	}
 	t, ok := f.tasks[id]
 	if !ok || t.TenantID != tenantID || t.UserID != userID {
 		return agenttask.Task{}, agenttask.ErrNotFound
@@ -210,7 +221,7 @@ func createSettled(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.U
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get after launch: %v", err)
@@ -378,6 +389,7 @@ func TestService_Cancel_FromRunning(t *testing.T) {
 	if cancelled.Status != agenttask.StatusCancelled {
 		t.Errorf("expected StatusCancelled, got %v", cancelled.Status)
 	}
+	svc.WaitIdle() // the engine stop runs in the background, same as the launch
 	if got := eng.cancelCount(); got != 1 {
 		t.Errorf("expected the engine session to be cancelled exactly once, got %d calls", got)
 	}
@@ -399,6 +411,7 @@ func TestService_Cancel_TerminalStateRejected(t *testing.T) {
 	if _, err := svc.Cancel(context.Background(), tenantID, userID, created.ID); !errors.Is(err, agenttask.ErrTerminalState) {
 		t.Fatalf("expected ErrTerminalState on a second cancel, got %v", err)
 	}
+	svc.WaitIdle()
 	if got := eng.cancelCount(); got != 1 {
 		t.Errorf("expected exactly one engine cancel across a double cancel, got %d", got)
 	}
@@ -437,6 +450,7 @@ func TestService_Cancel_ReleasesEngineConcurrencySlot(t *testing.T) {
 	if _, err := svc.Cancel(context.Background(), tenantID, userID, first.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
+	svc.WaitIdle()
 	if got := eng.slotsInUse(); got != 0 {
 		t.Fatalf("cancel did not release the launcher slot: %d still in use (issue #886)", got)
 	}
@@ -473,7 +487,7 @@ func TestService_CancelDuringLaunch_ReleasesTheSlotThatLaunchTook(t *testing.T) 
 	}
 
 	close(eng.launchGate) // the launch now finishes into a cancelled task
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 
 	if got := eng.slotsInUse(); got != 0 {
 		t.Fatalf("a launch that finished into a cancelled task kept its slot: %d in use", got)
@@ -501,8 +515,82 @@ func TestService_Cancel_LosesRaceWithCompletion_LeavesEngineAlone(t *testing.T) 
 	if _, err := svc.Cancel(context.Background(), tenantID, userID, created.ID); !errors.Is(err, agenttask.ErrTerminalState) {
 		t.Fatalf("expected ErrTerminalState, got %v", err)
 	}
+	svc.WaitIdle()
 	if got := eng.cancelCount(); got != 0 {
 		t.Errorf("expected no engine cancel for an already-terminal task, got %d", got)
+	}
+}
+
+// A launch that succeeds and then cannot record itself is the nastiest
+// failure in this file, and review found it uncovered: the session is stopped,
+// but if the task is left in queued with an empty engine_session_ref then
+// Repository.ListActive excludes it, the poller never touches it, and the
+// customer watches a task that will never move and carries no error. That is
+// the silent-stuck-queue shape this package already closed once, and it is
+// worse than the 500 the create path used to return.
+func TestService_LaunchSucceedsButTransitionFails_TaskFailsVisibly(t *testing.T) {
+	repo := newFakeRepository()
+	repo.failTransitionTo = agenttask.StatusRunning
+	repo.failTransitionErr = errors.New("pgx: connection pool exhausted")
+	eng := newSlotEngine(1)
+	svc := agenttask.NewService(repo, eng)
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle()
+
+	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if settled.Status != agenttask.StatusFailed {
+		t.Fatalf("expected StatusFailed so the task is not stranded in queued forever, got %v", settled.Status)
+	}
+	if settled.ErrorMessage == "" {
+		t.Error("expected a customer-visible error_message rather than a silent stuck task")
+	}
+	if strings.Contains(settled.ErrorMessage, "pgx") || strings.Contains(settled.ErrorMessage, "pool") {
+		t.Errorf("error_message must not carry the raw database failure: %q", settled.ErrorMessage)
+	}
+	if got := eng.slotsInUse(); got != 0 {
+		t.Errorf("expected the unrecorded session to be stopped and its slot freed, %d still in use", got)
+	}
+}
+
+// panickingEngine models a bug in an Engine implementation. Before the launch
+// moved to its own goroutine this ran inside the HTTP handler, where
+// net/http's per-connection recover contained it; a goroutine without its own
+// recover turns the same bug into a process-wide crash.
+type panickingEngine struct{}
+
+func (panickingEngine) Launch(context.Context, agenttask.Task) (string, error) {
+	panic("engine implementation bug")
+}
+
+func (panickingEngine) Cancel(context.Context, string) error { return nil }
+
+func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
+	svc := agenttask.NewService(newFakeRepository(), panickingEngine{})
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle() // an unrecovered panic here takes the whole test binary down
+
+	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if settled.Status != agenttask.StatusFailed {
+		t.Fatalf("expected a panicking launch to leave the task failed, got %v", settled.Status)
+	}
+	if settled.ErrorMessage == "" {
+		t.Error("expected a customer-visible error_message after a panicking launch")
 	}
 }
 
@@ -530,7 +618,7 @@ func TestService_CreateTask_DoesNotBlockOnLaunch(t *testing.T) {
 	}
 
 	close(eng.launchGate)
-	svc.WaitForLaunches()
+	svc.WaitIdle()
 
 	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
 	if err != nil {
