@@ -504,13 +504,8 @@ jobs:
           # few hundred kilobytes base64, and an argument list is not the
           # place to discover the limit.
           upload() {
-            python3 -c '
-import base64, json, sys
-print(json.dumps({
-    "message": sys.argv[2],
-    "branch": sys.argv[3],
-    "content": base64.b64encode(open(sys.argv[1], "rb").read()).decode(),
-}))' "$1" "ci: visual proof for PR #${PR} (run ${GITHUB_RUN_ID})" "$branch" \
+            python3 -c 'import base64,json,sys;print(json.dumps({"message":sys.argv[2],"branch":sys.argv[3],"content":base64.b64encode(open(sys.argv[1],"rb").read()).decode()}))' \
+              "$1" "ci: visual proof for PR #${PR} (run ${GITHUB_RUN_ID})" "$branch" \
               | gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$dir/$(basename "$1")" --input - >/dev/null
           }
           for file in "$CAPTURE_DIR"/*.png; do
