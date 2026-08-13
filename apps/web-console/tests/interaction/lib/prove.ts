@@ -27,7 +27,7 @@
 // of the gate's own invention, its whole proof is that the flip survives a
 // reload, and the gate flips it back and fails if the restore did not take.
 
-import type { BrowserContext, Locator, Page, Request } from "@playwright/test";
+import type { BrowserContext, Locator, Page, Request, Route } from "@playwright/test";
 
 import { signatureInPage, type RawControl } from "./enumerate";
 
@@ -85,35 +85,68 @@ export interface MutationGuard {
   withWritesBlocked<T>(act: () => Promise<T>): Promise<{ value: T; blocked: string[] }>;
 }
 
-export async function installMutationGuard(context: BrowserContext): Promise<MutationGuard> {
-  let armed = false;
-  let blocked: string[] = [];
+/** Static assets can never be a mutation, and are the bulk of the traffic. */
+function interceptable(url: URL): boolean {
+  return !ASSET_PATTERN.test(url.href);
+}
 
-  await context.route(
-    (url) => !ASSET_PATTERN.test(url.href),
-    async (route) => {
-      const request = route.request();
-      if (armed && MUTATING_METHODS.has(request.method().toUpperCase())) {
-        blocked.push(`${request.method()} ${normalizeUrl(request.url())}`);
-        await route.abort("blockedbyclient").catch(() => undefined);
-        return;
-      }
-      await route.continue().catch(() => undefined);
-    },
-  );
-
+export function mutationGuard(context: BrowserContext): MutationGuard {
   return {
     async withWritesBlocked<T>(act: () => Promise<T>): Promise<{ value: T; blocked: string[] }> {
-      blocked = [];
-      armed = true;
+      const blocked: string[] = [];
+      const handler = async (route: Route): Promise<void> => {
+        const request = route.request();
+        if (MUTATING_METHODS.has(request.method().toUpperCase())) {
+          blocked.push(`${request.method()} ${redactUrl(request.url())}`);
+          await route.abort("blockedbyclient").catch(() => undefined);
+          return;
+        }
+        await route.continue().catch(() => undefined);
+      };
+      // Registered for the activation and removed straight after, rather than
+      // left installed and toggled by a flag. An interceptor in the path of
+      // every request is not free and not neutral: it changes how the browser
+      // handles a request even when it lets it through, and this suite's whole
+      // job is to observe what a page does on its own.
+      await context.route(interceptable, handler);
       try {
         const value = await act();
         return { value, blocked: [...blocked] };
       } finally {
-        armed = false;
+        await context.unroute(interceptable, handler).catch(() => undefined);
       }
     },
   };
+}
+
+/**
+ * A URL safe to write into a report that is committed, uploaded as a CI
+ * artifact from a public repository, and read by people.
+ *
+ * The fragment goes entirely: an OAuth implicit response puts a whole session
+ * there. Credential-shaped query parameters are replaced by name, which covers
+ * the invitation and password-reset links whose value in the query string is
+ * itself the credential. PR #578 published four live invitation tokens exactly
+ * this way.
+ */
+const SECRET_PARAMS =
+  /^(token|token_hash|access_token|refresh_token|id_token|code|state|secret|password|apikey|api_key|key|invitation|invite|signature|sig)$/i;
+
+export function redactUrl(raw: string): string {
+  const withoutFragment = raw.split("#")[0];
+  try {
+    const url = new URL(withoutFragment);
+    let touched = false;
+    for (const name of [...url.searchParams.keys()]) {
+      if (SECRET_PARAMS.test(name)) {
+        url.searchParams.set(name, "REDACTED");
+        touched = true;
+      }
+    }
+    return touched ? url.toString() : withoutFragment;
+  } catch {
+    return withoutFragment;
+  }
 }
 
 /**
@@ -149,7 +182,7 @@ function errorSurfacesInPage(): string[] {
 }
 
 function normalizeUrl(url: string): string {
-  return url.split("#")[0];
+  return redactUrl(url);
 }
 
 async function safeSignature(page: Page): Promise<string> {

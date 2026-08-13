@@ -34,7 +34,7 @@ import {
   DISABLED_PROOF_TYPE,
   SESSION_ENDING_PATTERN,
   fillFormFor,
-  installMutationGuard,
+  mutationGuard,
   observe,
   proveExternalLink,
   proveField,
@@ -399,7 +399,12 @@ async function proveControl(
     observation.domChanged ||
     observation.popup ||
     observation.requests.length > 0;
-  if (observation.domChanged && !observation.urlChanged) {
+  // Not when the guard fired. What a blocked write reveals is the application's
+  // network-error branch: a "Try again" button that exists only while that error
+  // is on screen, cannot be reached again from a fresh page, and is therefore
+  // reported as unlocatable on every run. That is the gate accusing the console
+  // of a control the gate itself conjured.
+  if (observation.domChanged && !observation.urlChanged && blocked.length === 0) {
     const all = await enumeratePage(page);
     const activeIdx = await page.evaluate((): number => {
       const element = document.querySelector("[data-ic-active='1']");
@@ -465,8 +470,8 @@ test.describe("interaction coverage", () => {
       viewport: { width: 1440, height: 900 },
     });
     const guards = new Map<BrowserContext, MutationGuard>([
-      [authed, await installMutationGuard(authed)],
-      [anon, await installMutationGuard(anon)],
+      [authed, mutationGuard(authed)],
+      [anon, mutationGuard(anon)],
     ]);
 
     // Break proof hook. A gate nobody has watched fail is worth nothing, so
