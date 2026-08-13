@@ -30,6 +30,14 @@ concurrency:
   group: chat-coverage-${{ github.ref }}
   cancel-in-progress: true
 
+# Read only, and narrowed to what is actually read: the self-check job asks the
+# issues API whether a surface exclusion's blocking issue has closed. Nothing
+# here writes to the repository, and a job that walks a live OAuth flow should
+# not be holding a token that could.
+permissions:
+  contents: read
+  issues: read
+
 jobs:
   self-check:
     name: Chat coverage self-check (no deployment needed)
@@ -40,6 +48,10 @@ jobs:
         working-directory: apps/web-console
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Leave no usable git credential in the runner's config for the rest
+          # of the job, which runs a browser against a live deployment.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -83,6 +95,10 @@ jobs:
       COV_SURFACES: ${{ inputs.surfaces }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Leave no usable git credential in the runner's config for the rest
+          # of the job, which runs a browser against a live deployment.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

@@ -160,9 +160,13 @@ async function walkChatHop(
     await page.waitForTimeout(8000);
   }
 
-  await page.waitForURL((u) => u.origin === new URL(options.chatUrl).origin, {
-    timeout: 90_000,
-  });
+  // Origin alone is not enough: the sign-in page is on the chat origin too, so
+  // this predicate used to be satisfied by still sitting on /auth, and the
+  // failure only surfaced later as a sweep that could not find the chat home.
+  await page.waitForURL(
+    (u) => u.origin === new URL(options.chatUrl).origin && !u.pathname.startsWith("/auth"),
+    { timeout: 90_000 },
+  );
   // "New Chat" is a button while the sidebar is collapsed and a link once it is
   // open, so a role-specific wait passes on a fresh profile and times out on a
   // returning one.

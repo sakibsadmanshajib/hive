@@ -487,6 +487,9 @@ async function proveByClickInner(
     const u = r.url();
     if (!isMeaningfulRequest(u)) return;
     if (chatter.has(requestSignature(u))) return;
+    // Same identity check as onResponse: a failure only counts against this
+    // control when it belongs to a request this control made.
+    if (!mine.has(r)) return;
     transportFailed.push(
       (r.failure()?.errorText ?? "failed") + " " + r.method() + " " + redactUrl(u),
     );

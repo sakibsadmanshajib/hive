@@ -121,7 +121,7 @@ on every pull request that touches the gate:
 | Delete Everything, destructive by its own name | not fired | not fired, never clicked |
 | Locked, disabled with a title | not fired | not fired, and never proof |
 
-```
+```console
 cd apps/web-console
 npm run e2e:chat-coverage:self-check
 3 passed

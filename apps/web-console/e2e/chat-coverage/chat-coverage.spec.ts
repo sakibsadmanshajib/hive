@@ -23,6 +23,7 @@ import {
   flip,
   isDeferred,
   isDestructive,
+  identityOf,
   isStateful,
   locate,
   proveByClick,
@@ -548,13 +549,17 @@ test.describe("chat interaction coverage", () => {
     // has to write down and sign. An earlier version dropped every not-fired
     // result from the failure list, which would have turned two controls this
     // repository's own ledger proves dead into a green gate.
-    const excused = results.filter(
-      (r) =>
-        !r.proven &&
-        [...registryHits.entries()].some(
-          ([key, justification]) => r.key.includes(key) && justification.length > 0,
-        ),
-    );
+    // Exact key, or the identity the key is an instance of. Substring matching
+    // used to be the rule, and it excuses far more than whoever wrote the entry
+    // intended: "settings::button::Save" would also excuse
+    // "settings::button::Save and close". An excuse is a decision about one
+    // control, so it names one control.
+    const excused = results.filter((r) => {
+      if (r.proven) return false;
+      const justification =
+        registryHits.get(r.key) ?? registryHits.get(identityOf(r.key)) ?? "";
+      return justification.length > 0;
+    });
     const deferred = results.filter(isDeferred);
     const failures = results.filter(
       (r) => !r.proven && !excused.some((e) => e.key === r.key),

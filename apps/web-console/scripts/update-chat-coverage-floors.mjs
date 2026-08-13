@@ -35,9 +35,21 @@ const WEB_CONSOLE = resolve(HERE, "..");
 const FLOOR_FILE = join(WEB_CONSOLE, "e2e/chat-coverage/surface-floors.json");
 const DEFAULT_LEDGER = join(WEB_CONSOLE, "chat-coverage-report/coverage.run.json");
 
+const KNOWN_FLAGS = new Set(["--allow-lower", "--dry-run"]);
+
 function parseArgs(argv) {
   const flags = new Set(argv.filter((a) => a.startsWith("--")));
   const positional = argv.filter((a) => !a.startsWith("--"));
+  // A typo must not be read as its own absence. `--allowlower` used to be
+  // ignored silently, which for the one flag that permits lowering a floor
+  // means the program does the opposite of what was asked, quietly.
+  const unknown = [...flags].filter((flag) => !KNOWN_FLAGS.has(flag));
+  if (unknown.length > 0) {
+    console.error(
+      `unknown flag(s): ${unknown.join(", ")}. Known flags are ${[...KNOWN_FLAGS].join(", ")}.`,
+    );
+    process.exit(2);
+  }
   return {
     ledger: positional[0] ? resolve(positional[0]) : DEFAULT_LEDGER,
     allowLower: flags.has("--allow-lower"),

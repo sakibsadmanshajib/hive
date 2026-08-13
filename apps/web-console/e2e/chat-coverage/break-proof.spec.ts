@@ -9,6 +9,13 @@
 // nobody has watched fail is worth nothing.
 import { test, expect } from "@playwright/test";
 
+declare global {
+  interface Window {
+    /** Set by the fixture's destructive button if anything ever clicks it. */
+    __destructiveFired?: boolean;
+  }
+}
+
 import { EXCLUSIONS, REGISTRY } from "./data";
 import {
   checkWithoutFiring,
@@ -44,6 +51,10 @@ const SELF_TEST_HTML = `
     toast.textContent = 'Something went wrong, please try again';
   });
   at('Toasty').addEventListener('click', () => { toast.textContent = 'Error: could not save'; });
+  // Records its own activation, so the test can prove the harness never fired
+  // it rather than trusting the verdict string.
+  window.__destructiveFired = false;
+  at('Delete Everything').addEventListener('click', () => { window.__destructiveFired = true; });
   // Sends a request nothing ever answers. The old rule proved a control on the
   // request alone, so a button wired to a hanging endpoint was covered for ever.
   at('Hanging').addEventListener('click', () => { fetch('/api/hang').catch(() => {}); });
@@ -157,6 +168,12 @@ test.describe("chat coverage gate self-checks", () => {
     expect(destructive.proven, "a destructive control was reported as proven").toBe(false);
     expect(destructive.proof).toBe("not-fired");
     expect(isDeferred(destructive)).toBe(true);
+    // The verdict string is not the claim being tested. The claim is that the
+    // control was never activated, and only the page can answer that.
+    expect(
+      await page.evaluate(() => window.__destructiveFired === true),
+      "the harness fired a destructive control it reported as not fired",
+    ).toBe(false);
 
     const locked = await proveByClick(page, byName("Locked"), { ignoreRequests: chatter });
     expect(locked.proven, "a disabled control was reported as proven: " + locked.detail).toBe(
