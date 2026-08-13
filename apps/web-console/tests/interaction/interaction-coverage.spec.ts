@@ -303,7 +303,12 @@ async function prepare(
   revealPath: string[],
 ): Promise<boolean> {
   await pinLocale(page);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  // Through the retry, like every other navigation. This one runs on the three
+  // hottest paths there are: the stale-page retry, the toggle persistence
+  // re-locate, and the reveal-chain reopen. A transient answer here returns an
+  // error page, the control is not on it, and the verdict is "could not be
+  // found on a freshly loaded page", which reads as a defect in the console.
+  await gotoWithRetry(page, url, url);
   await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => undefined);
   for (const step of revealPath) {
     const ancestor = await locateByKey(page, step);
