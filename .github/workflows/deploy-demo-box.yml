@@ -211,18 +211,70 @@ jobs:
     # when this job is skipped. actions:read exists for one reason: the
     # agent-engine step below downloads the CI-built Apptainer image when the
     # box has none, since that image is linux/amd64 only and cannot be built
-    # on the dev machine.
+    # on the dev machine. contents:read is for the Pull latest main step
+    # below: it authenticates the box's own HTTPS remote with this job's own
+    # ephemeral github.token instead of a credential stored on the box.
     permissions:
       actions: read
+      contents: read
     timeout-minutes: 15
     steps:
       - name: Pull latest main
+        # Root cause of the 2026-08-13 outage (every deploy since failing
+        # `fatal: could not read Username for 'https://github.com': No such
+        # device or address`, exit 128): the box's persistent clone at
+        # /home/sakib/hive authenticates its HTTPS remote from some
+        # credential external to this workflow (a stored PAT or a git
+        # credential helper on the box; this runner has no shell access to
+        # inspect which). That credential worked through the 2026-08-12
+        # 20:04 UTC run (confirmed from that run's own log: `git fetch`
+        # printed a real ref listing, not an error) and was gone by the next
+        # deploy 17 hours later, with the workflow file byte-identical
+        # across that gap (`git log -- .github/workflows/deploy-demo-box.yml`
+        # between those two commits is empty). That is an expired or rotated
+        # credential, not a missing config line: nothing in this repo
+        # changed to cause it.
+        #
+        # Fix: stop depending on any credential that lives on the box at
+        # all. `github.token` is this job's own ephemeral, auto-rotated
+        # GITHUB_TOKEN (scoped read-only by `contents: read` above, minted
+        # fresh per run, never stored on disk), the same mechanism
+        # actions/checkout uses internally. It is supplied only as a `git
+        # -c http.extraheader` value scoped to this one invocation, never
+        # written to the repo's or the box's persistent git config, so
+        # there is nothing here to expire or rotate again. GitHub
+        # automatically masks the token if it ever appeared in a log line;
+        # it does not, since it is only interpolated into a shell variable.
+        #
+        # actions/checkout itself was considered instead of fixing the pull
+        # in place, letting the runner's own already-authenticated checkout
+        # do the fetch. Rejected: every step below assumes /home/sakib/hive is
+        # a long-lived directory carrying the box's own untracked .env
+        # (every secret this stack runs on) and Docker build cache.
+        # actions/checkout's default `clean: true` runs `git clean -ffdx`,
+        # which would delete that untracked .env on first use, a bigger
+        # and riskier change than fixing the credential the persistent
+        # clone already uses.
+        #
+        # GIT_TERMINAL_PROMPT=0 makes a still-bad credential fail in one
+        # git-native line instead of the opaque "could not read Username /
+        # No such device or address" this outage actually produced (that
+        # message is itself just what a denied non-interactive prompt looks
+        # like on a runner with no tty).
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
           cd /home/sakib/hive
           git checkout main
-          git fetch origin
-          git pull --ff-only origin main
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' '${{ github.token }}' | base64 -w0)"
+          if ! git -c "http.https://github.com/.extraheader=${auth_header}" \
+               fetch origin main; then
+            echo "::error::git fetch failed authenticating to https://github.com with this job's own GITHUB_TOKEN (contents: read). This is a credential/permission failure, not a missing branch or ref: check the deploy job's permissions block and that the box's git remote is still https://github.com/${{ github.repository }}.git (git -C /home/sakib/hive remote -v)." >&2
+            exit 1
+          fi
+          git -c "http.https://github.com/.extraheader=${auth_header}" \
+            pull --ff-only origin main
 
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
