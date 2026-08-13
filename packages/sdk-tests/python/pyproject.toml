@@ -9,7 +9,11 @@ dependencies = [
     # collection). httpx is pinned as its own direct dependency below so this
     # suite never again depends on openai's internal HTTP client naming.
     "openai>=2.30.0,<3.0.0",
-    "httpx>=0.28.0,<1.0.0",
+    # httpx is pre-1.0; bounded to the next minor (not major) since httpx has
+    # shipped breaking changes across 0.x minor releases before. Matches how
+    # npm caret (used for sibling package sdk-tests-js's "openai": "^6.33.0")
+    # treats a 0.x version: bounds at the next minor, not the next major.
+    "httpx>=0.28.0,<0.29.0",
 ]
 
 [project.optional-dependencies]
