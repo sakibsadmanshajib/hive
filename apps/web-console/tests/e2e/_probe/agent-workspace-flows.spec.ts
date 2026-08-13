@@ -50,13 +50,28 @@ const TASKS_URL = `${WORKSPACE}/tasks`;
 const AGENT_EMAIL = process.env.HIVE_QA_AGENT_EMAIL ?? "demo@hive-demo.invalid";
 const AGENT_PASSWORD = process.env.HIVE_QA_AGENT_PASSWORD ?? "";
 
-// live-auth.mjs mints against these three. Without them there is no session
-// and no honest way to get one.
+/*
+ * live-auth.mjs mints against these three. Without them there is no session
+ * and no honest way to get one.
+ *
+ * A HARD failure, deliberately, not a skip. A skip here is the same defect as
+ * the committed excuse this suite was rewritten to remove, just moved into the
+ * numerator: one renamed secret would quietly drop every authenticated control
+ * out of the run, the builder would count them as skipped rather than missing,
+ * and the job would report a cheerful green at 6 of 23. The coverage floor in
+ * build-agent-workspace-coverage.mjs is the second layer under this one.
+ */
 const MINT_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"];
 const MISSING_MINT_ENV = MINT_ENV.filter((name) => !(process.env[name] ?? "").trim());
-const MINT_SKIP_REASON =
+const MINT_FAILURE_REASON =
   `cannot mint a live session: ${MISSING_MINT_ENV.join(", ")} not set. ` +
-  "See docs/live-test-auth.md. There is no credential-rotating fallback and there must never be one.";
+  "See docs/live-test-auth.md. There is no credential-rotating fallback and there must never " +
+  "be one. This fails rather than skips on purpose: a skipped control is not a proven control, " +
+  "and a run that cannot authenticate has not measured this surface at all.";
+
+function requireMintEnv(): void {
+  expect(MISSING_MINT_ENV, MINT_FAILURE_REASON).toEqual([]);
+}
 
 const PASSWORD_SKIP_REASON =
   "HIVE_QA_AGENT_PASSWORD not set. Every other authenticated control here is proven from a " +
@@ -93,8 +108,20 @@ const TASK_LIST_GLOB = "**/v1/agent/tasks";
  * actually renders, so a control that ships without a ledger entry fails the
  * run rather than quietly shrinking the total.
  */
+/*
+ * ponytail: light DOM only, and the claim in the ledger is worded to match.
+ * Known ceiling, stated rather than hidden: querySelectorAll does not cross a
+ * shadow root or an iframe document, the descriptor is deduplicated into a Set
+ * so N identical Cancel buttons collapse to one, and only the two screens in
+ * the states this file drives are inventoried, so a control that appears only
+ * in a state nothing here reaches is not seen. This app has no shadow DOM and
+ * no iframes today (it is a plain Next app, and its own middleware sets
+ * frame-ancestors 'none'), so the ceiling costs nothing yet. Widen to a
+ * recursive walk over shadowRoot and frameLocator the day either appears.
+ */
 const FOCUSABLE_SELECTOR =
-  'a[href], button, input:not([type="hidden"]), textarea, select, [tabindex]:not([tabindex="-1"])';
+  'a[href], button, input:not([type="hidden"]), textarea, select, iframe, summary, ' +
+  '[contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
 
 async function focusableInventory(page: Page): Promise<string[]> {
   return page.evaluate((selector) => {
@@ -227,12 +254,31 @@ test.describe("sign-in entry (no session required)", () => {
     const response = await request.get(`${CHAT}/v1/agent/tasks`);
     expect(response.status()).toBe(401);
   });
+
+  test("[C24] every focusable control on the sign-in screen is claimed by the ledger", async ({
+    page,
+  }) => {
+    /*
+     * Half of the denominator check, and deliberately the half that needs no
+     * session, so it is outside the authenticated group's gate entirely. C23
+     * does the same for the task console. A guard against gaming the
+     * denominator must not share a gate with the thing it guards: put both
+     * halves behind the session and one absent environment variable disables
+     * the guard exactly when the numerator is also collapsing.
+     */
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    await expect(page.locator("#email")).toBeVisible();
+    expect(
+      await focusableInventory(page),
+      "the sign-in screen renders a focusable control the ledger does not claim, or claims one " +
+        "it no longer renders. Add or remove the matching entry in agent-workspace-controls.json.",
+    ).toEqual(ledgerInventory("sign-in"));
+  });
 });
 
 test.describe("authenticated task console", () => {
-  test.beforeEach(() => {
-    test.skip(MISSING_MINT_ENV.length > 0, MINT_SKIP_REASON);
-  });
+  test.beforeEach(requireMintEnv);
+
 
   test("[C8] sign-in with valid credentials lands on the task console, not the chat app", async ({
     page,
@@ -299,7 +345,7 @@ test.describe("authenticated task console", () => {
     expect(createFired).toBe(false);
   });
 
-  test("[C14][C15][C16][C17] a real task is created, is cancellable while it runs, and a second cancel is refused", async ({
+  test("[C14][C15][C16][C17] a real task is created, its row is marked cancelled on request, and a second cancel is refused", async ({
     page,
     request,
   }) => {
@@ -309,8 +355,8 @@ test.describe("authenticated task console", () => {
      * of seconds on a warm box and is bounded at five minutes. Every control
      * this test carries is downstream of that one create, so splitting them
      * would mean launching several real sandboxes on a shared demo box for no
-     * extra coverage. The task is cancelled at the end rather than left to run
-     * its full course.
+     * extra coverage. The task is cancelled in the `finally` below whatever
+     * happens, so a hard assertion firing mid-test cannot orphan one.
      *
      * Do not read a repeated Blocked row as a flake in this test. Cancel is a
      * database transition only: it never reaches the engine, so the sandbox is
@@ -405,55 +451,80 @@ test.describe("authenticated task console", () => {
       "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
     ).not.toBe("");
 
-    const tasks = page.getByRole("region", { name: "Tasks" });
-    const row = tasks.getByRole("listitem").filter({ hasText: brief }).first();
-    await expect(row).toBeVisible();
-    /*
-     * C16. The engine notice is derived from the newest task carrying the
-     * engine-unavailable sentinel. Since #870 the demo box has a working
-     * runtime, so the correct rendering is its absence, and its presence here
-     * means the launcher is down. The previous version of this file asserted
-     * the notice was present, which was true only while the runtime was
-     * unconfigured.
-     */
-    await expect(
-      page.getByRole("status").filter({ hasText: "The agent runtime is not configured" }),
-    ).toHaveCount(0);
-    /*
-     * Non-terminal, so the row offers Cancel. "Blocked" is what both engine
-     * sentinels read as, and there are exactly two ways to get one:
-     * the runtime is unconfigured on this deployment, which the notice
-     * asserted just above would also show; or the launcher refused this
-     * particular launch, which on a repeated run is the held quota slot in
-     * issue #886.
-     */
-    await expect(
-      row,
-      "the task must reach a non-terminal state so cancel is exercisable. Blocked means the " +
-        "launcher refused it: either no runtime is configured, or the user's concurrency slots " +
-        "are still held by earlier cancelled tasks (issue #886).",
-    ).not.toContainText("Blocked");
-    const cancel = row.getByRole("button", { name: "Cancel" });
-    await expect(cancel).toBeVisible();
+    try {
+      const tasks = page.getByRole("region", { name: "Tasks" });
+      const row = tasks.getByRole("listitem").filter({ hasText: brief }).first();
+      await expect(row).toBeVisible();
+      /*
+       * C16. The engine notice is derived from the newest task carrying the
+       * engine-unavailable sentinel. Since #870 the demo box has a working
+       * runtime, so the correct rendering is its absence, and its presence here
+       * means the launcher is down. The previous version of this file asserted
+       * the notice was present, which was true only while the runtime was
+       * unconfigured.
+       */
+      await expect(
+        page.getByRole("status").filter({ hasText: "The agent runtime is not configured" }),
+      ).toHaveCount(0);
+      /*
+       * Non-terminal, so the row offers Cancel. "Blocked" is what both engine
+       * sentinels read as, and there are exactly two ways to get one:
+       * the runtime is unconfigured on this deployment, which the notice
+       * asserted just above would also show; or the launcher refused this
+       * particular launch, which on a repeated run is the held quota slot in
+       * issue #886.
+       */
+      await expect(
+        row,
+        "the task must reach a non-terminal state so cancel is exercisable. Blocked means the " +
+          "launcher refused it: either no runtime is configured, or the user's concurrency slots " +
+          "are still held by earlier cancelled tasks (issue #886).",
+      ).not.toContainText("Blocked");
+      const cancel = row.getByRole("button", { name: "Cancel" });
+      await expect(cancel).toBeVisible();
 
-    // C17, UI half: the button actually cancels.
-    await cancel.click();
-    await expect(row).toContainText("Cancelled", { timeout: 30_000 });
-    await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+      /*
+       * C17, UI half. What this proves and nothing more: the button is offered
+       * on a non-terminal row, pressing it moves that row to Cancelled, and the
+       * button is then withdrawn. It does NOT prove the sandbox stopped, and it
+       * cannot: control-plane's Engine interface has only Launch, and
+       * Service.Cancel is a bare database transition, so nothing on this path
+       * can reach the running sandbox at all (issue #886). Any wording that
+       * claims this control stops a task would be a false proof.
+       */
+      await cancel.click();
+      await expect(row).toContainText("Cancelled", { timeout: 30_000 });
+      await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
 
-    /*
-     * C17, server half. Hiding a button proves nothing about the server
-     * refusing the call, and this is the assertion the previous version got
-     * inverted: it asserted only ">= 400", which stays green if the route is
-     * unmounted and 404s, or if the caller is unauthenticated and gets a 401.
-     * The contract says 409 on an already-terminal task
-     * (apps/control-plane/internal/agenttask/SYNC_CONTRACT.md), so that is
-     * what is asserted.
-     */
-    const cancelAgain = await request.post(`${CHAT}/v1/agent/tasks/${createdId}/cancel`, {
-      headers: { Authorization: authHeader },
-    });
-    expect(cancelAgain.status()).toBe(409);
+      /*
+       * C17, server half. Hiding a button proves nothing about the server
+       * refusing the call, and this is the assertion the previous version got
+       * inverted: it asserted only ">= 400", which stays green if the route is
+       * unmounted and 404s, or if the caller is unauthenticated and gets a 401.
+       * The contract says 409 on an already-terminal task
+       * (apps/control-plane/internal/agenttask/SYNC_CONTRACT.md), so that is
+       * what is asserted.
+       */
+      const cancelAgain = await request.post(`${CHAT}/v1/agent/tasks/${createdId}/cancel`, {
+        headers: { Authorization: authHeader },
+      });
+      expect(cancelAgain.status()).toBe(409);
+    } finally {
+      /*
+       * Cleanup, never an assertion, and it must not mask the real failure.
+       * Without this, any hard assertion above leaves a live task on a shared
+       * box. Cancel is all this suite can reach, and per #886 it does not free
+       * the sandbox, but a cancelled row is still the closest thing to putting
+       * the box back as it was found.
+       */
+      if (createdId) {
+        await request
+          .post(`${CHAT}/v1/agent/tasks/${createdId}/cancel`, {
+            headers: { Authorization: authHeader },
+          })
+          .catch(() => undefined);
+      }
+    }
   });
 
   test("[C18] the empty state renders when the account has no tasks", async ({ page }) => {
@@ -532,14 +603,20 @@ test.describe("authenticated task console", () => {
     });
   });
 
-  test("[C23] every focusable control on both screens is claimed by the ledger", async ({
+  test("[C23] every focusable control on the task console is claimed by the ledger", async ({
     page,
   }) => {
     /*
-     * The denominator check. Without this, the coverage ratio is only as
-     * honest as the author's enumeration: a control that ships without a
-     * ledger entry raises neither the total nor the proven count, and the
-     * percentage goes up.
+     * The denominator check for the authenticated screen. Without this, the
+     * coverage ratio is only as honest as the author's enumeration: a control
+     * that ships without a ledger entry raises neither the total nor the proven
+     * count, and the percentage goes up.
+     *
+     * Its sign-in half is C24, deliberately in the unauthenticated group above:
+     * this half needs a session and the other does not, and a guard against
+     * gaming that shares a gate with the thing it guards fails open in exactly
+     * the case that matters. The gate is now a hard failure rather than a skip
+     * as well, which is the other half of that fix.
      *
      * The task list is stubbed to a fixed pair (one running row, one terminal
      * row) so both the Cancel-offered and Cancel-withheld renderings are on
@@ -604,13 +681,5 @@ test.describe("authenticated task console", () => {
      * forces it into the ledger instead of leaving it silently uncounted.
      */
     await expect(page.getByRole("log")).toHaveCount(0);
-
-    await page.goto(`${WORKSPACE}/auth/sign-in`);
-    await expect(page.locator("#email")).toBeVisible();
-    expect(
-      await focusableInventory(page),
-      "the sign-in screen renders a focusable control the ledger does not claim, or claims one " +
-        "it no longer renders. Add or remove the matching entry in agent-workspace-controls.json.",
-    ).toEqual(ledgerInventory("sign-in"));
   });
 });

@@ -128,11 +128,58 @@ for (const u of unproven) {
  * and the whole point of the ledger is that a control cannot go missing
  * quietly.
  */
+const failures = [];
+
 if (notRun.length > 0) {
-  console.error(
-    `\nFAIL: ${notRun.length} control(s) have no test in this run: ` +
+  failures.push(
+    `${notRun.length} control(s) have no test in this run: ` +
       `${notRun.map((r) => r.id).join(", ")}. Either add a test carrying that ` +
       "[C#] tag, or remove the control from agent-workspace-controls.json.",
   );
+}
+
+/*
+ * Identity, not cardinality, in both directions.
+ *
+ * The loop above walks the ledger, so a [C#] tag the ledger does not declare
+ * was previously ignored outright. That makes the ratio movable by deletion:
+ * remove the C17 entry the day C17 regresses and the ratio RISES, from 18/24
+ * to 18/23, while a real user-facing control silently leaves the suite. Same
+ * argument, and the same fix, as playwright-spec-manifest.json pinning specs
+ * to projects.
+ */
+const undeclared = [...byControlId.keys()].filter(
+  (id) => !controls.controls.some((c) => c.id === id),
+);
+if (undeclared.length > 0) {
+  failures.push(
+    `${undeclared.length} control id(s) are tagged in a test title but declared nowhere in ` +
+      `agent-workspace-controls.json: ${undeclared.join(", ")}. Add the entry, or drop the tag. ` +
+      "A tag with no ledger entry can only move the ratio by shrinking its denominator.",
+  );
+}
+
+/*
+ * The floor. Without it the ratio reports whatever it happens to be, so a run
+ * that skipped or lost most of the suite is indistinguishable from a healthy
+ * one at a glance, and green means only "nothing threw". RATCHET UP ONLY: the
+ * fix for a run below the floor is the coverage, never the number.
+ */
+const floor = controls.minimum_proven;
+if (typeof floor !== "number") {
+  failures.push(
+    "agent-workspace-controls.json has no numeric minimum_proven, so this run has no floor to " +
+      "fail against and the ratio gates nothing.",
+  );
+} else if (proven.length < floor) {
+  failures.push(
+    `coverage regressed: ${proven.length} controls proven, floor is ${floor}. Fix the coverage. ` +
+      "Lowering minimum_proven to make this pass is the exact failure this floor exists to catch.",
+  );
+}
+
+if (failures.length > 0) {
+  console.error("");
+  for (const failure of failures) console.error(`FAIL: ${failure}`);
   process.exit(1);
 }

@@ -74,15 +74,36 @@ export default defineConfig({
     },
     {
       // Interaction-coverage probe for the agent workspace (Cowork), run
-      // against the deployed chat host after every deploy by
+      // against the deployed chat host by
       // .github/workflows/deploy-demo-box.yml. It needs SUPABASE_URL,
       // SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY to mint a session
-      // (tests/e2e/support/live-auth.mjs) and skips itself, loudly and by
-      // name in the coverage ledger, without them.
+      // (tests/e2e/support/live-auth.mjs) and fails hard without them, because
+      // a skip here silently drops sixteen controls out of the ratio.
       name: "agent-workspace",
       testDir: "./tests/e2e/_probe",
       testMatch: /agent-workspace-flows\.spec\.ts$/,
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        /*
+         * No trace and no video for this project, overriding the
+         * retain-on-failure defaults above. This is the one project that
+         * drives a browser with a REAL session on a deployed host, and a
+         * Playwright trace stores request headers and cookies verbatim: the
+         * Authorization bearer on every agent-task call, and the
+         * sb-*-auth-token cookie, which carries the refresh token for a shared
+         * account. This repository is public and its artifacts are retained
+         * for 90 days, so a single failed run would publish a live credential.
+         * live-auth.mjs redacts its own output; it cannot reach inside a
+         * browser trace.
+         *
+         * The trade is deliberate: a probe of a deployed surface is
+         * reproducible by re-running it against that surface, which is not
+         * true of a CI job whose stack is gone. Debug it locally with
+         * `--trace on` against a throwaway identity, never in CI.
+         */
+        trace: "off",
+        video: "off",
+      },
     },
     {
       name: "phase-19-setup",

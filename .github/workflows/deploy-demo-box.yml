@@ -867,6 +867,21 @@ jobs:
   agent-workspace-coverage:
     name: Agent workspace interaction coverage
     needs: deploy
+    # MANUAL ONLY until issues #881 and #886 are fixed, then delete this line.
+    #
+    # The suite creates one real agent task and cancels it. Per #886 a cancel
+    # never reaches the engine, so the sandbox keeps running and keeps its
+    # concurrency slot; two runs exhaust HIVE_QUOTA_USER_CONCURRENCY for the
+    # demo account and every later create is refused. On every push to main
+    # touching apps/web-console that would take the demo surface down for the
+    # day, which is a real cost to pay for a measurement.
+    #
+    # Not in report-failure's `needs` either, for the same window: that job
+    # dedupes on a single open label, so a job that is red for a known product
+    # reason would hold that issue open and downgrade a genuine `migrate`
+    # failure to a comment on a stale issue, which is #553's blind spot
+    # reopened.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -956,14 +971,23 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload the coverage ledger and Playwright report
+      - name: Upload the coverage ledger
+        # The ledger and the run summary, by extension, and nothing else.
+        #
+        # NOT the Playwright report and NOT test-results/ wholesale. This
+        # project drives a browser with a real session on a deployed host, so a
+        # trace or a video would carry the Authorization bearer and the
+        # sb-*-auth-token cookie (which holds a refresh token) verbatim, into a
+        # public repository's artifacts for 90 days. The project turns both off
+        # in playwright.config.ts; this glob is the second layer, so a future
+        # edit that re-enables either one still cannot publish it.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-workspace-coverage
           path: |
-            apps/web-console/test-results/
-            apps/web-console/playwright-report/
+            apps/web-console/test-results/*.json
+            apps/web-console/test-results/*.txt
           if-no-files-found: warn
 
   report-failure:
@@ -980,7 +1004,7 @@ jobs:
     # class of silent schema failure this change exists to eliminate invisible
     # all over again.
     name: Report failure
-    needs: [migrate, deploy, sdk-replay, agent-workspace-coverage]
+    needs: [migrate, deploy, sdk-replay]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -994,7 +1018,6 @@ jobs:
           # Bracket notation, not needs.sdk-replay.result: a hyphen in a
           # context property is parsed as subtraction in a GitHub expression.
           REPLAY_RESULT: ${{ needs['sdk-replay'].result }}
-          COWORK_RESULT: ${{ needs['agent-workspace-coverage'].result }}
         with:
           script: |
             const label = 'ci-failure:deploy-demo-box';
@@ -1002,8 +1025,7 @@ jobs:
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const results = `migrate=${process.env.MIGRATE_RESULT}, `
               + `deploy=${process.env.DEPLOY_RESULT}, `
-              + `sdk-replay=${process.env.REPLAY_RESULT}, `
-              + `agent-workspace-coverage=${process.env.COWORK_RESULT}`;
+              + `sdk-replay=${process.env.REPLAY_RESULT}`;
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
