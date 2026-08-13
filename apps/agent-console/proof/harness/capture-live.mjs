@@ -142,11 +142,25 @@ async function createTask(page, instructions) {
 }
 
 async function waitForRowStatus(page, instructions, label, timeoutMs) {
-  await taskRow(page, instructions)
-    .getByText(label, { exact: true })
-    .waitFor({ timeout: timeoutMs });
-  log(`row "${instructions.slice(0, 40)}…" reached ${label}`);
+  // A string is matched exactly; a RegExp is for the states the console
+  // renders under more than one label.
+  const target =
+    label instanceof RegExp
+      ? taskRow(page, instructions).getByText(label)
+      : taskRow(page, instructions).getByText(label, { exact: true });
+  await target.waitFor({ timeout: timeoutMs });
+  log(`row "${instructions.slice(0, 40)}…" reached ${await target.innerText()}`);
 }
+
+/*
+ * A launch the engine refused reads as "Blocked", not "Failed": the console
+ * gives ENGINE_LAUNCH_FAILED_MESSAGE its own label so a deployment problem
+ * does not read to the user as a problem with what they asked for (see
+ * isEngineLaunchFailure in lib/edge-api/tasks.ts). Both are terminal and both
+ * mean the same thing here, so the refusal wait accepts either rather than
+ * pinning the proof to today's copy.
+ */
+const REFUSED = /^(Blocked|Failed)$/;
 
 async function cancelRow(page, instructions) {
   await taskRow(page, instructions).getByRole("button", { name: "Cancel" }).click();
@@ -251,7 +265,7 @@ const SCENARIOS = [
       // The refusal arrives on the read path (the launch is asynchronous), so
       // this waits for the row rather than reading the create response.
       await createTask(page, blocked);
-      await waitForRowStatus(page, blocked, "Failed", 180_000);
+      await waitForRowStatus(page, blocked, REFUSED, 180_000);
       await shoot(
         page,
         "cancel-frees-slot",
