@@ -1,0 +1,25 @@
+# One origin in front of the agent console and edge-api, for the CI visual
+# proof job (.github/workflows/agent-visual-proof.yml) only. Never deployed.
+#
+# It exists because the console's browser fetches are deliberately relative
+# (NEXT_PUBLIC_EDGE_API_BASE_URL is empty in the shipped image) and edge-api
+# serves no CORS headers, so the task console only works when something
+# serves both under one origin. In production that something is
+# Caddyfile.owui; standing the whole chat surface up in CI to get two routes
+# is not worth it.
+#
+# ponytail: the two routes below are copied from Caddyfile.owui rather than
+# shared with it. Known ceiling: a route change there does not reach here.
+# The proof this file supports is about the agent surface, not about the
+# proxy, and the routes are two lines; if they grow, boot the real thing.
+:80 {
+	@agentConsole path /agent-workspace /agent-workspace/*
+	reverse_proxy @agentConsole agent-console:3000
+
+	@agentApi path /v1/agent/*
+	reverse_proxy @agentApi edge-api:8080
+
+	# Nothing else is served: an unmatched path is a bug in the harness, not
+	# a route to invent.
+	respond 404
+}
