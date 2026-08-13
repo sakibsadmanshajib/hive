@@ -270,7 +270,7 @@ jobs:
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' '${{ github.token }}' | base64 -w0)"
           if ! git -c "http.https://github.com/.extraheader=${auth_header}" \
                fetch origin main; then
-            echo "::error::git fetch failed authenticating to https://github.com with this job's own GITHUB_TOKEN (contents: read). This is a credential/permission failure, not a missing branch or ref: check the deploy job's permissions block and that the box's git remote is still https://github.com/${{ github.repository }}.git (git -C /home/sakib/hive remote -v)." >&2
+            echo "::error::git fetch origin main failed. See the git error above for the actual cause. If it names the username/credential, check the deploy job's permissions block (needs contents: read) and that the box's git remote is still https://github.com/${{ github.repository }}.git (git -C /home/sakib/hive remote -v)." >&2
             exit 1
           fi
           git -c "http.https://github.com/.extraheader=${auth_header}" \
