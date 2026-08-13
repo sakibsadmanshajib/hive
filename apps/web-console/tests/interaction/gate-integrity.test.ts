@@ -23,7 +23,12 @@ import {
 } from "./lib/exclusions";
 import { floorProblems, loadFloors, staleFloors, type FloorFile } from "./lib/floors";
 import { enumerateInPage, type RawControl } from "./lib/enumerate";
-import { verdictForDisabled, verdictFromObservation, type Observation } from "./lib/prove";
+import {
+  redactUrl,
+  verdictForDisabled,
+  verdictFromObservation,
+  type Observation,
+} from "./lib/prove";
 import { controlKey } from "./lib/key";
 import { indexRegistry, parseRegistry, validateRegistry } from "./lib/registry";
 import { ratio } from "./lib/report";
@@ -230,6 +235,31 @@ describe("enumerator", () => {
     const keys = enumerateInPage().controls.map(controlKey);
     expect(new Set(keys).size).toBe(2);
     expect(keys).toEqual(["button|Save", "button|Save~1"]);
+  });
+
+  it("counts duplicates of the key itself, not of some other tuple", () => {
+    // Two links with the same name and different hrefs. The ordinal used to be
+    // counted on tag/role/name/href, so both took ordinal 0, and controlKey
+    // prefers the name over the href, so both came out as `a|Overview`. A
+    // collided key makes one of the two unaddressable for the registry, the
+    // re-locator and the report.
+    render(`<a href="/console">Overview</a><a href="/console/analytics">Overview</a>`);
+    const keys = enumerateInPage().controls.map(controlKey);
+    expect(keys).toEqual(["a|Overview", "a|Overview~1"]);
+  });
+});
+
+describe("URLs written into the ledger", () => {
+  it("drops the fragment and redacts credential-shaped query parameters", () => {
+    expect(redactUrl("https://console.example/auth/callback#access_token=abc.def")).toBe(
+      "https://console.example/auth/callback",
+    );
+    expect(redactUrl("https://console.example/invitations/accept?token=live-secret")).toBe(
+      "https://console.example/invitations/accept?token=REDACTED",
+    );
+    expect(redactUrl("https://console.example/console/billing?page=2")).toBe(
+      "https://console.example/console/billing?page=2",
+    );
   });
 });
 

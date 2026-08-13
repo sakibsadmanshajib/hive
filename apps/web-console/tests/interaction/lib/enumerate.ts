@@ -310,7 +310,32 @@ export function enumerateInPage(): EnumerationResult {
     const form = el.closest("form");
     const disabled =
       el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
-    const key = `${el.tagName.toLowerCase()}|${role}|${name}|${el.getAttribute("href") ?? ""}`;
+    // The ordinal has to count duplicates of the identity `controlKey` builds,
+    // not of some other tuple. Keying it on tag/role/name/href let two links
+    // both named "Overview" with different hrefs each take ordinal 0, and since
+    // `controlKey` prefers the name over the href, both then produced the key
+    // `a|Overview`. The ledger in
+    // docs/proof/interaction-coverage-2026-08-10/break-proof-sabotaged.json
+    // carries that collision, and a collided key makes one of the two controls
+    // unaddressable for the registry, the re-locator and the report.
+    //
+    // The precedence below mirrors lib/key.ts and must keep mirroring it. It is
+    // duplicated rather than imported because this function is serialized into
+    // the page, where this module's imports do not exist.
+    const testid = el.getAttribute("data-testid") ?? "";
+    const id = el.getAttribute("id") ?? "";
+    const href = el.getAttribute("href") ?? "";
+    const label =
+      testid !== ""
+        ? `testid=${testid}`
+        : id !== ""
+          ? `#${id}`
+          : name !== ""
+            ? name
+            : href !== ""
+              ? `href=${href}`
+              : "(unnamed)";
+    const key = `${el.tagName.toLowerCase()}|${role}|${label}`;
     const ordinal = seenKeys.get(key) ?? 0;
     seenKeys.set(key, ordinal + 1);
 
@@ -321,9 +346,9 @@ export function enumerateInPage(): EnumerationResult {
       role,
       type,
       name,
-      href: el.getAttribute("href") ?? "",
-      testid: el.getAttribute("data-testid") ?? "",
-      id: el.getAttribute("id") ?? "",
+      href,
+      testid,
+      id,
       fieldName: el.getAttribute("name") ?? "",
       kind: kindOf(el, role, type),
       matchedBy,

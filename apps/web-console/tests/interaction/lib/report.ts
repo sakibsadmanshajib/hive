@@ -89,6 +89,15 @@ export interface CoverageReport {
    * happens to hold.
    */
   staleDeclarations: string[];
+  /**
+   * External destinations, with whether they answered.
+   *
+   * Reported, never fatal. A link's own effect is that it navigates, which the
+   * browser guarantees for a well formed absolute URL; whether the far end is
+   * up is a fact about a third party's server and does not belong in a merge
+   * gate. This section is how the dead documentation link was found (#883).
+   */
+  externalDestinations: Array<{ href: string; reachable: boolean; detail: string }>;
   /** Registry and route-fixture integrity failures. */
   problems: string[];
 }
@@ -134,6 +143,7 @@ export function buildReport(input: {
   controls: ControlRecord[];
   problems: string[];
   staleDeclarations?: string[];
+  externalDestinations?: Array<{ href: string; reachable: boolean; detail: string }>;
 }): CoverageReport {
   const proven = input.controls.filter((c) => c.status === "proven").length;
   // Primary figure. An identity counts as proven only when every instance of
@@ -182,6 +192,7 @@ export function buildReport(input: {
     unprovenControls,
     disabledControls,
     staleDeclarations: input.staleDeclarations ?? [],
+    externalDestinations: input.externalDestinations ?? [],
     problems: input.problems,
   };
 }
@@ -244,6 +255,16 @@ export function formatSummary(report: CoverageReport): string {
         control.revealPath.length > 0 ? ` [revealed by ${control.revealPath.join(" > ")}]` : "";
       lines.push(`    ${control.route}  ${control.key}${reveal}`);
       lines.push(`      ${control.proofType}: ${control.detail}`);
+    }
+  }
+  const dead = report.externalDestinations.filter((entry) => !entry.reachable);
+  if (dead.length > 0) {
+    lines.push("");
+    lines.push(
+      `  DEAD EXTERNAL DESTINATIONS (${String(dead.length)}) — the links themselves work, the far ends do not; reported, not counted against any control`,
+    );
+    for (const entry of dead) {
+      lines.push(`    ${entry.href} ${entry.detail}`);
     }
   }
   if (report.staleDeclarations.length > 0) {
