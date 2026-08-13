@@ -3,7 +3,13 @@ name = "hive-sdk-tests-python"
 version = "0.0.1"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=2.30.0",
+    # Bounded below the openai 3.0.0 major bump: 3.x renamed its transitive
+    # HTTP client dependency from `httpx` to `httpx2`, which silently dropped
+    # the `httpx` module our tests import directly (ModuleNotFoundError on
+    # collection). httpx is pinned as its own direct dependency below so this
+    # suite never again depends on openai's internal HTTP client naming.
+    "openai>=2.30.0,<3.0.0",
+    "httpx>=0.28.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
