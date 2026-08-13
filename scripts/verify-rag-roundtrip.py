@@ -14,8 +14,13 @@ document while the unit suite stayed green). Run this against the demo box, or
 any live stack, after touching the RAG or embedding code.
 
 Idempotent: the throwaway tenant, its member user, and the ENABLE_RAG gate are
-upserted, and the user's password is rotated every run, mirroring
-scripts/seed-owui-e2e-user.py. It writes nothing outside its own tenant.
+upserted. It writes nothing outside its own tenant, and it does not rotate the
+member user's password. It used to, on every run, against a hardcoded shared
+address, which is the shape docs/live-test-auth.md forbids: the control-plane
+resolves every bearer against GoTrue per request, so a rotation revokes the
+sessions of every other run holding one. A first run creates the account and
+prints the password it generated, on stderr, once. Save that value: every later
+run signs in with it through RAG_VERIFY_PASSWORD, and no run will rotate it.
 
 Retries: the serverless embedding route is slow and uneven (measured between
 one and over a hundred seconds per call on the demo stack), so ingest and query
@@ -24,7 +29,8 @@ retry here is about upstream weather, not about masking a defect. Every attempt
 is printed, so a run that only passes on the third try is visible rather than
 silently green.
 
-Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY
+Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, and
+              RAG_VERIFY_PASSWORD once the member account exists
 Optional env: EDGE_API_URL (default http://localhost:8080),
               RAG_CHAT_MODEL (default hive-fast)
 """
@@ -121,9 +127,17 @@ def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
         None,
     )
 
-    password = random_password()
+    # An existing account keeps its password. This script signs in with a
+    # password, so it needs one, but overwriting the account's would revoke
+    # every session another run holds on it (docs/live-test-auth.md), and
+    # this address is hardcoded and shared. So the value comes from the
+    # caller, and its absence is a loud failure naming the variable rather
+    # than a rotation nobody asked for. A brand-new account has no session to
+    # break, so it still gets a fresh random one.
+    env_password = os.environ.get("RAG_VERIFY_PASSWORD", "").strip()
     metadata = {"selected_tenant_id": tenant_id}
     if existing is None:
+        password = env_password or random_password()
         status, body = request(
             gotrue, headers, "POST", "/admin/users",
             body={"email": USER_EMAIL, "password": password,
@@ -132,14 +146,34 @@ def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
         if status not in (200, 201):
             fail(f"user create: {status} {body}")
         user_id = body["id"]
+        if not env_password:
+            # Print it, once, on the only run that can know it. Without this
+            # the account exists with a password nobody holds, and every later
+            # run fails on the branch below demanding a value no operator could
+            # ever obtain, which would leave DEMO.md's RAG proof permanently
+            # dead on any environment this has already run against.
+            print(
+                f"created {USER_EMAIL} with a fresh password. Save it: every later "
+                f"run needs it, and no run will rotate it.\n"
+                f"  export RAG_VERIFY_PASSWORD={password}",
+                file=sys.stderr,
+            )
     else:
+        if not env_password:
+            fail(
+                f"{USER_EMAIL} already exists and this script will not rotate its "
+                "password: doing so revokes every session any concurrent run holds "
+                "on it (docs/live-test-auth.md). Set RAG_VERIFY_PASSWORD to the "
+                "account's existing password to sign in with it."
+            )
+        password = env_password
         user_id = existing["id"]
         status, body = request(
             gotrue, headers, "PUT", f"/admin/users/{user_id}",
-            body={"password": password, "user_metadata": metadata},
+            body={"user_metadata": metadata},
         )
         if status != 200:
-            fail(f"user password rotate: {status} {body}")
+            fail(f"user metadata update: {status} {body}")
 
     status, body = request(
         rest, headers, "POST", "/tenant_users",

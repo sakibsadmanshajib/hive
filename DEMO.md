@@ -79,7 +79,10 @@ service still reports healthy). Prove the whole path instead:
 
 ```bash
 export EDGE_API_URL=http://localhost:8080   # or the deployed edge origin
-python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env
+python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env,
+                                            # plus RAG_VERIFY_PASSWORD once its
+                                            # member account exists (it will not
+                                            # rotate that account's password)
 ```
 
 It uploads a document with a unique marker, waits for embedding, then requires

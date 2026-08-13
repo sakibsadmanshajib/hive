@@ -207,14 +207,27 @@ npx playwright show-report
 ```
 
 E2E credentials: the fixture script `tests/e2e/support/e2e-auth-fixtures.mjs`
-resets dedicated `e2e-*@hive-ci.test` accounts in staging Supabase before each
-test. Values default to shared constants in
-`tests/e2e/support/e2e-auth-creds.ts`; env overrides
-(`E2E_VERIFIED_EMAIL`, `E2E_VERIFIED_PASSWORD`, `E2E_UNVERIFIED_EMAIL`,
-`E2E_UNVERIFIED_PASSWORD`, `E2E_INVITATION_TOKEN`) are honored when they meet
-minimum length checks (passwords ≥ 6, token ≥ 16); otherwise safe fallbacks are
-used. Supabase admin env is still required: `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`.
+seeds dedicated fixture accounts in Supabase before each test. Three values are
+required and have no default, because a default here is a credential committed
+to a public repository that the seeder then writes onto a live account:
+
+```bash
+export E2E_RUN_KEY="$(whoami)-$(date +%s)"   # any value unique to this run
+export E2E_VERIFIED_PASSWORD=...             # at least 6 characters
+export E2E_UNVERIFIED_PASSWORD=...           # at least 6 characters
+export E2E_INVITATION_TOKEN=...              # at least 16 characters
+```
+
+A missing one fails the run and names itself. `E2E_RUN_KEY` is required as
+well, and for a stronger reason than the rest: seeding writes a password to
+whatever address it is given, so every fixture address is namespaced with the
+run key. Without one, a local run would overwrite the password of a shared
+live account and revoke the sessions of every other run. The two addresses
+(`E2E_VERIFIED_EMAIL`, `E2E_UNVERIFIED_EMAIL`) do have defaults, in
+`tests/e2e/support/e2e-auth-defaults.json`, but they are bases to derive this
+run's address from, never targets.
+Supabase admin env is required too: `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`. See `docs/live-test-auth.md`.
 
 ## Conventions
 

@@ -12,7 +12,7 @@ The main agent never edits code or docs, commits, pushes, resolves review thread
 4. Code, commits, PR bodies, issues, review comments: normal professional prose. No dash punctuation in prose.
 
 ## Context hygiene
-context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, ctx_fetch_and_index); Bash only for git, mkdir, rm, mv, navigation, short output. Superpowers skills for structure (brainstorming, writing-plans, systematic-debugging, verification-before-completion). claude-mem is the cross-session store: search before familiar-smelling work, record observations after solving anything notable. Keep the task ledger current; after a process restart rebuild it from GitHub ground truth, never from memory.
+context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, ctx_fetch_and_index); Bash only for git, mkdir, rm, mv, navigation, short output. Carve-out for pipeline commands: `gh pr create`, `gh pr comment`, `coderabbit review`, `gh run watch` (steps 5-10 above). Superpowers skills for structure (brainstorming, writing-plans, systematic-debugging, verification-before-completion). claude-mem is the cross-session store: search before familiar-smelling work, record observations after solving anything notable. Keep the task ledger current; after a process restart rebuild it from GitHub ground truth, never from memory.
 
 ## Agent fleet rules
 1. Library-first subagent selection with explicit subagent_type. planner, architect, and Explore are read only, never give them write tasks.
@@ -23,6 +23,38 @@ context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, c
 6. haiku only for watch loops and single-shot queries, sonnet default, opus for design docs, security review, and quality-critical generation.
 7. After any worktree agent completes, verify the shared checkout is still on main.
 8. Visual proof before merge (non-negotiable, owner directive 2026-07-21): no feature or fix touching a live UI/UX surface merges, and no completion claim reaches the owner, without a fresh screenshot or screen recording taken against the actually-running stack after the change, showing the claimed behavior. The proof artifact itself must be posted in the PR (attached to the PR body or a PR comment), not just described in a subagent's text report or held in a scratch dir. A text description alone is not proof. Bypass only on explicit owner instruction for that specific change. Applies to the main agent's own claims to the owner as much as to builder self-reports. Any flow whose URL carries a credential in the query string (invitation accept, password reset, magic link, OAuth callback) must have that value redacted in both the captured text log and the screenshot's URL overlay before commit, never the raw value (PR #578 leaked four real invite tokens this way; `npm run lint:proof-tokens` catches the text half in CI but cannot inspect screenshot pixels, so masking the image is on the capturing agent).
+
+## Coding pipeline (every dispatched implementation task)
+
+Every task the orchestrator hands to a builder subagent runs this sequence. The subagent executes each stage itself; the orchestrator only dispatches, verifies, and merges, per Orchestrator only (strict) above.
+
+1. Context: read .wolf/decisions.md, .wolf/cerebrum.md, and .wolf/anatomy.md, plus the touched code, before proposing anything.
+2. Plan: superpowers:writing-plans (superpowers:brainstorming first if the design is still open), final plan saved to the Obsidian vault per the obsidian-working-docs rule.
+3. Spec: spec-driven-development skill for requirements and acceptance criteria before code, folded into the same vault doc.
+4. Implement: TDD (superpowers:test-driven-development / tdd-guide), in the task's own worktree, per Agent fleet rules above.
+5. Open the PR now, before review starts (gh pr create; a draft PR is fine). Review comments land on this PR, not a private report.
+6. Adversarial review: adversarial-pr-review skill, pipeline mode, dynamic selector (always CodeRabbit CLI, `ecc:code-review`, and a plain adversarial pass; domain specialists added by diff shape; `/codex:adversarial-review` added for diffs that trigger the mandatory security review). Full stream definitions live in the skill itself, not duplicated here. Every stream posts inline PR comments.
+6a. (Builder, not orchestrator): Address every posted comment, either with a fix or a reasoned rebuttal, resolve the thread, and rerun any tests the fix touches. Push fixes to the same branch; the PR auto-updates.
+8. (Orchestrator, not builder): Verify: superpowers:verification-before-completion applied by orchestrator only. Confirm CI is green and zero threads are unresolved before merge, per Thread clearing and Merge policy above.
+9. (Orchestrator, not builder): Merge: orchestrator only. Squash and delete the branch, per Thread clearing and Merge policy above. Also remove the worktree this task ran in (`git worktree remove <path>`) once the branch is confirmed merged; do not leave it for a later cleanup pass.
+10. (Orchestrator, not builder): Deploy: automatic, since pushing to main triggers deploy-demo-box.yml and deploy-web-console-workers.yml. Orchestrator confirms the triggered run actually succeeds (`gh run watch`) before reporting the task done. UI-touching changes still need the visual-proof screenshot required above, captured against the deployed result once step 10 lands.
+11. Periodically (not per task): run `/harness-audit` and record the score in `.wolf/decisions.md`. This is the standing answer to "are our plugins actually wired in and enforced," not a per-task gate.
+
+Skip a stage only when it plainly does not apply (a one-line typo fix has no meaningful spec), and say so in the report. Never skip stage 6 or stage 8 for anything touching auth, money, or input-parsing paths.
+
+Gate compliance (fulfilling a fact-forcing or skill-prerequisite gate instead of routing around it) is a cross-project rule, defined once in the global `~/.claude/CLAUDE.md`'s Gate Compliance section. Applies here without restatement.
+
+## Autonomous execution and fallbacks
+
+Every pipeline stage that touches GitHub (opening a PR, posting review comments, resolving threads, merging) is fully automatic. No stage pauses to ask the owner or the orchestrator for permission to do any of this; the owner authorized this standing, for hive specifically, on 2026-08-12. The one gate that stays, deliberately: hive's branch protection on `main` (PR required, CI must be green, threads resolved), since a push to `main` auto-deploys the live demo box via `deploy-demo-box.yml` with no other check in front of it. That gate is a machine check, not a human approval (`required_pull_request_reviews` is null on this repo), so it never blocks autonomous operation, only a genuinely broken commit.
+
+Known failure modes and their automatic fallback, so a dispatch brief never needs to restate them:
+
+- `gh pr merge` errors or behaves unexpectedly (stale local branch state, an ambiguous current-branch error): fall back to `gh api -X PUT repos/{owner}/{repo}/pulls/{number}/merge -f merge_method=squash`, which also surfaces the real rejection reason when merge is genuinely blocked. Delete the remote branch after, if the merge call did not already.
+- A review stream fails to run (CodeRabbit CLI rate limited, unauthenticated, or returns an auth or organization error; any other stream's tool unavailable): skip that one stream, say so explicitly as SKIPPED in the posted review, and proceed with every other stream that did run. Never block the pipeline on one unavailable stream, and never treat its absence as a clean pass.
+- Required CI checks are still running: poll (`gh pr checks <n>` on a bounded retry loop, or the Monitor tool) until they resolve. Do not end the turn on a vague "waiting" status and hope to be resumed; actually wait and retry within the same dispatch where the harness allows it.
+- A dispatched agent goes idle without delivering its report content: this is a known harness quirk, not evidence the work did not happen. Every implementer and reviewer writes its full report to a named file rather than relying on the reply message alone; verify completion against that file and against real git or `gh` state (`git ls-remote`, `gh pr view`), not just whether a message was delivered.
+- A hook denies a tool call: per the Gate Compliance rule above, fulfill it and retry. That is itself the fallback, not an escalation.
 
 ## Repetitive work
 When a task pattern repeats three or more times, mint a repo-local skill via skill-creator. Use claude-md-management skills for CLAUDE.md upkeep. Hooks for anything that must fire automatically.

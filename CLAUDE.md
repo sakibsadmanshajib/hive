@@ -8,6 +8,8 @@ Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md`
 
 The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.
 
+This repo also carries project-level skills under `.claude/skills/` (`memory-tools`, `review-changes`, `refactor-safely`, `debug-issue`, `explore-codebase`), routed only here since the global skill router cannot enumerate every project's local skills. Check that directory for a match before reaching for a global equivalent.
+
 
 # Hive
 
@@ -147,8 +149,11 @@ cd deploy/docker && docker compose run --build web-console npm run test:unit
 cd deploy/docker && docker compose --env-file ../../.env --profile test up --build
 
 # E2E tests. Host-run against the working tree, so no image staleness here, but
-# it needs a stack already running.
-cd apps/web-console && npx playwright test
+# it needs a stack already running. E2E_RUN_KEY is mandatory and has no
+# default: seeding writes a password to whatever address it resolves, so the
+# key is what keeps this run off the shared fixture accounts. The three
+# credentials have no default either (README.md, docs/live-test-auth.md).
+cd apps/web-console && E2E_RUN_KEY="$(whoami)-$(date +%s)" npx playwright test
 ```
 
 ### Live sessions for tests

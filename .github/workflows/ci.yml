@@ -1031,7 +1031,9 @@ jobs:
       - name: Dump compose logs on failure
         if: failure()
         working-directory: deploy/docker
-        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose.log || true
+        # Piped through the redactor because this artifact is public: container
+        # logs carry OAuth callbacks, bearer headers and API keys verbatim.
+        run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose.log || true
 
       - name: Upload compose logs
         if: failure()
@@ -1039,6 +1041,7 @@ jobs:
         with:
           name: compose-logs
           path: /tmp/compose.log
+          retention-days: 5
           if-no-files-found: ignore
 
       - name: Tear down stack
@@ -1317,6 +1320,22 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
+      - name: Generate the fixture invitation token
+        # Random per job, and masked, because the seeder stores its sha256 as a
+        # live pending invitation. A value anybody can derive from the public
+        # run page is a published credential for as long as the run lasts.
+        #
+        # 24 bytes gives 48 hex characters. The floor it has to clear is
+        # minTokenLength in tests/e2e/support/e2e-auth-defaults.json, which
+        # requiredSecretEnv enforces at 16, so do not shorten this below that
+        # without moving both: the failure would otherwise surface far from
+        # here, naming a variable this step does not mention.
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
+
       - name: Run UI Playwright suite (unauth + credentialed)
         working-directory: apps/web-console
         env:
@@ -1344,16 +1363,26 @@ jobs:
           # reassign rows out from under this job's own reads mid-test.
           # github.run_attempt makes a manual re-run of a flake get a fresh
           # identity too, not the one the previous attempt already consumed.
-          # Passwords stay the shared default (from secrets, or the fixture
-          # defaults in e2e-auth-defaults.json when those secrets are
-          # unset): nothing looks a user up by password, so they never need
-          # to be unique per run.
+          # The passwords come from secrets and have no fallback. They used to
+          # fall back to plaintext values committed in
+          # e2e-auth-defaults.json, in a public repository, for live accounts
+          # holding a tenant OWNER role; the seeder then wrote those values
+          # back onto the accounts. The fallback is gone and an unset secret
+          # now fails this job by name. They need not be unique per run:
+          # nothing looks a user up by password, and the addresses above are
+          # already run-scoped.
           E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
-          E2E_INVITATION_TOKEN: e2e-invitation-token-2026-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+          # Generated in the step above, not derived here. It used to be a
+          # committed literal concatenated with the run id and attempt, both
+          # of which are public on the run page, and e2e-fixture-seed.mjs
+          # stores its sha256 as the pending invitation's token_hash. Anyone
+          # reading the run URL could compute the live token and accept the
+          # invitation into this run's account while it was still open.
+          E2E_INVITATION_TOKEN: ${{ env.E2E_INVITATION_TOKEN }}
           # Workspace-owner fixture for console-workspace-admin.spec.ts.
           # Unset leaves that spec skipped, which is why the required
           # coverage for a mispointed control-plane is the unit-level
@@ -1389,7 +1418,8 @@ jobs:
       - name: Dump compose logs on failure
         if: failure()
         working-directory: deploy/docker
-        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose-web-e2e-api.log || true
+        # Piped through the redactor: see the sdk-tests dump step above.
+        run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
       - name: Upload compose logs
         if: failure()
@@ -1398,14 +1428,32 @@ jobs:
           name: compose-logs-web-e2e-api
           path: /tmp/compose-web-e2e-api.log
           if-no-files-found: ignore
+          retention-days: 5
 
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-api
-          path: apps/web-console/playwright-report/
+          # Traces (.zip), videos (.webm) and index.html are excluded. This
+          # repository is public, so any artifact here is downloadable by
+          # anyone with the run URL, and playwright.config.ts retains a trace
+          # on failure: it holds every request header (Authorization: Bearer)
+          # and every sb-*-auth-token cookie for the fixture session.
+          # index.html goes too, and for the same reason rather than a
+          # different one: the HTML reporter base64-inlines the whole report
+          # payload into that file, including stdout, stderr and error text,
+          # and a waitForURL timeout enumerates the URLs it navigated,
+          # fragment included. Both are binary-wrapped, so no text linter can
+          # inspect either. Screenshots survive, and the failing test names
+          # and error text are already in this job's own log.
+          path: |
+            apps/web-console/playwright-report/
+            !apps/web-console/playwright-report/**/*.zip
+            !apps/web-console/playwright-report/**/*.webm
+            !apps/web-console/playwright-report/index.html
           if-no-files-found: ignore
+          retention-days: 5
 
       - name: Tear down stack
         if: always()

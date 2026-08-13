@@ -36,6 +36,14 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",
     video: "retain-on-failure",
+    // The CI artifact excludes traces (*.zip), videos (*.webm) and index.html,
+    // because each of those carries request headers, cookies or URLs with a
+    // credential in the query string or the fragment, wrapped so that no text
+    // linter can inspect them. Without this line the exclusions would leave
+    // that artifact empty, since screenshot defaults to "off" and the report
+    // directory holds nothing else. A screenshot is the viewport only: no URL
+    // bar, no headers, no cookies, and it is inspectable by eye.
+    screenshot: "only-on-failure",
   },
   projects: [
     {
