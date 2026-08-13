@@ -48,16 +48,15 @@ control that plainly did not work. The predicate now refuses that:
 - A change to the render whose only new content is an error surface is
   `error-surface`, never proof.
 
-### Expected versus unexpected 4xx
+### Expected versus unexpected 4xx, as this run was scored
 
-The exception is a property of the activation, not of the status. When the
-gate fills a form with its own probe values and submits it, a 400, 409 or 422
-back is the endpoint validating input, which is the control working. Nothing
-else earns it: 401 and 403 mean the session is wrong, 404, 405, 410 and 501
-mean nothing is mounted there, 429 means the gate hit a limiter, 5xx means the
-server fell over, and a 400 on an activation the gate did not feed is the
-application sending a request its own server will not accept, which is a
-defect. In code this is `ProofContext.harnessSuppliedInput`.
+At the time of this run, a 400, 409 or 422 was excused when the gate had typed
+the values the request carried, through `ProofContext.harnessSuppliedInput`.
+That exception no longer exists, and neither does the field: the gate now
+aborts, inside the browser, every state changing request whose values it
+supplied, so no such request reaches a server to be refused. Any 4xx that does
+come back is the application's own, and `verdictFromObservation` classifies it
+as `failed-request`. Kept here because it is what produced the numbers below.
 
 ### What the change actually reclassified: nothing
 
@@ -87,10 +86,15 @@ silent exclusion.
 
 ## The denominator can no longer shrink quietly
 
-`route-floors.json` records the control count of every route this run visited.
-A later run that enumerates fewer controls on a route than its floor fails the
-gate, and so does a visited route with no floor at all. Lowering a floor is a
-line in a diff with a reason beside it. A floor rather than a comparison
+At the time of this run, `route-floors.json` recorded the control count of
+every route visited. That metric is gone: a count taken against this tenant's
+data is not comparable to a CI account with an empty workspace, so it could
+only be red forever there or lowered until it detected nothing. The file now
+names the control identities each route must render and leave enabled, which
+the shell and the pages produce regardless of data. What has not changed is the
+rule this section was written for, and it is stronger now: a floor moves only
+through a deliberate commit, and there is no longer any command that lets a run
+rewrite its own bar. A floor rather than a comparison
 against the previous run because a CI job starts from a clean checkout with no
 artifact from the last one, so previous-run state can always be missing and
 would degrade to no check at all.
@@ -106,9 +110,11 @@ control:
 - The Recharts chart surface on `/console/analytics`, a permanent registry
   entry with no issue.
 
-`/console/api-keys/[id]/limits` is no longer excluded. #766 closed, the skip
-expired, and the gate now reports that it cannot reach the route instead of
-pretending the route is not there.
+`/console/api-keys/[id]/limits` was unexcluded for this run: #766 closed, the
+skip expired, and the gate reported that it cannot reach the route rather than
+pretending the route is not there. It is excluded again as of 2026-08-11, now
+citing #885, because reaching it needs an API key to exist and the gate refuses
+to create one. That exclusion expires the same way this one did.
 
 ## The break proof still holds
 
@@ -119,11 +125,11 @@ controls at the event layer and leaves the markup and every sibling untouched.
 
 | control | clean | handlers blocked |
 | --- | --- | --- |
-| `button|24h` | proven, network | **unproven** |
-| `button|7d` | proven, network | **unproven** |
-| `button|30d` | proven, network | **unproven** |
-| `button|90d` | proven, network | **unproven** |
-| `button|Custom` | proven, dom | proven, dom |
+| `button\|24h` | proven, network | **unproven** |
+| `button\|7d` | proven, network | **unproven** |
+| `button\|30d` | proven, network | **unproven** |
+| `button\|90d` | proven, network | **unproven** |
+| `button\|Custom` | proven, dom | proven, dom |
 
 Ledgers for both runs are `break-proof-clean.json` and
 `break-proof-sabotaged.json` in this directory.

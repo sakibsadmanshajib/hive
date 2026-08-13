@@ -27,7 +27,7 @@ that class of defect impossible to ship quietly.
    | text field | the edit produces an observable consequence (including enabling the Save button beside it), **or** the field is named and inside a form |
    | select | changing the value fires a request, navigates, changes the render, or the select is named and inside a form |
    | internal link | navigation happens and the destination does not answer 4xx or 5xx |
-   | external link | the destination is reachable; checked once per destination, not once per link |
+   | external link | the href is an absolute http(s) URL, so clicking it navigates. Destination reachability is checked once per destination and **reported**, never fatal: a third party's uptime does not belong in a merge gate |
    | destructive control, or a submit whose form the gate filled | the application issues its state changing request and the gate **stops it in the browser** |
    | button, tab, menu item, anything else | a request, a navigation, a download, a popup, a native dialog, or a change to the rendered output |
    | disabled control | nothing. A disabled control is reported in its own bucket and is never proof |
@@ -102,7 +102,13 @@ exercises whatever was last built and reports a green result for stale code.
 `interaction-coverage/coverage.json` carries per-route and overall counts,
 every control with its proof type and detail, and the unproven set. The same
 document is attached to the Playwright report, so the number is trackable
-between runs. The headline format is `proven / enumerated`.
+between runs, along with the disabled set, the external destinations and their
+reachability, and any declaration no control in this run matched.
+
+The headline figure is proven over enumerated **distinct control identities**,
+which is what `COVERAGE` prints. Raw instance counts are printed underneath and
+labelled not comparable between runs, because they move with how many rows an
+account happens to hold rather than with what the product offers.
 
 ## The registry
 

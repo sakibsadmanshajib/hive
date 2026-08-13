@@ -789,6 +789,14 @@ jobs:
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
+    # `issues: read` on top of the workflow default, for the exclusion expiry
+    # check in tests/interaction/gate-integrity.test.ts. It asks the tracker
+    # whether the issue an exclusion cites is still open, and the default token
+    # answers 403 without this, which the check reports as a failure rather
+    # than swallowing: an unanswered question about an exclusion is not a pass.
+    permissions:
+      contents: read
+      issues: read
     timeout-minutes: 15
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
     # docs-only decision is applied per step. See the note above `changes`.
@@ -2433,6 +2441,18 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs-interaction.log; exit 1
 
+      - name: Generate the fixture invitation token
+        # Same reasoning as the Web E2E job: the seeder stores this value's
+        # sha256 as a live pending invitation, and the run id and attempt are on
+        # the public run page, so deriving it from those published a working
+        # invitation for as long as the run lasted. Random, and masked so it
+        # cannot reach a log.
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
+
       - name: Seed the fixture identity the gate signs in as
         working-directory: apps/web-console
         env:
@@ -2442,7 +2462,7 @@ jobs:
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: interaction-gate-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
-          E2E_INVITATION_TOKEN: interaction-gate-invitation-${{ github.run_id }}-${{ github.run_attempt }}
+          E2E_INVITATION_TOKEN: ${{ env.E2E_INVITATION_TOKEN }}
         run: node tests/e2e/support/e2e-auth-fixtures.mjs
 
       # SUPABASE_SERVICE_ROLE_KEY is what mints the session: the setup project
@@ -2461,6 +2481,11 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run test:interaction
 
+      # The Playwright HTML report serializes input values into ARIA
+      # snapshots, and this gate types into password fields (issue #554), so
+      # the report is never uploaded. The JSON coverage document is, and every
+      # URL it records has had its fragment dropped and its credential-shaped
+      # query parameters replaced before it was written.
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -2469,13 +2494,14 @@ jobs:
           path: apps/web-console/interaction-coverage/
           if-no-files-found: warn
 
-      # The Playwright HTML report serializes input values into ARIA
-      # snapshots, and this gate types into password fields (issue #554).
-      # Only the JSON coverage document is uploaded.
+      # Redacted, like the other two dump steps in this workflow. Container
+      # logs carry OAuth callbacks, bearer headers and API keys verbatim, and
+      # an artifact from a public repository is downloadable by anyone holding
+      # the run URL.
       - name: Dump compose logs on failure
         if: failure()
         working-directory: deploy/docker
-        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose-interaction.log || true
+        run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-interaction.log || true
 
       - name: Upload compose logs
         if: failure()
