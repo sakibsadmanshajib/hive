@@ -150,6 +150,12 @@ var ErrLastOwner = errors.New("accounts: workspace must keep at least one owner"
 // workspace provisioning did not produce one.
 var ErrNoActiveWorkspace = errors.New("accounts: no active workspace available")
 
+// ErrEmailNotVerified is returned when a viewer whose email address is not
+// verified tries to accept an invitation. Accepting is what grants the role, so
+// it carries at least the verification requirement that issuing an invitation
+// already carries.
+var ErrEmailNotVerified = errors.New("accounts: email address must be verified before accepting an invitation")
+
 // ErrMembershipActivation is returned when accepting an invitation fails to
 // activate the invitee's pending membership row. It is deliberately distinct
 // from ErrNotFound, which the HTTP layer reports as an invalid invitation link:

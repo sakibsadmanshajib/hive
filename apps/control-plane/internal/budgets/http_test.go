@@ -209,6 +209,12 @@ func TestHandler_BudgetAuthzMatrix(t *testing.T) {
 		{"owner verified view budget", "owner", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK},
 		// member cannot view budget (not granted billing.view)
 		{"member verified view budget", "member", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusForbidden},
+		// billing.write — RequiresVerified=true — the legacy budget mutations
+		// were gated on billing.view, so an owner who had never proven control
+		// of their mailbox could raise their own hard spend cap.
+		{"owner unverified set budget", "owner", false, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden},
+		{"owner unverified dismiss alert", "owner", false, http.MethodPost, "/api/v1/accounts/current/budget/dismiss", http.StatusForbidden},
+		{"member verified set budget", "member", true, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden},
 	}
 
 	for _, tc := range cases {

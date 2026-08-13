@@ -154,6 +154,55 @@ func membershipRow(t *testing.T, repo *stubRepo, accountID, userID uuid.UUID) ac
 	return accounts.Membership{}
 }
 
+// Accepting is what grants the role, so it carries at least the verification
+// the sending side already carries: members.invite is registered
+// RequiresVerified, so an unverified owner cannot issue an invitation, while
+// this path used to hand the invitation's role to anyone who merely claimed the
+// invited address. Since migration 20260727_02 that role can be owner, and an
+// owner seat on an is_platform_admin account is platform-admin authority, which
+// is the same authority the predicate in this pull request guards.
+func TestAcceptInvitation_RequiresAVerifiedEmail(t *testing.T) {
+	repo := newStubRepo()
+	svc := accounts.NewService(repo)
+	ctx := context.Background()
+
+	inviterID, accountID := uuid.New(), uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID: accountID, Slug: "verify-gate", DisplayName: "Verify Gate",
+		AccountType: "business", OwnerUserID: inviterID,
+	}
+	repo.memberships = append(repo.memberships, accounts.Membership{
+		ID: uuid.New(), AccountID: accountID, UserID: inviterID,
+		Role: accounts.RoleOwner, Status: accounts.StatusActive,
+	})
+
+	inviter := auth.Viewer{UserID: inviterID, Email: "owner@example.com", EmailVerified: true}
+	result, err := svc.CreateInvitation(ctx, accountID, inviter, "invitee@example.com", accounts.RoleOwner)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+
+	unverified := auth.Viewer{UserID: uuid.New(), Email: "invitee@example.com", EmailVerified: false}
+	if _, err := svc.AcceptInvitation(ctx, unverified, result.Token); !errors.Is(err, accounts.ErrEmailNotVerified) {
+		t.Fatalf("AcceptInvitation for an unverified viewer = %v, want ErrEmailNotVerified", err)
+	}
+	for _, m := range repo.memberships {
+		if m.UserID == unverified.UserID {
+			t.Fatal("no membership row may be written for an unverified acceptance")
+		}
+	}
+	if repo.acceptCalled {
+		t.Fatal("the invitation must stay redeemable until a verified viewer accepts it")
+	}
+
+	// The same person, verified, joins normally.
+	verified := unverified
+	verified.EmailVerified = true
+	if _, err := svc.AcceptInvitation(ctx, verified, result.Token); err != nil {
+		t.Fatalf("AcceptInvitation for a verified viewer: %v", err)
+	}
+}
+
 // failingActivationRepo makes the activation write fail the way a lost race
 // does, so the error the invitee is shown can be asserted.
 type failingActivationRepo struct {

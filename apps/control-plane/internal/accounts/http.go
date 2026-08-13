@@ -347,6 +347,11 @@ func writeAcceptInvitationError(w http.ResponseWriter, r *http.Request, err erro
 			"error": "this invitation was sent to a different email address",
 			"code":  "invitation_email_mismatch",
 		})
+	case errors.Is(err, ErrEmailNotVerified):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "verify your email address before accepting this invitation",
+			"code":  "email_verification_required",
+		})
 	// Above the ErrNotFound case on purpose. The invitation was valid and the
 	// membership write behind it failed, so telling the invitee their link is
 	// not valid would send them chasing a problem they cannot fix.

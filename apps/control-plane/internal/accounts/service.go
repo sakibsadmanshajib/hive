@@ -287,6 +287,20 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 // The viewer email must match the invitation email (case-insensitive).
 // Returns the joined account ID. Does not alter the current-account selection.
 func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawToken string) (uuid.UUID, error) {
+	// The receiving side of an invitation grants the role, so it needs at least
+	// the verification the sending side already requires: PermMembersInvite is
+	// registered RequiresVerified, so an unverified owner cannot issue an
+	// invitation, while this path granted one to anybody who merely claimed the
+	// invited address. Since 20260727_02 widened account_invitations.role to
+	// include owner, what that granted could be an owner seat, and an owner seat
+	// on an is_platform_admin account is platform-admin authority.
+	//
+	// Checked before the token is even looked up, so an unverified caller learns
+	// nothing about whether a token exists.
+	if !viewer.EmailVerified {
+		return uuid.Nil, ErrEmailNotVerified
+	}
+
 	tokenHash := HashToken(rawToken)
 
 	inv, err := s.repo.FindInvitationByTokenHash(ctx, tokenHash)
@@ -364,6 +378,14 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 			Status:    StatusActive,
 		}
 		if err := s.repo.CreateMembership(ctx, membership); err != nil {
+			// Two first-time acceptances of the same token both reach this
+			// insert, and UNIQUE (account_id, user_id) rejects the second one.
+			// The loser is a member as of that instant, so it gets the same
+			// truthful answer as any other already-a-member caller rather than
+			// an opaque 500.
+			if errors.Is(err, ErrAlreadyMember) {
+				return uuid.Nil, ErrAlreadyMember
+			}
 			return uuid.Nil, fmt.Errorf("accounts: create member membership: %w", err)
 		}
 	}

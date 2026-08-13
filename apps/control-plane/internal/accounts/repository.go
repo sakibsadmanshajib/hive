@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -120,11 +122,22 @@ func (r *pgxRepository) CreateAccount(ctx context.Context, acct Account) error {
 	return err
 }
 
+// CreateMembership inserts one membership row.
+//
+// UNIQUE (account_id, user_id) is what arbitrates two concurrent first-time
+// acceptances of the same invitation: one row is written and the other insert
+// is rejected. The loser is not a server fault, it is a caller who is a member
+// as of that instant, so the unique violation is translated into ErrAlreadyMember
+// rather than escaping as raw pgx text and being answered as an opaque 500.
 func (r *pgxRepository) CreateMembership(ctx context.Context, m Membership) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO public.account_memberships (id, account_id, user_id, role, status)
 		VALUES ($1, $2, $3, $4, $5)
 	`, m.ID, m.AccountID, m.UserID, m.Role, m.Status)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+		return ErrAlreadyMember
+	}
 	return err
 }
 
@@ -211,10 +224,12 @@ func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.
 // Zero rows affected therefore means there is no membership row at all, which
 // surfaces as ErrNotFound.
 //
-// The ceiling: status is 'active' or 'invited' and nothing else, which is what
-// makes an unconditional SET status = 'active' safe here. If a third status is
-// ever added (a suspension, a soft removal), this statement has to exclude it
-// explicitly or acceptance will quietly reinstate it.
+// The WHERE names the two statuses it is willing to write over rather than
+// trusting the CHECK constraint to keep the set at two. A comment is not a
+// guard, and the defect this repository is fixing was itself a query that was
+// correct only while an assumption about the data held. A later suspension or
+// soft-removal status now falls through as ErrNotFound instead of being
+// silently reinstated by an accepted invitation.
 func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.account_memberships
@@ -222,6 +237,7 @@ func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userI
 		    status = 'active'
 		WHERE account_id = $1
 		  AND user_id = $2
+		  AND status IN ('active', 'invited')
 	`, accountID, userID, role)
 	if err != nil {
 		return err

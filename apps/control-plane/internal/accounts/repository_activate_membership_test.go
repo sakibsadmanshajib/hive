@@ -11,6 +11,45 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 )
 
+// UNIQUE (account_id, user_id) is what arbitrates two concurrent first-time
+// acceptances, so the second insert has to come back as a truthful
+// already-a-member rather than as raw pgx text the handler answers with a 500.
+func TestCreateMembership_DuplicateSeatIsAlreadyMember(t *testing.T) {
+	pool := newMembershipOrderTestPool(t)
+	repo := accounts.NewPgxRepository(pool)
+	ctx := context.Background()
+
+	var userID, accountID uuid.UUID
+	marker := "dup-seat-" + uuid.NewString()
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO auth.users(id, email, raw_user_meta_data)
+		 VALUES (gen_random_uuid(), $1, '{}'::jsonb) RETURNING id`,
+		marker+"@example.test").Scan(&userID); err != nil {
+		t.Fatalf("insert auth user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM auth.users WHERE id = $1`, userID) })
+
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO public.accounts(id, slug, display_name, account_type, owner_user_id)
+		 VALUES (gen_random_uuid(), $1, $1, 'business', $2) RETURNING id`,
+		marker, userID).Scan(&accountID); err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM public.accounts WHERE id = $1`, accountID) })
+
+	seat := accounts.Membership{
+		ID: uuid.New(), AccountID: accountID, UserID: userID,
+		Role: accounts.RoleMember, Status: accounts.StatusActive,
+	}
+	if err := repo.CreateMembership(ctx, seat); err != nil {
+		t.Fatalf("first CreateMembership: %v", err)
+	}
+	seat.ID = uuid.New()
+	if err := repo.CreateMembership(ctx, seat); !errors.Is(err, accounts.ErrAlreadyMember) {
+		t.Fatalf("second CreateMembership = %v, want ErrAlreadyMember", err)
+	}
+}
+
 // AcceptInvitation must consume an invitation exactly once. Without the
 // accepted_at IS NULL predicate a double-clicked link updates the row twice,
 // and the service cannot tell the winner of that race from the loser.
