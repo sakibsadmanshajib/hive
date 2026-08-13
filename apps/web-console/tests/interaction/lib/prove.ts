@@ -185,11 +185,20 @@ function normalizeUrl(url: string): string {
   return redactUrl(url);
 }
 
-async function safeSignature(page: Page): Promise<string> {
+/**
+ * The page's signature, or null when it could not be read.
+ *
+ * Null rather than a unique placeholder. The placeholder was a timestamp, which
+ * never equals the baseline, so a read that failed because the page had
+ * navigated or the context had closed came out as `domChanged: true` and
+ * `verdictFromObservation` proved the control on it. An unreadable page is the
+ * absence of evidence, and the callers below treat it as such.
+ */
+async function safeSignature(page: Page): Promise<string | null> {
   try {
     return await page.evaluate(signatureInPage);
   } catch {
-    return `unavailable:${Date.now()}`;
+    return null;
   }
 }
 
@@ -217,7 +226,7 @@ export async function observe(
   const signatureA = await safeSignature(page);
   await page.waitForTimeout(250);
   const signatureB = await safeSignature(page);
-  const domStableBaseline = signatureA === signatureB;
+  const domStableBaseline = signatureA !== null && signatureA === signatureB;
   const errorsBefore = new Set(
     await page.evaluate(errorSurfacesInPage).catch((): string[] => []),
   );
@@ -287,25 +296,30 @@ export async function observe(
   let actError = "";
   try {
     await act();
+    // Only pay for a settle wait when the activation actually moved something.
+    // The common failure this gate exists to catch is a control that fires
+    // nothing at all, and charging four seconds of idle polling for each of
+    // those turns a twenty minute run into a three hour one.
+    await page.waitForTimeout(250);
+    if (requests.length > 0 || page.url() !== urlBefore) {
+      await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => undefined);
+      await page.waitForTimeout(250);
+    }
   } catch (error) {
     actError = String(error).split("\n")[0].slice(0, 200);
+  } finally {
+    // In a finally, because the settle waits above throw whenever the page or
+    // the context has closed, and this loop runs over hundreds of controls in
+    // one process. Leaked listeners accumulate, and the leaked dialog and
+    // download handlers go on dismissing dialogs and cancelling downloads for
+    // later controls, destroying the evidence those observations need.
+    page.off("request", onRequest);
+    page.off("response", onResponse);
+    page.off("popup", onPopup);
+    page.off("download", onDownload);
+    page.off("dialog", onDialog);
+    page.off("console", onConsole);
   }
-  // Only pay for a settle wait when the activation actually moved something.
-  // The common failure this gate exists to catch is a control that fires
-  // nothing at all, and charging four seconds of idle polling for each of
-  // those turns a twenty minute run into a three hour one.
-  await page.waitForTimeout(250);
-  if (requests.length > 0 || page.url() !== urlBefore) {
-    await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => undefined);
-    await page.waitForTimeout(250);
-  }
-
-  page.off("request", onRequest);
-  page.off("response", onResponse);
-  page.off("popup", onPopup);
-  page.off("download", onDownload);
-  page.off("dialog", onDialog);
-  page.off("console", onConsole);
 
   const signatureAfter = await safeSignature(page);
   const urlAfter = page.url();
@@ -316,7 +330,7 @@ export async function observe(
     urlAfter,
     urlChanged: normalizeUrl(urlBefore) !== normalizeUrl(urlAfter),
     requests,
-    domChanged: domStableBaseline && signatureAfter !== signatureB,
+    domChanged: domStableBaseline && signatureAfter !== null && signatureAfter !== signatureB,
     domStableBaseline,
     popup,
     download,
@@ -793,48 +807,74 @@ export async function proveSelect(
 }
 
 /**
- * External links are browser primitives: the click always navigates, so the
- * only thing worth proving is that the destination is alive.
+ * External links, and why their destination is not part of the verdict.
  *
- * Cached per destination. A shell link repeated on seventeen routes is one
- * destination, and asking a third party seventeen times is both slow and a
- * good way to be rate limited into a false verdict.
+ * Clicking an anchor whose href is an absolute http(s) URL always navigates:
+ * that is a browser primitive, not application behaviour, so the control's own
+ * effect is proven by the href being well formed. Whether the far end answers
+ * is a fact about somebody else's server, and hanging a merge gate on a third
+ * party's uptime buys a flaky red instead of a finding. The destinations are
+ * checked anyway and reported in their own section of the ledger, which is
+ * where the dead `https://hivegpt.io` documentation link surfaced (issue #883).
+ *
+ * Checked once per destination. A shell link repeated on seventeen routes is
+ * one destination, and asking a third party seventeen times is slow and a good
+ * way to be rate limited into a meaningless answer.
  */
-const externalDestinations = new Map<string, ProofOutcome>();
+export interface ExternalDestination {
+  href: string;
+  reachable: boolean;
+  detail: string;
+}
+
+const externalDestinations = new Map<string, ExternalDestination>();
+
+/** Every external destination checked so far, for the report. */
+export function externalDestinationReport(): ExternalDestination[] {
+  return [...externalDestinations.values()].sort((a, b) => a.href.localeCompare(b.href));
+}
 
 export async function proveExternalLink(
   page: Page,
   href: string,
 ): Promise<ProofOutcome> {
-  const cached = externalDestinations.get(href);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const outcome = await checkExternalDestination(page, href);
-  externalDestinations.set(href, outcome);
-  return outcome;
-}
-
-async function checkExternalDestination(page: Page, href: string): Promise<ProofOutcome> {
-  try {
-    const response = await page.request.get(href, { timeout: 15000, maxRedirects: 5 });
-    if (response.status() >= 400) {
-      return {
-        proven: false,
-        proofType: "unproven",
-        detail: `external destination ${href} answered ${response.status()}`,
-      };
-    }
-    return {
-      proven: true,
-      proofType: "external-link",
-      detail: `${href} answered ${response.status()}`,
-    };
-  } catch (error) {
+  if (!/^https?:\/\//i.test(href)) {
     return {
       proven: false,
       proofType: "unproven",
-      detail: `external destination ${href} is unreachable: ${String(error).split("\n")[0].slice(0, 160)}`,
+      detail: `external link href "${href}" is not an absolute http(s) URL, so clicking it does nothing a browser understands`,
+    };
+  }
+  if (!externalDestinations.has(href)) {
+    externalDestinations.set(href, await checkExternalDestination(page, href));
+  }
+  const destination = externalDestinations.get(href);
+  return {
+    proven: true,
+    proofType: "external-link",
+    detail:
+      destination === undefined || destination.reachable
+        ? `navigates to ${redactUrl(href)}`
+        : `navigates to ${redactUrl(href)}, but ${destination.detail} (reported, not counted against the control)`,
+  };
+}
+
+async function checkExternalDestination(
+  page: Page,
+  href: string,
+): Promise<ExternalDestination> {
+  try {
+    const response = await page.request.get(href, { timeout: 15000, maxRedirects: 5 });
+    return {
+      href,
+      reachable: response.status() < 400,
+      detail: `answered ${String(response.status())}`,
+    };
+  } catch (error) {
+    return {
+      href,
+      reachable: false,
+      detail: `is unreachable: ${String(error).split("\n")[0].slice(0, 160)}`,
     };
   }
 }

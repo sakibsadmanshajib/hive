@@ -7,22 +7,6 @@
       "kind": "inert",
       "reason": "Recharts renders its chart surface focusable with role application, but the chart itself has no activation behaviour: every control that changes it is a sibling that this gate proves separately",
       "owner": "@sakibsadmanshajib"
-    },
-    {
-      "route": "*",
-      "control": "a|Documentation",
-      "kind": "known_broken",
-      "reason": "the shell links every console route to https://hivegpt.io, which accepts no connection, so the destination is dead rather than the control being wrong",
-      "owner": "@sakibsadmanshajib",
-      "issue": 883
-    },
-    {
-      "route": "/console",
-      "control": "a|Read the docs",
-      "kind": "known_broken",
-      "reason": "same dead destination as the shell Documentation link, rendered as a card on the overview page",
-      "owner": "@sakibsadmanshajib",
-      "issue": 883
     }
   ]
 }

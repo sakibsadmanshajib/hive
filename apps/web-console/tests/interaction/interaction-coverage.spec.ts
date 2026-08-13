@@ -9,7 +9,14 @@
 //   INTERACTION_BASE_URL=http://localhost:3000            (composed stack)
 //   INTERACTION_BASE_URL=https://console-hive.scubed.co   (deployed box)
 
-import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type Response,
+} from "@playwright/test";
 import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,6 +40,7 @@ import {
   DESTRUCTIVE_PATTERN,
   DISABLED_PROOF_TYPE,
   SESSION_ENDING_PATTERN,
+  externalDestinationReport,
   fillFormFor,
   mutationGuard,
   observe,
@@ -195,16 +203,33 @@ async function pinLocale(page: Page): Promise<void> {
   // that name whatever domain carries it, keep the rest (the session lives
   // there), then set ours.
   const context = page.context();
+  let cleared: Array<Awaited<ReturnType<BrowserContext["cookies"]>>[number]> = [];
   try {
     const cookies = await context.cookies();
     const survivors = cookies.filter((cookie) => cookie.name !== LOCALE_COOKIE);
     if (survivors.length !== cookies.length) {
       await context.clearCookies();
+      // Held for the finally below. Between the clear and the restore this
+      // context has no session at all, and swallowing a failure there would
+      // sign the run out and turn one pinning failure into a false unproven
+      // verdict for every control after it.
+      cleared = survivors;
       await context.addCookies(survivors);
+      cleared = [];
     }
     await context.addCookies([{ name: LOCALE_COOKIE, value: "en", url: BASE_URL }]);
-  } catch {
-    // Never let locale pinning be the reason a run fails.
+  } catch (error) {
+    // Never let locale pinning be the reason a run fails, but never let it
+    // leave the context signed out either, and never let it fail silently.
+    progress(
+      `[locale] pinning failed: ${String(error).split("\n")[0].slice(0, 160)}`,
+    );
+  } finally {
+    if (cleared.length > 0) {
+      await context.addCookies(cleared).catch(() => {
+        progress("[locale] session cookies could NOT be restored after clearing");
+      });
+    }
   }
 }
 
@@ -235,6 +260,40 @@ function isDeferred(control: RawControl): boolean {
     return true;
   }
   return isSessionEnding(control);
+}
+
+/**
+ * Navigates, retrying a transient answer.
+ *
+ * A deployed origin can drop for a couple of minutes and come back on its own
+ * (issue #815), so a 502 or a 5xx is retried before anything is written down.
+ * Used by every pass over a route, because a pass that skipped this recorded
+ * one blip as a dead control, and in the deferred pass that verdict is then
+ * cached and replayed to every route the control appears on.
+ */
+async function gotoWithRetry(
+  page: Page,
+  url: string,
+  label: string,
+): Promise<Response | null> {
+  let response = await page
+    .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
+    .catch(() => null);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const transient =
+      response === null || response.status() === 502 || response.status() >= 503;
+    if (!transient) {
+      break;
+    }
+    progress(
+      `[retry] ${label} answered ${response === null ? "nothing" : String(response.status())}, retrying`,
+    );
+    await page.waitForTimeout(20000);
+    response = await page
+      .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
+      .catch(() => null);
+  }
+  return response;
 }
 
 /** Navigates to a route and, when needed, re-opens the reveal chain. */
@@ -603,26 +662,7 @@ test.describe("interaction coverage", () => {
 
       try {
         await pinLocale(page);
-        // A deployed origin can drop for a couple of minutes and come back on
-        // its own (issue #815). Retry once before recording anything, so a
-        // transient outage is never written down as a dead surface.
-        let response = await page
-          .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
-          .catch(() => null);
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          const transient =
-            response === null || response.status() === 502 || response.status() >= 503;
-          if (!transient) {
-            break;
-          }
-          progress(
-            `[retry] ${route.pattern} answered ${response === null ? "nothing" : String(response.status())}, retrying`,
-          );
-          await page.waitForTimeout(20000);
-          response = await page
-            .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
-            .catch(() => null);
-        }
+        const response = await gotoWithRetry(page, url, route.pattern);
         if (response === null) {
           throw new Error("origin never answered after three attempts");
         }
@@ -823,7 +863,13 @@ test.describe("interaction coverage", () => {
         // renders in whatever locale the account last chose and a key lookup
         // finds nothing. That reported a working sign out as unlocatable.
         await pinLocale(page);
-        await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+        // The same transient-outage retry and settle wait the main loop uses.
+        // Without them a 502 that clears in twenty seconds, or a shell that has
+        // not finished hydrating, records this control as unproven, and the
+        // verdict is then cached and replayed to every route that renders it:
+        // one blip fails the gate on seventeen routes.
+        await gotoWithRetry(page, item.url, `${item.route} (deferred)`);
+        await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => undefined);
         const locator = await locateByKey(page, item.key);
         if (locator !== null) {
           const observation = await observe(page, async () => {
@@ -934,6 +980,7 @@ test.describe("interaction coverage", () => {
       controls: controlRecords,
       problems,
       staleDeclarations,
+      externalDestinations: externalDestinationReport(),
     });
     const file = writeReport(REPORT_DIR, report);
     const summary = formatSummary(report);
@@ -956,8 +1003,16 @@ test.describe("interaction coverage", () => {
 
 /** Finds a concrete instance of a dynamic route among hrefs the app rendered. */
 function findInstance(pattern: string, hrefs: Set<string>): string | null {
+  // A catch-all segment spans path separators and a plain one does not. Both
+  // were compiled to `([^/]+)`, so `/docs/[...slug]` never matched the
+  // `/docs/guide/setup` the app rendered, and the route was reported as having
+  // no reachable instance while a link to it sat on the page.
   const regex = new RegExp(
-    `^${pattern.replace(/\[(\.\.\.)?[^\]]+\]/g, "([^/]+)").replace(/\//g, "\\/")}$`,
+    `^${pattern
+      .replace(/\[(\.\.\.)?[^\]]+\]/g, (_match, spread: string | undefined) =>
+        spread === undefined ? "([^/]+)" : "(.+)",
+      )
+      .replace(/\//g, "\\/")}$`,
   );
   for (const href of hrefs) {
     const path = href.split("?")[0];
