@@ -363,11 +363,14 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 	// already-a-member branch above answers truthfully on retry.
 	if pending {
 		if err := s.repo.ActivateMembership(ctx, inv.AccountID, viewer.UserID, grantedRole); err != nil {
-			// Deliberately not wrapped with ErrNotFound: the HTTP layer maps
-			// that to "this invitation link is not valid", which would be a lie
-			// told to someone whose invitation was perfectly good.
+			// The sentinel leads so the HTTP layer answers a generic 500
+			// instead of ErrNotFound's "this invitation link is not valid",
+			// which would be a lie told to someone whose invitation was
+			// perfectly good. The cause is wrapped alongside it rather than
+			// discarded, so a missing row and a dropped connection stay
+			// distinguishable to anything that later wants to tell them apart.
 			log.Printf("accounts: activate membership failed account=%s: %v", inv.AccountID, err)
-			return uuid.Nil, ErrMembershipActivation
+			return uuid.Nil, fmt.Errorf("%w: %w", ErrMembershipActivation, err)
 		}
 	} else {
 		membership := Membership{

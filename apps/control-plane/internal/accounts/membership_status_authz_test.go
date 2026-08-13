@@ -249,8 +249,13 @@ func TestAcceptInvitation_ActivationFailureIsNotReportedAsABadLink(t *testing.T)
 	if !errors.Is(err, accounts.ErrMembershipActivation) {
 		t.Fatalf("AcceptInvitation error = %v, want ErrMembershipActivation", err)
 	}
-	if errors.Is(err, accounts.ErrNotFound) {
-		t.Fatal("the invitee must not be told their invitation link is invalid")
+	// The cause stays wrapped alongside the sentinel, so a missing row and a
+	// dropped connection remain distinguishable. What keeps the invitee from
+	// being told their link is invalid is the case order in
+	// writeAcceptInvitationError, where ErrMembershipActivation is matched
+	// before ErrNotFound.
+	if !errors.Is(err, accounts.ErrNotFound) {
+		t.Fatal("the underlying cause must not be discarded")
 	}
 
 	// The invitation is untouched, so a retry once the write recovers still works.

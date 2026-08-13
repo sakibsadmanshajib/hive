@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -240,7 +241,7 @@ func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userI
 		  AND status IN ('active', 'invited')
 	`, accountID, userID, role)
 	if err != nil {
-		return err
+		return fmt.Errorf("accounts: activate membership: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
