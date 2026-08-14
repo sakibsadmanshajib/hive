@@ -182,7 +182,16 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		// to go verify an address they already verified sends them to fix
 		// something that is not broken, and the machine code is what clients
 		// branch on.
-		if authz.RequiresVerified(perm) && !viewer.EmailVerified {
+		//
+		// The question is put to the policy rather than to the viewer's
+		// verified flag: would this same actor pass if the address were
+		// verified? Yes means verification is the only thing in the way, no
+		// means the role is. That keeps the decision inside authz.Policy,
+		// which is where every other authorization answer in this handler
+		// comes from.
+		verified := actor
+		verified.Verified = true
+		if h.policy.Can(verified, perm) {
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "email must be verified before changing billing settings",
 				"code":  "email_verification_required",
