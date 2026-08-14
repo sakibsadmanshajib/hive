@@ -989,7 +989,11 @@ jobs:
           # first request. Bounded retry rides out that cold-start window
           # without masking a genuinely broken deploy -- five attempts five
           # seconds apart still fails loudly if the box stays down.
-          body="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 \
+          # --max-time 15 bounds each individual attempt (edge-api's own
+          # resolve-client timeout is 10s; 15s covers that plus network
+          # round-trip) so a wedged attempt cannot silently eat the whole
+          # retry budget instead of failing over to the next attempt.
+          body="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 --max-time 15 \
             -H "Authorization: Bearer $HIVE_API_KEY" "$HIVE_BASE_URL/models")"
           echo "$body" | jq -e '.data | length >= 4' >/dev/null
           for alias in hive-auto hive-default hive-embedding-default hive-fast; do
