@@ -140,6 +140,15 @@ const normalizeDir = (value) => value.replace(/^\.\//, "").replace(/\/$/, "");
 // the pre-existing, permissive behaviour: narrowing wrongly is worse than not
 // narrowing, and this guard already fails closed elsewhere by declaring debt
 // rather than inventing coverage, not by rejecting shapes it cannot read.
+//
+// Known ceiling: the `else` branch is modelled as "every leg the `if` did not
+// select", not as the specific leg(s) the workflow author meant. With more
+// than two matrix legs (this repository has four), an `else` line is credited
+// with every leg besides the one the `if` named, including legs the shell
+// code never actually intends to reach. Harmless today because no source
+// file under those extra legs reads a DSN variable this pairs on; would
+// under-narrow the day one does. Modelling an explicit `elif` chain is the
+// fix, and is the rest of the "heavy lift" this guard's review named.
 function legsForLine(lines, index, legs) {
   let branch = null; // "if" | "else", set once an enclosing block is found
   let key = null;
