@@ -572,6 +572,73 @@ func (panickingEngine) Launch(context.Context, agenttask.Task) (string, error) {
 
 func (panickingEngine) Cancel(context.Context, string) error { return nil }
 
+// panickingRepository panics on a Transition to panicOn (or on every
+// Transition when panicOn is empty), standing in for the realistic shape of a
+// repository-layer fault: a nil pool after a reconnect, a nil dereference
+// inside a driver call. Everything else delegates, so a task can still be
+// created and read back.
+type panickingRepository struct {
+	*fakeRepository
+	panicOn agenttask.Status
+}
+
+func (p *panickingRepository) Transition(ctx context.Context, tenantID, userID, id uuid.UUID, status agenttask.Status, sessionRef, resultSummaryRef, errMsg string) (agenttask.Task, error) {
+	if p.panicOn == "" || status == p.panicOn {
+		panic("repository layer fault")
+	}
+	return p.fakeRepository.Transition(ctx, tenantID, userID, id, status, sessionRef, resultSummaryRef, errMsg)
+}
+
+// A panic between a successful launch and its running transition leaves a live
+// sandbox whose reference only the panicking frame ever held. Recovering
+// without stopping it strands the slot permanently, since nothing else knows
+// the session exists.
+func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
+	repo := &panickingRepository{fakeRepository: newFakeRepository(), panicOn: agenttask.StatusRunning}
+	eng := newSlotEngine(1)
+	svc := agenttask.NewService(repo, eng)
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle()
+
+	if got := eng.slotsInUse(); got != 0 {
+		t.Errorf("expected the launched session to be stopped after the panic, %d slot(s) still in use", got)
+	}
+	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if settled.Status != agenttask.StatusFailed {
+		t.Errorf("expected the task to end failed after a panic, got %v", settled.Status)
+	}
+}
+
+// The panic handler itself runs code that can panic for the same reason the
+// launch did, and a panic raised inside a recover that is already unwinding
+// escapes it. That would turn "one task dies" into "the process dies" exactly
+// when the fault is deterministic rather than a one-off.
+func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
+	repo := &panickingRepository{fakeRepository: newFakeRepository()} // every Transition panics
+	eng := newSlotEngine(1)
+	svc := agenttask.NewService(repo, eng)
+	tenantID, userID := uuid.New(), uuid.New()
+
+	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, ""); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle() // a panic escaping the recover takes the whole test binary down
+
+	// The task cannot be recorded failed, because recording is what panics.
+	// Freeing the slot does not touch the database, so it must still happen.
+	if got := eng.slotsInUse(); got != 0 {
+		t.Errorf("expected the session to be stopped even when the failure cannot be recorded, %d in use", got)
+	}
+}
+
 func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), panickingEngine{})
 	tenantID, userID := uuid.New(), uuid.New()

@@ -94,6 +94,19 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 		return Task{}, err
 	}
 
+	// Nothing bounds how many of these goroutines can be in flight, and the
+	// launcher's quota does not: it gates the sandbox launch, which happens
+	// inside the goroutine, after this row has already been inserted. There is
+	// no rate limiter in front of POST /v1/agent/tasks either (verified in
+	// apps/edge-api/cmd/server/main.go: the chain is unsupported-endpoint,
+	// budget gate which is inert for JWT session traffic, auth selector,
+	// metrics, compat headers, max bytes, plus a feature gate on the route;
+	// authz.Limiter is only reached through authorizer.Authorize, which this
+	// handler never calls). So an authenticated caller can spend rows,
+	// goroutines and pool checkouts without a ceiling today. Tracked in issue
+	// #900 rather than papered over with a comment claiming a control that is
+	// not shipped.
+	//
 	// The launch runs on a context detached from the caller's. A launch
 	// cold-starts a sandbox, which takes tens of seconds, and the browser tab
 	// that submitted the task is free to go away in the middle of that.
@@ -103,39 +116,47 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	// Worse, the Transition calls would inherit the same dead context and
 	// fail too, leaving the row queued forever.
 	opCtx := context.WithoutCancel(ctx)
-	s.background(func() { s.launch(opCtx, t) }, func() {
-		// Panic path. Before this work ran on its own goroutine it ran inside
-		// the HTTP handler, where net/http's per-connection recover contained a
-		// panic to one connection; a bare goroutine would instead take the
-		// whole process down, every tenant with it. Recovering keeps the blast
-		// radius at one task and still records that task as failed, so the
-		// customer is not left watching a queued row that will never move.
-		s.recordLaunchFailure(opCtx, t, engineLaunchFailedMessage)
-	})
+	s.background(func() { s.launch(opCtx, t) })
 
 	return t, nil
 }
 
 // background runs work on a goroutine tracked by WaitIdle, recovering any
-// panic so one bad launch or stop cannot take the process down. onPanic runs
-// after the panic is logged and may be nil.
-func (s *Service) background(work func(), onPanic func()) {
+// panic so one bad launch or stop cannot take the process down. Before this
+// work ran on its own goroutine it ran inside the HTTP handler, where
+// net/http's per-connection recover contained a panic to one connection; a
+// bare goroutine would instead take the whole process down, every tenant with
+// it. This recover is the outer net only: launch does its own task-level
+// recovery, because only launch knows the session reference that has to be
+// stopped.
+func (s *Service) background(work func()) {
 	s.launches.Add(1)
 	go func() {
 		defer s.launches.Done()
 		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
-			slog.Default().Error("agenttask: recovered panic in background work",
-				"panic", r, "stack", string(debug.Stack()))
-			if onPanic != nil {
-				onPanic()
+			if r := recover(); r != nil {
+				slog.Default().Error("agenttask: recovered panic in background work",
+					"panic", r, "stack", string(debug.Stack()))
 			}
 		}()
 		work()
 	}()
+}
+
+// safely runs f and swallows any panic it raises, logging it against what.
+// Only for use from inside a recovery path: a panic raised there is a fresh
+// panic in an already-unwinding deferred function, with no recover above it,
+// so it would kill the process. That matters most when the original panic came
+// from a shared dependency (a nil pool, a driver fault), because then the
+// recovery handler re-enters the very code that just failed and the second
+// panic is the deterministic one.
+func safely(what string, f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Default().Error("agenttask: panic while "+what+", giving up on it", "panic", r)
+		}
+	}()
+	f()
 }
 
 // launch performs one launch attempt and records its outcome. Runs on a
@@ -145,6 +166,28 @@ func (s *Service) background(work func(), onPanic func()) {
 func (s *Service) launch(ctx context.Context, t Task) {
 	launchCtx, cancel := context.WithTimeout(ctx, launchTimeout)
 	defer cancel()
+
+	// sessionRef is declared before the recover that reads it: a panic between
+	// a successful Launch and the transition that records the reference would
+	// otherwise strand a live sandbox whose reference only the panicking frame
+	// ever held, and nothing else could ever stop it. Stopping comes first
+	// because it frees the concurrency slot without touching the database,
+	// which is the dependency most likely to have caused the panic.
+	var sessionRef string
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		slog.Default().Error("agenttask: recovered panic during launch",
+			"task_id", t.ID, "panic", r, "stack", string(debug.Stack()))
+		safely("stopping the session of a panicking launch", func() {
+			s.stopEngineSession(ctx, t.ID, sessionRef)
+		})
+		safely("recording a panicking launch as failed", func() {
+			s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
+		})
+	}()
 
 	sessionRef, err := s.engine.Launch(launchCtx, t)
 	switch {
@@ -175,6 +218,16 @@ func (s *Service) launch(ctx context.Context, t Task) {
 	case errors.Is(err, ErrEngineNotConfigured):
 		s.recordLaunchFailure(ctx, t, engineUnavailableMessage)
 	default:
+		// Known gap, deliberately not closed here (issue #899). A Launch that
+		// fails in transport rather than at the launcher (the response is lost,
+		// launchTimeout fires, or this process dies mid-deploy) can leave a
+		// session that the launcher registered and this process never learned
+		// the reference for. That session holds its slots until the launcher
+		// restarts, because reap only runs from Status or Cancel and the
+		// poller's input requires a non-empty engine_session_ref. Closing it
+		// needs a way to re-derive the reference, which only the launcher can
+		// offer (a lookup by task id, or its own orphan sweep). The row is
+		// still recorded failed here, which is the half this service owns.
 		slog.Default().WarnContext(ctx, "agenttask: launch failed, engine detail",
 			"task_id", t.ID, "error", err)
 		s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
@@ -289,6 +342,6 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (T
 	// logged for an operator rather than returned. Tests wait on WaitIdle.
 	sessionRef := cancelled.EngineSessionRef
 	stopCtx := context.WithoutCancel(ctx)
-	s.background(func() { s.stopEngineSession(stopCtx, id, sessionRef) }, nil)
+	s.background(func() { s.stopEngineSession(stopCtx, id, sessionRef) })
 	return cancelled, nil
 }
