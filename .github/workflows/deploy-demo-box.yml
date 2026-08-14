@@ -267,14 +267,38 @@ jobs:
           set -euo pipefail
           cd /home/sakib/hive
           git checkout main
+
+          # The extraheader below authenticates ANY public github.com repo,
+          # not just this one, so it would fetch happily from a repointed
+          # origin. Check first, or a repointed remote pulls the wrong
+          # content while reporting the same green this whole fix exists to
+          # make honest.
+          expected_url="https://github.com/${{ github.repository }}"
+          actual_url=$(git remote get-url origin)
+          case "$actual_url" in
+            "$expected_url"|"$expected_url.git") ;;
+            *)
+              echo "::error::box remote 'origin' is $actual_url, expected $expected_url(.git). Refusing to pull: this job's GITHUB_TOKEN would authenticate a fetch from any public github.com repo, so a repointed remote would silently deploy the wrong source. Fix with: git -C /home/sakib/hive remote set-url origin $expected_url.git" >&2
+              exit 1
+              ;;
+          esac
+
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' '${{ github.token }}' | base64 -w0)"
           if ! git -c "http.https://github.com/.extraheader=${auth_header}" \
                fetch origin main; then
-            echo "::error::git fetch origin main failed. See the git error above for the actual cause. If it names the username/credential, check the deploy job's permissions block (needs contents: read) and that the box's git remote is still https://github.com/${{ github.repository }}.git (git -C /home/sakib/hive remote -v)." >&2
+            echo "::error::git fetch origin main failed. See the git error above for the actual cause. If it names the username/credential, check the deploy job's permissions block (needs contents: read)." >&2
             exit 1
           fi
-          git -c "http.https://github.com/.extraheader=${auth_header}" \
-            pull --ff-only origin main
+          if ! git -c "http.https://github.com/.extraheader=${auth_header}" \
+               pull --ff-only origin main; then
+            echo "::error::git pull --ff-only origin main failed after a successful fetch, so this is a fast-forward divergence (a stray local commit on the box, or main force-pushed), not a credential problem. See the git error above; git -C /home/sakib/hive log --oneline -5 origin/main on the box will show what diverged." >&2
+            exit 1
+          fi
+          # --ff-only means this line only runs after a real advance or a
+          # no-op "Already up to date.", never after a silent partial pull,
+          # but nothing upstream of this could tell the two apart without
+          # reading raw git output. Record the outcome explicitly instead.
+          echo "deployed commit: $(git rev-parse HEAD)"
 
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
