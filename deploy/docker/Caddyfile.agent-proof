@@ -27,6 +27,13 @@
 		reverse_proxy edge-api:8080
 	}
 
+	# Served on this origin in production too (Caddyfile.owui). The harness
+	# reads it to say whether a missing Cowork surface is the tenant's gate
+	# or the session, instead of leaving the next run to guess.
+	handle /v1/featuregate* {
+		reverse_proxy edge-api:8080
+	}
+
 	# Nothing else is served: an unmatched path is a bug in the harness, not
 	# a route to invent.
 	handle {

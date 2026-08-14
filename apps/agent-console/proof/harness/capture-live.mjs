@@ -393,6 +393,17 @@ async function main() {
     // credential in the fragment.
     await shoot(page, "setup", "00-no-composer").catch(() => {});
     log(`landed on ${new URL(page.url()).pathname}`);
+    // What edge-api answers for this exact session. Paired with the
+    // control-plane assertion the workflow already made, this says which hop
+    // dropped the gate: same answer means the row is off, a disagreement
+    // means the token's tenant claim is.
+    const gates = await context.request
+      .get(`${BASE_URL}/v1/featuregate`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      .then(async (r) => `HTTP ${r.status()} ${(await r.text()).slice(0, 300)}`)
+      .catch((err) => `unreachable: ${err.message}`);
+    log(`edge-api /v1/featuregate for this session: ${gates}`);
     const text = await page
       .locator("body")
       .innerText()

@@ -452,7 +452,28 @@ jobs:
               );
             if (error) throw new Error(`ENABLE_COWORK upsert failed: ${error.message}`);
             console.log("ENABLE_COWORK enabled for this run tenant");
-          '
+            console.log(`PROOF_TENANT_ID=${ids.verifiedTenantId}`);
+          ' | tee /tmp/seed.log
+          grep -E '^PROOF_TENANT_ID=' /tmp/seed.log >> "$GITHUB_ENV"
+
+      - name: Assert the Cowork gate reads as on
+        # Run 31816249902 reached the console signed in and rendered "The
+        # agent workspace is turned off for your organization", which is a
+        # capture of a real page and no proof of anything. Asserting the gate
+        # here separates the three places it can be off (the row, the
+        # registry join, the token's tenant claim) from a browser that simply
+        # shows the disabled panel, and it fails on the step that owns the
+        # cause rather than on the one that noticed.
+        run: |
+          set -euo pipefail
+          gates=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $CONTROL_PLANE_INTERNAL_TOKEN" \
+            "http://localhost:8081/internal/featuregate/$PROOF_TENANT_ID")
+          # One line: a `python3 -c` program written across several lines
+          # inside a YAML block has to be indented, and Python rejects a
+          # uniformly indented program.
+          python3 -c 'import json,sys; g=json.loads(sys.argv[1]).get("gates",{}); print("gates:", json.dumps(g,sort_keys=True)); sys.exit(0 if g.get("ENABLE_COWORK") else 1)' "$gates" \
+            || { echo "::error::ENABLE_COWORK is off for the run tenant, so the console renders no Cowork surface"; exit 1; }
 
       - name: Make the launch impossible (deliberate sabotage run)
         # The negative control for the whole job: with the launcher stopped
