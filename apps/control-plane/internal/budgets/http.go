@@ -86,7 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // =============================================================================
 
 func (h *Handler) handleGetBudget(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := h.resolveCurrentAccountID(w, r)
+	accountID, ok := h.resolveCurrentAccountID(w, r, authz.PermBillingView)
 	if !ok {
 		return
 	}
@@ -101,7 +101,12 @@ func (h *Handler) handleGetBudget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpsertBudget(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := h.resolveCurrentAccountID(w, r)
+	// A hard spend cap is a mutation, so it takes the write permission, which
+	// requires a verified email. billing.view does not, and gating the write on
+	// it let an owner who had never proven control of their mailbox raise their
+	// own cap. The Phase 14 workspace surface below already uses billing.write
+	// for the same class of change.
+	accountID, ok := h.resolveCurrentAccountID(w, r, authz.PermBillingWrite)
 	if !ok {
 		return
 	}
@@ -122,7 +127,8 @@ func (h *Handler) handleUpsertBudget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDismissAlert(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := h.resolveCurrentAccountID(w, r)
+	// Dismissing a spend alert is also a mutation of a spend control.
+	accountID, ok := h.resolveCurrentAccountID(w, r, authz.PermBillingWrite)
 	if !ok {
 		return
 	}
@@ -135,7 +141,7 @@ func (h *Handler) handleDismissAlert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 
-func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request, perm authz.Permission) (uuid.UUID, bool) {
 	viewer, ok := auth.ViewerFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -144,7 +150,7 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 
 	viewerContext, err := h.accountsSvc.EnsureViewerContext(r.Context(), viewer, parseAccountHeader(r))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not load your workspace", err)
 		return uuid.Nil, false
 	}
 
@@ -168,12 +174,33 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
-	if !h.policy.Can(actor, authz.PermBillingView) {
+	if !h.policy.Can(actor, perm) {
+		// This function now serves two permissions, so it has two reasons to
+		// refuse and they are not interchangeable. Telling a verified member
+		// to go verify an address they already verified sends them to fix
+		// something that is not broken, and the machine code is what clients
+		// branch on.
+		//
+		// The question is put to the policy rather than to the viewer's
+		// verified flag: would this same actor pass if the address were
+		// verified? Yes means verification is the only thing in the way, no
+		// means the role is. That keeps the decision inside authz.Policy,
+		// which is where every other authorization answer in this handler
+		// comes from.
+		verified := actor
+		verified.Verified = true
+		if h.policy.Can(verified, perm) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before changing billing settings",
+				"code":  "email_verification_required",
+			})
+			return uuid.Nil, false
+		}
 		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "email must be verified before accessing billing",
-			"code":  "email_verification_required",
+			"error": "workspace owner permission required",
+			"code":  "permission_denied",
 		})
 		return uuid.Nil, false
 	}
@@ -187,7 +214,7 @@ func writeBudgetError(w http.ResponseWriter, err error) {
 	case errors.As(err, &validationErr):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationErr.Error()})
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeOpaque(w, "request could not be completed", err)
 	}
 }
 
@@ -201,6 +228,24 @@ func parseAccountHeader(r *http.Request) uuid.UUID {
 		return uuid.Nil
 	}
 	return id
+}
+
+// writeInternal logs the real failure and answers with a fixed message. No
+// error string from this package belongs in a response body: it carries raw pgx
+// text, and the workspace provisioning inside EnsureViewerContext can fail on a
+// unique constraint over a slug built from the viewer's own name or email local
+// part.
+func writeInternal(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	slog.ErrorContext(r.Context(), msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
+}
+
+// writeOpaque is writeInternal for the error mappers that do not carry the
+// request. Same contract: the real error goes to the log, a fixed message goes
+// to the client.
+func writeOpaque(w http.ResponseWriter, msg string, err error) {
+	slog.Error(msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -548,7 +593,7 @@ func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, 
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "owner permission required"})
@@ -592,7 +637,7 @@ func (h *Handler) requireWorkspaceMembership(r *http.Request, userID, workspaceI
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		return errors.New("not a member")

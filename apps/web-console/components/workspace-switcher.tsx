@@ -28,10 +28,18 @@ export function WorkspaceSwitcher({
 }: WorkspaceSwitcherProps) {
   const t = useTranslations("WorkspaceSwitcher");
 
+  // Memberships arrive active and invited alike. Only an accepted seat is a
+  // workspace the viewer can be switched into: /console/account-switch refuses
+  // an invited target, so listing one here would offer an option that silently
+  // returns the viewer to the same workspace with no message.
+  const switchable = memberships.filter(
+    (membership) => membership.status === "active",
+  );
+
   // Exactly one workspace: nothing to switch to, so the control must not
   // present itself as interactive at all (issue #785) -- a static label, not
   // a control that opens on an empty list.
-  if (memberships.length <= 1) {
+  if (switchable.length <= 1) {
     return (
       <div
         className={cn(
@@ -79,7 +87,7 @@ export function WorkspaceSwitcher({
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
         )}
       >
-        {memberships.map((membership) => (
+        {switchable.map((membership) => (
           <option key={membership.account_id} value={membership.account_id}>
             {membership.account_display_name}
             {membership.account_id === currentAccountId ? ` (${t("current")})` : ""}

@@ -133,7 +133,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, p
 					AccountID: h.testVC.CurrentAccount.ID,
 					UserID:    h.testVC.User.ID,
 					Role:      h.testVC.CurrentAccount.Role,
-					Status:    "active",
+					Status:    accounts.StatusActive,
 				},
 				false,
 			)
@@ -158,7 +158,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, p
 	requestedAccountID := parseAccountHeader(r)
 	vc, err := h.accountSvc.EnsureViewerContext(r.Context(), viewer, requestedAccountID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return accounts.ViewerContext{}, false
 	}
 
@@ -182,7 +182,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, p
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      vc.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, perm) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
@@ -205,7 +205,6 @@ func authFromVC(vc *accounts.ViewerContext) auth.Viewer {
 	}
 }
 
-
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysRead)
 	if !ok {
@@ -214,7 +213,7 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 	views, err := h.svc.ListKeyViews(r.Context(), vc.CurrentAccount.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -256,13 +255,13 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.CreateKey(r.Context(), vc.CurrentAccount.ID, vc.User.ID, input)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
 	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, result.Key.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -313,7 +312,7 @@ func (h *Handler) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, result.NewKey.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -344,7 +343,7 @@ func (h *Handler) handleDisableKey(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -370,7 +369,7 @@ func (h *Handler) handleEnableKey(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -396,7 +395,7 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
 
@@ -559,6 +558,24 @@ func parseAccountHeader(r *http.Request) uuid.UUID {
 	return id
 }
 
+// writeInternal logs the real failure and answers with a fixed message. No
+// error string from this package belongs in a response body: it carries raw pgx
+// text, and the workspace provisioning inside EnsureViewerContext can fail on a
+// unique constraint over a slug built from the viewer's own name or email local
+// part.
+func writeInternal(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	slog.ErrorContext(r.Context(), msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
+}
+
+// writeOpaque is writeInternal for the error mappers that do not carry the
+// request. Same contract: the real error goes to the log, a fixed message goes
+// to the client.
+func writeOpaque(w http.ResponseWriter, msg string, err error) {
+	slog.Error(msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
+}
+
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -593,7 +610,7 @@ func handleKeyError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotActive):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is not active"})
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeOpaque(w, "request could not be completed", err)
 	}
 }
 

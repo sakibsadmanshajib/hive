@@ -20,6 +20,14 @@ func newMembershipOrderTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-database step and passes
+		// -short for the step that has no database, so a missing DSN in the
+		// live step means these suites skipped instead of running. That is the
+		// silent-green shape of issues #701 and #708; fail loudly there and
+		// keep skipping for local runs.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI: this suite must not silently skip")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	if !strings.Contains(strings.ToLower(dsn), "test") {

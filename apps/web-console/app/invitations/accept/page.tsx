@@ -195,6 +195,43 @@ function renderFailure(failure: InvitationFailure, signedInEmail: string) {
         </AuthShell>
       );
 
+    // The one failure in this switch the invitee can clear themselves. The
+    // control plane refuses acceptance until the address is confirmed, because
+    // accepting is what grants the role, so the card names the action rather
+    // than leaving them on a generic error with a link back to the console.
+    case "invitation_email_not_verified":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="Confirm your email address first"
+          subtitle={
+            <>
+              Joining a workspace grants you a role in it, so the address on
+              this account
+              {signedInEmail ? (
+                <>
+                  {" ("}
+                  <span className="font-mono text-[var(--color-ink)]">
+                    {signedInEmail}
+                  </span>
+                  {")"}
+                </>
+              ) : null}{" "}
+              has to be confirmed first. Open the confirmation email we sent
+              when you signed up, then open this invitation link again. The
+              invitation is still valid.
+            </>
+          }
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
     case "invitation_email_mismatch":
       return (
         <AuthShell
