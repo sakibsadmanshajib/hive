@@ -20,7 +20,7 @@
       "permanent": true
     },
     "/console/api-keys/[id]/limits": {
-      "skip": "needs an API key to exist in the signed-in workspace, and the gate refuses to create one: it blocks every state changing request whose values it supplied",
+      "skip": "needs an API key to exist in the signed-in workspace, and the gate refuses to create one: it blocks every state-changing request whose values it supplied",
       "owner": "@sakibsadmanshajib",
       "issue": 885
     }

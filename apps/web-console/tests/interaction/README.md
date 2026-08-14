@@ -28,7 +28,7 @@ that class of defect impossible to ship quietly.
    | select | changing the value fires a request, navigates, changes the render, or the select is named and inside a form |
    | internal link | navigation happens and the destination does not answer 4xx or 5xx |
    | external link | the href is an absolute http(s) URL, so clicking it navigates. Destination reachability is checked once per destination and **reported**, never fatal: a third party's uptime does not belong in a merge gate |
-   | destructive control, or a submit whose form the gate filled | the application issues its state changing request and the gate **stops it in the browser** |
+   | destructive control, or a submit whose form the gate filled | the application issues its state-changing request and the gate **stops it in the browser** |
    | button, tab, menu item, anything else | a request, a navigation, a download, a popup, a native dialog, or a change to the rendered output |
    | disabled control | nothing. A disabled control is reported in its own bucket and is never proof |
 

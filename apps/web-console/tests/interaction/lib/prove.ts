@@ -395,7 +395,7 @@ export function verdictFromObservation(
     return {
       proven: true,
       proofType: "wired-write-blocked",
-      detail: `activation issued ${String(blocked.length)} state changing request(s), stopped before leaving the browser: ${blocked.slice(0, 3).join(", ")}`,
+      detail: `activation issued ${String(blocked.length)} state-changing request(s), stopped before leaving the browser: ${blocked.slice(0, 3).join(", ")}`,
     };
   }
 
