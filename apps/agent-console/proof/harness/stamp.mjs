@@ -15,8 +15,20 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(HERE, "..", "..");
 const REPO_ROOT = resolve(APP_DIR, "..", "..");
 
-/** Short commit of the tree under proof, marked when the tree is dirty. */
+/**
+ * Short commit of the tree under proof, marked when the tree is dirty.
+ *
+ * Resolved once. Every shot stamps the same tree by definition, and the
+ * uncached version ran two git subprocesses per screenshot.
+ */
+let cachedStamp = null;
 export function commitStamp() {
+  if (cachedStamp !== null) return cachedStamp;
+  cachedStamp = resolveCommitStamp();
+  return cachedStamp;
+}
+
+function resolveCommitStamp() {
   try {
     const sha = execSync("git rev-parse --short HEAD", { cwd: REPO_ROOT }).toString().trim();
     const dirty = execSync("git status --porcelain", { cwd: REPO_ROOT }).toString().trim();

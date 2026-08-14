@@ -341,7 +341,12 @@ async function main() {
   const page = await context.newPage();
   page.on("pageerror", (err) => log(`[browser pageerror] ${err.message}`));
   await page.goto(`${BASE_URL}${BASE_PATH}/tasks`, { waitUntil: "domcontentloaded" });
-  if (!(await page.getByLabel("What should the agent do?").count())) {
+  // Waited for, not counted once: the console is a client component, so an
+  // immediate count races the first render and would report a working surface
+  // as missing.
+  try {
+    await page.getByLabel("What should the agent do?").waitFor({ timeout: 60_000 });
+  } catch {
     throw new Error(
       "the task composer never rendered: the session is not signed in, or ENABLE_COWORK is off " +
         "for this tenant, so there is no Cowork surface to prove",

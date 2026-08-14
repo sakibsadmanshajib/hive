@@ -310,10 +310,19 @@ jobs:
           # of 15 and shared with the live demo stack, so a job that booted a
           # stack on session mode alone could take chat-hive offline.
           python3 scripts/derive-pooler-dsn.py --self-test
-          python3 scripts/derive-pooler-dsn.py \
+          # Masked before it is exported. Actions masks the secrets it knows,
+          # but a DSN is a derived value it has never seen, and it carries the
+          # password inside it, so a later step that echoes the variable would
+          # print the credential in clear.
+          dsns=$(python3 scripts/derive-pooler-dsn.py \
             --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
             --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
-            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
+            --password "$SUPABASE_DB_PASSWORD")
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            echo "::add-mask::${line#*=}"
+            echo "$line" >> "$GITHUB_ENV"
+          done <<<"$dsns"
 
       - name: Build the stack images
         run: |
@@ -393,7 +402,12 @@ jobs:
             caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
           for _ in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' "$PROOF_ORIGIN/agent-workspace/tasks" || true)
-            [ "$code" != "000" ] && { echo "proxy up (HTTP $code)"; exit 0; }
+            # A success or a redirect to sign-in, nothing else. "Answered at
+            # all" is what let run 31730077938 report "proxy up (HTTP 404)"
+            # and carry a misrouted proxy into the capture.
+            case "$code" in
+              2??|3??) echo "proxy up (HTTP $code)"; exit 0 ;;
+            esac
             sleep 2
           done
           echo "::error::the proof origin never answered"
