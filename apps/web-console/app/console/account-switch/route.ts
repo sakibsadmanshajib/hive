@@ -20,12 +20,16 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // Validate the requested account exists in the viewer's memberships
+  // Validate the requested account is one of the viewer's ACTIVE memberships.
+  // Memberships arrive active and invited alike, and the control plane serves
+  // only active ones: accepting an invited row here would pin the cookie to a
+  // workspace the API then refuses to select, so the console would render one
+  // workspace while every request answered for another.
   let isValidAccount = false;
   try {
     const viewer = await getViewer();
     isValidAccount = viewer.memberships.some(
-      (m) => m.account_id === accountId
+      (m) => m.account_id === accountId && m.status === "active"
     );
   } catch {
     // If we can't fetch the viewer, deny the switch

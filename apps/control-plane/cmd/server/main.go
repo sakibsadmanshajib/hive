@@ -146,13 +146,18 @@ func newAccountsAccessChecker(repo accounts.Repository) invoices.AccessChecker {
 // IsWorkspaceMember returns whether userID has any active membership row on
 // the given workspace (account) id. Phase 14 = "any role"; Phase 18 may
 // narrow.
+//
+// ListMembershipsByUserID returns invited rows alongside active ones (the
+// console lists both), so the status check here is what makes the sentence
+// above true: an invited-but-not-accepted seat must not read a workspace's
+// invoices.
 func (a *accountsAccessChecker) IsWorkspaceMember(ctx context.Context, userID, workspaceID uuid.UUID) (bool, error) {
 	memberships, err := a.repo.ListMembershipsByUserID(ctx, userID)
 	if err != nil {
 		return false, fmt.Errorf("invoices access: list memberships: %w", err)
 	}
 	for _, m := range memberships {
-		if m.AccountID == workspaceID {
+		if m.AccountID == workspaceID && m.Status == accounts.StatusActive {
 			return true, nil
 		}
 	}

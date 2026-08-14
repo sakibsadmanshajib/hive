@@ -41,7 +41,7 @@ vi.mock("next/headers", () => ({
   cookies: () => Promise.resolve({ getAll: () => [], set: () => {} }),
 }));
 
-let memberships: Array<{ account_id: string }> = [];
+let memberships: Array<{ account_id: string; status: string }> = [];
 let viewerThrows = false;
 
 vi.mock("@/lib/control-plane/client", () => ({
@@ -211,7 +211,7 @@ describe("app/console/account-switch/route.ts redirect origin", () => {
   });
 
   it("sends a non-member account to the forwarded host", async () => {
-    memberships = [{ account_id: "acct-other" }];
+    memberships = [{ account_id: "acct-other", status: "active" }];
 
     const response = await accountSwitch(switchRequest("acct-1"));
 
@@ -220,8 +220,25 @@ describe("app/console/account-switch/route.ts redirect origin", () => {
     );
   });
 
+  // The control plane serves only active memberships, so pinning the cookie to
+  // an invited one would leave the console rendering one workspace while every
+  // request answered for another.
+  it("refuses to pin the cookie to a workspace the viewer has only been invited to", async () => {
+    memberships = [
+      { account_id: "acct-1", status: "active" },
+      { account_id: "acct-invited", status: "invited" },
+    ];
+
+    const response = await accountSwitch(switchRequest("acct-invited"));
+
+    expect(response.headers.get("location")).toBe(
+      "https://console-hive.scubed.co/console",
+    );
+    expect(response.cookies.get("hive_account_id")).toBeUndefined();
+  });
+
   it("sends a valid switch to the forwarded host and still sets the account cookie", async () => {
-    memberships = [{ account_id: "acct-1" }];
+    memberships = [{ account_id: "acct-1", status: "active" }];
 
     const response = await accountSwitch(switchRequest("acct-1"));
 
@@ -233,7 +250,7 @@ describe("app/console/account-switch/route.ts redirect origin", () => {
   });
 
   it("never emits the wildcard bind address on any branch", async () => {
-    memberships = [{ account_id: "acct-1" }];
+    memberships = [{ account_id: "acct-1", status: "active" }];
 
     const response = await accountSwitch(switchRequest("acct-1"));
 

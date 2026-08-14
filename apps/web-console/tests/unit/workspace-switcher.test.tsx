@@ -115,6 +115,35 @@ describe("workspace switcher submits the chosen workspace", () => {
     ).toHaveProperty("name", "account_id");
   });
 
+  it("leaves an invited workspace out of the options, since it cannot be switched into", () => {
+    // /console/account-switch refuses a target the viewer has only been invited
+    // to, so offering it here would be an option that silently returns the
+    // viewer to the workspace they were already in.
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkspaceSwitcher
+          memberships={[
+            ...memberships,
+            {
+              account_id: "acct_invited",
+              account_display_name: "Pending Workspace",
+              account_slug: "pending-workspace",
+              display_name: "Pending Workspace",
+              role: "owner",
+              status: "invited",
+            },
+          ]}
+          currentAccountId="acct_1"
+          currentAccountName="Hive Demo"
+          ariaLabel="Switch workspace"
+        />
+      </NextIntlClientProvider>
+    );
+
+    expect(screen.queryByRole("option", { name: /Pending Workspace/ })).toBeNull();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+  });
+
   it("does not submit before the user changes anything", () => {
     renderSwitcher();
     const submissions = captureSubmissions(switcherForm());
