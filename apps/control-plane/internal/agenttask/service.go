@@ -173,17 +173,35 @@ func (s *Service) launch(ctx context.Context, t Task) {
 	// ever held, and nothing else could ever stop it. Stopping comes first
 	// because it frees the concurrency slot without touching the database,
 	// which is the dependency most likely to have caused the panic.
-	var sessionRef string
+	var (
+		sessionRef  string
+		teardownRun bool // this launch already attempted its own teardown
+	)
 	defer func() {
 		r := recover()
 		if r == nil {
 			return
 		}
+		// Residual, deliberately not wrapped: a panic from this logging call
+		// (or from debug.Stack) escapes into background's recover, which logs
+		// through the same slog call, so the two nets are not independent for
+		// that one case. Reaching it needs a slog handler that panics, and
+		// control-plane installs none: there is no slog.SetDefault in
+		// cmd/server, so this is the stdlib text handler, and fmt recovers from
+		// a panicking String or Error on the panic value itself. Revisit if a
+		// structured handler is ever installed.
 		slog.Default().Error("agenttask: recovered panic during launch",
 			"task_id", t.ID, "panic", r, "stack", string(debug.Stack()))
-		safely("stopping the session of a panicking launch", func() {
-			s.stopEngineSession(ctx, t.ID, sessionRef)
-		})
+		// Skipped when the launch already tore its own session down: repeating
+		// it is harmless for accounting (quota's release is a sync.Once and
+		// reap is idempotent) but it logs a leaked-slot warning for a slot that
+		// was correctly freed, because the control socket directory is gone by
+		// then and Interrupt fails.
+		if !teardownRun {
+			safely("stopping the session of a panicking launch", func() {
+				s.stopEngineSession(ctx, t.ID, sessionRef)
+			})
+		}
 		safely("recording a panicking launch as failed", func() {
 			s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
 		})
@@ -196,6 +214,7 @@ func (s *Service) launch(ctx context.Context, t Task) {
 			// The session started but its reference could not be recorded, so
 			// nothing can ever poll or stop it and it would hold its
 			// concurrency slot for its full natural life. Stop it here.
+			teardownRun = true
 			s.stopEngineSession(ctx, t.ID, sessionRef)
 
 			// ErrTerminalState is the expected case: a cancel won the race
@@ -251,6 +270,13 @@ func (s *Service) recordLaunchFailure(ctx context.Context, t Task, message strin
 // recorded, and a failure here is an operator problem (a leaked slot), not
 // something the customer can act on or should see as a failed request. The
 // engine detail goes to the log only, never to a customer-visible field.
+//
+// The warning carries session_ref because on two paths that reach it (a cancel
+// that won the race before the launch reported back, and the panic path above)
+// the reference exists nowhere else by then: the row's engine_session_ref was
+// never written, the poller cannot see the task, and the launcher's registry is
+// in memory with no listing endpoint. Without it the only remedy left is
+// restarting the launcher, which drops every other tenant's live sandbox too.
 func (s *Service) stopEngineSession(ctx context.Context, taskID uuid.UUID, sessionRef string) {
 	if sessionRef == "" {
 		return // never launched, so nothing holds a slot
@@ -259,7 +285,7 @@ func (s *Service) stopEngineSession(ctx context.Context, taskID uuid.UUID, sessi
 	defer done()
 	if err := s.engine.Cancel(stopCtx, sessionRef); err != nil {
 		slog.Default().WarnContext(stopCtx, "agenttask: engine cancel failed, the session may still hold its concurrency slot",
-			"task_id", taskID, "error", err)
+			"task_id", taskID, "session_ref", sessionRef, "error", err)
 	}
 }
 
