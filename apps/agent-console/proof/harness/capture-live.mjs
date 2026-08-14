@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadChromium, shoot as shootStamped, waitForHttp } from "./stamp.mjs";
 import { redactSecrets } from "../../../web-console/tests/e2e/support/e2e-fixture-seed.mjs";
-import { reauthenticate } from "../../../web-console/tests/e2e/support/live-auth.mjs";
+import { mintSession, sessionCookies } from "../../../web-console/tests/e2e/support/live-auth.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BASE_PATH = "/agent-workspace";
@@ -363,11 +363,21 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   // Mints a one-shot token for an EXISTING account and exchanges it. No
   // password is read, written or rotated.
-  const { userId } = await reauthenticate(context, {
-    email: EMAIL,
-    targetUrl: `${BASE_URL}${BASE_PATH}/tasks`,
-  });
-  log(`signed in as user ${userId}`);
+  //
+  // reauthenticate() inlined rather than called, for one reason: it would
+  // build the cookies with the same project identity it minted with, and
+  // @supabase/ssr names its cookie after the project ref in the URL it is
+  // given. The browser bundle is built with NEXT_PUBLIC_SUPABASE_URL, so a
+  // deployment where that differs from the admin SUPABASE_URL gets a cookie
+  // under the wrong name and a console that is simply signed out.
+  const session = await mintSession({ email: EMAIL });
+  await context.addCookies(
+    await sessionCookies(session, `${BASE_URL}${BASE_PATH}/tasks`, {
+      supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL,
+      anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY,
+    }),
+  );
+  log(`signed in as user ${session.userId}`);
 
   const page = await context.newPage();
   page.on("pageerror", (err) => log(`[browser pageerror] ${err.message}`));
@@ -378,6 +388,16 @@ async function main() {
   try {
     await page.getByLabel("What should the agent do?").waitFor({ timeout: 60_000 });
   } catch {
+    // Say which of the two it was, instead of leaving the next run to guess.
+    // The path only, never the full URL: an auth redirect carries its
+    // credential in the fragment.
+    await shoot(page, "setup", "00-no-composer").catch(() => {});
+    log(`landed on ${new URL(page.url()).pathname}`);
+    const text = await page
+      .locator("body")
+      .innerText()
+      .catch(() => "");
+    log(`page said: ${text.replace(/\s+/g, " ").slice(0, 400)}`);
     throw new Error(
       "the task composer never rendered: the session is not signed in, or ENABLE_COWORK is off " +
         "for this tenant, so there is no Cowork surface to prove",
