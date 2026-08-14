@@ -30,45 +30,28 @@ import { existsSync, rmSync } from "node:fs";
 import { test as setup } from "@playwright/test";
 
 import { AUTH_STATE_FILE, interactionBaseUrl, interactionEmail } from "./lib/config";
+import { assertStateWritten, mintCommand, mintFailure } from "./lib/mint";
 
 setup("authenticate", () => {
-  const email = interactionEmail();
-  if (email === "") {
-    throw new Error(
-      "INTERACTION_EMAIL (or E2E_VERIFIED_EMAIL) must name an existing account; the gate cannot enumerate authenticated routes without a session",
-    );
-  }
+  const { command, args } = mintCommand(
+    interactionEmail(),
+    new URL("/console", interactionBaseUrl()).toString(),
+    AUTH_STATE_FILE,
+  );
 
   // A storage state left behind by an earlier run would let a failed mint pass
   // for a successful one, and would sign the sweep in as whoever ran last.
   rmSync(AUTH_STATE_FILE, { force: true });
 
-  const targetUrl = new URL("/console", interactionBaseUrl()).toString();
   try {
-    execFileSync(
-      "node",
-      ["tests/e2e/support/live-auth.mjs", email, targetUrl, AUTH_STATE_FILE],
-      { cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: "" }, stdio: "pipe" },
-    );
+    execFileSync(command, args, {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "" },
+      stdio: "pipe",
+    });
   } catch (error: unknown) {
-    // live-auth.mjs redacts its own output, so relaying it is safe.
-    const streams =
-      typeof error === "object" && error !== null
-        ? [
-            "stdout" in error ? String(error.stdout ?? "") : "",
-            "stderr" in error ? String(error.stderr ?? "") : "",
-          ].join("")
-        : String(error);
-    throw new Error(`[live-auth] mint failed\n${streams}`);
+    throw mintFailure(error);
   }
 
-  // The mint throws on every failure it can see, so this catches the one it
-  // cannot: a helper that returns without having written the file. Failing here
-  // names the cause. Leaving it to the sweep's own `newContext` produces an
-  // ENOENT three hundred lines away that reads like a harness bug.
-  if (!existsSync(AUTH_STATE_FILE)) {
-    throw new Error(
-      `live-auth returned without writing ${AUTH_STATE_FILE}; the sweep has no session and must not run`,
-    );
-  }
+  assertStateWritten(existsSync(AUTH_STATE_FILE), AUTH_STATE_FILE);
 });

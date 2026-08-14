@@ -22,6 +22,7 @@ import {
   type Exclusion,
 } from "./lib/exclusions";
 import { floorProblems, loadFloors, staleFloors, type FloorFile } from "./lib/floors";
+import { assertStateWritten, mintCommand, mintFailure } from "./lib/mint";
 import { enumerateInPage, type RawControl } from "./lib/enumerate";
 import {
   redactUrl,
@@ -246,6 +247,52 @@ describe("enumerator", () => {
     render(`<a href="/console">Overview</a><a href="/console/analytics">Overview</a>`);
     const keys = enumerateInPage().controls.map(controlKey);
     expect(keys).toEqual(["a|Overview", "a|Overview~1"]);
+  });
+});
+
+// The file behind the incident this whole suite answers. Its setup reported
+// success in 13 milliseconds having minted nothing, and the only symptom was an
+// ENOENT three hundred lines away, so these three decisions are worth a check
+// that runs without a browser.
+describe("the gate's sign-in", () => {
+  it("refuses to run with no account named", () => {
+    expect(() => mintCommand("", "https://console.example/console", "/tmp/x.json")).toThrow(
+      /INTERACTION_EMAIL/,
+    );
+    expect(() => mintCommand("   ", "https://console.example/console", "/tmp/x.json")).toThrow();
+  });
+
+  it("mints through the live-auth command line, not an import", () => {
+    // Both import forms are broken in opposite directions: extensionless type
+    // checks against the synchronous wrapper while running the asynchronous
+    // module, which is how the promise came to float, and the explicit .mjs
+    // fails to load under Playwright's CommonJS output.
+    const { command, args } = mintCommand(
+      "someone@example.com",
+      "https://console.example/console",
+      "tests/interaction/.auth/user.json",
+    );
+    expect(command).toBe("node");
+    expect(args[0]).toBe("tests/e2e/support/live-auth.mjs");
+    expect(args).toEqual([
+      "tests/e2e/support/live-auth.mjs",
+      "someone@example.com",
+      "https://console.example/console",
+      "tests/interaction/.auth/user.json",
+    ]);
+  });
+
+  it("fails when the mint returned without writing a session", () => {
+    expect(() => assertStateWritten(false, "/tmp/user.json")).toThrow(
+      /returned without writing .*the sweep has no session and must not run/,
+    );
+    expect(() => assertStateWritten(true, "/tmp/user.json")).not.toThrow();
+  });
+
+  it("relays the child process output, which live-auth has already redacted", () => {
+    const failure = mintFailure({ stdout: "live-auth: verify failed", stderr: "" });
+    expect(failure.message).toContain("[live-auth] mint failed");
+    expect(failure.message).toContain("verify failed");
   });
 });
 

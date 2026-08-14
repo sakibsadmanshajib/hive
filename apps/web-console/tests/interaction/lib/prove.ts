@@ -240,11 +240,21 @@ export async function observe(
   let navStatus: number | null = null;
   const failedRequests: string[] = [];
 
+  // The request objects seen during THIS activation's window. A response only
+  // says something about a control when it answers a request that control
+  // caused, and the window is roughly four and a half seconds against a 250
+  // millisecond pre-click sample, so without this a background poll or the
+  // late answer to something the page started before the click lands inside
+  // the window and is read as this control's proof, or as its failure. Same
+  // correlation the chat coverage suite settled on (PR #809, 09d39925).
+  const mine = new Set<Request>();
+
   const onRequest = (request: Request): void => {
     const url = normalizeUrl(request.url());
     if (ASSET_PATTERN.test(url) || baseline.has(url)) {
       return;
     }
+    mine.add(request);
     requests.push(`${request.method()} ${url}`);
   };
   const onResponse = (response: {
@@ -254,13 +264,13 @@ export async function observe(
   }): void => {
     const request = response.request();
     const url = normalizeUrl(response.url());
-    if (ASSET_PATTERN.test(url)) {
+    if (ASSET_PATTERN.test(url) || !mine.has(request)) {
       return;
     }
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
       navStatus = response.status();
     }
-    if (response.status() >= 400 && !baseline.has(url)) {
+    if (response.status() >= 400) {
       failedRequests.push(`${response.status()} ${request.method()} ${url}`);
     }
   };
