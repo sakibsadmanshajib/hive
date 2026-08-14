@@ -466,8 +466,11 @@ jobs:
         # cause rather than on the one that noticed.
         run: |
           set -euo pipefail
+          # X-Internal-Token, not a bearer: control-plane's /internal/* gate is
+          # RequireInternalToken (platform/http/internalauth.go), which fails
+          # closed on anything else and answered 401 to a bearer.
           gates=$(curl -sS --fail-with-body \
-            -H "Authorization: Bearer $CONTROL_PLANE_INTERNAL_TOKEN" \
+            -H "X-Internal-Token: $CONTROL_PLANE_INTERNAL_TOKEN" \
             "http://localhost:8081/internal/featuregate/$PROOF_TENANT_ID")
           # One line: a `python3 -c` program written across several lines
           # inside a YAML block has to be indented, and Python rejects a
