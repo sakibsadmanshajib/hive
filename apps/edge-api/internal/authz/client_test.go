@@ -205,6 +205,37 @@ func TestResolveClassifiesControlPlane5xxAsUpstreamUnavailable(t *testing.T) {
 	}
 }
 
+// A 200 status only means the headers arrived; the client's own Timeout still
+// covers the body read (net/http cancels the request context mid-read when it
+// fires), so a response that starts with a 200 and then stalls before
+// finishing the body must classify the same as a transport failure, not fall
+// through unclassified into a default invalid_api_key.
+func TestResolveClassifiesStalledBodyReadAfterOKStatusAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: &http.Client{Timeout: 5 * time.Millisecond},
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a stalled body read")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable for a stalled body read after a 200 status, got %v", err)
+	}
+}
+
 // A genuine control-plane verdict that the key does not exist must NOT be
 // classified as upstream-unavailable: the fix must not weaken a real
 // rejection into a retryable 503.

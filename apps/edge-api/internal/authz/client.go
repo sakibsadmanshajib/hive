@@ -175,12 +175,19 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return AuthSnapshot{}, fmt.Errorf("authz: read response: %w", err)
+		// A 200 status only means the response headers arrived; the client's
+		// own Timeout still covers reading the body (net/http cancels the
+		// request context when it fires, mid-read), and a slow or truncated
+		// body read reaches no usable verdict on the key any more than a
+		// transport failure before headers did.
+		return AuthSnapshot{}, fmt.Errorf("authz: read response: %w: %w", ErrUpstreamUnavailable, err)
 	}
 
 	var snap AuthSnapshot
 	if err := json.Unmarshal(respBytes, &snap); err != nil {
-		return AuthSnapshot{}, fmt.Errorf("authz: decode snapshot: %w", err)
+		// A malformed body is a control-plane-side bug, not a verdict on the
+		// key; same "no usable verdict" shape as the cases above.
+		return AuthSnapshot{}, fmt.Errorf("authz: decode snapshot: %w: %w", ErrUpstreamUnavailable, err)
 	}
 
 	// 3. Cache in Redis (fire and forget).
