@@ -177,9 +177,21 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, perm) {
+		// This function now serves two permissions, so it has two reasons to
+		// refuse and they are not interchangeable. Telling a verified member
+		// to go verify an address they already verified sends them to fix
+		// something that is not broken, and the machine code is what clients
+		// branch on.
+		if authz.RequiresVerified(perm) && !viewer.EmailVerified {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before changing billing settings",
+				"code":  "email_verification_required",
+			})
+			return uuid.Nil, false
+		}
 		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "email must be verified before accessing billing",
-			"code":  "email_verification_required",
+			"error": "workspace owner permission required",
+			"code":  "permission_denied",
 		})
 		return uuid.Nil, false
 	}

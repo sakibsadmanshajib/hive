@@ -348,9 +348,14 @@ func writeAcceptInvitationError(w http.ResponseWriter, r *http.Request, err erro
 			"code":  "invitation_email_mismatch",
 		})
 	case errors.Is(err, ErrEmailNotVerified):
+		// Its own code rather than the shared email_verification_required,
+		// which two other handlers also emit for what is usually a role
+		// refusal. This is the one refusal in this switch the invitee can
+		// actually clear themselves, so the console needs to be able to tell it
+		// apart and offer the action that clears it.
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "verify your email address before accepting this invitation",
-			"code":  "email_verification_required",
+			"code":  "invitation_email_not_verified",
 		})
 	// Above the ErrNotFound case on purpose. The invitation was valid and the
 	// membership write behind it failed, so telling the invitee their link is

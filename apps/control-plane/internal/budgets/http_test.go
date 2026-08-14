@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,18 +204,22 @@ func TestHandler_BudgetAuthzMatrix(t *testing.T) {
 		method     string
 		path       string
 		wantStatus int
+		// wantCode discriminates the two refusals resolveCurrentAccountID can
+		// produce. Status alone cannot: a verified member and an unverified
+		// owner are both 403, and only one of them has anything to go and fix.
+		wantCode string
 	}{
 		// billing.view — RequiresVerified=false — unverified owner allowed
-		{"owner unverified view budget", "owner", false, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK},
-		{"owner verified view budget", "owner", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK},
+		{"owner unverified view budget", "owner", false, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK, ""},
+		{"owner verified view budget", "owner", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK, ""},
 		// member cannot view budget (not granted billing.view)
-		{"member verified view budget", "member", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusForbidden},
+		{"member verified view budget", "member", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusForbidden, "permission_denied"},
 		// billing.write — RequiresVerified=true — the legacy budget mutations
 		// were gated on billing.view, so an owner who had never proven control
 		// of their mailbox could raise their own hard spend cap.
-		{"owner unverified set budget", "owner", false, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden},
-		{"owner unverified dismiss alert", "owner", false, http.MethodPost, "/api/v1/accounts/current/budget/dismiss", http.StatusForbidden},
-		{"member verified set budget", "member", true, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden},
+		{"owner unverified set budget", "owner", false, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden, "email_verification_required"},
+		{"owner unverified dismiss alert", "owner", false, http.MethodPost, "/api/v1/accounts/current/budget/dismiss", http.StatusForbidden, "email_verification_required"},
+		{"member verified set budget", "member", true, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden, "permission_denied"},
 	}
 
 	for _, tc := range cases {
@@ -245,6 +250,9 @@ func TestHandler_BudgetAuthzMatrix(t *testing.T) {
 
 			if rr.Code != tc.wantStatus {
 				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
+			}
+			if tc.wantCode != "" && !strings.Contains(rr.Body.String(), tc.wantCode) {
+				t.Errorf("want code %q in body, got %s", tc.wantCode, rr.Body.String())
 			}
 		})
 	}
