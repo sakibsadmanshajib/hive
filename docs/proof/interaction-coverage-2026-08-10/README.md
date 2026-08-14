@@ -9,7 +9,7 @@
 > ever fired: the only control matching the destructive pattern in either run
 > was the `Top up credits` link, and the workspace held no rows carrying a
 > revoke control. The gate no longer works this way. It now aborts, inside the
-> browser, every state changing request whose values it supplied and anything
+> browser, every state-changing request whose values it supplied and anything
 > named delete, revoke or purchase, and the interception is what proves the
 > control is wired. Read the numbers below as a measurement of the console, not
 > as a description of how the gate behaves today.
@@ -53,7 +53,7 @@ control that plainly did not work. The predicate now refuses that:
 At the time of this run, a 400, 409 or 422 was excused when the gate had typed
 the values the request carried, through `ProofContext.harnessSuppliedInput`.
 That exception no longer exists, and neither does the field: the gate now
-aborts, inside the browser, every state changing request whose values it
+aborts, inside the browser, every state-changing request whose values it
 supplied, so no such request reaches a server to be refused. Any 4xx that does
 come back is the application's own, and `verdictFromObservation` classifies it
 as `failed-request`. Kept here because it is what produced the numbers below.
