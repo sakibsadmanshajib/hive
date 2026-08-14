@@ -9,11 +9,14 @@ are writing or reviewing a test, the question is never "does it pass". It is
 "what would have to break for this to fail, and is that the thing I care
 about".
 
-Every number in this document is one the tooling produces today. Where a figure
-has been superseded, the old one is left visible beside the new one with the
-commit it was true at, because a correction that erases the wrong number
-teaches nothing. If you cannot reproduce a figure here with the command next to
-it, the document is wrong and the fix belongs in the same change that noticed.
+Every current measurement figure in this document is reproducible from the
+command next to it. Dates, issue numbers, incident counts, and shape counts are
+historical record, not tooling output, and are not claimed to regenerate.
+Where a measurement figure has been superseded, the old one is left visible
+beside the new one with the commit it was true at, because a correction that
+erases the wrong number teaches nothing. If you cannot reproduce a current
+figure here with the command next to it, the document is wrong and the fix
+belongs in the same change that noticed.
 
 ## The one non negotiable rule
 
@@ -387,17 +390,17 @@ that guards money, authorization, or data loss.
 Nothing skips. There is no variable to blame. The file simply is never passed
 to any runner, and an uninvoked file emits no signal at all.
 
-The tree holds thirty four spec files. `node tools/verify-spec-wiring.mjs`
+The tree holds thirty six spec files. `node tools/verify-spec-wiring.mjs`
 reports what happens to them today:
 
 | State | Count | Which |
 | --- | --- | --- |
-| runs on a pull request | 13 | the `chromium` project, run by `web-e2e` as `npx playwright test --project=chromium` |
-| runs only on a trigger a pull request cannot fire | 18 | the `phase-19`, `owui` and `owui-perf` projects, run by `owui-nightly.yml` on a schedule, a manual dispatch, or a labelled pull request |
+| runs on a pull request | 14 | the `chromium` project, run by `web-e2e` as `npx playwright test --project=chromium`; and `chat-coverage-break-proof`, run by chat-coverage.yml's self-check job, which has no gate and fires on every ordinary pull request |
+| runs only on a trigger a pull request cannot fire | 19 | the `phase-19`, `owui` and `owui-perf` projects, run by `owui-nightly.yml`; and `chat-coverage`, run by chat-coverage.yml's live-sweep job. All four run on a schedule, a manual dispatch, or a pull request carrying a specific label (`run-owui-e2e`, `run-chat-coverage`). A labelled `pull_request` event is still a `pull_request` event, so it is not "not a pull request"; what excludes it is that an ORDINARY pull request, the one that opens or pushes a commit with no label attached, never carries that label, so it never selects these projects. That is the distinction this guard's `pr`/`other` split encodes, and it is why these four are `other` rather than `pr` despite firing on `pull_request` in the YAML sense |
 | runs nowhere | 3 | the two `_probe` specs and `owui/deployed-login.spec.ts`, whose projects no workflow invokes |
 
 Those three have never executed anywhere, which is the shape in its pure
-form. The eighteen are the more interesting half: they run, they are real, and
+form. The nineteen are the more interesting half: they run, they are real, and
 they protect nothing on the merge path, so counting them alongside the
 thirteen produces a number that sounds like coverage and gates nothing. The
 guard reports the two separately for that reason, and the twenty one that are
@@ -461,9 +464,9 @@ no workflow, so five of its seven specs `test.skip` themselves by name and two
 actually execute assertions. That is shape 1 wearing shape 14's clothes, and
 the workflow step says so in its own comment rather than leaving the reader to
 find out. Provisioning a second tenant and the two crafted JWTs is tracked on
-#708.
+issue `#708`.
 
-The same caveat applies to the thirteen pull-request specs. `openai-sdk.spec.ts`
+The same caveat applies to the fourteen pull-request specs. `openai-sdk.spec.ts`
 is selected by `chromium` and skips itself on `EDGE_BASE_URL`, which `web-e2e`
 deliberately does not set. Counting a selected file as a covered one is
 generous in exactly the direction that flatters, so treat the wiring figure as
@@ -552,3 +555,28 @@ And the corollary that applies to this document as much as to the code: when a
 peer disproves a number, the number was wrong, not the peer. The correction
 belongs in the artifact, with the old figure left visible next to it, which is
 why "it reported 6 and 27" is still written above.
+
+### 16. An effect not caused by the control, counted as proof
+
+A prover clicks a control, sees a network call, a DOM mutation, or a download
+start, and credits that as proof the control fired. The effect is real. The
+cause is not established: a page can navigate, a timer can tick, or an
+unrelated element can mutate at the same moment for a reason that has nothing
+to do with the control under test, and a prover that only asks "did something
+happen" cannot tell the two apart.
+
+Confirmed in `apps/web-console/e2e/chat-coverage/lib.ts` (#809): the first
+version of the interaction-coverage prover credited a mutation anywhere in the
+window as a control's proof, and counted an intercepted request as network
+proof with no verdict behind it, so a control sitting next to something that
+mutates or dials out on its own could pass with no click ever reaching it.
+Both were narrowed to the outcome caused by the specific element the prover
+interacted with (a disabled control is explicitly never proof, only a
+mutation, network call, download, file chooser, popup, or navigation
+attributable to that element counts).
+
+**Instead:** scope the observed effect to the element under test, not the
+page. If a mutation observer, a request interceptor, or a navigation listener
+is the evidence, attach it to the control's own subtree or filter it to
+requests the control's own handler could plausibly have issued, and treat
+"something happened somewhere" as `proof: "none"` rather than a pass.

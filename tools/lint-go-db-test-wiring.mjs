@@ -128,6 +128,41 @@ function resolveDirectories(template, legs) {
 
 const normalizeDir = (value) => value.replace(/^\.\//, "").replace(/\/$/, "");
 
+// A `go test` line inside a shell `if [ "${{ matrix.KEY }}" = "VALUE" ]` /
+// `else` block only ever runs for the matrix leg(s) that branch selects.
+// Without this, two branches naming the same package pattern (the real shape
+// of the control-plane/edge-api RLS step below) can credit a leg whose branch
+// never reaches that command at all, because every invocation in the step
+// otherwise carries every leg's directory regardless of which branch wraps it.
+//
+// Unrecognised shapes (a different comparison operator, no enclosing `if`,
+// something this has not been taught) return every leg unchanged, which is
+// the pre-existing, permissive behaviour: narrowing wrongly is worse than not
+// narrowing, and this guard already fails closed elsewhere by declaring debt
+// rather than inventing coverage, not by rejecting shapes it cannot read.
+function legsForLine(lines, index, legs) {
+  let branch = null; // "if" | "else", set once an enclosing block is found
+  let key = null;
+  let value = null;
+  for (let i = index; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (i !== index && /^fi\s*;?$/.test(line)) return legs; // closed before opening: not inside a block
+    if (branch === null && /^else\b/.test(line)) {
+      branch = "else";
+      continue;
+    }
+    const match = /^if\s+\[\s*"?\$\{\{\s*matrix\.([A-Za-z0-9_]+)\s*\}\}"?\s*==?\s*"([^"]+)"\s*\]/.exec(line);
+    if (match) {
+      key = match[1];
+      value = match[2];
+      branch = branch ?? "if";
+      break;
+    }
+  }
+  if (!key) return legs;
+  return legs.filter((leg) => (branch === "else" ? String(leg[key]) !== value : String(leg[key]) === value));
+}
+
 // A step exports a variable to every later step in its job by appending to
 // $GITHUB_ENV. Anything else is scoped to the step or the job.
 function exportedToGithubEnv(run) {
@@ -153,13 +188,15 @@ for (const file of readdirSync(WORKFLOW_DIR).filter((f) => f.endsWith(".yml") ||
     for (const step of job?.steps ?? []) {
       if (typeof step?.run !== "string") continue;
       const available = new Set([...inScope, ...Object.keys(step?.env ?? {})]);
+      const runLines = step.run.replace(/\\\n/g, " ").split("\n");
 
-      for (const line of step.run.replace(/\\\n/g, " ").split("\n")) {
+      for (const [index, line] of runLines.entries()) {
         const command = line.trim();
         if (command.startsWith("#") || !/\bgo test\b/.test(command)) continue;
+        const scopedLegs = legsForLine(runLines, index, legs);
         invocations.push({
           where: `${path}#${jobId}`,
-          directories: resolveDirectories(step["working-directory"] ?? jobDefault, legs),
+          directories: resolveDirectories(step["working-directory"] ?? jobDefault, scopedLegs),
           patterns: command.split(/\s+/).filter((token) => token.startsWith("./")),
           available,
         });

@@ -170,9 +170,13 @@ function reactsToOrdinaryPullRequest(doc) {
 // gated. That is a deliberate design in ci.yml rather than a hole, and
 // modelling it would mean evaluating the `changes` job's path filters against
 // a diff this guard does not have.
-function survivesOrdinaryPullRequest(condition) {
+export function survivesOrdinaryPullRequest(condition) {
   if (!condition) return true;
   if (/github\.event\.pull_request\.labels/.test(condition)) return false;
+  // `github.event_name != 'pull_request'` mentions the event name and also
+  // contains the quoted string `pull_request`, so it must be checked before
+  // the presence-only test below, which cannot tell an exclusion from a gate.
+  if (/github\.event_name\s*!=\s*['"]pull_request(_target)?['"]/.test(condition)) return false;
   if (/github\.event_name/.test(condition) && !/['"]pull_request['"]/.test(condition)) return false;
   return true;
 }
@@ -331,6 +335,7 @@ function selectionOf(invocation, configs, where) {
 
 // ---- measurement --------------------------------------------------------
 
+function main() {
 const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
 const specProjects = manifest.specs ?? {};
 const configs = manifest.configs ?? {};
@@ -524,3 +529,9 @@ console.log(
   "  Selection is not execution: a spec that skips every test on an unset variable is counted here " +
     "as run. That is camouflage shape 1, and it is measured separately.",
 );
+}
+
+// Guarded so tools/verify-spec-wiring.test.mjs can import the pure helpers
+// above (survivesOrdinaryPullRequest) without running the real measurement
+// against this repository's own workflow tree and exiting the test process.
+if (import.meta.url === `file://${process.argv[1]}`) main();

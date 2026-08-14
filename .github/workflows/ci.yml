@@ -425,7 +425,7 @@ jobs:
             # them in the -short step above instead is the same never-runs
             # trap as issues #701 and #708. The recursive pattern is
             # deliberate: it cannot go stale when a new subpackage lands.
-            # scripts/verify-go-package-wiring.mjs fails if it is dropped.
+            # tools/lint-go-db-test-wiring.mjs fails if it is dropped.
             go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/platform/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
           else
             # -tags integration additionally compiles in
@@ -644,12 +644,26 @@ jobs:
       # apps/web-console/tests/dark-spec-allowlist.json. It lives here, not in
       # web-unit, because it reads workflow YAML and the pinned spec manifest
       # and needs neither browsers nor the web console's dependencies.
+      # Fixture regression test for the classifier above: a `github.event_name
+      # != 'pull_request'` exclusion must not be credited as pull-request
+      # gated. Runs before the guard itself so a broken classifier fails here,
+      # in a check that names the case, rather than as a silently wrong count
+      # in the guard below.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:spec-wiring:test
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:spec-wiring
 
       # Issue #659, #797. A Go package carrying a database-gated test skips
       # silently when it is absent from the RLS step's package list, which is
       # how the platform package went from never running to green in one line.
+      # Fixture regression test: two matrix legs, one shell `if` with no
+      # `else` wrapping a single go test line, so only one leg's package is
+      # actually reached. The other leg's DSN-gated package must be reported
+      # unpaired, not credited via the directory the wrapped line shares with
+      # every leg regardless of the branch that selects it.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:go-db-test-wiring:test
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:go-db-test-wiring
 

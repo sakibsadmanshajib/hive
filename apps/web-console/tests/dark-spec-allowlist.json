@@ -33,7 +33,7 @@
         "e2e/phase-19/06-no-tenant-block.spec.ts",
         "e2e/phase-19/07-cross-tenant-attack.spec.ts"
       ],
-      "reason": "The phase-19 project runs in owui-nightly.yml, which fires on a schedule, a manual dispatch, or a pull request carrying the run-owui-e2e label. An ordinary pull request selects none of it. Worse than that for coverage purposes: 03 through 07 skip themselves by name on E2E_TENANT_B_ID, E2E_USER_A_SECOND_TENANT_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT, which no environment provides, so two of these seven actually execute assertions anywhere. Provisioning a second tenant and the two crafted JWTs is the remaining half of the issue below.",
+      "reason": "The phase-19 project runs in owui-nightly.yml, which fires on a schedule, a manual dispatch, or a pull request carrying the run-owui-e2e label. An ordinary pull request selects none of it. Worse than that for coverage purposes: 03 through 07 skip themselves by name on E2E_TENANT_B_ID, E2E_USER_A_SECOND_TENANT_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT, which no environment provides, so only two of these seven (01 and 02) execute assertions anywhere. Provisioning a second tenant and the two crafted JWTs is the remaining half of the issue below.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
@@ -70,6 +70,13 @@
         "tests/e2e/_probe/staging-flows.spec.ts"
       ],
       "reason": "Manual staging probes in the probe project, which no workflow invokes and the chromium project ignores by testDir. They target deployed hosts by name and are gated on HIVE_QA variables that appear in no workflow, so against a locally booted stack they fail on DNS rather than on the change under test. The open decision is whether they become a scheduled suite against the demo box or a documented manual tool.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "other",
+      "specs": ["e2e/chat-coverage/chat-coverage.spec.ts"],
+      "reason": "chat-coverage.yml's live-sweep job (#809) fires on workflow_dispatch or a pull request carrying the run-chat-coverage label, never on an ordinary pull request. It exercises a real deployed chat surface via the live-session helper and spends real provider credit, which is why it is not in the merge-gate path yet. break-proof.spec.ts is a sibling project in the same config but runs in the self-check job, which has no such gate and does run on every ordinary pull request, so it is not declared here.",
       "owner": "sakibsadmanshajib",
       "issue": 821
     }
