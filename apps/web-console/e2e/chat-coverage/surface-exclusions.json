@@ -1,0 +1,11 @@
+{
+  "$comment": "Surfaces deliberately left out of the sweep. Each one leaves the denominator entirely rather than counting as covered. An exclusion that exists because something is broken names the issue that is broken, and the gate fails the moment that issue closes, so an exclusion cannot outlive its reason. A standing decision sets permanent instead and names no issue.",
+  "surfaces": [
+    {
+      "id": "composer-controls",
+      "reason": "the advanced parameters panel does not open from a clean home state, so the surface enumerates zero controls and none of them can be activated",
+      "issue": 844,
+      "owner": "@sakibsadmanshajib"
+    }
+  ]
+}

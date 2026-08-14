@@ -1,0 +1,17 @@
+{
+  "$comment": "Upstream Open WebUI surfaces this deployment removes because Hive has no backend for them (#771, #772). They must be ABSENT, not present-and-inert: an element that still renders here is a finding, because the removal patches assert their own effect at image build time and a survivor means one silently stopped matching.",
+  "forbiddenControls": [
+    { "surface": "^settings:", "label": "^Integrations$", "issue": "#771" },
+    { "surface": "^workspace", "label": "^(Models|Prompts|Tools|Skills)$", "issue": "#772" },
+    { "surface": "^user-menu", "label": "^(Documentation|Releases)$", "issue": "#772" },
+    { "surface": ".", "label": "^Playground$", "issue": "#772" },
+    { "surface": ".", "label": "^(Manage Tool Servers|Open Terminal)$", "issue": "#771" }
+  ],
+  "forbiddenRoutes": [
+    { "path": "/workspace/models", "issue": "#772" },
+    { "path": "/workspace/prompts", "issue": "#772" },
+    { "path": "/workspace/tools", "issue": "#772" },
+    { "path": "/workspace/skills", "issue": "#772" },
+    { "path": "/playground", "issue": "#772" }
+  ]
+}

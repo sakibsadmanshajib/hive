@@ -1,0 +1,4 @@
+{
+  "$comment": "Controls allowed to have no observable effect. Every entry needs a real justification; an entry with an empty or missing justification fails the gate on its own. Keys are matched as substrings against the control key emitted in coverage.json (surface::role::label).",
+  "allowed": []
+}

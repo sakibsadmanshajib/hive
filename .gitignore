@@ -67,6 +67,9 @@ __pycache__/
 # named anything other than test-results/ was landing traces and videos in
 # `git status` where an `add -A` could commit them.
 /apps/web-console/test-results*/
+/apps/web-console/playwright-report-chat-coverage/
+/apps/web-console/chat-coverage-report/
+/apps/web-console/e2e/chat-coverage/.auth/
 # Added by code-review-graph
 .code-review-graph/
 

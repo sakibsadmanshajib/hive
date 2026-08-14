@@ -10,9 +10,11 @@
     "same PR. If the line changes and nobody meant to change it, the spec went dark by",
     "accident, which is what this file exists to catch.",
     "",
-    "Project names come from playwright.config.ts and e2e/phase-19/owui/playwright.owui.config.ts.",
-    "The owui projects gate their testMatch on credentials, so the guard lists that config",
-    "with placeholders to keep collection deterministic everywhere.",
+    "Project names come from playwright.config.ts, e2e/phase-19/owui/playwright.owui.config.ts",
+    "and e2e/chat-coverage/playwright.chat-coverage.config.ts.",
+    "The owui projects and the live chat-coverage project gate their testMatch on credentials,",
+    "so the guard lists those configs with placeholders to keep collection deterministic",
+    "everywhere.",
     "",
     "`configs` pins each config to the projects it declares, verified by the same guard from the",
     "same listing. tools/verify-spec-wiring.mjs reads it to resolve a workflow's `--config` and",
@@ -25,9 +27,17 @@
       "owui-deployed-login",
       "owui-perf",
       "owui-setup"
+    ],
+    "e2e/chat-coverage/playwright.chat-coverage.config.ts": [
+      "chat-coverage",
+      "chat-coverage-break-proof",
+      "chat-coverage-setup"
     ]
   },
   "specs": {
+    "e2e/chat-coverage/auth.setup.ts": ["chat-coverage-setup"],
+    "e2e/chat-coverage/break-proof.spec.ts": ["chat-coverage-break-proof"],
+    "e2e/chat-coverage/chat-coverage.spec.ts": ["chat-coverage"],
     "e2e/phase-19/01-signin-google.spec.ts": ["phase-19"],
     "e2e/phase-19/02-first-chat.spec.ts": ["phase-19"],
     "e2e/phase-19/03-tenant-isolation.spec.ts": ["phase-19"],
