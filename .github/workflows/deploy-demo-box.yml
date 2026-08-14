@@ -982,7 +982,15 @@ jobs:
       - name: Assert model catalog
         run: |
           set -euo pipefail
-          body="$(curl -fsS -H "Authorization: Bearer $HIVE_API_KEY" "$HIVE_BASE_URL/models")"
+          # --retry 5 --retry-all-errors --retry-delay 5: this runs right after
+          # deploy recreates control-plane, and a cold container's first
+          # /internal/apikeys/resolve can take several seconds (2026-08-14
+          # incident: 5.65s observed), which used to 401 this replay's very
+          # first request. Bounded retry rides out that cold-start window
+          # without masking a genuinely broken deploy -- five attempts five
+          # seconds apart still fails loudly if the box stays down.
+          body="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 \
+            -H "Authorization: Bearer $HIVE_API_KEY" "$HIVE_BASE_URL/models")"
           echo "$body" | jq -e '.data | length >= 4' >/dev/null
           for alias in hive-auto hive-default hive-embedding-default hive-fast; do
             echo "$body" | jq -e --arg id "$alias" '.data | map(.id) | index($id) != null' >/dev/null \

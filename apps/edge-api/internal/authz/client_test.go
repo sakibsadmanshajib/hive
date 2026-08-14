@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -123,5 +124,107 @@ func TestResolveHydratesRedisFromControlPlane(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("expected a single control-plane fetch, got %d", requests)
+	}
+}
+
+// A cold control-plane container (post-recreate, DB pool not yet warm) answers
+// slower than the resolve client's timeout. That is a transport failure, not a
+// verdict on the key: Resolve must let callers tell the two apart so a slow
+// backend cannot masquerade as a nonexistent key (2026-08-14 live-box incident,
+// GET /v1/models 401'd a valid key while control-plane logged its own
+// "context canceled" resolving that same request).
+func TestResolveClassifiesClientTimeoutAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: &http.Client{Timeout: 5 * time.Millisecond},
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a timed-out resolve call")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable for a client timeout, got %v", err)
+	}
+}
+
+// A canceled context (caller gave up, or the parent request deadline expired)
+// is the same shape as a timeout: it says nothing about the key.
+func TestResolveClassifiesContextCancellationAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.Resolve(ctx, "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a canceled-context resolve call")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable for a canceled context, got %v", err)
+	}
+}
+
+// The control-plane itself returning a 5xx (its own DB call failed or was
+// canceled) is the same "says nothing about the key" shape as a transport
+// failure, and must classify the same way.
+func TestResolveClassifiesControlPlane5xxAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"request could not be completed"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a 5xx resolve response")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable for a control-plane 5xx, got %v", err)
+	}
+}
+
+// A genuine control-plane verdict that the key does not exist must NOT be
+// classified as upstream-unavailable: the fix must not weaken a real
+// rejection into a retryable 503.
+func TestResolveDoesNotClassifyGenuineNotFoundAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a 404 resolve response")
+	}
+	if errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("a genuine not-found must not be classified upstream-unavailable, got %v", err)
 	}
 }

@@ -89,6 +89,8 @@ func WriteAuthFailure(w http.ResponseWriter, oerr *OpenAIError, headers map[stri
 		status = http.StatusTooManyRequests
 	case oerr.Error.Code != nil && *oerr.Error.Code == "model_not_found":
 		status = http.StatusNotFound
+	case oerr.Error.Code != nil && *oerr.Error.Code == "upstream_unavailable":
+		status = http.StatusServiceUnavailable
 	}
 	WriteError(w, status, oerr.Error.Type, oerr.Error.Message, oerr.Error.Code)
 }

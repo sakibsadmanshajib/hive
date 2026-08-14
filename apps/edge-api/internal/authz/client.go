@@ -50,6 +50,18 @@ func HashBearerToken(authHeader string) string {
 	return strings.ToLower(hex.EncodeToString(h[:]))
 }
 
+// ErrUpstreamUnavailable classifies a Resolve failure that says nothing about
+// whether the presented key is valid: a transport failure (dial/connection
+// error), a client timeout, a canceled or expired context, or a non-2xx
+// status from control-plane that is not itself a verdict on the key (its own
+// request failed or was canceled, e.g. a 500 mid-cold-start). Authorize maps
+// this distinctly from a genuine invalid-key rejection (401) so a slow or
+// momentarily unreachable control-plane cannot masquerade as "this key does
+// not exist" -- see the 2026-08-14 live-box incident, where a cold
+// control-plane container answered /internal/apikeys/resolve too slowly and
+// a perfectly valid key was told it was invalid.
+var ErrUpstreamUnavailable = errors.New("authz: resolve upstream unavailable")
+
 // snapshotTTL bounds how long the edge will honor a cached auth snapshot when
 // active control-plane invalidation is missed. The control-plane DELETEs the
 // snapshot key on revoke/disable/rotate (primary path); this TTL is the
@@ -76,10 +88,24 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 
 	return &Client{
 		cache:      &redisSnapshotStore{client: redis.NewClient(opt)},
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: &http.Client{Timeout: resolveClientTimeout},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 	}, nil
 }
+
+// resolveClientTimeout bounds a single /internal/apikeys/resolve call. Raised
+// from 5s to 10s on 2026-08-14: a control-plane container recreated at
+// 16:34:29Z took until 16:35:17Z (measured 5.65s for the first request after
+// listening began) to complete its first resolve, so the previous 5s timeout
+// was already below the observed worst case and turned that cold-start
+// latency into a resolve failure on every deploy's post-deploy replay. 10s
+// gives roughly double that observed worst case as headroom. The trade-off is
+// real: a genuinely dead control-plane now takes up to 10s (was 5s) to surface
+// as a failure on the hot path. That is an acceptable trade now that a resolve
+// failure answers a retryable 503 (upstream_unavailable) instead of a
+// non-retryable 401 -- the failure being slower matters far less than it being
+// honest.
+const resolveClientTimeout = 10 * time.Second
 
 // Resolve returns the AuthSnapshot for the given raw token or Bearer header.
 // It checks Redis first, then falls back to the control plane.
@@ -126,13 +152,25 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return AuthSnapshot{}, fmt.Errorf("authz: fetch: %w", err)
+		// A transport failure (dial error, TLS error, client timeout, canceled
+		// context) says nothing about whether rawToken is a valid key -- it
+		// never reached a control-plane verdict at all.
+		return AuthSnapshot{}, fmt.Errorf("authz: fetch: %w: %w", ErrUpstreamUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return AuthSnapshot{}, fmt.Errorf("authz: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		statusErr := fmt.Errorf("authz: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		// 404 (not found) and 409 (revoked/disabled/not-active) are genuine
+		// control-plane verdicts on the key; every other status (5xx from a
+		// control-plane request that itself failed or was canceled, or
+		// anything unexpected) is the same "no verdict reached" shape as a
+		// transport failure above.
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict {
+			return AuthSnapshot{}, statusErr
+		}
+		return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
 	}
 
 	respBytes, err := io.ReadAll(resp.Body)

@@ -83,17 +83,15 @@ func (o *Orchestrator) executeSync(
 	authHeader := r.Header.Get("Authorization")
 	snapshot, headers, authErr := o.authorizer.Authorize(ctx, authHeader, model, estimatedCredits, 0, 0)
 	if authErr != nil {
-		status := http.StatusUnauthorized
-		if authErr.Error.Type == "insufficient_quota" {
-			status = http.StatusTooManyRequests
-		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
-			status = http.StatusNotFound
-		}
-		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
-			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
-			return
-		}
-		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
+		// apierrors.WriteAuthFailure is the single source of truth for
+		// mapping an authz failure to a wire response (rate-limit 429,
+		// quota 429, model-not-found 404, upstream-unavailable 503,
+		// default 401); duplicating that switch here let it drift out of
+		// sync (it never gained the upstream_unavailable case, so a cold
+		// control-plane container fell through to 401 here even after
+		// Authorizer started returning 503 -- fixed by routing through the
+		// shared helper instead of a second copy of its logic).
+		apierrors.WriteAuthFailure(w, authErr, headers)
 		return
 	}
 

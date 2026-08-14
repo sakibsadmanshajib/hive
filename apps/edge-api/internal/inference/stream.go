@@ -106,17 +106,10 @@ func (o *Orchestrator) executeStreaming(
 	authHeader := r.Header.Get("Authorization")
 	snapshot, headers, authErr := o.authorizer.Authorize(ctx, authHeader, model, estimatedCredits, 0, 0)
 	if authErr != nil {
-		status := http.StatusUnauthorized
-		if authErr.Error.Type == "insufficient_quota" {
-			status = http.StatusTooManyRequests
-		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
-			status = http.StatusNotFound
-		}
-		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
-			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
-			return nil
-		}
-		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
+		// See the matching comment in orchestrator.go's executeSync: route
+		// through the shared apierrors.WriteAuthFailure mapper rather than a
+		// second copy of its status-code switch.
+		apierrors.WriteAuthFailure(w, authErr, headers)
 		return nil
 	}
 

@@ -99,6 +99,20 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 		// for not-found/revoked vs a transport error) so an outage is
 		// diagnosable from logs instead of guesswork across reruns.
 		log.Printf("authz: key resolution failed err=%v", err)
+		if errors.Is(err, ErrUpstreamUnavailable) {
+			// The resolve call never reached a verdict on this key (transport
+			// failure, timeout, canceled context, or a control-plane 5xx) --
+			// answer with a retryable, provider-blind 503 rather than the
+			// permanent, non-retryable 401 a genuinely invalid key gets. A 401
+			// on a valid credential reads as "this key is wrong" and sends the
+			// caller to rotate it; that is worse than a slow, honest failure.
+			code := "upstream_unavailable"
+			return AuthSnapshot{}, nil, newErr(
+				"api_error",
+				"The authorization service is temporarily unavailable. Please retry.",
+				&code,
+			)
+		}
 		code := "invalid_api_key"
 		return AuthSnapshot{}, nil, newErr(
 			"invalid_request_error",

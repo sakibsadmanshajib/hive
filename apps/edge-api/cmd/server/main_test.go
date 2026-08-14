@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -911,6 +912,61 @@ func TestCheckOWUIShimKeyAcceptsAResolvableKey(t *testing.T) {
 				t.Fatalf("expected a healthy verdict, got %v", err)
 			}
 		})
+	}
+}
+
+// TestCheckOWUIShimKeyDistinguishesUpstreamUnavailableFromDoesNotResolve
+// guards the 2026-08-14 near-miss: a resolve call that never reached a
+// verdict on the key (control-plane timeout/cold-start) must not read the
+// same as "this key does not resolve", or the operator is told to rotate a
+// key that is perfectly fine.
+func TestCheckOWUIShimKeyDistinguishesUpstreamUnavailableFromDoesNotResolve(t *testing.T) {
+	resolver := &stubShimKeyResolver{
+		err: fmt.Errorf("authz: fetch: %w: %w", authz.ErrUpstreamUnavailable, context.DeadlineExceeded),
+	}
+
+	err := checkOWUIShimKey(context.Background(), resolver, testOWUIShimKey)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), "does not resolve to a Hive API key") {
+		t.Fatalf("a transient upstream failure must not read as the key not resolving, got %q", err.Error())
+	}
+	if !errors.Is(err, authz.ErrUpstreamUnavailable) {
+		t.Fatalf("expected the upstream-unavailable cause preserved through the wrap, got %q", err.Error())
+	}
+}
+
+// TestWatchOWUIShimKeyLogsTransientUnavailableWithoutRotateAdvice pins the log
+// line an operator actually reads: on an upstream-unavailable verdict it must
+// not carry the "mint a replacement" remedy, since rotating the key would
+// achieve nothing (the key was never the problem) and could break a working
+// long-lived deployment if acted on.
+func TestWatchOWUIShimKeyLogsTransientUnavailableWithoutRotateAdvice(t *testing.T) {
+	logged := captureLog(t)
+	resolver := &stubShimKeyResolver{
+		err: fmt.Errorf("authz: fetch: %w: %w", authz.ErrUpstreamUnavailable, context.DeadlineExceeded),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Hour)
+		close(done)
+	}()
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "OWUI_SHIM_KEY") })
+	cancel()
+	<-done
+
+	out := logged.String()
+	if strings.Contains(out, "Mint a replacement") {
+		t.Fatalf("transient upstream-unavailable must not advise rotating the key, got %q", out)
+	}
+	for _, want := range []string{"WARN", "transient", "do not rotate"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected the log to contain %q, got %q", want, out)
+		}
 	}
 }
 
