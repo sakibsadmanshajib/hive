@@ -141,35 +141,46 @@ const normalizeDir = (value) => value.replace(/^\.\//, "").replace(/\/$/, "");
 // narrowing, and this guard already fails closed elsewhere by declaring debt
 // rather than inventing coverage, not by rejecting shapes it cannot read.
 //
-// Known ceiling: the `else` branch is modelled as "every leg the `if` did not
-// select", not as the specific leg(s) the workflow author meant. With more
-// than two matrix legs (this repository has four), an `else` line is credited
-// with every leg besides the one the `if` named, including legs the shell
-// code never actually intends to reach. Harmless today because no source
-// file under those extra legs reads a DSN variable this pairs on; would
-// under-narrow the day one does. Modelling an explicit `elif` chain is the
-// fix, and is the rest of the "heavy lift" this guard's review named.
+// Known ceiling: the trailing `else` of a chain is modelled as "every leg no
+// `if`/`elif` in this chain named", not as the specific leg(s) the workflow
+// author meant. A leg the surrounding step's own YAML `if:` already excludes
+// (this repository's RLS step runs only for `matrix.module in
+// (control-plane, edge-api)`, two of its four legs) is not modelled here, so
+// an `else` line is still credited with every OTHER leg this shell chain
+// never names, including ones the step never reaches at all. Harmless today
+// because no source file under those extra legs reads a DSN variable this
+// pairs on; would under-narrow the day one does. Modelling the step's own
+// `if:` against the matrix is the rest of the "heavy lift" this guard's
+// review named; an `elif` chain within one step, the shape reported and
+// fixed here, is not the remaining gap.
 function legsForLine(lines, index, legs) {
-  let branch = null; // "if" | "else", set once an enclosing block is found
-  let key = null;
-  let value = null;
+  const CONDITION =
+    /^(if|elif)\s+\[\s*"?\$\{\{\s*matrix\.([A-Za-z0-9_]+)\s*\}\}"?\s*==?\s*"([^"]+)"\s*\]/;
+  let inElse = false;
+  const excluded = []; // [key, value] pairs a trailing `else` must exclude
   for (let i = index; i >= 0; i--) {
     const line = lines[i].trim();
     if (i !== index && /^fi\s*;?$/.test(line)) return legs; // closed before opening: not inside a block
-    if (branch === null && /^else\b/.test(line)) {
-      branch = "else";
+    if (!inElse && /^else\b/.test(line)) {
+      inElse = true;
       continue;
     }
-    const match = /^if\s+\[\s*"?\$\{\{\s*matrix\.([A-Za-z0-9_]+)\s*\}\}"?\s*==?\s*"([^"]+)"\s*\]/.exec(line);
-    if (match) {
-      key = match[1];
-      value = match[2];
-      branch = branch ?? "if";
-      break;
+    const match = CONDITION.exec(line);
+    if (!match) continue;
+    const [, kind, key, value] = match;
+    if (!inElse) {
+      // Our own branch's header: the `if` or `elif` this line lives inside.
+      return legs.filter((leg) => String(leg[key]) === value);
+    }
+    // Inside a trailing `else`: this if/elif is a sibling branch it excludes.
+    // Keep walking to collect every sibling in the chain, stopping once the
+    // chain's own opening `if` is reached (an `elif` cannot start a chain).
+    excluded.push([key, value]);
+    if (kind === "if") {
+      return legs.filter((leg) => excluded.every(([k, v]) => String(leg[k]) !== v));
     }
   }
-  if (!key) return legs;
-  return legs.filter((leg) => (branch === "else" ? String(leg[key]) !== value : String(leg[key]) === value));
+  return legs;
 }
 
 // A step exports a variable to every later step in its job by appending to

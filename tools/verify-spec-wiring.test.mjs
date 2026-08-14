@@ -16,7 +16,7 @@
 // Run: node tools/verify-spec-wiring.test.mjs
 
 import assert from "node:assert/strict";
-import { survivesOrdinaryPullRequest } from "./verify-spec-wiring.mjs";
+import { survivesOrdinaryPullRequest, conditionOf } from "./verify-spec-wiring.mjs";
 
 // --- Case 1: no condition at all always survives (an unconditional step). ---
 assert.equal(survivesOrdinaryPullRequest(undefined), true, "no condition must survive");
@@ -72,5 +72,41 @@ assert.equal(
   false,
   "a label gate must not survive an ordinary pull request",
 );
+
+// --- Case 6: THE HOLE, round 2. Found by ecc:code-review on this same PR
+// after the round-1 fix landed: this function was patched twice for the
+// "excludes pull_request but reads as included" defect class (`!=` and
+// `github.event.action`), and still missed two siblings in the same class.
+//
+// 6a. A boolean `false` if-condition (a common way to temporarily disable a
+// step) disables it outright; it must never survive. ---
+assert.equal(
+  survivesOrdinaryPullRequest("false"),
+  false,
+  "an always-false condition must not survive an ordinary pull request",
+);
+
+// 6b. Negated string-matching helpers on github.event_name exclude
+// pull_request exactly as `!=` does, and still contain the quoted string
+// `pull_request`, so they must be checked before the presence-only test. ---
+for (const fn of ["contains", "startsWith", "endsWith"]) {
+  assert.equal(
+    survivesOrdinaryPullRequest(`!${fn}(github.event_name, 'pull_request')`),
+    false,
+    `!${fn}(...) excluding pull_request must not survive an ordinary pull request`,
+  );
+}
+
+// --- Case 7: conditionOf. The caller derived jobCondition/stepCondition with
+// `typeof job?.if === "string" ? job.if : ""`, which silently turns a YAML
+// boolean `if: false` into "" (no condition, i.e. "always runs") because
+// YAML's unquoted `false` parses to a JS boolean, not a string. A disabled
+// step was therefore credited as pull-request-covered. conditionOf must
+// preserve a boolean as its string form so survivesOrdinaryPullRequest can
+// see it. ---
+assert.equal(conditionOf(false), "false", "a boolean false condition must not disappear into \"\"");
+assert.equal(conditionOf(true), "true", "a boolean true condition must round-trip too");
+assert.equal(conditionOf("github.event_name == 'pull_request'"), "github.event_name == 'pull_request'");
+assert.equal(conditionOf(undefined), "", "no condition at all must still normalize to \"\"");
 
 console.log("verify-spec-wiring.test: PASS");

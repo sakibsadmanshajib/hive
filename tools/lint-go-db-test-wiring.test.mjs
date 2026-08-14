@@ -116,6 +116,104 @@ function run(root) {
   return spawnSync("node", [LINT_SCRIPT], { cwd: root, encoding: "utf8" });
 }
 
+// A second, three-leg fixture for the `elif` misattribution ecc:code-review
+// found on this same PR. Each leg's branch names a DIFFERENT package
+// (mod-a/internal/rag, mod-b/internal/other, mod-c/internal/rag again) so a
+// misattribution changes the pass/fail outcome rather than hiding behind an
+// identical pattern every branch happens to share. Before the fix,
+// legsForLine's backward scan recognised `if` and `else` but not `elif`, so
+// scanning back from mod-b's `elif` line walked straight past its own
+// `elif [ "${{ matrix.module }}" = "mod-b" ]` header and latched onto the
+// outer `if [ ... = "mod-a" ]` instead, crediting that line with mod-a's
+// directory, not mod-b's. mod-b/internal/other then matched no invocation at
+// all (the one line that names it was attributed to the wrong module), and
+// the guard failed for the wrong reason: "no go test step ... names it",
+// when a real one does, misattributed. Confirmed RED against the pre-fix
+// legsForLine, extracted verbatim and run in isolation on this exact chain:
+// it returned `[{module:"mod-a"}]` for the elif line where
+// `[{module:"mod-b"}]` was correct.
+function buildElifFixture() {
+  const root = mkdtempSync(join(tmpdir(), "lint-go-db-test-wiring-elif-fixture-"));
+
+  const dsnTest = (pkg) => `package ${pkg}
+
+import (
+	"os"
+	"testing"
+)
+
+func TestNeedsDSN(t *testing.T) {
+	if os.Getenv("HIVE_TEST_DB_URL") == "" {
+		t.Skip("no db")
+	}
+}
+`;
+
+  write(root, "apps/mod-a/go.mod", "module mod-a\n\ngo 1.24\n");
+  write(root, "apps/mod-a/internal/rag/x_test.go", dsnTest("rag"));
+  write(root, "apps/mod-b/go.mod", "module mod-b\n\ngo 1.24\n");
+  write(root, "apps/mod-b/internal/other/x_test.go", dsnTest("other"));
+  write(root, "apps/mod-c/go.mod", "module mod-c\n\ngo 1.24\n");
+  write(root, "apps/mod-c/internal/rag/x_test.go", dsnTest("rag"));
+
+  write(
+    root,
+    ".github/workflows/fixture.yml",
+    `on:
+  pull_request:
+jobs:
+  go-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - module: mod-a
+            path: ./apps/mod-a
+          - module: mod-b
+            path: ./apps/mod-b
+          - module: mod-c
+            path: ./apps/mod-c
+    steps:
+      - name: bootstrap
+        run: |
+          echo "HIVE_TEST_DB_URL=postgresql://fixture" >> "$GITHUB_ENV"
+      - name: rls
+        working-directory: \${{ matrix.path }}
+        run: |
+          if [ "\${{ matrix.module }}" = "mod-a" ]; then
+            go test -tags integration -count=1 ./internal/rag/...
+          elif [ "\${{ matrix.module }}" = "mod-b" ]; then
+            go test -tags integration -count=1 ./internal/other/...
+          else
+            go test -tags integration -count=1 ./internal/rag/...
+          fi
+`,
+  );
+
+  return root;
+}
+
+const elifRoot = buildElifFixture();
+try {
+  const result = run(elifRoot);
+  const output = `${result.stdout}${result.stderr}`;
+
+  // mod-b's own elif line genuinely reaches ./internal/other/..., so a
+  // correctly leg-aware guard must pair it, not report it dark.
+  assert.equal(
+    result.status,
+    0,
+    `expected mod-b/internal/other to pair via its own elif line. Output:\n${output}`,
+  );
+  assert.doesNotMatch(
+    output,
+    /mod-b\/internal\/other/,
+    `mod-b/internal/other must not be named as a problem when its elif line is attributed correctly. Output:\n${output}`,
+  );
+} finally {
+  rmSync(elifRoot, { recursive: true, force: true });
+}
+
 const root = buildFixture();
 try {
   const result = run(root);

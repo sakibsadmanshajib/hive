@@ -104,6 +104,39 @@ name a spec file that exists and a marker string that file actually contains.
 Empty justifications, missing owners, and entries matching nothing all fail
 the gate. Deliberate inertness is a recorded decision, never a silent skip.
 
+### Floors change by ledger, never by the run doing the checking
+
+A raw enumerated count is not stable surface to surface: the chat list
+enumerates one control per chat, so it counted 50 on one run and 106 on the
+next with no product change between them. Pinning that number would red the
+gate every time somebody grooms an account, and the fix everyone reaches for
+is to lower the floor, which turns the gate into a ratchet that only ever
+loosens.
+
+`#809` (`apps/web-console/e2e/chat-coverage/surface-floors.json`) is the
+shipped answer, generalised here because it is the part of that PR most worth
+carrying beyond chat coverage. Two rules:
+
+- **A floor rises or falls only through a separate, deliberate commit**, made
+  with the surface's own `scripts/update-chat-coverage-floors.mjs` against a
+  recorded ledger, never by the run that checks it. The run that measures
+  coverage is not the run that is allowed to move the bar it measures against;
+  conflating the two is how a metric that can only improve in the flattering
+  direction gets built, which shape 15 above already names as not measuring
+  at all.
+- **An unsweepable surface carries a presence floor of 1**, not a pinned
+  count. That floor is a bar the surface must still exist and render
+  something over, so deleting the entry point that reaches it fails the gate
+  instead of quietly shrinking the denominator the percentage is computed
+  over. A floor key this run never swept fails too, for the same reason:
+  silence from a surface is not evidence it still has one control, it is
+  absence of the measurement.
+
+Both rules generalise past chat coverage: any enumerated-count gate that can
+legitimately grow or shrink for reasons that have nothing to do with the
+product (account data, seeded fixtures, environment-dependent renders) needs
+a floor with this shape, not a bare assertion on the live count.
+
 ## Getting a live session
 
 There is exactly one sanctioned way to sign an automated run into a deployed
@@ -139,10 +172,10 @@ before commit. `npm run lint:proof-tokens` catches the text half in CI. It
 cannot inspect image pixels, so masking the screenshot is on whoever captured
 it. PR #578 leaked four live invitation tokens publicly this way.
 
-## The fifteen camouflage shapes
+## The sixteen camouflage shapes
 
 Each of these hid a real defect in this repository. Read them as a review
-checklist: for any test you are about to approve, ask which of these fifteen
+checklist: for any test you are about to approve, ask which of these sixteen
 it might be.
 
 ### 1. Skipped on a variable that is absent from CI
@@ -390,7 +423,7 @@ that guards money, authorization, or data loss.
 Nothing skips. There is no variable to blame. The file simply is never passed
 to any runner, and an uninvoked file emits no signal at all.
 
-The tree holds thirty six spec files. `node tools/verify-spec-wiring.mjs`
+The tree holds thirty-six spec files. `node tools/verify-spec-wiring.mjs`
 reports what happens to them today:
 
 | State | Count | Which |
@@ -403,7 +436,7 @@ Those three have never executed anywhere, which is the shape in its pure
 form. The nineteen are the more interesting half: they run, they are real, and
 they protect nothing on the merge path, so counting them alongside the
 fourteen produces a number that sounds like coverage and gates nothing. The
-guard reports the two separately for that reason, and the twenty two that are
+guard reports the two separately for that reason, and the twenty-two that are
 not pull-request gated are declared in
 `apps/web-console/tests/dark-spec-allowlist.json`.
 

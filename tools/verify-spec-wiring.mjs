@@ -172,6 +172,10 @@ function reactsToOrdinaryPullRequest(doc) {
 // a diff this guard does not have.
 export function survivesOrdinaryPullRequest(condition) {
   if (!condition) return true;
+  // An always-false condition (a literal `false`, which is what a YAML
+  // boolean `if: false` becomes once conditionOf below stops discarding it)
+  // disables the job or step outright: nothing after this line runs, ever.
+  if (/^false$/i.test(String(condition).trim())) return false;
   if (/github\.event\.pull_request\.labels/.test(condition)) return false;
   // A job restricted to one pull_request action (`types: [labeled]` gating a
   // step on `github.event.action == 'labeled'`) excludes the ordinary
@@ -179,12 +183,33 @@ export function survivesOrdinaryPullRequest(condition) {
   // check above, and this guard does not evaluate which action value the
   // condition demands, so it fails closed on any action-scoped condition.
   if (/github\.event\.action/.test(condition)) return false;
-  // `github.event_name != 'pull_request'` mentions the event name and also
-  // contains the quoted string `pull_request`, so it must be checked before
-  // the presence-only test below, which cannot tell an exclusion from a gate.
+  // Every shape below excludes pull_request while still mentioning the event
+  // name and the quoted string `pull_request`, so each must be checked before
+  // the presence-only test at the end, which cannot tell an exclusion from a
+  // gate. `!=` is the comparison form; contains/startsWith/endsWith are the
+  // function-call forms the same GitHub Actions expression language offers
+  // for the same exclusion, negated.
   if (/github\.event_name\s*!=\s*['"]pull_request(_target)?['"]/.test(condition)) return false;
+  if (
+    /!\s*(?:contains|startsWith|endsWith)\s*\(\s*github\.event_name\s*,\s*['"]pull_request(_target)?['"]\s*\)/.test(
+      condition,
+    )
+  )
+    return false;
   if (/github\.event_name/.test(condition) && !/['"]pull_request['"]/.test(condition)) return false;
   return true;
+}
+
+// A job or step `if:` normalized to the string this guard reasons about. YAML
+// parses an unquoted `false`/`true` to a JS boolean, not a string, so a naive
+// `typeof x === "string" ? x : ""` silently turns a real `if: false` (a
+// disabled step) into "" (no condition, i.e. always runs) and credits it as
+// pull-request coverage. Booleans round-trip through their string form;
+// anything else that is not already a string normalizes to "", same as
+// before.
+export function conditionOf(raw) {
+  if (typeof raw === "boolean") return String(raw);
+  return typeof raw === "string" ? raw : "";
 }
 
 function workflowFiles() {
@@ -196,11 +221,11 @@ function workflowFiles() {
 
 function* runSteps(file, doc) {
   for (const [jobId, job] of Object.entries(doc?.jobs ?? {})) {
-    const jobCondition = typeof job?.if === "string" ? job.if : "";
+    const jobCondition = conditionOf(job?.if);
     const jobWorkingDirectory = job?.defaults?.run?.["working-directory"] ?? "";
     for (const step of job?.steps ?? []) {
       if (typeof step?.run !== "string") continue;
-      const stepCondition = typeof step?.if === "string" ? step.if : "";
+      const stepCondition = conditionOf(step?.if);
       yield {
         where: `${file}#${jobId}`,
         workingDirectory: step["working-directory"] ?? jobWorkingDirectory,
