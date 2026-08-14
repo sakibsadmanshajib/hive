@@ -173,6 +173,12 @@ function reactsToOrdinaryPullRequest(doc) {
 export function survivesOrdinaryPullRequest(condition) {
   if (!condition) return true;
   if (/github\.event\.pull_request\.labels/.test(condition)) return false;
+  // A job restricted to one pull_request action (`types: [labeled]` gating a
+  // step on `github.event.action == 'labeled'`) excludes the ordinary
+  // opened/synchronize/reopened flow as thoroughly as the label-contains
+  // check above, and this guard does not evaluate which action value the
+  // condition demands, so it fails closed on any action-scoped condition.
+  if (/github\.event\.action/.test(condition)) return false;
   // `github.event_name != 'pull_request'` mentions the event name and also
   // contains the quoted string `pull_request`, so it must be checked before
   // the presence-only test below, which cannot tell an exclusion from a gate.

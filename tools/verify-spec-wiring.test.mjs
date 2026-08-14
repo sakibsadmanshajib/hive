@@ -53,6 +53,19 @@ assert.equal(
   "a condition naming only a non pull-request event must not survive",
 );
 
+// --- Case 4b: a job restricted to a specific pull_request action (e.g. a
+// workflow with `types: [labeled]` gating a job on `github.event.action`)
+// must not survive. Found by a CodeRabbit CLI pass on this same PR: `labeled`
+// excludes the ordinary opened/synchronize/reopened flow just as thoroughly
+// as an explicit label-contains check does, and nothing in this repository's
+// workflows exercises it today, so this is a synthetic case rather than a
+// reproduced live one. ---
+assert.equal(
+  survivesOrdinaryPullRequest("github.event.action == 'labeled'"),
+  false,
+  "an action-scoped condition must not survive an ordinary pull request",
+);
+
 // --- Case 5: the label-gate case (existing behaviour, regression guard). ---
 assert.equal(
   survivesOrdinaryPullRequest("contains(github.event.pull_request.labels.*.name, 'run-owui-e2e')"),

@@ -2,7 +2,7 @@
 
 What counts as a real test in this repository, and what does not.
 
-This document exists because each of the fifteen shapes catalogued below
+This document exists because each of the sixteen shapes catalogued below
 concealed a defect that shipped from this repository, inside a green run. Every
 one is a real instance, not a hypothetical, and the instance is named. If you
 are writing or reviewing a test, the question is never "does it pass". It is
@@ -402,8 +402,8 @@ reports what happens to them today:
 Those three have never executed anywhere, which is the shape in its pure
 form. The nineteen are the more interesting half: they run, they are real, and
 they protect nothing on the merge path, so counting them alongside the
-thirteen produces a number that sounds like coverage and gates nothing. The
-guard reports the two separately for that reason, and the twenty one that are
+fourteen produces a number that sounds like coverage and gates nothing. The
+guard reports the two separately for that reason, and the twenty two that are
 not pull-request gated are declared in
 `apps/web-console/tests/dark-spec-allowlist.json`.
 
