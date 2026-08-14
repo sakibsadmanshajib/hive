@@ -1,0 +1,10 @@
+scenarios: launch-liveness
+launcher runtime dir: /mnt/agent-runtime, live sessions at start: 0
+signed in as user 6981e0f5-a904-48b2-8e32-a92d580e99e6
+token claims: aal,amr,app_metadata,aud,email,exp,iat,is_anonymous,iss,owui_role,phone,role,session_id,sub,tenant_id,tenants,user_metadata
+token tenant claim: c546bc74-b96c-e81b-46d8-cf2db613c44c · role=OWNER · aal=aal1
+--- scenario: launch-liveness ---
+wrote /home/runner/work/hive/hive/docs/proof/agent-visual-proof/run-31822220586/launch-liveness-01-empty-console.png
+create answered HTTP 500 in 15697ms, status=n/a
+wrote /home/runner/work/hive/hive/docs/proof/agent-visual-proof/run-31822220586/launch-liveness-02-sandbox-launched.png
+scenario launch-liveness: ok
