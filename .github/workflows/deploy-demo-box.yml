@@ -363,6 +363,13 @@ jobs:
         # therefore runs on the box as this unprivileged user and
         # control-plane talks to it over a Unix socket; see the script header
         # for why the container is deliberately NOT given that privilege.
+        # GH_TOKEN below is job-scoped, so the contents:read this job's
+        # permissions block grants for the Pull latest main step above also
+        # reaches this GH_TOKEN, which previously only carried the default
+        # actions:read scope. Correct and unavoidable at job-level
+        # permissions granularity; noted since it was not called out when
+        # contents:read was added. See issue #902 for the separate,
+        # pre-existing question of who can trigger this job at all.
         working-directory: /home/sakib/hive
         env:
           GH_TOKEN: ${{ github.token }}
