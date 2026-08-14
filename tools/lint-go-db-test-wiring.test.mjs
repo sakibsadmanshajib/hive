@@ -36,6 +36,20 @@ function write(root, relPath, content) {
   writeFileSync(full, content);
 }
 
+const dsnTest = (pkg) => `package ${pkg}
+
+import (
+	"os"
+	"testing"
+)
+
+func TestNeedsDSN(t *testing.T) {
+	if os.Getenv("HIVE_TEST_DB_URL") == "" {
+		t.Skip("no db")
+	}
+}
+`;
+
 function buildFixture() {
   const root = mkdtempSync(join(tmpdir(), "lint-go-db-test-wiring-fixture-"));
 
@@ -135,20 +149,6 @@ function run(root) {
 function buildElifFixture() {
   const root = mkdtempSync(join(tmpdir(), "lint-go-db-test-wiring-elif-fixture-"));
 
-  const dsnTest = (pkg) => `package ${pkg}
-
-import (
-	"os"
-	"testing"
-)
-
-func TestNeedsDSN(t *testing.T) {
-	if os.Getenv("HIVE_TEST_DB_URL") == "" {
-		t.Skip("no db")
-	}
-}
-`;
-
   write(root, "apps/mod-a/go.mod", "module mod-a\n\ngo 1.24\n");
   write(root, "apps/mod-a/internal/rag/x_test.go", dsnTest("rag"));
   write(root, "apps/mod-b/go.mod", "module mod-b\n\ngo 1.24\n");
@@ -212,6 +212,70 @@ try {
   );
 } finally {
   rmSync(elifRoot, { recursive: true, force: true });
+}
+
+// A third fixture: an unrelated nested `if [ "$OPTIONAL_STEP" = "1" ]; then
+// ... fi` completes right before the `go test` line, inside the outer
+// matrix `if [ "${{ matrix.module }}" = "mod-a" ]` and with no `else`.
+// CodeRabbit found legsForLine's original "bail on the first `fi`" check had
+// no concept of nesting depth: any `fi`, matrix-related or not, was read as
+// proof we are not inside a block at all, crediting every leg. mod-b must
+// stay unpaired; only mod-a's own line reaches it.
+function buildNestedIfFixture() {
+  const root = mkdtempSync(join(tmpdir(), "lint-go-db-test-wiring-nested-if-fixture-"));
+
+  write(root, "apps/mod-a/go.mod", "module mod-a\n\ngo 1.24\n");
+  write(root, "apps/mod-a/internal/rag/x_test.go", dsnTest("rag"));
+  write(root, "apps/mod-b/go.mod", "module mod-b\n\ngo 1.24\n");
+  write(root, "apps/mod-b/internal/rag/x_test.go", dsnTest("rag"));
+
+  write(
+    root,
+    ".github/workflows/fixture.yml",
+    `on:
+  pull_request:
+jobs:
+  go-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - module: mod-a
+            path: ./apps/mod-a
+          - module: mod-b
+            path: ./apps/mod-b
+    steps:
+      - name: bootstrap
+        run: |
+          echo "HIVE_TEST_DB_URL=postgresql://fixture" >> "$GITHUB_ENV"
+      - name: rls
+        working-directory: \${{ matrix.path }}
+        run: |
+          if [ "\${{ matrix.module }}" = "mod-a" ]; then
+            if [ "$OPTIONAL_STEP" = "1" ]; then
+              echo nested
+            fi
+            go test -tags integration -count=1 ./internal/rag/...
+          fi
+`,
+  );
+
+  return root;
+}
+
+const nestedIfRoot = buildNestedIfFixture();
+try {
+  const result = run(nestedIfRoot);
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.equal(result.status, 1, `expected mod-b/internal/rag to be reported unpaired. Output:\n${output}`);
+  assert.match(
+    output,
+    /mod-b\/internal\/rag/,
+    `expected the failure to name mod-b/internal/rag as unpaired. Output:\n${output}`,
+  );
+} finally {
+  rmSync(nestedIfRoot, { recursive: true, force: true });
 }
 
 const root = buildFixture();

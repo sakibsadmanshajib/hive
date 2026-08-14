@@ -140,6 +140,11 @@ const normalizeDir = (value) => value.replace(/^\.\//, "").replace(/\/$/, "");
 // the pre-existing, permissive behaviour: narrowing wrongly is worse than not
 // narrowing, and this guard already fails closed elsewhere by declaring debt
 // rather than inventing coverage, not by rejecting shapes it cannot read.
+// Also handles an `elif` chain, and a nested, unrelated `if ... fi` (e.g.
+// gating on a plain shell variable, nothing to do with the matrix) that
+// closes before the `go test` line: the backward scan tracks how many `fi`s
+// it still owes a matching `if` before treating one as its own enclosing
+// header, so a completed nested block does not read as "outside every block".
 //
 // Known ceiling: the trailing `else` of a chain is modelled as "every leg no
 // `if`/`elif` in this chain named", not as the specific leg(s) the workflow
@@ -157,10 +162,26 @@ function legsForLine(lines, index, legs) {
   const CONDITION =
     /^(if|elif)\s+\[\s*"?\$\{\{\s*matrix\.([A-Za-z0-9_]+)\s*\}\}"?\s*==?\s*"([^"]+)"\s*\]/;
   let inElse = false;
+  let depth = 0; // unmatched `fi`s seen so far scanning backward, each still owed a matching `if`
   const excluded = []; // [key, value] pairs a trailing `else` must exclude
   for (let i = index; i >= 0; i--) {
     const line = lines[i].trim();
-    if (i !== index && /^fi\s*;?$/.test(line)) return legs; // closed before opening: not inside a block
+    if (i !== index && /^fi\s*;?$/.test(line)) {
+      depth += 1;
+      continue;
+    }
+    if (depth > 0) {
+      // Inside a nested, unrelated shell block that already closed before
+      // our line (an `if [ "$SOME_OTHER_VAR" = ... ]; then ... fi` with
+      // nothing to do with the matrix). Only an `if` here pays down the debt
+      // a `fi` created; an `elif`/`else` at this depth belongs to that same
+      // nested block, not to ours, and a plain command is not a header at
+      // all. Bailing out on the first `fi` regardless of nesting was the
+      // original bug: it credited every leg the moment ANY block closed
+      // before our line, even one with no matrix condition in it at all.
+      if (/^if\b/.test(line)) depth -= 1;
+      continue;
+    }
     if (!inElse && /^else\b/.test(line)) {
       inElse = true;
       continue;
