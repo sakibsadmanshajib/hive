@@ -88,6 +88,18 @@ function liveSessions() {
   }
 }
 
+async function waitForSessionsAtLeast(want, timeoutMs, what) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const now = liveSessions();
+    if (now >= want) return now;
+    if (Date.now() > deadline) {
+      throw new Error(`${what}: launcher never reached ${want} live session(s), saw ${now}`);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 async function waitForSessions(want, timeoutMs, what) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -179,21 +191,40 @@ const SCENARIOS = [
      */
     async run(page) {
       const instructions = `${RUN_TAG} liveness: list the files in the workspace and stop.`;
-      await shoot(page, "launch-liveness", "01-empty-console", `slots=${liveSessions()}`);
+      await shoot(page, "launch-liveness", "01-empty-console", `launcher slots in use=${liveSessions()}`);
 
-      await createTask(page, instructions);
-      await waitForRowStatus(page, instructions, "Running", 300_000);
-      const slots = liveSessions();
-      if (slots < 1) {
-        throw new Error(
-          "the task reads as Running but the launcher holds no session directory, " +
-            "so nothing was actually launched",
-        );
+      const created = await createTask(page, instructions);
+      /*
+       * The launcher's own session count is the assertion, not the row's
+       * status, and deliberately so. On a tree that predates #881 the create
+       * blocks on the launch, edge-api gives up at 15 seconds and cancels the
+       * request, and control-plane can lose the row to that cancelled
+       * context: the sandbox still started, but the row may never read
+       * Running. Asserting on the row would make this scenario fail for the
+       * bug it is not measuring. A session directory appearing means an
+       * Apptainer sandbox really came up on this host, which is the one thing
+       * every agent-surface change can be held to, and it is exactly what the
+       * sabotage run removes.
+       */
+      const slots = await waitForSessionsAtLeast(
+        1,
+        300_000,
+        "after creating a task from the console",
+      );
+      await shoot(
+        page,
+        "launch-liveness",
+        "02-sandbox-launched",
+        `launcher slots in use=${slots} · create HTTP ${created.status} in ${created.elapsedMs}ms`,
+      );
+
+      // Best effort: a row that already reached a terminal state has no
+      // Cancel control, and that is not this scenario's business.
+      const cancel = taskRow(page, instructions).getByRole("button", { name: "Cancel" });
+      if (await cancel.count()) {
+        await cancel.click();
+        await waitForRowStatus(page, instructions, "Cancelled", 120_000);
       }
-      await shoot(page, "launch-liveness", "02-running-on-a-real-sandbox", `slots=${slots}`);
-
-      await cancelRow(page, instructions);
-      await waitForRowStatus(page, instructions, "Cancelled", 120_000);
     },
   },
   {
