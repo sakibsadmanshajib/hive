@@ -279,10 +279,13 @@ jobs:
           # (the timeout-minutes below, a manual cancel, or a box reboot
           # this file's own header says the runner does not survive) would
           # fail this line with a lock message instead of the real problem.
-          # Safe to clear unconditionally: the workflow-level concurrency
-          # group (deploy-demo-box, cancel-in-progress: false) guarantees no
-          # other run of this job is genuinely holding it right now.
-          rm -f .git/index.lock
+          # Age-gated, not unconditional: this clone is the box's shared
+          # checkout, other writers (git gc --auto, a human on the box) can
+          # legitimately hold this lock, and the workflow-level concurrency
+          # group only serializes this workflow's own runs against each
+          # other. 15 minutes matches this job's own timeout-minutes below,
+          # so a lock younger than that is still someone's live operation.
+          find .git -maxdepth 1 -name index.lock -mmin +15 -delete
           git checkout main
 
           # The token below authenticates ANY public github.com repo, not
@@ -298,7 +301,10 @@ jobs:
           # site to remember.
           expected_url="https://github.com/${{ github.repository }}"
           actual_url=$(git remote get-url origin)
-          redacted_url=$(printf '%s' "$actual_url" | sed -E 's#//[^/@]*@#//REDACTED@#')
+          # Greedy up to the LAST @, not the first: a credential whose
+          # secret half itself contains an unencoded @ would otherwise
+          # leave part of it printed after a first-@ match.
+          redacted_url=$(printf '%s' "$actual_url" | sed -E 's#//.*@#//REDACTED@#')
           case "$actual_url" in
             "$expected_url"|"$expected_url.git") ;;
             *)
@@ -309,10 +315,21 @@ jobs:
 
           # Secret-free, and answers exactly what this PR could not verify
           # without box access: whether a credential path older than this
-          # fix could still shadow or rescue it.
-          git config --show-origin --get-all credential.helper || echo "no credential helper configured"
+          # fix could still shadow or rescue it. --name-only reports THAT a
+          # helper is configured, never its value: a helper can be an
+          # inline shell snippet with a PAT embedded in it, and that value
+          # is exactly the on-box credential this whole PR suspects.
+          git config --name-only --get-regexp '^credential\.helper$' \
+            && echo "credential.helper is configured (value withheld)" \
+            || echo "no credential helper configured"
           echo "origin: $redacted_url"
           [ -f "$HOME/.git-credentials" ] && echo "a stored credential file exists on the box" || true
+          [ -f "$HOME/.netrc" ] && echo "a .netrc file exists on the box" || true
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN is empty. This job's permissions block (needs contents: read) or the runner's token minting is the problem, not the box." >&2
+            exit 1
+          fi
 
           # GIT_CONFIG_* env vars, not `git -c` on argv: argv is world
           # readable via /proc/<pid>/cmdline on a stock box with no
