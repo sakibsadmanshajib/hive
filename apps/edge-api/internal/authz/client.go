@@ -62,6 +62,18 @@ func HashBearerToken(authHeader string) string {
 // a perfectly valid key was told it was invalid.
 var ErrUpstreamUnavailable = errors.New("authz: resolve upstream unavailable")
 
+// ErrInternalTokenRejected classifies a resolve failure caused by
+// control-plane's RequireInternalToken middleware rejecting edge-api's own
+// X-Internal-Token (a mismatched or missing CONTROL_PLANE_INTERNAL_TOKEN on
+// one side). This always wraps ErrUpstreamUnavailable too -- the customer
+// still sees the same retryable 503, since it is not their key's fault
+// either -- but it is a permanent misconfiguration, not a transient
+// condition, and will not self-resolve by retrying the way a cold-start
+// timeout does. Classified distinctly so it can be logged loudly instead of
+// blending into ordinary transient-failure noise, per PR #903 security
+// review.
+var ErrInternalTokenRejected = errors.New("authz: control-plane rejected our internal token")
+
 // snapshotTTL bounds how long the edge will honor a cached auth snapshot when
 // active control-plane invalidation is missed. The control-plane DELETEs the
 // snapshot key on revoke/disable/rotate (primary path); this TTL is the
@@ -87,11 +99,30 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 	}
 
 	return &Client{
-		cache:      &redisSnapshotStore{client: redis.NewClient(opt)},
-		httpClient: &http.Client{Timeout: resolveClientTimeout},
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		cache: &redisSnapshotStore{client: redis.NewClient(opt)},
+		httpClient: &http.Client{
+			Timeout:   resolveClientTimeout,
+			Transport: &http.Transport{MaxConnsPerHost: resolveMaxConnsPerHost},
+		},
+		baseURL: strings.TrimRight(baseURL, "/"),
 	}, nil
 }
+
+// resolveMaxConnsPerHost bounds concurrent connections to control-plane from
+// this one shared *Client, which two per-request paths call: BudgetGate's
+// workspace-identity resolver (main.go's buildBudgetGate) and Authorizer's
+// own key resolution, so a single incoming request can drive up to two
+// Resolve calls, each blocking up to resolveClientTimeout (10s, doubled from
+// 5s in the same change that added this bound). With no cap, a sustained
+// control-plane outage could grow that to one goroutine and connection per
+// in-flight resolve with no ceiling -- at even 50 req/s sustained through a
+// 10s-timeout outage that is up to 1000 concurrent connections stacking up
+// against the one host that is already struggling, worsening the outage it
+// is trying to recover from. Go's Transport blocks new dials once this limit
+// is hit rather than erroring (net/http docs: "On limit violation, dials
+// will block"), so it turns unbounded growth into bounded queuing that still
+// resolves via the existing client Timeout -- no new pooling code needed.
+const resolveMaxConnsPerHost = 64
 
 // resolveClientTimeout bounds a single /internal/apikeys/resolve call. Raised
 // from 5s to 10s on 2026-08-14: a control-plane container recreated at
@@ -161,16 +192,37 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		contentType := resp.Header.Get("Content-Type")
 		statusErr := fmt.Errorf("authz: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		// 404 (not found) and 409 (revoked/disabled/not-active) are genuine
-		// control-plane verdicts on the key; every other status (5xx from a
-		// control-plane request that itself failed or was canceled, or
-		// anything unexpected) is the same "no verdict reached" shape as a
-		// transport failure above.
-		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict {
+		switch {
+		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(contentType, "application/json"):
+			// A genuine control-plane verdict: apikeys.handleKeyError answers
+			// this with a JSON body via writeJSON.
 			return AuthSnapshot{}, statusErr
+		case resp.StatusCode == http.StatusNotFound:
+			// issue #816: a control-plane that booted without a database pool
+			// never mounts /internal/apikeys/resolve at all (router.go's
+			// RouterConfig.DBReady comment), so Go's own ServeMux answers this
+			// 404 before any handler runs, via the stdlib's http.Error (plain
+			// text, not JSON) -- indistinguishable from a genuine not-found by
+			// status code alone, but not by Content-Type. This is exactly the
+			// cold/degraded boot state this PR exists to stop lying about.
+			return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
+		case resp.StatusCode == http.StatusConflict:
+			// Genuine verdict: revoked/disabled/not-active (also writeJSON).
+			return AuthSnapshot{}, statusErr
+		case resp.StatusCode == http.StatusUnauthorized:
+			// This endpoint authenticates only edge-api's own X-Internal-Token
+			// (RequireInternalToken), never the customer's presented API key,
+			// so a 401 here can only mean that shared secret is misconfigured
+			// on one side -- a permanent condition, not a transient one.
+			return AuthSnapshot{}, fmt.Errorf("%w: %w: %w", ErrUpstreamUnavailable, ErrInternalTokenRejected, statusErr)
+		default:
+			// Every other status (5xx from a control-plane request that
+			// itself failed or was canceled, or anything unexpected) is the
+			// same "no verdict reached" shape as a transport failure above.
+			return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
 		}
-		return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
 	}
 
 	respBytes, err := io.ReadAll(resp.Body)

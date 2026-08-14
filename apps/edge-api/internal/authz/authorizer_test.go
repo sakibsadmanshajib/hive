@@ -314,6 +314,38 @@ func TestAuthorizeStillReturnsInvalidAPIKeyForGenuineNotFound(t *testing.T) {
 	}
 }
 
+// TestAuthorizeLogsConfigurationErrorLoudlyForRejectedInternalToken is the
+// regression guard for the PR #903 security review MEDIUM finding: a
+// rejected internal token (CONTROL_PLANE_INTERNAL_TOKEN mismatch) is a
+// permanent misconfiguration, not a transient failure, and must not log the
+// same generic line as an ordinary resolve failure -- an on-call engineer
+// waiting out what looks like a cold-start blip would wait forever. The
+// customer-facing response is unchanged (still the same retryable 503): only
+// the operator-facing log line differs.
+func TestAuthorizeLogsConfigurationErrorLoudlyForRejectedInternalToken(t *testing.T) {
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, fmt.Errorf("authz: status 401: %w: %w", ErrUpstreamUnavailable, ErrInternalTokenRejected)
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	var err *apierrors.OpenAIError
+	logOutput := captureAuthzLogs(t, func() {
+		_, _, err = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	})
+
+	if err == nil || err.Error.Code == nil || *err.Error.Code != "upstream_unavailable" {
+		t.Fatalf("expected the same retryable upstream_unavailable response, got %#v", err)
+	}
+	for _, want := range []string{"CONFIGURATION ERROR", "will NOT self-resolve"} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("expected the log to loudly name a permanent misconfiguration (%q), got %q", want, logOutput)
+		}
+	}
+}
+
 func TestAuthorizeReturnsInsufficientQuotaOnProjectedBudgetOverrun(t *testing.T) {
 	limit := int64(1000)
 	client := &Client{

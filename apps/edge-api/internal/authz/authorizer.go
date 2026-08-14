@@ -98,14 +98,36 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 		// carries the resolve-path outcome, e.g. control-plane status code
 		// for not-found/revoked vs a transport error) so an outage is
 		// diagnosable from logs instead of guesswork across reruns.
-		log.Printf("authz: key resolution failed err=%v", err)
+		if errors.Is(err, ErrInternalTokenRejected) {
+			// Loud and distinct on purpose (PR #903 security review): this is
+			// a permanent misconfiguration (CONTROL_PLANE_INTERNAL_TOKEN
+			// mismatch), not a transient condition, and will keep failing
+			// every request until an operator fixes the token on one or both
+			// sides -- it must not blend into ordinary cold-start/timeout log
+			// noise that an on-call engineer would reasonably wait out.
+			log.Printf("authz: CONFIGURATION ERROR key resolution is permanently broken: control-plane rejected edge-api's own internal service token (CONTROL_PLANE_INTERNAL_TOKEN mismatch or unset) -- this will NOT self-resolve by waiting or retrying err=%v", err)
+		} else {
+			log.Printf("authz: key resolution failed err=%v", err)
+		}
 		if errors.Is(err, ErrUpstreamUnavailable) {
 			// The resolve call never reached a verdict on this key (transport
-			// failure, timeout, canceled context, or a control-plane 5xx) --
-			// answer with a retryable, provider-blind 503 rather than the
-			// permanent, non-retryable 401 a genuinely invalid key gets. A 401
-			// on a valid credential reads as "this key is wrong" and sends the
-			// caller to rotate it; that is worse than a slow, honest failure.
+			// failure, timeout, canceled context, a control-plane 5xx, or a
+			// rejected internal token) -- answer with a retryable,
+			// provider-blind 503 rather than the permanent, non-retryable 401
+			// a genuinely invalid key gets. A 401 on a valid credential reads
+			// as "this key is wrong" and sends the caller to rotate it; that
+			// is worse than a slow, honest failure.
+			//
+			// Explicit judgment on the resulting 401-vs-503 split, per PR #903
+			// security review: this is NOT a new key-existence oracle. Which
+			// branch a caller lands on depends only on control-plane's own
+			// health at request time, identically for every key value --
+			// a real key and a fake key presented at the same moment get the
+			// same verdict (both 503 while control-plane is degraded, both
+			// resolved on the pre-existing 200-vs-401 axis once it is
+			// healthy). No signal here correlates with which specific key was
+			// presented, so no enumeration capability is added beyond what
+			// already existed before this PR.
 			code := "upstream_unavailable"
 			return AuthSnapshot{}, nil, newErr(
 				"api_error",

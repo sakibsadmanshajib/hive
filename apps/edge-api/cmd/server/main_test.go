@@ -970,6 +970,43 @@ func TestWatchOWUIShimKeyLogsTransientUnavailableWithoutRotateAdvice(t *testing.
 	}
 }
 
+// TestWatchOWUIShimKeyLogsDeadKeyAfterTransientFailure is the regression
+// guard for the PR #903 security review MEDIUM finding: watchOWUIShimKey used
+// to compare a plain boolean "healthy" against its last-logged value, so a
+// transient upstream-unavailable failure followed by a genuinely dead key
+// never re-logged -- both collapsed to the same "unhealthy" boolean, so the
+// second, more actionable verdict (the one with the "mint a replacement"
+// remedy) was silently dropped. Asserts both verdicts reach the log.
+func TestWatchOWUIShimKeyLogsDeadKeyAfterTransientFailure(t *testing.T) {
+	logged := captureLog(t)
+	resolver := &stubShimKeyResolver{
+		err:  fmt.Errorf("authz: fetch: %w: %w", authz.ErrUpstreamUnavailable, context.DeadlineExceeded),
+		seen: make(chan struct{}, 1),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Millisecond)
+		close(done)
+	}()
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "WARN") })
+
+	// Same boolean "unhealthy" as the transient failure above, but a
+	// different, more actionable verdict: this key is actually dead, not
+	// merely unreachable right now. Must produce its own log line.
+	resolver.set(authz.AuthSnapshot{}, errors.New("authz: resolve status 404: not found"))
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "ERROR") })
+	cancel()
+	<-done
+
+	out := logged.String()
+	if !strings.Contains(out, "Mint a replacement") {
+		t.Fatalf("expected the genuinely-dead verdict to reach the log with its remedy, got %q", out)
+	}
+}
+
 // TestWatchOWUIShimKeyReportsAnUnusableKey is the alarm that replaces the empty
 // model picker. A dead shim key must reach the operator log with the cause and
 // the remedy named, not just fail three features quietly.

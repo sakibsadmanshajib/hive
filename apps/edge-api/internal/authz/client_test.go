@@ -238,10 +238,15 @@ func TestResolveClassifiesStalledBodyReadAfterOKStatusAsUpstreamUnavailable(t *t
 
 // A genuine control-plane verdict that the key does not exist must NOT be
 // classified as upstream-unavailable: the fix must not weaken a real
-// rejection into a retryable 503.
+// rejection into a retryable 503. Uses the same Content-Type header the real
+// handleKeyError writes (apikeys/http.go's writeJSON always sets
+// application/json), which is exactly the signal that distinguishes this
+// from the unmounted-route case below.
 func TestResolveDoesNotClassifyGenuineNotFoundAsUpstreamUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":"key not found"}`, http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"key not found"}`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -257,5 +262,67 @@ func TestResolveDoesNotClassifyGenuineNotFoundAsUpstreamUnavailable(t *testing.T
 	}
 	if errors.Is(err, ErrUpstreamUnavailable) {
 		t.Fatalf("a genuine not-found must not be classified upstream-unavailable, got %v", err)
+	}
+}
+
+// TestResolveClassifiesUnmountedResolveRouteAsUpstreamUnavailable is the
+// regression guard for the PR #903 security review HIGH finding: a
+// control-plane that booted without a database pool never mounts
+// /internal/apikeys/resolve at all (issue #816, router.go's
+// RouterConfig.DBReady), so a request to it falls through to Go's own
+// ServeMux 404 -- the exact cold/degraded boot state this PR exists to stop
+// mapping to a false 401. A bare *http.ServeMux with the route deliberately
+// never registered reproduces that exact response (plain-text body,
+// Content-Type text/plain) rather than a hand-approximation of it.
+func TestResolveClassifiesUnmountedResolveRouteAsUpstreamUnavailable(t *testing.T) {
+	mux := http.NewServeMux() // /internal/apikeys/resolve deliberately not registered
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from an unmounted resolve route")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("an unmounted route (control-plane booted with no DB pool, issue #816) must classify as upstream-unavailable, not a genuine key verdict, got %v", err)
+	}
+}
+
+// TestResolveClassifiesInternalTokenRejectionAsUpstreamUnavailable covers the
+// PR #903 security review MEDIUM finding: /internal/apikeys/resolve
+// authenticates only edge-api's own X-Internal-Token, so its 401 can only
+// mean CONTROL_PLANE_INTERNAL_TOKEN is misconfigured on one side -- a
+// permanent condition, still surfaced to the customer as the same retryable
+// 503 (not their key's fault), but classified distinctly so it can be logged
+// loudly rather than blending into transient-failure noise.
+func TestResolveClassifiesInternalTokenRejectionAsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from a rejected internal token")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable (still a retryable 503 to the customer), got %v", err)
+	}
+	if !errors.Is(err, ErrInternalTokenRejected) {
+		t.Fatalf("expected ErrInternalTokenRejected preserved for the operator-facing log, got %v", err)
 	}
 }
