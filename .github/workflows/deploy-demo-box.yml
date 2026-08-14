@@ -319,7 +319,7 @@ jobs:
           # helper is configured, never its value: a helper can be an
           # inline shell snippet with a PAT embedded in it, and that value
           # is exactly the on-box credential this whole PR suspects.
-          git config --name-only --get-regexp '^credential\.helper$' \
+          git config --show-origin --name-only --get-regexp '^credential\.helper$' \
             && echo "credential.helper is configured (value withheld)" \
             || echo "no credential helper configured"
           echo "origin: $redacted_url"
