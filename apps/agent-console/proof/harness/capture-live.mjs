@@ -378,6 +378,22 @@ async function main() {
     }),
   );
   log(`signed in as user ${session.userId}`);
+  /*
+   * Claim names and the tenant claim, never the token. edge-api resolves the
+   * caller's tenant from this claim and answers 403 without it, which is the
+   * difference between "the gate is off" (a row) and "this session has no
+   * tenant" (a token), and the two are indistinguishable from the rendered
+   * page. A user id and a tenant id are identifiers, not credentials, and the
+   * user id is already logged above.
+   */
+  const claims = JSON.parse(
+    Buffer.from(session.access_token.split(".")[1], "base64url").toString(),
+  );
+  log(`token claims: ${Object.keys(claims).sort().join(",")}`);
+  log(
+    `token tenant claim: ${claims.selected_tenant_id ?? claims.tenant_id ?? "ABSENT"}` +
+      ` · role=${claims.role ?? "-"} · aal=${claims.aal ?? "-"}`,
+  );
 
   const page = await context.newPage();
   page.on("pageerror", (err) => log(`[browser pageerror] ${err.message}`));
