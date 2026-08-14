@@ -38,6 +38,9 @@ const TAG_RE = /\[C(\d+)\]/g;
 /** @type {Map<string, { status: string, reason: string | null, attempts: number, title: string }>} */
 const byControlId = new Map();
 
+/** Control ids tagged by more than one test. See the set call below. */
+const duplicateIds = [];
+
 function walkSuites(suites) {
   for (const suite of suites ?? []) {
     for (const spec of suite.specs ?? []) {
@@ -76,6 +79,12 @@ function walkSuites(suites) {
         reason = result?.error?.message ?? status;
       }
       for (const id of ids) {
+        // A second test carrying the same tag would overwrite the first, so the
+        // ratio would report whichever spec the walk happened to visit last and
+        // a failed control could be recorded as proven. Collected here and
+        // failed on below rather than resolved by precedence: two tests for one
+        // control makes the ledger ambiguous whichever one wins.
+        if (byControlId.has(id)) duplicateIds.push(id);
         byControlId.set(id, { status, reason, attempts, title });
       }
     }
@@ -151,6 +160,14 @@ if (notRun.length > 0) {
 const undeclared = [...byControlId.keys()].filter(
   (id) => !controls.controls.some((c) => c.id === id),
 );
+if (duplicateIds.length > 0) {
+  failures.push(
+    "control id(s) are tagged by more than one test, so this ledger records only the last one " +
+      `walked and a failing control can be reported as proven: ${[...new Set(duplicateIds)].join(", ")}. ` +
+      "One control, one test.",
+  );
+}
+
 if (undeclared.length > 0) {
   failures.push(
     `${undeclared.length} control id(s) are tagged in a test title but declared nowhere in ` +

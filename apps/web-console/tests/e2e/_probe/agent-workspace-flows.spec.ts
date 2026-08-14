@@ -121,12 +121,58 @@ async function openTaskConsole(page: Page): Promise<void> {
 const TASK_LIST_GLOB = "**/v1/agent/tasks";
 
 /*
+ * The collection endpoint EXACTLY, path and all, not a substring of it.
+ *
+ * `url().includes("/v1/agent/tasks")` also matches
+ * `/v1/agent/tasks/{id}/cancel`, so a predicate built on it picks the cancel
+ * call out of the network stream just as happily as the create. In the current
+ * file that never bites, because the cancel happens after the create and
+ * `workers: 1` serialises everything. Both of those are properties of this file
+ * rather than of the assertion, and either can change without anyone noticing
+ * the proof went soft, which is precisely how a correlation check rots.
+ */
+const TASKS_ENDPOINT = `${CHAT}/v1/agent/tasks`;
+const isTasksCollection = (url: string): boolean => new URL(url).pathname === "/v1/agent/tasks";
+
+/*
+ * The two wire shapes this file reads back, named rather than inlined as
+ * `unknown`. This repository forbids `any`, `unknown` and unsafe casts in
+ * favour of structurally valid values, so the fields are declared optional and
+ * every read below still guards with `typeof`, which is what makes the shape an
+ * assumption that is checked rather than one that is asserted. Both mirror
+ * apps/agent-console/lib/edge-api/tasks.ts, which is the app's own decoder for
+ * the same payloads.
+ */
+interface AgentTaskWire {
+  id?: string;
+  instructions?: string;
+  status?: string;
+}
+
+interface AgentTaskListWire {
+  tasks?: AgentTaskWire[];
+}
+
+/*
  * Every focusable control on a screen, as a stable descriptor.
  *
- * This is what stops the coverage denominator from being author controlled.
- * The ledger's `dom` fields are compared against what the deployed page
- * actually renders, so a control that ships without a ledger entry fails the
- * run rather than quietly shrinking the total.
+ * What this actually defends, stated as a fraction rather than as a property of
+ * the whole suite: 9 of the 24 controls carry a non-empty `dom` entry (C1, C2,
+ * C3, C9, C10, C11, C12, C13, C17), and only those 9 are compared against what
+ * the deployed page renders. The other 15 are behaviours rather than elements
+ * (two redirects, an API status, four error states, three submit paths, the
+ * engine notice, the empty state, the noValidate finding, and these two guards
+ * themselves), and no DOM sweep can enumerate a behaviour: there is no node to
+ * find for "an expired session is reported". Their only defence is that each
+ * has a test, which is what the not-run, duplicate-tag and floor checks in the
+ * build script enforce.
+ *
+ * So the accurate claim is narrow: a new focusable CONTROL cannot ship on
+ * either screen without raising the denominator. A new behaviour can, and the
+ * suite would not notice. Widening that honestly needs the states driven, which
+ * is one test per control, which is the thing that already exists. A sweep at
+ * rest would find none of the conditional regions and would only look like a
+ * guard.
  */
 /*
  * ponytail: light DOM only, and the claim in the ledger is worded to match.
@@ -271,7 +317,7 @@ test.describe("sign-in entry (no session required)", () => {
   }) => {
     // The task console calls this path same-origin. It must be routed here (so
     // not a 404) and must reject an unauthenticated caller (so not a 200).
-    const response = await request.get(`${CHAT}/v1/agent/tasks`);
+    const response = await request.get(TASKS_ENDPOINT);
     expect(response.status()).toBe(401);
   });
 
@@ -298,7 +344,6 @@ test.describe("sign-in entry (no session required)", () => {
 
 test.describe("authenticated task console", () => {
   test.beforeEach(requireMintEnv);
-
 
   test("[C8] sign-in with valid credentials lands on the task console, not the chat app", async ({
     page,
@@ -393,11 +438,11 @@ test.describe("authenticated task console", () => {
 
     const brief = `interaction-coverage proof ${Date.now()}`;
     const createRequest = page.waitForRequest(
-      (req) => req.url().includes("/v1/agent/tasks") && req.method() === "POST",
+      (req) => isTasksCollection(req.url()) && req.method() === "POST",
       { timeout: 30_000 },
     );
     const createResponse = page.waitForResponse(
-      (res) => res.url().includes("/v1/agent/tasks") && res.request().method() === "POST",
+      (res) => isTasksCollection(res.url()) && res.request().method() === "POST",
       { timeout: 330_000 },
     );
     await page.locator("#task-instructions").fill(brief);
@@ -463,6 +508,20 @@ test.describe("authenticated task console", () => {
       .toBe(201);
 
     /*
+     * Seeded from the create body first, so the cleanup can reach a task the
+     * list read below misses. The body is the task object itself (edge-api's
+     * handleCreate does writeJSON(w, StatusCreated, task)), so the id is at the
+     * top level, verified against the live route. On the #881 path the create
+     * answers 500 with an error envelope and this stays empty, which is why the
+     * list read is still the primary source.
+     */
+    let createdId = "";
+    if (response.ok()) {
+      const created: AgentTaskWire | null = await response.json().catch(() => null);
+      if (typeof created?.id === "string") createdId = created.id;
+    }
+
+    /*
      * The create's proof of effect is read from the server rather than from
      * the create response body, so it holds whatever the status code was: the
      * row is persisted and comes back from the list. That is also a stronger
@@ -470,23 +529,31 @@ test.describe("authenticated task console", () => {
      */
     const listResponse = page.waitForResponse(
       (res) =>
-        res.url().includes("/v1/agent/tasks") &&
+        isTasksCollection(res.url()) &&
         res.request().method() === "GET" &&
         res.status() === 200,
       { timeout: 60_000 },
     );
     await page.reload();
-    const listed: { tasks?: Array<{ id?: unknown; instructions?: unknown }> } = await (
+    const listed: AgentTaskListWire = await (
       await listResponse
     ).json();
     const match = (listed.tasks ?? []).find((task) => task.instructions === brief);
-    const createdId = typeof match?.id === "string" ? match.id : "";
-    expect(
-      createdId,
-      "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
-    ).not.toBe("");
+    if (typeof match?.id === "string") createdId = match.id;
 
     try {
+      /*
+       * Inside the try, not before it. Outside, a create that succeeded but did
+       * not come back in this particular list read would end the test here with
+       * no cancel call at all, and the header's promise that the task is always
+       * cancelled would be false in exactly the case that costs the most: a
+       * live sandbox holding a concurrency slot nothing frees (issue #886).
+       */
+      expect(
+        createdId,
+        "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
+      ).not.toBe("");
+
       const tasks = page.getByRole("region", { name: "Tasks" });
       const row = tasks.getByRole("listitem").filter({ hasText: brief }).first();
       await expect(row).toBeVisible();
@@ -540,7 +607,7 @@ test.describe("authenticated task console", () => {
        * (apps/control-plane/internal/agenttask/SYNC_CONTRACT.md), so that is
        * what is asserted.
        */
-      const cancelAgain = await request.post(`${CHAT}/v1/agent/tasks/${createdId}/cancel`, {
+      const cancelAgain = await request.post(`${TASKS_ENDPOINT}/${createdId}/cancel`, {
         headers: { Authorization: authHeader },
       });
       expect(cancelAgain.status()).toBe(409);
@@ -554,7 +621,7 @@ test.describe("authenticated task console", () => {
        */
       if (createdId) {
         await request
-          .post(`${CHAT}/v1/agent/tasks/${createdId}/cancel`, {
+          .post(`${TASKS_ENDPOINT}/${createdId}/cancel`, {
             headers: { Authorization: authHeader },
           })
           .catch(() => undefined);

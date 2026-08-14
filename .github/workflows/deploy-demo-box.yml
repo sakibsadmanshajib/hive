@@ -959,10 +959,20 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          # The status is captured rather than allowed to abort the step, and
+          # stderr is merged into the pipe, because neither was true before and
+          # both broke the case this step exists for. The build script exits
+          # non-zero on a missing test, an undeclared tag, a duplicate tag or a
+          # run under the floor, and pipefail propagated that through `tee`, so
+          # the shell aborted and the summary block below never ran. The FAIL
+          # lines go to stderr as well, so `tee` captured none of them and both
+          # the summary and the artifact omitted the reason. A failing ledger
+          # has to publish WHY it failed; that is the whole point of it.
+          status=0
           node scripts/build-agent-workspace-coverage.mjs \
             test-results/agent-workspace-run.json \
             test-results/agent-workspace-coverage.json \
-            | tee test-results/coverage-summary.txt
+            2>&1 | tee test-results/coverage-summary.txt || status=$?
           {
             echo '## Agent workspace interaction coverage'
             echo ''
@@ -970,24 +980,33 @@ jobs:
             cat test-results/coverage-summary.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Upload the coverage ledger
         # The ledger and the run summary, by extension, and nothing else.
         #
-        # NOT the Playwright report and NOT test-results/ wholesale. This
-        # project drives a browser with a real session on a deployed host, so a
-        # trace or a video would carry the Authorization bearer and the
-        # sb-*-auth-token cookie (which holds a refresh token) verbatim, into a
-        # public repository's artifacts for 90 days. The project turns both off
-        # in playwright.config.ts; this glob is the second layer, so a future
-        # edit that re-enables either one still cannot publish it.
+        # NOT the Playwright report, NOT test-results/ wholesale, and the two
+        # files are NAMED rather than globbed. This project drives a browser
+        # with a real session on a deployed host, so a trace or a video would
+        # carry the Authorization bearer and the sb-*-auth-token cookie (which
+        # holds a refresh token) verbatim, into a public repository's artifacts
+        # for 90 days. The project turns both off in playwright.config.ts; this
+        # list is the second layer, so a future edit that re-enables either one
+        # still cannot publish it.
+        #
+        # A `*.json` glob was the first attempt and it was too wide: it also
+        # published test-results/agent-workspace-run.json, the raw Playwright
+        # report, which carries every title, error message and captured
+        # stdout/stderr from a run against a live deployment. Nothing prints a
+        # token today, so that was a posture gap rather than a live leak, but
+        # naming the files means a future log line cannot widen the artifact.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-workspace-coverage
           path: |
-            apps/web-console/test-results/*.json
-            apps/web-console/test-results/*.txt
+            apps/web-console/test-results/agent-workspace-coverage.json
+            apps/web-console/test-results/coverage-summary.txt
           if-no-files-found: warn
 
   report-failure:
