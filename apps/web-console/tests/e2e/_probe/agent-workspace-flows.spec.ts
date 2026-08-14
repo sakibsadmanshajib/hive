@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 import controls from "./agent-workspace-controls.json";
@@ -328,8 +330,10 @@ test.describe("sign-in entry (no session required)", () => {
     await page.goto(`${WORKSPACE}/auth/sign-in`);
     await expect(page.locator("#email")).toHaveAttribute("required", "");
     await expect(page.locator("#password")).toHaveAttribute("required", "");
-    const tokenResponse = page.waitForResponse(
-      (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+    const tokenResponse = armed(
+      page.waitForResponse(
+        (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+      ),
     );
     await page.click('button[type="submit"]');
     const response = await tokenResponse;
@@ -343,8 +347,10 @@ test.describe("sign-in entry (no session required)", () => {
     page,
   }) => {
     await page.goto(`${WORKSPACE}/auth/sign-in`);
-    const tokenResponse = page.waitForResponse(
-      (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+    const tokenResponse = armed(
+      page.waitForResponse(
+        (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+      ),
     );
     await page.locator("#email").fill("proof-of-effect@example.com");
     await page.locator("#password").fill("definitely-wrong-password-123");
@@ -487,7 +493,15 @@ test.describe("authenticated task console", () => {
     await signIn(page);
     await openTaskConsole(page);
 
-    const brief = `interaction-coverage proof ${Date.now()}`;
+    /*
+     * Identity, not timing. `findTaskIdByBrief` matches on this exact string to
+     * decide what the cleanup cancels, so it has to be unique against a shared
+     * live box rather than merely unlikely to collide. A `Date.now()` suffix
+     * alone rests on no two runs starting in the same millisecond, which is an
+     * assumption about scheduling rather than a property of the value, and a
+     * collision would have one run cancel a task another run created.
+     */
+    const brief = `interaction-coverage proof ${Date.now()} ${randomUUID()}`;
     const createRequest = armed(
       page.waitForRequest((req) => isTasksCollection(req.url()) && req.method() === "POST", {
         timeout: 30_000,
@@ -550,7 +564,7 @@ test.describe("authenticated task console", () => {
           "would be asserting against an unauthenticated 401",
       ).toBe(true);
 
-        /*
+      /*
        * C15. Soft, and the only soft assertion in this file. It still fails the
        * test, so nothing is hidden, but the body continues and the task this
        * created is still cancelled at the end rather than left holding a sandbox
