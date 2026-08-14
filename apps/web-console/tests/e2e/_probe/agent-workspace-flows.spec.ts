@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 import controls from "./agent-workspace-controls.json";
 import { reauthenticate } from "../support/live-auth";
@@ -151,6 +151,57 @@ interface AgentTaskWire {
 
 interface AgentTaskListWire {
   tasks?: AgentTaskWire[];
+}
+
+/**
+ * Arms a waiter so its rejection can only ever be delivered at its `await`.
+ *
+ * Every waiter in this file is created before the action it observes, because a
+ * waiter armed afterwards races the event it is waiting for. That leaves the
+ * promise floating while the stack is parked on the action, and a waiter that
+ * times out during that window is an UNHANDLED rejection, which Playwright
+ * turns into an immediate test abort. An abort does not unwind the stack, so
+ * `finally` never runs and the task this test created is orphaned on a shared
+ * box, holding a concurrency slot nothing frees (issue #886).
+ *
+ * Found by deliberately sabotaging the list waiter to a 1ms timeout to prove
+ * the cleanup ran: it did not, and the task was still `running` afterwards.
+ * Attaching a no-op handler here keeps the rejection on the awaited path, where
+ * it is an ordinary throw inside the guarded region.
+ *
+ * ponytail: absorb at the source rather than a try/catch at each await. Three
+ * call sites today, and the next waiter someone adds gets it for free only if
+ * they use this, which is why the name says what it is for.
+ */
+function armed<T>(waiter: Promise<T>): Promise<T> {
+  waiter.catch(() => undefined);
+  return waiter;
+}
+
+/**
+ * Finds a task by the exact brief it was created with, straight from the API.
+ *
+ * Only used by cleanup, and therefore swallows everything: it runs in a
+ * `finally` whose job is to reclaim a sandbox, so a failure here must never
+ * replace the error that sent us there. Returns an empty string when the task
+ * cannot be found or the call cannot be made.
+ */
+async function findTaskIdByBrief(
+  request: APIRequestContext,
+  authHeader: string,
+  brief: string,
+): Promise<string> {
+  try {
+    const listed = await request.get(TASKS_ENDPOINT, {
+      headers: { Authorization: authHeader },
+    });
+    if (!listed.ok()) return "";
+    const body: AgentTaskListWire = await listed.json();
+    const match = (body.tasks ?? []).find((task) => task.instructions === brief);
+    return typeof match?.id === "string" ? match.id : "";
+  } catch {
+    return "";
+  }
 }
 
 /*
@@ -437,118 +488,135 @@ test.describe("authenticated task console", () => {
     await openTaskConsole(page);
 
     const brief = `interaction-coverage proof ${Date.now()}`;
-    const createRequest = page.waitForRequest(
-      (req) => isTasksCollection(req.url()) && req.method() === "POST",
-      { timeout: 30_000 },
+    const createRequest = armed(
+      page.waitForRequest((req) => isTasksCollection(req.url()) && req.method() === "POST", {
+        timeout: 30_000,
+      }),
     );
-    const createResponse = page.waitForResponse(
-      (res) => isTasksCollection(res.url()) && res.request().method() === "POST",
-      { timeout: 330_000 },
+    const createResponse = armed(
+      page.waitForResponse(
+        (res) => isTasksCollection(res.url()) && res.request().method() === "POST",
+        { timeout: 330_000 },
+      ),
     );
     await page.locator("#task-instructions").fill(brief);
     // C14: Ctrl+Enter is the submit path being proven here. C13 above proves
     // the Start task button reaches the same handler.
     await page.locator("#task-instructions").press("Control+Enter");
 
+    /*
+     * From here to the `finally`, everything is guarded.
+     *
+     * The guarded region opens the instant the POST has left the browser,
+     * because that is the instant a task can exist on the box, and it is the
+     * only boundary that makes the header's promise true. An earlier version
+     * opened the `try` further down and left `page.reload()` and the list wait
+     * outside it: a slow reload or a list GET that never resolved inside its 60
+     * second budget threw before `finally` existed, and orphaned exactly the
+     * sandbox this block is here to reclaim. Fixing the instance rather than
+     * the window is how that came back, so the window is what moved.
+     *
+     * `authHeader` is read before the `try` on purpose: `finally` needs it to
+     * cancel, and reading a header off a request that has already been
+     * delivered cannot throw.
+     */
     const submitted = await createRequest;
-    /*
-     * Proof attribution. Both waiters are armed before the keypress, because a
-     * waiter armed afterwards races the response it is waiting for, but "the
-     * next POST that looks right" is not the same claim as "the response to the
-     * request this keypress made". PR #809's sibling gate shipped with only the
-     * shape match and it was a real bug there: any qualifying response inside
-     * the settle window counted as proof. Object identity closes it.
-     */
-    const response = await createResponse;
-    expect(
-      response.request() === submitted,
-      "the awaited response must belong to the create request this keypress issued, not merely " +
-        "to the next POST on that path that happened to arrive",
-    ).toBe(true);
-
     const authHeader = submitted.headers()["authorization"];
-    // Asserted as a boolean rather than with toMatch, so a failure prints
-    // "false" instead of echoing a live bearer token into the report, the
-    // trace and the CI log.
-    expect(
-      typeof authHeader === "string" && authHeader.startsWith("Bearer "),
-      "the create request must carry a bearer token, otherwise the cancel assertions below " +
-        "would be asserting against an unauthenticated 401",
-    ).toBe(true);
-
-    /*
-     * C15. Soft, and the only soft assertion in this file. It still fails the
-     * test, so nothing is hidden, but the body continues and the task this
-     * created is still cancelled at the end rather than left holding a sandbox
-     * on a shared box.
-     *
-     * A soft failure makes Playwright append a second, spurious error reading
-     * "Test timeout of 30000ms exceeded" even when the body ran to completion
-     * well inside the raised timeout above. Confirmed against a throwaway spec
-     * that logged testInfo.timeout as 120000 and printed its last line before
-     * the runner reported the same 30000. Ignore that line and read the
-     * assertion error underneath it.
-     *
-     * It fails against the demo box today, and the cause is a real defect
-     * rather than a flake (issue #881): edge-api's control-plane client has a 15 second
-     * timeout (apps/edge-api/internal/agenttask/client.go) while
-     * control-plane's CreateTask blocks inline on Engine.Launch with a five
-     * minute bound (apps/control-plane/internal/agenttask/service.go). Any
-     * launch slower than 15 seconds answers the browser with a 500 while the
-     * task is created and runs to completion, so the composer says "Could not
-     * start the task" about a task that is running. Measured live on
-     * 2026-08-11: 18.0s to a 500, and the task reached `succeeded`.
-     */
-    expect
-      .soft(
-        response.status(),
-        "POST /v1/agent/tasks must answer 201. A 500 here, with the task still appearing in " +
-          "the list below, is issue #881, the edge-api create timeout described above.",
-      )
-      .toBe(201);
-
-    /*
-     * Seeded from the create body first, so the cleanup can reach a task the
-     * list read below misses. The body is the task object itself (edge-api's
-     * handleCreate does writeJSON(w, StatusCreated, task)), so the id is at the
-     * top level, verified against the live route. On the #881 path the create
-     * answers 500 with an error envelope and this stays empty, which is why the
-     * list read is still the primary source.
-     */
     let createdId = "";
-    if (response.ok()) {
-      const created: AgentTaskWire | null = await response.json().catch(() => null);
-      if (typeof created?.id === "string") createdId = created.id;
-    }
-
-    /*
-     * The create's proof of effect is read from the server rather than from
-     * the create response body, so it holds whatever the status code was: the
-     * row is persisted and comes back from the list. That is also a stronger
-     * claim than trusting the body the create echoed.
-     */
-    const listResponse = page.waitForResponse(
-      (res) =>
-        isTasksCollection(res.url()) &&
-        res.request().method() === "GET" &&
-        res.status() === 200,
-      { timeout: 60_000 },
-    );
-    await page.reload();
-    const listed: AgentTaskListWire = await (
-      await listResponse
-    ).json();
-    const match = (listed.tasks ?? []).find((task) => task.instructions === brief);
-    if (typeof match?.id === "string") createdId = match.id;
 
     try {
       /*
-       * Inside the try, not before it. Outside, a create that succeeded but did
-       * not come back in this particular list read would end the test here with
-       * no cancel call at all, and the header's promise that the task is always
-       * cancelled would be false in exactly the case that costs the most: a
-       * live sandbox holding a concurrency slot nothing frees (issue #886).
+       * Proof attribution. Both waiters are armed before the keypress, because
+       * a waiter armed afterwards races the response it is waiting for, but
+       * "the next POST that looks right" is not the same claim as "the response
+       * to the request this keypress made". PR #809's sibling gate shipped with
+       * only the shape match and it was a real bug there: any qualifying
+       * response inside the settle window counted as proof. Object identity
+       * closes it.
        */
+      const response = await createResponse;
+      expect(
+        response.request() === submitted,
+        "the awaited response must belong to the create request this keypress issued, not merely " +
+          "to the next POST on that path that happened to arrive",
+      ).toBe(true);
+
+      // Asserted as a boolean rather than with toMatch, so a failure prints
+      // "false" instead of echoing a live bearer token into the report, the
+      // trace and the CI log.
+      expect(
+        typeof authHeader === "string" && authHeader.startsWith("Bearer "),
+        "the create request must carry a bearer token, otherwise the cancel assertions below " +
+          "would be asserting against an unauthenticated 401",
+      ).toBe(true);
+
+        /*
+       * C15. Soft, and the only soft assertion in this file. It still fails the
+       * test, so nothing is hidden, but the body continues and the task this
+       * created is still cancelled at the end rather than left holding a sandbox
+       * on a shared box.
+       *
+       * A soft failure makes Playwright append a second, spurious error reading
+       * "Test timeout of 30000ms exceeded" even when the body ran to completion
+       * well inside the raised timeout above. Confirmed against a throwaway spec
+       * that logged testInfo.timeout as 120000 and printed its last line before
+       * the runner reported the same 30000. Ignore that line and read the
+       * assertion error underneath it.
+       *
+       * It fails against the demo box today, and the cause is a real defect
+       * rather than a flake (issue #881): edge-api's control-plane client has a 15 second
+       * timeout (apps/edge-api/internal/agenttask/client.go) while
+       * control-plane's CreateTask blocks inline on Engine.Launch with a five
+       * minute bound (apps/control-plane/internal/agenttask/service.go). Any
+       * launch slower than 15 seconds answers the browser with a 500 while the
+       * task is created and runs to completion, so the composer says "Could not
+       * start the task" about a task that is running. Measured live on
+       * 2026-08-11: 18.0s to a 500, and the task reached `succeeded`.
+       */
+      expect
+        .soft(
+          response.status(),
+          "POST /v1/agent/tasks must answer 201. A 500 here, with the task still appearing in " +
+            "the list below, is issue #881, the edge-api create timeout described above.",
+        )
+        .toBe(201);
+
+      /*
+       * Seeded from the create body first, so the cleanup can reach a task the
+       * list read below misses. The body is the task object itself (edge-api's
+       * handleCreate does writeJSON(w, StatusCreated, task)), so the id is at the
+       * top level, verified against the live route. On the #881 path the create
+       * answers 500 with an error envelope and this stays empty, which is why the
+       * list read is still the primary source.
+       */
+      // createdId is declared above the try, so `finally` can always see it.
+      if (response.ok()) {
+        const created: AgentTaskWire | null = await response.json().catch(() => null);
+        if (typeof created?.id === "string") createdId = created.id;
+      }
+
+      /*
+       * The create's proof of effect is read from the server rather than from
+       * the create response body, so it holds whatever the status code was: the
+       * row is persisted and comes back from the list. That is also a stronger
+       * claim than trusting the body the create echoed.
+       */
+      const listResponse = armed(
+        page.waitForResponse(
+          (res) =>
+            isTasksCollection(res.url()) &&
+            res.request().method() === "GET" &&
+            res.status() === 200,
+          { timeout: 60_000 },
+        ),
+      );
+      await page.reload();
+      const listed: AgentTaskListWire = await (
+        await listResponse
+      ).json();
+      const match = (listed.tasks ?? []).find((task) => task.instructions === brief);
+      if (typeof match?.id === "string") createdId = match.id;
+
       expect(
         createdId,
         "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
@@ -614,11 +682,21 @@ test.describe("authenticated task console", () => {
     } finally {
       /*
        * Cleanup, never an assertion, and it must not mask the real failure.
-       * Without this, any hard assertion above leaves a live task on a shared
-       * box. Cancel is all this suite can reach, and per #886 it does not free
-       * the sandbox, but a cancelled row is still the closest thing to putting
-       * the box back as it was found.
+       * Without this, any throw above leaves a live task on a shared box. Cancel
+       * is all this suite can reach, and per #886 it does not free the sandbox,
+       * but a cancelled row is still the closest thing to putting the box back
+       * as it was found.
+       *
+       * The id is re-derived here when nothing above got far enough to name it,
+       * which is the case that matters: a throw between the create and the list
+       * read means a task exists that this test never learned the id of, and
+       * "we could not name it" is not a reason to leave it running. Everything
+       * in here is failure-tolerant by construction, so a cleanup that cannot
+       * reach the API stays silent rather than replacing the real error.
        */
+      if (!createdId) {
+        createdId = await findTaskIdByBrief(request, authHeader, brief);
+      }
       if (createdId) {
         await request
           .post(`${TASKS_ENDPOINT}/${createdId}/cancel`, {
