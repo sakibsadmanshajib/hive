@@ -30,6 +30,26 @@ import { reauthenticate } from "../support/live-auth";
  * (control-plane's CreateTask calls Engine.Launch inline, bounded at five
  * minutes), so a create can take tens of seconds before it answers with a
  * running task. The timeouts below are sized for that, not for a stub.
+ *
+ * CONTAINMENT. This suite writes to a live deployment, so the complete set of
+ * writes it can make is stated here rather than inferred:
+ *
+ *   1. POST /v1/agent/tasks, exactly once per run, which is the control under
+ *      test. Cancelled in a `finally` whatever happens.
+ *   2. POST /v1/agent/tasks/{id}/cancel, on that one task.
+ *   3. admin generate_link plus verify, inside live-auth.mjs. Touches no
+ *      password. It moves the account's sign-in timestamps, which any login
+ *      does, and nothing else (evidence:
+ *      docs/proof/live-auth-helper-2026-08-08/README.md).
+ *
+ * That is the whole list, and it is short because the surface is: the agent
+ * console has no destructive control at all, only a composer, two radios, a
+ * submit and a cancel. So containment here is structural rather than a
+ * label-matching guard of the kind PR #811 shipped and was found to have
+ * missed a "Change email" control that called supabase.auth.updateUser. If a
+ * destructive control ever ships on this surface, C23 and C24 fail on the
+ * unclaimed descriptor before any test can click it, which is the intended
+ * order: enumerate, fail, then decide, rather than click and discover.
  */
 const CHAT = process.env.HIVE_CHAT_BASE_URL ?? "https://chat-hive.scubed.co";
 const WORKSPACE = `${CHAT}/agent-workspace`;
@@ -385,7 +405,23 @@ test.describe("authenticated task console", () => {
     // the Start task button reaches the same handler.
     await page.locator("#task-instructions").press("Control+Enter");
 
-    const authHeader = (await createRequest).headers()["authorization"];
+    const submitted = await createRequest;
+    /*
+     * Proof attribution. Both waiters are armed before the keypress, because a
+     * waiter armed afterwards races the response it is waiting for, but "the
+     * next POST that looks right" is not the same claim as "the response to the
+     * request this keypress made". PR #809's sibling gate shipped with only the
+     * shape match and it was a real bug there: any qualifying response inside
+     * the settle window counted as proof. Object identity closes it.
+     */
+    const response = await createResponse;
+    expect(
+      response.request() === submitted,
+      "the awaited response must belong to the create request this keypress issued, not merely " +
+        "to the next POST on that path that happened to arrive",
+    ).toBe(true);
+
+    const authHeader = submitted.headers()["authorization"];
     // Asserted as a boolean rather than with toMatch, so a failure prints
     // "false" instead of echoing a live bearer token into the report, the
     // trace and the CI log.
@@ -418,7 +454,6 @@ test.describe("authenticated task console", () => {
      * start the task" about a task that is running. Measured live on
      * 2026-08-11: 18.0s to a 500, and the task reached `succeeded`.
      */
-    const response = await createResponse;
     expect
       .soft(
         response.status(),
