@@ -12,14 +12,24 @@
 # shared with it. Known ceiling: a route change there does not reach here.
 # The proof this file supports is about the agent surface, not about the
 # proxy, and the routes are two lines; if they grow, boot the real thing.
+# handle blocks, not bare matchers plus a respond: Caddy sorts directives into
+# its own canonical order rather than the order written, and `respond` sorts
+# ahead of `reverse_proxy`, so a trailing catch-all 404 answers every request
+# including the two that should have been proxied. Measured: run 31730077938
+# reported "proxy up (HTTP 404)" for /agent-workspace/tasks. handle blocks are
+# mutually exclusive and evaluated in written order, which is what this needs.
 :80 {
-	@agentConsole path /agent-workspace /agent-workspace/*
-	reverse_proxy @agentConsole agent-console:3000
+	handle /agent-workspace* {
+		reverse_proxy agent-console:3000
+	}
 
-	@agentApi path /v1/agent/*
-	reverse_proxy @agentApi edge-api:8080
+	handle /v1/agent/* {
+		reverse_proxy edge-api:8080
+	}
 
 	# Nothing else is served: an unmatched path is a bug in the harness, not
 	# a route to invent.
-	respond 404
+	handle {
+		respond 404
+	}
 }

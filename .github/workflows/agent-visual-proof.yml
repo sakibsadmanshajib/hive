@@ -152,6 +152,9 @@ jobs:
       # image is built with; Caddyfile.agent-proof is the same-origin front.
       NEXT_PUBLIC_EDGE_API_BASE_URL: ''
       E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Off the root filesystem, which Docker also lives on. See the reclaim
+      # step below.
+      PLAYWRIGHT_BROWSERS_PATH: /mnt/ms-playwright
     steps:
       - name: Resolve the pull request under proof
         id: target
@@ -178,6 +181,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.target.outputs.ref }}
+
+      - name: Reclaim disk space
+        # This job holds a one gigabyte SIF, five container images including
+        # a Next.js production build, node_modules and a Chromium. Run
+        # 31730077938 filled the root filesystem and failed inside `npx
+        # playwright install` with ENOSPC, which reads as a browser problem
+        # rather than a disk one. The SIF and the browser live on /mnt, which
+        # is the runner's large volume; these preinstalled toolchains, which
+        # nothing here uses, are what frees room for Docker on the root disk.
+        run: |
+          set -euo pipefail
+          # The hosted tool cache is deliberately left alone: setup-node and
+          # the actions runtime live there, and reclaiming it to save a few
+          # more gigabytes breaks the steps below in a way that is much
+          # harder to read than ENOSPC.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost || true
+          sudo mkdir -p /mnt/ms-playwright
+          sudo chown "$(id -un):$(id -gn)" /mnt/ms-playwright
+          df -h / /mnt
 
       - uses: actions/setup-node@v4
         with:
