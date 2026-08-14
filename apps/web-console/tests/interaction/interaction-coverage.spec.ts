@@ -425,11 +425,17 @@ async function proveControl(
     filledFields = await fillFormFor(locator);
   }
 
-  // The two cases where a real write must not leave the browser: a control
-  // whose label says it destroys something, and a form the gate itself filled
-  // in. Both are still clicked, and the request the application builds is
-  // still what proves the control is wired; it is stopped on the way out.
-  const blockWrites = destructive || filledFields.length > 0;
+  // Every activation, not a chosen few. Containment used to depend on the
+  // control's visible label matching a destructive-sounding word, which is not
+  // a safety mechanism: `Change email` on /console/settings/profile calls
+  // supabase.auth.updateUser and matched nothing, so both live runs of this
+  // gate issued a real PUT to /auth/v1/user against the demo account. A rule
+  // that has to guess which button is dangerous will keep guessing wrong.
+  //
+  // The click still happens, the application still builds and issues its
+  // request, and the interception is what proves the control is wired. The one
+  // exception is a toggle, whose whole proof is that its flip survives a
+  // reload, and which the gate flips back and fails if it could not.
 
   // Tag the element so the reveal pass can tell "a new control appeared" from
   // "the control I just clicked relabelled itself to Sending…", which is a
@@ -440,15 +446,11 @@ async function proveControl(
     })
     .catch(() => undefined);
 
-  const click = async (): Promise<Observation> =>
+  const { value: observation, blocked } = await guard.withWritesBlocked(() =>
     observe(page, async () => {
       await locator.click({ timeout: 8000 });
-    });
-  const { observation, blocked } = blockWrites
-    ? await guard
-        .withWritesBlocked(click)
-        .then((result) => ({ observation: result.value, blocked: result.blocked }))
-    : { observation: await click(), blocked: [] };
+    }),
+  );
   const outcome = verdictFromObservation(observation, { blockedMutations: blocked });
   if (filledFields.length > 0) {
     outcome.detail = `${outcome.detail} (form pre-filled: ${filledFields.join(", ")})`;
@@ -857,6 +859,13 @@ test.describe("interaction coverage", () => {
         storageState: AUTH_STATE_FILE,
         viewport: { width: 1440, height: 900 },
       });
+      // Guarded like every other activation. Sign out and the locale switcher
+      // both POST, and both change state that outlives this run: one revokes
+      // the session, the other rewrites the account's language preference. The
+      // ordering hazard this pass exists to work around, sign out killing the
+      // session every later control is addressed through, cannot happen once
+      // the request is stopped in the browser.
+      const deferredGuard = mutationGuard(context);
       const page = await context.newPage();
       let outcome: ProofOutcome = {
         proven: false,
@@ -877,10 +886,12 @@ test.describe("interaction coverage", () => {
         await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => undefined);
         const locator = await locateByKey(page, item.key);
         if (locator !== null) {
-          const observation = await observe(page, async () => {
-            await locator.click({ timeout: 8000 });
-          });
-          outcome = verdictFromObservation(observation);
+          const { value: observation, blocked } = await deferredGuard.withWritesBlocked(() =>
+            observe(page, async () => {
+              await locator.click({ timeout: 8000 });
+            }),
+          );
+          outcome = verdictFromObservation(observation, { blockedMutations: blocked });
         }
       } catch (error) {
         outcome = {
