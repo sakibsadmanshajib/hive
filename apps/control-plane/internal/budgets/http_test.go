@@ -3,10 +3,10 @@ package budgets
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -220,6 +220,12 @@ func TestHandler_BudgetAuthzMatrix(t *testing.T) {
 		{"owner unverified set budget", "owner", false, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden, "email_verification_required"},
 		{"owner unverified dismiss alert", "owner", false, http.MethodPost, "/api/v1/accounts/current/budget/dismiss", http.StatusForbidden, "email_verification_required"},
 		{"member verified set budget", "member", true, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden, "permission_denied"},
+		// The only row where both obstacles apply at once, and therefore the
+		// only one where the classification has a genuine choice to make.
+		// Verifying alone would not admit this caller, since the second Can
+		// still refuses on role, so naming verification would send them to fix
+		// something that would not help.
+		{"member unverified set budget", "member", false, http.MethodPut, "/api/v1/accounts/current/budget", http.StatusForbidden, "permission_denied"},
 	}
 
 	for _, tc := range cases {
@@ -251,8 +257,20 @@ func TestHandler_BudgetAuthzMatrix(t *testing.T) {
 			if rr.Code != tc.wantStatus {
 				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
 			}
-			if tc.wantCode != "" && !strings.Contains(rr.Body.String(), tc.wantCode) {
-				t.Errorf("want code %q in body, got %s", tc.wantCode, rr.Body.String())
+			// Decoded rather than substring-matched over the whole body: a
+			// substring check starts passing for the wrong reason the day a
+			// message is reworded to mention a code.
+			if tc.wantCode != "" {
+				var body struct {
+					Error string `json:"error"`
+					Code  string `json:"code"`
+				}
+				if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode body %s: %v", rr.Body.String(), err)
+				}
+				if body.Code != tc.wantCode {
+					t.Errorf("want code %q got %q (error: %q)", tc.wantCode, body.Code, body.Error)
+				}
 			}
 		})
 	}
