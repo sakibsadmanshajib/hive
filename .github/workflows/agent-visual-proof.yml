@@ -119,6 +119,15 @@ jobs:
       COMPOSE_PROFILES: local
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # Without both of these edge-api logs "phase-19 JWT auth wiring
+      # skipped" at boot and then answers 403 to every Supabase-JWT caller,
+      # which the console renders as "the agent workspace is turned off for
+      # your organization": a real page, and proof of nothing. Measured in
+      # run 31819555736, where the token carried the right tenant and
+      # control-plane reported the gate on. Derived from SUPABASE_URL rather
+      # than added as two more secrets, since both are public URLs.
+      SUPABASE_JWT_ISSUER: ${{ secrets.SUPABASE_URL }}/auth/v1
+      SUPABASE_JWKS_URL: ${{ secrets.SUPABASE_URL }}/auth/v1/.well-known/jwks.json
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -390,6 +399,14 @@ jobs:
             exit 1
           fi
           echo "control-plane is on the socket arm and the daemon answered /health"
+          # Same class of silent misconfiguration, one service over: edge-api
+          # logs this and then denies every Supabase-JWT caller, which reads
+          # as a disabled feature rather than as a broken deployment.
+          if docker compose logs --no-color edge-api | grep -q "JWT auth wiring skipped"; then
+            echo "::error::edge-api skipped JWT auth wiring, so no browser session can authenticate"
+            exit 1
+          fi
+          echo "edge-api wired Supabase JWT auth"
 
       - name: Serve the console and edge-api from one origin
         working-directory: deploy/docker
