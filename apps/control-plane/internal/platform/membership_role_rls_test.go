@@ -76,7 +76,7 @@ func newAccountRoleTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// seedAccountMembership inserts the subject user, a separate user who created
+// seedSubjectAccountMembership inserts the subject user, a separate user who created
 // and owns the account, the account itself, and one account_memberships row
 // putting the subject on that account with the given role and status.
 //
@@ -89,7 +89,7 @@ func newAccountRoleTestPool(t *testing.T) *pgxpool.Pool {
 // predicate reads. Here every case is one shape, a user added to somebody
 // else's workspace, and the only variable is the role and status on the
 // membership row, which is the predicate under test.
-func seedAccountMembership(t *testing.T, accountID, userID uuid.UUID, role, status string) {
+func seedSubjectAccountMembership(t *testing.T, accountID, userID uuid.UUID, role, status string) {
 	t.Helper()
 	dsn := requireAccountRoleTestDSN(t)
 	ctx := context.Background()
@@ -154,7 +154,7 @@ const (
 func TestIsWorkspaceOwner_ActiveOwnerIsOwner(t *testing.T) {
 	pool := newAccountRoleTestPool(t)
 	accountID, userID := uuid.New(), uuid.New()
-	seedAccountMembership(t, accountID, userID, "owner", "active")
+	seedSubjectAccountMembership(t, accountID, userID, "owner", "active")
 
 	svc := platform.NewRoleService(platform.NewPgxRoleStore(pool))
 	isOwner, err := svc.IsWorkspaceOwner(context.Background(), userID, accountID)
@@ -187,7 +187,7 @@ func TestIsWorkspaceOwner_NonActiveOwnerIsNotOwner(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			accountID, userID := uuid.New(), uuid.New()
-			seedAccountMembership(t, accountID, userID, tc.role, tc.status)
+			seedSubjectAccountMembership(t, accountID, userID, tc.role, tc.status)
 
 			isOwner, err := svc.IsWorkspaceOwner(ctx, userID, accountID)
 			if err != nil {
@@ -208,8 +208,8 @@ func TestIsWorkspaceOwner_ForeignWorkspaceMembershipDoesNotCarry(t *testing.T) {
 	pool := newAccountRoleTestPool(t)
 	accountA, accountB := uuid.New(), uuid.New()
 	userID := uuid.New()
-	seedAccountMembership(t, accountA, userID, "owner", "active")
-	seedAccountMembership(t, accountB, uuid.New(), "owner", "active")
+	seedSubjectAccountMembership(t, accountA, userID, "owner", "active")
+	seedSubjectAccountMembership(t, accountB, uuid.New(), "owner", "active")
 
 	svc := platform.NewRoleService(platform.NewPgxRoleStore(pool))
 	isOwner, err := svc.IsWorkspaceOwner(context.Background(), userID, accountB)
