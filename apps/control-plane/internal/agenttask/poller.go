@@ -33,7 +33,7 @@ const maxPollerBackoff = 5 * time.Minute
 // Unlike every other StatusChecker error, this one is not retried at all: a
 // session the engine has no memory of can never report progress again, so
 // RunOnce fails the task immediately instead of leaving it queued/running
-// forever or charging it against maxTaskFailureBudget first.
+// forever or charging it against its failure budget first.
 //
 // The routine producer of this path on the demo box is a DEPLOY, not a rare
 // crash: deploy-demo-box.yml runs scripts/install-agent-engine-host.sh
@@ -58,13 +58,26 @@ var ErrEngineSessionGone = errors.New("agenttask: engine has no memory of this s
 // so "failed" would be stating something this code cannot actually know.
 const engineSessionGoneMessage = "this task's outcome could not be recovered: its session was lost"
 
-// maxTaskFailureBudget bounds how many consecutive passes a single task's
-// status check (or, once it reports a real terminal status, the transition
-// that records it) may fail before RunOnce gives up on that ONE task and
-// fails it directly, regardless of what shape the error took. 20 passes is
-// about 5 minutes at the default 15s interval, the same order of magnitude
+// maxTaskFailureDuration bounds, in wall-clock time rather than a raw pass
+// count, how long a single task's status check (or, once it reports a real
+// terminal status, the transition that records it) may keep failing before
+// RunOnce gives up on that ONE task and fails it directly, regardless of
+// what shape the error took. About 5 minutes, the same order of magnitude
 // maxPollerBackoff used to cap the whole poller's shared interval at, now
 // scoped to one task instead of every tenant's sweep.
+//
+// Expressed as a duration and converted to a pass count via
+// Poller.taskFailureBudget (using the poller's OWN configured interval)
+// rather than a fixed pass count, deliberately: HIVE_AGENT_TASK_POLL_INTERVAL
+// is operator-tunable, and lowering it is the obvious reaction to this very
+// incident. A fixed pass count
+// would have silently shortened the real kill timeout in proportion — at a
+// tuned 3s interval a fixed 20-pass budget would give up on a task in 60
+// seconds instead of 5 minutes, against Cowork tasks that routinely run
+// sixteen to twenty-two minutes, killing legitimately slow-to-report work
+// instead of only genuinely dead sessions. Tying the budget to the
+// interval keeps its documented ~5 minute meaning invariant regardless of
+// how that knob is tuned.
 //
 // This exists because ErrEngineSessionGone only covers one definitive
 // failure shape: a 404 from a launcher whose in-memory registry never had
@@ -77,15 +90,35 @@ const engineSessionGoneMessage = "this task's outcome could not be recovered: it
 // non-enumerable error shape. A per-task budget catches that case and any
 // future one without needing to name every failure mode a StatusChecker
 // implementation could return.
-const maxTaskFailureBudget = 20
+const maxTaskFailureDuration = 5 * time.Minute
 
 // engineUnreachableAfterRetriesMessage is the customer-visible
-// error_message persisted when a task exhausts maxTaskFailureBudget without
-// ErrEngineSessionGone ever firing. Provider-blind and worded the same
-// unrecoverable-outcome way as engineSessionGoneMessage, for the same
-// reason: repeated Status failures mean this code cannot learn what
-// happened, not that the task is confirmed to have failed.
+// error_message persisted when a task exhausts its failure budget (see
+// Poller.taskFailureBudget) without ErrEngineSessionGone ever firing.
+// Provider-blind and worded the same unrecoverable-outcome way as
+// engineSessionGoneMessage, for the same reason: repeated Status failures
+// mean this code cannot learn what happened, not that the task is confirmed
+// to have failed.
 const engineUnreachableAfterRetriesMessage = "this task's outcome could not be recovered: its session stopped answering"
+
+// budgetExceededCanceler is the narrow surface chargeFailureBudget needs to
+// best-effort stop a session before giving up on its row: StatusChecker
+// itself has no Cancel method (by design, per its own doc comment), but
+// every concrete StatusChecker cmd/server/main.go's buildAgentEngine wires
+// (agentengine.Remote for the socket arm, agentengine.Engine in-process) is
+// also an agenttask.Engine, so it has one. Without this, exhausting the
+// budget only marked the row failed and never told the engine to let go: a
+// non-404 error means the launcher answered from its own handler, so the
+// session is still live in SandboxEngine.sessions holding a concurrency
+// slot (reap runs only from a terminal Status or Cancel), and once the row
+// is terminal, Service.Cancel's own atomic guard returns ErrTerminalState
+// before it ever reaches stopEngineSession — nothing else would ever free
+// that slot, reproducing issue #886's leaked-slot symptom through a new
+// door. Deliberately NOT used on the ErrEngineSessionGone path: there is
+// nothing left to stop, the engine already said so.
+type budgetExceededCanceler interface {
+	Cancel(ctx context.Context, sessionRef string) error
+}
 
 // PollerConfig controls Poller behaviour.
 type PollerConfig struct {
@@ -107,10 +140,15 @@ type Poller struct {
 	interval time.Duration
 	logger   *slog.Logger
 
+	// taskFailuresMu guards taskFailures. RunOnce is exported, so a caller
+	// besides loop (which Start/Stop's own mutex serializes) could call it
+	// concurrently; loop's own serialization guarantee protects loop against
+	// itself, not this method against an arbitrary caller, and an
+	// unsynchronized concurrent map write is a process-fatal throw with no
+	// recover, not merely a data race. Cheap to close, so closed.
+	taskFailuresMu sync.Mutex
 	// taskFailures counts each task's CONSECUTIVE per-pass failures (see
-	// maxTaskFailureBudget). Only ever touched from RunOnce, which loop
-	// guarantees is never running concurrently with itself (Start/Stop's own
-	// mutex serializes passes), so this needs no lock of its own.
+	// taskFailureBudget).
 	taskFailures map[uuid.UUID]int
 
 	mu      sync.Mutex
@@ -138,6 +176,59 @@ func NewPoller(repo Repository, checker StatusChecker, cfg PollerConfig) *Poller
 	return &Poller{repo: repo, checker: checker, interval: interval, logger: logger, taskFailures: make(map[uuid.UUID]int)}
 }
 
+// taskFailureBudget converts maxTaskFailureDuration to a pass count using
+// THIS poller's own configured interval, so the budget's documented ~5
+// minute meaning does not silently drift when HIVE_AGENT_TASK_POLL_INTERVAL
+// is tuned (see maxTaskFailureDuration's doc comment). At least 1: an
+// interval tuned coarser than the duration itself still gets one retry
+// before giving up, never zero.
+func (p *Poller) taskFailureBudget() int {
+	n := int(maxTaskFailureDuration / p.interval)
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// taskFailureCount returns id's current consecutive-failure streak, 0 if it
+// has none.
+func (p *Poller) taskFailureCount(id uuid.UUID) int {
+	p.taskFailuresMu.Lock()
+	defer p.taskFailuresMu.Unlock()
+	return p.taskFailures[id]
+}
+
+// incrementTaskFailure counts one more consecutive failure against id and
+// returns the new total.
+func (p *Poller) incrementTaskFailure(id uuid.UUID) int {
+	p.taskFailuresMu.Lock()
+	defer p.taskFailuresMu.Unlock()
+	p.taskFailures[id]++
+	return p.taskFailures[id]
+}
+
+// clearTaskFailure forgets id's failure streak (a clean pass, a resolved
+// terminal state, or the task no longer being active at all).
+func (p *Poller) clearTaskFailure(id uuid.UUID) {
+	p.taskFailuresMu.Lock()
+	defer p.taskFailuresMu.Unlock()
+	delete(p.taskFailures, id)
+}
+
+// pruneInactiveTaskFailures forgets every tracked task's streak that is not
+// in active, so the map does not grow forever once a task stops showing up
+// in ListActive (resolved this pass, by a concurrent Cancel, or anything
+// else).
+func (p *Poller) pruneInactiveTaskFailures(active map[uuid.UUID]bool) {
+	p.taskFailuresMu.Lock()
+	defer p.taskFailuresMu.Unlock()
+	for id := range p.taskFailures {
+		if !active[id] {
+			delete(p.taskFailures, id)
+		}
+	}
+}
+
 // RunOnce performs exactly one poll pass: every active task gets exactly one
 // StatusChecker.Status call and, if terminal, one Repository.Transition
 // call.
@@ -159,9 +250,9 @@ func NewPoller(repo Repository, checker StatusChecker, cfg PollerConfig) *Poller
 // Instead, every task-level problem is scoped to that ONE task via
 // pollTask/chargeFailureBudget: a StatusChecker error definitively
 // identified as ErrEngineSessionGone fails the task immediately; anything
-// else is retried per pass, up to maxTaskFailureBudget consecutive times,
-// after which RunOnce gives up on that task and fails it directly regardless
-// of the error's shape (see maxTaskFailureBudget's doc comment for why a
+// else is retried per pass, up to taskFailureBudget consecutive times, after
+// which RunOnce gives up on that task and fails it directly regardless of
+// the error's shape (see maxTaskFailureDuration's doc comment for why a
 // budget, not an enumeration, is what actually closes this class of bug). A
 // Repository.Transition failure for an ALREADY-KNOWN terminal status (the
 // engine told us the task succeeded or failed, but persisting that failed)
@@ -198,14 +289,7 @@ func (p *Poller) RunOnce(ctx context.Context) (advanced int, err error) {
 			"declared_dead", declaredDead, "active_this_pass", len(tasks))
 	}
 
-	// Forget the failure streak of any task no longer active (resolved this
-	// pass, by a concurrent Cancel, or anything else) so the map does not
-	// grow forever.
-	for id := range p.taskFailures {
-		if !active[id] {
-			delete(p.taskFailures, id)
-		}
-	}
+	p.pruneInactiveTaskFailures(active)
 	return advanced, nil
 }
 
@@ -217,7 +301,7 @@ type pollResult struct {
 	advanced bool
 	// declaredDead reports whether THIS pass is the one where the poller
 	// itself decided the task is dead (ErrEngineSessionGone or an exhausted
-	// maxTaskFailureBudget) — never true for a task the engine reported
+	// failure budget) — never true for a task the engine reported
 	// succeeded/failed/cancelled on its own.
 	declaredDead bool
 }
@@ -238,7 +322,7 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 		ok := p.chargeFailureBudget(ctx, t, statusErr)
 		return pollResult{advanced: ok, declaredDead: ok}
 	}
-	delete(p.taskFailures, t.ID) // a clean answer this pass, whatever it was
+	p.clearTaskFailure(t.ID) // a clean answer this pass, whatever it was
 
 	if status != StatusSucceeded && status != StatusFailed && status != StatusCancelled {
 		return pollResult{}
@@ -273,43 +357,62 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 }
 
 // chargeFailureBudget counts one more consecutive failure against t and, once
-// that reaches maxTaskFailureBudget, gives up on the task for good instead of
-// retrying it forever (see maxTaskFailureBudget's doc comment for why this
+// that reaches taskFailureBudget, gives up on the task for good instead of
+// retrying it forever (see maxTaskFailureDuration's doc comment for why this
 // exists alongside ErrEngineSessionGone rather than instead of it).
 func (p *Poller) chargeFailureBudget(ctx context.Context, t Task, cause error) (declaredDead bool) {
-	p.taskFailures[t.ID]++
-	if p.taskFailures[t.ID] < maxTaskFailureBudget {
+	count := p.incrementTaskFailure(t.ID)
+	if count < p.taskFailureBudget() {
 		p.logger.WarnContext(ctx, "agenttask: poller status check failed, retrying next pass",
-			"task_id", t.ID, "consecutive_failures", p.taskFailures[t.ID], "error", cause)
+			"task_id", t.ID, "consecutive_failures", count, "error", cause)
 		return false
 	}
 	p.logger.WarnContext(ctx, "agenttask: task exceeded its failure budget, failing it",
-		"task_id", t.ID, "consecutive_failures", p.taskFailures[t.ID], "error", cause)
+		"task_id", t.ID, "consecutive_failures", count, "error", cause)
+
+	// This branch (unlike ErrEngineSessionGone) means the launcher answered
+	// from its own handler, so the session is very likely still live and
+	// holding its concurrency slot (SandboxEngine.reap runs only from a
+	// terminal Status or Cancel). Failing the row below without stopping the
+	// engine first would leave that slot held forever: once the row is
+	// terminal, Service.Cancel's own atomic guard returns ErrTerminalState
+	// before it ever reaches stopEngineSession, so nothing else can free it.
+	// Best-effort and before the Transition: if the session really did just
+	// finish, Cancel is a documented no-op on it (agenttask.Engine's doc
+	// comment), and if the Transition below then loses a race to a
+	// concurrent Cancel or completion, that path's own stop attempt (or the
+	// fact that a successful completion needs no stop at all) makes this one
+	// redundant, not wrong.
+	if canceler, ok := p.checker.(budgetExceededCanceler); ok {
+		if err := canceler.Cancel(ctx, t.EngineSessionRef); err != nil {
+			p.logger.WarnContext(ctx, "agenttask: best-effort session stop failed after exhausting the failure budget, its concurrency slot may still be held",
+				"task_id", t.ID, "error", err)
+		}
+	}
 	return p.failTask(ctx, t, engineUnreachableAfterRetriesMessage)
 }
 
 // failTask transitions t straight to StatusFailed with a provider-blind
 // message. Deliberately does not clear t's failure streak when the
 // Transition call itself fails with a real (non-ErrTerminalState) error: the
-// streak is already at or past maxTaskFailureBudget by the time this runs
+// streak is already at or past taskFailureBudget by the time this runs
 // (chargeFailureBudget only calls it once the budget is exhausted, and
 // ErrEngineSessionGone routes straight here on its own), so leaving the
 // count where it is makes the next pass retry this same transition
-// immediately rather than waiting out a fresh maxTaskFailureBudget cycle
-// first.
+// immediately rather than waiting out a fresh budget cycle first.
 func (p *Poller) failTask(ctx context.Context, t Task, message string) (advanced bool) {
 	if _, transErr := p.repo.Transition(ctx, t.TenantID, t.UserID, t.ID, StatusFailed, "", "", message); transErr != nil {
 		if errors.Is(transErr, ErrTerminalState) {
 			// Already resolved, e.g. by a concurrent Cancel: not a failure
 			// of this attempt, forget the streak.
-			delete(p.taskFailures, t.ID)
+			p.clearTaskFailure(t.ID)
 			return false
 		}
 		p.logger.WarnContext(ctx, "agenttask: poller transition failed, retrying next pass",
 			"task_id", t.ID, "error", transErr)
 		return false
 	}
-	delete(p.taskFailures, t.ID)
+	p.clearTaskFailure(t.ID)
 	return true
 }
 
@@ -366,7 +469,7 @@ func (p *Poller) Stop() {
 // frequency. An engine-side problem (the agent-engine daemon itself
 // unreachable, one task's session gone, or anything else RunOnce's own doc
 // comment scopes to a single task) never reaches this signal at all: it is
-// bounded per task by maxTaskFailureBudget instead, so it costs that one
+// bounded per task by its own failure budget instead, so it costs that one
 // task some retries, never the whole poller's cadence.
 func (p *Poller) loop(ctx context.Context, doneCh chan<- struct{}) {
 	defer close(doneCh)

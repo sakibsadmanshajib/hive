@@ -24,11 +24,17 @@ func quietPollerLogger() *slog.Logger {
 
 // fakeStatusChecker is a hand-built agenttask.StatusChecker stub: a fixed
 // per-sessionRef response table, with an optional call counter for the
-// Start/Stop loop tests.
+// Start/Stop loop tests. Also implements Cancel (agentengine.Remote and
+// agentengine.Engine both do, structurally satisfying the unexported
+// budgetExceededCanceler interface chargeFailureBudget type-asserts for),
+// so tests can assert on the best-effort stop a budget-exhausted task
+// triggers.
 type fakeStatusChecker struct {
 	mu        sync.Mutex
 	responses map[string]checkerResponse
 	calls     int
+	cancelled []string
+	cancelErr error
 }
 
 type checkerResponse struct {
@@ -49,10 +55,23 @@ func (f *fakeStatusChecker) Status(_ context.Context, sessionRef string) (agentt
 	return resp.status, resp.resultSummary, resp.errMessage, resp.err
 }
 
+func (f *fakeStatusChecker) Cancel(_ context.Context, sessionRef string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelled = append(f.cancelled, sessionRef)
+	return f.cancelErr
+}
+
 func (f *fakeStatusChecker) Calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeStatusChecker) Cancelled() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cancelled...)
 }
 
 func newActiveTask(repo *fakeRepository, status agenttask.Status, sessionRef string) agenttask.Task {
@@ -241,8 +260,13 @@ func TestPoller_RunOnce_SingleTaskErroringForeverDoesNotBackOffTheSweep(t *testi
 // NOT one wrapping ErrEngineSessionGone, since the launcher's serve.go only
 // maps engineapi.ErrUnknownSession (a 404) onto that sentinel; this failure
 // shape is whatever the daemon's default error-mapping branch produces (a
-// 502 in practice). RunOnce must still eventually give up on it, exactly
-// maxTaskFailureBudget consecutive passes in.
+// 502 in practice). RunOnce must still eventually give up on it, exactly at
+// the poller's own taskFailureBudget()'th consecutive pass (20 at the
+// default 15s interval, since maxTaskFailureDuration is 5 minutes). It must
+// also best-effort stop the still-live session at that point: a non-404
+// error means the launcher answered from its own handler, so
+// SandboxEngine.reap never ran and the session is still holding its
+// concurrency slot.
 func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t *testing.T) {
 	repo := newFakeRepository()
 	task := newActiveTask(repo, agenttask.StatusRunning, "session-dead-sandbox")
@@ -253,7 +277,7 @@ func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t 
 	}}
 	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
 
-	const budget = 20 // must match agenttask.maxTaskFailureBudget
+	const budget = 20 // default interval 15s, maxTaskFailureDuration 5m: 5m/15s = 20
 	for pass := 1; pass < budget; pass++ {
 		if _, err := p.RunOnce(context.Background()); err != nil {
 			t.Fatalf("pass %d: expected no error (per-task budget, not systemic), got %v", pass, err)
@@ -265,6 +289,9 @@ func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t 
 		if got.Status != agenttask.StatusRunning {
 			t.Fatalf("pass %d: status=%q want still running (budget not yet exhausted)", pass, got.Status)
 		}
+	}
+	if cancelled := checker.Cancelled(); len(cancelled) != 0 {
+		t.Fatalf("expected no Cancel calls before the budget is exhausted, got %v", cancelled)
 	}
 
 	// The budget-exhausting pass.
@@ -281,6 +308,9 @@ func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t 
 	if got.ErrorMessage == "" || strings.Contains(got.ErrorMessage, "502") {
 		t.Fatalf("error_message=%q want a non-empty, provider-blind message", got.ErrorMessage)
 	}
+	if cancelled := checker.Cancelled(); len(cancelled) != 1 || cancelled[0] != "session-dead-sandbox" {
+		t.Fatalf("expected exactly one best-effort Cancel(\"session-dead-sandbox\") once the budget was exhausted, got %v", cancelled)
+	}
 
 	// Never rechecked again once terminal.
 	callsBefore := checker.Calls()
@@ -290,6 +320,74 @@ func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t 
 	if got := checker.Calls(); got != callsBefore {
 		t.Fatalf("expected 0 additional Status calls once the task is terminal, calls went from %d to %d", callsBefore, got)
 	}
+}
+
+// TestPoller_RunOnce_FailureBudgetScalesWithConfiguredInterval is the
+// regression guard for the review finding that a fixed 20-pass budget would
+// silently shorten the real kill timeout whenever
+// HIVE_AGENT_TASK_POLL_INTERVAL is tuned. At a 1 minute interval,
+// maxTaskFailureDuration (5 minutes) must yield a 5-pass budget, not 20.
+func TestPoller_RunOnce_FailureBudgetScalesWithConfiguredInterval(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-dead-sandbox")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-dead-sandbox": {err: errors.New("agentengine: /status: status 502")},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Interval: time.Minute, Logger: quietPollerLogger()})
+
+	const budget = 5 // maxTaskFailureDuration (5m) / 1m interval
+	for pass := 1; pass < budget; pass++ {
+		if _, err := p.RunOnce(context.Background()); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		got, getErr := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+		if getErr != nil {
+			t.Fatalf("pass %d: Get: %v", pass, getErr)
+		}
+		if got.Status != agenttask.StatusRunning {
+			t.Fatalf("pass %d: status=%q want still running (budget not yet exhausted at a 1m interval)", pass, got.Status)
+		}
+	}
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("final pass: %v", err)
+	}
+	got, getErr := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if getErr != nil {
+		t.Fatalf("Get: %v", getErr)
+	}
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed on the 5th consecutive failure at a 1m interval, not the 15s-interval default of 20", got.Status)
+	}
+}
+
+// TestPoller_RunOnce_ConcurrentCallsDoNotCorruptTaskFailures is the
+// contract-regression guard the review flagged: RunOnce is exported, and
+// loop's own serialization (Start/Stop's mutex) protects loop against
+// itself, not this method against a second, direct caller. An
+// unsynchronized concurrent map write is a process-fatal throw Go's runtime
+// detects on its own, with no recover, even without -race. This is a
+// contract regression today (no shipped caller does this), not a live bug;
+// still cheap to close.
+func TestPoller_RunOnce_ConcurrentCallsDoNotCorruptTaskFailures(t *testing.T) {
+	repo := newFakeRepository()
+	for i := range 5 {
+		newActiveTask(repo, agenttask.StatusRunning, fmt.Sprintf("session-%d", i))
+	}
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-0": {err: errors.New("boom")},
+		"session-1": {err: errors.New("boom")},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = p.RunOnce(context.Background())
+		}()
+	}
+	wg.Wait()
 }
 
 // TestPoller_RunOnce_FailureBudgetResetsOnCleanPass proves the budget counts
@@ -304,7 +402,7 @@ func TestPoller_RunOnce_FailureBudgetResetsOnCleanPass(t *testing.T) {
 	}}
 	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
 
-	const budget = 20 // must match agenttask.maxTaskFailureBudget
+	const budget = 20 // default interval 15s, maxTaskFailureDuration 5m: 5m/15s = 20
 	for pass := 0; pass < budget-1; pass++ {
 		if _, err := p.RunOnce(context.Background()); err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
@@ -341,7 +439,10 @@ func TestPoller_RunOnce_FailureBudgetResetsOnCleanPass(t *testing.T) {
 // root-cause fix: a StatusChecker error wrapping agenttask.ErrEngineSessionGone
 // (the launcher has no memory of this session, e.g. it restarted) is a
 // definitive answer, not a transient one, and must fail the task in this
-// same pass rather than being retried forever.
+// same pass rather than being retried forever. It must also NOT attempt a
+// best-effort Cancel the way an exhausted failure budget does: the engine
+// already said it has no memory of the session, so there is nothing left to
+// stop.
 func TestPoller_RunOnce_EngineSessionGoneFailsTaskInstead(t *testing.T) {
 	repo := newFakeRepository()
 	task := newActiveTask(repo, agenttask.StatusRunning, "session-lost")
@@ -369,6 +470,9 @@ func TestPoller_RunOnce_EngineSessionGoneFailsTaskInstead(t *testing.T) {
 	}
 	if strings.Contains(got.ErrorMessage, "404") || strings.Contains(got.ErrorMessage, "session-lost") {
 		t.Fatalf("error_message=%q leaked engine detail (provider-blind violation)", got.ErrorMessage)
+	}
+	if cancelled := checker.Cancelled(); len(cancelled) != 0 {
+		t.Fatalf("expected no Cancel calls on the session-gone path (nothing left to stop), got %v", cancelled)
 	}
 
 	// Second pass: the now-failed task is no longer active, so it is never
