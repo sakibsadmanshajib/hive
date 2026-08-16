@@ -16,24 +16,16 @@
     "so the guard lists those configs with placeholders to keep collection deterministic",
     "everywhere.",
     "",
-    "`configs` pins each config to the projects it declares, verified by the same guard from the",
-    "same listing. tools/verify-spec-wiring.mjs reads it to resolve a workflow's `--config` and",
-    "`--project` arguments into a set of spec files without importing any config file itself."
+    "There used to be a `configs` object here, pinning each config to the projects it declares.",
+    "It was a hand-maintained copy that this doc claimed was 'verified by the same guard from the",
+    "same listing', which was not true: nothing here re-derived it, so it went stale the moment a",
+    "config's projects changed anywhere but this file. PR #799 added a project to",
+    "playwright.config.ts while a sibling branch's copy of this file was mid-flight, and the",
+    "guard blamed the workflow that correctly selected the new project instead of its own stale",
+    "copy. tools/verify-spec-wiring.mjs now asks Playwright directly which projects a config",
+    "declares (an unfindable --project name always names every real one in its own error), so",
+    "there is nothing here left to go stale."
   ],
-  "configs": {
-    "playwright.config.ts": ["chromium", "phase-19", "phase-19-setup", "probe"],
-    "e2e/phase-19/owui/playwright.owui.config.ts": [
-      "owui",
-      "owui-deployed-login",
-      "owui-perf",
-      "owui-setup"
-    ],
-    "e2e/chat-coverage/playwright.chat-coverage.config.ts": [
-      "chat-coverage",
-      "chat-coverage-break-proof",
-      "chat-coverage-setup"
-    ]
-  },
   "specs": {
     "e2e/chat-coverage/auth.setup.ts": ["chat-coverage-setup"],
     "e2e/chat-coverage/break-proof.spec.ts": ["chat-coverage-break-proof"],

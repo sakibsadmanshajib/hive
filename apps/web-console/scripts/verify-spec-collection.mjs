@@ -200,44 +200,24 @@ function listOneConfig({ label, args, env }) {
 function main() {
   const document = JSON.parse(readFileSync(MANIFEST, "utf8"));
   const manifest = document.specs;
-  const declaredConfigs = document.configs ?? {};
 
   const collected = new Map();
   const problems = [];
 
+  // tools/verify-spec-wiring.mjs used to resolve a workflow's `--config` and
+  // `--project` arguments through a `configs` object pinned here from this
+  // same listing. That was a hand-maintained copy of what this loop already
+  // computes below, and it drifted (issue: PR #799 added a project to
+  // playwright.config.ts while a sibling branch's copy of this file was
+  // mid-flight, and the wiring guard blamed the workflow instead of its own
+  // stale copy). It now asks Playwright directly, the same way this loop
+  // does, so there is nothing left to pin or compare here.
   for (const config of CONFIGS) {
     const byFile = listOneConfig(config);
-    const projects = new Set();
     for (const [file, fileProjects] of byFile) {
       const merged = collected.get(file) ?? new Set();
-      for (const project of fileProjects) {
-        merged.add(project);
-        projects.add(project);
-      }
+      for (const project of fileProjects) merged.add(project);
       collected.set(file, merged);
-    }
-
-    // tools/verify-spec-wiring.mjs resolves a workflow's `--config` and
-    // `--project` arguments through this map instead of importing the config
-    // itself. It is pinned here, from the same listing, so it cannot drift
-    // into crediting a workflow with projects its config does not declare.
-    const actual = [...projects].sort();
-    const expected = [...(declaredConfigs[config.label] ?? [])].sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      problems.push(
-        `CONFIGS   ${config.label} declares projects ${JSON.stringify(actual)}, manifest \`configs\` ` +
-          `says ${JSON.stringify(expected)}. Update:\n    ${JSON.stringify(config.label)}: ` +
-          `${JSON.stringify(actual)}`,
-      );
-    }
-  }
-
-  for (const label of Object.keys(declaredConfigs)) {
-    if (!CONFIGS.some((config) => config.label === label)) {
-      problems.push(
-        `CONFIGS   manifest \`configs\` names ${label}, which this guard never lists. Add it to ` +
-          "CONFIGS here, or drop it from the manifest.",
-      );
     }
   }
 

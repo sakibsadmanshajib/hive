@@ -65,11 +65,15 @@
     },
     {
       "state": "dark",
-      "specs": [
-        "tests/e2e/_probe/agent-workspace-flows.spec.ts",
-        "tests/e2e/_probe/staging-flows.spec.ts"
-      ],
-      "reason": "Manual staging probes in the probe project, which no workflow invokes and the chromium project ignores by testDir. They target deployed hosts by name and are gated on HIVE_QA variables that appear in no workflow, so against a locally booted stack they fail on DNS rather than on the change under test. The open decision is whether they become a scheduled suite against the demo box or a documented manual tool.",
+      "specs": ["tests/e2e/_probe/staging-flows.spec.ts"],
+      "reason": "A manual staging probe in the probe project, which no workflow invokes and the chromium project ignores by testDir. It targets deployed hosts by name and is gated on HIVE_QA variables that appear in no workflow, so against a locally booted stack it fails on DNS rather than on the change under test. The open decision is whether it becomes a scheduled suite against the demo box or a documented manual tool.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "other",
+      "specs": ["tests/e2e/_probe/agent-workspace-flows.spec.ts"],
+      "reason": "PR #799 wired this into deploy-demo-box.yml's agent-workspace-coverage job (npm run e2e:agent-workspace, project agent-workspace, added to playwright.config.ts). That job is gated to workflow_dispatch, never an ordinary pull request, so this moved from dark to other rather than to pr. Progress from the prior state, recorded rather than silently dropped.",
       "owner": "sakibsadmanshajib",
       "issue": 821
     },

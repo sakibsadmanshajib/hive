@@ -26,16 +26,22 @@
 // Two deliberate design choices, both of them corrections of an earlier
 // version of this file that is written up as shape 15 in the standard.
 //
-// 1. It executes nothing. An earlier version ran `playwright test --list` for
-//    every invocation it parsed out of a workflow, including a `--config`
-//    path taken from that same workflow text. Playwright IMPORTS a config
-//    file, so that turned editing a `run:` line into arbitrary code execution
-//    inside a required check. Wiring is resolved instead from
-//    apps/web-console/playwright-spec-manifest.json, which pins every spec to
-//    the projects that collect it and is itself verified against a live
-//    `--list` by apps/web-console/scripts/verify-spec-collection.mjs in the
-//    same required job. Ask the runner, but ask it through the artifact it
-//    already certifies.
+// 1. It never executes a `--config` path taken from workflow text. An
+//    earlier version ran `playwright test --list` for every invocation it
+//    parsed out of a workflow, including that `--config` argument verbatim.
+//    Playwright IMPORTS a config file, so that turned editing a `run:` line
+//    into arbitrary code execution inside a required check. A workflow's
+//    `--config` is checked against KNOWN_CONFIGS, a small fixed list this
+//    file maintains, and only a config on that list is ever handed to a
+//    live Playwright process (see projectsOf). Which specs a config's
+//    projects collect still comes from
+//    apps/web-console/playwright-spec-manifest.json, verified against a
+//    live `--list` by apps/web-console/scripts/verify-spec-collection.mjs in
+//    the "Web console" job; which PROJECTS a config declares no longer does
+//    (a hand-maintained copy of that went stale under PR #799 and produced
+//    a false positive here), and is asked of Playwright directly instead,
+//    in the same job, now that this guard runs there rather than in the
+//    dependency-light "Repo policy lints" job.
 //
 // 2. It parses workflows with a YAML parser and refuses arguments it does not
 //    model. An invocation carrying `--grep`, a positional path filter, or any
@@ -47,6 +53,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { parse } from "yaml";
 
 const WORKFLOW_DIR = ".github/workflows";
@@ -55,6 +62,54 @@ const MANIFEST_PATH = `${WEB_CONSOLE}/playwright-spec-manifest.json`;
 const ALLOWLIST_PATH = `${WEB_CONSOLE}/tests/dark-spec-allowlist.json`;
 const PACKAGE_PATH = `${WEB_CONSOLE}/package.json`;
 const DEFAULT_CONFIG = "playwright.config.ts";
+
+// The config files this guard knows how to ask Playwright about. Fixed and
+// developer-maintained, the same trust boundary CONFIGS in
+// verify-spec-collection.mjs already accepts: a workflow's own `--config`
+// text is never passed to a live Playwright process, only checked against
+// this list, because Playwright imports whatever config path it is given,
+// and running arbitrary workflow-authored text through that import is
+// exactly the code-execution hole named at the top of this file.
+const KNOWN_CONFIGS = [
+  DEFAULT_CONFIG,
+  "e2e/phase-19/owui/playwright.owui.config.ts",
+  "e2e/chat-coverage/playwright.chat-coverage.config.ts",
+];
+
+// A project name Playwright will never have, so --project=<this> always
+// fails and always names every real project in its own error, regardless of
+// how any project's testMatch is gated.
+const NONEXISTENT_PROJECT_PROBE = "__verify-spec-wiring-nonexistent-probe__";
+
+// Asks Playwright itself which projects a config declares, instead of
+// trusting a hand-maintained copy. playwright-spec-manifest.json used to pin
+// this in a `configs` object; PR #799 added a project to
+// playwright.config.ts while a sibling branch's copy of that object was
+// mid-flight, and this guard blamed the workflow that correctly selected the
+// new project instead of its own stale copy. No live credentials are
+// needed: project declaration does not depend on the env-gated testMatch
+// some projects carry.
+//
+// Method note: the default reporters (html, and this repository's own
+// flake-reporter) swallow this output; --reporter=list must be explicit, or
+// the probe silently sees nothing instead of failing loudly. Requires
+// apps/web-console's own node_modules (Playwright installed), which is why
+// this guard now runs in the "Web console" CI job rather than the
+// dependency-light "Repo policy lints" job.
+function projectsOf(configPath) {
+  const args = configPath === DEFAULT_CONFIG ? [] : [`--config=${configPath}`];
+  const run = spawnSync(
+    "npx",
+    ["playwright", "test", `--project=${NONEXISTENT_PROJECT_PROBE}`, "--list", "--reporter=list", ...args],
+    { cwd: WEB_CONSOLE, encoding: "utf8" },
+  );
+  const match = /Available projects:\s*(.+)/.exec(`${run.stdout ?? ""}${run.stderr ?? ""}`);
+  if (!match) return null;
+  return match[1]
+    .split(",")
+    .map((entry) => entry.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
 
 const STATES = ["pr", "other", "dark"];
 const DECLARABLE_STATES = ["other", "dark"];
@@ -407,8 +462,8 @@ function selectionOf(invocation, configs, where) {
   if (!available) {
     fail(
       `${where}: \`${invocation.shown}\` uses the Playwright config \`${config}\`, which is not in ` +
-        `${MANIFEST_PATH}. Add it to CONFIGS in ${WEB_CONSOLE}/scripts/verify-spec-collection.mjs so ` +
-        "its projects are pinned, then it can be measured here.",
+        "KNOWN_CONFIGS in this file. Add it there so this guard can ask Playwright about its " +
+        "projects, then it can be measured here.",
     );
     return null;
   }
@@ -417,8 +472,10 @@ function selectionOf(invocation, configs, where) {
     if (!available.includes(project)) {
       fail(
         `${where}: \`${invocation.shown}\` selects the project \`${project}\`, which config ` +
-          `\`${config}\` does not declare. Playwright would collect nothing, so this invocation runs ` +
-          `no specs at all. Config \`${config}\` has: ${available.join(", ")}.`,
+          `\`${config}\` does not declare (Playwright has: ${available.join(", ")}). Playwright ` +
+          "exits non-zero on an unknown project name, so this invocation would fail loudly rather " +
+          "than run no specs quietly; it is still measured as unwired here, because a workflow step " +
+          "that always fails is not coverage either.",
       );
       return null;
     }
@@ -435,13 +492,25 @@ function selectionOf(invocation, configs, where) {
 function main() {
 const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
 const specProjects = manifest.specs ?? {};
-const configs = manifest.configs ?? {};
+const configs = Object.fromEntries(
+  KNOWN_CONFIGS.map((path) => [path, projectsOf(path)]).filter(([, projects]) => projects),
+);
 const scripts = JSON.parse(readFileSync(PACKAGE_PATH, "utf8")).scripts ?? {};
 
 if (Object.keys(configs).length === 0) {
   console.error(
-    `spec wiring guard FAILED: ${MANIFEST_PATH} declares no configs, so no invocation can be ` +
-      "resolved to a project set.",
+    "spec wiring guard FAILED: asked Playwright about every config in KNOWN_CONFIGS and got no " +
+      "project list back from any of them, so no invocation can be resolved to a project set. " +
+      "Run one by hand: npx playwright test --project=x --list --reporter=list (cwd " +
+      `${WEB_CONSOLE}) and check its output.`,
+  );
+  process.exit(1);
+}
+if (Object.keys(configs).length < KNOWN_CONFIGS.length) {
+  const missing = KNOWN_CONFIGS.filter((path) => !(path in configs));
+  console.error(
+    `spec wiring guard FAILED: Playwright would not name its projects for: ${missing.join(", ")}. ` +
+      "Run the probe in KNOWN_CONFIGS by hand against each to see why.",
   );
   process.exit(1);
 }
@@ -453,9 +522,9 @@ for (const [label, projects] of Object.entries(configs)) {
   for (const project of projects) {
     if (configOf.has(project)) {
       fail(
-        `project \`${project}\` is declared by both \`${configOf.get(project)}\` and \`${label}\` in ` +
-          `${MANIFEST_PATH}. Project names have to be unique across configs, otherwise selecting one ` +
-          "credits the specs of the other.",
+        `project \`${project}\` is declared by both \`${configOf.get(project)}\` and \`${label}\`, ` +
+          "per Playwright's own listing. Project names have to be unique across configs, otherwise " +
+          "selecting one credits the specs of the other.",
       );
     }
     configOf.set(project, label);
