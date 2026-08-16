@@ -7,10 +7,12 @@ than a config flag.
 
 Asserts its own effect, the same posture as this Dockerfile's other patches:
 every rewrite must match its expected number of sites and leave none behind,
-and the guard strings for the surfaces Hive keeps (Workspace > Knowledge, the
-Admin Panel entry) must still be present afterwards. A future open-webui digest
-whose bundle shifted therefore fails the build loudly instead of silently
-restoring a removed surface or removing a kept one.
+and the guard strings for the surfaces Hive keeps (Workspace > Knowledge and
+the Settings dialog) must still be present afterwards. A future open-webui
+digest whose bundle shifted therefore fails the build loudly instead of
+silently restoring a removed surface or removing a kept one. The Admin Panel
+entry moved from the kept side to the removed side in #846; it is now a
+REWRITES entry like any other, asserted gone rather than guarded intact.
 """
 
 import pathlib

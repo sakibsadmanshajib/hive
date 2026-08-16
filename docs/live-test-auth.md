@@ -83,6 +83,41 @@ every session that any other run currently holds. On 2026-08-08 a scratch
 script did exactly that and broke three agents working concurrently; four
 separate agents were blocked on credentials across that day and the one after.
 
+## Never point a write-capable suite at the demo account
+
+The password is not the only shared state on `demo@hive-demo.invalid`. It is
+also the account the owner demos to prospects, and every chat this account
+sends, every agent task it submits, and every API key it mints is real,
+visible in that account's own sidebar, task list and keys page, and today
+undeletable: there is no chat-delete, task-delete or account-delete route
+wired up yet (issues #828, #848). A suite that authenticates as this account
+and drives a real composer, a real task submit, or a real key mint leaves a
+permanent mark on the surface the owner is about to show someone.
+
+This happened. `docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json`
+records `"demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"`,
+and the 2026-08-11 demo-readiness walk (issue #858) found the sidebar full of
+empty "New Chat" rows and the agent task list "a wall of 'cancel-guard proof'
+and 'interaction-coverage proof' entries," on that same account. Issue #848
+tracks the cleanup and the standing fix.
+
+So: a suite that only signs in and reads (a redirect check, a rendered
+heading, an unclicked button) is fine against the demo account. A suite that
+sends a message, submits a task, or mints a key must run as a dedicated,
+non-demo identity instead, the same way the plain E2E suite already does with
+its `E2E_RUN_KEY`-scoped fixture accounts (see above), or the way
+`seed-owui-e2e-user.py --account-slug` stands up a billing account of its
+own rather than sharing one. Do not add a new literal fallback to
+`demo@hive-demo.invalid` anywhere in this codebase; the existing ones are
+being removed, not extended.
+
+`scripts/verify-control-plane.py` is NOT an example of the read-only case,
+despite never rotating a password: its "api-key lifecycle" check mints a real
+key and sends a real `POST /v1/chat/completions` through it, which is a write
+and a real spend, not a read. It now requires `HIVE_VERIFY_EMAIL` with no
+default rather than falling back to the demo account (issue #848); point it
+at a dedicated verification identity, same as any other write-capable suite.
+
 ### What this repository does about it
 
 Three scripts here used to rotate unconditionally. They no longer do, and the
@@ -119,8 +154,9 @@ with must come from your environment and why that path must never silently
 default.
 
 `scripts/verify-control-plane.py` states the same rule in its docstring and
-signs in with an existing password it is given. That is fine. Inventing a new
-password is not.
+signs in with an existing password it is given. That is fine on the password
+question specifically. Inventing a new password is not. It is not otherwise a
+read-only script; see the note above about its identity requirement.
 
 ### The scratch script to avoid
 

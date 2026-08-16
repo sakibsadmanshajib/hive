@@ -152,13 +152,35 @@ REWRITES = (
         replace='case"playground":return!1;',
     ),
     Rewrite(
-        # Distinguished from the Admin Panel entry, which compiles to the same
-        # shape in the same chunk, only by the branch identifiers. That entry is
-        # asserted intact by GUARDS below.
+        # Distinguished from the Admin Panel entry below, which compiles to the
+        # same shape in the same chunk, only by the branch identifiers.
         surface="usermenu-playground-item",
         upstream="src/lib/components/layout/Sidebar/UserMenu.svelte, the {#if role === 'admin'} wrapping /playground",
         find='T(kt,_=>{q()==="admin"&&_(Kt)})',
         replace="T(kt,_=>{!1&&_(Kt)})",
+    ),
+    Rewrite(
+        # #846. The user menu's "Admin Panel" entry navigates to /admin, which
+        # Caddyfile.owui already 404s outright (the @blocked admin regex,
+        # #769/#772) because D-014 makes web-console/control-plane the sole
+        # admin surface and keeps Open WebUI's own admin panel off. Until now
+        # this was the one entry in this table kept alive on purpose
+        # (asserted intact by GUARDS as "usermenu-admin-panel"), on the theory
+        # that Hive's tenant-owner-to-OWUI-admin promotion made it a real,
+        # working control. It never was: every tenant OWNER lands here, sees
+        # a top level "Admin Panel" item, and clicking it always 404s, with
+        # nothing telling them why (issue #846, reconfirmed live in the
+        # 2026-08-11 demo-readiness walk, issue #858). Wiring the endpoint up
+        # instead would stand up a second admin surface next to web-console's,
+        # which is the exact duplication D-014 forecloses. Same removal shape
+        # as the Playground entry immediately above: gated to `!1` rather
+        # than narrowed to a permission, because every tenant owner already
+        # passes `role === "admin"` and a permission-scoped hide would hide
+        # nothing from the audience this ships to.
+        surface="usermenu-admin-panel",
+        upstream="src/lib/components/layout/Sidebar/UserMenu.svelte, the {#if role === 'admin'} wrapping /admin",
+        find='T(Ie,_=>{q()==="admin"&&_(De)})',
+        replace="T(Ie,_=>{!1&&_(De)})",
     ),
     Rewrite(
         # Open WebUI's release-notes dialog. It opens itself on first load
@@ -419,10 +441,6 @@ GUARDS = (
         "workspace-knowledge-tab",
         '(((e=o())==null?void 0:e.role)==="admin"||(t=(r=(a=o())==null?void 0:'
         'a.permissions)==null?void 0:r.workspace)!=null&&t.knowledge)&&s(O)',
-    ),
-    (
-        "usermenu-admin-panel",
-        'T(Ie,_=>{q()==="admin"&&_(De)})',
     ),
     (
         # Rendered from the same layout, one statement before the changelog
