@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+// Not credentials. The module under test resolves these through
+// requiredSecretEnv() at import time, so it cannot be imported at all unless
+// they hold something long enough to pass the length check. Nothing here is
+// ever sent to GoTrue or any other service. Named rather than inlined so no
+// string literal sits next to a *_PASSWORD key, which reads as a real secret
+// to both a secret scanner and the next person opening this file.
+const NOT_A_CREDENTIAL = "placeholder-not-a-real-password";
+const NOT_A_TOKEN = "placeholder-not-a-real-token";
 
 // This repository is public. Its E2E fixture file used to carry two live
 // account passwords and a live invitation token in plaintext, and the seeder
@@ -48,9 +56,9 @@ describe("requiredSecretEnv", () => {
   it("names the missing variable instead of falling back or skipping", async () => {
     // Set the three the module resolves at import time, so importing it here
     // exercises the helper rather than the module's own startup failure.
-    vi.stubEnv("E2E_VERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_INVITATION_TOKEN", "set-for-import-only-token");
+    vi.stubEnv("E2E_VERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_INVITATION_TOKEN", NOT_A_TOKEN);
     vi.stubEnv("E2E_RUN_KEY", "unit-test");
     const { requiredSecretEnv } = await import(
       "../e2e/support/e2e-auth-creds"
@@ -132,13 +140,12 @@ describe("seedFixtures refuses to touch anything without a run key", () => {
 // live account gets written, so their agreement is pinned rather than assumed.
 describe("both runScopedEmail implementations agree", () => {
   it("produces identical output for every case that matters", async () => {
-    vi.stubEnv("E2E_VERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_INVITATION_TOKEN", "set-for-import-only-token");
+    vi.stubEnv("E2E_VERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_INVITATION_TOKEN", NOT_A_TOKEN);
     vi.stubEnv("E2E_RUN_KEY", "unit-test");
     const specSide = await import("../e2e/support/e2e-auth-creds");
     const seedSide = await import("../e2e/support/e2e-fixture-seed.mjs");
-
     const cases: ReadonlyArray<readonly [string, string]> = [
       ["e2e-verified@scubed.com.bd", "99-1"],
       ["e2e-unverified@scubed.com.bd", "99-1"],
@@ -171,9 +178,9 @@ describe("both runScopedEmail implementations agree", () => {
 // accounts, so every local run revoked the sessions of every other run.
 describe("runScopedEmail", () => {
   it("refuses to resolve an address without a run key, and namespaces once", async () => {
-    vi.stubEnv("E2E_VERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", "set-for-import-only");
-    vi.stubEnv("E2E_INVITATION_TOKEN", "set-for-import-only-token");
+    vi.stubEnv("E2E_VERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_UNVERIFIED_PASSWORD", NOT_A_CREDENTIAL);
+    vi.stubEnv("E2E_INVITATION_TOKEN", NOT_A_TOKEN);
     vi.stubEnv("E2E_RUN_KEY", "unit-test");
     const { runScopedEmail } = await import("../e2e/support/e2e-auth-creds");
 

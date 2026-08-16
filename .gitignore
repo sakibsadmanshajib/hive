@@ -31,6 +31,9 @@ package-lock.json
 # apps/desktop predate that rule and are already tracked, which is why they
 # need no negation here.
 !/apps/agent-console/package-lock.json
+# The repo root is one of those: repo-policy-lints and the web-console job
+# both install root dev deps with `npm ci` before running tools/*.mjs.
+!/package-lock.json
 
 # Rust (apps/desktop-sandbox) — Cargo.lock is committed for reproducible
 # builds of the codex-bwrap binary; only the build output is ignored.

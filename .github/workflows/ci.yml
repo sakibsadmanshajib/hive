@@ -426,6 +426,7 @@ jobs:
             # live database, and neither ran anywhere before: the package was
             # absent from this list, so the escalation those guards catch
             # would have shipped again with the suite reporting green.
+            # tools/lint-go-db-test-wiring.mjs fails if either is dropped.
             go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
           else
             # -tags integration additionally compiles in
@@ -596,7 +597,7 @@ jobs:
 
       - name: Install repo-level dev deps
         if: needs.changes.outputs.run != 'false'
-        run: npm ci --ignore-scripts || npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       # Merge-gate integrity: exactly one job may publish each required
       # check name, and every required context must have a producer.
@@ -637,6 +638,24 @@ jobs:
       # It passes on main today.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:no-client-cost-fields
+
+      # Issue #813, spec wiring. Moved to web-unit (see that job): asking
+      # Playwright which projects a config declares needs the web console's
+      # own node_modules, which this dependency-light job deliberately does
+      # not install.
+
+      # Issue #659, #797. A Go package carrying a database-gated test skips
+      # silently when it is absent from the RLS step's package list, which is
+      # how the platform package went from never running to green in one line.
+      # Fixture regression test: two matrix legs, one shell `if` with no
+      # `else` wrapping a single go test line, so only one leg's package is
+      # actually reached. The other leg's DSN-gated package must be reported
+      # unpaired, not credited via the directory the wrapped line shares with
+      # every leg regardless of the branch that selects it.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:go-db-test-wiring:test
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:go-db-test-wiring
 
       # Self-checks for the provisioning scripts (pure python, no network, no
       # framework). Wired into CI here because nothing ran them before: the
@@ -718,6 +737,36 @@ jobs:
       - name: Spec collection guard
         if: needs.changes.outputs.run != 'false'
         run: npm run e2e:verify-collection
+
+      # Issue #813, camouflage shape 14. A Playwright spec that no workflow
+      # runs emits no signal at all, and one that only a nightly runs
+      # protects nothing on the merge path. Moved here, not left in
+      # repo-policy-lints: it asks Playwright directly which projects a
+      # config declares (see tools/verify-spec-wiring.mjs's projectsOf),
+      # rather than trusting a hand-maintained copy that went stale under
+      # PR #799 and produced a false positive. That needs this job's own
+      # node_modules (Playwright installed), which repo-policy-lints
+      # deliberately does not carry. Fixture regression test for the
+      # event-condition classifier runs first, in a check that names the
+      # case, rather than as a silently wrong count in the guard below.
+      # tools/verify-spec-wiring.mjs parses workflow YAML with the root
+      # devDependency 'yaml'. This job's only other install is the
+      # apps/web-console one above, set by defaults.run.working-directory, so
+      # without this the guard dies on ERR_MODULE_NOT_FOUND. The sibling
+      # root-scoped steps below survive because they import nothing.
+      - name: Install repo-level dev deps
+        if: needs.changes.outputs.run != 'false'
+        working-directory: .
+        run: npm ci --ignore-scripts
+
+      - name: Spec wiring guard test
+        if: needs.changes.outputs.run != 'false'
+        working-directory: .
+        run: npm run lint:spec-wiring:test
+      - name: Spec wiring guard
+        if: needs.changes.outputs.run != 'false'
+        working-directory: .
+        run: npm run lint:spec-wiring
 
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'

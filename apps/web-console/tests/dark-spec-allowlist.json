@@ -1,0 +1,88 @@
+{
+  "$doc": [
+    "Debt ledger for docs/TESTING-STANDARD.md shape 14. Every spec file here is one that no pull",
+    "request run selects, resolved by tools/verify-spec-wiring.mjs from playwright-spec-manifest.json.",
+    "",
+    "Two states are declarable, and the guard fails when the declared one and the measured one",
+    "disagree, in either direction:",
+    "  other  some workflow selects it, but only on a trigger a pull request cannot fire: a nightly",
+    "         schedule, a manual dispatch, or a labelled run",
+    "  dark   no workflow selects it at all",
+    "",
+    "What the guard enforces, stated plainly so nobody reads more into this file than is true: the",
+    "state, that a reason, owner and integer issue number are present, and that no spec is declared",
+    "twice. It does NOT check that the issue is still open, because that needs a network call inside",
+    "a required check. Issue 813 was closed on 2026-08-11 while eight entries here still cited it, so",
+    "a stale reference is a real failure mode this file does not catch on its own; re-read the",
+    "references when you touch a group.",
+    "",
+    "Specs are grouped by shared cause rather than listed one by one with a free-text reason each.",
+    "An earlier version demanded a reason of at least 25 characters per entry, which is a threshold",
+    "set at whatever the current value happened to be: seven entries then carried one byte-identical",
+    "sentence and passed it."
+  ],
+  "groups": [
+    {
+      "state": "other",
+      "specs": [
+        "e2e/phase-19/01-signin-google.spec.ts",
+        "e2e/phase-19/02-first-chat.spec.ts",
+        "e2e/phase-19/03-tenant-isolation.spec.ts",
+        "e2e/phase-19/04-tenant-switch.spec.ts",
+        "e2e/phase-19/05-jwt-expiry.spec.ts",
+        "e2e/phase-19/06-no-tenant-block.spec.ts",
+        "e2e/phase-19/07-cross-tenant-attack.spec.ts"
+      ],
+      "reason": "The phase-19 project runs in owui-nightly.yml, which fires on a schedule, a manual dispatch, or a pull request carrying the run-owui-e2e label. An ordinary pull request selects none of it. Worse than that for coverage purposes: 03 through 07 skip themselves by name on E2E_TENANT_B_ID, E2E_USER_A_SECOND_TENANT_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT, which no environment provides, so only two of these seven (01 and 02) execute assertions anywhere. Provisioning a second tenant and the two crafted JWTs is the remaining half of the issue below.",
+      "owner": "sakibsadmanshajib",
+      "issue": 708
+    },
+    {
+      "state": "other",
+      "specs": [
+        "e2e/phase-19/owui/01-chat-send-stream.spec.ts",
+        "e2e/phase-19/owui/02-chat-multi-turn.spec.ts",
+        "e2e/phase-19/owui/03-chat-model-switch.spec.ts",
+        "e2e/phase-19/owui/04-rag-personal-pdf-upload.spec.ts",
+        "e2e/phase-19/owui/05-rag-personal-citation.spec.ts",
+        "e2e/phase-19/owui/06-tenant-model-visibility.spec.ts",
+        "e2e/phase-19/owui/07-image-upload-vision.spec.ts",
+        "e2e/phase-19/owui/08-signout.spec.ts",
+        "e2e/phase-19/owui/09-agent-workspace-launcher.spec.ts",
+        "e2e/phase-19/owui/performance/embed-latency.spec.ts",
+        "e2e/phase-19/owui/performance/ttfb.spec.ts"
+      ],
+      "reason": "The owui and owui-perf projects run in owui-nightly.yml, on the same schedule, dispatch and labelled-run triggers. They do execute for real against a booted Open WebUI with provisioned OAuth secrets, and they spend real provider credit doing it, which is why they are nightly rather than per pull request. They protect nothing on the merge path until that changes, and moving them there is the coverage programme tracked below.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "dark",
+      "specs": ["e2e/phase-19/owui/deployed-login.spec.ts"],
+      "reason": "Sits alone in the owui-deployed-login project, which no workflow invokes. owui-nightly.yml selects owui and owui-perf only, so this file has never executed anywhere. Either wire the project or delete the spec; carrying it is what makes the tree look better covered than it is.",
+      "owner": "sakibsadmanshajib",
+      "issue": 708
+    },
+    {
+      "state": "dark",
+      "specs": ["tests/e2e/_probe/staging-flows.spec.ts"],
+      "reason": "A manual staging probe in the probe project, which no workflow invokes and the chromium project ignores by testDir. It targets deployed hosts by name and is gated on HIVE_QA variables that appear in no workflow, so against a locally booted stack it fails on DNS rather than on the change under test. The open decision is whether it becomes a scheduled suite against the demo box or a documented manual tool.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "other",
+      "specs": ["tests/e2e/_probe/agent-workspace-flows.spec.ts"],
+      "reason": "PR #799 wired this into deploy-demo-box.yml's agent-workspace-coverage job (npm run e2e:agent-workspace, project agent-workspace, added to playwright.config.ts). That job is gated to workflow_dispatch, never an ordinary pull request, so this moved from dark to other rather than to pr. Progress from the prior state, recorded rather than silently dropped.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    },
+    {
+      "state": "other",
+      "specs": ["e2e/chat-coverage/chat-coverage.spec.ts"],
+      "reason": "chat-coverage.yml's live-sweep job (#809) fires on workflow_dispatch or a pull request carrying the run-chat-coverage label, never on an ordinary pull request. It exercises a real deployed chat surface via the live-session helper and spends real provider credit, which is why it is not in the merge-gate path yet. break-proof.spec.ts is a sibling project in the same config but runs in the self-check job, which has no such gate and does run on every ordinary pull request, so it is not declared here.",
+      "owner": "sakibsadmanshajib",
+      "issue": 821
+    }
+  ]
+}

@@ -96,8 +96,12 @@ const CONFIGS = [
 
 // Where Playwright test modules live. Anything matching TEST_FILE under these
 // is expected to be collected by at least one project.
+// `.test.ts` is here because the chromium project sets a testDir and no
+// testMatch, so Playwright's default pattern collects that suffix too. Walking
+// for `.spec.ts` alone would leave a file the runner does load invisible to the
+// DARK check below.
 const TEST_ROOTS = ["e2e", "tests/e2e"];
-const TEST_FILE = /\.(spec|setup)\.ts$/;
+const TEST_FILE = /\.(spec|test|setup)\.ts$/;
 
 function listFilesOnDisk() {
   const found = [];
@@ -194,18 +198,29 @@ function listOneConfig({ label, args, env }) {
 }
 
 function main() {
-  const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")).specs;
+  const document = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  const manifest = document.specs;
 
   const collected = new Map();
+  const problems = [];
+
+  // tools/verify-spec-wiring.mjs used to resolve a workflow's `--config` and
+  // `--project` arguments through a `configs` object pinned here from this
+  // same listing. That was a hand-maintained copy of what this loop already
+  // computes below, and it drifted (issue: PR #799 added a project to
+  // playwright.config.ts while a sibling branch's copy of this file was
+  // mid-flight, and the wiring guard blamed the workflow instead of its own
+  // stale copy). It now asks Playwright directly, the same way this loop
+  // does, so there is nothing left to pin or compare here.
   for (const config of CONFIGS) {
-    for (const [file, projects] of listOneConfig(config)) {
+    const byFile = listOneConfig(config);
+    for (const [file, fileProjects] of byFile) {
       const merged = collected.get(file) ?? new Set();
-      for (const project of projects) merged.add(project);
+      for (const project of fileProjects) merged.add(project);
       collected.set(file, merged);
     }
   }
 
-  const problems = [];
   const asLine = (file, projects) =>
     `    ${JSON.stringify(file)}: ${JSON.stringify([...projects].sort())}`;
 

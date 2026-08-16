@@ -14,7 +14,17 @@
     "and e2e/chat-coverage/playwright.chat-coverage.config.ts.",
     "The owui projects and the live chat-coverage project gate their testMatch on credentials,",
     "so the guard lists those configs with placeholders to keep collection deterministic",
-    "everywhere."
+    "everywhere.",
+    "",
+    "There used to be a `configs` object here, pinning each config to the projects it declares.",
+    "It was a hand-maintained copy that this doc claimed was 'verified by the same guard from the",
+    "same listing', which was not true: nothing here re-derived it, so it went stale the moment a",
+    "config's projects changed anywhere but this file. PR #799 added a project to",
+    "playwright.config.ts while a sibling branch's copy of this file was mid-flight, and the",
+    "guard blamed the workflow that correctly selected the new project instead of its own stale",
+    "copy. tools/verify-spec-wiring.mjs now asks Playwright directly which projects a config",
+    "declares (an unfindable --project name always names every real one in its own error), so",
+    "there is nothing here left to go stale."
   ],
   "specs": {
     "e2e/chat-coverage/auth.setup.ts": ["chat-coverage-setup"],
