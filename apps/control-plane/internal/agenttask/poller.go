@@ -228,6 +228,15 @@ func (p *Poller) clearTaskFailure(id uuid.UUID) {
 // in active, so the map does not grow forever once a task stops showing up
 // in ListActive (resolved this pass, by a concurrent Cancel, or anything
 // else).
+//
+// active is only ever populated from one pass's ListActive result, and
+// Repository.ListActive's agent_tasks_list_active() function caps at LIMIT
+// 500 oldest-first: above 500 genuinely active tasks, a task outside that
+// window has its streak dropped here even though it is still active, exactly
+// as if it had just answered cleanly. That only ever RESETS a budget, never
+// shortens one, so it is safe in the direction that matters, just worth
+// knowing before assuming this map is a complete picture of every active
+// task's history above that row count.
 func (p *Poller) pruneInactiveTaskFailures(active map[uuid.UUID]bool) {
 	p.taskFailuresMu.Lock()
 	defer p.taskFailuresMu.Unlock()
