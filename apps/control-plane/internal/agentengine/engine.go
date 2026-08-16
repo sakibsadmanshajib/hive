@@ -46,11 +46,18 @@ func (e *Engine) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 // past running.
 func (e *Engine) Status(ctx context.Context, sessionRef string) (status agenttask.Status, resultSummary, errMessage string, err error) {
 	s, resultSummary, errMessage, err := e.sandbox.Status(ctx, sessionRef)
-	if err != nil && errors.Is(err, engineapi.ErrUnknownSession) {
-		// Mirrors Remote.post's 404 mapping so the poller can tell "this
-		// session can never answer again" apart from a transient failure
-		// regardless of which agenttask.Engine arm is wired in.
-		return "", "", "", fmt.Errorf("%w: %s", agenttask.ErrEngineSessionGone, err)
+	if errors.Is(err, engineapi.ErrUnknownSession) {
+		// Same scoping as Remote.post's 404 mapping, so the poller can tell
+		// "this session can never answer again" apart from a transient
+		// failure regardless of which agenttask.Engine arm is wired in.
+		// %w twice keeps errors.Is(result, engineapi.ErrUnknownSession)
+		// working too, in case anything ever depends on the original chain.
+		// Unlike Remote.post, this error never crosses a process boundary —
+		// it only ever reaches the poller's own WARN log (see
+		// agenttask.Poller.pollTask), never a customer-visible field — so
+		// embedding sessionRef here is not the provider-blind leak it would
+		// be on the socket arm.
+		return "", "", "", fmt.Errorf("%w: %w", agenttask.ErrEngineSessionGone, err)
 	}
 	return agenttask.Status(s), resultSummary, errMessage, err
 }
@@ -58,6 +65,17 @@ func (e *Engine) Status(ctx context.Context, sessionRef string) (status agenttas
 // Cancel interrupts sessionRef's conversation and terminates its sandbox
 // process, which is what releases the session's concurrency slot on the
 // launcher side. Called by agenttask.Service.Cancel (issue #886).
+//
+// Maps engineapi.ErrUnknownSession the same way Status does above, for the
+// same arm-agnostic reason Remote.post's /cancel mapping exists: a session
+// the engine has no memory of holds no concurrency slot either (the quota
+// manager lives in the same in-memory state as the session registry), so
+// Service.stopEngineSession's ErrEngineSessionGone branch (its doc comment)
+// applies here too and there is nothing to warn an operator about.
 func (e *Engine) Cancel(ctx context.Context, sessionRef string) error {
-	return e.sandbox.Cancel(ctx, sessionRef)
+	err := e.sandbox.Cancel(ctx, sessionRef)
+	if errors.Is(err, engineapi.ErrUnknownSession) {
+		return fmt.Errorf("%w: %w", agenttask.ErrEngineSessionGone, err)
+	}
+	return err
 }

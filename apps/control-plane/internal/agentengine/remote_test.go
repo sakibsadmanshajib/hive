@@ -89,3 +89,57 @@ func TestRemoteStatus404MapsToEngineSessionGone(t *testing.T) {
 		t.Fatalf("error should still identify the operation and status, got: %v", err)
 	}
 }
+
+// TestRemoteLaunch404DoesNotMapToEngineSessionGone is the negative case the
+// path-scoping fix above exists for: net/http.ServeMux answers 404 for ANY
+// path it has no handler for, not just the launcher's own deliberate
+// unknown-session case, and post also serves /launch. A control-plane build
+// calling an endpoint a mismatched launcher binary does not have (a routing
+// miss, not "this session is gone") must not be misread as
+// agenttask.ErrEngineSessionGone — Launch has no session reference to be
+// gone in the first place.
+func TestRemoteLaunch404DoesNotMapToEngineSessionGone(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "engine.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	// A bare http.NotFoundHandler models a routing miss: every path, every
+	// method, 404 — not a launcher that specifically recognizes
+	// engineapi.ErrUnknownSession.
+	srv := &http.Server{Handler: http.NotFoundHandler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	_, err = NewRemote(socketPath, "").Launch(context.Background(), agenttask.Task{})
+	if err == nil {
+		t.Fatal("expected an error for a 404 daemon response")
+	}
+	if errors.Is(err, agenttask.ErrEngineSessionGone) {
+		t.Fatalf("a /launch 404 (a routing miss, no session involved) must not map to ErrEngineSessionGone: %v", err)
+	}
+}
+
+// TestRemoteTransportFailureDoesNotMapToEngineSessionGone proves a dial
+// failure (the launcher is not running at all) never becomes
+// agenttask.ErrEngineSessionGone: that error is returned above the status
+// code branch entirely, so treating "unreachable" the same as "reachable and
+// says gone" cannot happen here. This is the discrimination the earlier
+// transport-collapsed-into-401 defect was missing.
+func TestRemoteTransportFailureDoesNotMapToEngineSessionGone(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "engine.sock")
+	// Deliberately never listened on: dialing it fails immediately.
+
+	_, _, _, err := NewRemote(socketPath, "").Status(context.Background(), "session-ref")
+	if err == nil {
+		t.Fatal("expected a dial error against a socket nothing is listening on")
+	}
+	if errors.Is(err, agenttask.ErrEngineSessionGone) {
+		t.Fatalf("a transport failure must not map to ErrEngineSessionGone: %v", err)
+	}
+}
