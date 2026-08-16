@@ -47,6 +47,8 @@ function fakeFetch(): Promise<Response> {
 }
 
 describe("control-plane analytics calls (#856)", () => {
+  const previousBaseUrl = process.env.CONTROL_PLANE_BASE_URL;
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.CONTROL_PLANE_BASE_URL = BASE_URL;
@@ -59,6 +61,14 @@ describe("control-plane analytics calls (#856)", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // CodeRabbit (PR #908): CONTROL_PLANE_BASE_URL is process-global, so
+    // leaving it set here would make any other suite that reads it
+    // order-dependent on this one having run first.
+    if (previousBaseUrl === undefined) {
+      delete process.env.CONTROL_PLANE_BASE_URL;
+    } else {
+      process.env.CONTROL_PLANE_BASE_URL = previousBaseUrl;
+    }
   });
 
   it("parses getAnalyticsUsage against the real {usage: [...]} wrapper", async () => {
@@ -124,5 +134,39 @@ describe("control-plane analytics calls (#856)", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].total_requests).toBe(2);
+  });
+
+  // The detectability gap this PR's own reviewer named: readArrayField
+  // collapses "key absent" and "key genuinely empty" to the same result
+  // unless a caller distinguishes them. A 200 whose shape has drifted (a
+  // rename, a proxy remangling a body, a nested wrapper change) must not
+  // parse to the same silent empty array #856 shipped as; it must throw, so
+  // the page's existing "Unable to load analytics" state catches it instead
+  // of a third all-zero read with no signal anything broke.
+  it("throws rather than silently parsing to empty when the expected key is missing", async () => {
+    nextResponse = new Response(JSON.stringify({ rows: [] }), { status: 200 });
+    const { getAnalyticsUsage } = await import("../lib/control-plane/client");
+
+    await expect(
+      getAnalyticsUsage({ group_by: "model", window: "24h" }),
+    ).rejects.toThrow(/"usage"/);
+  });
+
+  it("throws rather than silently parsing to empty when the expected key is wrong-typed", async () => {
+    nextResponse = new Response(JSON.stringify({ spend: "not-an-array" }), { status: 200 });
+    const { getAnalyticsSpend } = await import("../lib/control-plane/client");
+
+    await expect(
+      getAnalyticsSpend({ group_by: "model", window: "24h" }),
+    ).rejects.toThrow(/"spend"/);
+  });
+
+  it("still returns an empty array for a genuinely quiet account (key present, empty)", async () => {
+    nextResponse = new Response(JSON.stringify({ errors: [] }), { status: 200 });
+    const { getAnalyticsErrors } = await import("../lib/control-plane/client");
+
+    await expect(
+      getAnalyticsErrors({ group_by: "model", window: "24h" }),
+    ).resolves.toEqual([]);
   });
 });

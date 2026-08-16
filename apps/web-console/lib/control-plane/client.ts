@@ -202,6 +202,25 @@ function readArrayField(source: JsonObject, key: string): JsonArray | null {
   return Array.isArray(value) ? value : null;
 }
 
+// requireArrayField is readArrayField plus a loud failure mode for the
+// analytics endpoints (issue #856). readArrayField collapses "key absent",
+// "key wrong-typed", and "key present but genuinely empty" down to the same
+// `null` versus `[]` split; the first two are a response-shape contract
+// break (a backend rename, a proxy mangling a 200, a nested wrapper change),
+// the third is a real, silent, zero-usage account. `?? []` used to treat
+// all three identically, which is exactly how #856 (every analytics call
+// silently parsed to empty regardless of what usage_events held) shipped
+// undetected. A missing or wrong-typed key now throws instead of defaulting,
+// so the next contract drift surfaces as the page's existing "Unable to
+// load analytics" error state rather than a second silent all-zero read.
+function requireArrayField(source: JsonObject, key: string, context: string): JsonArray {
+  const value = readArrayField(source, key);
+  if (value === null) {
+    throw new Error(`${context}: expected "${key}" to be an array in the response`);
+  }
+  return value;
+}
+
 function readStringArrayField(source: JsonObject, key: string): string[] {
   const arr = readArrayField(source, key);
   if (!arr) return [];
@@ -2057,7 +2076,7 @@ export async function getAnalyticsUsage(params: {
 
   // handleAnalyticsUsage (apps/control-plane/internal/usage/http.go) wraps
   // its rows under "usage", never "data" (issue #856).
-  const rawData = readArrayField(payload, "usage") ?? [];
+  const rawData = requireArrayField(payload, "usage", "Failed to parse usage analytics response");
   const rows: UsageSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeUsageSummaryRow(item);
@@ -2094,7 +2113,7 @@ export async function getAnalyticsSpend(params: {
 
   // handleAnalyticsSpend (apps/control-plane/internal/usage/http.go) wraps
   // its rows under "spend", never "data" (issue #856).
-  const rawData = readArrayField(payload, "spend") ?? [];
+  const rawData = requireArrayField(payload, "spend", "Failed to parse spend analytics response");
   const rows: SpendSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeSpendSummaryRow(item);
@@ -2131,7 +2150,7 @@ export async function getAnalyticsErrors(params: {
 
   // handleAnalyticsErrors (apps/control-plane/internal/usage/http.go) wraps
   // its rows under "errors", never "data" (issue #856).
-  const rawData = readArrayField(payload, "errors") ?? [];
+  const rawData = requireArrayField(payload, "errors", "Failed to parse error analytics response");
   const rows: ErrorSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeErrorSummaryRow(item);
