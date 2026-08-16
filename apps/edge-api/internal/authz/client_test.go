@@ -69,8 +69,12 @@ func TestNewClientClonesDefaultTransportRatherThanReplacingIt(t *testing.T) {
 	if transport.IdleConnTimeout != defaultTransport.IdleConnTimeout {
 		t.Fatalf("IdleConnTimeout = %v, want the inherited default %v (a bare &http.Transport{} would zero this, and a zero IdleConnTimeout means idle connections never expire across a control-plane container recreate)", transport.IdleConnTimeout, defaultTransport.IdleConnTimeout)
 	}
-	if transport.MaxIdleConnsPerHost != defaultTransport.MaxIdleConnsPerHost {
-		t.Fatalf("MaxIdleConnsPerHost = %d, want the inherited default %d", transport.MaxIdleConnsPerHost, defaultTransport.MaxIdleConnsPerHost)
+	// MaxIdleConnsPerHost is deliberately NOT left at the inherited default
+	// (2): it is raised to match MaxConnsPerHost so the 64 connections this
+	// cap permits are actually kept alive for reuse instead of opened fresh
+	// and discarded (second-pass security review).
+	if transport.MaxIdleConnsPerHost != resolveMaxConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d (raised to match MaxConnsPerHost, not left at the stdlib default of 2)", transport.MaxIdleConnsPerHost, resolveMaxConnsPerHost)
 	}
 }
 
@@ -323,6 +327,40 @@ func TestResolveClassifiesUnmountedResolveRouteAsUpstreamUnavailable(t *testing.
 	}
 	if !errors.Is(err, ErrUpstreamUnavailable) {
 		t.Fatalf("an unmounted route (control-plane booted with no DB pool, issue #816) must classify as upstream-unavailable, not a genuine key verdict, got %v", err)
+	}
+}
+
+// TestResolveClassifiesIntermediaryJSON404AsUpstreamUnavailable is the
+// regression guard for the PR #903 second-pass security review finding that
+// Content-Type alone is not a safe discriminator: a reverse proxy or API
+// gateway in front of an operator-supplied CONTROL_PLANE_URL can answer its
+// own unrouted-404 as application/json too (Kong and AWS API Gateway both
+// do, with shapes like {"message": "..."}), which would satisfy the old
+// Content-Type-only check and reproduce the exact false-401 this PR exists
+// to remove, in a new costume. Requiring the body to also decode as
+// control-plane's own {"error": "..."} envelope closes that gap.
+func TestResolveClassifiesIntermediaryJSON404AsUpstreamUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		// Shaped like a gateway's own unrouted-404, not control-plane's
+		// {"error": "..."} envelope: same Content-Type, different body.
+		_, _ = w.Write([]byte(`{"message":"no Route matched with those values"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.Resolve(context.Background(), "Bearer hk_test")
+	if err == nil {
+		t.Fatal("expected an error from an intermediary's JSON 404")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("a JSON 404 that isn't control-plane's own error envelope must classify as upstream-unavailable, not a genuine key verdict, got %v", err)
 	}
 }
 

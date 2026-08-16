@@ -50,6 +50,25 @@ func HashBearerToken(authHeader string) string {
 	return strings.ToLower(hex.EncodeToString(h[:]))
 }
 
+// isControlPlaneErrorEnvelope reports whether body decodes as control-plane's
+// own error envelope ({"error": "<non-empty>"} -- apikeys/http.go's writeJSON
+// and every handleKeyError branch write exactly this shape). Content-Type
+// alone is a convention an intermediary in front of an operator-supplied
+// CONTROL_PLANE_URL (reverse proxy, API gateway, CDN) can satisfy by
+// accident on its own unrouted-404 response; this body-shape check is the
+// signature that specific control-plane handler actually produced the
+// response, not merely that something along the path called itself JSON
+// (PR #903 second-pass security review).
+func isControlPlaneErrorEnvelope(body []byte) bool {
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return strings.TrimSpace(envelope.Error) != ""
+}
+
 // ErrUpstreamUnavailable classifies a Resolve failure that says nothing about
 // whether the presented key is valid: a transport failure (dial/connection
 // error), a client timeout, a canceled or expired context, or a non-2xx
@@ -106,6 +125,14 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 	// off). Clone() inherits those deliberately instead of by omission.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxConnsPerHost = resolveMaxConnsPerHost
+	// MaxIdleConnsPerHost moves with MaxConnsPerHost: the stdlib default (2)
+	// is far below the 64 concurrent connections now permitted, so under
+	// real concurrency most of those connections would be opened fresh and
+	// then discarded rather than kept alive for reuse -- a fresh TCP (and
+	// TLS, if control-plane is behind an https front) handshake per resolve,
+	// on the hot path, against the one host this cap exists to protect
+	// (PR #903 second-pass security review).
+	transport.MaxIdleConnsPerHost = resolveMaxConnsPerHost
 
 	return &Client{
 		cache: &redisSnapshotStore{client: redis.NewClient(opt)},
@@ -133,17 +160,34 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 // resolves via the existing client Timeout -- no new pooling code needed.
 //
 // The concurrency ceiling this number actually sets, spelled out so whoever
-// raises it later during an incident knows what they are changing: 64
-// connections held for up to resolveClientTimeout (10s) each means new
-// dials start blocking once sustained arrivals exceed roughly
-// 64 / 10s = 6.4 resolve calls/sec against control-plane. Since one incoming
-// edge-api request can consume up to two of those (BudgetGate then
-// Authorizer), that is a shed threshold of roughly 3.2 incoming requests/sec
-// sustained through a control-plane outage before further requests queue
-// behind this cap rather than failing fast. Raising resolveMaxConnsPerHost
-// raises that ceiling; raising resolveClientTimeout lowers it for the same
+// raises it later during an incident knows what they are changing (PR #903
+// second-pass security review): a connection is held for up to
+// resolveClientTimeout each, so the shed threshold scales with which latency
+// is actually being served --
+//   - at the 5.65s cold-start latency this PR was written around: 64 conns /
+//     5.65s ≈ 11.3 resolve calls/sec, and since one incoming request can
+//     drive up to two resolves (BudgetGate then Authorizer), that's roughly
+//     5.6 incoming requests/sec served before the next one queues;
+//   - at a fully wedged control-plane paying the full resolveClientTimeout
+//     (10s) per call: 64 / 10s = 6.4 resolve calls/sec, roughly 3.2 incoming
+//     requests/sec.
+//
+// Below the applicable number, a cold start or outage is absorbed; above it,
+// additional callers wait behind this cap (queued, not dropped -- see next
+// paragraph) instead of failing fast. Raising resolveMaxConnsPerHost raises
+// both ceilings; raising resolveClientTimeout lowers them for the same
 // connection count -- the two constants trade off against each other, not
 // independently.
+//
+// What this cap does NOT bound (PR #903 second-pass security review):
+// sockets are bounded, waiting goroutines are not. A dial blocked on this
+// limit parks on Go's internal connection-wait queue rather than spawning a
+// new connection, which is the improvement, but nothing in front of the HTTP
+// handler limits how many requests can be in that waiting state at once, so
+// total in-flight request count and the memory behind it are still
+// unbounded above the thresholds computed here. A request-concurrency
+// limiter ahead of the handler would close that gap; not added here since
+// it is a broader change than one HTTP client's Transport.
 const resolveMaxConnsPerHost = 64
 
 // resolveClientTimeout bounds a single /internal/apikeys/resolve call. Raised
@@ -217,9 +261,17 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 		contentType := resp.Header.Get("Content-Type")
 		statusErr := fmt.Errorf("authz: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		switch {
-		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(contentType, "application/json"):
+		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(contentType, "application/json") && isControlPlaneErrorEnvelope(respBody):
 			// A genuine control-plane verdict: apikeys.handleKeyError answers
-			// this with a JSON body via writeJSON.
+			// this with a JSON body via writeJSON. Content-Type alone is a
+			// convention any intermediary can satisfy by accident (a
+			// reverse proxy or API gateway in front of an operator-supplied
+			// CONTROL_PLANE_URL can answer its own unrouted-404 as JSON too --
+			// Kong and AWS API Gateway both do); requiring the body to also
+			// decode as control-plane's own {"error": "..."} envelope, using
+			// bytes already read above, is a signature an accidental JSON
+			// 404 from something else won't reproduce (PR #903 second-pass
+			// security review).
 			return AuthSnapshot{}, statusErr
 		case resp.StatusCode == http.StatusNotFound:
 			// issue #816: a control-plane that booted without a database pool
@@ -227,8 +279,12 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 			// RouterConfig.DBReady comment), so Go's own ServeMux answers this
 			// 404 before any handler runs, via the stdlib's http.Error (plain
 			// text, not JSON) -- indistinguishable from a genuine not-found by
-			// status code alone, but not by Content-Type. This is exactly the
-			// cold/degraded boot state this PR exists to stop lying about.
+			// status code alone, but not by Content-Type plus body shape.
+			// This is exactly the cold/degraded boot state this PR exists to
+			// stop lying about, and it is also where any other intermediary's
+			// 404 (proxy, gateway, CDN) lands: none of them reproduce
+			// control-plane's own JSON error envelope, so none of them are
+			// misread as a genuine key verdict either.
 			return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
 		case resp.StatusCode == http.StatusConflict:
 			// Kept defensive rather than a live path today: apikeys.
