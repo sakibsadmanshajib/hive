@@ -264,6 +264,67 @@ jobs:
             echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus"
           } >> "$GITHUB_ENV"
 
+      - name: Fetch the SIF built from these exact image inputs
+        # The installer's own fallback takes the newest artifact called
+        # agent-engine-sif, repo wide, with no relation to the code under
+        # test. That is fine on the demo box and wrong here: a pull request
+        # that changes deploy/apptainer, vendor/openhands or the packs is
+        # precisely a pull request that rebuilds this image, and it would
+        # otherwise be certified with a stale, unrelated one. A proof job
+        # that proves the wrong artifact is worse than no proof job, because
+        # its output carries authority.
+        #
+        # Correlation is by image inputs rather than by commit: the SIF
+        # depends on exactly these three trees, so an artifact whose run
+        # built the same three trees IS the image for this ref, and a run
+        # that changed none of them does not need a rebuild. Matching on the
+        # head SHA alone would demand a fresh build for every unrelated
+        # commit and fail every pull request that touches nothing here.
+        #
+        # Downloaded into RUNTIME_DIR, so the installer below finds a SIF
+        # already in place and never reaches its own fallback.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$RUNTIME_DIR"
+          sudo chown "$(id -un):$(id -gn)" "$RUNTIME_DIR"
+
+          inputs_digest() {
+            for path in deploy/apptainer apps/agent-engine/packs vendor/openhands; do
+              # A path absent at that commit hashes as absent rather than
+              # being skipped, so "the directory was added" is a difference.
+              git rev-parse "$1:$path" 2>/dev/null || echo "absent:$path"
+            done | sha256sum | cut -d' ' -f1
+          }
+
+          want=$(inputs_digest HEAD)
+          echo "image inputs digest for this ref: $want"
+
+          match=""
+          while read -r id sha; do
+            [ -n "$sha" ] || continue
+            git fetch -q --depth=1 origin "$sha" 2>/dev/null || continue
+            got=$(inputs_digest "$sha")
+            echo "artifact $id from $sha: $got"
+            if [ "$got" = "$want" ]; then match="$id"; break; fi
+          done <<<"$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=agent-engine-sif&per_page=30" \
+            --jq '.artifacts[] | select(.expired == false) | "\(.id) \(.workflow_run.head_sha)"')"
+
+          if [ -z "$match" ]; then
+            echo "::error::no unexpired agent-engine-sif artifact was built from these image inputs, so there is no image to prove this ref with. Build one: gh workflow run \"agent-engine SIF\" --ref <this branch>"
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$match/zip" > /tmp/agent-engine-sif.zip
+          python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            /tmp/agent-engine-sif.zip "$RUNTIME_DIR"
+          if [ ! -s "$RUNTIME_DIR/agent-engine.sif" ]; then
+            echo "::error::artifact $match contained no agent-engine.sif"
+            exit 1
+          fi
+          echo "using artifact $match ($(stat -c%s "$RUNTIME_DIR/agent-engine.sif") bytes)"
+
       - name: Install the agent-engine launch daemon (socket arm)
         # The shipped installer, unmodified: it fetches the newest CI-built
         # SIF when the host has none, builds the launcher statically, writes
@@ -287,8 +348,9 @@ jobs:
           HIVE_SANDBOX_CPU_LIMIT: '2'
         run: |
           set -euo pipefail
-          sudo mkdir -p "$RUNTIME_DIR"
-          sudo chown "$(id -un):$(id -gn)" "$RUNTIME_DIR"
+          # RUNTIME_DIR is created, owned and populated with the correlated
+          # SIF by the step above, so the installer's own artifact fallback
+          # never runs here.
           RUNTIME_DIR="$RUNTIME_DIR" bash scripts/install-agent-engine-host.sh
 
       - name: Prove Apptainer can run this image on this runner
@@ -535,17 +597,30 @@ jobs:
           [ "$count" -gt 0 ] || { echo "::error::no screenshots captured"; exit 1; }
 
       - name: Check the text log carries no credential
+        id: lint
         # Scans docs/proof/ whole, which the captures were written into, so
         # the same guard that fails a hand-committed leak fails this one.
         # It cannot inspect pixels; that half is handled by stamp.mjs, whose
         # footer never carries a URL.
+        #
+        # No continue-on-error: a detected credential fails the job outright.
+        # Every step after this one that could republish the captures is
+        # gated on it below, so the guard cannot fire and be ignored.
         run: npm run lint:proof-tokens
 
       - name: Upload the captures
         # Whenever the capture ran at all, including when it failed partway:
         # a failure shot is evidence too. Not when it never started, where an
         # empty directory is the earlier step's failure, not this one's.
-        if: always() && steps.capture.conclusion != 'skipped'
+        #
+        # And never when the credential lint failed. This artifact is
+        # downloadable by anyone with the run URL on a public repository, so
+        # an `always()` upload would have detected a leak, blocked it from
+        # the pull request comment, and published it anyway: exactly the PR
+        # #578 leak class the lint exists to stop. A skipped upload here is
+        # not a silent absence either, because the lint step itself is red
+        # and names the file it found.
+        if: always() && steps.capture.conclusion != 'skipped' && steps.lint.conclusion != 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: agent-visual-proof-${{ github.run_id }}
