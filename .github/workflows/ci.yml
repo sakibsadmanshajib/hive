@@ -1647,14 +1647,34 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs-interaction.log; exit 1
 
-      - name: Generate the fixture invitation token
-        # Same reasoning as the Web E2E job: the seeder stores this value's
-        # sha256 as a live pending invitation, and the run id and attempt are on
-        # the public run page, so deriving it from those published a working
-        # invitation for as long as the run lasted. Random, and masked so it
-        # cannot reach a log.
+      - name: Resolve this job's fixture identity
+        # One place, because these three values must agree exactly and have
+        # twice failed by drifting apart.
+        #
+        # The run key has to be unique per JOB, not per workflow run. Web E2E
+        # uses `<run_id>-<attempt>`, and e2e-fixture-seed.mjs derives its
+        # account UUIDs and its inviter address from the key, so adopting that
+        # same key put both jobs in one identity namespace inside a single
+        # workflow run: they seeded the same derived rows and the later one
+        # reassigned them, which left this job's own address with no row in
+        # auth.users at all and the mint with nothing to sign into.
+        #
+        # The key also has to appear in the address, because runScopedEmail
+        # rewrites any address that does not already contain `+<key>@` and the
+        # seeder then provisions an account nobody signs in as. Both
+        # constraints at once means the key is in the local part twice over,
+        # which is ugly and correct.
+        #
+        # The invitation token is random and masked for the same reason as in
+        # Web E2E: the seeder stores its sha256 as a live pending invitation,
+        # and anything derived from the public run page is a published
+        # credential for as long as the run lasts.
         run: |
           set -euo pipefail
+          key="interaction-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "INTERACTION_RUN_KEY=$key" >> "$GITHUB_ENV"
+          echo "INTERACTION_FIXTURE_EMAIL=interaction-gate+$key@scubed.com.bd" >> "$GITHUB_ENV"
+          echo "INTERACTION_FIXTURE_EMAIL_UNVERIFIED=interaction-gate-unverified+$key@scubed.com.bd" >> "$GITHUB_ENV"
           token="$(openssl rand -hex 24)"
           echo "::add-mask::$token"
           echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
@@ -1663,20 +1683,33 @@ jobs:
         working-directory: apps/web-console
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # The run key has to be exactly what the addresses already carry
-          # after their `+`. runScopedEmail rewrites any address that does not
-          # contain `+<runKey>@`, so a key of `interaction-<id>-<attempt>`
-          # against an address holding `+<id>-<attempt>@` seeded a *different*
-          # account from the one the gate then signed in as: every /console
-          # route redirected to /no-workspace and the sweep measured five
-          # anonymous routes out of twenty four.
-          E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
-          E2E_VERIFIED_EMAIL: interaction-gate+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          E2E_RUN_KEY: ${{ env.INTERACTION_RUN_KEY }}
+          E2E_VERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL }}
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
-          E2E_UNVERIFIED_EMAIL: interaction-gate-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          E2E_UNVERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL_UNVERIFIED }}
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: ${{ env.E2E_INVITATION_TOKEN }}
-        run: node tests/e2e/support/e2e-auth-fixtures.mjs
+          # Prints the summary of what it actually seeded, which the next line
+          # checks. Without it the seeder is silent on success, and a run that
+          # provisioned the wrong address exits zero.
+          E2E_FIXTURE_VERBOSE: '1'
+        run: |
+          set -euo pipefail
+          node tests/e2e/support/e2e-auth-fixtures.mjs | tee /tmp/interaction-seed.json
+          # Loud at the source. The gate mints for INTERACTION_FIXTURE_EMAIL;
+          # if the seeder finished without creating exactly that address, fail
+          # here naming it, rather than letting the sweep discover it as every
+          # authenticated route redirecting to the sign-in page.
+          node -e '
+            const fs = require("node:fs");
+            const want = process.env.INTERACTION_FIXTURE_EMAIL;
+            const got = JSON.parse(fs.readFileSync("/tmp/interaction-seed.json", "utf8")).verifiedEmail;
+            if (got !== want) {
+              console.error(`::error::the fixture step seeded ${got} but the gate signs in as ${want}; the mint would have no account`);
+              process.exit(1);
+            }
+            console.log(`seeded the address the gate signs in as: ${want}`);
+          '
 
       # SUPABASE_SERVICE_ROLE_KEY is what mints the session: the setup project
       # calls tests/e2e/support/live-auth.mjs, which needs SUPABASE_URL (job
@@ -1690,7 +1723,7 @@ jobs:
         working-directory: apps/web-console
         env:
           INTERACTION_BASE_URL: http://localhost:3000
-          INTERACTION_EMAIL: interaction-gate+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          INTERACTION_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run test:interaction
 
