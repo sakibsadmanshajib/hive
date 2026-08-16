@@ -1068,6 +1068,17 @@ type shimKeyResolver interface {
 func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string) error {
 	snapshot, err := resolver.Resolve(ctx, shimKey)
 	if err != nil {
+		// A transport failure, timeout, or control-plane 5xx says nothing
+		// about the key itself -- it never reached a verdict. Keep that
+		// distinguishable from "the key does not resolve" so
+		// watchOWUIShimKey below does not tell an operator to mint a
+		// replacement over a transient outage (nearly happened live on
+		// 2026-08-14: a cold control-plane container timed out this same
+		// probe, and rotating the key it names would have broken a working,
+		// long-lived deployment for no reason).
+		if errors.Is(err, authz.ErrUpstreamUnavailable) {
+			return fmt.Errorf("%w: the control plane could not be reached to resolve it", err)
+		}
 		return fmt.Errorf("it does not resolve to a Hive API key: %w", err)
 	}
 	if snapshot.Status != "active" {
@@ -1108,26 +1119,58 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 // actually failed in #717 was the verdict, not its severity, so the fix is that
 // the verdict is now true. A no-op when OWUI_SHIM_KEY is unset, which is the
 // normal state for a deployment with no Open WebUI front-end.
+// owuiShimKeyState is the probe's tri-state verdict. A plain boolean
+// ("healthy") collapsed "transiently unreachable" and "genuinely unusable"
+// into the same "unhealthy" value, so watchOWUIShimKey's change-detection
+// (compare against the last logged state) never fired on a transition
+// between the two: a transient control-plane timeout would log once, and a
+// subsequent genuinely revoked/dead key would log nothing at all, because
+// the boolean never changed. That reintroduced exactly the silence issue
+// #717 exists to prevent, on the branch this PR added (PR #903 security
+// review MEDIUM finding).
+type owuiShimKeyState int
+
+const (
+	owuiShimKeyHealthy owuiShimKeyState = iota
+	owuiShimKeyTransient
+	owuiShimKeyDead
+)
+
 func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string, interval time.Duration) {
 	shimKey = strings.TrimSpace(shimKey)
 	if shimKey == "" {
 		return
 	}
 	reported := false
-	lastHealthy := false
+	var lastState owuiShimKeyState
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, owuiShimKeyProbeTimeout)
 		err := checkOWUIShimKey(probeCtx, resolver, shimKey)
 		cancel()
-		healthy := err == nil
-		if !reported || healthy != lastHealthy {
-			if healthy {
+
+		state := owuiShimKeyDead
+		switch {
+		case err == nil:
+			state = owuiShimKeyHealthy
+		case errors.Is(err, authz.ErrUpstreamUnavailable):
+			state = owuiShimKeyTransient
+		}
+
+		if !reported || state != lastState {
+			switch state {
+			case owuiShimKeyHealthy:
 				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
-			} else {
+			case owuiShimKeyTransient:
+				// Transient: the control plane could not be reached in time,
+				// not a verdict that the key is bad. No "mint a replacement"
+				// advice here -- rotating a working key over a timeout is
+				// the failure this branch exists to prevent.
+				log.Printf("owui: WARN OWUI_SHIM_KEY probe could not reach the control plane (transient, will retry next interval): %v. This is NOT a sign the key is invalid -- do not rotate it over this alone", err)
+			default:
 				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its document RAG embeddings and text-to-speech will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
 			}
 			reported = true
-			lastHealthy = healthy
+			lastState = state
 		}
 		select {
 		case <-ctx.Done():

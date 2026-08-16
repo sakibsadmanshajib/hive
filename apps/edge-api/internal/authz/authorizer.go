@@ -7,6 +7,8 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
@@ -46,6 +48,37 @@ func NewAuthorizer(client *Client, limiter *Limiter, opts ...AuthorizerOption) *
 func newErr(errType string, message string, code *string) *apierrors.OpenAIError {
 	e := apierrors.NewError(errType, message, code)
 	return &e
+}
+
+// internalTokenRejectionLogInterval bounds how often
+// logInternalTokenRejectionOncePerMinute actually writes to the log. This
+// condition is a permanent misconfiguration by construction (PR #903
+// second-pass security review): it fires on every request for as long as it
+// lasts, so logging it unthrottled turns a config error into a
+// disk-filling loop. Loud the first time, then at most once per interval --
+// still frequent enough that an operator watching logs live sees it
+// immediately, without flooding a log aggregator over a sustained outage.
+const internalTokenRejectionLogInterval = time.Minute
+
+// lastInternalTokenRejectionLogUnix holds the unix-seconds timestamp of the
+// last time logInternalTokenRejectionOncePerMinute actually logged. Package-
+// level and shared across every Authorizer instance deliberately: the
+// condition it throttles (a misconfigured shared secret) is process-wide,
+// not per-instance, so there is exactly one meaningful rate to enforce.
+var lastInternalTokenRejectionLogUnix atomic.Int64
+
+// logInternalTokenRejectionOncePerMinute logs a rejected-internal-token
+// CONFIGURATION ERROR at most once per internalTokenRejectionLogInterval.
+func logInternalTokenRejectionOncePerMinute(err error) {
+	now := time.Now().Unix()
+	last := lastInternalTokenRejectionLogUnix.Load()
+	if now-last < int64(internalTokenRejectionLogInterval.Seconds()) {
+		return
+	}
+	if !lastInternalTokenRejectionLogUnix.CompareAndSwap(last, now) {
+		return // another goroutine just logged it instead
+	}
+	log.Printf("authz: CONFIGURATION ERROR key resolution is permanently broken: control-plane's internal-token check rejected edge-api's own request (CONTROL_PLANE_INTERNAL_TOKEN mismatch or unset on control-plane, or an intermediary in front of it with its own authentication) -- this will NOT self-resolve by waiting or retrying, and this message is rate-limited to once per %s while the condition persists err=%v", internalTokenRejectionLogInterval, err)
 }
 
 // AuthzError carries a structured authorization failure (the OpenAI error
@@ -98,7 +131,80 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 		// carries the resolve-path outcome, e.g. control-plane status code
 		// for not-found/revoked vs a transport error) so an outage is
 		// diagnosable from logs instead of guesswork across reruns.
-		log.Printf("authz: key resolution failed err=%v", err)
+		if errors.Is(err, ErrInternalTokenRejected) {
+			// Loud and distinct on purpose (PR #903 security review): this is
+			// a permanent misconfiguration, not a transient condition, and
+			// will keep failing every request until an operator fixes it --
+			// it must not blend into ordinary cold-start/timeout log noise
+			// that an on-call engineer would reasonably wait out.
+			//
+			// Attribution is deliberately not pinned solely on
+			// CONTROL_PLANE_INTERNAL_TOKEN (second-pass security review):
+			// RequireInternalToken on control-plane itself is the only
+			// authenticator on this route in the shipped topology, but
+			// CONTROL_PLANE_URL is operator-supplied, and anything sitting in
+			// front of it with its own auth (a proxy, an access gateway
+			// rejecting a service token) answers the identical 401 here. The
+			// message names control-plane's own check as the likely cause
+			// without asserting it is the only possible one.
+			//
+			// Rate-limited to once per minute rather than once per request:
+			// this condition is permanent by construction, so every request
+			// hits it for as long as it lasts, and an unthrottled multi-line
+			// CONFIGURATION ERROR message on every single request is a
+			// disk-filling loop bolted onto an auth failure.
+			logInternalTokenRejectionOncePerMinute(err)
+		} else {
+			log.Printf("authz: key resolution failed err=%v", err)
+		}
+		if errors.Is(err, ErrUpstreamUnavailable) {
+			// The resolve call never reached a verdict on this key (transport
+			// failure, timeout, canceled context, a control-plane 5xx, or a
+			// rejected internal token) -- answer with a retryable,
+			// provider-blind 503 rather than the permanent, non-retryable 401
+			// a genuinely invalid key gets. A 401 on a valid credential reads
+			// as "this key is wrong" and sends the caller to rotate it; that
+			// is worse than a slow, honest failure.
+			//
+			// Explicit judgment on the resulting 401-vs-503 split, per PR #903
+			// security review (corrected from an earlier, overconfident
+			// version of this comment that claimed no oracle existed at all --
+			// that claim was wrong and has been retracted): this IS a narrow,
+			// real information leak, not eliminated by this change.
+			// control-plane's ResolveSnapshot (apikeys/service.go) fails fast
+			// at GetPolicyByTokenHash for a key that does not exist, before
+			// touching ListAllAliases/GetBudgetWindow/GetAccountRatePolicy/
+			// GetKeyRatePolicy/GetTenantIDByAccountID; a key that DOES exist
+			// proceeds through all of those, so during a degraded window
+			// (connection-pool exhaustion, request cancellation -- exactly
+			// what the 2026-08-14 incident's "get key rate policy" and
+			// "resolve tenant for account: context canceled" log lines were)
+			// an existing key is more likely to surface as 503 than a
+			// nonexistent one, which reliably 401s fast. Accepted rather than
+			// reverted: exploiting it requires riding an already-degraded
+			// control-plane window an attacker cannot RELIABLY induce from
+			// here (worded precisely per second-pass security review: this
+			// control-plane runs against a small shared session-mode pool
+			// that ordinary load alone has previously been enough to
+			// saturate, so a caller with nothing but valid API access could
+			// plausibly help manufacture that window rather than only wait
+			// for one -- weakly attacker-triggerable, not merely
+			// opportunistic; "cannot induce" overstated that and has been
+			// corrected). It still yields only a probabilistic existence
+			// signal and no access, and the alternative -- collapsing 503
+			// back into 401 -- reintroduces the certain, severe cost this PR
+			// exists to remove (a valid credential told it is invalid) to
+			// close a narrow, low-value leak. Follow-up tracked as issue
+			// #904 rather than left only in this comment: rate-limiting or
+			// aggregating repeated resolve failures per source would shrink
+			// the window in which this is observable.
+			code := "upstream_unavailable"
+			return AuthSnapshot{}, map[string]string{"retry-after": "5"}, newErr(
+				"api_error",
+				"The authorization service is temporarily unavailable. Please retry.",
+				&code,
+			)
+		}
 		code := "invalid_api_key"
 		return AuthSnapshot{}, nil, newErr(
 			"invalid_request_error",

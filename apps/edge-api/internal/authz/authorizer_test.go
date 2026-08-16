@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"strings"
 	"testing"
 
@@ -236,6 +238,143 @@ func TestAuthorizeReturnsRateLimitHeadersOnlyFor429(t *testing.T) {
 	}
 	if headers["x-ratelimit-limit-tokens"] != "" {
 		t.Fatalf("expected token headers omitted on request-only limit, got %#v", headers)
+	}
+}
+
+// 2026-08-14 live-box incident: a cold control-plane container answered a
+// resolve call with a transport-level failure (client timeout), and the
+// caller received the same 401 invalid_api_key as a key that plainly does not
+// exist. A 401 on a valid credential is a lie that sends the next operator to
+// rotate a working key. Authorize must surface a distinct, retryable failure
+// for a resolve error that says nothing about the key.
+func TestAuthorizeReturnsUpstreamUnavailableOnTransportFailure(t *testing.T) {
+	client := &Client{
+		// Shaped like the real Client.Resolve's classification of a transport
+		// error (client.go wraps with ErrUpstreamUnavailable); ResolveOverride
+		// bypasses that classification code, so the mock reproduces its output
+		// shape to exercise Authorize's handling of it in isolation.
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, fmt.Errorf("authz: fetch: %w: %w", ErrUpstreamUnavailable, &net.OpError{Op: "dial", Err: errors.New("connection refused")})
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	_, _, err := authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if err.Error.Code == nil || *err.Error.Code == "invalid_api_key" {
+		t.Fatalf("transport failure must not be reported as invalid_api_key, got code=%v message=%q", err.Error.Code, err.Error.Message)
+	}
+}
+
+// Same shape as the transport-failure case above: a client timeout must not
+// read as "this key does not exist" either.
+func TestAuthorizeReturnsUpstreamUnavailableOnTimeout(t *testing.T) {
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, fmt.Errorf("authz: fetch: %w: %w", ErrUpstreamUnavailable, context.DeadlineExceeded)
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	_, _, err := authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if err.Error.Code == nil || *err.Error.Code == "invalid_api_key" {
+		t.Fatalf("a timeout must not be reported as invalid_api_key, got code=%v message=%q", err.Error.Code, err.Error.Message)
+	}
+}
+
+// Proves the fix does not weaken a real rejection: a key that genuinely does
+// not exist (control-plane 404, wrapped through the real Client.Resolve
+// error shape) must still come back as invalid_api_key. Passes before and
+// after the upstream-unavailable fix.
+func TestAuthorizeStillReturnsInvalidAPIKeyForGenuineNotFound(t *testing.T) {
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, errors.New(`authz: status 404: {"error":"key not found"}`)
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	_, _, err := authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	if err == nil {
+		t.Fatal("expected invalid_api_key error")
+	}
+	if err.Error.Code == nil || *err.Error.Code != "invalid_api_key" {
+		t.Fatalf("expected invalid_api_key code preserved for genuine not-found, got %v", err.Error.Code)
+	}
+	if err.Error.Message != "Incorrect API key provided." {
+		t.Fatalf("message = %q, want byte-identical generic message", err.Error.Message)
+	}
+}
+
+// TestAuthorizeLogsConfigurationErrorLoudlyForRejectedInternalToken is the
+// regression guard for the PR #903 security review MEDIUM finding: a
+// rejected internal token (CONTROL_PLANE_INTERNAL_TOKEN mismatch) is a
+// permanent misconfiguration, not a transient failure, and must not log the
+// same generic line as an ordinary resolve failure -- an on-call engineer
+// waiting out what looks like a cold-start blip would wait forever. The
+// customer-facing response is unchanged (still the same retryable 503): only
+// the operator-facing log line differs.
+func TestAuthorizeLogsConfigurationErrorLoudlyForRejectedInternalToken(t *testing.T) {
+	lastInternalTokenRejectionLogUnix.Store(0) // isolate from other tests/-count runs sharing this process
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, fmt.Errorf("authz: status 401: %w: %w", ErrUpstreamUnavailable, ErrInternalTokenRejected)
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	var err *apierrors.OpenAIError
+	logOutput := captureAuthzLogs(t, func() {
+		_, _, err = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	})
+
+	if err == nil || err.Error.Code == nil || *err.Error.Code != "upstream_unavailable" {
+		t.Fatalf("expected the same retryable upstream_unavailable response, got %#v", err)
+	}
+	for _, want := range []string{"CONFIGURATION ERROR", "will NOT self-resolve"} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("expected the log to loudly name a permanent misconfiguration (%q), got %q", want, logOutput)
+		}
+	}
+	// Attribution must not be pinned solely on CONTROL_PLANE_INTERNAL_TOKEN
+	// (second-pass security review): an intermediary in front of control-plane
+	// can answer the identical 401 with its own authentication rejected.
+	if !strings.Contains(logOutput, "intermediary") {
+		t.Fatalf("expected the log to acknowledge an intermediary could also cause this, got %q", logOutput)
+	}
+}
+
+// TestAuthorizeRateLimitsRejectedInternalTokenLogging is the regression guard
+// for the PR #903 second-pass security review LOW finding: this condition is
+// permanent by construction and fires on every request for as long as it
+// lasts, so logging it unthrottled is a disk-filling loop bolted onto an auth
+// failure. A second Authorize call within the same rate-limit interval must
+// not produce a second CONFIGURATION ERROR line.
+func TestAuthorizeRateLimitsRejectedInternalTokenLogging(t *testing.T) {
+	lastInternalTokenRejectionLogUnix.Store(0)
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, fmt.Errorf("authz: status 401: %w: %w", ErrUpstreamUnavailable, ErrInternalTokenRejected)
+		},
+	}
+	authorizer := NewAuthorizer(client, nil)
+
+	logOutput := captureAuthzLogs(t, func() {
+		_, _, _ = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+		_, _, _ = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	})
+
+	if got := strings.Count(logOutput, "CONFIGURATION ERROR"); got != 1 {
+		t.Fatalf("expected exactly one CONFIGURATION ERROR line across two calls within the rate-limit interval, got %d in %q", got, logOutput)
 	}
 }
 

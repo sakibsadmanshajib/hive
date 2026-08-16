@@ -48,17 +48,12 @@ func (o *Orchestrator) executeResponsesStreaming(
 	authHeader := r.Header.Get("Authorization")
 	snapshot, headers, authErr := o.authorizer.Authorize(ctx, authHeader, model, estimatedCredits, 0, 0)
 	if authErr != nil {
-		status := http.StatusUnauthorized
-		if authErr.Error.Type == "insufficient_quota" {
-			status = http.StatusTooManyRequests
-		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
-			status = http.StatusNotFound
-		}
-		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
-			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
-			return
-		}
-		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
+		// Third copy of this switch found during PR #903 security review
+		// (orchestrator.go and stream.go had already been fixed to call the
+		// shared helper; this one was missed). Route through
+		// apierrors.WriteAuthFailure like every other Authorize call site
+		// instead of a third copy of its logic.
+		apierrors.WriteAuthFailure(w, authErr, headers)
 		return
 	}
 

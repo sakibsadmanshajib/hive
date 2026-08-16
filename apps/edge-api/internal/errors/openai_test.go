@@ -183,6 +183,19 @@ func TestWriteAuthFailureMapsStatusAndPreservesRetryHeaders(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 		},
 		{
+			// PR #903 security review: a resolve failure that reaches no
+			// verdict on the key (cold/unreachable control-plane) must answer
+			// 503, not 401, and must carry a machine-readable retry-after so
+			// SDK retry layers don't fall back to hammering an already-struggling
+			// control-plane with their own short backoff.
+			name:       "upstream_unavailable -> 503 with retry-after",
+			errType:    "api_error",
+			code:       ptrStr("upstream_unavailable"),
+			headers:    map[string]string{"retry-after": "5"},
+			wantStatus: http.StatusServiceUnavailable,
+			wantRetry:  "5",
+		},
+		{
 			name:       "invalid key -> 401",
 			errType:    "invalid_request_error",
 			code:       ptrStr("invalid_api_key"),
