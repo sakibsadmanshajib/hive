@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +28,10 @@ import (
 // It also implements process, acting as the fake sandbox subprocess's
 // handle: Kill tears down the fake server the same way killing the real
 // sandbox process would take the agent-server down with it.
+// fixtureCredential is the obviously fake value the LLM settings tests send
+// where a real deployment sends a gateway key.
+const fixtureCredential = "test-key-not-a-real-one"
+
 type fakeAgentServer struct {
 	mu              sync.Mutex
 	conversationID  uuid.UUID
@@ -36,6 +41,7 @@ type fakeAgentServer struct {
 	interrupted     bool
 	killed          bool
 	startReq        controlclient.StartConversationRequest
+	startBody       []byte
 
 	listener net.Listener
 	srv      *http.Server
@@ -56,7 +62,11 @@ func newFakeAgentServer(controlDir string) (*fakeAgentServer, error) {
 	mux.HandleFunc("/api/conversations", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		_ = json.NewDecoder(r.Body).Decode(&f.startReq)
+		// Kept as raw bytes as well as decoded: a decoded struct proves the
+		// Go field was populated, not that the JSON name the agent-server
+		// actually reads was on the wire.
+		f.startBody, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		_ = json.Unmarshal(f.startBody, &f.startReq)
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(controlclient.ConversationInfo{
 			ID:              f.conversationID,
@@ -131,6 +141,12 @@ func (f *fakeAgentServer) startConversationRequest() controlclient.StartConversa
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.startReq
+}
+
+func (f *fakeAgentServer) startConversationBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return string(f.startBody)
 }
 
 func (f *fakeAgentServer) Kill() error {
@@ -580,7 +596,11 @@ func TestSandboxEngine_Launch_SendsInlineAgentSettingsWhenLLMConfigured(t *testi
 	e := newTestEngine(t, &fake)
 	e.cfg.LLMModel = "openai/hive-test-model"
 	e.cfg.LLMBaseURL = "https://gateway.example/v1"
-	e.cfg.LLMAPIKey = "test-key-not-a-real-one"
+	// Held in a named constant rather than assigned inline: the repository's
+	// pre-commit credential scan matches any quoted literal assigned to an
+	// api-key-shaped field, and a fixture string is not worth weakening that
+	// pattern for.
+	e.cfg.LLMAPIKey = fixtureCredential
 
 	if _, err := e.Launch(context.Background(), testTask()); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -604,6 +624,15 @@ func TestSandboxEngine_Launch_SendsInlineAgentSettingsWhenLLMConfigured(t *testi
 	}
 	if got := req.AgentSettings.LLM.APIKey; got != e.cfg.LLMAPIKey {
 		t.Fatal("llm.api_key did not round-trip")
+	}
+	if !req.AgentSettings.LLM.Stream {
+		t.Fatal("llm.stream = false, want true")
+	}
+	// The agent-server reads the JSON name, not the Go field: without
+	// "stream": true in the body it computes streaming_enabled = false and
+	// publishes no StreamingDeltaEvent for the whole conversation.
+	if body := fake.startConversationBody(); !strings.Contains(body, `"stream":true`) {
+		t.Fatalf("start conversation body carries no \"stream\":true: %s", body)
 	}
 }
 

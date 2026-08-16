@@ -391,6 +391,13 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 				BaseURL: e.cfg.LLMBaseURL,
 				APIKey:  e.cfg.LLMAPIKey,
 				UsageID: "hive-agent",
+				// Always on, with no Config knob: a sandbox that cannot
+				// stream its tokens is of no use to any surface Hive is
+				// building, and the cost is nil either way (the vendored SDK
+				// keeps asking for the terminal usage frame when it streams,
+				// so the gateway meters a streamed response exactly as it
+				// meters a buffered one).
+				Stream: true,
 			},
 		}
 	} else {

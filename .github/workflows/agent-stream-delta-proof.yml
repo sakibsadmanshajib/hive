@@ -1,0 +1,207 @@
+name: agent streaming delta proof
+
+# Live evidence that a launched sandbox publishes token deltas, captured while
+# a conversation is still running.
+#
+# WHY IT CANNOT BE CAPTURED ANYWHERE ELSE
+#
+# StreamingDeltaEvent is published straight to the agent-server's PubSub and is
+# deliberately never persisted to the conversation event log, so reading events
+# after a run cannot tell a streaming conversation from a non-streaming one.
+# The observation has to happen mid-run, against a real Apptainer sandbox
+# talking to a real model. The WSL2 development box has neither Apptainer nor
+# root, and the demo box runs only already-merged code, so a hosted runner is
+# the only place this can be proven before merge. Same reasoning, and most of
+# the same setup, as agent-visual-proof.yml.
+#
+# This job is scaffolding for one change. Delete it once the launcher relay
+# lands and streaming has a permanent test of its own.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/agent-engine/internal/controlclient/**'
+      - 'apps/agent-engine/internal/engine/**'
+      - 'apps/agent-engine/cmd/streamproof/**'
+      - '.github/workflows/agent-stream-delta-proof.yml'
+
+# No concurrency group, for the reason agent-visual-proof.yml records: a
+# cancelled proof run is a silent absence of evidence rather than a loud
+# failure.
+
+env:
+  APPTAINER_VERSION: "1.5.2"
+  RUNTIME_DIR: /mnt/agent-runtime
+  PROOF_LOG: /tmp/stream-delta-proof.log
+
+jobs:
+  prove:
+    name: Capture token deltas from a live sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A fork pull request gets no secrets, so it would fail on the missing
+    # gateway key rather than on the change under test.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: apps/agent-engine/go.sum
+
+      - name: Install Apptainer and allow unprivileged user namespaces
+        run: |
+          set -euo pipefail
+          deb="apptainer_${APPTAINER_VERSION}_amd64.deb"
+          curl -fsSL -o "/tmp/${deb}" \
+            "https://github.com/apptainer/apptainer/releases/download/v${APPTAINER_VERSION}/${deb}"
+          sudo apt-get update -qq
+          sudo apt-get install -y "/tmp/${deb}"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          apptainer --version
+
+      - name: Start a systemd user session for rootless cgroups
+        # Apptainer enforces the per-session memory and CPU limits through
+        # rootless cgroups, which need a user manager: without XDG_RUNTIME_DIR
+        # and DBUS_SESSION_BUS_ADDRESS every launch dies with "cannot use
+        # cgroups - DBUS_SESSION_BUS_ADDRESS is not set".
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$(id -un)"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          if [ ! -S "$runtime/bus" ]; then
+            echo "::error::no systemd user session bus at $runtime/bus"
+            exit 1
+          fi
+          {
+            echo "XDG_RUNTIME_DIR=$runtime"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch the SIF built from these exact image inputs
+        # Correlated by image inputs rather than by commit, the same way
+        # agent-visual-proof.yml does it: the image depends on exactly these
+        # three trees, so an artifact whose run built the same three trees is
+        # the image for this ref. Certifying a change against an unrelated
+        # image would be worse than no proof, because the output carries
+        # authority.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$RUNTIME_DIR"
+          sudo chown "$(id -un):$(id -gn)" "$RUNTIME_DIR"
+
+          inputs_digest() {
+            for path in deploy/apptainer apps/agent-engine/packs vendor/openhands; do
+              git rev-parse "$1:$path" 2>/dev/null || echo "absent:$path"
+            done | sha256sum | cut -d' ' -f1
+          }
+
+          want=$(inputs_digest HEAD)
+          echo "image inputs digest for this ref: $want"
+
+          match=""
+          while read -r id sha; do
+            [ -n "$sha" ] || continue
+            git fetch -q --depth=1 origin "$sha" 2>/dev/null || continue
+            got=$(inputs_digest "$sha")
+            echo "artifact $id from $sha: $got"
+            if [ "$got" = "$want" ]; then match="$id"; break; fi
+          done <<<"$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=agent-engine-sif&per_page=30" \
+            --jq '.artifacts[] | select(.expired == false) | "\(.id) \(.workflow_run.head_sha)"')"
+
+          if [ -z "$match" ]; then
+            echo "::error::no unexpired agent-engine-sif artifact was built from these image inputs. Build one: gh workflow run \"agent-engine SIF\" --ref <this branch>"
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$match/zip" > /tmp/agent-engine-sif.zip
+          python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            /tmp/agent-engine-sif.zip "$RUNTIME_DIR"
+          if [ ! -s "$RUNTIME_DIR/agent-engine.sif" ]; then
+            echo "::error::artifact $match contained no agent-engine.sif"
+            exit 1
+          fi
+          echo "using artifact $match ($(stat -c%s "$RUNTIME_DIR/agent-engine.sif") bytes)"
+
+      - name: Prove Apptainer can run this image on this runner
+        run: |
+          set -euo pipefail
+          apptainer exec "$RUNTIME_DIR/agent-engine.sif" /bin/true
+          echo "rootless apptainer exec of the shipped image: ok"
+
+      - name: Launch a real sandbox and capture its token deltas
+        env:
+          HIVE_AGENT_ENGINE_SIF_PATH: /mnt/agent-runtime/agent-engine.sif
+          HIVE_AGENT_ENGINE_PACKS_DIR: ${{ github.workspace }}/apps/agent-engine/packs
+          HIVE_AGENT_ENGINE_WORKSPACE_ROOT: /mnt/agent-runtime/workspaces
+          HIVE_AGENT_ENGINE_RUN_DIR: /mnt/agent-runtime/run
+          HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
+          HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
+          HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          HIVE_PROOF_LOG: ${{ env.PROOF_LOG }}
+        run: go run -tags proof ./apps/agent-engine/cmd/streamproof
+
+      - name: Redact the captured log
+        # The log carries model names, conversation ids and streamed model
+        # output, never a credential, but the redactor runs anyway before the
+        # log is published anywhere: the one thing worse than no evidence is
+        # evidence that leaks (PR #578).
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -s "$PROOF_LOG" ]; then
+            python3 scripts/redact-log-credentials.py < "$PROOF_LOG" > /tmp/proof-redacted.log
+          else
+            echo "no proof log was written" > /tmp/proof-redacted.log
+          fi
+          {
+            echo '### Streaming delta capture'
+            echo
+            echo '```'
+            cat /tmp/proof-redacted.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the captured log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stream-delta-proof-${{ github.run_id }}
+          path: /tmp/proof-redacted.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Post the capture on the pull request
+        # An artifact behind an authenticated download is not evidence anyone
+        # reviewing the pull request will read, so the log goes in a comment.
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          body=$(mktemp)
+          {
+            echo "## Streaming delta capture, run [\`${GITHUB_RUN_ID}\`](https://github.com/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID})"
+            echo
+            echo "Captured on a hosted runner against a real Apptainer sandbox built from the"
+            echo "shipped SIF, talking to the live gateway. The stream=false arm is the control."
+            echo
+            echo '```'
+            cat /tmp/proof-redacted.log
+            echo '```'
+          } > "$body"
+          gh pr comment "$PR" --body-file "$body"
