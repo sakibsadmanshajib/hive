@@ -2055,7 +2055,9 @@ export async function getAnalyticsUsage(params: {
     throw new Error("Failed to parse usage analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsUsage (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "usage", never "data" (issue #856).
+  const rawData = readArrayField(payload, "usage") ?? [];
   const rows: UsageSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeUsageSummaryRow(item);
@@ -2090,7 +2092,9 @@ export async function getAnalyticsSpend(params: {
     throw new Error("Failed to parse spend analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsSpend (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "spend", never "data" (issue #856).
+  const rawData = readArrayField(payload, "spend") ?? [];
   const rows: SpendSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeSpendSummaryRow(item);
@@ -2125,7 +2129,9 @@ export async function getAnalyticsErrors(params: {
     throw new Error("Failed to parse error analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsErrors (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "errors", never "data" (issue #856).
+  const rawData = readArrayField(payload, "errors") ?? [];
   const rows: ErrorSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeErrorSummaryRow(item);
