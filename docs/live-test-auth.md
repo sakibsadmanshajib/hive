@@ -102,8 +102,7 @@ and 'interaction-coverage proof' entries," on that same account. Issue #848
 tracks the cleanup and the standing fix.
 
 So: a suite that only signs in and reads (a redirect check, a rendered
-heading, an unclicked button) is fine against the demo account, the same way
-`scripts/verify-control-plane.py` is fine, per the table below. A suite that
+heading, an unclicked button) is fine against the demo account. A suite that
 sends a message, submits a task, or mints a key must run as a dedicated,
 non-demo identity instead, the same way the plain E2E suite already does with
 its `E2E_RUN_KEY`-scoped fixture accounts (see above), or the way
@@ -111,6 +110,13 @@ its `E2E_RUN_KEY`-scoped fixture accounts (see above), or the way
 own rather than sharing one. Do not add a new literal fallback to
 `demo@hive-demo.invalid` anywhere in this codebase; the existing ones are
 being removed, not extended.
+
+`scripts/verify-control-plane.py` is NOT an example of the read-only case,
+despite never rotating a password: its "api-key lifecycle" check mints a real
+key and sends a real `POST /v1/chat/completions` through it, which is a write
+and a real spend, not a read. It now requires `HIVE_VERIFY_EMAIL` with no
+default rather than falling back to the demo account (issue #848); point it
+at a dedicated verification identity, same as any other write-capable suite.
 
 ### What this repository does about it
 
@@ -148,8 +154,9 @@ with must come from your environment and why that path must never silently
 default.
 
 `scripts/verify-control-plane.py` states the same rule in its docstring and
-signs in with an existing password it is given. That is fine. Inventing a new
-password is not.
+signs in with an existing password it is given. That is fine on the password
+question specifically. Inventing a new password is not. It is not otherwise a
+read-only script; see the note above about its identity requirement.
 
 ### The scratch script to avoid
 
