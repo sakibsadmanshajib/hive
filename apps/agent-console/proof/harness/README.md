@@ -92,3 +92,34 @@ string `stub-anon-key-not-a-credential`. No value in this directory is
 accepted by any real system, and no captured URL carries a token in its query
 string. Keep it that way: `npm run lint:proof-tokens` guards the text half of
 that rule for `docs/proof/`, and nothing can inspect screenshot pixels for you.
+
+## The live sibling: `capture-live.mjs`
+
+`capture.mjs` proves rendering. It cannot prove anything that only exists when
+a sandbox really starts, because it starts none. `capture-live.mjs` is the
+other half: it drives the same console against a booted edge-api,
+control-plane and agent-engine launch daemon, so a task it creates runs inside
+a real Apptainer sandbox.
+
+It is not run by hand on the dev box. The sandbox image is `linux/amd64` and
+unbuildable under WSL2, so the stack that can run it is stood up by
+`.github/workflows/agent-visual-proof.yml`:
+
+```bash
+gh workflow run "agent visual proof" -f pr=<number>
+```
+
+That checks out `refs/pull/<number>/merge`, boots the stack with the launcher
+on the socket arm, runs the scenarios below, pushes the captures to a side
+branch and posts them as a comment on that pull request.
+
+| Scenario | What it proves |
+| --- | --- |
+| `launch-liveness` | A task created in the browser reaches Running because a real sandbox came up for it. Asserts nothing version specific, so it doubles as the workflow's own self-test. |
+| `create-returns-queued` | Issue #881: create answers 201 with a `queued` task inside edge-api's 15 second client bound, instead of blocking on a cold sandbox and 500ing. |
+| `cancel-frees-slot` | Issue #886: with `HIVE_QUOTA_USER_CONCURRENCY=1`, a second create is refused while the slot is held, the cancel takes the launcher's live session count from 1 to 0, and the next create launches. |
+
+The slot count is read from the launcher's `sessions/` directory rather than
+from a status badge: `SandboxEngine.Launch` creates exactly one directory
+there per live session and `reap()` removes it in the same call that releases
+the quota slot, so the number is the slot, not a proxy for it.

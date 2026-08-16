@@ -38,6 +38,16 @@ CREDENTIAL_PARAMS = [
     "client_secret",
     "api_key",
     "apikey",
+    # Bare `key`, which the `[A-Za-z0-9_]*` prefix below turns into every
+    # `*_KEY` spelling at once: S3_ACCESS_KEY, S3_SECRET_KEY,
+    # LITELLM_MASTER_KEY, SUPABASE_ANON_KEY. All four are wired into
+    # .github/workflows/agent-visual-proof.yml, whose failure-log artifact is
+    # downloadable by anyone with the run URL on a public repository, and
+    # none of them matched before. It over-redacts benign `key=` pairs
+    # (idempotency_key, cache_key) and that is the right direction for a
+    # filter whose output is published: a lost debugging value costs a
+    # rerun, a lost credential costs a rotation.
+    "key",
     "password",
     "secret",
     "token",
@@ -112,6 +122,20 @@ def selfcheck() -> None:
         out = redact(line)
         assert SAMPLE_VALUE not in out, out
         assert "PASSWORD=<redacted>" in out, out
+
+    # Every `*_KEY` spelling wired into the agent visual proof job, whose
+    # failure-log artifact is public. None of these matched before `key` was
+    # added to CREDENTIAL_PARAMS.
+    for line in (
+        f"S3_ACCESS_KEY={SAMPLE_VALUE}",
+        f"S3_SECRET_KEY={SAMPLE_VALUE}",
+        f"LITELLM_MASTER_KEY={SAMPLE_VALUE}",
+        f"SUPABASE_ANON_KEY={SAMPLE_VALUE}",
+        f"edge-api  | starting with access_key={SAMPLE_VALUE} configured",
+    ):
+        out = redact(line)
+        assert SAMPLE_VALUE not in out, out
+        assert "=<redacted>" in out, out
 
     # Bare tokens with no parameter name around them.
     assert SAMPLE_JWT not in redact(f"Authorization: Bearer {SAMPLE_JWT}")
