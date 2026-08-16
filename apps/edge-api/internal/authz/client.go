@@ -98,11 +98,20 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 		return nil, fmt.Errorf("authz: parse redis URL: %w", err)
 	}
 
+	// Clone http.DefaultTransport rather than building a bare &http.Transport{}:
+	// a bare struct sets only the one field given and silently zeroes every
+	// other default (IdleConnTimeout becomes 0, so idle connections never
+	// expire -- exactly the risk across a control-plane container recreate
+	// this PR exists to survive; Proxy becomes nil; HTTP/2 negotiation is
+	// off). Clone() inherits those deliberately instead of by omission.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxConnsPerHost = resolveMaxConnsPerHost
+
 	return &Client{
 		cache: &redisSnapshotStore{client: redis.NewClient(opt)},
 		httpClient: &http.Client{
 			Timeout:   resolveClientTimeout,
-			Transport: &http.Transport{MaxConnsPerHost: resolveMaxConnsPerHost},
+			Transport: transport,
 		},
 		baseURL: strings.TrimRight(baseURL, "/"),
 	}, nil
@@ -122,6 +131,19 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 // is hit rather than erroring (net/http docs: "On limit violation, dials
 // will block"), so it turns unbounded growth into bounded queuing that still
 // resolves via the existing client Timeout -- no new pooling code needed.
+//
+// The concurrency ceiling this number actually sets, spelled out so whoever
+// raises it later during an incident knows what they are changing: 64
+// connections held for up to resolveClientTimeout (10s) each means new
+// dials start blocking once sustained arrivals exceed roughly
+// 64 / 10s = 6.4 resolve calls/sec against control-plane. Since one incoming
+// edge-api request can consume up to two of those (BudgetGate then
+// Authorizer), that is a shed threshold of roughly 3.2 incoming requests/sec
+// sustained through a control-plane outage before further requests queue
+// behind this cap rather than failing fast. Raising resolveMaxConnsPerHost
+// raises that ceiling; raising resolveClientTimeout lowers it for the same
+// connection count -- the two constants trade off against each other, not
+// independently.
 const resolveMaxConnsPerHost = 64
 
 // resolveClientTimeout bounds a single /internal/apikeys/resolve call. Raised

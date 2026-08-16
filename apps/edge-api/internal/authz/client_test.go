@@ -42,6 +42,38 @@ func (s *fakeSnapshotStore) Set(_ context.Context, key string, value string, ttl
 	return nil
 }
 
+// TestNewClientClonesDefaultTransportRatherThanReplacingIt is the regression
+// guard for the PR #903 security review follow-up: a bare &http.Transport{}
+// setting only MaxConnsPerHost silently zeroes every other default,
+// including IdleConnTimeout, so a pooled connection to a control-plane
+// container that has since been recreated would never expire and could
+// serve a stale/broken connection across exactly the container-recreate
+// scenario this PR exists to survive. NewClient must Clone()
+// http.DefaultTransport and set MaxConnsPerHost on the clone, inheriting
+// every other default deliberately instead of by omission.
+func TestNewClientClonesDefaultTransportRatherThanReplacingIt(t *testing.T) {
+	client, err := NewClient("http://control-plane.internal", "redis://localhost:6379/0")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.httpClient.Transport)
+	}
+	if transport.MaxConnsPerHost != resolveMaxConnsPerHost {
+		t.Fatalf("MaxConnsPerHost = %d, want %d", transport.MaxConnsPerHost, resolveMaxConnsPerHost)
+	}
+
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	if transport.IdleConnTimeout != defaultTransport.IdleConnTimeout {
+		t.Fatalf("IdleConnTimeout = %v, want the inherited default %v (a bare &http.Transport{} would zero this, and a zero IdleConnTimeout means idle connections never expire across a control-plane container recreate)", transport.IdleConnTimeout, defaultTransport.IdleConnTimeout)
+	}
+	if transport.MaxIdleConnsPerHost != defaultTransport.MaxIdleConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want the inherited default %d", transport.MaxIdleConnsPerHost, defaultTransport.MaxIdleConnsPerHost)
+	}
+}
+
 func TestResolveHydratesRedisFromControlPlane(t *testing.T) {
 	rawToken := "hk_test_secret"
 	tokenHash := HashBearerToken(rawToken)
