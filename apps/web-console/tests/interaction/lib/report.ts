@@ -27,6 +27,8 @@ export interface ControlRecord {
   detail: string;
   declaredKind?: string;
   owner?: string;
+  /** Issue a declaration cites, so a reader can tell tracked from new. */
+  issue?: number;
 }
 
 export interface RouteRecord {
@@ -255,6 +257,23 @@ export function formatSummary(report: CoverageReport): string {
         control.revealPath.length > 0 ? ` [revealed by ${control.revealPath.join(" > ")}]` : "";
       lines.push(`    ${control.route}  ${control.key}${reveal}`);
       lines.push(`      ${control.proofType}: ${control.detail}`);
+    }
+  }
+  // Printed by name and by issue number, because a check that is red for a
+  // reason nobody can identify at a glance stops being read. Anything in this
+  // section is a defect somebody has already written down; anything in the
+  // unproven section below is not.
+  const knownBroken = report.controls.filter((c) => c.declaredKind === "known_broken");
+  if (knownBroken.length > 0) {
+    lines.push("");
+    lines.push(
+      `  KNOWN BROKEN, TRACKED (${String(knownBroken.length)}) — expected, and each expires when its issue closes`,
+    );
+    for (const control of knownBroken) {
+      lines.push(
+        `    ${control.route}  ${control.key}  #${String(control.issue ?? 0)} (${control.owner ?? "UNOWNED"})`,
+      );
+      lines.push(`      ${control.detail}`);
     }
   }
   const dead = report.externalDestinations.filter((entry) => !entry.reachable);

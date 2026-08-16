@@ -1663,7 +1663,14 @@ jobs:
         working-directory: apps/web-console
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          E2E_RUN_KEY: interaction-${{ github.run_id }}-${{ github.run_attempt }}
+          # The run key has to be exactly what the addresses already carry
+          # after their `+`. runScopedEmail rewrites any address that does not
+          # contain `+<runKey>@`, so a key of `interaction-<id>-<attempt>`
+          # against an address holding `+<id>-<attempt>@` seeded a *different*
+          # account from the one the gate then signed in as: every /console
+          # route redirected to /no-workspace and the sweep measured five
+          # anonymous routes out of twenty four.
+          E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_VERIFIED_EMAIL: interaction-gate+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: interaction-gate-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
