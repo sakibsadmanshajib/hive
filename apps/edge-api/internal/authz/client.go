@@ -173,8 +173,12 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 //     requests/sec.
 //
 // Below the applicable number, a cold start or outage is absorbed; above it,
-// additional callers wait behind this cap (queued, not dropped -- see next
-// paragraph) instead of failing fast. Raising resolveMaxConnsPerHost raises
+// additional callers wait behind this cap instead of failing fast -- but
+// that wait is charged against resolveClientTimeout, not exempt from it (LOW
+// finding, third-pass security review: the earlier wording here said
+// "queued, not dropped", which overstated it). A caller that queues for the
+// entire timeout still gets the 503 having never actually resolved; "queued"
+// describes where it waits, not a reprieve from the deadline. Raising resolveMaxConnsPerHost raises
 // both ceilings; raising resolveClientTimeout lowers them for the same
 // connection count -- the two constants trade off against each other, not
 // independently.
