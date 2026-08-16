@@ -121,19 +121,20 @@ func TestPoller_RunOnce_EngineErrorIsRetriedNotFailed(t *testing.T) {
 
 	advanced, err := p.RunOnce(context.Background())
 	// A mixed pass (one task erroring, another succeeding in the same sweep)
-	// is not a systemically degraded pass: the healthy task proves the
-	// engine itself is reachable, so this must not feed loop's backoff.
-	// Before this fix RunOnce reported an error for ANY per-task problem,
-	// which let one permanently broken task (ListActive is cross-tenant) pin
-	// the whole poller's shared interval at maxPollerBackoff for as long as
-	// that row existed, throttling every other tenant's poll cadence too
-	// (measured live 2026-08-16, task f9409763).
+	// must never feed loop's backoff: RunOnce's returned error means
+	// ListActive itself failed, nothing else. Before this fix RunOnce
+	// reported an error for ANY per-task problem, which let one permanently
+	// broken task (ListActive is cross-tenant) pin the whole poller's shared
+	// interval at maxPollerBackoff for as long as that row existed,
+	// throttling every other tenant's poll cadence too (measured live
+	// 2026-08-16, task f9409763).
 	if err != nil {
 		t.Fatalf("expected a mixed pass (one error, one success) to report no error, got %v", err)
 	}
 	// "Retried not failed": the broken task is untouched (still active, will
-	// be retried next pass), and the healthy task in the same pass still
-	// advanced despite the other task's error.
+	// be retried next pass, charged against its own failure budget), and the
+	// healthy task in the same pass still advanced despite the other task's
+	// error.
 	if advanced != 1 {
 		t.Fatalf("advanced=%d want 1 (only the healthy task)", advanced)
 	}
@@ -147,12 +148,12 @@ func TestPoller_RunOnce_EngineErrorIsRetriedNotFailed(t *testing.T) {
 	}
 }
 
-// TestPoller_RunOnce_AllTasksErroringIsSystemicFailure locks in the other
-// side of the same rule: when EVERY active task's status check fails this
-// pass (no evidence the engine is reachable at all), RunOnce must still
-// report an error so loop's backoff engages — that is the genuine outage
-// case the mechanism exists for.
-func TestPoller_RunOnce_AllTasksErroringIsSystemicFailure(t *testing.T) {
+// TestPoller_RunOnce_AllTasksErroringNeverBacksOffEither locks in that even
+// the "everything looks down" pass (no task anywhere succeeds) still does not
+// feed loop's backoff: RunOnce's error is scoped to ListActive alone. A
+// widespread engine outage costs each task its own maxTaskFailureBudget
+// retries, never the shared poll cadence.
+func TestPoller_RunOnce_AllTasksErroringNeverBacksOffEither(t *testing.T) {
 	repo := newFakeRepository()
 	newActiveTask(repo, agenttask.StatusRunning, "session-a")
 	newActiveTask(repo, agenttask.StatusRunning, "session-b")
@@ -163,8 +164,8 @@ func TestPoller_RunOnce_AllTasksErroringIsSystemicFailure(t *testing.T) {
 	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
 
 	advanced, err := p.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("expected RunOnce to report an error when every active task's status check failed")
+	if err != nil {
+		t.Fatalf("expected no error even when every active task's status check failed, got %v", err)
 	}
 	if advanced != 0 {
 		t.Fatalf("advanced=%d want 0", advanced)
@@ -180,7 +181,11 @@ func TestPoller_RunOnce_AllTasksErroringIsSystemicFailure(t *testing.T) {
 // at 0 the whole time, which is exactly the input pollerBackoffDelay needs to
 // keep returning the configured base interval (see TestPollerBackoffDelay);
 // before this fix it grew without bound and pinned the shared poll cadence at
-// maxPollerBackoff for every other tenant's tasks too.
+// maxPollerBackoff for every other tenant's tasks too. Runs fewer passes than
+// maxTaskFailureBudget so the broken task's own budget never exhausts either —
+// this test is purely about the shared cadence, not the per-task ceiling
+// (see TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape
+// for that).
 func TestPoller_ConsecutiveFailures_OnePermanentlyFailingTaskDoesNotBackOffTheSweep(t *testing.T) {
 	repo := newFakeRepository()
 	newActiveTask(repo, agenttask.StatusRunning, "session-broken")
@@ -201,6 +206,134 @@ func TestPoller_ConsecutiveFailures_OnePermanentlyFailingTaskDoesNotBackOffTheSw
 	}
 	if consecutiveFailures != 0 {
 		t.Fatalf("consecutiveFailures=%d after 10 passes with one permanently broken task alongside a healthy one, want 0 (base interval, no backoff)", consecutiveFailures)
+	}
+}
+
+// TestPoller_RunOnce_SingleTaskErroringForeverDoesNotBackOffTheSweep is the
+// direct regression guard for the reviewed HIGH: the demo box's own quota (2
+// per user, 4 per tenant) makes a SINGLE active task the ordinary shape, not
+// a corner case, and an earlier version of this fix (errCount == len(tasks))
+// collapsed back to "any single task's own error" exactly in that shape,
+// since a fraction of 1 out of 1 is trivially 100%. With only one active task
+// in the whole system erroring every single pass (never reaching
+// maxTaskFailureBudget within this loop), RunOnce must still report no error
+// on every pass.
+func TestPoller_RunOnce_SingleTaskErroringForeverDoesNotBackOffTheSweep(t *testing.T) {
+	repo := newFakeRepository()
+	newActiveTask(repo, agenttask.StatusRunning, "session-only")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-only": {err: errors.New("agent-server unreachable")},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	for pass := 0; pass < 10; pass++ {
+		if _, err := p.RunOnce(context.Background()); err != nil {
+			t.Fatalf("pass %d: expected no error with a single perpetually-erroring active task, got %v", pass, err)
+		}
+	}
+}
+
+// TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape is
+// the per-task-budget regression guard the review found missing: a task
+// whose engine session was killed some way other than through Cancel or a
+// normal terminal status (an OOM, an Apptainer crash) never reaches
+// SandboxEngine.reap and fails its Status call forever with a plain error —
+// NOT one wrapping ErrEngineSessionGone, since the launcher's serve.go only
+// maps engineapi.ErrUnknownSession (a 404) onto that sentinel; this failure
+// shape is whatever the daemon's default error-mapping branch produces (a
+// 502 in practice). RunOnce must still eventually give up on it, exactly
+// maxTaskFailureBudget consecutive passes in.
+func TestPoller_RunOnce_TaskExceedingFailureBudgetFailsRegardlessOfErrorShape(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-dead-sandbox")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		// A plain error, deliberately NOT wrapping agenttask.ErrEngineSessionGone
+		// — stands in for the 502 an externally killed sandbox produces.
+		"session-dead-sandbox": {err: errors.New("agentengine: /status: status 502")},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	const budget = 20 // must match agenttask.maxTaskFailureBudget
+	for pass := 1; pass < budget; pass++ {
+		if _, err := p.RunOnce(context.Background()); err != nil {
+			t.Fatalf("pass %d: expected no error (per-task budget, not systemic), got %v", pass, err)
+		}
+		got, getErr := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+		if getErr != nil {
+			t.Fatalf("pass %d: Get: %v", pass, getErr)
+		}
+		if got.Status != agenttask.StatusRunning {
+			t.Fatalf("pass %d: status=%q want still running (budget not yet exhausted)", pass, got.Status)
+		}
+	}
+
+	// The budget-exhausting pass.
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("final pass: expected no error, got %v", err)
+	}
+	got, getErr := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if getErr != nil {
+		t.Fatalf("Get: %v", getErr)
+	}
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed once the failure budget is exhausted", got.Status)
+	}
+	if got.ErrorMessage == "" || strings.Contains(got.ErrorMessage, "502") {
+		t.Fatalf("error_message=%q want a non-empty, provider-blind message", got.ErrorMessage)
+	}
+
+	// Never rechecked again once terminal.
+	callsBefore := checker.Calls()
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("post-failure RunOnce: %v", err)
+	}
+	if got := checker.Calls(); got != callsBefore {
+		t.Fatalf("expected 0 additional Status calls once the task is terminal, calls went from %d to %d", callsBefore, got)
+	}
+}
+
+// TestPoller_RunOnce_FailureBudgetResetsOnCleanPass proves the budget counts
+// CONSECUTIVE failures, not a lifetime total: a task that fails, then
+// answers cleanly once, then fails again must not be any closer to its
+// budget ceiling than a task that only ever failed the second run.
+func TestPoller_RunOnce_FailureBudgetResetsOnCleanPass(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-flaky")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-flaky": {err: errors.New("agent-server unreachable")},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	const budget = 20 // must match agenttask.maxTaskFailureBudget
+	for pass := 0; pass < budget-1; pass++ {
+		if _, err := p.RunOnce(context.Background()); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+	}
+	// One clean pass resets the streak.
+	checker.mu.Lock()
+	checker.responses["session-flaky"] = checkerResponse{status: agenttask.StatusRunning}
+	checker.mu.Unlock()
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("clean pass: %v", err)
+	}
+	checker.mu.Lock()
+	checker.responses["session-flaky"] = checkerResponse{err: errors.New("agent-server unreachable")}
+	checker.mu.Unlock()
+
+	// budget-1 more failures: still short of a fresh budget-1 threshold, so
+	// the task must remain running, not failed.
+	for pass := 0; pass < budget-1; pass++ {
+		if _, err := p.RunOnce(context.Background()); err != nil {
+			t.Fatalf("post-reset pass %d: %v", pass, err)
+		}
+	}
+	got, getErr := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if getErr != nil {
+		t.Fatalf("Get: %v", getErr)
+	}
+	if got.Status != agenttask.StatusRunning {
+		t.Fatalf("status=%q want still running: the one clean pass should have reset the failure streak", got.Status)
 	}
 }
 
