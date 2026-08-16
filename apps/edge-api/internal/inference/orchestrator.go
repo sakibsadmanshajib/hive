@@ -91,7 +91,13 @@ func (o *Orchestrator) executeSync(
 	dispatch dispatchFunc,
 	normalize normalizeFunc,
 ) {
-	endTotal := o.stage(endpoint, StageTotal)
+	// Deferred, unlike every other stage below: this one spans the whole
+	// function, and executeSync returns early on authorization, routing,
+	// reservation, upstream and normalization failures. Recording it at the
+	// bottom instead would mean the total only ever counts requests that
+	// succeeded, which is a metric that cannot go red on exactly the outcomes
+	// worth alerting on.
+	defer o.stage(endpoint, StageTotal)()
 
 	// 1. Authorize
 	authHeader := r.Header.Get("Authorization")
@@ -352,7 +358,6 @@ func (o *Orchestrator) executeSync(
 	w.WriteHeader(http.StatusOK)
 	w.Write(normalized)
 	endResponseWrite()
-	endTotal()
 }
 
 func (o *Orchestrator) recordErrorEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, statusCode int, errBody string) {

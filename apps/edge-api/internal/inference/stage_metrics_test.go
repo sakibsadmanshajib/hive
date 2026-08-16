@@ -1,6 +1,8 @@
 package inference
 
 import (
+	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -93,6 +95,35 @@ func TestStageBucketsCoverTheObservedRange(t *testing.T) {
 	}
 	if highestFiniteBound < 24 {
 		t.Fatalf("a 24 s observation must land in a finite bucket, but the highest bound is %.2fs", highestFiniteBound)
+	}
+}
+
+// A total that is only recorded after a successful response write is a metric
+// that cannot go red on the outcomes worth alerting on. executeSync returns
+// early on authorization, routing, reservation, upstream and normalization
+// failures, so the total has to be deferred. This drives the earliest of those
+// exits (authorization) and asserts the observation still lands.
+func TestTotalIsRecordedOnAFailedRequest(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	orch := upstreamUnavailableOrchestrator().WithStageMetrics(NewStageMetrics(reg))
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, []byte(`{}`), "gpt-4o", NeedFlags{}, 100, nil, nil)
+
+	if w.Code == 200 {
+		t.Fatalf("this test needs a failing request to be meaningful, got 200")
+	}
+	count, ok := stageSampleCount(t, reg, StageTotal, EndpointChatCompletions)
+	if !ok || count != 1 {
+		t.Fatalf("a failed request must still record one total observation, got count=%d present=%v", count, ok)
+	}
+	// The stage that did run before the failure is recorded too, so the total
+	// can be read against its parts rather than standing alone.
+	if _, ok := stageSampleCount(t, reg, StageAuthorize, EndpointChatCompletions); !ok {
+		t.Fatal("expected the authorize stage to be recorded on the failure path")
 	}
 }
 

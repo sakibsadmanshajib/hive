@@ -79,9 +79,11 @@ func (m *StageMetrics) observe(stage, endpoint string, d time.Duration) {
 //	reservation, err := o.accounting.CreateReservation(ctx, ...)
 //	done()
 //
-// Deliberately not a defer-based helper: several of these stages sit in the
-// middle of a long function whose scope is the whole request, so a defer would
-// record every stage at the same moment, at the end.
+// Deliberately not defer-only: most of these stages sit in the middle of a
+// long function whose scope is the whole request, so deferring them all would
+// record every stage at the same moment, at the end. A stage that genuinely
+// does span the whole function (StageTotal) should still be deferred, so that
+// it is recorded on the early-return failure paths too.
 func (o *Orchestrator) stage(endpoint, name string) func() {
 	if o.metrics == nil {
 		return func() {}
