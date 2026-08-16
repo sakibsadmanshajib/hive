@@ -48,9 +48,8 @@ func (e *Engine) Status(ctx context.Context, sessionRef string) (status agenttas
 }
 
 // Cancel interrupts sessionRef's conversation and terminates its sandbox
-// process. Not called by agenttask.Service.Cancel yet (that method only
-// transitions the DB row today); wiring it in is the same follow-up as
-// Status above.
+// process, which is what releases the session's concurrency slot on the
+// launcher side. Called by agenttask.Service.Cancel (issue #886).
 func (e *Engine) Cancel(ctx context.Context, sessionRef string) error {
 	return e.sandbox.Cancel(ctx, sessionRef)
 }

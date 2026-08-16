@@ -491,6 +491,44 @@ func TestSandboxEngine_Cancel_CleansUpDirs(t *testing.T) {
 	assertDirEmpty(t, e.cfg.WorkspaceRoot)
 }
 
+// Characterisation test for pre-existing behaviour, NOT regression coverage
+// for issue #886. Nothing in this package changed in that fix, so every
+// assertion below passes with the fix fully reverted; it exists to pin the
+// invariant control-plane now depends on, which is that ending a session
+// through Cancel returns its slot to the pool immediately rather than whenever
+// the sandbox finishes on its own (roughly sixteen minutes on the demo box).
+//
+// The actual regression coverage for issue #886 is in
+// apps/control-plane/internal/agenttask/service_test.go, where
+// TestService_Cancel_ReleasesEngineConcurrencySlot and its two siblings fail
+// on revert because they drive Service.Cancel and assert on counters that only
+// move when Service reaches the engine.
+func TestSandboxEngine_Cancel_FreesQuotaSlot(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 1, 1)
+
+	task := testTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := e.Cancel(context.Background(), sessionRef); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if tenant, user := e.q.InUse(task.TenantID, task.UserID); tenant != 0 || user != 0 {
+		t.Fatalf("cancel left quota held: tenant=%d user=%d, want 0/0", tenant, user)
+	}
+
+	// The observable consequence: the same user can start work again at once.
+	next := testTask()
+	next.TenantID = task.TenantID
+	next.UserID = task.UserID
+	if _, err := e.Launch(context.Background(), next); err != nil {
+		t.Fatalf("expected the cancelled session's slot to be reusable, got %v", err)
+	}
+}
+
 func assertDirEmpty(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
