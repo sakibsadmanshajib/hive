@@ -109,4 +109,45 @@ assert.equal(conditionOf(true), "true", "a boolean true condition must round-tri
 assert.equal(conditionOf("github.event_name == 'pull_request'"), "github.event_name == 'pull_request'");
 assert.equal(conditionOf(undefined), "", "no condition at all must still normalize to \"\"");
 
+// --- Case 8: THE HOLE, round 3. A fourth distinct shape, found by
+// CodeRabbit on this same PR after round 2's fix landed: grouped negation.
+// `!(github.event_name == 'pull_request')` still mentions the event name and
+// the quoted string `pull_request`, so it still reached the old
+// presence-only fallback and was credited as surviving. This is the shape
+// that ended the pattern-matching approach: the function was rewritten to
+// fail closed by default (a small closed set of known-surviving atoms,
+// composed with && and ||; every negation, at any position, is never
+// credited) rather than add a fifth targeted exclusion. ---
+assert.equal(
+  survivesOrdinaryPullRequest("!(github.event_name == 'pull_request')"),
+  false,
+  "grouped negation of a pull_request check must not survive an ordinary pull request",
+);
+
+// --- Case 9: the rewrite's own compositional cases, so the && / || splitter
+// and the atom allowlist are exercised directly rather than only through
+// the real ci.yml text (also covered by rerunning the guard itself, see the
+// PR). The first is web-e2e's actual job condition verbatim: a path gate
+// ANDed with an OR of "push" or "pull_request-and-same-repo". The second
+// is the sibling fork-only job's condition, which must NOT survive: this
+// function only knows the same-repo (==) form of the fork check, not its
+// negation. ---
+assert.equal(
+  survivesOrdinaryPullRequest(
+    "needs.changes.outputs.run == 'true' && needs.changes.outputs.web_e2e == 'true' && " +
+      "(github.event_name == 'push' || (github.event_name == 'pull_request' && " +
+      "github.event.pull_request.head.repo.full_name == github.repository))",
+  ),
+  true,
+  "web-e2e's real compound condition must still survive for a same-repo ordinary pull request",
+);
+assert.equal(
+  survivesOrdinaryPullRequest(
+    "needs.changes.outputs.run == 'true' && github.event_name == 'pull_request' && " +
+      "github.event.pull_request.head.repo.full_name != github.repository",
+  ),
+  false,
+  "a fork-only job's condition must not survive (this function does not know the != form of the fork check)",
+);
+
 console.log("verify-spec-wiring.test: PASS");

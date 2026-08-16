@@ -160,44 +160,110 @@ function reactsToOrdinaryPullRequest(doc) {
   });
 }
 
-// Can this `if:` be true on an ordinary pull request? The guard does not
-// evaluate the expression language, and it answers no whenever it cannot tell,
-// so a job it misreads is reported as debt rather than as coverage.
+// Can this `if:` be true on an ordinary pull request?
 //
-// Known ceiling: a path gate such as `needs.changes.outputs.web_e2e == 'true'`
-// counts as yes. web-e2e carries one, so a pull request touching no web path
-// does not run those specs even though they are counted here as pull-request
-// gated. That is a deliberate design in ci.yml rather than a hole, and
-// modelling it would mean evaluating the `changes` job's path filters against
-// a diff this guard does not have.
+// THE CEILING, STATED PLAINLY: this function proves survival only for a
+// small, closed set of atoms this repository's own workflows actually use,
+// composed with `&&` and `||`:
+//
+//   true                                          a literal, unconditional
+//   needs.<job>.outputs.<x> != 'false'             a path gate, either
+//   needs.<job>.outputs.<x> == 'true'              polarity ci.yml uses
+//   github.event_name == 'pull_request(_target)'   the event itself
+//   github.event.pull_request.head.repo.full_name  same-repo (non-fork) PR
+//     == github.repository
+//
+// Everything else is refused, meaning the condition is treated as NOT
+// surviving: every negated form (`!=` the other direction, `!contains(...)`,
+// `!startsWith(...)`, `!endsWith(...)`, a grouped `!(...)` of any kind),
+// `github.event.action`, a label check, a bare `false`, or any expression
+// this has not been taught. `!` is never credited, at any position: proving
+// a negation survives requires knowing what it negates is a confirmed hard
+// exclusion, and telling "confirmed excluded" apart from "merely
+// unrecognised" is exactly the unbounded semantics problem this rewrite
+// stops chasing. A negation is therefore always not-surviving, even one a
+// human could work out is actually safe.
+//
+// WHY REFUSING IS THE SAFE DIRECTION: four separate review passes each found
+// a distinct negated or composed shape reaching the old presence-only
+// fallback below and being credited as coverage: `!=`, then a literal
+// `false` plus negated contains/startsWith, then a caller-side
+// boolean-coercion bug (see conditionOf), then grouped `!(...)`. Each fix
+// closed one shape and left the category open, because GitHub Actions
+// expressions nest, negate, group, and compose with `&&`, `||`, `contains`,
+// `startsWith`, `endsWith` and `!` without a finite list of shapes a pattern
+// match can enumerate; the next author who writes a condition slightly
+// differently reopens it. Failing closed by default inverts which mistake
+// is silent: an unrecognised condition now reports a spec as debt for a
+// human to clear, rather than silently crediting pull-request coverage this
+// narrow a guard was never able to prove.
+function isKnownSurvivingAtom(trimmed) {
+  if (/^true$/i.test(trimmed)) return true;
+  if (/^needs\.[\w-]+\.outputs\.[\w-]+\s*!=\s*['"]false['"]$/.test(trimmed)) return true;
+  if (/^needs\.[\w-]+\.outputs\.[\w-]+\s*==\s*['"]true['"]$/.test(trimmed)) return true;
+  if (/^github\.event_name\s*==\s*['"]pull_request(_target)?['"]$/.test(trimmed)) return true;
+  if (/^github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository$/.test(trimmed)) return true;
+  return false;
+}
+
+// Removes one matching, whole-string-enclosing pair of parentheses:
+// "(A && B)" -> "A && B". Leaves "(A) && (B)" alone, since those parens do
+// not enclose the whole expression (the depth count returns to zero before
+// the string ends).
+function stripOuterParens(expr) {
+  if (!(expr.startsWith("(") && expr.endsWith(")"))) return expr;
+  let depth = 0;
+  for (let i = 0; i < expr.length; i++) {
+    if (expr[i] === "(") depth += 1;
+    else if (expr[i] === ")") {
+      depth -= 1;
+      if (depth === 0 && i < expr.length - 1) return expr;
+    }
+  }
+  return expr.slice(1, -1).trim();
+}
+
+// Splits on every top-level occurrence of `&&` or `||`, ignoring any that sit
+// inside parentheses. Returns [expr] unchanged if the operator never appears
+// at depth zero, which is how the caller detects "there is nothing to split".
+function splitTopLevel(expr, op) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    else if (depth === 0 && expr.slice(i, i + op.length) === op) {
+      parts.push(expr.slice(start, i).trim());
+      i += op.length - 1;
+      start = i + 1;
+    }
+  }
+  parts.push(expr.slice(start).trim());
+  return parts;
+}
+
+// `||` binds loosest, so it is split first; each side only has to survive on
+// its own for the whole to. `&&` binds tighter: every side has to survive.
+// `!` and a bare atom are the leaves once no top-level combinator remains.
+function evaluate(expr) {
+  const trimmed = stripOuterParens(expr.trim());
+
+  const orParts = splitTopLevel(trimmed, "||");
+  if (orParts.length > 1) return orParts.some((part) => evaluate(part));
+
+  const andParts = splitTopLevel(trimmed, "&&");
+  if (andParts.length > 1) return andParts.every((part) => evaluate(part));
+
+  if (trimmed.startsWith("!")) return false; // see the ceiling comment above
+
+  return isKnownSurvivingAtom(trimmed);
+}
+
 export function survivesOrdinaryPullRequest(condition) {
   if (!condition) return true;
-  // An always-false condition (a literal `false`, which is what a YAML
-  // boolean `if: false` becomes once conditionOf below stops discarding it)
-  // disables the job or step outright: nothing after this line runs, ever.
-  if (/^false$/i.test(String(condition).trim())) return false;
-  if (/github\.event\.pull_request\.labels/.test(condition)) return false;
-  // A job restricted to one pull_request action (`types: [labeled]` gating a
-  // step on `github.event.action == 'labeled'`) excludes the ordinary
-  // opened/synchronize/reopened flow as thoroughly as the label-contains
-  // check above, and this guard does not evaluate which action value the
-  // condition demands, so it fails closed on any action-scoped condition.
-  if (/github\.event\.action/.test(condition)) return false;
-  // Every shape below excludes pull_request while still mentioning the event
-  // name and the quoted string `pull_request`, so each must be checked before
-  // the presence-only test at the end, which cannot tell an exclusion from a
-  // gate. `!=` is the comparison form; contains/startsWith/endsWith are the
-  // function-call forms the same GitHub Actions expression language offers
-  // for the same exclusion, negated.
-  if (/github\.event_name\s*!=\s*['"]pull_request(_target)?['"]/.test(condition)) return false;
-  if (
-    /!\s*(?:contains|startsWith|endsWith)\s*\(\s*github\.event_name\s*,\s*['"]pull_request(_target)?['"]\s*\)/.test(
-      condition,
-    )
-  )
-    return false;
-  if (/github\.event_name/.test(condition) && !/['"]pull_request['"]/.test(condition)) return false;
-  return true;
+  return evaluate(String(condition).trim());
 }
 
 // A job or step `if:` normalized to the string this guard reasons about. YAML
