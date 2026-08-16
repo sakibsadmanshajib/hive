@@ -146,7 +146,8 @@ func main() {
 	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
 	accountingClient := inference.NewAccountingClient(resolveControlPlaneBaseURL())
 	litellmClient := inference.NewLiteLLMClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
-	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient)
+	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient).
+		WithStageMetrics(inference.NewStageMetrics(promRegistry))
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
 		Pool:    dbPool,

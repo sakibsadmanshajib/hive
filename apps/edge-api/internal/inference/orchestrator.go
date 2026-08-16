@@ -20,6 +20,18 @@ type Orchestrator struct {
 	routing    *RoutingClient
 	accounting *AccountingClient
 	litellm    *LiteLLMClient
+
+	// metrics is optional; a nil value records nothing. See StageMetrics.
+	metrics *StageMetrics
+}
+
+// WithStageMetrics attaches per-stage timing to this Orchestrator and returns
+// it, mirroring accounting.Service.WithAccountLocker rather than widening
+// NewOrchestrator's signature, so the many call sites that do not want metrics
+// (every test) are untouched.
+func (o *Orchestrator) WithStageMetrics(m *StageMetrics) *Orchestrator {
+	o.metrics = m
+	return o
 }
 
 // NewOrchestrator creates a new Orchestrator.
@@ -79,9 +91,13 @@ func (o *Orchestrator) executeSync(
 	dispatch dispatchFunc,
 	normalize normalizeFunc,
 ) {
+	endTotal := o.stage(endpoint, StageTotal)
+
 	// 1. Authorize
 	authHeader := r.Header.Get("Authorization")
+	endAuthorize := o.stage(endpoint, StageAuthorize)
 	snapshot, headers, authErr := o.authorizer.Authorize(ctx, authHeader, model, estimatedCredits, 0, 0)
+	endAuthorize()
 	if authErr != nil {
 		// apierrors.WriteAuthFailure is the single source of truth for
 		// mapping an authz failure to a wire response (rate-limit 429,
@@ -96,6 +112,7 @@ func (o *Orchestrator) executeSync(
 	}
 
 	// 2. Select route
+	endSelectRoute := o.stage(endpoint, StageSelectRoute)
 	route, err := o.selectRoute(ctx, snapshot, SelectRouteInput{
 		AliasID:             model,
 		NeedChatCompletions: needFlags.NeedChatCompletions,
@@ -105,6 +122,7 @@ func (o *Orchestrator) executeSync(
 		NeedReasoning:       needFlags.NeedReasoning,
 		RequireToolCapable:  needFlags.RequireToolCapable,
 	})
+	endSelectRoute()
 	if err != nil {
 		if errors.Is(err, ErrAccountNotProvisioned) {
 			writeAccountNotProvisionedError(w)
@@ -139,6 +157,7 @@ func (o *Orchestrator) executeSync(
 
 	// 3. Start attempt
 	requestID := uuid.New().String()
+	endStartAttempt := o.stage(endpoint, StageStartAttempt)
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
 		AccountID:     snapshot.AccountID,
 		RequestID:     requestID,
@@ -148,11 +167,13 @@ func (o *Orchestrator) executeSync(
 		Status:        "dispatching",
 		APIKeyID:      snapshot.KeyID,
 	})
+	endStartAttempt()
 	if err != nil {
 		log.Printf("inference: start attempt failed (non-fatal): %v", err)
 	}
 
 	// 4. Create reservation
+	endCreateReservation := o.stage(endpoint, StageCreateReservation)
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
 		AccountID:        snapshot.AccountID,
 		RequestID:        requestID,
@@ -163,6 +184,7 @@ func (o *Orchestrator) executeSync(
 		EstimatedCredits: estimatedCredits,
 		PolicyMode:       "strict",
 	})
+	endCreateReservation()
 	if err != nil && refuseOnReservationFailure(w, endpoint, model, err) {
 		return
 	}
@@ -184,7 +206,9 @@ func (o *Orchestrator) executeSync(
 	}()
 
 	// 5. Dispatch to LiteLLM with bounded retry on 429/5xx.
+	endDispatch := o.stage(endpoint, StageDispatch)
 	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, dispatch)
+	endDispatch()
 	if err != nil {
 		if reservation.ID != "" {
 			releaseReason = "upstream_error"
@@ -288,6 +312,7 @@ func (o *Orchestrator) executeSync(
 			// context + accountingTimeout as releaseReservationBackground and
 			// settleStream (PR #602's pattern).
 			finalizeCtx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
+			endFinalize := o.stage(endpoint, StageFinalizeReservation)
 			err := o.accounting.FinalizeReservation(finalizeCtx, FinalizeReservationInput{
 				AccountID:     snapshot.AccountID,
 				ReservationID: reservation.ID,
@@ -300,6 +325,7 @@ func (o *Orchestrator) executeSync(
 				TerminalUsageConfirmed: confirmed,
 				Status:                 "completed",
 			})
+			endFinalize()
 			cancel()
 			if err != nil {
 				log.Printf("inference: finalize reservation failed, releasing hold instead request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
@@ -310,12 +336,23 @@ func (o *Orchestrator) executeSync(
 		}
 	}
 
+	// The gap this measures is the sharpest evidence the 2026-08-16 latency
+	// investigation produced: the client's body arrived 190 ms after the last
+	// ledger row was written, three times running, which is what showed the
+	// wait was Hive's own accounting rather than the agent or the provider.
+	// Keeping it as a metric is what makes a regression in that gap visible
+	// without repeating the investigation.
+	endRecordUsage := o.stage(endpoint, StageRecordUsage)
 	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, usage)
+	endRecordUsage()
 
 	// 9. Write response
+	endResponseWrite := o.stage(endpoint, StageResponseWrite)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(normalized)
+	endResponseWrite()
+	endTotal()
 }
 
 func (o *Orchestrator) recordErrorEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, statusCode int, errBody string) {
