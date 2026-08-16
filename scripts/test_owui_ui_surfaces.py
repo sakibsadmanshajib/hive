@@ -104,10 +104,11 @@ def test_each_rewrite_still_targets_its_own_surface() -> None:
     build time; this catches the same edit in review, by pinning the marker
     each target must contain.
 
-    The two user-menu entries carry no marker of their own: minification left
-    them identifiable only by their branch identifiers, and the Admin Panel
-    entry Hive keeps compiles to the very same shape. For those two the check
-    is that they are not that entry.
+    Three user-menu entries carry no marker of their own: minification left
+    them identifiable only by their branch identifiers, and all three compile
+    to the very same shape (Playground, Admin Panel, and the vendor-links
+    block). For those three the check is only that each `find` is distinct
+    from the others and from any surviving GUARDS entry, asserted below.
     """
     markers = {
         "workspace-models-tab": (".models)", '==="admin"'),
@@ -117,6 +118,7 @@ def test_each_rewrite_still_targets_its_own_surface() -> None:
         "workspace-index-redirect": ('"/workspace/models"', '!=="admin"'),
         "sidebar-playground-item": ('case"playground"', '==="admin"'),
         "usermenu-playground-item": ('==="admin"',),
+        "usermenu-admin-panel": ('==="admin"',),
         "usermenu-vendor-links": ('==="admin"',),
         "changelog-modal": ("get show()",),
         "about-vendor-copyright": ("Open WebUI Inc.", "openwebui.com"),

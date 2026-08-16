@@ -7,12 +7,6 @@
       "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
       "text": "ait wi.set(x()?!1:localStorage.showControls===\"true\"),wi.subscribe(U=>{localStorage.showControls=U?\"true\":\"false\"}),ki.set(localStorage.selectedTerminalId??null),ki.subscribe(U=>{U===null?delete localStorage.selectedTerminalId:localStorage.selectedTerminalId=U}),await _a(),s(de,!0)});const O=async()=>{s(Y,await ld(localStorage.token).catch(p=>({current:$r,latest:$r})))};kt();var re=q1(),ge=tt(re);P1(ge,{get show(){return Js(),w()},set show(p){Ys(Vs,p)},$$legacy:!0});var ee=o(ge,2);j1(ee,{get show(){return Js(),W()},set show(p){Ys(qs,p)},$$legacy:!0});var D=o(ee,2);{var L=p=>{var P=H1(),B=a(P);W1(B,{get version(){return e(Y)},$$events:{close:()=>{localStorage.setItem(\"dismissedUpdateToast\",Date.now().toString()),s(Y,null)}}}),t(P),Fo(1,P,()=>nd,()=>({duration:100})),i(p,P)},ie=Za(()=>{var p;return e(Y)&&dd(e(Y).latest,e(Y).current)&&(((p=r())==null?void 0:p.s"
     },
-    "usermenu-admin-panel": {
-      "file": "chunks/D0RRQevw.js",
-      "offset": 28713,
-      "sha256": "ce18f1fe1c2d8658f30e89644f62b6eb6b3b79ab31757f67e605a50be13bf28c",
-      "text": "okeWidth:\"1.5\"}),e(Fe);var he=o(Fe,2),_e=t(he,!0);e(he),e(Ue);var Ie=o(Ue,2);{var De=_=>{var c=qa(),n=t(c),y=t(n);za(y,{className:\"w-5 h-5\",strokeWidth:\"1.5\"}),e(n);var $=o(n,2),x=t($,!0);e($),e(c),N(k=>O(x,k),[()=>(a(),r(()=>a().t(\"Admin Panel\")))]),z(\"click\",c,async k=>{k.metaKey||k.ctrlKey||k.shiftKey||k.button===1||(k.preventDefault(),C(!1),He(\"/admin\"),J()&&(await xe(),Ne.set(!1)))}),f(_,c)};T(Ie,_=>{q()===\"admin\"&&_(De)})}var Ke=o(Ie,2),ve=t(Ke),Wt=t(ve);ca(Wt,{className:\"size-5\",strokeWidth:\"1.5\"}),e(ve);var ht=o(ve,2),Lt=t(ht,!0);e(ht),e(Ke);var _t=o(Ke,4);{var jt=_=>{var c=Ya(),n=t(c),y=o(t(n),2),$=t(y,!0);e(y),e(n);var x=o(n,2);{var k=v=>{{let K=fe(()=>(a(),r(()=>Q(\"workspace\")?a().t(\"Unpin from Sidebar\"):a().t(\"Pin to Sidebar\"))));be(v,{get content(){return l(K)},children:(g,R)=>{var S=Xe(),V=t(S);{var L=s=>{"
-    },
     "workspace-knowledge-tab": {
       "file": "nodes/7.BhJvxSQn.js",
       "offset": 4240,
@@ -94,6 +88,12 @@
       "offset": 113668,
       "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
       "text": " rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group\"><div class=\"self-center relative\"><img class=\" size-7 object-cover rounded-full\"/> <!></div></button>'),Np=g('<div class=\" pt-[7px] pb-2 px-2 flex flex-col justify-between text-black dark:text-white hover:bg-gray-50/30 dark:hover:bg-gray-950/30 h-full z-10 transition-all border-e-[0.5px] border-gray-50 dark:border-gray-850/30\" id=\"sidebar\"><button><div class=\"pb-1.5\"><!></div> <div class=\"-mt-[0.5px]\"><div><!></div> <div><!></div> <!></div></button> <div><div><div class=\" py-2 flex justify-center items-center\"><!></div></div></div></div>'),Tp=g('<button><div class=\" self-center p-1.5\"><!></div></button>'),Dp=Ia('<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"2\" stroke=\"currentColor\" class=\"size-4.5\"><path stroke-linecap=\""
+    },
+    "usermenu-admin-panel": {
+      "file": "chunks/D0RRQevw.js",
+      "offset": 28713,
+      "sha256": "ce18f1fe1c2d8658f30e89644f62b6eb6b3b79ab31757f67e605a50be13bf28c",
+      "text": "okeWidth:\"1.5\"}),e(Fe);var he=o(Fe,2),_e=t(he,!0);e(he),e(Ue);var Ie=o(Ue,2);{var De=_=>{var c=qa(),n=t(c),y=t(n);za(y,{className:\"w-5 h-5\",strokeWidth:\"1.5\"}),e(n);var $=o(n,2),x=t($,!0);e($),e(c),N(k=>O(x,k),[()=>(a(),r(()=>a().t(\"Admin Panel\")))]),z(\"click\",c,async k=>{k.metaKey||k.ctrlKey||k.shiftKey||k.button===1||(k.preventDefault(),C(!1),He(\"/admin\"),J()&&(await xe(),Ne.set(!1)))}),f(_,c)};T(Ie,_=>{q()===\"admin\"&&_(De)})}var Ke=o(Ie,2),ve=t(Ke),Wt=t(ve);ca(Wt,{className:\"size-5\",strokeWidth:\"1.5\"}),e(ve);var ht=o(ve,2),Lt=t(ht,!0);e(ht),e(Ke);var _t=o(Ke,4);{var jt=_=>{var c=Ya(),n=t(c),y=o(t(n),2),$=t(y,!0);e(y),e(n);var x=o(n,2);{var k=v=>{{let K=fe(()=>(a(),r(()=>Q(\"workspace\")?a().t(\"Unpin from Sidebar\"):a().t(\"Pin to Sidebar\"))));be(v,{get content(){return l(K)},children:(g,R)=>{var S=Xe(),V=t(S);{var L=s=>{"
     },
     "usermenu-playground-item": {
       "file": "chunks/D0RRQevw.js",
