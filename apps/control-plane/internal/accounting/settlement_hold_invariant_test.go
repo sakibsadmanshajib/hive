@@ -24,10 +24,12 @@ import (
 // released hold minus actual and nothing ever lifted the captured remainder, so
 // GetBalance's ABS(SUM(hold) + SUM(release)) kept counting it forever.
 //
-// These cases assert against the fake ledger's own balance, which mirrors the
-// production SQL (reserved = held - released, available = posted - reserved),
-// so a regression shows up as a wrong number of credits rather than as a
-// missing call.
+// These cases assert against the fake ledger's own balance rather than against
+// call counts, so a regression shows up as a wrong number of credits. The fake
+// keeps reserved as a signed held minus released, where the production SQL
+// takes ABS of the same sum; the two agree for every case here, because none
+// releases more than it held, and TestSettlementLedgerMagnitude_Live covers the
+// real query on a real database anyway.
 func TestSettlementReturnsReservedToZero(t *testing.T) {
 	const grant = 300000
 
@@ -148,15 +150,15 @@ func TestSettlementReturnsReservedToZero(t *testing.T) {
 	}
 }
 
-// A second settlement attempt that disagrees on the amount must not post a
-// second charge. The idempotency key carried the amount ("charge-<credits>")
-// until this change, so two attempts that disagreed were two different keys and
-// therefore two charges, which is the same defect issue #652 fixed for the
-// release key. Reaching finalizeLocked twice is not hypothetical: the charge
-// posts before the reservation row is updated, so a failure in between leaves
-// an open row that a retry re-enters (reservation 9d422064 in production is
-// exactly that shape, charged 115 credits with consumed_credits still 0).
-func TestSecondSettlementWithADifferentAmountPostsNoSecondCharge(t *testing.T) {
+// A settlement whose release deduplicates against an EARLIER, SMALLER release
+// must fail rather than mark the reservation settled. PostEntry hands back the
+// first entry for a repeated (account, type, key), so without the check that
+// call returns quietly with the hold only partly lifted, the row goes terminal,
+// and the remainder is stranded past the reaper, which only scans non-terminal
+// holds. That is issue #616 reintroduced silently, on the very rows this branch
+// exists to fix. The sequence is reachable across a deploy: the old code posted
+// a partial release and then failed before updating the row.
+func TestSettlementRefusesToSettleAgainstAPartialRelease(t *testing.T) {
 	repo := newRepoStub()
 	ledgerSvc := newReaperLedger(300000)
 	svc := NewService(repo, ledgerSvc, concurrentUsage{})
@@ -175,43 +177,31 @@ func TestSecondSettlementWithADifferentAmountPostsNoSecondCharge(t *testing.T) {
 		t.Fatalf("CreateReservation: %v", err)
 	}
 
-	if _, err := svc.FinalizeReservation(ctx, FinalizeReservationInput{
-		AccountID:              accountID,
-		ReservationID:          reservation.ID,
-		ActualCredits:          115,
-		TerminalUsageConfirmed: true,
-		Status:                 string(usage.AttemptStatusCompleted),
-	}); err != nil {
-		t.Fatalf("first FinalizeReservation: %v", err)
+	// What the pre-fix code left behind: a release for the unused remainder
+	// only, under the same flat key this settlement will use.
+	if _, err := ledgerSvc.ReleaseReservedCredits(ctx, accountID, reservation.RequestID, nil, &reservation.ID,
+		svc.idempotencyKey(reservation.ID, "release"), 9982, map[string]any{"path": "pre-fix partial release"}); err != nil {
+		t.Fatalf("seed partial release: %v", err)
 	}
 
-	// Force the retry shape the comment above describes: the row is put back
-	// into an open state, as it would be had the post-charge update failed.
-	stored := repo.reservations[reservation.ID]
-	stored.Status = ReservationStatusActive
-	stored.ConsumedCredits = 0
-	stored.ReleasedCredits = 0
-	repo.reservations[reservation.ID] = stored
-
-	// A retry landing on a different number must not become a second charge.
-	// It may fail loudly; what it may not do is quietly bill twice.
 	_, err = svc.FinalizeReservation(ctx, FinalizeReservationInput{
 		AccountID:              accountID,
 		ReservationID:          reservation.ID,
-		ActualCredits:          400,
+		ActualCredits:          18,
 		TerminalUsageConfirmed: true,
 		Status:                 string(usage.AttemptStatusCompleted),
 	})
-	_ = err
+	if err == nil {
+		t.Fatal("expected settlement to refuse a hold that is only partly lifted, got no error")
+	}
 
-	if got := ledgerSvc.entryCount(ledger.EntryTypeUsageCharge); got != 1 {
-		t.Fatalf("expected exactly one usage_charge entry across both settlement attempts, got %d", got)
+	stored := repo.reservations[reservation.ID]
+	if !reservationOpen(stored.Status) {
+		t.Fatalf("reservation was marked %s with 18 credits still held; the reaper can no longer reach it", stored.Status)
 	}
-	balance, err := ledgerSvc.GetBalance(ctx, accountID)
-	if err != nil {
+	if balance, err := ledgerSvc.GetBalance(ctx, accountID); err != nil {
 		t.Fatalf("GetBalance: %v", err)
-	}
-	if balance.PostedCredits != 300000-115 {
-		t.Fatalf("posted = %d, want %d: only the first charge may land", balance.PostedCredits, 300000-115)
+	} else if balance.ReservedCredits != 18 {
+		t.Fatalf("expected the 18 unlifted credits to remain visibly reserved, got %d", balance.ReservedCredits)
 	}
 }

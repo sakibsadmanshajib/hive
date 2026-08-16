@@ -20,9 +20,12 @@ import (
 // ReleaseReservedCredits had been called would have passed on that same code,
 // because it WAS called, just for 18 credits too few.
 //
-// Gated on HIVE_TEST_DB_URL like release_idempotency_test.go, so CI runs it
-// against the ephemeral pgvector:pg17 instance bootstrapped from
-// supabase/migrations/ (.github/workflows/ci.yml).
+// Gated on HIVE_TEST_DB_URL like release_idempotency_test.go, and run against
+// the ephemeral pgvector:pg17 instance bootstrapped from supabase/migrations/.
+// That only became true with this change: the live-Postgres step in
+// .github/workflows/ci.yml did not list ./internal/accounting/..., so both this
+// package's live tests silently skipped everywhere. Do not remove the package
+// from that list; without it this file is decoration.
 func TestSettlementLedgerMagnitude_Live(t *testing.T) {
 	pool := newAccountingTestPool(t)
 	accountID := seedReleaseIdempotencyAccount(t, pool)

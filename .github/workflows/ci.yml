@@ -427,7 +427,16 @@ jobs:
             # absent from this list, so the escalation those guards catch
             # would have shipped again with the suite reporting green.
             # tools/lint-go-db-test-wiring.mjs fails if either is dropped.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
+            # ./internal/accounting/... carries the credit-reservation
+            # settlement suites. Its two HIVE_TEST_DB_URL-gated tests, the
+            # release-key dedup proof (issue #652) and the settlement magnitude
+            # proof (issue #616), had never run anywhere: the package was absent
+            # from this list and the -short step above skips them for want of
+            # the env var. The magnitude one is the only check that measures the
+            # ledger on real Postgres rather than through a fake, so leaving it
+            # unlisted is the same never-runs trap as issues #701 and #708, on
+            # the money path.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
