@@ -739,6 +739,7 @@ test.describe("interaction coverage", () => {
               detail: declared.reason,
               declaredKind: declared.kind,
               owner: declared.owner,
+              issue: declared.issue,
             });
             continue;
           }

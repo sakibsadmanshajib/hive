@@ -7,6 +7,14 @@
       "kind": "inert",
       "reason": "Recharts renders its chart surface focusable with role application, but the chart itself has no activation behaviour: every control that changes it is a sibling that this gate proves separately",
       "owner": "@sakibsadmanshajib"
+    },
+    {
+      "route": "/auth/reset-password",
+      "control": "button|Update password",
+      "kind": "known_broken",
+      "reason": "submitting without a valid recovery session answers a generic server error with a support reference instead of saying the reset link is missing or expired",
+      "owner": "@sakibsadmanshajib",
+      "issue": 905
     }
   ]
 }
