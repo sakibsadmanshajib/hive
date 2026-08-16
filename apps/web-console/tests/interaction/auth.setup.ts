@@ -32,7 +32,7 @@ import { test as setup } from "@playwright/test";
 import { AUTH_STATE_FILE, interactionBaseUrl, interactionEmail } from "./lib/config";
 import { assertStateWritten, mintCommand, mintFailure } from "./lib/mint";
 
-setup("authenticate", () => {
+setup("authenticate", async ({ browser }) => {
   const { command, args } = mintCommand(
     interactionEmail(),
     new URL("/console", interactionBaseUrl()).toString(),
@@ -54,4 +54,34 @@ setup("authenticate", () => {
   }
 
   assertStateWritten(existsSync(AUTH_STATE_FILE), AUTH_STATE_FILE);
+
+  // A written state file is not a working session. Cookies can be present and
+  // still be ignored by the application: the mint reads SUPABASE_URL while the
+  // browser bundle reads NEXT_PUBLIC_SUPABASE_URL, and the cookie name is
+  // derived from the project ref in whichever URL each side was given, so two
+  // secrets pointing at different projects produce a full state file that the
+  // app cannot see. Spend one navigation proving otherwise here, where the
+  // cause can be named, rather than letting the sweep report the same redirect
+  // against every authenticated route and leave the reader to work out that
+  // fifteen identical problems are one problem.
+  const context = await browser.newContext({ storageState: AUTH_STATE_FILE });
+  try {
+    const target = new URL("/console", interactionBaseUrl()).toString();
+    const page = await context.newPage();
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 45000 });
+    const landed = new URL(page.url()).pathname;
+    if (landed.startsWith("/auth/")) {
+      throw new Error(
+        [
+          `the minted session is not accepted by the application: ${target} landed on ${landed}.`,
+          "The sweep would report this as every authenticated route redirecting, which reads as an application defect and is not one.",
+          "Check, in this order: that SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL name the same project, since the auth cookie name is derived from the project ref;",
+          `that ${interactionEmail()} exists on that project and was seeded by this job's own fixture step;`,
+          "and that E2E_RUN_KEY is the exact string the seeded addresses carry after their plus sign, because runScopedEmail rewrites any address that does not already contain it and the seeder then provisions an account the gate never signs in as.",
+        ].join(" "),
+      );
+    }
+  } finally {
+    await context.close().catch(() => undefined);
+  }
 });
