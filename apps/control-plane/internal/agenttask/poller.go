@@ -56,6 +56,15 @@ var ErrEngineSessionGone = errors.New("agenttask: engine has no memory of this s
 // unrecoverable outcome rather than an assertion of failure: the sandbox may
 // well have finished the work before the launcher lost the reference to it,
 // so "failed" would be stating something this code cannot actually know.
+//
+// The split between this message and engineUnreachableAfterRetriesMessage
+// below is deliberate and only half done: the row this text is attached to
+// is still persisted as status = StatusFailed either way, so a machine
+// reader (Handler.handleGet, the console, any future metric) counts both
+// the same as a confirmed failure. Telling "outcome unrecoverable" apart
+// from "confirmed failed" programmatically needs a distinct terminal status
+// or a reason code, not built here — tracked alongside the rest of the
+// operator-visibility follow-up in issue #921.
 const engineSessionGoneMessage = "this task's outcome could not be recovered: its session was lost"
 
 // maxTaskFailureDuration bounds, in wall-clock time rather than a raw pass
