@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -193,6 +194,15 @@ func TestSettlementRefusesToSettleAgainstAPartialRelease(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected settlement to refuse a hold that is only partly lifted, got no error")
+	}
+	// Typed, because this one cannot self-heal and the reaper logs it at error
+	// for alerting rather than as one more ordinary refusal.
+	var divergence *SettlementDivergenceError
+	if !errors.As(err, &divergence) {
+		t.Fatalf("expected a *SettlementDivergenceError, got %T: %v", err, err)
+	}
+	if divergence.PostedCredits != 9982 || divergence.WantCredits != 10000 {
+		t.Fatalf("error carries posted=%d want=%d, expected 9982 and 10000", divergence.PostedCredits, divergence.WantCredits)
 	}
 
 	stored := repo.reservations[reservation.ID]

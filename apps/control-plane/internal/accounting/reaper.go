@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -166,6 +167,20 @@ func (r *Reaper) RunOnce(ctx context.Context) (ReapResult, error) {
 			// A refused release is not fatal to the pass: one reservation that
 			// settled underneath us must not strand the rest of the batch.
 			result.Failed++
+			// A divergence is different in kind from a lost race. The ledger
+			// already holds a release for a different amount, so no pass can
+			// ever clear this hold and an operator has to reconcile it; log it
+			// at error so alerting separates it from the ordinary refusals this
+			// loop expects to see.
+			var divergence *SettlementDivergenceError
+			if errors.As(err, &divergence) {
+				r.logger.ErrorContext(ctx, "accounting: reaper found a hold whose ledger release disagrees with the row, manual reconciliation required",
+					"reservation_id", reservation.ID.String(),
+					"account_id", reservation.AccountID.String(),
+					"posted_release_credits", divergence.PostedCredits,
+					"held_credits", divergence.WantCredits)
+				continue
+			}
 			r.logger.WarnContext(ctx, "accounting: reaper could not release a stranded hold",
 				"reservation_id", reservation.ID.String(),
 				"account_id", reservation.AccountID.String(),

@@ -667,14 +667,39 @@ func reservationOpen(status ReservationStatus) bool {
 // is a settlement that posted the old partial release and then failed before
 // updating the row, with the retry landing on code that releases in full.
 //
-// Failing here leaves the reservation open, so the reaper retries it and logs a
-// warning on every pass rather than a wrong number being written once. An
-// unrecognized settlement fact is fatal on the money path (D-034).
+// Failing here leaves the reservation open, so it stays in the reaper's
+// candidate scan and is reported on every pass instead of a wrong number being
+// written once and disappearing. An unrecognized settlement fact is fatal on
+// the money path (D-034).
+//
+// The comparison is against a POSITIVE amount because a release is stored
+// positive: ledger.ReleaseReservedCredits posts +credits while ReserveCredits
+// posts -credits, which is what makes the two cancel in GetBalance's sum. The
+// live magnitude test would fail on its first settlement if that were inverted.
+//
+// A reservation that trips this cannot self-heal: its charge is already
+// committed, and both settlement paths recompute the same amount and hit the
+// same deduplicated entry. That is deliberate, since the alternatives are
+// writing a number the ledger contradicts or silently dropping credits, but it
+// needs an operator, so the error is typed rather than a bare string for
+// alerting to key on. No reconciliation job is written: nothing drains that
+// table today (issue #600) and the reaper would insert a fresh row every 15
+// minutes for the same stuck reservation.
+type SettlementDivergenceError struct {
+	ReservationID uuid.UUID
+	PostedCredits int64
+	WantCredits   int64
+}
+
+func (e *SettlementDivergenceError) Error() string {
+	return fmt.Sprintf("accounting: reservation %s already carries a %d-credit release, refusing to settle against a %d-credit hold", e.ReservationID, e.PostedCredits, e.WantCredits)
+}
+
 func assertReleasedInFull(reservationID uuid.UUID, entry ledger.LedgerEntry, want int64) error {
 	if entry.CreditsDelta == want {
 		return nil
 	}
-	return fmt.Errorf("accounting: reservation %s already carries a %d-credit release, refusing to settle against a %d-credit hold", reservationID, entry.CreditsDelta, want)
+	return &SettlementDivergenceError{ReservationID: reservationID, PostedCredits: entry.CreditsDelta, WantCredits: want}
 }
 
 func remainingHeldCredits(reservation Reservation) int64 {
