@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -124,7 +125,27 @@ interface RequestContext {
   headers: Record<string, string>;
 }
 
-async function getRequestContext(): Promise<RequestContext> {
+// Memoized per request with React's cache(): every exported function below
+// calls this before its own control-plane fetch, and a single server page can
+// legitimately call several of them (the budget settings page alone calls
+// getViewer, getAccountProfile, and getBudget; its parent layout calls
+// getViewer, getBalance, and getBudgetThreshold on the very same navigation).
+// Unmemoized, that is six separate real network round-trips to Supabase
+// Auth's getUser() for one page load, each one a chance for a transient
+// upstream hiccup to throw "No active session" and crash the whole Server
+// Components tree — confirmed live: a CI run of
+// tests/e2e/console-budgets.spec.ts failed with the console's generic error
+// boundary ("Something went wrong on this page") on a page whose only two
+// unguarded upstream calls are getViewer() and getAccountProfile(), and eight
+// of the eighteen console pages (this one included) make three or more of
+// these calls on one render, with the shared layout adding four more of its
+// own on every single one of them. cache() scopes the memoized
+// promise to a single request (Next.js's per-request React cache, reset on
+// the next navigation), so this does not change session freshness across
+// page loads, only how many times one page load re-derives it. Cuts the
+// external-call surface, and therefore the flake surface, without weakening
+// or skipping the session check itself.
+const getRequestContext = cache(async (): Promise<RequestContext> => {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
@@ -163,7 +184,7 @@ async function getRequestContext(): Promise<RequestContext> {
   }
 
   return { baseUrl, headers };
-}
+});
 
 function isJsonObject(value: JsonValue | null): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
