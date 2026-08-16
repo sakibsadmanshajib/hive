@@ -146,8 +146,14 @@ func TestReleaseAfterUnconfirmedSettlementKeepsRowBalanced(t *testing.T) {
 	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 1003 {
 		t.Fatalf("expected one 1003-credit charge, got %#v", ledgerSvc.chargeCalls)
 	}
-	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 8997 {
-		t.Fatalf("expected only the finalize's own 8997-credit release, got %#v", ledgerSvc.releaseCalls)
+	// One release, for the WHOLE 10000 hold rather than the 8997 unused
+	// remainder: capture lifts the authorization in full, and the 1003 charged
+	// is posted separately (issue #616). The row still records 8997 as its
+	// released_credits, asserted by the balance check above, because that
+	// column answers how the hold was disposed of rather than whether any
+	// authorization is still outstanding.
+	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 10000 {
+		t.Fatalf("expected only the finalize's own 10000-credit hold lift, got %#v", ledgerSvc.releaseCalls)
 	}
 	if repo.releaseEventCounts[reservation.ID] != 0 {
 		t.Fatalf("expected no release event row, got %d", repo.releaseEventCounts[reservation.ID])

@@ -293,29 +293,64 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		actualCredits = heldCredits
 	}
 
-	releaseCredits := releasableCredits(reservation, actualCredits)
+	// unusedCredits is a fact about the RESERVATION: how much of the hold never
+	// turned into spend. It is what the row records, beside consumed_credits,
+	// and the two still sum to reserved_credits.
+	unusedCredits := releasableCredits(reservation, actualCredits)
 
 	if actualCredits > 0 {
-		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", actualCredits)), actualCredits, map[string]any{
+		// Idempotency key is "charge", not "charge-<credits>", for the same
+		// reason the release key is flat (issue #652): a key that varies with
+		// the amount cannot deduplicate two settlement attempts that DISAGREE
+		// on the amount, which is exactly the case worth catching. That retry
+		// is reachable, not hypothetical -- the charge posts before the
+		// reservation row is updated, so a failure in between leaves an open
+		// row for a retry to re-enter with a freshly computed number.
+		entry, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "charge"), actualCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
-		}); err != nil {
+		})
+		if err != nil {
 			return Reservation{}, fmt.Errorf("accounting: charge usage: %w", err)
+		}
+		// The dedup above returns the FIRST entry, so a second attempt for a
+		// different amount would otherwise leave the ledger and the reservation
+		// row disagreeing about what was billed, silently. An unrecognized
+		// settlement fact is fatal on the money path (D-034): fail here and
+		// leave the hold open for the reaper rather than record a divergence.
+		if entry.CreditsDelta != -actualCredits {
+			return Reservation{}, fmt.Errorf("accounting: charge already posted for reservation %s at %d credits, refusing to settle at %d", reservation.ID, -entry.CreditsDelta, actualCredits)
 		}
 	}
 
-	if releaseCredits > 0 {
-		// Idempotency key is "release", not "release-<credits>" (issue #652):
-		// releaseLocked below already keys its full release the same way, and a
-		// key that varies with the amount cannot deduplicate two release
-		// attempts of DIFFERING amounts for the same reservation, which is
-		// exactly the case worth catching. One reservation, one release key,
-		// regardless of which path or how much it releases.
-		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
+	// The ledger releases the WHOLE outstanding hold, including the part the
+	// charge just captured, not merely the unused remainder. A hold is an
+	// authorization, and capture lifts it in full; the charge is what the
+	// customer actually pays. Releasing only the remainder left `actual`
+	// credits sitting in the ledger's reserved bucket forever, and since
+	// GetBalance computes available as posted minus reserved, every settled
+	// request cost the customer its price TWICE: once posted, once withheld
+	// (issue #616, measured live 2026-08-16 -- 143642 credits held against
+	// 1825 reservations that had already settled, one 18-credit completion
+	// moving available by 36). The reaper cannot recover these, because it
+	// only scans holds still in a non-terminal state.
+	//
+	// This is also what the API key counter has always done a few lines below:
+	// ApplyReservationDelta unwinds -heldCredits, never -unusedCredits.
+	//
+	// Idempotency key is "release", not "release-<credits>" (issue #652):
+	// releaseLocked below keys its own release the same way, and a key that
+	// varies with the amount cannot deduplicate two release attempts of
+	// DIFFERING amounts for the same reservation. Both paths now also release
+	// the same quantity, remainingHeldCredits, so whichever arrives first
+	// posts an entry the other would have posted identically.
+	if heldCredits > 0 {
+		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), heldCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
+			"captured_credits":   actualCredits,
 		}); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: release reserved credits: %w", err)
 		}
@@ -330,7 +365,7 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		eventType = usage.UsageEventReconciled
 	}
 
-	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, releaseCredits, input.TerminalUsageConfirmed, nextStatus, reason)
+	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, unusedCredits, input.TerminalUsageConfirmed, nextStatus, reason)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: finalize reservation: %w", err)
 	}
@@ -378,8 +413,12 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		HiveCreditDelta: -actualCredits,
 		CustomerTags:    reservation.CustomerTags,
 		InternalMetadata: map[string]any{
-			"reservation_id":           reservation.ID.String(),
-			"released_credits":         releaseCredits,
+			"reservation_id": reservation.ID.String(),
+			// The unused part of the hold, matching the reservation row's
+			// released_credits column. The ledger lifts more than this (the
+			// whole authorization, captured part included), which is a
+			// different question and deliberately not what analytics reads.
+			"released_credits":         unusedCredits,
 			"terminal_usage_confirmed": input.TerminalUsageConfirmed,
 		},
 	}); err != nil {

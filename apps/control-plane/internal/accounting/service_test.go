@@ -439,8 +439,11 @@ func TestFinalizeReservationCreatesChargeAndRelease(t *testing.T) {
 	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 70 {
 		t.Fatalf("expected one 70-credit charge, got %#v", ledgerSvc.chargeCalls)
 	}
-	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 30 {
-		t.Fatalf("expected one 30-credit release, got %#v", ledgerSvc.releaseCalls)
+	// The ledger lifts the whole 100-credit hold, not the 30 left unused: the
+	// 70 the charge captured has to leave the reserved bucket too, or available
+	// balance carries it forever (issue #616).
+	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 100 {
+		t.Fatalf("expected one 100-credit hold lift, got %#v", ledgerSvc.releaseCalls)
 	}
 	if len(usageSvc.statusCalls) != 1 || usageSvc.statusCalls[0].status != usage.AttemptStatusCompleted {
 		t.Fatalf("expected completed attempt status update, got %#v", usageSvc.statusCalls)
@@ -494,8 +497,11 @@ func TestFinalizeReservationClampsChargeToReservedHold(t *testing.T) {
 	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 10000 {
 		t.Fatalf("expected the ledger charge clamped to 10000, got %#v", ledgerSvc.chargeCalls)
 	}
-	if len(ledgerSvc.releaseCalls) != 0 {
-		t.Fatalf("expected no release call when the clamped charge consumes the full hold, got %#v", ledgerSvc.releaseCalls)
+	// Nothing is left unused, so the row releases 0, but the ledger still has
+	// to lift the 10000 hold the charge just captured. Before issue #616 this
+	// path posted no release at all, which stranded the entire hold.
+	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 10000 {
+		t.Fatalf("expected the full 10000 hold lifted even though the clamped charge consumed all of it, got %#v", ledgerSvc.releaseCalls)
 	}
 }
 
@@ -548,8 +554,11 @@ func TestFinalizeReservationConfirmedUsageAboveHoldIsNotClamped(t *testing.T) {
 	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 15000 {
 		t.Fatalf("expected the ledger charge for the true 15000, got %#v", ledgerSvc.chargeCalls)
 	}
-	if len(ledgerSvc.releaseCalls) != 0 {
-		t.Fatalf("expected no release call on a confirmed overage, got %#v", ledgerSvc.releaseCalls)
+	// The charge exceeds the hold, so nothing is unused and the row releases 0,
+	// but the 10000-credit authorization is still outstanding until the ledger
+	// lifts it (issue #616).
+	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 10000 {
+		t.Fatalf("expected the full 10000 hold lifted on a confirmed overage, got %#v", ledgerSvc.releaseCalls)
 	}
 }
 
@@ -592,8 +601,10 @@ func TestFinalizeReservationMarksAmbiguousStreamForReconciliation(t *testing.T) 
 	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 40 {
 		t.Fatalf("expected one 40-credit charge, got %#v", ledgerSvc.chargeCalls)
 	}
-	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 50 {
-		t.Fatalf("expected one 50-credit release, got %#v", ledgerSvc.releaseCalls)
+	// 90 held, 40 charged: the ledger lifts all 90, the row records 50 unused
+	// (issue #616).
+	if len(ledgerSvc.releaseCalls) != 1 || ledgerSvc.releaseCalls[0].credits != 90 {
+		t.Fatalf("expected one 90-credit hold lift, got %#v", ledgerSvc.releaseCalls)
 	}
 	if len(usageSvc.statusCalls) != 1 || usageSvc.statusCalls[0].status != usage.AttemptStatusInterrupted {
 		t.Fatalf("expected interrupted status update, got %#v", usageSvc.statusCalls)
