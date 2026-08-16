@@ -1,0 +1,87 @@
+name: Demo chat settings drift check
+
+# Backstop for issue #855. The real fix is structural (persistence.ts's
+# persistencePass now restores a flipped control even when the reload used to
+# verify persistence fails), but the account this protects is shared, live,
+# mutable state, and the detector already existed (PR #863) with nowhere
+# automated to run. This wires it in.
+#
+#   schedule       Detector only, no repair. A red run here means the account
+#                   has drifted; there is no follow-up issue-filing job here on
+#                   purpose (ponytail: a red scheduled run is signal enough
+#                   until it proves it goes unnoticed; add issue-filing like
+#                   deploy-demo-box.yml's report-failure job if it does).
+#   workflow_dispatch  Repairs by default (repair=true) and captures fresh
+#                   proof with docs/proof/issue-855-enter-key/capture.mjs, the
+#                   same script PR #863 used, uploaded as a build artifact.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      repair:
+        description: 'Fix drift and capture fresh proof (false = detector only)'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: demo-chat-settings-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web-console
+    env:
+      CHAT_URL: ${{ vars.CHAT_URL || 'https://chat-hive.scubed.co' }}
+      CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      DEMO_ACCOUNT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL || secrets.HIVE_QA_TESTER_EMAIL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+      - name: Check the inputs this job cannot run without
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DEMO_ACCOUNT_EMAIL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Check demo account settings
+        if: github.event_name == 'schedule'
+        run: node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL"
+      - name: Repair demo account settings
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        run: node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL" --repair
+      - name: Check only (repair not requested)
+        if: github.event_name == 'workflow_dispatch' && inputs.repair != 'true'
+        run: node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL"
+      - name: Capture Enter-sends proof
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        run: |
+          mkdir -p /tmp/proof
+          node ../../docs/proof/issue-855-enter-key/capture.mjs manual-repair /tmp/proof "$DEMO_ACCOUNT_EMAIL"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        with:
+          name: enter-key-proof
+          path: /tmp/proof/*.png
+          retention-days: 14
