@@ -56,14 +56,20 @@ func WriteErrorWithParam(w http.ResponseWriter, httpStatus int, errType string, 
 	json.NewEncoder(w).Encode(body)
 }
 
-// WriteRateLimitError writes a 429 OpenAI-style error with retry metadata headers.
-func WriteRateLimitError(w http.ResponseWriter, message string, code *string, headers map[string]string) {
+// applyHeaders sets each non-blank header on w. Shared by every error path
+// that carries retry metadata, so a header only needs handling here once.
+func applyHeaders(w http.ResponseWriter, headers map[string]string) {
 	for key, value := range headers {
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
 		w.Header().Set(key, value)
 	}
+}
+
+// WriteRateLimitError writes a 429 OpenAI-style error with retry metadata headers.
+func WriteRateLimitError(w http.ResponseWriter, message string, code *string, headers map[string]string) {
+	applyHeaders(w, headers)
 	WriteError(w, http.StatusTooManyRequests, "rate_limit_error", message, code)
 }
 
@@ -90,7 +96,12 @@ func WriteAuthFailure(w http.ResponseWriter, oerr *OpenAIError, headers map[stri
 	case oerr.Error.Code != nil && *oerr.Error.Code == "model_not_found":
 		status = http.StatusNotFound
 	case oerr.Error.Code != nil && *oerr.Error.Code == "upstream_unavailable":
+		// A 503 telling the caller to retry needs a machine-readable
+		// retry-after or every SDK retry layer falls back to its own short
+		// backoff and hammers a control-plane that is, by construction,
+		// already unable to answer (PR #903 security review LOW finding).
 		status = http.StatusServiceUnavailable
+		applyHeaders(w, headers)
 	}
 	WriteError(w, status, oerr.Error.Type, oerr.Error.Message, oerr.Error.Code)
 }

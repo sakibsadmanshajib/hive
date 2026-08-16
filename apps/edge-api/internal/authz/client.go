@@ -209,7 +209,16 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 			// cold/degraded boot state this PR exists to stop lying about.
 			return AuthSnapshot{}, fmt.Errorf("%w: %w", ErrUpstreamUnavailable, statusErr)
 		case resp.StatusCode == http.StatusConflict:
-			// Genuine verdict: revoked/disabled/not-active (also writeJSON).
+			// Kept defensive rather than a live path today: apikeys.
+			// handleKeyError answers 409 for ErrRevoked/ErrDisabled/
+			// ErrNotActive, but ResolveSnapshot (the only path
+			// handleInternalResolve calls) never returns any of those three --
+			// it returns a 200 snapshot carrying the key's real Status, and
+			// edge-api's own CheckAccess denies a revoked/disabled/expired key
+			// from that 200, not from a 409. If ResolveSnapshot's error
+			// surface ever changes to return them, this still classifies
+			// correctly as a genuine verdict rather than falling through to
+			// the default branch below.
 			return AuthSnapshot{}, statusErr
 		case resp.StatusCode == http.StatusUnauthorized:
 			// This endpoint authenticates only edge-api's own X-Internal-Token

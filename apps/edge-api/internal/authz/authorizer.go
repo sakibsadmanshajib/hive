@@ -119,17 +119,31 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 			// is worse than a slow, honest failure.
 			//
 			// Explicit judgment on the resulting 401-vs-503 split, per PR #903
-			// security review: this is NOT a new key-existence oracle. Which
-			// branch a caller lands on depends only on control-plane's own
-			// health at request time, identically for every key value --
-			// a real key and a fake key presented at the same moment get the
-			// same verdict (both 503 while control-plane is degraded, both
-			// resolved on the pre-existing 200-vs-401 axis once it is
-			// healthy). No signal here correlates with which specific key was
-			// presented, so no enumeration capability is added beyond what
-			// already existed before this PR.
+			// security review (corrected from an earlier, overconfident
+			// version of this comment that claimed no oracle existed at all --
+			// that claim was wrong and has been retracted): this IS a narrow,
+			// real information leak, not eliminated by this change.
+			// control-plane's ResolveSnapshot (apikeys/service.go) fails fast
+			// at GetPolicyByTokenHash for a key that does not exist, before
+			// touching ListAllAliases/GetBudgetWindow/GetAccountRatePolicy/
+			// GetKeyRatePolicy/GetTenantIDByAccountID; a key that DOES exist
+			// proceeds through all of those, so during a degraded window
+			// (connection-pool exhaustion, request cancellation -- exactly
+			// what the 2026-08-14 incident's "get key rate policy" and
+			// "resolve tenant for account: context canceled" log lines were)
+			// an existing key is more likely to surface as 503 than a
+			// nonexistent one, which reliably 401s fast. Accepted rather than
+			// reverted: exploiting it requires riding an already-degraded
+			// control-plane window an attacker cannot induce from here, it
+			// yields only a probabilistic existence signal and no access, and
+			// the alternative -- collapsing 503 back into 401 -- reintroduces
+			// the certain, severe cost this PR exists to remove (a valid
+			// credential told it is invalid) to close a narrow, low-value
+			// leak. Follow-up worth doing separately, not blocking here:
+			// rate-limiting or aggregating repeated resolve failures per
+			// source would shrink the window in which this is observable.
 			code := "upstream_unavailable"
-			return AuthSnapshot{}, nil, newErr(
+			return AuthSnapshot{}, map[string]string{"retry-after": "5"}, newErr(
 				"api_error",
 				"The authorization service is temporarily unavailable. Please retry.",
 				&code,
