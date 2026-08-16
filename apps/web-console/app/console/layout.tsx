@@ -6,6 +6,7 @@ import {
   getViewer,
   getBalance,
   getBudgetThreshold,
+  type Viewer,
 } from "@/lib/control-plane/client";
 import { readTenantIdClaim } from "@/lib/auth/tenant-claim";
 import { createClient } from "@/lib/supabase/server";
@@ -22,7 +23,20 @@ interface ConsoleLayoutProps {
 // components/workspace-switcher.tsx) so each page picks its own `active`
 // route.
 export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
-  const viewer = await getViewer();
+  // getViewer() already retries one transient Supabase Auth hiccup
+  // (lib/control-plane/client.ts). A second failure means the session
+  // genuinely cannot be resolved right now, and every page under this layout
+  // shares this one call, so this is the one place that closes the crash for
+  // all of them: redirect to sign-in, the same destination an expired
+  // session already takes (tests/e2e/unauth.spec.ts), instead of letting the
+  // throw reach the generic error boundary.
+  let viewer: Viewer;
+  try {
+    viewer = await getViewer();
+  } catch (error) {
+    console.error("ConsoleLayout: could not load viewer", error);
+    redirect("/auth/sign-in");
+  }
 
   // A signed-in user can legitimately hold no tenant membership: the Supabase
   // access-token hook issues a valid token with no tenant_id claim rather than
