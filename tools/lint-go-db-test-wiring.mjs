@@ -41,7 +41,6 @@ const SKIP_DIRS = new Set(["node_modules", "vendor", ".git", "target", "dist", "
 // leaves the workflow's list, and it fails again if a package is exempted here
 // after it starts running.
 const KNOWN_DARK = new Map([
-  ["apps/control-plane/./internal/accounting", "#797 backlog, never executed"],
   ["apps/control-plane/./internal/audit", "#797 backlog, never executed"],
   ["apps/control-plane/./internal/auditarchive", "#797 backlog, never executed"],
   ["apps/control-plane/./internal/auditverifier", "#797 backlog, never executed"],
