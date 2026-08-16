@@ -561,7 +561,7 @@ jobs:
         # The negative control for the whole job: with the launcher stopped
         # nothing can launch, and this run must go red rather than pass with
         # an empty capture directory.
-        if: github.event.inputs.sabotage == 'true' || true # TEMPORARY: re-demonstrating the empty-capture guard after the review fixes, reverted in the next commit
+        if: github.event.inputs.sabotage == 'true'
         run: |
           set -euo pipefail
           systemctl --user stop hive-agent-engine.service
