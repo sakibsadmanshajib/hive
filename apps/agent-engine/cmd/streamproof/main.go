@@ -73,9 +73,12 @@ import (
 )
 
 const (
-	// Small on purpose: this run is billed against a real Hive account, and a
-	// one sentence answer still produces several token deltas.
-	proofPrompt = "Reply with exactly this sentence and nothing else: Hive streaming proof ok."
+	// Small on purpose: this run is billed against a real Hive account. It
+	// still asks for one shell command before the sentence, because streaming
+	// reassembles tool call arguments from partial JSON and a prompt the model
+	// can answer in prose alone would never exercise that path, which is the
+	// one an agent actually spends its time on.
+	proofPrompt = "Run the shell command: echo hive-streaming-proof. Then reply with exactly this sentence and nothing else: Hive streaming proof ok."
 
 	deltaKind           = "StreamingDeltaEvent"
 	conversationTimeout = 5 * time.Minute
