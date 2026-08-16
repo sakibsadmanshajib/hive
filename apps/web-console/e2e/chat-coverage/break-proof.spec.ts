@@ -213,39 +213,54 @@ test.describe("chat coverage gate self-checks", () => {
   // briefly unreachable mid-run (issue #815). No live deployment is needed to
   // prove this: the fixture below plays the role of Open WebUI's own
   // database (a change survives navigation, because /persist-save updates
-  // it), and the second GET to /persist-index is aborted to stand in for
-  // that mid-run outage.
-  test("a reload failure while verifying persistence still restores the flipped control", async ({
-    page,
-  }) => {
-    test.setTimeout(60_000);
-    let checked = false;
-    let indexRequests = 0;
+  // it), and the second GET to /persist-index hangs (never fulfilled, never
+  // aborted) to stand in for that mid-run outage.
+  //
+  // Hangs rather than aborts on purpose. `route.abort("connectionreset")`
+  // was tried first and made this test flaky in a revealing way: Chromium
+  // retries a GET that failed with a connection reset before any response
+  // began, so the "aborted" request quietly succeeded on its own retry and
+  // `page.reload()` never threw at all, which defeated the entire premise of
+  // the test without failing it for an honest reason. A route that never
+  // answers has no completed failure to retry; Playwright's own navigation
+  // timeout is what rejects `page.reload()`, deterministically, the same way
+  // this file's own "Hanging" button fixture works above.
+  test.describe("reload failure resilience", () => {
+    // Scoped to just this test: the fixture's hang needs a short navigation
+    // timeout so the test does not spend real time waiting out the config's
+    // default 60s per attempted navigation.
+    test.use({ navigationTimeout: 3000 });
 
-    await page.route("https://cov.selftest/**", async (route) => {
-      const url = route.request().url();
-      if (url.includes("/persist-save")) {
-        checked = new URL(url).searchParams.get("checked") === "true";
-        await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-        return;
-      }
-      if (url.includes("/persist-index")) {
-        indexRequests += 1;
-        // The first GET is the pass's own baseline read, the third is its
-        // recovery re-open after the failed reload. Only the second, the
-        // `page.reload()` this test exists to break, is aborted.
-        if (indexRequests === 2) {
-          await route.abort("connectionreset");
+    test("a reload failure while verifying persistence still restores the flipped control", async ({
+      page,
+    }) => {
+      test.setTimeout(60_000);
+      let checked = false;
+      let indexRequests = 0;
+
+      await page.route("https://cov.selftest/**", async (route) => {
+        const url = route.request().url();
+        if (url.includes("/persist-save")) {
+          checked = new URL(url).searchParams.get("checked") === "true";
+          await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
           return;
         }
-        await route.fulfill({
-          contentType: "text/html",
-          body: PERSIST_FIXTURE_HTML(checked),
-        });
-        return;
-      }
-      await route.fulfill({ status: 404, body: "not found" });
-    });
+        if (url.includes("/persist-index")) {
+          indexRequests += 1;
+          // The first GET is the pass's own baseline read, the third is its
+          // recovery re-open after the failed reload. Only the second, the
+          // `page.reload()` this test exists to break, hangs.
+          if (indexRequests === 2) {
+            return;
+          }
+          await route.fulfill({
+            contentType: "text/html",
+            body: PERSIST_FIXTURE_HTML(checked),
+          });
+          return;
+        }
+        await route.fulfill({ status: 404, body: "not found" });
+      });
 
     const fixtureSurface: Surface = {
       id: "settings:fixture",
@@ -296,6 +311,7 @@ test.describe("chat coverage gate self-checks", () => {
       results.some((r) => !r.proven && /reload failed/i.test(r.detail)),
       "a reload failure must be recorded as an unprovable result, not swallowed silently",
     ).toBe(true);
+    });
   });
 
   test("every inert-registry entry carries a justification", async () => {

@@ -27,6 +27,16 @@
 // could be re-read, on a best-effort basis if even that failed. See
 // break-proof.spec.ts's "a reload failure still restores every flipped
 // control" test, which exercises this without a live deployment.
+//
+// Scope of the guarantee, stated plainly rather than left implied: every
+// throw that travels this file's own call chain (a failed reload, a failed
+// re-open, a failed click) is caught and turned into a best-effort restore
+// attempt. This cannot, and does not claim to, survive a Playwright
+// worker-level interrupt: the enclosing test's own `test.setTimeout` firing
+// mid-pass, or an unrelated unhandled rejection elsewhere in that same test
+// reaching `workerMain.js` and calling `testInfo._interrupt()`. Neither is a
+// JS exception unwinding the call stack, so no `try`/`catch`/`finally`
+// written here can intercept either one.
 import type { Page } from "@playwright/test";
 
 import { flip, readState, type Control, type Result } from "./lib";
@@ -80,10 +90,15 @@ export async function restore(page: Page, ctl: Control, before: string | null): 
 /**
  * Re-read a control after whatever just happened, tolerating a page that may
  * be mid-recovery from a failed reload. Never throws.
+ *
+ * `enumerateSurface` already calls `surface.open(page)` as its own first step
+ * (surfaces.ts), so this must not open the surface itself first: doing both
+ * issued two navigations per recovery attempt instead of one, doubling this
+ * exact call's exposure to the #815 unreachability window it exists to
+ * recover from.
  */
 async function relocateAfterFailure(page: Page, surface: Surface): Promise<Control[]> {
   try {
-    await surface.open(page);
     return await enumerateSurface(page, surface);
   } catch {
     return [];
@@ -195,8 +210,27 @@ export async function persistencePass(
 
   // Controls the batch could not re-locate (a flipped toggle can hide its own
   // dependants) get an individual pass rather than a false negative.
+  //
+  // Each call is isolated in its own try/catch, not just persistOne's own
+  // internals: persistOne's leading enumerateSurface (locating the control
+  // fresh before it can do anything else) is not itself guarded, since a
+  // throw there means there is no target and nothing yet to restore. Without
+  // this wrapper, that throw would propagate out of this loop entirely,
+  // silently abandoning every control still pending behind it, not just the
+  // one that failed to re-open, which is the same defect this file exists to
+  // remove, one retry level deeper.
   for (const ctl of [...missing, ...reverted]) {
-    results.push(await persistOne(page, surface, ctl));
+    try {
+      results.push(await persistOne(page, surface, ctl));
+    } catch (err) {
+      results.push(
+        unprovable(
+          surface,
+          ctl,
+          `individual retry could not re-open the surface (${String(err).split("\n")[0].slice(0, 120)})`,
+        ),
+      );
+    }
   }
 }
 
