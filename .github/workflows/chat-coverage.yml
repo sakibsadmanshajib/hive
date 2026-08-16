@@ -88,7 +88,20 @@ jobs:
       # An existing account to mint a session for. live-auth.mjs mints through
       # the admin one-time-token flow, so no password is read and none is
       # changed; HIVE_QA_TESTER_PASSWORD is deliberately not passed in here.
-      HIVE_QA_AGENT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL || secrets.HIVE_QA_TESTER_EMAIL }}
+      #
+      # #848. This used to fall back to secrets.HIVE_QA_TESTER_EMAIL when
+      # HIVE_QA_AGENT_EMAIL was unset (which it always was: no such secret is
+      # configured on this repository). That silent fallback is how the
+      # sweep ended up authenticated against the account the owner demos to
+      # prospects: its own coverage ledger records
+      # "demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"
+      # (docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json),
+      # and every chat this sweep sends a real message from is undeletable
+      # today (issue #848). The "Check the inputs the sweep cannot run
+      # without" step below already fails the job loud on an empty value;
+      # removing the fallback here is what lets that check actually catch
+      # this instead of quietly succeeding against the wrong account.
+      HIVE_QA_AGENT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -63,14 +63,23 @@ const TASKS_URL = `${WORKSPACE}/tasks`;
  * "not enabled for your organization" notice instead of the task panel
  * (apps/agent-console/lib/edge-api/gate.ts).
  *
- * Defaulted rather than left empty on purpose. The account name is already
- * public in docs/proof/live-auth-helper-2026-08-08/README.md and it is not a
- * credential, so a default keeps this suite runnable by hand with no setup,
- * and makes a renamed account fail loudly instead of skipping the whole
- * authenticated half into silence.
+ * #848. This USED to default silently to `demo@hive-demo.invalid` "to keep
+ * the suite runnable by hand with no setup." That default is exactly what
+ * put a wall of undeletable "interaction-coverage proof ..." task rows,
+ * stuck Cancelled or Blocked, onto the live account the owner demos to
+ * prospects: confirmed by issue #848 and the 2026-08-11 demo-readiness walk
+ * (issue #858), and every one of them is permanent, since no per-task delete
+ * route exists yet. A control proven by littering the account the audience
+ * sees is not a clean proof, so this fails hard instead of defaulting: set
+ * HIVE_QA_AGENT_EMAIL to an identity dedicated to this measurement, never
+ * let it fall back onto the shared demo account by omission.
  */
-const AGENT_EMAIL = process.env.HIVE_QA_AGENT_EMAIL ?? "demo@hive-demo.invalid";
+const AGENT_EMAIL = process.env.HIVE_QA_AGENT_EMAIL ?? "";
 const AGENT_PASSWORD = process.env.HIVE_QA_AGENT_PASSWORD ?? "";
+const AGENT_EMAIL_FAILURE_REASON =
+  "HIVE_QA_AGENT_EMAIL not set. This suite creates a real, currently undeletable agent " +
+  "task on whatever account it signs in as (issue #848), so it must never silently fall " +
+  "back to the shared demo account. Point it at an identity dedicated to this measurement.";
 
 /*
  * live-auth.mjs mints against these three. Without them there is no session
@@ -93,6 +102,7 @@ const MINT_FAILURE_REASON =
 
 function requireMintEnv(): void {
   expect(MISSING_MINT_ENV, MINT_FAILURE_REASON).toEqual([]);
+  expect(AGENT_EMAIL, AGENT_EMAIL_FAILURE_REASON).not.toEqual("");
 }
 
 const PASSWORD_SKIP_REASON =
