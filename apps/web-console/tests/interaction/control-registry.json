@@ -1,0 +1,20 @@
+{
+  "$comment": "Controls that are deliberately inert, whose effect is proven by another spec, or that this gate found broken and that a tracked issue now covers. Every entry needs a route, a control key, a one line justification of at least 25 characters, and an owner. covered_elsewhere entries additionally need a spec file that exists and a marker string that file actually contains. known_broken entries need an issue number, so the entry expires when the defect is fixed. Stale entries fail the gate. See README.md in this directory.",
+  "entries": [
+    {
+      "route": "/console/analytics",
+      "control": "svg[role=application]|(unnamed)",
+      "kind": "inert",
+      "reason": "Recharts renders its chart surface focusable with role application, but the chart itself has no activation behaviour: every control that changes it is a sibling that this gate proves separately",
+      "owner": "@sakibsadmanshajib"
+    },
+    {
+      "route": "/auth/reset-password",
+      "control": "button|Update password",
+      "kind": "known_broken",
+      "reason": "submitting without a valid recovery session answers a generic server error with a support reference instead of saying the reset link is missing or expired",
+      "owner": "@sakibsadmanshajib",
+      "issue": 905
+    }
+  ]
+}

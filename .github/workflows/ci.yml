@@ -684,6 +684,14 @@ jobs:
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
+    # `issues: read` on top of the workflow default, for the exclusion expiry
+    # check in tests/interaction/gate-integrity.test.ts. It asks the tracker
+    # whether the issue an exclusion cites is still open, and the default token
+    # answers 403 without this, which the check reports as a failure rather
+    # than swallowing: an unanswered question about an exclusion is not a pass.
+    permissions:
+      contents: read
+      issues: read
     timeout-minutes: 15
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
     # docs-only decision is applied per step. See the note above `changes`.
@@ -719,8 +727,15 @@ jobs:
         if: needs.changes.outputs.run != 'false'
         run: npm run e2e:verify-collection
 
+      # GITHUB_TOKEN is read by tests/interaction/gate-integrity.test.ts, which
+      # asks the issue tracker whether any exclusion still cites an open issue.
+      # An exclusion whose blocker closed is a permanent blind spot, and the
+      # only authority on "closed" is the tracker, so without a token that check
+      # cannot run. It fails rather than skipping when CI is set.
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run test:unit
 
       - name: Build (Next.js)
@@ -1439,6 +1454,308 @@ jobs:
             !apps/web-console/playwright-report/index.html
           if-no-files-found: ignore
           retention-days: 5
+
+      - name: Tear down stack
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose down -v --remove-orphans || true
+
+  # ------------------------------------------------------------------
+  # Interaction coverage gate. Enumerates every interactive control in
+  # every console route from the rendered DOM, activates each one, and
+  # requires observable evidence that it did something: a request, a
+  # navigation, a change to the render, or a value that survives a reload.
+  # A control with no proven effect fails the job.
+  #
+  # This exists because every UI test we had asserted that a control
+  # rendered. A button with aria-haspopup="menu" and no click handler
+  # passed all of them (issue #785), and so would a toggle that flips in
+  # the browser and persists nothing.
+  #
+  # ADVISORY, not a required check, and deliberately so for now. It is a
+  # sweep of a whole application against a live-ish stack, so its failure
+  # modes include the stack, the network and the seeded account, not only
+  # the console. Making it required before it has a run history on main
+  # would block every merge on any of those. It graduates the same way
+  # rust-tests and desktop-tests did: a track record first.
+  #
+  # Advisory does not mean silent. The job reports its own red, and the
+  # unit-level half (tests/interaction/gate-integrity.test.ts) runs inside
+  # the required web-unit job, so a malformed registry, a stale exclusion
+  # or a broken enumerator fails a required check even when this job does
+  # not run.
+  # ------------------------------------------------------------------
+
+  interaction-coverage:
+    name: Interaction coverage (console controls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >-
+      needs.changes.outputs.run == 'true' &&
+      needs.changes.outputs.web_e2e == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    needs: [changes, web-unit, go-tests]
+    env:
+      COMPOSE_PROFILES: local
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      # The gate drives the UI only. It never asks for a completion, so
+      # stub provider keys satisfy LiteLLM startup without exposing paid
+      # credentials to a job that has no use for them.
+      OPENROUTER_API_KEY: 'ci-stub-not-used'
+      GROQ_API_KEY: 'ci-stub-not-used'
+      NVIDIA_NIM_API_KEY: 'ci-stub-not-used'
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
+      OPENROUTER_EMBEDDING_FALLBACK_MODEL: ${{ vars.OPENROUTER_EMBEDDING_FALLBACK_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
+      NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Reconstruct SUPABASE_DB_URL
+        shell: bash
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 scripts/derive-pooler-dsn.py --self-test
+          python3 scripts/derive-pooler-dsn.py \
+            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
+            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
+            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build stack images
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=stack
+            *.cache-to=type=gha,scope=stack,mode=max
+
+      - name: Start core stack
+        working-directory: deploy/docker
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: docker compose --profile local up -d redis litellm control-plane edge-api
+
+      - name: Wait for services to become healthy
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+          for svc in control-plane edge-api; do
+            while :; do
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              if [ "$state" = "healthy" ]; then
+                echo "$svc: healthy"
+                break
+              fi
+              if [ "$(date +%s)" -gt "$deadline" ]; then
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 $svc
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Install web-console deps
+        working-directory: apps/web-console
+        run: npm ci
+
+      - name: Read Playwright version
+        id: pw
+        working-directory: apps/web-console
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: apps/web-console
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web-console
+        run: npx playwright install-deps chromium
+
+      # The compose `web-console` service COPYs source into its image and
+      # mounts no volume, so a compose run without `--build` would drive a
+      # stale bundle and report a green gate for code that is not in this
+      # commit. This job sidesteps that entirely by building the app from
+      # the checkout here, the same way the Web E2E job does.
+      - name: Build + start Next.js from this checkout
+        working-directory: apps/web-console
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          CONTROL_PLANE_BASE_URL: http://localhost:8081
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          npm run build
+          nohup npm start > /tmp/nextjs-interaction.log 2>&1 &
+          for i in {1..60}; do
+            if (echo > /dev/tcp/127.0.0.1/3000) 2>/dev/null; then echo "Next.js up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Next.js did not start"; cat /tmp/nextjs-interaction.log; exit 1
+
+      - name: Resolve this job's fixture identity
+        # One place, because these three values must agree exactly and have
+        # twice failed by drifting apart.
+        #
+        # The run key has to be unique per JOB, not per workflow run. Web E2E
+        # uses `<run_id>-<attempt>`, and e2e-fixture-seed.mjs derives its
+        # account UUIDs and its inviter address from the key, so adopting that
+        # same key put both jobs in one identity namespace inside a single
+        # workflow run: they seeded the same derived rows and the later one
+        # reassigned them, which left this job's own address with no row in
+        # auth.users at all and the mint with nothing to sign into.
+        #
+        # The key also has to appear in the address, because runScopedEmail
+        # rewrites any address that does not already contain `+<key>@` and the
+        # seeder then provisions an account nobody signs in as. Both
+        # constraints at once means the key is in the local part twice over,
+        # which is ugly and correct.
+        #
+        # The invitation token is random and masked for the same reason as in
+        # Web E2E: the seeder stores its sha256 as a live pending invitation,
+        # and anything derived from the public run page is a published
+        # credential for as long as the run lasts.
+        run: |
+          set -euo pipefail
+          key="interaction-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "INTERACTION_RUN_KEY=$key" >> "$GITHUB_ENV"
+          echo "INTERACTION_FIXTURE_EMAIL=interaction-gate+$key@scubed.com.bd" >> "$GITHUB_ENV"
+          echo "INTERACTION_FIXTURE_EMAIL_UNVERIFIED=interaction-gate-unverified+$key@scubed.com.bd" >> "$GITHUB_ENV"
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Seed the fixture identity the gate signs in as
+        working-directory: apps/web-console
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_RUN_KEY: ${{ env.INTERACTION_RUN_KEY }}
+          E2E_VERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL }}
+          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL_UNVERIFIED }}
+          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+          E2E_INVITATION_TOKEN: ${{ env.E2E_INVITATION_TOKEN }}
+          # Prints the summary of what it actually seeded, which the next line
+          # checks. Without it the seeder is silent on success, and a run that
+          # provisioned the wrong address exits zero.
+          E2E_FIXTURE_VERBOSE: '1'
+        run: |
+          set -euo pipefail
+          node tests/e2e/support/e2e-auth-fixtures.mjs | tee /tmp/interaction-seed.json
+          # Loud at the source. The gate mints for INTERACTION_FIXTURE_EMAIL;
+          # if the seeder finished without creating exactly that address, fail
+          # here naming it, rather than letting the sweep discover it as every
+          # authenticated route redirecting to the sign-in page.
+          node -e '
+            const fs = require("node:fs");
+            const want = process.env.INTERACTION_FIXTURE_EMAIL;
+            const got = JSON.parse(fs.readFileSync("/tmp/interaction-seed.json", "utf8")).verifiedEmail;
+            if (got !== want) {
+              console.error(`::error::the fixture step seeded ${got} but the gate signs in as ${want}; the mint would have no account`);
+              process.exit(1);
+            }
+            console.log(`seeded the address the gate signs in as: ${want}`);
+          '
+
+      # SUPABASE_SERVICE_ROLE_KEY is what mints the session: the setup project
+      # calls tests/e2e/support/live-auth.mjs, which needs SUPABASE_URL (job
+      # env), SUPABASE_ANON_KEY (job env) and the service role key here. Without
+      # it the mint throws, and the sweep has no session to enumerate with.
+      #
+      # No password variable: live-auth mints through the admin one-time-token
+      # flow, so the gate never reads, sets or rotates a credential of the
+      # account it signs in as.
+      - name: Run the interaction coverage gate
+        working-directory: apps/web-console
+        env:
+          INTERACTION_BASE_URL: http://localhost:3000
+          INTERACTION_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run test:interaction
+
+      # The Playwright HTML report serializes input values into ARIA
+      # snapshots, and this gate types into password fields (issue #554), so
+      # the report is never uploaded. The JSON coverage document is, and every
+      # URL it records has had its fragment dropped and its credential-shaped
+      # query parameters replaced before it was written.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interaction-coverage
+          path: apps/web-console/interaction-coverage/
+          if-no-files-found: warn
+
+      # Redacted, like the other two dump steps in this workflow. Container
+      # logs carry OAuth callbacks, bearer headers and API keys verbatim, and
+      # an artifact from a public repository is downloadable by anyone holding
+      # the run URL.
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-interaction.log || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-interaction
+          path: /tmp/compose-interaction.log
+          if-no-files-found: ignore
 
       - name: Tear down stack
         if: always()
