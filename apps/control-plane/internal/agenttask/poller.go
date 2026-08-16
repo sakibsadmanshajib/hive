@@ -22,6 +22,28 @@ type StatusChecker interface {
 // loop's interval to (see loop's doc comment).
 const maxPollerBackoff = 5 * time.Minute
 
+// ErrEngineSessionGone is a StatusChecker implementation's definitive answer
+// that sessionRef no longer exists anywhere the engine can reach it — the
+// launcher restarted and lost its in-memory session registry, and its own
+// /status endpoint answers 404 for exactly that reason (see
+// agentengine.Remote.post and agentengine.Engine.Status, which map their
+// respective 404/engineapi.ErrUnknownSession cases onto this sentinel).
+// Unlike every other StatusChecker error, this one is not retried next pass:
+// a session the engine has no memory of can never report progress again, so
+// RunOnce fails the task immediately instead of leaving it queued/running
+// forever. Left unhandled, a single such task sits in ListActive's
+// cross-tenant result set and errors on every single pass, which used to
+// hold the whole poller's shared backoff at maxPollerBackoff (see loop's doc
+// comment) for as long as that one row existed, throttling poll cadence for
+// every other tenant's tasks too (measured live 2026-08-16, task f9409763).
+var ErrEngineSessionGone = errors.New("agenttask: engine has no memory of this session")
+
+// engineSessionGoneMessage is the customer-visible error_message persisted
+// when ErrEngineSessionGone fires. Provider-blind, same rationale as
+// Service's engineLaunchFailedMessage: no session reference, sandbox path,
+// or engine detail ever reaches a customer-facing field.
+const engineSessionGoneMessage = "agent task session is no longer reachable"
+
 // PollerConfig controls Poller behaviour.
 type PollerConfig struct {
 	// Interval between poll passes when the previous pass had no errors.
@@ -69,11 +91,23 @@ func NewPoller(repo Repository, checker StatusChecker, cfg PollerConfig) *Poller
 
 // RunOnce performs exactly one poll pass: every active task gets exactly one
 // StatusChecker.Status call and, if terminal, one Repository.Transition
-// call. A single task's engine error is logged and skipped — it stays
-// active and is retried next pass, it does not abort the rest of the pass.
-// The returned error, when non-nil, reports that at least one task had a
-// problem this pass (see loop's backoff); it does not mean the pass failed
-// outright unless ListActive itself errored.
+// call. A single task's transient engine error is logged and skipped — it
+// stays active and is retried next pass, it does not abort the rest of the
+// pass. ErrEngineSessionGone is not transient and is not retried: it fails
+// the task in this same pass (see its doc comment).
+//
+// The returned error, when non-nil, is loop's sole backoff signal (see
+// loop's doc comment) and means this PASS looks systemically degraded: every
+// active task's status check failed, or ListActive itself failed. It is
+// deliberately NOT "at least one task had a problem": a sweep where some
+// tasks succeed and one fails is not a failed sweep in any useful sense, and
+// ListActive is cross-tenant, so treating any single task-level error as
+// pass-level failure let one permanently broken task hold the whole poller's
+// shared backoff at maxPollerBackoff for as long as that row existed,
+// throttling poll cadence for every other tenant's tasks too (measured live
+// 2026-08-16, task f9409763: a lost session 404ing forever kept every sweep
+// erroring, so consecutiveFailures never reset). A pass with zero active
+// tasks is never systemically degraded.
 func (p *Poller) RunOnce(ctx context.Context) (advanced int, err error) {
 	tasks, err := p.repo.ListActive(ctx)
 	if err != nil {
@@ -84,6 +118,23 @@ func (p *Poller) RunOnce(ctx context.Context) (advanced int, err error) {
 	for _, t := range tasks {
 		status, resultSummary, errMessage, statusErr := p.checker.Status(ctx, t.EngineSessionRef)
 		if statusErr != nil {
+			if errors.Is(statusErr, ErrEngineSessionGone) {
+				p.logger.WarnContext(ctx, "agenttask: engine has no memory of this session, failing the task",
+					"task_id", t.ID, "error", statusErr)
+				if _, transErr := p.repo.Transition(ctx, t.TenantID, t.UserID, t.ID, StatusFailed, "", "", engineSessionGoneMessage); transErr != nil {
+					if errors.Is(transErr, ErrTerminalState) {
+						// Lost a race with a concurrent Cancel or a previous
+						// pass that already resolved this: already terminal.
+						continue
+					}
+					errCount++
+					p.logger.WarnContext(ctx, "agenttask: poller transition failed, retrying next pass",
+						"task_id", t.ID, "error", transErr)
+					continue
+				}
+				advanced++
+				continue
+			}
 			errCount++
 			p.logger.WarnContext(ctx, "agenttask: poller status check failed, retrying next pass",
 				"task_id", t.ID, "error", statusErr)
@@ -119,8 +170,8 @@ func (p *Poller) RunOnce(ctx context.Context) (advanced int, err error) {
 		advanced++
 	}
 
-	if errCount > 0 {
-		return advanced, fmt.Errorf("agenttask: poller pass had %d task-level error(s)", errCount)
+	if len(tasks) > 0 && errCount == len(tasks) {
+		return advanced, fmt.Errorf("agenttask: poller pass had %d/%d task-level error(s), sweep looks systemically degraded", errCount, len(tasks))
 	}
 	return advanced, nil
 }

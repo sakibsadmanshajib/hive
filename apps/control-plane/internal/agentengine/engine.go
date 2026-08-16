@@ -10,6 +10,8 @@ package agentengine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
@@ -44,6 +46,12 @@ func (e *Engine) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 // past running.
 func (e *Engine) Status(ctx context.Context, sessionRef string) (status agenttask.Status, resultSummary, errMessage string, err error) {
 	s, resultSummary, errMessage, err := e.sandbox.Status(ctx, sessionRef)
+	if err != nil && errors.Is(err, engineapi.ErrUnknownSession) {
+		// Mirrors Remote.post's 404 mapping so the poller can tell "this
+		// session can never answer again" apart from a transient failure
+		// regardless of which agenttask.Engine arm is wired in.
+		return "", "", "", fmt.Errorf("%w: %s", agenttask.ErrEngineSessionGone, err)
+	}
 	return agenttask.Status(s), resultSummary, errMessage, err
 }
 
