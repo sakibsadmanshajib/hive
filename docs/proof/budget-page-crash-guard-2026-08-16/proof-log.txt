@@ -1,0 +1,31 @@
+Visual proof for PR #906, head SHA 44786ad55180a7b8b0b4fcf6e6934a623d68e025.
+
+Captured locally against a stack rebuilt from that commit
+(docker compose --profile local --profile dev up --build), not a dev server
+serving unbuilt source.
+
+01-budget-normal-render.png
+  Signed in as a fixture-seeded owner (e2e-verified+proof906-<run>@...,
+  workspace-scoped, thrown away after the run). Navigated to
+  /console/billing/budget. Shows the ordinary case unbroken by this PR: the
+  budget form renders with soft/hard cap inputs enabled for the owner.
+
+02-getviewer-failure-redirects-to-signin.png
+  Same signed-in session (saved storageState, reused, not a fresh sign-in).
+  Induced the getViewer() failure honestly, at the boundary: stopped the
+  control-plane container (`docker compose stop control-plane`), then
+  navigated to /console/billing/budget again with no code changes to the
+  component. getViewer()'s fetch to control-plane fails for real (connection
+  refused, not a stub), the retry in getRequestContext() exhausts, and
+  app/console/billing/budget/page.tsx's catch redirects to /auth/sign-in.
+  Screenshot shows the ordinary sign-in form, not the generic "Something went
+  wrong on this page" error boundary this PR was written to stop reaching.
+  control-plane was restarted immediately after this capture
+  (`docker compose start control-plane`).
+
+No credential appears in either screenshot: Playwright's page.screenshot()
+captures page content only, never the browser address bar, so there is no
+URL to redact. The fixture email visible in the sidebar
+(e2e-verified+proof906-<run>@scubed.com.bd) is a throwaway address, not a
+credential. The signed-in storageState (cookies/tokens) used to reuse the
+session between the two captures was never committed; deleted after use.
