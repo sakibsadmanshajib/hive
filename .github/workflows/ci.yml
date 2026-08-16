@@ -597,7 +597,7 @@ jobs:
 
       - name: Install repo-level dev deps
         if: needs.changes.outputs.run != 'false'
-        run: npm ci --ignore-scripts || npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       # Merge-gate integrity: exactly one job may publish each required
       # check name, and every required context must have a producer.
@@ -749,6 +749,16 @@ jobs:
       # deliberately does not carry. Fixture regression test for the
       # event-condition classifier runs first, in a check that names the
       # case, rather than as a silently wrong count in the guard below.
+      # tools/verify-spec-wiring.mjs parses workflow YAML with the root
+      # devDependency 'yaml'. This job's only other install is the
+      # apps/web-console one above, set by defaults.run.working-directory, so
+      # without this the guard dies on ERR_MODULE_NOT_FOUND. The sibling
+      # root-scoped steps below survive because they import nothing.
+      - name: Install repo-level dev deps
+        if: needs.changes.outputs.run != 'false'
+        working-directory: .
+        run: npm ci --ignore-scripts
+
       - name: Spec wiring guard test
         if: needs.changes.outputs.run != 'false'
         working-directory: .
