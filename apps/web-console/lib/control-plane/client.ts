@@ -52,6 +52,20 @@ export interface AccountProfile {
   profile_setup_complete: boolean;
 }
 
+// The not-yet-set-up shape: a fresh account with no profile row (control-plane
+// 404s), and the fallback a page takes when the profile fetch itself fails.
+// Same reasoning as the 404 case below — render the needs-setup state rather
+// than crash.
+export const EMPTY_ACCOUNT_PROFILE: AccountProfile = {
+  owner_name: "",
+  login_email: "",
+  display_name: "",
+  account_type: "",
+  country_code: "",
+  state_region: "",
+  profile_setup_complete: false,
+};
+
 export interface UpdateAccountProfileInput {
   ownerName: string;
   loginEmail: string;
@@ -125,26 +139,32 @@ interface RequestContext {
   headers: Record<string, string>;
 }
 
-// Memoized per request with React's cache(): every exported function below
-// calls this before its own control-plane fetch, and a single server page can
-// legitimately call several of them (the budget settings page alone calls
-// getViewer, getAccountProfile, and getBudget; its parent layout calls
-// getViewer, getBalance, and getBudgetThreshold on the very same navigation).
-// Unmemoized, that is six separate real network round-trips to Supabase
-// Auth's getUser() for one page load, each one a chance for a transient
-// upstream hiccup to throw "No active session" and crash the whole Server
-// Components tree — confirmed live: a CI run of
-// tests/e2e/console-budgets.spec.ts failed with the console's generic error
-// boundary ("Something went wrong on this page") on a page whose only two
-// unguarded upstream calls are getViewer() and getAccountProfile(), and eight
-// of the eighteen console pages (this one included) make three or more of
-// these calls on one render, with the shared layout adding four more of its
-// own on every single one of them. cache() scopes the memoized
-// promise to a single request (Next.js's per-request React cache, reset on
-// the next navigation), so this does not change session freshness across
-// page loads, only how many times one page load re-derives it. Cuts the
-// external-call surface, and therefore the flake surface, without weakening
-// or skipping the session check itself.
+// Memoized per request with React's cache(): confirmed benefit is scoped to
+// the ~16 page.tsx/layout.tsx Server Components that call these exports (the
+// budget settings page alone calls getViewer, getAccountProfile, and
+// getBudget; its parent layout calls getViewer, getBalance, and
+// getBudgetThreshold on the same navigation — up to 6 calls per page load,
+// unmemoized). cache() dedup is scoped by React to the render of that
+// component tree; it does not apply to the ~15 Route Handlers under
+// app/api/**/route.ts that import this module, but each of those calls a
+// getRequestContext-consuming function once per invocation, so there is no
+// multi-call dedup to lose there either way.
+//
+// Each of those (up to 6, per Server Component render) calls was a real
+// network round trip to Supabase Auth's getUser(), and a chance for a
+// transient upstream hiccup to throw "No active session" — confirmed live: a
+// CI run of tests/e2e/console-budgets.spec.ts failed with the console's
+// generic error boundary ("Something went wrong on this page") instead of
+// the budget page. cache() collapses those up-to-6 chances into 1 per
+// request (scoped to that one request; reset on the next navigation, so this
+// does not change session freshness). The one-retry below closes most of
+// what's left of that one remaining chance. Neither eliminates it: a retry
+// exhausted or a memoized rejection is still a thrown error, and the two
+// call sites that throw uncaught on it (getViewer, getAccountProfile in
+// app/console/billing/budget/page.tsx and its layout) now catch it and
+// redirect to sign-in instead of letting it reach the generic boundary — see
+// those two files. The other 16 console pages that call getViewer() directly
+// still have the bare crash-on-throw path; known follow-up, not closed here.
 const getRequestContext = cache(async (): Promise<RequestContext> => {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
@@ -152,10 +172,21 @@ const getRequestContext = cache(async (): Promise<RequestContext> => {
   // Validate the JWT against Supabase (getUser does a server round-trip
   // and rejects revoked tokens) before trusting the session. getSession
   // only reads the cookie and would accept a revoked token.
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
+  //
+  // One retry only: a transient upstream hiccup (the failure class that
+  // crashed the budget page, see above) usually clears on a second attempt
+  // a moment later. A genuinely revoked or invalid token fails identically
+  // both times, so this cannot turn a real refusal into a false accept.
+  let user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"] =
+    null;
+  let userError: Awaited<ReturnType<typeof supabase.auth.getUser>>["error"] =
+    null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await supabase.auth.getUser();
+    user = result.data.user;
+    userError = result.error;
+    if (!userError && user) break;
+  }
   if (userError || !user) {
     throw new Error("No active session");
   }
@@ -905,15 +936,7 @@ export async function getAccountProfile(): Promise<AccountProfile> {
   // and billing pages can render their needs-setup state instead of
   // crashing the whole Server Components tree.
   if (response.status === 404) {
-    return {
-      owner_name: "",
-      login_email: "",
-      display_name: "",
-      account_type: "",
-      country_code: "",
-      state_region: "",
-      profile_setup_complete: false,
-    };
+    return EMPTY_ACCOUNT_PROFILE;
   }
 
   if (!response.ok) {
