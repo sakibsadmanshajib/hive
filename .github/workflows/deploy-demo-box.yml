@@ -1006,6 +1006,166 @@ jobs:
         working-directory: packages/sdk-tests/python
         run: pytest tests/test_health.py tests/test_models.py tests/test_embeddings.py -q
 
+  # ------------------------------------------------------------------
+  # Interaction coverage for the agent workspace (Cowork), against the
+  # deployment this workflow just shipped.
+  #
+  # It lives here rather than in ci.yml because the surface it exercises is a
+  # deployed one: the Cowork console, the edge-api agent-task routes and the
+  # host launcher only exist together on the box. A pull request job could
+  # only ever probe main's deployment, which says nothing about the pull
+  # request, and ci.yml's stack boots neither agent-console nor the launcher.
+  #
+  # Selected by project name, never by file path (issue #813). The project's
+  # testMatch in apps/web-console/playwright.config.ts is the single place
+  # that names the file, and scripts/verify-spec-collection.mjs fails the
+  # required web-console job if that wiring ever silently stops matching.
+  # ------------------------------------------------------------------
+  agent-workspace-coverage:
+    name: Agent workspace interaction coverage
+    needs: deploy
+    # MANUAL ONLY until issues #881 and #886 are fixed, then delete this line.
+    #
+    # The suite creates one real agent task and cancels it. Per #886 a cancel
+    # never reaches the engine, so the sandbox keeps running and keeps its
+    # concurrency slot; two runs exhaust HIVE_QUOTA_USER_CONCURRENCY for the
+    # demo account and every later create is refused. On every push to main
+    # touching apps/web-console that would take the demo surface down for the
+    # day, which is a real cost to pay for a measurement.
+    #
+    # Not in report-failure's `needs` either, for the same window: that job
+    # dedupes on a single open label, so a job that is red for a known product
+    # reason would hold that issue open and downgrade a genuine `migrate`
+    # failure to a comment on a stale issue, which is #553's blind spot
+    # reopened.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # One create in this suite launches a real sandbox, and control-plane's
+    # CreateTask is synchronous over that launch with a five-minute bound.
+    timeout-minutes: 25
+    env:
+      HIVE_CHAT_BASE_URL: https://chat-hive.scubed.co
+      # Minting a session needs all three. live-auth.mjs uses the admin
+      # one-time-token flow, which touches no password, and there is no
+      # credential-rotating fallback in it (docs/live-test-auth.md).
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Optional. The spec defaults to the demo account, which is named in
+      # docs/proof/live-auth-helper-2026-08-08/README.md and is not a
+      # credential. Set this secret to point the run at a different identity.
+      HIVE_QA_AGENT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL }}
+      # Optional, and the only reason C8 is unproven when it is absent: that
+      # control is the password submit path itself. Never rotate a shared
+      # account's password to manufacture one.
+      HIVE_QA_AGENT_PASSWORD: ${{ secrets.HIVE_QA_AGENT_PASSWORD }}
+      # Both generated files land in test-results/, which the repo .gitignore
+      # already excludes. Nothing this job produces is ever committed: a
+      # checked-in coverage snapshot reports the same ratio forever, including
+      # after the coverage it describes has moved.
+      PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/agent-workspace-run.json
+    defaults:
+      run:
+        working-directory: apps/web-console
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Install web-console deps
+        run: npm ci
+
+      - name: Read Playwright version
+        id: pw
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Run the agent workspace probe
+        run: npm run e2e:agent-workspace
+
+      - name: Build the coverage ledger
+        # Always, so a red run still publishes which controls it proved and
+        # which it did not. The ledger is generated here and gitignored: a
+        # committed snapshot reports the same ratio forever, including after
+        # coverage has moved. This step also fails when a control has no test
+        # at all, which is the one hole a ratio alone cannot show.
+        if: always()
+        run: |
+          set -euo pipefail
+          # The status is captured rather than allowed to abort the step, and
+          # stderr is merged into the pipe, because neither was true before and
+          # both broke the case this step exists for. The build script exits
+          # non-zero on a missing test, an undeclared tag, a duplicate tag or a
+          # run under the floor, and pipefail propagated that through `tee`, so
+          # the shell aborted and the summary block below never ran. The FAIL
+          # lines go to stderr as well, so `tee` captured none of them and both
+          # the summary and the artifact omitted the reason. A failing ledger
+          # has to publish WHY it failed; that is the whole point of it.
+          status=0
+          node scripts/build-agent-workspace-coverage.mjs \
+            test-results/agent-workspace-run.json \
+            test-results/agent-workspace-coverage.json \
+            2>&1 | tee test-results/coverage-summary.txt || status=$?
+          {
+            echo '## Agent workspace interaction coverage'
+            echo ''
+            echo '```'
+            cat test-results/coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload the coverage ledger
+        # The ledger and the run summary, by extension, and nothing else.
+        #
+        # NOT the Playwright report, NOT test-results/ wholesale, and the two
+        # files are NAMED rather than globbed. This project drives a browser
+        # with a real session on a deployed host, so a trace or a video would
+        # carry the Authorization bearer and the sb-*-auth-token cookie (which
+        # holds a refresh token) verbatim, into a public repository's artifacts
+        # for 90 days. The project turns both off in playwright.config.ts; this
+        # list is the second layer, so a future edit that re-enables either one
+        # still cannot publish it.
+        #
+        # A `*.json` glob was the first attempt and it was too wide: it also
+        # published test-results/agent-workspace-run.json, the raw Playwright
+        # report, which carries every title, error message and captured
+        # stdout/stderr from a run against a live deployment. Nothing prints a
+        # token today, so that was a posture gap rather than a live leak, but
+        # naming the files means a future log line cannot widen the artifact.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-workspace-coverage
+          path: |
+            apps/web-console/test-results/agent-workspace-coverage.json
+            apps/web-console/test-results/coverage-summary.txt
+          if-no-files-found: warn
+
   report-failure:
     # This workflow only triggers on push-to-main or manual dispatch, so every
     # failure in it means main is unmigrated, undeployed or unverified on the
