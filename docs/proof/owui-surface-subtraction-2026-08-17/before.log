@@ -3,3 +3,5 @@
 [before] settings tabs: ["General","Interface","Personalization","Audio","Data Controls","Account","About"]
 [before] settings admin links: 1
 [before] settings vendor links: ["https://github.com/open-webui/open-webui/blob/main/docs/CONTRIBUTING.md#-translations-and-internationalization"]
+[before] console errors: []
+[before] failed requests: []

@@ -15,6 +15,11 @@ node docs/proof/owui-surface-subtraction-2026-08-17/capture.mjs before http://lo
 node docs/proof/owui-surface-subtraction-2026-08-17/capture.mjs after  http://localhost:3032 <this dir>
 ```
 
+`capture.mjs` resolves Playwright from `apps/web-console/node_modules`, relative
+to itself, so it needs `npm ci` there and nothing else. A git worktree has no
+`node_modules` of its own; set `PLAYWRIGHT_CORE` to the primary checkout's copy
+for that case.
+
 The compose-less run is the point, not a shortcut. Every surface removed here
 was already off on the demo box and only there, because `docker-compose.yml`
 names three environment variables and `hive_rag_env_config.py` reconciles them
@@ -82,6 +87,25 @@ authenticated, through Caddy as configured on this branch:
   GET  /api/v1/chats/        -> 200
   GET  /api/v1/knowledge/    -> 200
 ```
+
+### The interface with that block in front of it
+
+`after-proxied.log` and `after-proxied-*.png` are the same capture run against
+the `after` image through the branch's own Caddy, on a shared docker network so
+the Caddyfile's `open-webui` upstream name resolves. Blocking a router would be
+a bad trade if the interface still called it, so that run records every console
+error and every 4xx or 5xx response the page provokes, in steady state:
+
+```
+[after-proxied] console errors: []
+[after-proxied] failed requests: []
+```
+
+Same menus, same settings tabs, and no request to `/api/v1/notes` at all, which
+is the point: the block returns 404, so any such request would have shown up in
+that list.
+
+### Why the block is scoped to notes
 
 That is the whole argument for the Caddy line in one block. With
 `notes.enable` false and the navigation entry gone, `POST /api/v1/notes/create`
