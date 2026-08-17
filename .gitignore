@@ -24,6 +24,13 @@
 # trimmed, patched copy of OpenHands's software-agent-sdk; see
 # vendor/openhands/VENDORING.md.
 !/vendor/openhands/
+# vendor/open-webui is the forked chat frontend, added as a squashed git
+# subtree and built from source by deploy/docker/Dockerfile.open-webui; see
+# docs/owui-fork.md. `git subtree add` writes a tree directly and so ignored
+# this exclusion, which left the vendored tree tracked but every NEW file
+# under it silently unstageable, including the whole Hive shell. Re-included
+# explicitly so a `git add` of a new component cannot pass in silence.
+!/vendor/open-webui/
 node_modules/
 package-lock.json
 # Apps whose CI job installs with `npm ci` need their lockfile committed, so

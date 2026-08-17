@@ -10,163 +10,21 @@
  * and heavily modified, so this stylesheet is the old ceiling, not a
  * constraint, and nothing here may be cited to refuse fork work.
  *
- * Two overrides live here, both added in the 2026-07-26 UI/UX pass:
- *   1. The agent-workspace launcher injected by loader.js.
- *   2. Replacing the emoji glyph that stock OWUI uses as the primary visual
- *      anchor of its Workspace empty states.
+ * One override lives here: replacing the emoji glyph that stock Open WebUI uses
+ * as the primary visual anchor of its Workspace empty states.
+ *
+ * A second one used to: the agent-workspace launcher that loader.js pinned to
+ * the header band by measurement. It is gone, and so is the reason for it. The
+ * agent workspace is a labelled row in the shell's own sidebar now
+ * (vendor/open-webui/src/lib/hive/), which is what an overlay positioned off
+ * eleven measured viewport widths was standing in for.
  *
  * Product branding that env vars and static assets already cover (name, title,
  * favicon, logo, splash) is deliberately NOT duplicated here.
  */
 
 /* ───────────────────────────────────────────────────────────────────────────
- * 1. Agent-workspace launcher
- *
- * Injected into <body> by loader.js, so it is styled by id and cannot collide
- * with any OWUI utility class. Sits in OWUI's own header band rather than
- * bottom-right: a bottom-anchored overlay lands on the message composer as soon
- * as the window narrows, whereas the header band has a permanent empty span
- * between the model selector and OWUI's own three header icons.
- *
- * EVERY VALUE BELOW IS OWUI'S OWN, read off the live pinned image at 1440px
- * rather than eyeballed, so the control is indistinguishable from the three
- * icons beside it. Its native header icon button is
- * `flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition`,
- * which computes to: padding 8px, border-radius 12px, no border, transparent
- * background, no shadow, transition 150ms, and an 18px `size-4.5` icon stroked
- * in currentColor at stroke-width 1.5 -- a 34x34 box sitting at y=7. Colours
- * resolve to oklch(0.51 0 0) idle and oklch(0.98 0 0) on hover in light, and
- * oklch(0.77 0 0) idle and oklch(0.27 0 0) on hover in dark. The previous
- * white-filled, bordered, drop-shadowed pill matched none of that and read as
- * an overlay pasted on top of the app.
- *
- * PLACEMENT. `right: 120px` is derived, not guessed. OWUI's right-hand
- * icon cluster never collapses or reflows: measured at 1440, 1280, 1024, 900,
- * 768, 640, 600, 540, 480, 414, 390 and 375px, its left edge stays pinned
- * 116-118px from the viewport's right edge. 120px puts this control just
- * outside it at every one of those widths, with the cluster to its right and
- * OWUI's left-hand group (sidebar toggle, model selector, add-model) to its
- * left.
- *
- * WHY THE GATE IS 768px AND NOT 375px. The binding constraint is not this
- * overlay, it is that OWUI's model selector is unclamped -- computed
- * `max-width: none`, `overflow: visible` -- so the left-hand group grows
- * rightwards with the length of the selected model's id. Measured right edge of
- * that group, by viewport and by label:
- *
- *            placeholder  seeded default   longest realistic   launcher's
- *            (unselected) (24 chars)       OpenRouter id (44)  left edge
- *   1440px      237           327               520              1163
- *   1024px      237           327               520               747
- *    768px      237           327               498               614
- *    640px      218           308               479               486
- *    600px      218           308               458               446  <- clash
- *    480px      218           286               338               326  <- clash
- *    375px      196           233               233               221  <- clash
- *
- * Two corrections from a 2026-08-05 re-measurement, taken with a model actually
- * selected rather than against the placeholder. First, the right-edge figures
- * above are the selector's own, not the whole group's: the add-model button adds
- * about 22px past them, so at 768px the group ends at 520 rather than 498.
- * Second, selecting a model makes upstream render a "Set as default" button as
- * well, and that one sits on its own line below the selector, never in the
- * launcher's row.
- *
- * At 768px the control clears even a 44-character model id by 94px. At 640px
- * the selector alone leaves 7px, so with the add-model button the two already
- * collide, and they stay collided all the way down -- and a collision
- * here is not cosmetic: this element paints above OWUI's, so it would swallow
- * clicks meant for the model selector. Hence 768px, which recovers everything
- * from 768px to 1023px that the previous 1024px gate hid for no measured
- * reason. Below 768px is not a matter of finding a better offset, it needs OWUI
- * to clamp its own selector (a fork or an upstream fix), so the per-message
- * "Open Agent Workspace" Action
- * (deploy/docker/pipelines/hive_agent_console_action.py) remains the entry
- * point there, exactly as before.
- *
- * The text label drops below 1024px, leaving the icon-only shape OWUI's own
- * header is made of; loader.js gives it a `title` so the name stays reachable.
- * ─────────────────────────────────────────────────────────────────────────── */
-#hive-agent-launcher {
-  position: fixed;
-  /* Both in px, both measured off the live header rather than rounded to a
-     convenient rem: 7px is where OWUI's own 34px header buttons sit, so the row
-     shares one baseline, and 120px clears its icon cluster (see table above). */
-  top: 7px;
-  right: 120px;
-  z-index: 30;
-
-  display: none; /* enabled at 768px by the media queries below */
-  align-items: center;
-  gap: 0.5rem;
-
-  padding: 0.5rem;
-  border: 0;
-  border-radius: 0.75rem;
-  background: transparent;
-  box-shadow: none;
-
-  color: oklch(0.51 0 0);
-  font-size: 0.875rem;
-  font-weight: 400;
-  line-height: 1;
-  text-decoration: none;
-  white-space: nowrap;
-
-  /* cubic-bezier(0.4, 0, 0.2, 1) is what OWUI's own `transition` utility
-     computes to, read off the live page. Omitting it defaults to `ease`, which
-     is a visibly different curve on the same 150ms. */
-  transition:
-    background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
-    color 150ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-#hive-agent-launcher:hover {
-  background: oklch(0.98 0 0);
-}
-
-/* OWUI's header buttons carry `focus:outline-hidden` and so show nothing on
-   keyboard focus. Not copied: a focusable control with no visible focus state
-   is an accessibility defect, not a house style worth matching. Drawn in
-   currentColor so it needs no per-theme override. */
-#hive-agent-launcher:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
-}
-
-#hive-agent-launcher svg {
-  width: 18px;
-  height: 18px;
-  flex: none;
-}
-
-/* OWUI sets a `dark` (or `light`) class on <html> from localStorage.theme
-   before the SPA boots -- see the inline theme script in its index.html -- so
-   keying off that class matches the app's own theme rather than the OS. */
-html.dark #hive-agent-launcher {
-  color: oklch(0.77 0 0);
-}
-
-html.dark #hive-agent-launcher:hover {
-  background: oklch(0.27 0 0);
-}
-
-@media (min-width: 768px) {
-  #hive-agent-launcher {
-    display: inline-flex;
-  }
-}
-
-/* Icon-only between 768px and 1023px: the label would eat the clearance the
-   table above measures, and OWUI's own header controls are icon-only anyway. */
-@media (max-width: 1023px) {
-  #hive-agent-launcher-label {
-    display: none;
-  }
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
- * 2. Workspace empty-state icon
+ * 1. Workspace empty-state icon
  *
  * Stock Open WebUI anchors its Workspace empty states (Models, Knowledge,
  * Prompts, Tools, and the admin Functions and Models panels) on a large

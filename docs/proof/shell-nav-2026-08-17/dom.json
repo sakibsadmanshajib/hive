@@ -1,0 +1,284 @@
+{
+  "before-light": {
+    "pathname": "/",
+    "title": "Hive",
+    "navRows": [],
+    "launcherCount": 1,
+    "sidebarPresent": true,
+    "agentPanel": null,
+    "bodyBackground": "rgb(255, 255, 255)",
+    "bodyFont": "-apple-system, BlinkMacSystemFont, Inter, Vazirmatn, ui-sans-serif, system-ui, \"Segoe UI\", Roboto, Ubuntu, Cantarell, \"Noto Sans\", sans-serif, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+    "hankenLoaded": false
+  },
+  "after-light": {
+    "pathname": "/",
+    "title": "Hive",
+    "navRows": [
+      {
+        "id": "chats",
+        "text": "Chats",
+        "href": "/",
+        "ariaCurrent": "page",
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.288 0.005 107)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "agents",
+        "text": "Agents",
+        "href": "/agents",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "knowledge",
+        "text": "Knowledge",
+        "href": "/workspace/knowledge",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      }
+    ],
+    "launcherCount": 0,
+    "sidebarPresent": true,
+    "agentPanel": null,
+    "bodyBackground": "rgb(255, 255, 255)",
+    "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+    "hankenLoaded": true
+  },
+  "after-agents-light": {
+    "pathname": "/agents",
+    "title": "Agents • Hive",
+    "navRows": [
+      {
+        "id": "chats",
+        "text": "Chats",
+        "href": "/",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "agents",
+        "text": "Agents",
+        "href": "/agents",
+        "ariaCurrent": "page",
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.288 0.005 107)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "knowledge",
+        "text": "Knowledge",
+        "href": "/workspace/knowledge",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      }
+    ],
+    "launcherCount": 0,
+    "sidebarPresent": true,
+    "agentPanel": {
+      "src": "/agent-workspace/tasks?embed=1&theme=light",
+      "width": 1180,
+      "height": 900,
+      "sameOrigin": true,
+      "embeddedFlag": 1,
+      "themeFlag": "light"
+    },
+    "bodyBackground": "rgb(255, 255, 255)",
+    "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+    "hankenLoaded": true
+  },
+  "before-dark": {
+    "pathname": "/",
+    "title": "Hive",
+    "navRows": [],
+    "launcherCount": 1,
+    "sidebarPresent": true,
+    "agentPanel": null,
+    "bodyBackground": "rgb(23, 23, 23)",
+    "bodyFont": "-apple-system, BlinkMacSystemFont, Inter, Vazirmatn, ui-sans-serif, system-ui, \"Segoe UI\", Roboto, Ubuntu, Cantarell, \"Noto Sans\", sans-serif, \"Helvetica Neue\", Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+    "hankenLoaded": false
+  },
+  "after-dark": {
+    "pathname": "/",
+    "title": "Hive",
+    "navRows": [
+      {
+        "id": "chats",
+        "text": "Chats",
+        "href": "/",
+        "ariaCurrent": "page",
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.288 0.005 107)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "agents",
+        "text": "Agents",
+        "href": "/agents",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "knowledge",
+        "text": "Knowledge",
+        "href": "/workspace/knowledge",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      }
+    ],
+    "launcherCount": 0,
+    "sidebarPresent": true,
+    "agentPanel": null,
+    "bodyBackground": "rgb(23, 23, 23)",
+    "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+    "hankenLoaded": true
+  },
+  "after-agents-dark": {
+    "pathname": "/agents",
+    "title": "Agents • Hive",
+    "navRows": [
+      {
+        "id": "chats",
+        "text": "Chats",
+        "href": "/",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "agents",
+        "text": "Agents",
+        "href": "/agents",
+        "ariaCurrent": "page",
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.288 0.005 107)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "knowledge",
+        "text": "Knowledge",
+        "href": "/workspace/knowledge",
+        "ariaCurrent": null,
+        "ariaLabel": null,
+        "height": 32,
+        "width": 244,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      }
+    ],
+    "launcherCount": 0,
+    "sidebarPresent": true,
+    "agentPanel": {
+      "src": "/agent-workspace/tasks?embed=1&theme=dark",
+      "width": 1180,
+      "height": 900,
+      "sameOrigin": true,
+      "embeddedFlag": 1,
+      "themeFlag": "dark"
+    },
+    "bodyBackground": "rgb(23, 23, 23)",
+    "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+    "hankenLoaded": true
+  },
+  "after-rail": {
+    "pathname": "/",
+    "title": "Hive",
+    "navRows": [
+      {
+        "id": "chats",
+        "text": "",
+        "href": "/",
+        "ariaCurrent": "page",
+        "ariaLabel": "Chats",
+        "height": 36,
+        "width": 36,
+        "colour": "oklch(0.288 0.005 107)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "agents",
+        "text": "",
+        "href": "/agents",
+        "ariaCurrent": null,
+        "ariaLabel": "Agents",
+        "height": 36,
+        "width": 36,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      },
+      {
+        "id": "knowledge",
+        "text": "",
+        "href": "/workspace/knowledge",
+        "ariaCurrent": null,
+        "ariaLabel": "Knowledge",
+        "height": 36,
+        "width": 36,
+        "colour": "oklch(0.42 0.02 82)",
+        "font": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+        "transition": "0.12s"
+      }
+    ],
+    "launcherCount": 0,
+    "sidebarPresent": true,
+    "agentPanel": null,
+    "bodyBackground": "rgb(255, 255, 255)",
+    "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+    "hankenLoaded": true
+  },
+  "focus": {
+    "boxShadow": "oklch(0.95 0.014 85) 0px 0px 0px 2px, oklch(0.678 0.164 43) 0px 0px 0px 4px",
+    "outline": "none"
+  },
+  "reducedMotion": "0s",
+  "coarsePointer": 44
+}

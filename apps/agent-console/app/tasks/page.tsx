@@ -1,13 +1,23 @@
+import { headers } from "next/headers";
+
 import { isCoworkEnabled } from "@/lib/edge-api/gate";
+import { HIVE_EMBED_HEADER } from "@/lib/embed";
 import { TaskConsole } from "@/components/task-console";
 import { AppHeader } from "@/components/brand";
 
 export default async function TasksPage() {
+  /*
+   * The chat shell renders this page as its Agents destination, inside the one
+   * sidebar and on the same origin. When it does, this app must not draw a
+   * second brand row and a "back to chat" link over the shell's own chrome.
+   * The theme half is handled once in the root layout.
+   */
+  const embedded = (await headers()).get(HIVE_EMBED_HEADER) === "1";
   const enabled = await isCoworkEnabled();
 
   return (
-    <>
-      <AppHeader />
+    <div className="min-h-screen bg-canvas">
+      {embedded ? null : <AppHeader />}
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-10">
         {/*
           Secondary text is --color-ink-2 throughout, not --color-ink-3. On
@@ -42,6 +52,6 @@ export default async function TasksPage() {
           </div>
         )}
       </main>
-    </>
+    </div>
   );
 }

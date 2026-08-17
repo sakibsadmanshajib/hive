@@ -32,6 +32,19 @@ target "web-console" {
   tags       = ["hive-web-console:ci"]
 }
 
+// The chat frontend, built from vendor/open-webui rather than taken prebuilt.
+// Not in any group: it is the slowest target in the file (about nine minutes
+// cold, a cache hit when the vendored tree is untouched), and the job that
+// actually exercises it is owui-nightly.yml, which boots the stack with
+// `--build`. Named here so `docker buildx bake open-webui` is one command
+// locally and so a future job can select it without inventing a second
+// build definition.
+target "open-webui" {
+  context    = "."
+  dockerfile = "deploy/docker/Dockerfile.open-webui"
+  tags       = ["hive-open-webui:v0.10.2-branded"]
+}
+
 target "sdk-tests-js" {
   context    = "."
   dockerfile = "deploy/docker/Dockerfile.sdk-tests-js"

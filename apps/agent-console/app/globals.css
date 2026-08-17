@@ -82,7 +82,7 @@
  * matching comment in apps/web-console/app/globals.css.
  */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-hv-theme="light"]) {
     --color-canvas: oklch(0.16 0.005 90);
     --color-surface: oklch(0.19 0.005 90);
     --color-surface-2: oklch(0.22 0.005 90);
@@ -104,6 +104,46 @@
     --color-warning-soft: oklch(0.30 0.06 75);
     --color-danger-soft: oklch(0.30 0.08 25);
   }
+}
+
+/*
+ * The same dark palette again, applied when the page is asked for a theme
+ * rather than inheriting one. The chat shell renders this app as its Agents
+ * destination and passes the theme the person actually chose, which is not
+ * necessarily the operating system's: a shell in dark mode on a light desktop
+ * would otherwise frame a light panel, and the seam between the two is exactly
+ * what makes a product read as assembled rather than built.
+ *
+ * Two copies of one palette, deliberately, and they must stay in step. There
+ * is no mixin in this toolchain and the values cannot live in a `@theme` block
+ * (Tailwind v4 hoists those out of any condition, which is the bug the comment
+ * above records). The media query above is guarded by
+ * `:not([data-hv-theme="light"])`, so an explicitly light panel on a dark
+ * desktop resolves without a third copy.
+ */
+:root[data-hv-theme="dark"] {
+  --color-canvas: oklch(0.16 0.005 90);
+  --color-surface: oklch(0.19 0.005 90);
+  --color-surface-2: oklch(0.22 0.005 90);
+  --color-surface-inset: oklch(0.14 0.005 90);
+  --color-border: oklch(0.27 0.005 90);
+  --color-border-strong: oklch(0.36 0.005 90);
+
+  --color-ink: oklch(0.96 0.005 90);
+  --color-ink-2: oklch(0.78 0.005 90);
+  --color-ink-3: oklch(0.60 0.005 90);
+  --color-ink-4: oklch(0.44 0.005 90);
+
+  --color-accent: oklch(0.72 0.14 38);
+  --color-accent-hover: oklch(0.78 0.14 38);
+  --color-accent-soft: oklch(0.30 0.05 38);
+  --color-accent-ink: oklch(0.86 0.10 38);
+
+  --color-success-soft: oklch(0.28 0.05 150);
+  --color-warning-soft: oklch(0.30 0.06 75);
+  --color-danger-soft: oklch(0.30 0.08 25);
+
+  color-scheme: dark;
 }
 
 @layer base {

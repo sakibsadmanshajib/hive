@@ -1,0 +1,330 @@
+/*
+ * Hive design tokens.
+ *
+ * Source of truth for colour, type, spacing, radius, elevation and motion
+ * across every surface that renders Hive chrome. Authored from
+ * spec-2026-08-11-hive-design-system (Obsidian vault), whose values were read
+ * from the live brand stylesheet at scubed.co/hive rather than sampled from a
+ * screenshot.
+ *
+ * Plain CSS custom properties, no framework and no build step, so the same
+ * file is consumed by the SvelteKit chat frontend (vendor/open-webui) and by
+ * the React applications under apps/. Tailwind 4 consumes it by pointing
+ * `@theme` at these variables.
+ *
+ * Every token is prefixed `--hv-`. That is load bearing rather than cosmetic:
+ * inside the chat fork this stylesheet shares a document with upstream Open
+ * WebUI's own custom properties, and an unprefixed `--color-border` is a
+ * collision waiting to happen.
+ *
+ * Structure: light values on bare `:root`; dark values repeated in two blocks,
+ * one under `prefers-color-scheme` guarded so an explicit light choice wins,
+ * and one under an explicit `data-theme="dark"`. Neither dark block may be a
+ * Tailwind `@theme` block: Tailwind v4 hoists a `@theme` inside a media query
+ * into an unconditional layer, which is what left the developer console
+ * permanently dark until 2026-07-26.
+ *
+ * Colour is expressed in OKLCH so a lightness figure means the same
+ * perceptual thing across hues, which is what makes the contrast reasoning in
+ * the specification checkable rather than asserted.
+ */
+
+:root {
+	/* ---------------------------------------------------------------- *
+	 * Neutrals. A warm paper family taken from the brand: cream page,
+	 * charcoal ink. Light column is the brand verbatim.
+	 * ---------------------------------------------------------------- */
+	--hv-canvas: oklch(0.95 0.014 85);
+	--hv-surface: oklch(0.968 0.011 85);
+	--hv-surface-raised: oklch(0.92 0.021 86);
+	--hv-surface-sunken: oklch(0.895 0.024 86);
+
+	/*
+	 * The brand's dark register is a contained card inside a light page, never
+	 * the page itself. That role is preserved rather than discarded: charcoal
+	 * on cream is the treatment for genuinely inset machine output, which is
+	 * code blocks, terminal and log output, and diffs. Measured 12.94:1.
+	 */
+	--hv-surface-inverse: oklch(0.288 0.005 107);
+	--hv-on-inverse: oklch(0.968 0.011 85);
+
+	--hv-border: oklch(0.857 0.028 86);
+	--hv-border-strong: oklch(0.76 0.032 85);
+
+	/*
+	 * Measured on cream: charcoal 12.28:1, ink-soft 5.12:1, both clear AA as
+	 * body text. The brand's `--muted` #9c927f is 2.66:1 and cannot carry text
+	 * on cream at all, which is why it is mapped to the disabled role rather
+	 * than to the muted one. Light mode therefore has exactly two readable ink
+	 * levels plus one derived middle.
+	 */
+	--hv-ink: oklch(0.288 0.005 107);
+	--hv-ink-secondary: oklch(0.42 0.02 82);
+	--hv-ink-muted: oklch(0.503 0.022 80);
+	--hv-ink-disabled: oklch(0.663 0.03 84);
+
+	/* ---------------------------------------------------------------- *
+	 * Accent. Coral is the only hue that is ever a fill, and a coral
+	 * element always means "you can act on this". Identical in light and
+	 * dark: it reads 2.67:1 on cream and 5.34:1 on charcoal, so it works
+	 * as a ground in both and as text in neither.
+	 *
+	 * Charcoal on coral measures 4.60:1 and passes AA; white on coral
+	 * measures 3.08:1 and fails. The brand's pairing is the only
+	 * accessible one, so `--hv-on-accent` is charcoal in both modes and
+	 * any future instinct to put white on the primary control is a
+	 * regression with a number attached.
+	 * ---------------------------------------------------------------- */
+	--hv-accent: oklch(0.678 0.164 43);
+	--hv-accent-hover: oklch(0.63 0.17 43);
+	--hv-on-accent: oklch(0.288 0.005 107);
+	--hv-accent-soft: oklch(0.94 0.035 45);
+	--hv-accent-line: oklch(0.84 0.07 44);
+	/* Coral taken down until it clears AA on cream, for the rare accent
+	 * flavoured label. Coral itself is never text and never a border. */
+	--hv-accent-ink: oklch(0.47 0.13 40);
+
+	/* ---------------------------------------------------------------- *
+	 * State. Separated by form, never by hue: coral is always a ground
+	 * and maroon is always ink, so the two can never present in the same
+	 * shape even though they sit 19.8 degrees apart.
+	 * ---------------------------------------------------------------- */
+	--hv-success: oklch(0.628 0.099 183);
+	--hv-success-soft: oklch(0.94 0.03 183);
+	--hv-warning: oklch(0.752 0.134 82);
+	--hv-warning-soft: oklch(0.945 0.045 85);
+	--hv-warning-ink: oklch(0.47 0.09 75);
+	--hv-danger: oklch(0.491 0.132 23);
+	--hv-danger-soft: oklch(0.945 0.03 25);
+	--hv-danger-ink: oklch(0.472 0.135 23);
+
+	/* Charts only. Never in interface chrome. */
+	--hv-chart-blue: oklch(0.629 0.104 242);
+	--hv-chart-lilac: oklch(0.773 0.073 318);
+
+	/* ---------------------------------------------------------------- *
+	 * Utility
+	 * ---------------------------------------------------------------- */
+	--hv-focus-ring: oklch(0.678 0.164 43);
+	--hv-scrim: oklch(0.288 0.005 107 / 0.45);
+	--hv-selection: var(--hv-accent-soft);
+	--hv-container-max: 1180px;
+	--hv-container-pad: 48px;
+
+	/* ---------------------------------------------------------------- *
+	 * Type. One family, Hanken Grotesk, carrying display and interface
+	 * both, separated by weight. Geist Mono is a product only addition
+	 * the brand does not have, because a marketing page has no credit
+	 * balances, key fragments, model identifiers or log output to set.
+	 * Both are SIL Open Font License 1.1.
+	 * ---------------------------------------------------------------- */
+	--hv-font-sans: 'Hanken Grotesk', 'Noto Sans Bengali', ui-sans-serif, system-ui, sans-serif;
+	--hv-font-display: var(--hv-font-sans);
+	--hv-font-mono: 'Geist Mono', 'Noto Sans Bengali', ui-monospace, 'SFMono-Regular', monospace;
+
+	/* Body stays at 14px. This is a control surface with dense lists and
+	 * tables; 16px body turns it into a marketing page. */
+	--hv-text-2xs: 11px;
+	--hv-leading-2xs: 16px;
+	--hv-text-xs: 12px;
+	--hv-leading-xs: 16px;
+	--hv-text-sm: 13px;
+	--hv-leading-sm: 20px;
+	--hv-text-base: 14px;
+	--hv-leading-base: 22px;
+	--hv-text-md: 15px;
+	--hv-leading-md: 24px;
+	--hv-text-lg: 16px;
+	--hv-leading-lg: 24px;
+	--hv-text-xl: 18px;
+	--hv-leading-xl: 26px;
+	--hv-text-2xl: 22px;
+	--hv-leading-2xl: 30px;
+	--hv-display-sm: 28px;
+	--hv-leading-display-sm: 34px;
+	--hv-display-md: 36px;
+	--hv-leading-display-md: 42px;
+	--hv-display-lg: 44px;
+	--hv-leading-display-lg: 50px;
+
+	/* Weight ladder. No other weight is drawn; an unconstrained variable
+	 * axis is how a type system stops being one. */
+	--hv-weight-body: 400;
+	--hv-weight-label: 500;
+	--hv-weight-heading: 600;
+	--hv-weight-eyebrow: 700;
+	--hv-weight-display: 800;
+
+	/* ---------------------------------------------------------------- *
+	 * Spacing. A strict 4px rhythm; no value outside this set appears in
+	 * a layout.
+	 * ---------------------------------------------------------------- */
+	--hv-space-1: 4px;
+	--hv-space-2: 8px;
+	--hv-space-3: 12px;
+	--hv-space-4: 16px;
+	--hv-space-5: 20px;
+	--hv-space-6: 24px;
+	--hv-space-8: 32px;
+	--hv-space-10: 40px;
+	--hv-space-12: 48px;
+	--hv-space-16: 64px;
+	--hv-space-20: 80px;
+
+	/* Fixed dimensions the shell depends on, all multiples of 4. */
+	--hv-sidebar-width: 280px;
+	--hv-sidebar-collapsed: 56px;
+	--hv-brand-row: 56px;
+	--hv-nav-row: 32px;
+	--hv-composer-rail: 40px;
+	--hv-account-row: 56px;
+	--hv-mobile-topbar: 48px;
+
+	/* ---------------------------------------------------------------- *
+	 * Radii. 24px and the pill are the brand's own two values; the two
+	 * smaller steps are ours, because a dense application needs shapes a
+	 * marketing site never has to draw. Nothing is drawn between 12px and
+	 * 24px, which is what stops the interface sliding into a field of
+	 * uniformly soft rectangles.
+	 * ---------------------------------------------------------------- */
+	--hv-radius-xs: 4px;
+	--hv-radius-sm: 8px;
+	--hv-radius-md: 12px;
+	--hv-radius-lg: 24px;
+	--hv-radius-pill: 100px;
+
+	/* ---------------------------------------------------------------- *
+	 * Elevation. Four levels, all low, none of them a glow.
+	 * ---------------------------------------------------------------- */
+	--hv-shadow-0: none;
+	--hv-shadow-1: 0 1px 0 0 oklch(0.19 0.006 260 / 0.05);
+	--hv-shadow-2:
+		0 1px 2px -1px oklch(0.19 0.006 260 / 0.08), 0 1px 0 0 oklch(0.19 0.006 260 / 0.04);
+	--hv-shadow-3:
+		0 6px 16px -6px oklch(0.19 0.006 260 / 0.12), 0 2px 6px -3px oklch(0.19 0.006 260 / 0.06);
+	--hv-shadow-4:
+		0 16px 40px -12px oklch(0.19 0.006 260 / 0.18), 0 4px 12px -6px oklch(0.19 0.006 260 / 0.08);
+
+	/* ---------------------------------------------------------------- *
+	 * Motion. Nothing over 260ms. There is deliberately no ease-in token
+	 * for entering elements: an entering element that starts slowly reads
+	 * as lag.
+	 * ---------------------------------------------------------------- */
+	--hv-duration-instant: 0ms;
+	--hv-duration-fast: 120ms;
+	--hv-duration-base: 180ms;
+	--hv-duration-slow: 260ms;
+	--hv-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+	--hv-ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--hv-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/*
+ * Dark. Built entirely from the brand's own charcoal ramp, which the live
+ * page renders at #201f1c, #2b2b28 and #3a3a34, so the dark theme can never
+ * introduce a colour the brand does not have. Measured on #201f1c: cream is
+ * 14.25:1 and the brand's `--muted` is 5.36:1, so dark has one more usable
+ * ink level than light.
+ *
+ * Declared once in a named block and applied by both selectors below, so the
+ * two can never drift apart.
+ */
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		--hv-canvas: oklch(0.239 0.006 92);
+		--hv-surface: oklch(0.288 0.005 107);
+		--hv-surface-raised: oklch(0.346 0.01 107);
+		--hv-surface-sunken: oklch(0.195 0.005 92);
+		--hv-surface-inverse: oklch(0.95 0.014 85);
+		--hv-on-inverse: oklch(0.288 0.005 107);
+
+		--hv-border: oklch(0.375 0.008 100);
+		--hv-border-strong: oklch(0.46 0.01 100);
+
+		--hv-ink: oklch(0.95 0.014 85);
+		--hv-ink-secondary: oklch(0.8 0.02 84);
+		--hv-ink-muted: oklch(0.663 0.03 84);
+		--hv-ink-disabled: oklch(0.5 0.02 82);
+
+		--hv-accent-hover: oklch(0.73 0.15 43);
+		--hv-accent-soft: oklch(0.32 0.055 43);
+		--hv-accent-line: oklch(0.45 0.09 43);
+		--hv-accent-ink: oklch(0.84 0.09 45);
+
+		--hv-success: oklch(0.72 0.095 183);
+		--hv-success-soft: oklch(0.3 0.04 183);
+		--hv-warning-soft: oklch(0.33 0.05 82);
+		--hv-warning-ink: oklch(0.85 0.09 84);
+		/* Maroon measures only 2.12:1 on charcoal, so danger is lifted. */
+		--hv-danger: oklch(0.68 0.14 25);
+		--hv-danger-soft: oklch(0.31 0.06 25);
+		--hv-danger-ink: oklch(0.78 0.11 25);
+
+		--hv-chart-blue: oklch(0.7 0.1 242);
+
+		--hv-scrim: oklch(0.2 0.005 95 / 0.62);
+
+		/*
+		 * Depth in dark is carried by the surface step plus the border. A
+		 * black shadow on a near black ground is invisible, and the attempt
+		 * to compensate is what produces the heavy murky look we avoid.
+		 */
+		--hv-shadow-1: none;
+		--hv-shadow-2: none;
+		--hv-shadow-3: none;
+	}
+}
+
+:root[data-theme='dark'] {
+	--hv-canvas: oklch(0.239 0.006 92);
+	--hv-surface: oklch(0.288 0.005 107);
+	--hv-surface-raised: oklch(0.346 0.01 107);
+	--hv-surface-sunken: oklch(0.195 0.005 92);
+	--hv-surface-inverse: oklch(0.95 0.014 85);
+	--hv-on-inverse: oklch(0.288 0.005 107);
+
+	--hv-border: oklch(0.375 0.008 100);
+	--hv-border-strong: oklch(0.46 0.01 100);
+
+	--hv-ink: oklch(0.95 0.014 85);
+	--hv-ink-secondary: oklch(0.8 0.02 84);
+	--hv-ink-muted: oklch(0.663 0.03 84);
+	--hv-ink-disabled: oklch(0.5 0.02 82);
+
+	--hv-accent-hover: oklch(0.73 0.15 43);
+	--hv-accent-soft: oklch(0.32 0.055 43);
+	--hv-accent-line: oklch(0.45 0.09 43);
+	--hv-accent-ink: oklch(0.84 0.09 45);
+
+	--hv-success: oklch(0.72 0.095 183);
+	--hv-success-soft: oklch(0.3 0.04 183);
+	--hv-warning-soft: oklch(0.33 0.05 82);
+	--hv-warning-ink: oklch(0.85 0.09 84);
+	--hv-danger: oklch(0.68 0.14 25);
+	--hv-danger-soft: oklch(0.31 0.06 25);
+	--hv-danger-ink: oklch(0.78 0.11 25);
+
+	--hv-chart-blue: oklch(0.7 0.1 242);
+
+	--hv-scrim: oklch(0.2 0.005 95 / 0.62);
+
+	--hv-shadow-1: none;
+	--hv-shadow-2: none;
+	--hv-shadow-3: none;
+}
+
+@media (max-width: 767px) {
+	:root {
+		--hv-container-pad: 22px;
+	}
+}
+
+/*
+ * Bengali conjuncts fracture under letter spacing, so every tracked label in
+ * the shell would break. Carried over unchanged from the developer console,
+ * where this rule has shipped since 2026-07.
+ */
+html:lang(bn),
+html:lang(bn) * {
+	letter-spacing: normal;
+}
