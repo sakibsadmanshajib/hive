@@ -77,7 +77,11 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import FileItem from '../common/FileItem.svelte';
 	import Image from '../common/Image.svelte';
-	import Spinner from '../common/Spinner.svelte';
+	// The composer's visual container and its send button, so this surface and
+	// the agent composer render the same control rather than two that resemble
+	// each other. Presentational only; nothing below this line changed.
+	import ComposerShell from '$lib/hive/ComposerShell.svelte';
+	import ComposerSendButton from '$lib/hive/ComposerSendButton.svelte';
 
 	import XMark from '../icons/XMark.svelte';
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
@@ -1358,11 +1362,9 @@
 							</div>
 						{/if}
 
-						<div
+						<ComposerShell
 							id="message-input-container"
-							class="flex-1 flex flex-col relative w-full shadow-lg rounded-3xl border {$temporaryChatEnabled
-								? 'border-dashed border-gray-100 dark:border-gray-800 hover:border-gray-200 focus-within:border-gray-200 hover:dark:border-gray-700 focus-within:dark:border-gray-700'
-								: ' border-gray-100/30 dark:border-gray-850/30 hover:border-gray-200 focus-within:border-gray-100 hover:dark:border-gray-800 focus-within:dark:border-gray-800'}  transition px-1 bg-white/5 dark:bg-gray-500/5 backdrop-blur-sm dark:text-gray-100"
+							dashed={$temporaryChatEnabled}
 							dir={$settings?.chatDirection ?? 'auto'}
 						>
 							{#if atSelectedModel !== undefined}
@@ -2174,38 +2176,18 @@
 														? $i18n.t('Waiting for upload...')
 														: $i18n.t('Send message')}
 												>
-													<button
+													<ComposerSendButton
 														id="send-message-button"
-														class="{!(prompt === '' && files.length === 0) || uploadPending
-															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
-															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
-														type="submit"
 														disabled={(prompt === '' && files.length === 0) || uploadPending}
-													>
-														{#if uploadPending}
-															<Spinner className="size-5" />
-														{:else}
-															<svg
-																xmlns="http://www.w3.org/2000/svg"
-																viewBox="0 0 16 16"
-																fill="currentColor"
-																class="size-5"
-															>
-																<path
-																	fill-rule="evenodd"
-																	d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
-																	clip-rule="evenodd"
-																/>
-															</svg>
-														{/if}
-													</button>
+														pending={uploadPending}
+													/>
 												</Tooltip>
 											</div>
 										{/if}
 									{/if}
 								</div>
 							</div>
-						</div>
+						</ComposerShell>
 
 						{#if $config?.license_metadata?.input_footer}
 							<div class=" text-xs text-gray-500 text-center line-clamp-1 marked">
