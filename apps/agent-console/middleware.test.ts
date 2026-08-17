@@ -61,10 +61,41 @@ describe("middleware basePath-aware redirects", () => {
     expect(response.headers.get("location")).toBe("http://localhost/agent-workspace/auth/sign-in");
   });
 
-  it("sets frame-denial headers on every response", async () => {
+  it("allows same-origin framing and refuses every other origin", async () => {
+    // The chat shell renders this app as its Agents destination, on the same
+    // origin behind the same Caddy listener, so 'none' is no longer correct.
+    // 'self' is still a real origin check: a third-party page cannot frame this
+    // one to harvest a click or a session.
     mockUser = { id: "user-1" };
     const request = new NextRequest("http://localhost/tasks");
     const response = await middleware(request);
-    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(response.headers.get("content-security-policy")).toBe(
+      "frame-ancestors 'self'"
+    );
+  });
+
+  it("carries the embed and theme parameters through the sign-in redirect", async () => {
+    // Without this the panel loses the shell's theme the moment it bounces to
+    // sign-in, and a light login appears inside a dark shell.
+    mockUser = null;
+    const request = new NextRequest(
+      "http://localhost/tasks?embed=1&theme=dark"
+    );
+    const response = await middleware(request);
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/agent-workspace/auth/sign-in?embed=1&theme=dark"
+    );
+  });
+
+  it("ignores a theme it does not know", async () => {
+    mockUser = null;
+    const request = new NextRequest(
+      "http://localhost/tasks?embed=1&theme=neon"
+    );
+    const response = await middleware(request);
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/agent-workspace/auth/sign-in?embed=1"
+    );
   });
 });

@@ -86,12 +86,16 @@ export async function middleware(request: NextRequest) {
   // Embedded rendering is a property of the whole visit, not of one page. The
   // chat shell asks for it on the URL it frames, and a redirect to sign-in
   // would otherwise drop it and paint a light panel inside a dark shell.
+  //
+  // Rebuilt from the values already validated above rather than copied from the
+  // incoming query, so nothing a caller invents is reflected back into a
+  // redirect target.
   const embedParams = new URLSearchParams();
-  for (const name of ["embed", "theme"]) {
-    const value = request.nextUrl.searchParams.get(name);
-    if (value) {
-      embedParams.set(name, value);
-    }
+  if (requestHeaders.has(HIVE_EMBED_HEADER)) {
+    embedParams.set("embed", "1");
+  }
+  if (requestedTheme) {
+    embedParams.set("theme", requestedTheme);
   }
   const query = embedParams.toString();
 
