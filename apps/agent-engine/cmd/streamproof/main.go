@@ -84,9 +84,10 @@ const (
 	// cannot be: a StreamingDeltaEvent only ever carries content or
 	// reasoning_content (event_service.py), so no tool-argument fragment can
 	// appear in this capture, and the tool phase produces no deltas at all.
-	proofPrompt = "Run the shell command: echo hive-streaming-proof. Then reply with exactly this sentence and nothing else: Hive streaming proof ok."
+	proofPrompt = "Run the shell command: echo hive-streaming-proof. Then finish by writing a plain chat message, not a tool call, containing exactly this sentence and nothing else: Hive streaming proof ok."
 
 	deltaKind           = "StreamingDeltaEvent"
+	messageKind         = "MessageEvent"
 	conversationTimeout = 5 * time.Minute
 	socketWaitTimeout   = 4 * time.Minute
 )
@@ -179,9 +180,18 @@ func run() error {
 	rec.printf("SUMMARY A/product(stream=true): %s", streamed)
 	rec.printf("SUMMARY B/control(stream=false): %s", control)
 
+	// Precondition, checked before the verdict rather than folded into it: a
+	// delta only ever carries content or reasoning_content, so a turn the model
+	// answered entirely through tool calls produces no prose and therefore no
+	// deltas whether streaming is on or off. Reporting that as a streaming
+	// failure would be a lie, and reporting it as a pass would be worse.
+	if streamed.count(messageKind) == 0 {
+		return fmt.Errorf("inconclusive rather than failed: the streaming arm produced no %s, so the model wrote no prose for a delta to carry this run (frames seen: %s). Rerun", messageKind, streamed)
+	}
+
 	var problems []string
 	if streamed.deltas() == 0 {
-		problems = append(problems, "the product launch published no StreamingDeltaEvent")
+		problems = append(problems, "the product launch wrote prose but published no StreamingDeltaEvent")
 	}
 	if n := control.deltas(); n != 0 {
 		problems = append(problems, fmt.Sprintf("the stream=false control published %d StreamingDeltaEvent frames, so this capture is not measuring the flag", n))
@@ -355,11 +365,13 @@ type capture struct {
 	samples        int
 }
 
-func (c *capture) deltas() int {
+func (c *capture) count(kind string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.counts[deltaKind]
+	return c.counts[kind]
 }
+
+func (c *capture) deltas() int { return c.count(deltaKind) }
 
 func (c *capture) String() string {
 	c.mu.Lock()
