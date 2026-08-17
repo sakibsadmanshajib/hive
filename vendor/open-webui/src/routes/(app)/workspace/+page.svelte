@@ -1,25 +1,15 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { user } from '$lib/stores';
 	import { onMount } from 'svelte';
 
+	/*
+	 * Hive: Knowledge is the only Workspace surface this product ships, so the
+	 * index is an unconditional redirect to it rather than a chain that walks
+	 * per-permission to Models, Prompts, Tools or Skills. Those four are gone
+	 * (see +layout.svelte), and a session without knowledge permission is
+	 * bounced to / by that layout's own guard, which is unchanged.
+	 */
 	onMount(() => {
-		if ($user?.role !== 'admin') {
-			if ($user?.permissions?.workspace?.models) {
-				goto('/workspace/models');
-			} else if ($user?.permissions?.workspace?.knowledge) {
-				goto('/workspace/knowledge');
-			} else if ($user?.permissions?.workspace?.prompts) {
-				goto('/workspace/prompts');
-			} else if ($user?.permissions?.workspace?.tools) {
-				goto('/workspace/tools');
-			} else if ($user?.permissions?.workspace?.skills) {
-				goto('/workspace/skills');
-			} else {
-				goto('/');
-			}
-		} else {
-			goto('/workspace/models');
-		}
+		goto('/workspace/knowledge');
 	});
 </script>

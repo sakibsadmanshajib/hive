@@ -31,7 +31,14 @@
 		<meta name="theme-color" content="#171717" />
 		<meta name="robots" content="noindex,nofollow" />
 
-		<script src="/static/loader.js" defer crossorigin="use-credentials"></script>
+		<!--
+			Hive: the /static/loader.js hook is gone with the overlay it injected.
+			It existed to add an agent-workspace entry point to a compiled bundle
+			that had no navigation slot; this frontend is built from source now and
+			the entry point is a row in the sidebar
+			(src/lib/hive/ShellNav.svelte). custom.css stays: it still carries the
+			Workspace empty-state override, which is upstream markup we do not own.
+		-->
 		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
 
 		<script>

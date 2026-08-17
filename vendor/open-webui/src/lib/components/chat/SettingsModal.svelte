@@ -223,23 +223,6 @@
 				'settings'
 			]
 		},
-		{
-			id: 'tools',
-			title: 'Integrations',
-			keywords: [
-				'addconnection',
-				'add connection',
-				'integrations',
-				'managetools',
-				'manage tools',
-				'manage tool servers',
-				'managetoolservers',
-				'open terminal',
-				'openterminal',
-				'terminal',
-				'settings'
-			]
-		},
 
 		{
 			id: 'personalization',

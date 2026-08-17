@@ -15,7 +15,12 @@ jobs:
   owui-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-owui-e2e')) }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # 30 until the chat frontend was forked. This job boots the stack with
+    # `--build`, and that build now compiles vendor/open-webui from source:
+    # measured cold on a development machine, `npm ci` about 90 seconds and
+    # `npm run build` about 420 seconds, against a runner with no layer cache
+    # to hit. 45 covers it with the same margin the previous number had.
+    timeout-minutes: 45
     env:
       OWUI_URL: http://localhost:3003
       OWUI_E2E_MAX_USD_PER_RUN: '1'

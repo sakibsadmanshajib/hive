@@ -51,6 +51,10 @@
 	import '../app.css';
 	import 'tippy.js/dist/tippy.css';
 
+	// Hive shell. Loaded last so its type and navigation styling wins over the
+	// upstream defaults it replaces. Everything it owns lives in $lib/hive.
+	import '$lib/hive/hive.css';
+
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
 	import { getAllTags, getChatList } from '$lib/apis/chats';

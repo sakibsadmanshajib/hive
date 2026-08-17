@@ -244,8 +244,9 @@ async function findTaskIdByBrief(
  * so N identical Cancel buttons collapse to one, and only the two screens in
  * the states this file drives are inventoried, so a control that appears only
  * in a state nothing here reaches is not seen. This app has no shadow DOM and
- * no iframes today (it is a plain Next app, and its own middleware sets
- * frame-ancestors 'none'), so the ceiling costs nothing yet. Widen to a
+ * renders no iframe of its own today (it is a plain Next app; the chat shell
+ * now frames it, which is why its middleware sets frame-ancestors 'self'
+ * rather than 'none'), so the ceiling costs nothing yet. Widen to a
  * recursive walk over shadowRoot and frameLocator the day either appears.
  */
 const FOCUSABLE_SELECTOR =

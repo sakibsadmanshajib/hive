@@ -2,19 +2,44 @@
 
 @config '../tailwind.config.js';
 
+/*
+ * Hive palette.
+ *
+ * Upstream funnels every surface and every ink in the application through this
+ * one neutral ramp plus white and black, so this block is where the product
+ * stops being grey and becomes the brand: a warm cream page with charcoal ink,
+ * read from the live brand at scubed.co/hive and carried in
+ * packages/hive-tokens/tokens.css.
+ *
+ * Lightness is held within a step or two of upstream's own ramp on purpose.
+ * Every contrast pair in the application was drawn against those relationships,
+ * so warming the hue and pinning the two ends to brand values re-skins the
+ * product without inverting a single pair. The ends are the brand verbatim:
+ * white is the raised cream surface #f8f4ec, gray-50 is the cream page #f3eee4,
+ * gray-850 is charcoal #2b2b28 and gray-900 is the dark page #201f1c, so
+ * `dark:text-white` resolves to cream on charcoal, which is the brand's own
+ * hero pairing at 12.94:1.
+ *
+ * There is deliberately no accent here. Coral is the one accent, it is only
+ * ever a ground, and it is applied by Hive components from the token file
+ * rather than by an upstream utility class.
+ */
 @theme {
-	--color-gray-50: oklch(0.98 0 0);
-	--color-gray-100: oklch(0.94 0 0);
-	--color-gray-200: oklch(0.92 0 0);
-	--color-gray-300: oklch(0.85 0 0);
-	--color-gray-400: oklch(0.77 0 0);
-	--color-gray-500: oklch(0.69 0 0);
-	--color-gray-600: oklch(0.51 0 0);
-	--color-gray-700: oklch(0.42 0 0);
-	--color-gray-800: oklch(0.32 0 0);
-	--color-gray-850: oklch(0.27 0 0);
-	--color-gray-900: oklch(0.2 0 0);
-	--color-gray-950: oklch(0.16 0 0);
+	--color-white: oklch(0.968 0.011 85);
+	--color-black: oklch(0.195 0.005 92);
+
+	--color-gray-50: oklch(0.95 0.014 85);
+	--color-gray-100: oklch(0.92 0.021 86);
+	--color-gray-200: oklch(0.895 0.024 86);
+	--color-gray-300: oklch(0.857 0.028 86);
+	--color-gray-400: oklch(0.76 0.032 85);
+	--color-gray-500: oklch(0.663 0.03 84);
+	--color-gray-600: oklch(0.503 0.022 80);
+	--color-gray-700: oklch(0.42 0.02 82);
+	--color-gray-800: oklch(0.346 0.01 107);
+	--color-gray-850: oklch(0.288 0.005 107);
+	--color-gray-900: oklch(0.239 0.006 92);
+	--color-gray-950: oklch(0.195 0.005 92);
 }
 
 /*

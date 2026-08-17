@@ -60,6 +60,7 @@
 	import { createNoteHandler } from '$lib/components/notes/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
+	import HiveShellNav from '$lib/hive/ShellNav.svelte';
 	import ArchivedChatsModal from './ArchivedChatsModal.svelte';
 	import UserMenu from './Sidebar/UserMenu.svelte';
 	import ChatItem from './Sidebar/ChatItem.svelte';
@@ -85,7 +86,10 @@
 	import HotkeyHint from '../common/HotkeyHint.svelte';
 
 	const BREAKPOINT = 768;
-	const DEFAULT_PINNED_ITEMS = ['notes', 'workspace'];
+	// Hive: Knowledge is a top level destination in the shell's own nav, so the
+	// Workspace container has one child left and no reason to be a row of its
+	// own. Notes is off by feature flag on this deployment.
+	const DEFAULT_PINNED_ITEMS: string[] = [];
 
 	let scrollTop = 0;
 
@@ -144,8 +148,6 @@
 					$config?.features?.enable_calendar &&
 					($user?.role === 'admin' || $user?.permissions?.features?.calendar)
 				);
-			case 'playground':
-				return $user?.role === 'admin';
 			default:
 				return false;
 		}
@@ -156,8 +158,7 @@
 			notes: { label: 'Notes', href: '/notes', iconType: 'note' },
 			workspace: { label: 'Workspace', href: '/workspace', iconType: 'workspace' },
 			automations: { label: 'Automations', href: '/automations', iconType: 'automations' },
-			calendar: { label: 'Calendar', href: '/calendar', iconType: 'calendar' },
-			playground: { label: 'Playground', href: '/playground', iconType: 'playground' }
+			calendar: { label: 'Calendar', href: '/calendar', iconType: 'calendar' }
 		};
 		return items[id];
 	};
@@ -829,6 +830,8 @@
 	>
 		<button
 			class="flex flex-col flex-1 {isWindows ? 'cursor-pointer' : 'cursor-[e-resize]'}"
+			aria-label={$i18n.t('Open Sidebar')}
+			aria-expanded="false"
 			on:click={async () => {
 				showSidebar.set(!$showSidebar);
 			}}
@@ -899,6 +902,13 @@
 						</button>
 					</Tooltip>
 				</div>
+
+				<!--
+					Hive: the shell's own destinations on the collapsed rail. Same list
+					and same order as the expanded sidebar, so collapsing the sidebar
+					hides labels and never hides a destination.
+				-->
+				<HiveShellNav rail={true} />
 
 				{#each pinnedItems as itemId (itemId)}
 					{@const meta = getMenuItemMeta(itemId)}
@@ -1150,6 +1160,13 @@
 						</button>
 					</div>
 
+					<!--
+						Hive: Chats, Agents and Knowledge as labelled destinations. The
+						owner named the absence of the first two; the third was two clicks
+						deep behind a Workspace container this product does not ship.
+					-->
+					<HiveShellNav />
+
 					<div id="pinned-menu-items-list">
 						{#each pinnedItems as itemId (itemId)}
 							{@const meta = getMenuItemMeta(itemId)}
@@ -1354,7 +1371,7 @@
 				<Folder
 					id="sidebar-chats"
 					className="px-2 mt-0.5"
-					name={$i18n.t('Chats')}
+					name={$i18n.t('Recents')}
 					chevron={false}
 					on:change={async (e) => {
 						selectedFolder.set(null);

@@ -1,0 +1,8 @@
+captured 01-before-chat-light.png <- http://owui-before:8080/ (light)
+captured 02-after-chat-light.png <- http://caddy-proof:80/ (light)
+captured 03-after-agents-light.png <- http://caddy-proof:80/agents (light)
+captured 01-before-chat-dark.png <- http://owui-before:8080/ (dark)
+captured 02-after-chat-dark.png <- http://caddy-proof:80/ (dark)
+captured 03-after-agents-dark.png <- http://caddy-proof:80/agents (dark)
+captured 04-after-rail-light.png <- http://caddy-proof:80/ (light)
+captured 05-after-focus-ring.png

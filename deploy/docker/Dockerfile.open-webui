@@ -1,5 +1,48 @@
 # Hive-branded Open WebUI image.
 #
+# The frontend is ours and is built from source. `vendor/open-webui` is the
+# upstream repository at v0.10.2, added as a squashed git subtree, and this
+# first stage compiles it exactly the way upstream's own Dockerfile does:
+# node:22-alpine3.20, `npm ci --force`, `npm run build`. The result replaces
+# /app/build in the pinned image below.
+#
+# Frontend only, deliberately (owner decision 2026-08-11, .wolf/decisions.md
+# D-036, and plan-2026-08-11-one-shell-two-panels-owui-fork section 1):
+#
+#   * The Python backend and its dependency set stay upstream's, so a digest
+#     bump keeps giving us backend CVE fixes for free.
+#   * Every backend patch below keeps working unchanged.
+#   * The frontend and backend versions must therefore match, which the second
+#     stage asserts rather than assumes.
+#
+# Measured on the development machine, cold, no layer cache: `npm ci` about 90
+# seconds, `npm run build` about 420 seconds. Warm, with vendor/open-webui
+# untouched, both layers are cache hits and cost nothing. NODE_OPTIONS raises
+# the heap because the deploy target is the 12 GB demo box, where this build
+# runs alongside the live stack.
+FROM node:22-alpine3.20 AS frontend
+
+WORKDIR /build/vendor/open-webui
+
+# Upstream's own build stage installs git; its build reads the revision.
+RUN apk add --no-cache git
+
+COPY vendor/open-webui/package.json vendor/open-webui/package-lock.json ./
+RUN npm ci --force
+
+# The design tokens live outside the vendored tree on purpose: they are plain
+# CSS custom properties shared with the React applications, and keeping Hive's
+# visual identity out of a tree that tracks upstream is what makes it portable.
+# Copied at the same relative depth the repository has, so the stylesheet's
+# `@import '../../../../../packages/hive-tokens/tokens.css'` resolves here and
+# in a working tree without a second code path.
+COPY packages/hive-tokens /build/packages/hive-tokens
+COPY vendor/open-webui ./
+
+ENV APP_BUILD_HASH=hive-fork
+ENV NODE_OPTIONS=--max-old-space-size=4096
+RUN npm run build && test -f build/index.html
+#
 # Upstream Open WebUI hardcodes a license-enforcement suffix: any custom
 # WEBUI_NAME gets " (Open WebUI)" appended (backend/open_webui/env.py,
 # WEBUI_NAME != 'Open WebUI' check) unless the deployment stays at <=50 end
@@ -175,3 +218,57 @@ RUN sed -i "s/or 'native'/or os.environ.get('HIVE_DEFAULT_FUNCTION_CALLING', 'na
 COPY deploy/docker/owui-patches/remove_integrations_tab.py /tmp/remove_integrations_tab.py
 RUN python3 /tmp/remove_integrations_tab.py \
     && ! grep -rq 'id:"tools",title:"Integrations"' /app/build/_app/immutable
+
+# The Hive frontend replaces the prebuilt one, and it goes last on purpose.
+#
+# Every bundle rewrite above still runs, against the bundle it was written for,
+# and this step then throws that bundle away. That reads as waste and it is
+# deliberate for exactly one release. Those rewrites are exact literals over
+# minified output; the identifiers inside them are allocated per chunk, so any
+# edit to our own source renames them, and running them over our own build
+# fails on three of nineteen entries that name surfaces which have not actually
+# come back. Measured, not assumed: the first build of this stage failed on
+# sidebar-playground-item, changelog-modal and about-vendor-social-badges, and
+# an identifier-tolerant pattern for the last two matched sibling components
+# that must not be touched.
+#
+# Every surface those rewrites removed is removed in the vendored source
+# instead (see docs/owui-fork.md), so nothing regresses. What the steps above
+# still buy is the digest-drift guard: they fail the build if a future image
+# bump moves upstream's own bundle out from under the source we track. Retiring
+# them is a follow-up, deliberately not in this change, because a separate
+# change was in flight against hive_ui_surfaces.py and two edits to that file
+# from different directions is how a surface silently returns.
+#
+# The version assertion below is the load-bearing half of this step. This
+# image's Python backend serves whatever is in /app/build, and a frontend built
+# from a different upstream release would call endpoints that moved, so a
+# digest bump without a matching `git subtree pull` fails here rather than in a
+# browser.
+COPY --from=frontend /build/vendor/open-webui/package.json /tmp/hive-frontend-package.json
+RUN set -eu; \
+    vendored=$(python3 -c "import json;print(json.load(open('/tmp/hive-frontend-package.json'))['version'])"); \
+    pinned=$(python3 -c "import json;print(json.load(open('/app/package.json'))['version'])"); \
+    test "$vendored" = "$pinned" || { \
+      echo "vendor/open-webui is $vendored but this image's backend is $pinned" >&2; \
+      echo "run: git subtree pull --prefix vendor/open-webui <remote> v$pinned --squash" >&2; \
+      exit 1; }; \
+    rm /tmp/hive-frontend-package.json; \
+    echo "hive: frontend and backend agree on $pinned"
+
+RUN rm -rf /app/build
+COPY --from=frontend /build/vendor/open-webui/build /app/build
+
+# The Hive shell has to be in what actually ships, and the surfaces removed in
+# source have to be absent from it. Cheap, and it is the one check that fails
+# if the frontend stage silently built a tree without our changes in it.
+RUN set -eu; \
+    grep -rqF 'data-hive-nav' /app/build/_app/immutable || { \
+      echo "the built bundle carries no Hive navigation" >&2; exit 1; }; \
+    grep -rqF 'HankenGrotesk-Variable' /app/build/_app/immutable || { \
+      echo "the built bundle does not load the brand typeface" >&2; exit 1; }; \
+    ! grep -rqF '"/workspace/models"' /app/build/_app/immutable || { \
+      echo "Workspace > Models came back in the built bundle" >&2; exit 1; }; \
+    ! grep -rqF 'discord.gg/5rJgQTnV4s' /app/build/_app/immutable || { \
+      echo "the vendor social badges came back in the built bundle" >&2; exit 1; }; \
+    echo "hive: shell present, removed surfaces absent"

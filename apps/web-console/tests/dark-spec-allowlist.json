@@ -48,7 +48,7 @@
         "e2e/phase-19/owui/06-tenant-model-visibility.spec.ts",
         "e2e/phase-19/owui/07-image-upload-vision.spec.ts",
         "e2e/phase-19/owui/08-signout.spec.ts",
-        "e2e/phase-19/owui/09-agent-workspace-launcher.spec.ts",
+        "e2e/phase-19/owui/09-agent-workspace-nav.spec.ts",
         "e2e/phase-19/owui/performance/embed-latency.spec.ts",
         "e2e/phase-19/owui/performance/ttfb.spec.ts"
       ],
