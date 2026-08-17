@@ -743,6 +743,21 @@ services:
       DEFAULT_USER_ROLE: "pending"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
+      # #947: both flags below default to true upstream (config.py:2029,
+      # config.py:2037) and we never set them, so every Open WebUI
+      # administrator -- which is every sole tenant OWNER, per the
+      # tenant-role patch below -- could list every other tenant's Knowledge
+      # collections (routers/knowledge.py:143) and read any user's chats
+      # (routers/chats.py:600, :1056). Confirmed live: a demo account's
+      # Knowledge collection was visible from an unrelated personal account.
+      # Both are plain os.getenv reads at import time, not PersistentConfig,
+      # so setting them here takes effect on the next container start with
+      # no database reconciliation needed. Scope: this does not change who
+      # holds the admin role (#748) or the proxy write-verb gap (#949); it
+      # only stops an admin session from reading across tenants once it
+      # exists.
+      BYPASS_ADMIN_ACCESS_CONTROL: "false"
+      ENABLE_ADMIN_CHAT_ACCESS: "false"
       # #772: stock Open WebUI surfaces with no Hive counterpart. These three
       # are the ones upstream actually gates on a feature flag rather than on a
       # permission, and the flag is checked before the role, so turning them
