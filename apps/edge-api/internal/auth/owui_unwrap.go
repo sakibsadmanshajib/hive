@@ -165,12 +165,12 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 					return
 				}
 			}
-			// This check has to come before the pass-through below, not
-			// after it. A per-user path can only receive its user token in a
-			// JSON __metadata block, so a shim-key request there with a
-			// missing or non-JSON Content-Type can never be legitimate.
-			// Passing it through first would let any caller skip the
-			// rejection further down simply by omitting Content-Type.
+			// The rejection has to come before the pass-through, not after it.
+			// With no carrier on the header, a per-user path can only receive
+			// its user token in a JSON __metadata block, so a shim-key request
+			// there with a missing or non-JSON Content-Type can never be
+			// legitimate. Passing it through first would let any caller skip
+			// the rejection simply by omitting Content-Type.
 			jsonBody := r.Body != nil && isJSONContent(r.Header.Get("Content-Type"))
 			if !jsonBody {
 				// The bodyless case the header carrier exists for. Nothing to
