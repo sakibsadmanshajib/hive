@@ -35,6 +35,15 @@ type BalanceSummary struct {
 	PostedCredits    int64 `json:"posted_credits"`
 	ReservedCredits  int64 `json:"reserved_credits"`
 	AvailableCredits int64 `json:"available_credits"`
+
+	// Corruption counters, not balance components (issue #918). A reservation
+	// whose releases exceed its holds is impossible by construction and means
+	// credits were returned that were never taken. Reported so the condition is
+	// visible instead of being folded into a plausible-looking hold, and kept
+	// off the wire (json:"-") so the customer-facing payload keeps its shape;
+	// the operator signal is the error log in Service.GetBalance.
+	OverReleasedCredits      int64 `json:"-"`
+	OverReleasedReservations int64 `json:"-"`
 }
 
 type PostEntryInput struct {

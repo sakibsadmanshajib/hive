@@ -51,22 +51,32 @@ func (l *serializingLedger) RefundCredits(_ context.Context, _ uuid.UUID, _ stri
 	return ledger.LedgerEntry{ID: uuid.New(), EntryType: ledger.EntryTypeRefund, CreditsDelta: credits}, nil
 }
 
-// concurrentRepo is a goroutine-safe repoStub for the race test.
+// concurrentRepo is a goroutine-safe repoStub for the race test. It applies the
+// hold to the shared balance itself, because the production repository writes
+// the hold in the same transaction as the row (issue #918); modelling it
+// anywhere else would leave the race test measuring a sequence the system no
+// longer performs.
 type concurrentRepo struct {
-	mu    sync.Mutex
-	count int
+	mu     sync.Mutex
+	count  int
+	ledger *serializingLedger
 }
 
-func (r *concurrentRepo) CreateReservation(_ context.Context, reservation Reservation, _ string) (Reservation, error) {
+func (r *concurrentRepo) CreateReservation(ctx context.Context, reservation Reservation, _ string, hold ReservationHold) (Reservation, error) {
 	r.mu.Lock()
 	r.count++
 	r.mu.Unlock()
+	if r.ledger != nil {
+		if _, err := r.ledger.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, nil, &reservation.ID, hold.IdempotencyKey, hold.Credits, hold.Metadata); err != nil {
+			return Reservation{}, err
+		}
+	}
 	return reservation, nil
 }
 func (r *concurrentRepo) GetReservation(context.Context, uuid.UUID, uuid.UUID) (Reservation, error) {
 	return Reservation{}, ErrNotFound
 }
-func (r *concurrentRepo) ExpandReservation(context.Context, uuid.UUID, uuid.UUID, int64, string) (Reservation, error) {
+func (r *concurrentRepo) ExpandReservation(context.Context, uuid.UUID, uuid.UUID, int64, string, ReservationHold) (Reservation, error) {
 	return Reservation{}, ErrNotFound
 }
 func (r *concurrentRepo) FinalizeReservation(context.Context, uuid.UUID, uuid.UUID, int64, int64, bool, ReservationStatus, string) (Reservation, error) {
@@ -103,8 +113,8 @@ func (concurrentUsage) ListAttempts(context.Context, uuid.UUID, string, int) ([]
 // using the supplied account locker, and returns how many succeeded.
 func runConcurrentReservations(t *testing.T, locker AccountLocker, balance, each int64, n int) (int, *serializingLedger) {
 	t.Helper()
-	repo := &concurrentRepo{}
 	ledgerSvc := &serializingLedger{available: balance}
+	repo := &concurrentRepo{ledger: ledgerSvc}
 	svc := NewService(repo, ledgerSvc, concurrentUsage{}).WithAccountLocker(locker)
 
 	accountID := uuid.New()
@@ -159,14 +169,32 @@ type countingLocker struct {
 	mu       sync.Mutex
 	calls    int
 	accounts []uuid.UUID
+	// held is true while the guarded function runs, so a fake repository can
+	// record whether IT ran inside the lock. Without it the assertion fires
+	// only if the service stops taking a hold at all, and moving the repository
+	// call outside WithAccountLock would keep the test green.
+	held bool
 }
 
 func (l *countingLocker) WithAccountLock(ctx context.Context, accountID uuid.UUID, fn func(context.Context) error) error {
 	l.mu.Lock()
 	l.calls++
 	l.accounts = append(l.accounts, accountID)
+	l.held = true
 	l.mu.Unlock()
-	return fn(ctx)
+
+	err := fn(ctx)
+
+	l.mu.Lock()
+	l.held = false
+	l.mu.Unlock()
+	return err
+}
+
+func (l *countingLocker) heldNow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.held
 }
 
 // TestCreateReservationAcquiresAccountLock deterministically proves the
@@ -178,6 +206,7 @@ func TestCreateReservationAcquiresAccountLock(t *testing.T) {
 	locker := &countingLocker{}
 	accountID := uuid.New()
 
+	repo.lockProbe = locker
 	svc := NewService(repo, ledgerSvc, &usageStub{}).WithAccountLocker(locker)
 	if _, err := svc.CreateReservation(context.Background(), CreateReservationInput{
 		AccountID:        accountID,
@@ -197,8 +226,16 @@ func TestCreateReservationAcquiresAccountLock(t *testing.T) {
 	if len(locker.accounts) != 1 || locker.accounts[0] != accountID {
 		t.Fatalf("expected lock keyed on account %s, got %#v", accountID, locker.accounts)
 	}
-	if len(ledgerSvc.reserveCalls) != 1 {
-		t.Fatalf("expected the reserve hold to be posted inside the lock, got %d reserve calls", len(ledgerSvc.reserveCalls))
+	// The hold is written with the row now (issue #918), so the thing that must
+	// happen inside the lock is the repository call that carries it. Asserted
+	// on where it ran, not merely that it ran: repoStub records the locker's
+	// held flag at call time, so moving s.repo.CreateReservation outside
+	// WithAccountLock fails this.
+	if len(repo.holds) != 1 || repo.holds[0].Credits != 50 {
+		t.Fatalf("expected the 50-credit hold to be written inside the lock, got %#v", repo.holds)
+	}
+	if !repo.createdUnderLock {
+		t.Fatal("the reservation and its hold were written outside the per-account lock, which is the double-spend window issue #106 closed")
 	}
 }
 
