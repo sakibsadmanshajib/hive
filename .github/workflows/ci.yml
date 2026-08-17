@@ -1464,12 +1464,61 @@ jobs:
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
+      - name: Name a shared session-pool exhaustion on failure
+        if: failure()
+        # Diagnosis, not dispensation. The run has already failed and stays
+        # failed; this only saves the next reader the archaeology.
+        #
+        # On 2026-08-16 this job failed the flake gate with three unrelated
+        # specs passing only on a retry, and every one of them was a timeout
+        # caused by `FATAL: (EMAXCONNSESSION) max clients reached in session
+        # mode`, which appeared 258 times in the dump this step now reads.
+        # Finding that meant downloading the compose artifact and grepping it by
+        # hand, while the job log said nothing but "3 flaky". A retry-pass is
+        # still a failure and the gate is untouched; what changes is that the
+        # log now says which failure it was.
+        run: |
+          set -uo pipefail
+          log=/tmp/compose-web-e2e-api.log
+          [ -f "$log" ] || exit 0
+          n=$(grep -c EMAXCONNSESSION "$log" || true)
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "::error title=Shared session pool exhausted::${n} EMAXCONNSESSION refusals in this job's container logs. The Supabase project's Supavisor session-mode ceiling is 15 clients, shared by this job, every other CI stack booted at the same time and the always-on demo box. Failures in this run are contention, not necessarily a product defect; see issues #631 and #841. Do not raise the retry count or the timeouts to survive it."
+          fi
+
       - name: Upload compose logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: compose-logs-web-e2e-api
           path: /tmp/compose-web-e2e-api.log
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Upload the Next.js server log on failure
+        if: failure()
+        # The console renders an error boundary ("Something went wrong on this
+        # page", plus a digest) when a server component throws, and the cause is
+        # only ever in this log. On 2026-08-16 an invitation-acceptance spec
+        # timed out waiting for a workspace switcher that the error boundary had
+        # replaced, and nothing in any uploaded artifact said why: this file was
+        # written and then discarded with the runner.
+        #
+        # Redacted on the way out, like the compose dump: artifacts on a public
+        # repository are downloadable by anyone with the run URL, and this job
+        # drives /invitations/accept?token=<live token>.
+        run: |
+          set -uo pipefail
+          if [ -f /tmp/nextjs.log ]; then
+            python3 scripts/redact-log-credentials.py < /tmp/nextjs.log > /tmp/nextjs-redacted.log || true
+          fi
+
+      - name: Upload the redacted Next.js server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-log-web-e2e
+          path: /tmp/nextjs-redacted.log
           if-no-files-found: ignore
           retention-days: 5
 

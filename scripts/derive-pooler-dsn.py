@@ -37,6 +37,12 @@ them and leave nothing for Open WebUI, which is exactly the observed failure.
 An explicit cap makes the budget a property of the deployment rather than of
 whatever hardware it lands on.
 
+The session cap defaults to the EPHEMERAL budget, and `--session-max-conns`
+raises it for the one long-lived deployment. See `DEFAULT_SESSION_MAX_CONNS`
+below for the arithmetic: with the old single value of six, one push asked for
+18 of the 15 slots across its three CI stacks, and the visible symptom was
+unrelated browser specs passing only on a retry.
+
 The session DSN additionally carries `pool_max_conn_idle_time` and
 `pool_health_check_period`. A cap alone bounds how many slots a consumer may
 take; it does nothing about how long it keeps them. pgxpool holds an idle
@@ -49,6 +55,7 @@ Usage
 -----
     derive-pooler-dsn.py --dsn "postgresql://user:pw@host:5432/postgres"
     derive-pooler-dsn.py --host H --port 5432 --user U --dbname D --password P
+    derive-pooler-dsn.py --dsn "..." --session-max-conns 6
     derive-pooler-dsn.py --self-test
 
 Prints three `KEY=value` lines, ready to append to $GITHUB_ENV:
@@ -82,10 +89,39 @@ SESSION_PORT = 5432
 TRANSACTION_PORT = 6543
 
 # Session slots are a hard 15 shared by everything, so control-plane gets a
-# budget rather than the whole pool. Six covers the permanent LISTEN connection
-# plus normal query traffic plus a held account advisory lock, and leaves room
-# for a second control-plane instance and any transient psql.
-SESSION_MAX_CONNS = 6
+# budget rather than the whole pool.
+#
+# The default is the EPHEMERAL budget, and that is the important part. Six was
+# the original value and it was sized for one long-lived deployment; every
+# ephemeral consumer inherited it. Three stacks boot per push (ci.yml's web-e2e
+# job, ci.yml's live-integration job, agent-visual-proof.yml), so a single push
+# asked for 18 of the 15 slots before the always-on demo box's own six was
+# counted. On 2026-08-16 that produced 258 `EMAXCONNSESSION` refusals inside one
+# Web E2E job, whose visible symptom was three unrelated specs passing only on a
+# retry and the repository's flake gate failing `main` for it.
+#
+# Four, and the arithmetic behind it is the reservation path rather than a round
+# number. `accounting.PgxAccountLocker.WithAccountLock` checks out one connection
+# per account currently holding the advisory lock and then runs `fn`, which needs
+# a further connection for its own ledger and usage writes; `pglock.go` says so
+# in its own comment and gates per account in-process for exactly this reason. So
+# a pool of `max` survives `max - 2` concurrent account locks: one connection is
+# pinned for the life of the process by `LISTEN tenant_settings_changed`, K are
+# held by lock holders, and at least one has to stay free or the holders starve
+# and the reservation path deadlocks until their contexts expire. Four leaves
+# room for two concurrent accounts, which is above anything CI drives; three
+# would allow exactly one, and trading a contention timeout for a starvation
+# timeout is not a fix.
+#
+# A deployment that needs more asks for it with --session-max-conns, so the large
+# budget is explicit and local to the one consumer that earned it, and a new
+# workflow that forgets the flag fails safe.
+DEFAULT_SESSION_MAX_CONNS = 4
+
+# Below two, the listener's permanently checked-out connection leaves nothing for
+# queries and control-plane wedges on its first one. Refuse it here, where the
+# message can say why.
+MIN_SESSION_MAX_CONNS = 2
 
 # A session slot is held for as long as the pgxpool connection that owns it
 # exists, not for as long as it is in use, and pgxpool's own defaults are
@@ -176,12 +212,25 @@ def with_port(dsn: str, port: int) -> str:
     return urlunsplit(parts._replace(netloc=netloc))
 
 
-def derive(dsn: str) -> tuple[str, str, str]:
+def derive(
+    dsn: str, session_max_conns: int = DEFAULT_SESSION_MAX_CONNS
+) -> tuple[str, str, str]:
     """Return (session_dsn, transaction_dsn, transaction_libpq_dsn) for one DSN.
 
     The third value is the transaction DSN as libpq will accept it: same host,
     port and credential, with pgx's own parameters stripped.
+
+    session_max_conns is this consumer's share of the project's 15 session slots.
+    It defaults to the ephemeral budget; a long-lived deployment passes its own.
     """
+    if session_max_conns < MIN_SESSION_MAX_CONNS:
+        raise ValueError(
+            f"session_max_conns={session_max_conns} is below {MIN_SESSION_MAX_CONNS}: "
+            "control-plane pins one pool connection for the life of the process on "
+            "LISTEN tenant_settings_changed, so a smaller cap leaves nothing to run "
+            "queries on"
+        )
+
     parts = urlsplit(dsn)
     host = parts.hostname
     if not host:
@@ -189,7 +238,7 @@ def derive(dsn: str) -> tuple[str, str, str]:
 
     session = with_params(
         dsn,
-        pool_max_conns=str(SESSION_MAX_CONNS),
+        pool_max_conns=str(session_max_conns),
         pool_max_conn_idle_time=SESSION_MAX_CONN_IDLE_TIME,
         pool_health_check_period=SESSION_HEALTH_CHECK_PERIOD,
     )
@@ -222,7 +271,31 @@ def self_test() -> int:
     session, transaction, libpq = derive(pooler)
 
     assert ":5432/" in session, session
-    assert "pool_max_conns=6" in session, session
+    # The default is the ephemeral budget, so a consumer that asks for nothing
+    # gets the small one instead of a third of the project's whole session
+    # ceiling. Never below three: see DEFAULT_SESSION_MAX_CONNS for why a pool
+    # of `max` only survives `max - 2` concurrent account locks.
+    assert "pool_max_conns=4" in session, session
+    assert DEFAULT_SESSION_MAX_CONNS >= 3, DEFAULT_SESSION_MAX_CONNS
+
+    # A long-lived deployment asks for its larger budget explicitly.
+    big_session, big_transaction, big_libpq = derive(pooler, session_max_conns=6)
+    assert "pool_max_conns=6" in big_session, big_session
+    # The transaction flavours are not session slots and must not move with it.
+    assert "pool_max_conns=8" in big_transaction, big_transaction
+    assert "pool_max_conns" not in big_libpq, big_libpq
+
+    # settings.Resolver.StartListener acquires a pool connection and holds it for
+    # the life of the process, so a cap of 1 leaves zero connections for queries
+    # and control-plane wedges on its first request. Refuse it here, where the
+    # message can say why, rather than in a container that merely hangs.
+    for rejected in (1, 0, -1):
+        try:
+            derive(pooler, session_max_conns=rejected)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"session_max_conns={rejected} must be rejected")
     # A cap without an idle release still lets one consumer squat six of the
     # fifteen session slots for pgxpool's default 30 idle minutes, which is how
     # three idle consumers exhaust the pool between them.
@@ -294,7 +367,7 @@ def self_test() -> int:
         assert "options=-c%20statement_timeout%3D3000" in flavour, flavour
         assert "+" not in urlsplit(flavour).query, flavour
 
-    print("derive-pooler-dsn: self-test ok (33 assertions)")
+    print("derive-pooler-dsn: self-test ok (40 assertions)")
     return 0
 
 
@@ -306,6 +379,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--user")
     ap.add_argument("--dbname")
     ap.add_argument("--password")
+    ap.add_argument(
+        "--session-max-conns",
+        type=int,
+        default=DEFAULT_SESSION_MAX_CONNS,
+        help=(
+            "this consumer's share of the project's 15 session-mode slots "
+            f"(default {DEFAULT_SESSION_MAX_CONNS}, the ephemeral budget; a "
+            "long-lived deployment passes a larger one explicitly)"
+        ),
+    )
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
 
@@ -323,7 +406,10 @@ def main(argv: list[str]) -> int:
             ap.error(f"--dsn, or all of --host --user --dbname --password (missing: {', '.join(missing)})")
         dsn = build_dsn(args.host, args.port, args.user, args.dbname, args.password)
 
-    session, transaction, libpq = derive(dsn)
+    try:
+        session, transaction, libpq = derive(dsn, session_max_conns=args.session_max_conns)
+    except ValueError as err:
+        ap.error(str(err))
     print(f"SUPABASE_DB_URL={session}")
     print(f"SUPABASE_DB_POOL_URL={transaction}")
     print(f"SUPABASE_DB_POOL_URL_LIBPQ={libpq}")
