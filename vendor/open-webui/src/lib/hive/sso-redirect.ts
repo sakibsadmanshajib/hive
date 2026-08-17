@@ -21,7 +21,7 @@ export type SsoRedirectConfig = {
 		auth_trusted_header?: boolean;
 	} | null;
 	onboarding?: boolean;
-} | null;
+} | null | undefined;
 
 export type SsoRedirectContext = {
 	/** `?form=` on the sign in URL, the deliberate escape hatch to the manual page. */
@@ -122,35 +122,80 @@ export const ssoAutoRedirectDecision = (
 };
 
 const ATTEMPT_KEY = 'hive:sso-attempt-at';
+const SIGNED_OUT_KEY = 'hive:signed-out';
 
-/** Reads the attempt stamp. Storage is unavailable in some privacy modes, and an
- * unreadable stamp must never be the reason a sign in cannot start. */
-export const readSsoAttemptAt = (): number | null => {
+const readStorage = (key: string): string | null => {
 	try {
-		const raw = sessionStorage.getItem(ATTEMPT_KEY);
-		if (!raw) {
-			return null;
-		}
-		const parsed = Number.parseInt(raw, 10);
-		return Number.isFinite(parsed) ? parsed : null;
+		return sessionStorage.getItem(key);
 	} catch {
 		return null;
 	}
 };
 
-export const markSsoAttempt = (now: number = Date.now()): void => {
+/** Writes and reads back, because a browser that refuses storage does not always
+ * throw; some silently drop the value. A write that cannot be proved is a
+ * failure, since the caller uses the answer to decide whether it is safe to
+ * redirect. */
+const writeStorage = (key: string, value: string): boolean => {
 	try {
-		sessionStorage.setItem(ATTEMPT_KEY, String(now));
+		sessionStorage.setItem(key, value);
+		return sessionStorage.getItem(key) === value;
 	} catch {
-		// ponytail: a tab that cannot store the stamp loses only the loop guard,
-		// and the guard is a safety net, not a precondition for signing in.
+		return false;
 	}
 };
 
-export const clearSsoAttempt = (): void => {
+const clearStorage = (key: string): void => {
 	try {
-		sessionStorage.removeItem(ATTEMPT_KEY);
+		sessionStorage.removeItem(key);
 	} catch {
 		// Nothing to clear if storage is unavailable.
 	}
+};
+
+/** Reads the attempt stamp. `null` means "no usable stamp", which includes
+ * storage being unreadable, so callers must treat it together with the result of
+ * {@link markSsoAttempt} rather than as proof that no attempt was made. */
+export const readSsoAttemptAt = (): number | null => {
+	const raw = readStorage(ATTEMPT_KEY);
+	if (!raw) {
+		return null;
+	}
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) ? parsed : null;
+};
+
+/** Records that a round trip is starting. Returns false when the stamp could not
+ * be stored, which means the loop guard is blind. The automatic path must not
+ * redirect in that case: an unrecorded attempt is exactly how an endless bounce
+ * starts. An explicit click may still proceed, because a person deciding to
+ * retry is the bound the guard would otherwise supply. */
+export const markSsoAttempt = (now: number = Date.now()): boolean =>
+	writeStorage(ATTEMPT_KEY, String(now));
+
+export const clearSsoAttempt = (): void => clearStorage(ATTEMPT_KEY);
+
+/** Signing out has to outlive the one page load it lands on. The provider's own
+ * session usually survives ours, and this provider publishes no end session
+ * endpoint, so without a sticky marker the next navigation would silently sign
+ * the same person back in and signing out would be unreachable. Cleared by an
+ * explicit sign in, so it never blocks anyone who wants back in. */
+export const markSignedOut = (): boolean => writeStorage(SIGNED_OUT_KEY, '1');
+
+export const readSignedOut = (): boolean => readStorage(SIGNED_OUT_KEY) === '1';
+
+export const clearSignedOut = (): void => clearStorage(SIGNED_OUT_KEY);
+
+/** Accepts only a path inside this application. A protocol relative value such
+ * as `//evil.example` or `/\\evil.example` is a different origin wearing a
+ * path's clothes, and this parameter is now reachable with no interaction at
+ * all. */
+export const safeRedirectPath = (value: string | null | undefined): string | null => {
+	if (!value || !value.startsWith('/')) {
+		return null;
+	}
+	if (value.startsWith('//') || value.startsWith('/\\')) {
+		return null;
+	}
+	return value;
 };

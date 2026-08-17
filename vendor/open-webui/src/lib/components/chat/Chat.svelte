@@ -3248,7 +3248,6 @@
 											messageInput?.setText(text);
 										}}
 										{selectedModels}
-										{atSelectedModel}
 										{sendMessage}
 										{showMessage}
 										{submitMessage}

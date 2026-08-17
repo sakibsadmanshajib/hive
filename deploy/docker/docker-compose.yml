@@ -697,6 +697,10 @@ services:
       # `curl -s https://<chat-host>/api/config` and check that
       # oauth.auto_redirect is true.
       #
+      # To turn it back off, set this to "false" rather than deleting the line:
+      # the reconcile only writes keys the environment names, so removing the
+      # variable leaves whatever is already persisted, which by then is true.
+      #
       # The redirect is not unconditional. The page re-checks at runtime that
       # there is exactly one provider, no password form, no LDAP, no trusted
       # header and no onboarding, and it refuses to redirect after a round trip

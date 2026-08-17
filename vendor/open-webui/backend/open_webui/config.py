@@ -1626,12 +1626,12 @@ DEFAULT_MODELS = os.getenv('DEFAULT_MODELS', None)
 
 DEFAULT_PINNED_MODELS = os.getenv('DEFAULT_PINNED_MODELS', None)
 
-# Hive ships no starter prompts. Upstream seeded six sample prompts here (a fun
-# fact about the Roman Empire, options trading, procrastination) and the chat
-# landing surface rendered them under a "Suggested" heading, which read as
+# Hive ships no starter prompts. Upstream seeded six sample prompts here and the
+# chat landing surface rendered them under a "Suggested" heading, which read as
 # someone else's product rather than ours. The renderer is gone and so is the
-# sample content. The variable stays because a deployment can still supply its
-# own through the environment, and it is empty by default rather than stocked.
+# sample content; scripts/test_owui_ui_surfaces.py fails if either comes back.
+# The variable stays because a deployment can still supply its own prompts
+# through the environment, and it is empty by default rather than stocked.
 try:
     default_prompt_suggestions = json.loads(os.getenv('DEFAULT_PROMPT_SUGGESTIONS', '[]'))
 except Exception as e:

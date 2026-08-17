@@ -22,9 +22,15 @@ because Open WebUI only refreshes the name from a claim that is actually present
 """
 
 import re
+import unicodedata
 
 # Separators that stand in for a space inside an email local part.
 _SEPARATORS = re.compile(r'[._\-]+')
+
+# Longest display name this will produce. Long enough for any real name, short
+# enough that a hostile address cannot push a wall of text through every surface
+# that renders the value.
+_MAX_LENGTH = 64
 
 
 def display_name_from_email(email: str) -> str:
@@ -34,17 +40,33 @@ def display_name_from_email(email: str) -> str:
     a bad display name is a cosmetic problem, and failing a sign in over one
     would not be.
     """
+    email = (email or '').strip()
     if not email:
         return ''
 
     local = email.split('@', 1)[0]
+    # A quoted local part is legal but rare. The quotes are syntax, not a name.
+    local = local.strip('"')
     # Plus addressing is a routing tag, not part of the person's name.
     local = local.split('+', 1)[0]
 
-    words = [word for word in _SEPARATORS.split(local) if word]
+    words = [word for word in _SEPARATORS.split(_sanitize(local)) if word]
     if not words:
         return email
 
-    # Capitalize a word that is entirely lower case, and leave anything else
-    # alone so deliberate casing such as "McDonald" survives.
-    return ' '.join(word.capitalize() if word.islower() else word for word in words)
+    # Capitalize unconditionally. `handle_callback` lower cases the address
+    # before it reaches here, so there is no deliberate casing left to preserve
+    # and a branch for it would be dead code that implies a promise this does not
+    # keep.
+    return ' '.join(word.capitalize() for word in words)[:_MAX_LENGTH].strip()
+
+
+def _sanitize(value: str) -> str:
+    """Drop characters that do not belong in a name rendered next to other
+    people's names: control characters, and the bidirectional overrides that let
+    one string display as another."""
+    return ''.join(
+        character
+        for character in value
+        if unicodedata.category(character) not in ('Cc', 'Cf', 'Co', 'Cs', 'Zl', 'Zp')
+    )

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	SSO_RETRY_WINDOW_MS,
+	safeRedirectPath,
 	ssoAutoRedirectDecision,
 	type SsoRedirectConfig,
 	type SsoRedirectContext
@@ -101,6 +102,29 @@ describe('ssoAutoRedirectDecision', () => {
 		});
 	});
 
+	it('stays put when the deployment has another way in entirely', () => {
+		// The two remaining branches of the same guard. Trusted header auth and
+		// auth disabled both mean the page is not the only door, so redirecting
+		// out of it would take the visitor away from the door they need.
+		const trustedHeader: SsoRedirectConfig = {
+			...ssoOnlyConfig,
+			features: { ...ssoOnlyConfig?.features, auth_trusted_header: true }
+		};
+		expect(ssoAutoRedirectDecision(trustedHeader, ctx())).toEqual({
+			redirect: false,
+			reason: 'other-auth-mode'
+		});
+
+		const authDisabled: SsoRedirectConfig = {
+			...ssoOnlyConfig,
+			features: { ...ssoOnlyConfig?.features, auth: false }
+		};
+		expect(ssoAutoRedirectDecision(authDisabled, ctx())).toEqual({
+			redirect: false,
+			reason: 'other-auth-mode'
+		});
+	});
+
 	it('does not redirect during first run onboarding', () => {
 		expect(ssoAutoRedirectDecision({ ...ssoOnlyConfig, onboarding: true }, ctx())).toEqual({
 			redirect: false,
@@ -133,5 +157,29 @@ describe('ssoAutoRedirectDecision', () => {
 
 	it('does nothing at all without a configuration', () => {
 		expect(ssoAutoRedirectDecision(null, ctx())).toEqual({ redirect: false, reason: 'disabled' });
+	});
+});
+
+describe('safeRedirectPath', () => {
+	it('keeps a path inside this application', () => {
+		expect(safeRedirectPath('/c/abc123')).toBe('/c/abc123');
+		expect(safeRedirectPath('/')).toBe('/');
+	});
+
+	it('refuses anything that leaves the origin', () => {
+		// The parameter is now reachable with no interaction at all, so a link is
+		// enough. A protocol relative value is a different origin wearing a path's
+		// clothes, and a backslash variant is normalized to one by browsers.
+		expect(safeRedirectPath('//evil.example/phish')).toBeNull();
+		expect(safeRedirectPath('/\\evil.example/phish')).toBeNull();
+		expect(safeRedirectPath('https://evil.example')).toBeNull();
+		expect(safeRedirectPath('javascript:alert(1)')).toBeNull();
+		expect(safeRedirectPath('c/abc123')).toBeNull();
+	});
+
+	it('treats an absent value as no redirect', () => {
+		expect(safeRedirectPath(null)).toBeNull();
+		expect(safeRedirectPath(undefined)).toBeNull();
+		expect(safeRedirectPath('')).toBeNull();
 	});
 });
