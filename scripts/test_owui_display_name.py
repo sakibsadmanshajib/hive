@@ -19,13 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
-    REPO_ROOT
-    / "vendor"
-    / "open-webui"
-    / "backend"
-    / "open_webui"
-    / "utils"
-    / "hive_display_name.py"
+    REPO_ROOT / "deploy" / "docker" / "owui-patches" / "hive_display_name.py"
 )
 spec = importlib.util.spec_from_file_location("hive_display_name", MODULE_PATH)
 hive_display_name = importlib.util.module_from_spec(spec)
@@ -112,26 +106,46 @@ def test_the_result_is_never_the_raw_email_for_a_normal_address() -> None:
 
 
 def test_the_provisioning_path_actually_calls_it() -> None:
-    """A helper nothing calls is not a fix. Asserted against the file because
-    the Open WebUI backend cannot be imported here without its dependencies."""
-    oauth = (
+    """A helper nothing calls is not a fix, and the obvious place to call it is
+    the wrong one: this image builds only the front end from vendor/open-webui
+    and takes its backend from the pinned upstream image, so an edit to the
+    vendored backend never runs. The call is spliced into the real backend at
+    build time, like every other Hive backend change here."""
+    patch = (
         REPO_ROOT
-        / "vendor"
-        / "open-webui"
-        / "backend"
-        / "open_webui"
-        / "utils"
-        / "oauth.py"
+        / "deploy"
+        / "docker"
+        / "owui-patches"
+        / "apply_display_name_patch.py"
     ).read_text(encoding="utf-8")
     assert (
-        "from open_webui.utils.hive_display_name import display_name_from_email" in oauth
-    ), "oauth.py must import the derivation"
+        "from open_webui.utils.hive_display_name import display_name_from_email" in patch
+    ), "the patch must import the derivation into oauth.py"
     assert (
-        "name = display_name_from_email(email)" in oauth
-    ), "oauth.py must derive the name when the username claim is missing"
+        "name = display_name_from_email(email)" in patch
+    ), "the patch must derive the name when the username claim is missing"
     assert (
-        "name = email" not in oauth
-    ), "oauth.py must not fall back to storing the raw email address as a name"
+        "name = email\n" in patch
+    ), "the patch must still target upstream's email-as-name fallback"
+    assert (
+        "if new_name and new_name != user.name:" in patch
+    ), "the patch must assert the refresh path still skips an absent claim"
+
+
+def test_the_image_build_applies_the_patch() -> None:
+    """The patch file existing proves nothing; the Dockerfile has to run it, and
+    has to fail the build if the rewrite stopped matching."""
+    dockerfile = (
+        REPO_ROOT / "deploy" / "docker" / "Dockerfile.open-webui"
+    ).read_text(encoding="utf-8")
+    assert "apply_display_name_patch.py" in dockerfile, "the build must run the patch"
+    assert (
+        "owui-patches/hive_display_name.py /app/backend/open_webui/utils/hive_display_name.py"
+        in dockerfile
+    ), "the build must place the module the patched import resolves to"
+    assert (
+        "grep -q 'display_name_from_email(email)'" in dockerfile
+    ), "the build must assert the rewrite landed"
 
 
 def main() -> None:

@@ -85,7 +85,6 @@ from open_webui.models.users import Users
 from open_webui.retrieval.web.utils import validate_url
 from open_webui.utils.auth import create_token, get_password_hash
 from open_webui.utils.groups import apply_default_group_assignment
-from open_webui.utils.hive_display_name import display_name_from_email
 from open_webui.utils.misc import parse_duration
 from open_webui.utils.validate import validate_profile_image_url
 from starlette.responses import RedirectResponse
@@ -1902,19 +1901,8 @@ class OAuthManager:
 
                     name = user_data.get(username_claim)
                     if not name:
-                        # Storing the raw address here is what made the product
-                        # greet five of six accounts on the demo box by their
-                        # email address. Supabase's OAuth server sends no name
-                        # claim and no user metadata, so the local part of the
-                        # address is the only material there is. The user can
-                        # correct it in Settings then Account, and that edit
-                        # survives: the sign in refresh above only overwrites a
-                        # name when the claim is actually present.
-                        name = display_name_from_email(email)
-                        log.warning(
-                            'Username claim %s is missing, derived the display name from the email address',
-                            username_claim,
-                        )
+                        log.warning('Username claim is missing, using email as name')
+                        name = email
 
                     user = await Auths.insert_new_auth(
                         email=email,
