@@ -1,0 +1,13 @@
+{
+  "label": "main",
+  "baseUrl": "http://127.0.0.1:18080/",
+  "modelIdsShownInDropdown": [
+    "hive-auto",
+    "hive-default",
+    "hive-fast",
+    "hive-embedding-default",
+    "hive-stt",
+    "hive-tts"
+  ],
+  "capturedAt": "2026-08-17T08:35:46.346Z"
+}
