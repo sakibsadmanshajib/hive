@@ -120,7 +120,11 @@ func seedLedgerAccount(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 		 VALUES (gen_random_uuid(), $1, '{}'::jsonb) RETURNING id`,
 		"ledger-balance-"+uuid.NewString()+"@test.local",
 	).Scan(&userID); err != nil {
-		t.Skipf("seed auth.users failed (is this a migrated test DB?): %v", err)
+		// Fatal, not Skip. The CI leg that runs this suite bootstraps the full
+		// migration chain, so a seed failure here is a schema regression, and
+		// skipping would report it green: the never-runs trap this suite was
+		// added to close.
+		t.Fatalf("seed auth.users failed (is this a migrated test DB?): %v", err)
 	}
 
 	var accountID uuid.UUID

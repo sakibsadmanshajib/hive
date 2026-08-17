@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,18 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 }
 
 func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reservation, reason string, hold ReservationHold) (Reservation, error) {
+	// Boundary guard, before any database work. A zero-value hold would post a
+	// 0-credit entry under an empty idempotency key and commit, leaving a row
+	// that looks authorized against a ledger holding nothing: the very state
+	// this signature exists to prevent. The service validates its own input,
+	// but the next caller of this method is not bound by that.
+	if hold.Credits <= 0 {
+		return Reservation{}, fmt.Errorf("accounting: reservation hold must be greater than zero, got %d", hold.Credits)
+	}
+	if strings.TrimSpace(hold.IdempotencyKey) == "" {
+		return Reservation{}, fmt.Errorf("accounting: reservation hold requires an idempotency key")
+	}
+
 	metadata, err := json.Marshal(map[string]any{
 		"policy_mode":    reservation.PolicyMode,
 		"request_id":     reservation.RequestID,

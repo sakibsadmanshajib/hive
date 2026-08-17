@@ -130,15 +130,22 @@ func PostEntryTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, input Post
 func (r *pgxRepository) GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceSummary, error) {
 	row := r.pool.QueryRow(ctx, `
 		WITH entries AS (
-			SELECT entry_type, credits_delta, reservation_id
+			SELECT id, entry_type, credits_delta, reservation_id
 			FROM public.credit_ledger_entries
 			WHERE account_id = $1
 		),
 		holds AS (
-			SELECT reservation_id, SUM(credits_delta) AS net
+			-- Grouped per reservation, and a NULL reservation_id groups per ROW.
+			-- SQL puts every NULL in one bucket, which would net unrelated
+			-- entries against each other and reintroduce, for exactly those
+			-- rows, the account-wide netting this query exists to remove. No
+			-- hold or release carries a NULL today (only grants do, and they are
+			-- not in this set), but PostEntryInput.ReservationID is a pointer,
+			-- so nothing stops one, and it would hide inside the shared bucket.
+			SELECT SUM(credits_delta) AS net
 			FROM entries
 			WHERE entry_type IN ('reservation_hold', 'reservation_release')
-			GROUP BY reservation_id
+			GROUP BY reservation_id, CASE WHEN reservation_id IS NULL THEN id END
 		)
 		SELECT
 			COALESCE((
