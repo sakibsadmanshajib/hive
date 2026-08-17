@@ -31,7 +31,14 @@ const NAV_ROW = (id: string) => `[data-hive-nav="${id}"]`;
 const SIDEBAR = "#sidebar";
 const REMOVED_LAUNCHER = "#hive-agent-launcher";
 const TASKS_ENDPOINT = "/api/v1/hive/agent/tasks";
-const PROOF_DIR = "playwright-report-owui/proof";
+/*
+ * Deliberately NOT inside playwright-report-owui. The HTML reporter owns that
+ * folder and clears it before writing the report at the end of the run, which
+ * would delete these images after they were captured and leave an absence that
+ * looks exactly like a test that never ran. The workflow uploads this
+ * directory separately.
+ */
+const PROOF_DIR = "playwright-report-owui-proof";
 
 test("the sidebar carries labelled Chats, Agents and Knowledge destinations", async ({
   page,
