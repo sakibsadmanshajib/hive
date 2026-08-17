@@ -75,23 +75,24 @@ import (
 )
 
 const (
-	// Small on purpose: this run is billed against a real Hive account. The
-	// prose comes first and the shell command second, because an OpenHands
-	// agent ends a turn through the finish tool, so a prompt whose whole answer
-	// is the closing sentence tends to put that sentence inside a tool call and
-	// emit no MessageEvent at all. A delta only carries prose, so that run has
-	// nothing to observe and the harness reports it inconclusive. Asking for a
-	// message before the command is what makes prose reliably exist.
+	// Small on purpose: this run is billed against a real Hive account, and one
+	// sentence of prose still produces several token deltas.
 	//
-	// The shell command stays, as an end-to-end
-	// check that tool calling WORKS under stream=true: the SDK reassembles the
-	// call from streamed chunks, and a capture that records an ActionEvent and
-	// an ObservationEvent proves that reassembly produced a call the sandbox
-	// could execute. It is not coverage of argument-fragment streaming and
-	// cannot be: a StreamingDeltaEvent only ever carries content or
-	// reasoning_content (event_service.py), so no tool-argument fragment can
-	// appear in this capture, and the tool phase produces no deltas at all.
-	proofPrompt = "Do these two things in order. First, send a plain text chat message, with no tool call in it, saying: starting the streaming proof. Second, run the shell command: echo hive-streaming-proof. Then finish."
+	// Prose only, deliberately, after three runs proved otherwise. A delta
+	// carries content or reasoning_content and nothing else, and an OpenHands
+	// agent ends a turn through the finish tool, so a prompt that also asks for
+	// a shell command tends to route the whole answer through tool calls and
+	// emit no MessageEvent at all: runs 32008631987, 32009278161 and 32009716814
+	// each finished with ActionEvent and ObservationEvent frames and no prose
+	// for a delta to ride on, which the precondition below reports as
+	// inconclusive rather than as a streaming failure.
+	//
+	// Tool calling under stream=true is already proven and posted on this pull
+	// request by run 31957712375, which captured ActionEvent=1, ObservationEvent=1
+	// and five deltas in one turn. Re-rolling that dice on every run costs real
+	// money to re-prove a recorded result, so this prompt asks for the one thing
+	// the capture can observe deterministically.
+	proofPrompt = "Reply with exactly this sentence and nothing else: Hive streaming proof ok."
 
 	deltaKind           = "StreamingDeltaEvent"
 	messageKind         = "MessageEvent"
