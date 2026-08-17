@@ -55,7 +55,6 @@
 	export let bottomPadding = false;
 	export let autoScroll;
 
-	export let onSelect = (e) => {};
 
 	export let messagesCount: number | null = 8;
 	let messagesLoading = false;
@@ -502,7 +501,7 @@
 
 <div class={className}>
 	{#if Object.keys(history?.messages ?? {}).length == 0}
-		<ChatPlaceholder modelIds={selectedModels} {atSelectedModel} {onSelect} />
+		<ChatPlaceholder modelIds={selectedModels} {atSelectedModel} />
 	{:else}
 		<div class="w-full pt-2">
 			{#key chatId}

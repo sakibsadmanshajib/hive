@@ -684,6 +684,25 @@ services:
       # deploying with `curl -s https://<chat-host>/api/config` and check that
       # features.enable_login_form is false.
       ENABLE_LOGIN_FORM: "false"
+      # With the password form off and exactly one provider configured, the
+      # sign in page's only control was a "Continue with Hive" button, a choice
+      # between one option. This sends an unauthenticated visitor straight into
+      # the provider flow instead, carrying the `redirect` parameter through.
+      #
+      # Persistent config, same first-boot trap as ENABLE_LOGIN_FORM above:
+      # `oauth.auto_redirect` is in Open WebUI's DEFAULT_CONFIG, so this line
+      # reaches an already-booted box only because owui-patches/
+      # hive_rag_env_config.py reconciles the key from the environment on every
+      # container start. Confirm after deploying with
+      # `curl -s https://<chat-host>/api/config` and check that
+      # oauth.auto_redirect is true.
+      #
+      # The redirect is not unconditional. The page re-checks at runtime that
+      # there is exactly one provider, no password form, no LDAP, no trusted
+      # header and no onboarding, and it refuses to redirect after a round trip
+      # that came back without a session, so a broken provider surfaces as an
+      # explained page with a retry rather than a bounce loop.
+      OAUTH_AUTO_REDIRECT: "true"
       ENABLE_OAUTH_SIGNUP: "true"
       OAUTH_PROVIDER_NAME: "Hive"
       # The BROWSER-facing auth origin, which is not always the same value as
