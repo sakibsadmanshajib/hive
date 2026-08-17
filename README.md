@@ -1,90 +1,30 @@
 # Hive
 
-OpenAI-compatible API gateway for the Bangladesh market. v1.0 is a full Go rewrite of the prior stack, shipped for efficiency and operational control: lean hot-path latency, precise `math/big` FX, and source-level control over routing, sanitization, and billing.
+OpenAI-compatible and Anthropic-compatible API gateway. v1.0 is a full Go rewrite, shipped for lean hot-path latency, precise `math/big` financial calculations, and source-level control over routing, sanitization, and billing.
 
-- **Provider-agnostic routing** to OpenRouter / Groq (and future providers) via LiteLLM.
-- **Prepaid credit billing** on BDT payment rails (Stripe, bKash, SSLCommerz).
-- **Developer console** for API-key, billing, and analytics management.
+**One product, two modes:**
+- **Hive** (cloud SaaS, Bangladesh market, prepaid credit billing on BDT payment rails via Stripe, bKash, SSLCommerz)
+- **Hive Enterprise** (customer-hosted, data-sovereign, for regulated sectors: finance, legal, healthcare, government)
 
-## Architecture
+**Core surfaces:**
+- Chat (forked and heavily modified Open WebUI)
+- Coding agents (agent-console sidecar plus agent-engine Apptainer sandbox)
+- RAG (`/v1/rag/chat` with admin-selectable embedding model and dimension)
+- Voice (Groq STT/TTS)
+- Artifacts hosting
+- Desktop app (Tauri, Windows/Linux, in development)
+- Developer console (API keys, billing, model catalog)
 
-| Path | Role | Language |
-|------|------|----------|
-| `apps/control-plane` | Accounts, billing, credits, API keys, payments, catalog, routing | Go 1.24 |
-| `apps/edge-api` | Auth, rate limiting, inference dispatch, SSE streaming, file/media | Go 1.24 |
-| `apps/web-console` | Developer console (billing, keys, analytics, catalog) | Next.js 15 / React 19 / TS 5.8 |
-| `packages/openai-contract` | OpenAI spec + support matrix (single source of truth) | — |
-| `packages/sdk-tests` | JS / Python / Java SDK integration tests (real OpenAI SDKs) | — |
-| `supabase/migrations` | Postgres schema | SQL |
-| `deploy/docker` | Compose + Dockerfiles for the stack | — |
-| `deploy/litellm` | LiteLLM config (OpenRouter / Groq routing) | — |
-| `deploy/{prometheus,grafana,alertmanager}` | Monitoring stack | — |
-
-### Request flow (happy path)
-
-```
-client (OpenAI SDK)
-   │
-   ▼
-edge-api  (auth, rate limit, key lookup, sanitize)
-   │
-   ▼
-litellm   (provider routing)
-   │
-   ▼
-OpenRouter / Groq / ...
-```
-
-Billing + catalog reads are served by **control-plane**, consumed by both **edge-api** (ledger writes, routing decisions) and **web-console** (server components render billing/account state).
-
-## Tech Stack
-
-| Component | Tech | Version |
-|-----------|------|---------|
-| control-plane, edge-api | Go | 1.24 |
-| web-console | Next.js / React / TypeScript | 15 / 19 / 5.8 |
-| Database | Postgres (Supabase-hosted) | — |
-| Cache | Redis | 8.4 |
-| Model routing | LiteLLM | latest-stable |
-| Monitoring | Prometheus + Grafana + Alertmanager | — |
-| Payments | Stripe, bKash, SSLCommerz | — |
-| Object storage | Supabase Storage (S3-compatible) | — |
-
-## Quick Start
-
-```bash
-# Install the Hive CLI (PR #202 install method)
-curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash
-```
-
-## Prerequisites
-
-- Docker (with Compose v2) — everything runs in containers; no host Go/Node required.
-- A Supabase project (URL, anon key, service-role key, DB URL).
-- At least one LLM provider key (`OPENROUTER_API_KEY` or `GROQ_API_KEY`).
-- Supabase Storage S3 protocol enabled; pre-create `hive-files` and `hive-images` buckets.
-
-Payment rail keys (Stripe / bKash / SSLCommerz) are optional — services start without them.
-
-## EnterpriseEdge: One-Line Install
-
-Deploy a full self-hosted Hive box on any Ubuntu/Debian server (x86_64 or arm64):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash
-```
-
-With local Ollama inference:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash -s -- --with-ollama
-```
-
-The installer handles Docker setup, repo clone/update, `.env` configuration wizard, and health-checked stack launch. See [`scripts/README.md`](scripts/README.md) for flags, non-interactive usage, and uninstall instructions.
+**API surfaces:**
+- OpenAI-compatible (`/v1/chat/completions`, `/v1/models`, etc.)
+- Anthropic-compatible (`/v1/messages`, read `docs/anthropic-sdk-integration.md`)
+- Provider-agnostic routing (OpenRouter, Groq, and future providers)
 
 ## Getting Started
 
-### 1. Configure environment
+All services run in Docker. No host Go or Node required.
+
+### 1. Environment
 
 ```bash
 cp .env.example .env
@@ -95,12 +35,14 @@ cp .env.example .env
 #   OPENROUTER_API_KEY or GROQ_API_KEY (at least one)
 ```
 
-`edge-api` and `control-plane` **fail fast** if required S3 or Supabase vars are missing.
+`edge-api` and `control-plane` fail fast if required S3 or Supabase vars are missing. Supabase Storage is the only object storage backend. Enable S3 protocol in Supabase Storage and pre-create `hive-files` and `hive-images` buckets before starting the stack.
 
-### 2. Apply database migrations
+Payment rail keys (Stripe, bKash, SSLCommerz) are optional; services start without them.
+
+### 2. Apply migrations
 
 ```bash
-supabase db push                                # If Supabase CLI is linked
+supabase db push                     # If Supabase CLI is linked
 # Or apply supabase/migrations/* in order via the Supabase SQL editor
 ```
 
@@ -109,24 +51,27 @@ supabase db push                                # If Supabase CLI is linked
 ```bash
 cd deploy/docker
 
-# local: core stack + in-stack Redis + Open WebUI + Caddy (default for local dev).
-# Open WebUI requires its own shim-key configuration; see deploy/docker/docker-compose.yml.
-docker compose --env-file ../../.env --profile local up -d --build
+# Local dev: core stack with in-stack Redis and Open WebUI
+docker compose --env-file ../../.env --profile local up --build
 
-# cloud: core services expecting managed Upstash Redis (set REDIS_URL=rediss://... in .env)
-docker compose --env-file ../../.env --profile cloud up -d --build
+# Cloud: core services expecting managed Upstash Redis (set REDIS_URL=rediss://... in .env)
+docker compose --env-file ../../.env --profile cloud up --build
 
-# enterprise: core + in-stack Redis + Open WebUI + Caddy (self-hosted single box)
-docker compose --env-file ../../.env --profile enterprise up -d --build
+# Cloud with chat frontend
+docker compose --env-file ../../.env --profile cloud --profile chat up --build
 
-# chat: add Open WebUI + Caddy on top of cloud profile
-docker compose --env-file ../../.env --profile cloud --profile chat up -d --build
+# Enterprise: core + in-stack Redis + Open WebUI + Caddy (self-hosted single box)
+# Optional: add Ollama for local inference (set OLLAMA_BASE_URL and uncomment entries in deploy/litellm/config.yaml)
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.enterprise.yml \
+  --env-file ../../.env --profile enterprise up --build
 
-# monitoring: add Prometheus, Grafana, Alertmanager to any profile
-docker compose --env-file ../../.env --profile local --profile monitoring up -d --build
+# Add monitoring: Prometheus, Grafana, Alertmanager to any profile
+docker compose --env-file ../../.env --profile local --profile monitoring up --build
 ```
 
-### 4. Verify
+### 4. Verify services
 
 | Service | URL | Healthcheck |
 |---------|-----|-------------|
@@ -134,8 +79,7 @@ docker compose --env-file ../../.env --profile local --profile monitoring up -d 
 | Control Plane | http://localhost:8081 | `GET /health` |
 | Web Console | http://localhost:3000 | — |
 | LiteLLM | http://localhost:4000 | — |
-| Open WebUI (direct) | http://localhost:3002 | `--profile local` |
-| Caddy (OWUI proxy) | http://localhost:3003 | `--profile local` |
+| Open WebUI | http://localhost:3002 | `--profile local` |
 | Prometheus | http://localhost:9090 | `--profile monitoring` |
 | Grafana | http://localhost:3001 (`admin/admin`) | `--profile monitoring` |
 
@@ -143,41 +87,96 @@ docker compose --env-file ../../.env --profile local --profile monitoring up -d 
 
 ```bash
 cd deploy/docker
+docker compose down              # Stop services, keep volumes
+docker compose down -v           # Stop and remove volumes (DB/cache/images)
+```
 
-docker compose down             # Stop services, keep volumes
-docker compose down -v          # Stop + remove named volumes (DB / cache / images)
+## Using the APIs
+
+### OpenAI-compatible SDK
+
+```bash
+export OPENAI_API_KEY="<API_KEY>"
+export OPENAI_BASE_URL="https://api-hive.scubed.co/v1"
+
+# Python
+pip install openai
+python -c "
+from openai import OpenAI
+client = OpenAI()
+msg = client.chat.completions.create(
+    model='hive-fast',
+    messages=[{'role': 'user', 'content': 'Hello'}]
+)
+print(msg.choices[0].message.content)
+"
+
+# JavaScript / TypeScript
+npm install openai
+node -e "
+const OpenAI = require('openai');
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: 'https://api-hive.scubed.co/v1'
+});
+client.chat.completions.create({
+  model: 'hive-fast',
+  messages: [{role: 'user', content: 'Hello'}]
+}).then(msg => console.log(msg.choices[0].message.content));
+"
+```
+
+### Anthropic-compatible SDK
+
+See [`docs/anthropic-sdk-integration.md`](docs/anthropic-sdk-integration.md) for the exact integration path, base URL, and tested model aliases.
+
+```bash
+# Python example
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="https://api-hive.scubed.co",
+    api_key="<API_KEY>",
+)
+
+message = client.messages.create(
+    model="hive-fast",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(message.content[0].text)
 ```
 
 ## Testing
 
-All tests run through Docker — no host Go / Node required.
+All tests run through Docker. No host Go or Node required.
 
 ### Go unit tests
 
+The toolchain image has `ENTRYPOINT ["/bin/sh","-c"]`, so pass the command string directly. Wrapping it in `bash -c` silently runs nothing.
+
 ```bash
 cd deploy/docker
 
-docker compose --profile tools run --rm toolchain bash -c \
+docker compose --profile tools run toolchain \
   "cd /workspace && go test ./apps/control-plane/... -count=1 -short"
 
-docker compose --profile tools run --rm toolchain bash -c \
+docker compose --profile tools run toolchain \
   "cd /workspace && go test ./apps/edge-api/... -count=1 -short"
 ```
 
-> **Go workspace gotcha**: with `go.work`, Docker test commands must use full
-> module-relative paths (`./apps/control-plane/internal/...`), not short
-> `./internal/...` form.
+### Frontend
 
-### Frontend unit tests & build
+Build and unit tests. **Important:** without `--build`, `docker compose run` exercises the last-built stale image and reports a false green.
 
 ```bash
 cd deploy/docker
 
-docker compose run --rm web-console npm run build
-docker compose run --rm web-console npm run test:unit
+docker compose run --build web-console npm run build
+docker compose run --build web-console npm run test:unit
 ```
 
-### SDK integration tests (JS / Python / Java)
+### SDK integration tests
 
 Requires the core stack to be healthy.
 
@@ -188,114 +187,140 @@ docker compose --env-file ../../.env --profile test up --build
 
 ### Playwright E2E (web-console)
 
-Web E2E needs the full stack running (web-console SSRs through control-plane
-for billing/profile pages).
+Web E2E needs the full stack running (web-console SSRs through control-plane for billing and profile pages).
 
 ```bash
-# Ensure core stack is up (from `deploy/docker`):
-docker compose --env-file ../../.env up -d --build
+# Ensure core stack is running (from deploy/docker):
+docker compose --env-file ../../.env up --build
 
 # Run all E2E specs
 cd apps/web-console
 npx playwright test
 
-# Specific file
+# Specific test file
 npx playwright test tests/e2e/profile-completion.spec.ts
 
-# Open the HTML report after failures
+# View HTML report after failures
 npx playwright show-report
 ```
 
-E2E credentials: the fixture script `tests/e2e/support/e2e-auth-fixtures.mjs`
-seeds dedicated fixture accounts in Supabase before each test. Three values are
-required and have no default, because a default here is a credential committed
-to a public repository that the seeder then writes onto a live account:
+E2E requires three environment variables (no defaults, since defaults are credentials committed to a public repo that the seeder writes to a live account):
 
 ```bash
-export E2E_RUN_KEY="$(whoami)-$(date +%s)"   # any value unique to this run
-export E2E_VERIFIED_PASSWORD=...             # at least 6 characters
-export E2E_UNVERIFIED_PASSWORD=...           # at least 6 characters
-export E2E_INVITATION_TOKEN=...              # at least 16 characters
+export E2E_RUN_KEY="$(whoami)-$(date +%s)"           # unique per run
+export E2E_VERIFIED_PASSWORD="<at least 6 chars>"
+export E2E_UNVERIFIED_PASSWORD="<at least 6 chars>"
+export E2E_INVITATION_TOKEN="<at least 16 chars>"
 ```
 
-A missing one fails the run and names itself. `E2E_RUN_KEY` is required as
-well, and for a stronger reason than the rest: seeding writes a password to
-whatever address it is given, so every fixture address is namespaced with the
-run key. Without one, a local run would overwrite the password of a shared
-live account and revoke the sessions of every other run. The two addresses
-(`E2E_VERIFIED_EMAIL`, `E2E_UNVERIFIED_EMAIL`) do have defaults, in
-`tests/e2e/support/e2e-auth-defaults.json`, but they are bases to derive this
-run's address from, never targets.
-Supabase admin env is required too: `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`. See `docs/live-test-auth.md`.
+See `docs/live-test-auth.md` for the full authentication protocol.
 
-## Conventions
+## Architecture
 
-- **Immutability**: new objects, never mutate existing. Ledger is append-only.
-- **Commits**: `<type>: <description>` — `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
-- **No hardcoded secrets**: env vars only. Never commit `.env`.
-- **Provider-blind errors**: sanitize at both control-plane and edge boundaries. Provider names never leak to customers.
-- **`math/big` for FX**: all financial calcs use `math/big` to prevent `float64` corruption.
-- **Storage**: Supabase Storage is the only object storage backend. `edge-api` and `control-plane` fail fast unless required S3 env vars are present and both `hive-files` + `hive-images` buckets exist at startup.
+| Component | Role | Language |
+|-----------|------|----------|
+| `apps/control-plane` | Accounts, billing, credits, API keys, payments, routing, catalog | Go 1.24 |
+| `apps/edge-api` | Auth, rate limiting, dispatch, streaming, file/media | Go 1.24 |
+| `apps/web-console` | Developer console (billing, keys, analytics, catalog) | Next.js 15 / React 19 / TS 5.8 |
+| `apps/agent-engine` | Agent task sandbox (Apptainer rootless) | Go + Apptainer |
+| `vendor/open-webui` | Chat frontend (vendored fork, heavily modified) | Svelte + Node |
+| `packages/openai-contract` | OpenAI spec and support matrix | — |
+| `packages/sdk-tests` | JS / Python / Java SDK integration tests | — |
+| `deploy/docker` | Compose + Dockerfiles | — |
+| `deploy/litellm` | LiteLLM config and routing rules | — |
+| `supabase/migrations` | Postgres schema (40+ migrations) | SQL |
 
-## Regulatory Rules
+## Tech Stack
 
-None currently. The prior rule here (never show FX rates or currency-exchange
-language to BD customers; omit `amount_usd` from BD payment responses) was
-revoked by owner decision on 2026-08-08. Currency presentation to BD
-customers is an unconstrained product decision, to be revisited.
+| Component | Tech | Version |
+|-----------|------|---------|
+| APIs | Go | 1.24 |
+| Web console | Next.js / React / TypeScript | 15 / 19 / 5.8 |
+| Chat frontend | Svelte / Node | vendored fork |
+| Database | Postgres (Supabase or self-hosted) | — |
+| Cache | Redis | 8.4 |
+| Model routing | LiteLLM | stable |
+| Agent sandbox | Apptainer | rootless |
+| Monitoring | Prometheus / Grafana / Alertmanager | — |
 
-## Known Issues
+## Request flow
 
-Known issues, UAT results, and deferred scope are tracked in the project
-vault (Obsidian), not in-repo. See the roadmap board below for current
-status.
+```
+client (OpenAI or Anthropic SDK)
+   │
+   ▼
+edge-api (auth, rate limit, key lookup, sanitize)
+   │
+   ▼
+litellm (provider routing)
+   │
+   ▼
+OpenRouter / Groq / (self-hosted inference on Enterprise)
+```
 
-## Live Staging
+Billing and catalog reads are served by control-plane, consumed by edge-api (ledger writes, routing decisions) and web-console (SSR of billing/account state).
 
-| Surface | URL |
-|---------|-----|
-| Edge API (staging) | https://api-hive.scubed.co |
-| Control Plane (staging) | https://control-hive.scubed.co |
+## Standards & Conventions
 
-## Project State
-
-- **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete.
-- **v1.1 — in progress**: Phase 20 (Provider Catalog) closing. Phases 12-19 complete.
-- **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
-
-Planning ground truth (state, roadmap, requirements, UAT, deferred scope)
-lives in the project vault (Obsidian), not in-repo.
-
-## Phase 19 — Foundation Slice
-
-Phase 19 ships tenant settings, the identity bridge (Supabase Auth →
-Open WebUI + edge-api), Open WebUI deploy, the SOC 2 Type II audit-log
-primitive, and the chat happy-path end-to-end. Implementation plans:
-
-- `docs/superpowers/plans/2026-05-16-phase-19-01-data-and-audit.md`
-- `docs/superpowers/plans/2026-05-16-phase-19-02-identity-and-auth.md`
-- `docs/superpowers/plans/2026-05-16-phase-19-03-deploy-and-chat.md`
-- `docs/superpowers/plans/2026-05-16-phase-19-04-tests-and-ci.md`
-
-Local dev quickstart: [`docs/onboarding/phase-19-dev-setup.md`](docs/onboarding/phase-19-dev-setup.md).
-SOC 2 audit-log coverage: [`docs/compliance/SOC2-LOG-COVERAGE.md`](docs/compliance/SOC2-LOG-COVERAGE.md)
-(regenerated by `npm run soc2:report`).
+- **Immutability**: Create new objects, never mutate existing. Ledger is append-only.
+- **Commits**: `<type>: <description>` — types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`. No dash punctuation between clauses.
+- **Secrets**: Environment variables only. Never commit `.env`.
+- **Provider-blind errors**: Sanitize at both control-plane and edge boundaries. Provider names never leak to customers.
+- **`math/big` for money**: All financial calculations use `math/big.Decimal` to prevent float64 corruption.
+- **Storage**: Supabase Storage (S3-compatible) is the only object storage backend. Both `edge-api` and `control-plane` fail fast if required S3 env vars are missing.
 
 ## Repository Layout
 
 ```
-apps/                       Go + Next.js services (see Architecture table)
+apps/                           Go services + web-console
+  control-plane/                Billing, routing, catalog, auth
+  edge-api/                      Request dispatch, rate limits
+  web-console/                   Developer console (Next.js)
+  agent-engine/                  Agent task sandbox
+  
+vendor/                          Forked dependencies
+  open-webui/                    Chat frontend (heavily modified)
+  openhands/                     (included, not used in core path)
+  
 packages/
-  openai-contract/          Spec + support matrix (single source of truth)
-  sdk-tests/                JS / Python / Java integration suites
-supabase/migrations/        Postgres schema (41 migrations)
+  openai-contract/              OpenAI spec + support matrix
+  sdk-tests/                     Integration tests (JS/Python/Java)
+  
+supabase/migrations/            Postgres schema
 deploy/
-  docker/                   Compose + Dockerfiles
-  litellm/                  LiteLLM config
-  prometheus/               Prometheus + alert rules
-  grafana/                  Dashboards + provisioning
-  alertmanager/             Alert routing
-scripts/                    One-off operational scripts
-docs/                       Hand-written docs + generated codemaps
+  docker/                        Compose + Dockerfiles
+  litellm/                       LiteLLM config
+  prometheus/ grafana/           Monitoring stacks
+  apptainer/                     Agent sandbox image definition
+  cloudflare/                    Tunnel and DNS config
+  
+docs/                            User-facing guides + architecture
+scripts/                         Operational utilities
 ```
+
+## Project State
+
+- **v1.0 — Core developer API** (shipped 2026-04-21): OpenAI-compatible surface, provider routing, chat frontend, developer console
+- **v1.1 — In progress**: Anthropic API, provider catalog, coding agents, RAG, enterprise features
+- **Roadmap**: https://github.com/users/sakibsadmanshajib/projects/3
+
+Planning ground truth, UAT results, and deferred scope live in the project vault (Obsidian), not in-repo. See `CLAUDE.md` and `.claude/rules/openwolf.md` for operational and development standards.
+
+## Key Documents
+
+- **Integration guide** — `docs/anthropic-sdk-integration.md` for Anthropic SDK setup
+- **Testing** — `docs/live-test-auth.md` for E2E authentication protocol
+- **Agent runtime** — `deploy/apptainer/README.md` for sandbox image and configuration
+- **Operational** — `CLAUDE.md` for testing gotchas, agent engine setup, and regulatory stance
+- **Development** — `.claude/rules/orchestrator.md` for coding pipeline and merge policy
+- **Chat fork** — The Open WebUI frontend is a vendored fork, heavily modified; see `CLAUDE.md` for licensing and architecture notes
+
+## Known Limitations
+
+- **Open WebUI licence carve-out**: The branding modification (removing upstream's "(Open WebUI)" suffix) is permitted under the Open WebUI licence only while deployments stay at or under 50 end users per rolling 30 days, or hold written vendor permission, or hold an enterprise licence. This constraint is tracked but not gated; current deployments are within the threshold.
+- **Extended thinking, prompt caching, and server-side tools**: Anthropic-specific features like `thinking`, `cache_control`, `container`, `inference_geo` are not implemented. Neither OpenRouter nor Groq (the configured providers) support Anthropic's native versions, so this is a provider-capability gap, not an oversight.
+- **Batch API success path**: The `/v1/batches` endpoint processes submissions and failures correctly, but the success path (`status=completed`) is not exercisable with the current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports OpenAI, Azure, Vertex AI, and Anthropic; OpenRouter and Groq have no native batch API.
+
+## Support
+
+For issues, questions, or contributions, open a GitHub issue or see `.github/MERGE-POLICY.md` for the PR workflow and merge gate requirements.
