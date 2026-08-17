@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
-	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 const maxBodyBytes = 4 << 20 // 4 MiB
@@ -51,7 +50,7 @@ func NewHandler(deps Deps) *Handler {
 // ServeHTTP handles both POST /v1/messages and POST /v1/messages/count_tokens.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		apierr.WriteError(w, http.StatusMethodNotAllowed, "invalid_request_error", "Method not allowed", nil)
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
 		return
 	}
 
@@ -70,43 +69,43 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// for an API-key principal, which carries no session user.
 	if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
 		if user.TenantID == uuid.Nil {
-			apierr.Write(w, http.StatusForbidden, apierr.CodeNoTenant, "no tenant for user")
+			writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
 			return
 		}
 		if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
-			apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden, "chat not allowed")
+			writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
 			return
 		}
 	}
 	if h.deps.OpenAIChat == nil {
 		// Fail closed. Without the delegated chain there is no route resolution
 		// and no metering, and this surface must never dispatch without both.
-		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
+		writeAnthropicError(w, http.StatusInternalServerError, "internal error", "")
 		return
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "body read error", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
 		return
 	}
 
 	var req MessagesRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON body", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "invalid JSON body", "")
 		return
 	}
 
 	if req.Model == "" {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "model is required", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "model is required", "")
 		return
 	}
 	if len(req.Messages) == 0 {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "messages is required and must be non-empty", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "messages is required and must be non-empty", "")
 		return
 	}
 	if req.MaxTokens <= 0 {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required and must be greater than 0", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "max_tokens is required and must be greater than 0", "")
 		return
 	}
 
@@ -116,7 +115,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	oaiReq, err := ToOAIRequest(req)
 	if err != nil {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "request translation failed", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "request translation failed", "")
 		return
 	}
 
@@ -131,7 +130,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	body, err := json.Marshal(oaiReq)
 	if err != nil {
-		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
+		writeAnthropicError(w, http.StatusInternalServerError, "internal error", "")
 		return
 	}
 
@@ -158,27 +157,27 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
-		apierr.Write(w, http.StatusUnauthorized, apierr.CodeUnauthenticated, "missing user")
+		writeAnthropicError(w, http.StatusUnauthorized, "missing user", "")
 		return
 	}
 	if user.TenantID == uuid.Nil {
-		apierr.Write(w, http.StatusForbidden, apierr.CodeNoTenant, "no tenant for user")
+		writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
 		return
 	}
 	if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
-		apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden, "chat not allowed")
+		writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
 		return
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "body read error", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
 		return
 	}
 
 	var req MessagesRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON body", nil)
+		writeAnthropicError(w, http.StatusBadRequest, "invalid JSON body", "")
 		return
 	}
 

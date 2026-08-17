@@ -534,6 +534,100 @@ func TestHandler_CountTokens(t *testing.T) {
 	}
 }
 
+// anthropicErrorEnvelope mirrors the wire shape a real Anthropic SDK parses
+// (top-level "type":"error", nested error.type/error.message), decoded here
+// rather than via an exported Hive type: what matters is the JSON a client
+// actually receives, not an internal Go representation of it.
+type anthropicErrorEnvelope struct {
+	Type  string `json:"type"`
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
+// TestHandler_ValidationErrorUsesAnthropicEnvelope is the compliance guard for
+// this surface's own refusals (never delegated): before this, every one used
+// the OpenAI envelope ({"error":{"message","type"}}, no top-level "type"),
+// which the real Anthropic SDK's exception .type attribute reads as
+// body["error"]["type"] and never finds without the wrapper.
+func TestHandler_ValidationErrorUsesAnthropicEnvelope(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: &fakeChat{}})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)) // missing max_tokens
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400 got %d", rec.Code)
+	}
+	var got anthropicErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if got.Type != "error" {
+		t.Errorf(`top-level type: want "error" got %q`, got.Type)
+	}
+	if got.Error.Type != "invalid_request_error" {
+		t.Errorf("error.type: want invalid_request_error got %q", got.Error.Type)
+	}
+	if got.Error.Message == "" {
+		t.Error("error.message: want non-empty")
+	}
+}
+
+// TestHandler_DownstreamErrorUsesAnthropicEnvelope is the same guard for a
+// delegated refusal, reshaped rather than forwarded verbatim in the OpenAI
+// envelope it arrived in.
+func TestHandler_DownstreamErrorUsesAnthropicEnvelope(t *testing.T) {
+	chat := &fakeChat{respond: respondStatus(http.StatusForbidden,
+		`{"error":{"message":"model not available for this workspace","type":"forbidden"}}`)}
+	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: chat})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newAuthedRequest(t,
+		`{"model":"hive-premium","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: want 403 got %d", rec.Code)
+	}
+	var got anthropicErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if got.Type != "error" {
+		t.Errorf(`top-level type: want "error" got %q`, got.Type)
+	}
+	// Status drives the mapped type, not whatever the delegated chain's own
+	// OpenAI-shaped "type" string said ("forbidden" is not a member of
+	// Anthropic's error-type enum; "permission_error" is the 403 mapping).
+	if got.Error.Type != "permission_error" {
+		t.Errorf("error.type: want permission_error got %q", got.Error.Type)
+	}
+	if got.Error.Message != "model not available for this workspace" {
+		t.Errorf("error.message: want the delegated refusal text got %q", got.Error.Message)
+	}
+}
+
+// TestHandler_UpstreamErrorUsesAnthropicEnvelope pins the same shape on the
+// writeUpstreamError path (an empty or oversized delegated response).
+func TestHandler_UpstreamErrorUsesAnthropicEnvelope(t *testing.T) {
+	chat := &fakeChat{respond: func(w http.ResponseWriter, r *http.Request) {}}
+	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: chat})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newAuthedRequest(t,
+		`{"model":"hive-fast","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: want 502 got %d", rec.Code)
+	}
+	var got anthropicErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if got.Type != "error" || got.Error.Type != "api_error" {
+		t.Errorf("envelope: want type=error error.type=api_error got type=%q error.type=%q", got.Type, got.Error.Type)
+	}
+}
+
 func TestHandler_CountTokens_BadJSON(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: &fakeChat{}})
 	req := newAuthedRequest(t, `{bad}`)
