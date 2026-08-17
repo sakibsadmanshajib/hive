@@ -441,6 +441,15 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		if reqCtx.Err() != nil {
 			reason, eventType = "client_disconnect", "interrupted"
 		}
+		// Say so. The synchronous path already logs this case; the streaming
+		// path released the hold in silence, and a request that was served for
+		// nothing is exactly the shape that went unnoticed for three days
+		// (issue #626). It matters more now that agent traffic streams: a turn
+		// that only called tools accumulates no content, because
+		// AccumulateContent ignores tool-call deltas, so a real billable turn
+		// can land here and be filed as an upstream error with nothing said.
+		log.Printf("inference: settle stream delivered nothing, releasing hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s: upstream returned no usage and no output",
+			requestID, reservation.ID, endpoint, model, reason)
 		if reservation.ID != "" {
 			releaseCtx, cancelRelease := freshSettlementCtx()
 			err := o.accounting.ReleaseReservation(releaseCtx, ReleaseReservationInput{
@@ -458,6 +467,17 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		defer cancelEvent()
 		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
 		return true
+	}
+
+	// Mirrors the synchronous path's own line in orchestrator.go. The charge
+	// still lands, priced from a content estimate rather than measured
+	// tokens, and control-plane clamps it at the hold and files a
+	// reconciliation job that nothing drains today (issue #925). This line
+	// is the only signal that a provider stopped honouring
+	// stream_options.include_usage.
+	if !confirmed {
+		log.Printf("inference: settling unconfirmed usage estimate request_id=%s reservation_id=%s endpoint=%s model=%s estimated_credits=%d: upstream returned no usable usage block",
+			requestID, reservation.ID, endpoint, model, credits)
 	}
 
 	if reservation.ID == "" {

@@ -208,6 +208,22 @@ type LLMSettings struct {
 	BaseURL string `json:"base_url,omitempty"`
 	APIKey  string `json:"api_key,omitempty"`
 	UsageID string `json:"usage_id,omitempty"`
+
+	// Stream asks the agent-server to publish token-level deltas while the
+	// model is still producing them. It gates real behaviour rather than
+	// merely describing it: agent_server/event_service.py computes
+	// streaming_enabled as "the agent is an ACPAgent, or any of its LLMs has
+	// stream set", and only then wires the token callback that publishes
+	// StreamingDeltaEvent to subscribers. openhands/sdk/llm/llm.py defaults
+	// this field to False, so a payload that omits it launches a sandbox that
+	// can never emit a delta.
+	//
+	// No omitempty on purpose: the false case is a meaningful statement about
+	// a launch, and a launch payload that silently drops the field is exactly
+	// how this stayed off unnoticed. Deltas are transient by design (they
+	// bypass the callback chain that persists ConversationState.events), so
+	// this buys live delivery only, never replay.
+	Stream bool `json:"stream"`
 }
 
 // ConversationInfo is the subset of
