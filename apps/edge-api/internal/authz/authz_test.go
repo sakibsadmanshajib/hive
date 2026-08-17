@@ -55,6 +55,98 @@ func TestCheckAccessExpiredKey(t *testing.T) {
 	}
 }
 
+// TestCheckAccessDeniesUnparseableExpiresAt pins the hardening fix at
+// authz.go's expiry check: a present-but-unparseable expires_at must deny
+// the request, not silently skip the expiry check (fail-open on a parse
+// error). See authz.go step 2 for the reasoning on why this is defence in
+// depth rather than a fix for a reachable gap (issue #915 / PR #919
+// established expiry enforcement already works via two independent layers
+// on every real value control-plane emits).
+func TestCheckAccessDeniesUnparseableExpiresAt(t *testing.T) {
+	bad := "not-a-timestamp"
+	s := AuthSnapshot{
+		KeyID:          "key-1",
+		Status:         "active",
+		ExpiresAt:      &bad,
+		AllowAllModels: true,
+		BudgetKind:     "none",
+	}
+
+	r := CheckAccess(s, "hive-default", 0)
+	if r.Allowed {
+		t.Fatal("expected denied for unparseable expires_at, got allowed (fail-open on parse error)")
+	}
+	if r.DenyCode != "invalid_api_key" {
+		t.Fatalf("expected invalid_api_key code, got %s", r.DenyCode)
+	}
+	// Both this arm and the genuinely-expired arm return the same DenyCode,
+	// so DenyMsg is the only field an operator reading logs can use to tell
+	// a malformed cache entry apart from routine expiry. Pin it, or the
+	// message could silently drift to "API key has expired" and this test
+	// (and every other test in the package) would still pass.
+	if r.DenyMsg != "API key has an invalid expiry" {
+		t.Fatalf("expected the malformed-record message, got %q", r.DenyMsg)
+	}
+}
+
+// TestCheckAccessEmptyExpiresAtStillAllowed pins the "no live outage" side
+// of the same change: an empty expires_at string is treated the same as an
+// absent one (no expiry set), and must keep authorizing exactly as it does
+// today. Only a NON-empty unparseable value is denied.
+func TestCheckAccessEmptyExpiresAtStillAllowed(t *testing.T) {
+	empty := ""
+	s := AuthSnapshot{
+		KeyID:          "key-1",
+		Status:         "active",
+		ExpiresAt:      &empty,
+		AllowAllModels: true,
+		BudgetKind:     "none",
+	}
+
+	r := CheckAccess(s, "hive-default", 0)
+	if !r.Allowed {
+		t.Fatalf("expected allowed for empty expires_at (treated as absent), got denied: %s", r.DenyMsg)
+	}
+}
+
+// TestCheckAccessWhitespaceOnlyExpiresAtStillAllowed covers the distinct
+// branch TrimSpace introduces: a whitespace-only expires_at is trimmed down
+// to empty and takes the same no-expiry path as an empty string, rather than
+// being handed to time.Parse as a non-empty value that would fail.
+func TestCheckAccessWhitespaceOnlyExpiresAtStillAllowed(t *testing.T) {
+	whitespace := " \t\n"
+	s := AuthSnapshot{
+		KeyID:          "key-1",
+		Status:         "active",
+		ExpiresAt:      &whitespace,
+		AllowAllModels: true,
+		BudgetKind:     "none",
+	}
+
+	r := CheckAccess(s, "hive-default", 0)
+	if !r.Allowed {
+		t.Fatalf("expected allowed for whitespace-only expires_at, got denied: %s", r.DenyMsg)
+	}
+}
+
+// TestCheckAccessNilExpiresAtStillAllowed pins the other "no live outage"
+// side: a key with no expires_at set at all (nil pointer, the common case
+// for a non-expiring key) must keep authorizing exactly as it does today.
+func TestCheckAccessNilExpiresAtStillAllowed(t *testing.T) {
+	s := AuthSnapshot{
+		KeyID:          "key-1",
+		Status:         "active",
+		ExpiresAt:      nil,
+		AllowAllModels: true,
+		BudgetKind:     "none",
+	}
+
+	r := CheckAccess(s, "hive-default", 0)
+	if !r.Allowed {
+		t.Fatalf("expected allowed for nil expires_at (no expiry set), got denied: %s", r.DenyMsg)
+	}
+}
+
 func TestCheckAccessRejectsDisallowedAliasWithoutRemap(t *testing.T) {
 	s := AuthSnapshot{
 		KeyID:          "key-1",
