@@ -82,9 +82,18 @@ test("the agent workspace opens inside the shell and frames nothing", async ({
   // Recorded rather than asserted inline so the failure message can name the
   // status, which is the whole diagnostic value of this check.
   let tasksStatus: number | null = null;
-  page.on("response", (response) => {
-    if (new URL(response.url()).pathname === TASKS_ENDPOINT) {
-      tasksStatus = response.status();
+  let tasksBody: { tasks?: unknown } | null = null;
+  page.on("response", async (response) => {
+    if (new URL(response.url()).pathname !== TASKS_ENDPOINT) {
+      return;
+    }
+    tasksStatus = response.status();
+    if (response.status() === 200) {
+      try {
+        tasksBody = await response.json();
+      } catch {
+        tasksBody = null;
+      }
     }
   });
 
@@ -107,20 +116,30 @@ test("the agent workspace opens inside the shell and frames nothing", async ({
     "the agent surface must not frame anything, on this route or anywhere in it",
   ).toHaveCount(0);
 
-  // The composer is this application's own DOM, and it is the chat composer's
-  // container rather than a form that resembles one.
+  // An iframe count of zero is also true of a page that rendered nothing at
+  // all, so every assertion below is a positive one: the surface has to paint
+  // and work, not merely fail to contain a frame.
+  //
+  // The composer is this application's own DOM, it is the chat composer's
+  // container rather than a form that resembles one, and it takes input.
   const composer = page.locator("#hive-agent-instructions");
   await expect(composer).toBeVisible();
   await expect(page.locator("#hive-agent-send")).toBeVisible();
+  await composer.fill("Audit the webhook handlers for unvalidated input");
+  await expect(composer).toHaveValue(
+    "Audit the webhook handlers for unvalidated input",
+  );
+  // The container is the shared one, not a lookalike: this id belongs to the
+  // component MessageInput.svelte renders too.
+  await expect(page.locator("#hive-agent-instructions").locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]").first()).toBeVisible();
   for (const label of ["Knowledge work", "Coding"]) {
+    const option = page.getByText(label, { exact: true });
     await expect(
-      page.getByText(label, { exact: true }),
+      option,
       `the ${label} toggle is missing from the composer`,
     ).toBeVisible();
+    await option.click();
   }
-
-  // The list region renders, whether or not this fixture tenant has any tasks.
-  await expect(page.getByRole("heading", { name: "Your tasks" })).toBeAttached();
 
   await expect
     .poll(() => tasksStatus, {
@@ -136,6 +155,42 @@ test("the agent workspace opens inside the shell and frames nothing", async ({
       "after the principal and its tenant already resolved.",
   ).not.toBe(401);
   expect([200, 403]).toContain(tasksStatus);
+
+  // The list has to paint what the API actually returned. Without this, a
+  // surface that mounted and then rendered nothing would still satisfy every
+  // assertion above, which is the shape of green that cannot go red.
+  if (tasksStatus === 200) {
+    const rows = Array.isArray(tasksBody?.tasks) ? (tasksBody!.tasks as Array<Record<string, unknown>>) : [];
+    if (rows.length > 0) {
+      await expect(
+        page.locator("[data-hive-task-row]"),
+        "the API returned tasks and the list painted a different number of rows",
+      ).toHaveCount(rows.length);
+      // One row's own text, taken from the response rather than from a fixture.
+      // Rows that predate the goal field carry no instructions and must say so
+      // deliberately rather than rendering an empty line.
+      const first = rows[0];
+      const expected =
+        typeof first.instructions === "string" && first.instructions.trim() !== ""
+          ? first.instructions
+          : "No description was recorded for this task.";
+      await expect(
+        page.locator(`[data-hive-task-row="${first.id}"]`),
+      ).toContainText(expected);
+    } else {
+      await expect(
+        page.getByText("Nothing submitted yet"),
+        "no tasks came back, so the genuine empty state must be on screen",
+      ).toBeVisible();
+    }
+  } else {
+    // 403 is the Cowork gate. The surface must say so in the server's own
+    // words rather than showing a blank list that implies zero tasks.
+    await expect(
+      page.getByRole("alert"),
+      "a refused list must be stated, not rendered as an empty one",
+    ).toBeVisible();
+  }
 
   expect(documentLoads, "the hop into the agent must be client-side").toBe(0);
 });
@@ -161,16 +216,64 @@ test("proof capture: the agent surface, natively, in both palettes", async ({
     });
   }
 
-  // The chat composer, from the same build, because its container and send
-  // button were extracted into the components the agent composer renders and
-  // the extraction has to be provably invisible on this surface.
+  // The two composers, cropped to the control itself, from one build and one
+  // browser, so they can be put side by side and judged as one product or not.
+  // This is the owner's actual acceptance criterion: sharing a component is the
+  // means, looking like one control is the requirement.
   await page.emulateMedia({ colorScheme: "light" });
+
+  await page.goto("/agents");
+  const agentComposer = page
+    .locator("#hive-agent-instructions")
+    .locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]")
+    .first();
+  await expect(agentComposer).toBeVisible();
+  // Typed so the send button is in its enabled state for the capture, which is
+  // the state a reader is judging, and so the geometry below is asserted on a
+  // live control rather than a disabled one.
+  await page.locator("#hive-agent-instructions").fill("Rename the payslips in ascending order");
+  for (const cls of ["rounded-full", "p-1.5", "self-center"]) {
+    await expect(
+      page.locator("#hive-agent-send"),
+      `the shared send button lost ${cls}`,
+    ).toHaveClass(new RegExp(`(^|\\s)${cls}(\\s|$)`));
+  }
+  await expect(page.locator("#hive-agent-send")).toHaveAttribute(
+    "aria-label",
+    /\S/,
+  );
+  await agentComposer.screenshot({ path: `${PROOF_DIR}/composer-agent.png` });
+
   await page.goto("/");
-  await expect(page.locator("#message-input-container")).toBeVisible();
-  await page.screenshot({
-    path: `${PROOF_DIR}/chat-composer-after.png`,
-    fullPage: false,
-  });
+  const chatComposer = page.locator("#message-input-container");
+  await expect(chatComposer).toBeVisible();
+  await chatComposer.screenshot({ path: `${PROOF_DIR}/composer-chat.png` });
+  await page.screenshot({ path: `${PROOF_DIR}/chat-after.png`, fullPage: false });
+
+  /*
+   * The extraction has to be invisible on the chat surface, and two images a
+   * human eyeballs is a weak way to prove that. These are the classes that
+   * carry the composer's shape, asserted on chat's own container, so drift in
+   * the extracted component fails here in words rather than in a screenshot
+   * comparison nobody can diff.
+   *
+   * Asserted class by class rather than as one pinned string: the class
+   * attribute is assembled from a conditional expression whose branches carry
+   * their own leading and trailing spaces, so an exact-string match would fail
+   * on whitespace and teach the next person to delete the assertion.
+   */
+  for (const cls of [
+    "rounded-3xl",
+    "shadow-lg",
+    "backdrop-blur-sm",
+    "border",
+    "px-1",
+  ]) {
+    await expect(
+      chatComposer,
+      `chat's composer container lost ${cls}, so the extraction was not invisible`,
+    ).toHaveClass(new RegExp(`(^|\\s)${cls}(\\s|$)`));
+  }
 });
 
 test("the collapsed rail keeps every destination", async ({ page }) => {
