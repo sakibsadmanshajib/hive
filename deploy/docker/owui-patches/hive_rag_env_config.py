@@ -80,6 +80,14 @@ FEATURE_CONFIG_ENV = {
     "notes.enable": "ENABLE_NOTES",
     "calendar.enable": "ENABLE_CALENDAR",
     "automations.enable": "ENABLE_AUTOMATIONS",
+    # Added 2026-08-17, same mechanism and same first-boot trap. Upstream's
+    # Memory feature, on by default, whose only surface here is the Settings >
+    # Personalization tab; Hive's memory subsystem is a separate thing that is
+    # not built yet (.wolf/decisions.md D-020). Dockerfile.open-webui now also
+    # ships the image with this off, but the demo box seeded `memories.enable`
+    # true on its first boot in 2026 and the row has outranked the image ever
+    # since, so this entry is what actually turns it off there.
+    "memories.enable": "ENABLE_MEMORIES",
     "rag.enable_hybrid_search": "ENABLE_RAG_HYBRID_SEARCH",
 }
 

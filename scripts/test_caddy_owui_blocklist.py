@@ -69,6 +69,16 @@ MUST_BLOCK = [
     "/api/v1/terminals/",
     "/api/v1/terminals/srv1/files/list",
     "/api/v1/terminals/srv1/api/terminals/sess1",
+    # 2026-08-17: the notes router. Notes is a removed product surface whose
+    # backend, unlike the other flag-backed removals, enforces nothing:
+    # notes.py checks `notes.enable` on none of its 9 routes, so with the
+    # navigation entry and the page route already gone the API stayed callable
+    # by any signed-in user. Never on the captured open list, because every
+    # front-end caller renders only under `$config.features.enable_notes`.
+    "/api/v1/notes",
+    "/api/v1/notes/",
+    "/api/v1/notes/01234567-89ab-cdef-0123-456789abcdef",
+    "/api/v1/notes/01234567-89ab-cdef-0123-456789abcdef/update",
     # #771: the registration endpoints the "Manage Tool Servers" and "Open
     # Terminal" forms write to, plus the children that dial a caller-supplied
     # URL from inside the network.

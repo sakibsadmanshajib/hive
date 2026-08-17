@@ -725,6 +725,17 @@ services:
       ENABLE_NOTES: "false"
       ENABLE_CALENDAR: "false"
       ENABLE_AUTOMATIONS: "false"
+      # Upstream's Memory feature, added to the same set on 2026-08-17. Its
+      # only surface in this deployment is the Settings > Personalization tab,
+      # which nobody chose: ENABLE_MEMORIES defaults to true upstream. While it
+      # is on, Chat.svelte adds `features.memory: true` to every turn, so each
+      # message also pays for a lookup against a second memory store that Open
+      # WebUI owns and Hive does not read. Hive's memory subsystem is one
+      # subsystem on Hive's own Postgres (.wolf/decisions.md D-020) and is not
+      # built yet, so this is a competing store rather than a head start on it.
+      # Its router refuses on the same flag across all 11 of its routes, so
+      # unlike Notes it needs no path block.
+      ENABLE_MEMORIES: "false"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides
