@@ -98,6 +98,7 @@ class RecordingSession:
     calls: list[dict] = []
     status = 200
     payload: object = {'tasks': []}
+    raises: BaseException | None = None
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
@@ -112,6 +113,8 @@ class RecordingSession:
         RecordingSession.calls.append(
             {'method': method, 'url': url, 'headers': dict(headers or {}), 'json': json}
         )
+        if RecordingSession.raises is not None:
+            raise RecordingSession.raises
         return self
 
     async def json(self, content_type=None):  # noqa: ARG002
@@ -199,6 +202,7 @@ def reset() -> None:
     RecordingSession.calls = []
     RecordingSession.status = 200
     RecordingSession.payload = {'tasks': []}
+    RecordingSession.raises = None
     TOKEN_HOLDER['token'] = 'user-supabase-token'
 
 
@@ -347,6 +351,42 @@ def check_no_gateway_configuration_is_a_stated_503() -> None:
     check(RecordingSession.calls == [], 'no upstream call may be made with no shim key')
 
 
+def check_transport_failures_are_stated_not_raised() -> None:
+    """A transport failure must be a stated status, never a traceback.
+
+    An unhandled exception here becomes a 500 whose body carries a traceback,
+    on a request holding a gateway credential. The timeout arm is the one worth
+    pinning: aiohttp raises asyncio.TimeoutError for a total-timeout breach,
+    which is only the builtin TimeoutError on Python 3.11 and later, and
+    aiohttp's own ServerTimeoutError inherits from ClientError as well, so the
+    order the two arms are written in decides which status a connect timeout
+    reports.
+    """
+    import asyncio as _asyncio
+
+    reset()
+    RecordingSession.raises = _asyncio.TimeoutError()
+    try:
+        run(proxy.list_tasks(Request(), USER))
+    except HTTPException as exc:
+        check(exc.status_code == 504, f'a timeout must be a 504, got {exc.status_code}')
+    except BaseException as exc:  # noqa: BLE001 - the whole point of the check
+        failures.append(f'a timeout escaped as {type(exc).__name__}, so it becomes a 500')
+    else:
+        failures.append('a timeout must not read as a successful answer')
+
+    reset()
+    RecordingSession.raises = sys.modules['aiohttp'].ClientError()
+    try:
+        run(proxy.list_tasks(Request(), USER))
+    except HTTPException as exc:
+        check(exc.status_code == 502, f'an unreachable upstream must be a 502, got {exc.status_code}')
+    except BaseException as exc:  # noqa: BLE001
+        failures.append(f'a client error escaped as {type(exc).__name__}, so it becomes a 500')
+    else:
+        failures.append('an unreachable upstream must not read as a successful answer')
+
+
 def check_every_route_is_behind_the_session_dependency() -> None:
     source = SOURCE.read_text()
     routes = [
@@ -380,6 +420,7 @@ for check_fn in (
     check_task_id_must_be_a_uuid,
     check_upstream_body_is_returned_verbatim,
     check_no_gateway_configuration_is_a_stated_503,
+    check_transport_failures_are_stated_not_raised,
     check_every_route_is_behind_the_session_dependency,
 ):
     check_fn()

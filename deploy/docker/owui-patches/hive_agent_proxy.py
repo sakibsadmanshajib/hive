@@ -44,6 +44,7 @@ The security properties this file is responsible for, all of them load bearing:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 from uuid import UUID
@@ -169,15 +170,28 @@ async def _call(
                 # re-wrapping it here would mean two error vocabularies for one
                 # surface. It is provider-blind at the source.
                 return JSONResponse(status_code=response.status, content=body)
+    # Timeouts are caught before ClientError on purpose, and the exception is
+    # named as asyncio.TimeoutError rather than the builtin.
+    #
+    # Measured against the pinned image (ghcr.io/open-webui/open-webui:v0.10.2)
+    # rather than assumed: Python 3.11.15, aiohttp 3.13.5, and there
+    # `asyncio.TimeoutError is TimeoutError` is True, so the builtin would work
+    # today. It stops working on any interpreter older than 3.11, where the two
+    # are different classes and a total-timeout breach would escape as an
+    # unhandled exception, which on this path means a 500 carrying a traceback.
+    #
+    # The ordering matters for the same reason: aiohttp's ServerTimeoutError
+    # inherits from ClientError as well as from TimeoutError, so catching
+    # ClientError first would report a connect timeout as unreachable.
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail='The agent service took too long to answer. Try again shortly.',
+        )
     except aiohttp.ClientError:
         raise HTTPException(
             status_code=502,
             detail='The agent service could not be reached. Try again shortly.',
-        )
-    except TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail='The agent service took too long to answer. Try again shortly.',
         )
     except ValueError:
         # A non-JSON upstream body. Nothing honest to hand the front end.
