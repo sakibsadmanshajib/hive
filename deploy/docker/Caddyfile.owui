@@ -197,6 +197,23 @@
     }
   }
 
+  # SvelteKit writes a content hash into every file name under
+  # /_app/immutable, so a given URL's bytes can never change: a new build
+  # produces new names. The chat backend serves them with no Cache-Control at
+  # all, which leaves the caching policy to whatever sits in front. On the
+  # demo box that is Cloudflare, whose default browser TTL is four hours, so
+  # a returning user revalidates every one of roughly 155 chunks after half a
+  # day away, for files that are incapable of having changed. State the real
+  # lifetime here instead: a year, plus `immutable` so the browser skips the
+  # conditional request entirely rather than sending an If-None-Match and
+  # waiting for a 304.
+  #
+  # Scoped to /_app/immutable only. Everything else on this origin (the HTML
+  # entry point above all) must stay revalidated, because a deploy has to be
+  # able to change it.
+  @immutableAssets path /_app/immutable/*
+  header @immutableAssets Cache-Control "public, max-age=31536000, immutable"
+
   reverse_proxy open-webui:8080 {
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {

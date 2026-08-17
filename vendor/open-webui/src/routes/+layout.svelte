@@ -57,6 +57,7 @@
 
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
+	import { prefetchModels } from '$lib/utils/model-prefetch';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 	import {
@@ -1095,6 +1096,22 @@
 			}
 		});
 
+		// The config fetch, the session fetch and the model list are three
+		// independent round trips that used to run strictly one after another:
+		// the session request waited on a config it never reads, and the model
+		// list waited on both. Every one of those hops costs a full request to
+		// the deployment, so the depth of the chain, rather than any single
+		// slow call, is what kept the composer off screen. Start all three
+		// here and await each result at the point it is first needed.
+		const startupToken = localStorage.token;
+		const sessionUserRequest = startupToken
+			? getSessionUser(startupToken).catch((error) => {
+					toast.error(`${error}`);
+					return null;
+				})
+			: null;
+		prefetchModels(startupToken);
+
 		let backendConfig = null;
 		try {
 			backendConfig = await getBackendConfig();
@@ -1135,20 +1152,25 @@
 				const currentUrl = `${window.location.pathname}${window.location.search}`;
 				const encodedUrl = encodeURIComponent(currentUrl);
 
-				if (localStorage.token) {
-					// Get Session User Info
-					const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-						toast.error(`${error}`);
-						return null;
-					});
+				if (startupToken) {
+					// Get Session User Info, started above alongside the config
+					// fetch rather than after it.
+					const sessionUser = await sessionUserRequest;
 
 					if (sessionUser) {
 						await user.set(sessionUser);
-						try {
-							await config.set(await getBackendConfig());
-						} catch (error) {
-							console.error('Error refreshing backend config:', error);
-						}
+
+						// The second GET /api/config that used to sit here has
+						// been removed rather than deferred. It was not a
+						// refresh of anything: getBackendConfig sends no
+						// per-user header and relies on the session cookie the
+						// browser already attached to the first call, so the
+						// two requests were byte-identical by construction and
+						// the reply could only differ if the session lookup
+						// itself had changed server state, which it does not.
+						// It cost a whole round trip in the middle of the
+						// startup chain, blocking everything the app layout
+						// does afterwards.
 
 						// Keep user timezone in sync on every app load/refresh
 						const timezone = getUserTimezone();
