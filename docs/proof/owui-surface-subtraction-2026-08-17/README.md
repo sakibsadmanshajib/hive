@@ -97,13 +97,15 @@ a bad trade if the interface still called it, so that run records every console
 error and every 4xx or 5xx response the page provokes, in steady state:
 
 ```
-[after-proxied] console errors: []
-[after-proxied] failed requests: []
+[after-proxied] console errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+[after-proxied] failed requests: ["404 /api/v1/terminals/"]
 ```
 
 Same menus, same settings tabs, and no request to `/api/v1/notes` at all, which
 is the point: the block returns 404, so any such request would have shown up in
-that list.
+that list. The one entry that is there predates this change. It is #770's block
+on the terminals router, whose only caller returns `[]` on any non-2xx, which is
+why the interface renders normally around it.
 
 ### Why the block is scoped to notes
 

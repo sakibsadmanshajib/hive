@@ -3,5 +3,5 @@
 [after-proxied] settings tabs: ["General","Interface","Audio","Data Controls","Account","About"]
 [after-proxied] settings admin links: 0
 [after-proxied] settings vendor links: []
-[after-proxied] console errors: []
-[after-proxied] failed requests: []
+[after-proxied] console errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+[after-proxied] failed requests: ["404 /api/v1/terminals/"]

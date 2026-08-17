@@ -54,9 +54,9 @@ page.on('response', (r) => {
 // What is recorded below is a steady-state authenticated load.
 await page.goto(baseUrl, { waitUntil: 'networkidle' });
 await page.waitForTimeout(2000);
-await page.reload({ waitUntil: 'networkidle' });
 consoleErrors.length = 0;
 failedRequests.length = 0;
+await page.reload({ waitUntil: 'networkidle' });
 
 // The sidebar starts collapsed on a fresh profile. Its toggle carries the
 // accessible name added by #833, which is the only stable handle on it.
