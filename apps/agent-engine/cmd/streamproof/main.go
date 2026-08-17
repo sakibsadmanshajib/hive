@@ -21,11 +21,13 @@
 // It calls engineapi.New(...).Launch(...), the exact function the host
 // launcher's POST /launch handler calls (apps/agent-engine/cmd/agent-engine/
 // serve.go), against a real Apptainer sandbox built from the shipped SIF and a
-// real model behind the Hive gateway. The single substitution is
-// ResolveEgressHosts, which asks control-plane for a tenant's egress policy in
-// the daemon and here returns the model host directly, exactly as serve.go
-// appends it. That lookup cannot affect whether the agent-server publishes a
-// token delta.
+// real model behind the Hive gateway. It differs from the daemon in exactly two
+// ways, neither able to affect whether the agent-server publishes a token
+// delta: ResolveEgressHosts asks control-plane for a tenant's egress policy
+// there and returns the model host directly here, which is strictly narrower;
+// and MemoryLimit is 2G here against serve.go's 4G, so a heavier prompt could
+// be killed for memory in this harness and not in production. Every other
+// config field normalises to the production value inside engine.New.
 //
 // # THE DIFFERENTIAL
 //
@@ -74,10 +76,14 @@ import (
 
 const (
 	// Small on purpose: this run is billed against a real Hive account. It
-	// still asks for one shell command before the sentence, because streaming
-	// reassembles tool call arguments from partial JSON and a prompt the model
-	// can answer in prose alone would never exercise that path, which is the
-	// one an agent actually spends its time on.
+	// still asks for one shell command before the sentence, as an end-to-end
+	// check that tool calling WORKS under stream=true: the SDK reassembles the
+	// call from streamed chunks, and a capture that records an ActionEvent and
+	// an ObservationEvent proves that reassembly produced a call the sandbox
+	// could execute. It is not coverage of argument-fragment streaming and
+	// cannot be: a StreamingDeltaEvent only ever carries content or
+	// reasoning_content (event_service.py), so no tool-argument fragment can
+	// appear in this capture, and the tool phase produces no deltas at all.
 	proofPrompt = "Run the shell command: echo hive-streaming-proof. Then reply with exactly this sentence and nothing else: Hive streaming proof ok."
 
 	deltaKind           = "StreamingDeltaEvent"
