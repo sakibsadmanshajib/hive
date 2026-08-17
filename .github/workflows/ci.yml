@@ -1495,7 +1495,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
-      - name: Upload the Next.js server log on failure
+      - name: Redact the Next.js server log on failure
         if: failure()
         # The console renders an error boundary ("Something went wrong on this
         # page", plus a digest) when a server component throws, and the cause is
