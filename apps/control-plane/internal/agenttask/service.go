@@ -283,10 +283,23 @@ func (s *Service) stopEngineSession(ctx context.Context, taskID uuid.UUID, sessi
 	}
 	stopCtx, done := context.WithTimeout(context.WithoutCancel(ctx), engineCancelTimeout)
 	defer done()
-	if err := s.engine.Cancel(stopCtx, sessionRef); err != nil {
-		slog.Default().WarnContext(stopCtx, "agenttask: engine cancel failed, the session may still hold its concurrency slot",
-			"task_id", taskID, "session_ref", sessionRef, "error", err)
+	err := s.engine.Cancel(stopCtx, sessionRef)
+	if err == nil {
+		return
 	}
+	if errors.Is(err, ErrEngineSessionGone) {
+		// The engine already has no memory of this session (its in-memory
+		// registry lost it, e.g. a launcher restart), so it holds no
+		// concurrency slot for it either: the quota manager lives in the
+		// same in-memory state as the session registry
+		// (apps/agent-engine/internal/engine.SandboxEngine). Nothing leaked,
+		// nothing for an operator to chase — warning here would point them
+		// at a slot that does not exist, on exactly the path (issue #886)
+		// where leaked slots are the thing they've been trained to hunt.
+		return
+	}
+	slog.Default().WarnContext(stopCtx, "agenttask: engine cancel failed, the session may still hold its concurrency slot",
+		"task_id", taskID, "session_ref", sessionRef, "error", err)
 }
 
 // WaitIdle blocks until every background launch and engine stop this Service

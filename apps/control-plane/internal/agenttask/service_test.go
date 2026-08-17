@@ -1,9 +1,11 @@
 package agenttask_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -414,6 +416,53 @@ func TestService_Cancel_TerminalStateRejected(t *testing.T) {
 	svc.WaitIdle()
 	if got := eng.cancelCount(); got != 1 {
 		t.Errorf("expected exactly one engine cancel across a double cancel, got %d", got)
+	}
+}
+
+// sessionGoneEngine's Cancel always answers as if the launcher has already
+// forgotten the session — the engine-side counterpart to
+// TestPoller_RunOnce_EngineSessionGoneFailsTaskInstead, exercising the same
+// sentinel on Service.stopEngineSession's consumption side instead of the
+// poller's.
+type sessionGoneEngine struct {
+	sessionRef string
+}
+
+func (e sessionGoneEngine) Launch(context.Context, agenttask.Task) (string, error) {
+	return e.sessionRef, nil
+}
+
+func (e sessionGoneEngine) Cancel(context.Context, string) error {
+	return fmt.Errorf("agentengine: /cancel: status 404: %w", agenttask.ErrEngineSessionGone)
+}
+
+// TestService_Cancel_EngineSessionGoneDoesNotWarnAboutALeakedSlot proves
+// stopEngineSession does not log its "may still hold its concurrency slot"
+// warning when the engine's answer is specifically ErrEngineSessionGone: a
+// launcher with no memory of the session holds no slot for it either (the
+// quota manager lives in the same in-memory state as the session registry),
+// so that warning would send an operator chasing a leak that does not exist.
+func TestService_Cancel_EngineSessionGoneDoesNotWarnAboutALeakedSlot(t *testing.T) {
+	var logBuf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	svc := agenttask.NewService(newFakeRepository(), sessionGoneEngine{sessionRef: "session-gone"})
+	tenantID, userID := uuid.New(), uuid.New()
+	created := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
+
+	cancelled, err := svc.Cancel(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if cancelled.Status != agenttask.StatusCancelled {
+		t.Fatalf("expected StatusCancelled, got %v", cancelled.Status)
+	}
+	svc.WaitIdle()
+
+	if strings.Contains(logBuf.String(), "may still hold its concurrency slot") {
+		t.Fatalf("expected no leaked-slot warning for ErrEngineSessionGone, got log output: %s", logBuf.String())
 	}
 }
 

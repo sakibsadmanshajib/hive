@@ -150,6 +150,22 @@ func (r *Remote) post(ctx context.Context, path string, body any, out any) error
 		// container's log, not in a value callers may surface, so the
 		// returned error carries only the operation and the status code.
 		log.Printf("agentengine: %s: status %d: %s", path, resp.StatusCode, detail)
+		// The launcher maps engineapi.ErrUnknownSession onto 404
+		// (apps/agent-engine/cmd/agent-engine/serve.go), which happens only
+		// for /status and /cancel: the session reference is gone from its
+		// in-memory registry (a launcher restart lost it) and can never
+		// answer again. Scoped to those two paths deliberately: post also
+		// serves /launch, and net/http.ServeMux answers 404 for ANY path it
+		// has no handler for, so an unscoped check would call a routing
+		// miss (e.g. control-plane and the host launcher binary drifting out
+		// of sync) session-gone instead of the ordinary transient error it
+		// actually is. Wrapping agenttask.ErrEngineSessionGone here, rather
+		// than only in the in-process agentengine.Engine arm, is what lets
+		// the poller tell this definitive case apart from a transient
+		// failure regardless of which arm is wired in.
+		if resp.StatusCode == http.StatusNotFound && (path == "/status" || path == "/cancel") {
+			return fmt.Errorf("agentengine: %s: status %d: %w", path, resp.StatusCode, agenttask.ErrEngineSessionGone)
+		}
 		return fmt.Errorf("agentengine: %s: status %d", path, resp.StatusCode)
 	}
 	if out == nil {
