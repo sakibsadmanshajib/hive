@@ -17,6 +17,7 @@ Run: python3 scripts/test_owui_rag_env_config.py
 """
 import asyncio
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -228,15 +229,154 @@ def test_compose_leaves_hybrid_search_off_by_default() -> None:
     ), "docker-compose.yml must default Open WebUI hybrid retrieval to off (issue #832)"
 
 
+def test_speech_to_text_is_pointed_at_the_gateway() -> None:
+    """The Bengali dictation failure. Open WebUI ships `audio.stt.engine` as ""
+    (its "use my own bundled Whisper" value) and seeds it on first boot, so the
+    chat microphone transcribed inside the container with WHISPER_MODEL=base and
+    never reached the Hive gateway. base returns romanized Latin for Bengali at
+    any clip length, and forcing a language hint does not change that; the same
+    audio through hive-stt (groq/whisper-large-v3) returns Bengali script."""
+    config = FakeConfig(
+        {
+            "audio.stt.engine": "",
+            "audio.stt.model": "",
+            "audio.stt.openai.api_base_url": "https://api.openai.com/v1",
+            "audio.stt.openai.api_key": "",
+        }
+    )
+    applied = reconcile(
+        config,
+        {
+            "AUDIO_STT_ENGINE": "openai",
+            "AUDIO_STT_MODEL": "hive-stt",
+            "AUDIO_STT_OPENAI_API_BASE_URL": "http://edge-api:8080/v1",
+            "AUDIO_STT_OPENAI_API_KEY": "hk_example",
+        },
+    )
+    assert config.stored["audio.stt.engine"] == "openai", config.stored
+    assert config.stored["audio.stt.model"] == "hive-stt", config.stored
+    assert config.stored["audio.stt.openai.api_base_url"] == "http://edge-api:8080/v1", config.stored
+    assert config.stored["audio.stt.openai.api_key"] == "hk_example", config.stored
+    assert applied["audio.stt.engine"] == "openai", applied
+
+
+def test_stt_base_url_without_a_key_is_refused() -> None:
+    """Same rule as the RAG pair: a credential must not outlive the destination
+    it was issued for. Only the supplied keys are written, so a base URL on its
+    own would repoint transcription while Open WebUI kept sending the key
+    persisted for the previous destination."""
+    for key_value in (None, "", "   "):
+        environ = {
+            "AUDIO_STT_ENGINE": "openai",
+            "AUDIO_STT_OPENAI_API_BASE_URL": "http://somewhere-else:8080/v1",
+        }
+        if key_value is not None:
+            environ["AUDIO_STT_OPENAI_API_KEY"] = key_value
+
+        config = FakeConfig(
+            {
+                "audio.stt.openai.api_base_url": "http://edge-api:8080/v1",
+                "audio.stt.openai.api_key": "hk_issued_for_edge_api",
+            }
+        )
+        try:
+            reconcile(config, environ)
+        except RuntimeError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"expected a refusal for key_value={key_value!r}")
+
+        assert "AUDIO_STT_OPENAI_API_BASE_URL" in message, message
+        assert "AUDIO_STT_OPENAI_API_KEY" in message, message
+        assert "hk_issued_for_edge_api" not in message, message
+        assert config.upsert_calls == 0
+        assert config.stored["audio.stt.openai.api_base_url"] == "http://edge-api:8080/v1"
+        assert config.stored["audio.stt.openai.api_key"] == "hk_issued_for_edge_api"
+
+
+def test_unset_stt_env_leaves_the_persisted_engine_alone() -> None:
+    """An Enterprise box running the sovereign `voice` profile (Parakeet plus
+    faster-whisper) configures Open WebUI's speech-to-text itself. An unset
+    variable must never clobber that back to the gateway."""
+    config = FakeConfig({"audio.stt.engine": "openai", "audio.stt.model": "sovereign-stt"})
+    applied = reconcile(config, {"AUDIO_STT_ENGINE": "  "})
+    assert applied == {}, applied
+    assert config.upsert_calls == 0
+    assert config.stored["audio.stt.model"] == "sovereign-stt"
+
+
+def test_no_deployment_wide_speech_language_is_configured() -> None:
+    """Measured, same speaker and recording: whisper-large-v3 auto-detects
+    Bengali correctly from 5 seconds up, and an explicit hint rescues shorter
+    clips. But a forced deployment-wide language is not the fix, because English
+    speech transcribed with language=bn comes back as Bengali garbage, and Open
+    WebUI's WHISPER_LANGUAGE overrides every user's own setting rather than
+    filling in for it. The language stays per user (Settings > Audio), which the
+    composer already sends and the gateway already forwards verbatim."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    # A YAML assignment, not the word: the compose comment names the variable to
+    # explain why it is not used, and that comment is the point.
+    assigned = re.search(r"^\s*WHISPER_LANGUAGE\s*:", compose, re.MULTILINE)
+    assert assigned is None, (
+        "WHISPER_LANGUAGE forces one language on every user of the deployment "
+        "and would trade broken Bengali for broken English"
+    )
+
+
+def test_compose_routes_chat_transcription_through_the_gateway() -> None:
+    """The reconcile only helps if compose names the values. Asserted against
+    the file because the whole defect was an unset variable letting upstream's
+    own default win by omission."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    for line in (
+        'AUDIO_STT_ENGINE: "openai"',
+        'AUDIO_STT_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"',
+        "AUDIO_STT_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}",
+        "AUDIO_STT_MODEL: ${OWUI_STT_ALIAS:-hive-stt}",
+    ):
+        assert line in compose, f"docker-compose.yml must set {line}"
+
+
+def test_env_example_does_not_enable_the_stt_sidecars_by_default() -> None:
+    """`handleTranscription` hands the whole request to the Parakeet plus
+    faster-whisper sidecars as soon as either URL is set, and stops consulting
+    the catalog route. Those sidecars only run under the `voice` compose
+    profile, so an .env copied from the example onto a `local` or `chat` stack
+    would point chat dictation at hosts that are not running, defeating the fix
+    above. They stay commented out until an operator opts in."""
+    env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(
+        encoding="utf-8"
+    )
+    for variable in ("PARAKEET_BASE_URL", "FASTER_WHISPER_BASE_URL"):
+        assigned = re.search(rf"^{variable}=", env_example, re.MULTILINE)
+        assert assigned is None, (
+            f"{variable} must stay commented out in .env.example: setting it "
+            "takes /v1/audio/transcriptions away from the catalog route and "
+            "hands it to a sidecar that only exists under the `voice` profile"
+        )
+
+
 def test_reconciled_keys_are_loggable_without_the_secret() -> None:
     """The startup log line names the model (the signal this investigation
     lacked twice) and never the API key value."""
     summary = hive_rag_env_config.log_summary(
-        {"rag.embedding_model": ALIAS, "rag.openai.api_key": "hk_secret"}
+        {
+            "rag.embedding_model": ALIAS,
+            "rag.openai.api_key": "hk_secret",
+            "audio.stt.model": "hive-stt",
+            "audio.stt.openai.api_key": "hk_secret",
+        }
     )
     assert ALIAS in summary, summary
     assert "hk_secret" not in summary, summary
     assert "rag.openai.api_key" in summary, summary
+    # Same for the transcription pair: the alias is the signal, the key is not.
+    assert "hive-stt" in summary, summary
+    assert "audio.stt.openai.api_key" in summary, summary
 
 
 def main() -> None:

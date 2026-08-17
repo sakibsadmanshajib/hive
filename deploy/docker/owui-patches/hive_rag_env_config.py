@@ -15,9 +15,10 @@ with 404 `model_not_found` and no compose change could ever reach it.
 
 This module is spliced into that startup path by
 apply_rag_env_config_patch.py. The environment wins for the four keys that
-point Open WebUI's embedder at the Hive gateway, plus `ui.enable_login_form`
-(see its entry below, same mechanism, different symptom) and the three
-product-surface feature flags below (#772), and for nothing else: an
+point Open WebUI's embedder at the Hive gateway, the four that point its
+speech-to-text at the same gateway (the Bengali dictation fix, see their entry
+below), plus `ui.enable_login_form` (same mechanism, different symptom) and the
+three product-surface feature flags below (#772), and for nothing else: an
 administrator's other Open WebUI settings still persist normally, which is
 why this is a per-key reconcile rather than `ENABLE_PERSISTENT_CONFIG=false`.
 
@@ -45,6 +46,26 @@ RAG_CONFIG_ENV = {
     "rag.embedding_model": "RAG_EMBEDDING_MODEL",
     "rag.openai.api_base_url": "RAG_OPENAI_API_BASE_URL",
     "rag.openai.api_key": "RAG_OPENAI_API_KEY",
+    # Speech-to-text, and the same trap for the same reason. Open WebUI's
+    # `audio.stt.engine` default is the empty string, which is upstream's
+    # "transcribe with my own bundled Whisper" value, and `WHISPER_MODEL` is
+    # baked into the pinned image as `base`. So the chat microphone never
+    # reached the Hive gateway at all: it decoded inside the Open WebUI
+    # container, unmetered, invisible to the model catalog, on a model that
+    # returns romanized Latin for Bengali speech at any clip length (measured
+    # live 2026-08-17, and forcing a language hint did not change it). The same
+    # audio through `hive-stt`, which resolves to groq/whisper-large-v3, returns
+    # Bengali script. Bangladesh is the first market, so that is not a gap.
+    #
+    # These four are in DEFAULT_CONFIG, so a first boot seeded them and compose
+    # alone would be a silent no-op on any already-booted deployment, exactly
+    # like #722. The language of the audio is deliberately NOT set here: it stays
+    # a per-user choice (Settings > Audio), because forcing one language on the
+    # deployment would trade broken Bengali for broken English.
+    "audio.stt.engine": "AUDIO_STT_ENGINE",
+    "audio.stt.model": "AUDIO_STT_MODEL",
+    "audio.stt.openai.api_base_url": "AUDIO_STT_OPENAI_API_BASE_URL",
+    "audio.stt.openai.api_key": "AUDIO_STT_OPENAI_API_KEY",
     # Not a RAG key, and the only non-RAG one here. ponytail: reusing this
     # reconcile rather than minting a second identical module, because the
     # failure is identical to #722, right down to the mechanism. Every account
@@ -97,7 +118,22 @@ BOOLEAN_KEYS = frozenset({"ui.enable_login_form"})
 # this failure mode never produced anywhere: Open WebUI logs only aiohttp's
 # bare "404, message='Not Found'" for it, having discarded the response body
 # that names the model.
-SECRET_KEYS = frozenset({"rag.openai.api_key"})
+SECRET_KEYS = frozenset({"rag.openai.api_key", "audio.stt.openai.api_key"})
+
+# Destination keys that must never be written without their credential, and the
+# environment variables an operator has to fix when one is missing. Open WebUI
+# persists the destination and the credential as two independent rows, and this
+# module only writes the keys the environment supplies, so a destination on its
+# own would repoint the call while Open WebUI kept sending the key persisted for
+# the previous destination.
+PAIRED_DESTINATIONS = (
+    ("rag.openai.api_base_url", "rag.openai.api_key", "Open WebUI's embedder"),
+    (
+        "audio.stt.openai.api_base_url",
+        "audio.stt.openai.api_key",
+        "Open WebUI's speech-to-text",
+    ),
+)
 
 
 def overrides(environ) -> dict:
@@ -131,15 +167,17 @@ def overrides(environ) -> dict:
             # so an unrecognised value means off here exactly as it does there.
             applied[key] = value.lower() == "true"
 
-    if "rag.openai.api_base_url" in applied and "rag.openai.api_key" not in applied:
-        raise RuntimeError(
-            "RAG_OPENAI_API_BASE_URL is set to "
-            f"{applied['rag.openai.api_base_url']!r} but RAG_OPENAI_API_KEY is "
-            "empty or unset. Refusing to point Open WebUI's embedder at that "
-            "destination while it keeps sending the API key persisted for the "
-            "previous one. Set RAG_OPENAI_API_KEY (the Hive OWUI_SHIM_KEY) "
-            "together with RAG_OPENAI_API_BASE_URL."
-        )
+    for url_key, credential_key, consumer in PAIRED_DESTINATIONS:
+        if url_key in applied and credential_key not in applied:
+            url_variable = RAG_CONFIG_ENV[url_key]
+            credential_variable = RAG_CONFIG_ENV[credential_key]
+            raise RuntimeError(
+                f"{url_variable} is set to {applied[url_key]!r} but "
+                f"{credential_variable} is empty or unset. Refusing to point "
+                f"{consumer} at that destination while it keeps sending the API "
+                f"key persisted for the previous one. Set {credential_variable} "
+                f"(the Hive OWUI_SHIM_KEY) together with {url_variable}."
+            )
 
     return applied
 

@@ -840,6 +840,45 @@ services:
       # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
       # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
+      # Chat dictation. These four are persistent config as well, reconciled by
+      # the same owui-patches/hive_rag_env_config.py for the same
+      # first-boot-wins reason as the RAG keys above.
+      #
+      # Without them Open WebUI keeps its own default, `audio.stt.engine` = ""
+      # meaning "transcribe with my bundled Whisper", against the WHISPER_MODEL
+      # the upstream image bakes in, which is `base`. Two consequences, and the
+      # second is why this is a defect rather than a preference. Chat dictation
+      # never reached the gateway at all, so it was unmetered and invisible to
+      # the model catalog. And `base` cannot write Bengali: measured live on
+      # 2026-08-17 against real Bengali speech, it returned romanized Latin
+      # ("bhoi ki shambhat, ek dimu gta shambhat chutra...") at every clip
+      # length, and forcing language=bn did not change it, while the same audio
+      # through hive-stt returned Bengali script. Bangladesh is the first
+      # market, so a microphone that cannot produce Bengali is not a gap.
+      #
+      # OWUI_SHIM_KEY again, and for the same reason as RAG_OPENAI_API_KEY:
+      # a transcription request carries no body metadata to unwrap into a
+      # per-user JWT, so it authenticates as the shim key's own billing
+      # account. hive-stt is priced per second of audio, and Groq bills a
+      # minimum of ten seconds, so one dictation of ten seconds or less costs
+      # 43 credits.
+      #
+      # No language is set here on purpose. Open WebUI's WHISPER_LANGUAGE
+      # overrides every user's own Settings > Audio choice rather than filling
+      # in for it, and forcing bn turns English dictation into Bengali garbage
+      # (measured the same day). whisper-large-v3 auto-detects Bengali
+      # correctly from about five seconds of speech; below that a user who
+      # wants a guarantee sets the language in their own settings, which the
+      # composer already sends and the gateway forwards verbatim.
+      #
+      # An Enterprise box running the sovereign `voice` profile (Parakeet plus
+      # faster-whisper) points OWUI_STT_ALIAS at its own catalog alias, or
+      # clears AUDIO_STT_ENGINE to keep whatever its administrator configured;
+      # a blank value never clobbers a persisted one.
+      AUDIO_STT_ENGINE: "openai"
+      AUDIO_STT_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
+      AUDIO_STT_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
+      AUDIO_STT_MODEL: ${OWUI_STT_ALIAS:-hive-stt}
       VECTOR_DB: "pgvector"
       # TRANSACTION-mode pooler when one is configured. This is the connection
       # that has actually been failing: a recreated open-webui could not get a
