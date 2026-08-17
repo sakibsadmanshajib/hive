@@ -749,6 +749,26 @@ services:
       # never filtered anything; the filtering was Open WebUI's default access
       # control the whole time.
       BYPASS_MODEL_ACCESS_CONTROL: "true"
+      # #792: the one thing the gateway list cannot express. All six aliases
+      # are legitimately on /v1/models -- that endpoint is an OpenAI-contract
+      # surface and direct API clients need the embedding and audio ids -- but
+      # three of them serve no chat completion, so listing them in the chat
+      # dropdown only produces dead conversations. Dockerfile.open-webui's
+      # owui-patches/apply_model_picker_patch.py drops these ids from the
+      # /api/models response the picker reads, and from nothing else.
+      #
+      # Not Open WebUI's per-model access control, which is what #776 tried:
+      # the flag above disables it for every role, and it is admin-exempt
+      # regardless (BYPASS_ADMIN_ACCESS_CONTROL defaults true) while every
+      # tenant owner here is an Open WebUI admin. That fix could never fire.
+      #
+      # The patch also hides whatever RAG_EMBEDDING_MODEL, AUDIO_TTS_MODEL and
+      # AUDIO_STT_MODEL name, so changing the admin-selected embedding alias
+      # (D-001) does not need a second edit here. This list is for aliases
+      # Open WebUI itself never calls; hive-stt and hive-tts are named because
+      # this deployment routes voice through the gateway rather than through
+      # Open WebUI's own audio settings.
+      HIVE_PICKER_HIDDEN_MODEL_IDS: ${OWUI_PICKER_HIDDEN_ALIASES:-hive-embedding-default,hive-stt,hive-tts}
       ENABLE_EVALUATION_ARENA_MODELS: "false"
       # Web search. Opt-in via .env, default off (same pattern as
       # OWUI_E2E_MODE below) -- this service block is shared with the

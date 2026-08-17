@@ -1,0 +1,87 @@
+{
+  "scenario": "A. before fix (#776 merged), BYPASS_MODEL_ACCESS_CONTROL=true (as deployed)",
+  "owner (owui role=admin)": {
+    "picker": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "gateway_list": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "chat": [
+      200,
+      "ok"
+    ],
+    "rag_upload": [
+      200,
+      "ok"
+    ],
+    "rag_ingest_status": [
+      200,
+      "{'status': 'completed'}"
+    ],
+    "rag_query": [
+      200,
+      "1 hit(s)"
+    ],
+    "tts": [
+      200,
+      "621 bytes"
+    ],
+    "stt": [
+      200,
+      "stub gateway transcript"
+    ]
+  },
+  "member (owui role=user)": {
+    "picker": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "gateway_list": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "chat": [
+      200,
+      "ok"
+    ],
+    "rag_upload": [
+      200,
+      "ok"
+    ],
+    "rag_ingest_status": [
+      200,
+      "{'status': 'completed'}"
+    ],
+    "rag_query": [
+      200,
+      "1 hit(s)"
+    ],
+    "tts": [
+      200,
+      "621 bytes"
+    ],
+    "stt": [
+      200,
+      "stub gateway transcript"
+    ]
+  }
+}

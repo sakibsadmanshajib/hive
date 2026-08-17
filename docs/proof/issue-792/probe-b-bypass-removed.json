@@ -1,0 +1,73 @@
+{
+  "scenario": "B. before fix, BYPASS_MODEL_ACCESS_CONTROL removed (the tempting fix)",
+  "owner (owui role=admin)": {
+    "picker": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "gateway_list": [
+      "hive-auto",
+      "hive-default",
+      "hive-embedding-default",
+      "hive-fast",
+      "hive-stt",
+      "hive-tts"
+    ],
+    "chat": [
+      200,
+      "ok"
+    ],
+    "rag_upload": [
+      200,
+      "ok"
+    ],
+    "rag_ingest_status": [
+      200,
+      "{'status': 'completed'}"
+    ],
+    "rag_query": [
+      200,
+      "1 hit(s)"
+    ],
+    "tts": [
+      200,
+      "621 bytes"
+    ],
+    "stt": [
+      200,
+      "stub gateway transcript"
+    ]
+  },
+  "member (owui role=user)": {
+    "picker": [],
+    "gateway_list": [],
+    "chat": [
+      400,
+      "{\"detail\":\"Model not found\"}"
+    ],
+    "rag_upload": [
+      200,
+      "ok"
+    ],
+    "rag_ingest_status": [
+      200,
+      "{'status': 'completed'}"
+    ],
+    "rag_query": [
+      200,
+      "1 hit(s)"
+    ],
+    "tts": [
+      200,
+      "621 bytes"
+    ],
+    "stt": [
+      200,
+      "stub gateway transcript"
+    ]
+  }
+}

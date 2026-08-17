@@ -1,0 +1,10 @@
+{
+  "label": "branch",
+  "baseUrl": "http://127.0.0.1:18081/",
+  "modelIdsShownInDropdown": [
+    "hive-auto",
+    "hive-default",
+    "hive-fast"
+  ],
+  "capturedAt": "2026-08-17T08:35:26.731Z"
+}
