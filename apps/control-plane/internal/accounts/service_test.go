@@ -83,9 +83,14 @@ func (s *stubRepo) FindInvitationByTokenHash(_ context.Context, tokenHash string
 	return inv, nil
 }
 
+// AcceptInvitation mirrors the production statement's accepted_at IS NULL
+// predicate: consuming an already consumed invitation matches no row.
 func (s *stubRepo) AcceptInvitation(_ context.Context, invitationID uuid.UUID, acceptedAt time.Time) error {
 	for _, inv := range s.invitations {
 		if inv.ID == invitationID {
+			if inv.AcceptedAt != nil {
+				return accounts.ErrAlreadyAccepted
+			}
 			inv.AcceptedAt = &acceptedAt
 			s.acceptCalled = true
 			return nil
@@ -107,6 +112,21 @@ func (s *stubRepo) ListMembersByAccountID(_ context.Context, accountID uuid.UUID
 		}
 	}
 	return members, nil
+}
+
+func (s *stubRepo) ActivateMembership(_ context.Context, accountID, userID uuid.UUID, role string) error {
+	for i := range s.memberships {
+		m := s.memberships[i]
+		if m.AccountID == accountID && m.UserID == userID && m.Status == accounts.StatusInvited {
+			// Immutable update: replace the row rather than mutating in place.
+			updated := m
+			updated.Role = role
+			updated.Status = accounts.StatusActive
+			s.memberships[i] = updated
+			return nil
+		}
+	}
+	return accounts.ErrNotFound
 }
 
 func (s *stubRepo) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {

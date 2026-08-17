@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -50,6 +51,20 @@ export interface AccountProfile {
   state_region: string;
   profile_setup_complete: boolean;
 }
+
+// The not-yet-set-up shape: a fresh account with no profile row (control-plane
+// 404s), and the fallback a page takes when the profile fetch itself fails.
+// Same reasoning as the 404 case below — render the needs-setup state rather
+// than crash.
+export const EMPTY_ACCOUNT_PROFILE: AccountProfile = {
+  owner_name: "",
+  login_email: "",
+  display_name: "",
+  account_type: "",
+  country_code: "",
+  state_region: "",
+  profile_setup_complete: false,
+};
 
 export interface UpdateAccountProfileInput {
   ownerName: string;
@@ -124,17 +139,54 @@ interface RequestContext {
   headers: Record<string, string>;
 }
 
-async function getRequestContext(): Promise<RequestContext> {
+// Memoized per request with React's cache(): confirmed benefit is scoped to
+// the ~16 page.tsx/layout.tsx Server Components that call these exports (the
+// budget settings page alone calls getViewer, getAccountProfile, and
+// getBudget; its parent layout calls getViewer, getBalance, and
+// getBudgetThreshold on the same navigation — up to 6 calls per page load,
+// unmemoized). cache() dedup is scoped by React to the render of that
+// component tree; it does not apply to the ~15 Route Handlers under
+// app/api/**/route.ts that import this module, but each of those calls a
+// getRequestContext-consuming function once per invocation, so there is no
+// multi-call dedup to lose there either way.
+//
+// Each of those (up to 6, per Server Component render) calls was a real
+// network round trip to Supabase Auth's getUser(), and a chance for a
+// transient upstream hiccup to throw "No active session" — confirmed live: a
+// CI run of tests/e2e/console-budgets.spec.ts failed with the console's
+// generic error boundary ("Something went wrong on this page") instead of
+// the budget page. cache() collapses those up-to-6 chances into 1 per
+// request (scoped to that one request; reset on the next navigation, so this
+// does not change session freshness). The one-retry below closes most of
+// what's left of that one remaining chance. Neither eliminates it: a retry
+// exhausted or a memoized rejection is still a thrown error, and the two
+// call sites that throw uncaught on it (getViewer, getAccountProfile in
+// app/console/billing/budget/page.tsx and its layout) now catch it and
+// redirect to sign-in instead of letting it reach the generic boundary — see
+// those two files. The other 16 console pages that call getViewer() directly
+// still have the bare crash-on-throw path; known follow-up, not closed here.
+const getRequestContext = cache(async (): Promise<RequestContext> => {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
   // Validate the JWT against Supabase (getUser does a server round-trip
   // and rejects revoked tokens) before trusting the session. getSession
   // only reads the cookie and would accept a revoked token.
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
+  //
+  // One retry only: a transient upstream hiccup (the failure class that
+  // crashed the budget page, see above) usually clears on a second attempt
+  // a moment later. A genuinely revoked or invalid token fails identically
+  // both times, so this cannot turn a real refusal into a false accept.
+  let user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"] =
+    null;
+  let userError: Awaited<ReturnType<typeof supabase.auth.getUser>>["error"] =
+    null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await supabase.auth.getUser();
+    user = result.data.user;
+    userError = result.error;
+    if (!userError && user) break;
+  }
   if (userError || !user) {
     throw new Error("No active session");
   }
@@ -163,7 +215,7 @@ async function getRequestContext(): Promise<RequestContext> {
   }
 
   return { baseUrl, headers };
-}
+});
 
 function isJsonObject(value: JsonValue | null): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -200,6 +252,25 @@ function readObjectField(source: JsonObject, key: string): JsonObject | null {
 function readArrayField(source: JsonObject, key: string): JsonArray | null {
   const value = source[key];
   return Array.isArray(value) ? value : null;
+}
+
+// requireArrayField is readArrayField plus a loud failure mode for the
+// analytics endpoints (issue #856). readArrayField collapses "key absent",
+// "key wrong-typed", and "key present but genuinely empty" down to the same
+// `null` versus `[]` split; the first two are a response-shape contract
+// break (a backend rename, a proxy mangling a 200, a nested wrapper change),
+// the third is a real, silent, zero-usage account. `?? []` used to treat
+// all three identically, which is exactly how #856 (every analytics call
+// silently parsed to empty regardless of what usage_events held) shipped
+// undetected. A missing or wrong-typed key now throws instead of defaulting,
+// so the next contract drift surfaces as the page's existing "Unable to
+// load analytics" error state rather than a second silent all-zero read.
+function requireArrayField(source: JsonObject, key: string, context: string): JsonArray {
+  const value = readArrayField(source, key);
+  if (value === null) {
+    throw new Error(`${context}: expected "${key}" to be an array in the response`);
+  }
+  return value;
 }
 
 function readStringArrayField(source: JsonObject, key: string): string[] {
@@ -884,15 +955,7 @@ export async function getAccountProfile(): Promise<AccountProfile> {
   // and billing pages can render their needs-setup state instead of
   // crashing the whole Server Components tree.
   if (response.status === 404) {
-    return {
-      owner_name: "",
-      login_email: "",
-      display_name: "",
-      account_type: "",
-      country_code: "",
-      state_region: "",
-      profile_setup_complete: false,
-    };
+    return EMPTY_ACCOUNT_PROFILE;
   }
 
   if (!response.ok) {
@@ -1562,7 +1625,7 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to fetch checkout rails"));
+    await throwControlPlaneError(response, "Failed to fetch checkout rails");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1628,7 +1691,7 @@ export async function initiateCheckout(
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to initiate checkout"));
+    await throwControlPlaneError(response, "Failed to initiate checkout");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1754,7 +1817,7 @@ export async function createApiKey(nickname: string, expiresAt?: string): Promis
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to create API key"));
+    await throwControlPlaneError(response, "Failed to create API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1772,14 +1835,17 @@ export async function createApiKey(nickname: string, expiresAt?: string): Promis
 
 export async function revokeApiKey(keyId: string): Promise<ApiKey> {
   const { baseUrl, headers } = await getRequestContext();
-  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${keyId}/revoke`, {
+  // Encoded for the same reason keyLimitsUrl encodes: a key id carrying a path
+  // separator would otherwise retarget this request at a different upstream
+  // path while still carrying the caller's bearer.
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${encodeURIComponent(keyId)}/revoke`, {
     method: "POST",
     headers,
     cache: "no-store",
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to revoke API key"));
+    await throwControlPlaneError(response, "Failed to revoke API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -2052,7 +2118,9 @@ export async function getAnalyticsUsage(params: {
     throw new Error("Failed to parse usage analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsUsage (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "usage", never "data" (issue #856).
+  const rawData = requireArrayField(payload, "usage", "Failed to parse usage analytics response");
   const rows: UsageSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeUsageSummaryRow(item);
@@ -2087,7 +2155,9 @@ export async function getAnalyticsSpend(params: {
     throw new Error("Failed to parse spend analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsSpend (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "spend", never "data" (issue #856).
+  const rawData = requireArrayField(payload, "spend", "Failed to parse spend analytics response");
   const rows: SpendSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeSpendSummaryRow(item);
@@ -2122,7 +2192,9 @@ export async function getAnalyticsErrors(params: {
     throw new Error("Failed to parse error analytics response");
   }
 
-  const rawData = readArrayField(payload, "data") ?? [];
+  // handleAnalyticsErrors (apps/control-plane/internal/usage/http.go) wraps
+  // its rows under "errors", never "data" (issue #856).
+  const rawData = requireArrayField(payload, "errors", "Failed to parse error analytics response");
   const rows: ErrorSummaryRow[] = [];
   for (const item of rawData) {
     const decoded = decodeErrorSummaryRow(item);

@@ -471,6 +471,8 @@ func classifyInitiateError(err error) (int, string) {
 		return http.StatusBadRequest, "credits must be positive"
 	case strings.Contains(msg, "credits must be a multiple of 1000"):
 		return http.StatusBadRequest, "credits must be a multiple of 1000"
+	case strings.Contains(msg, "credits must be at most"):
+		return http.StatusBadRequest, "credits exceed the maximum for the selected payment method"
 	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):
 		return http.StatusBadRequest, "selected payment rail is not available for this account"
 	}

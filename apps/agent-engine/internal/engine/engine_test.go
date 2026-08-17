@@ -491,6 +491,44 @@ func TestSandboxEngine_Cancel_CleansUpDirs(t *testing.T) {
 	assertDirEmpty(t, e.cfg.WorkspaceRoot)
 }
 
+// Characterisation test for pre-existing behaviour, NOT regression coverage
+// for issue #886. Nothing in this package changed in that fix, so every
+// assertion below passes with the fix fully reverted; it exists to pin the
+// invariant control-plane now depends on, which is that ending a session
+// through Cancel returns its slot to the pool immediately rather than whenever
+// the sandbox finishes on its own (roughly sixteen minutes on the demo box).
+//
+// The actual regression coverage for issue #886 is in
+// apps/control-plane/internal/agenttask/service_test.go, where
+// TestService_Cancel_ReleasesEngineConcurrencySlot and its two siblings fail
+// on revert because they drive Service.Cancel and assert on counters that only
+// move when Service reaches the engine.
+func TestSandboxEngine_Cancel_FreesQuotaSlot(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 1, 1)
+
+	task := testTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := e.Cancel(context.Background(), sessionRef); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if tenant, user := e.q.InUse(task.TenantID, task.UserID); tenant != 0 || user != 0 {
+		t.Fatalf("cancel left quota held: tenant=%d user=%d, want 0/0", tenant, user)
+	}
+
+	// The observable consequence: the same user can start work again at once.
+	next := testTask()
+	next.TenantID = task.TenantID
+	next.UserID = task.UserID
+	if _, err := e.Launch(context.Background(), next); err != nil {
+		t.Fatalf("expected the cancelled session's slot to be reusable, got %v", err)
+	}
+}
+
 func assertDirEmpty(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -529,5 +567,60 @@ func TestSandboxEngine_Cancel_InterruptsAndKillsProcess(t *testing.T) {
 	}
 	if status != StatusCancelled {
 		t.Fatalf("expected cancelled after Cancel, got %s", status)
+	}
+}
+
+// Issue #780: a sandbox launched with --containall has no persisted profile
+// store, so an agent_profile_id can only ever resolve to ProfileNotFound
+// there. With an LLM configured, Launch must send the inline agent_settings
+// payload instead, and must not send both (the agent-server's own validator
+// rejects the combination outright).
+func TestSandboxEngine_Launch_SendsInlineAgentSettingsWhenLLMConfigured(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.cfg.LLMModel = "openai/hive-test-model"
+	e.cfg.LLMBaseURL = "https://gateway.example/v1"
+	e.cfg.LLMAPIKey = "test-key-not-a-real-one"
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	req := fake.startConversationRequest()
+	if req.AgentProfileID != nil {
+		t.Fatalf("expected no agent_profile_id alongside agent_settings, got %v", req.AgentProfileID)
+	}
+	if req.AgentSettings == nil {
+		t.Fatal("expected inline agent_settings")
+	}
+	if req.AgentSettings.AgentKind != "openhands" {
+		t.Fatalf("agent_kind = %q, want openhands", req.AgentSettings.AgentKind)
+	}
+	if got := req.AgentSettings.LLM.Model; got != e.cfg.LLMModel {
+		t.Fatalf("llm.model = %q, want %q", got, e.cfg.LLMModel)
+	}
+	if got := req.AgentSettings.LLM.BaseURL; got != e.cfg.LLMBaseURL {
+		t.Fatalf("llm.base_url = %q, want %q", got, e.cfg.LLMBaseURL)
+	}
+	if got := req.AgentSettings.LLM.APIKey; got != e.cfg.LLMAPIKey {
+		t.Fatal("llm.api_key did not round-trip")
+	}
+}
+
+// The profile path stays intact for a deployment that does persist profiles.
+func TestSandboxEngine_Launch_SendsProfileIDWhenNoLLMConfigured(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	req := fake.startConversationRequest()
+	if req.AgentSettings != nil {
+		t.Fatalf("expected no agent_settings without an LLM configured, got %+v", req.AgentSettings)
+	}
+	if req.AgentProfileID == nil || *req.AgentProfileID != e.cfg.AgentProfileID {
+		t.Fatalf("agent_profile_id = %v, want %v", req.AgentProfileID, e.cfg.AgentProfileID)
 	}
 }

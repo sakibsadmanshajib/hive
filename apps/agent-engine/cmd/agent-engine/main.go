@@ -45,7 +45,18 @@ func main() {
 	controlPlaneURL := flag.String("control-plane-url", envOr("CONTROL_PLANE_URL", "http://control-plane:8081"), "control-plane base URL")
 	controlPlaneToken := flag.String("control-plane-token", os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"), "shared internal-service token")
 	dryRun := flag.Bool("dry-run", false, "print the constructed apptainer argv and exit without launching")
+	serveSocket := flag.String("serve", "", "run as the long-lived host launch daemon on this Unix socket path (issue #780) instead of launching one session and exiting")
 	flag.Parse()
+
+	if *serveSocket != "" {
+		if (*controlPlaneToken == "" || *controlPlaneToken == insecureDefaultToken) && os.Getenv("HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN") != "1" {
+			log.Fatal("agent-engine: CONTROL_PLANE_INTERNAL_TOKEN is empty or the known local/dev default; refusing to start. Set HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN=1 only for local/dev.")
+		}
+		if err := serve(*serveSocket, *controlPlaneURL, *controlPlaneToken); err != nil {
+			log.Fatalf("agent-engine: %v", err)
+		}
+		return
+	}
 
 	tenant, err := uuid.Parse(*tenantID)
 	if err != nil {

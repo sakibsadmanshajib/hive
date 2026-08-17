@@ -173,7 +173,7 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 
 	viewerContext, err := h.accountsSvc.EnsureViewerContext(r.Context(), viewer, parseAccountHeader(r))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternal(w, r, "could not load your workspace", err)
 		return uuid.Nil, false
 	}
 
@@ -197,7 +197,7 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermLedgerView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
@@ -218,7 +218,7 @@ func writeLedgerError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ledger entry not found"})
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeOpaque(w, "request could not be completed", err)
 	}
 }
 
@@ -234,6 +234,24 @@ func parseAccountHeader(r *http.Request) uuid.UUID {
 	}
 
 	return id
+}
+
+// writeInternal logs the real failure and answers with a fixed message. No
+// error string from this package belongs in a response body: it carries raw pgx
+// text, and the workspace provisioning inside EnsureViewerContext can fail on a
+// unique constraint over a slug built from the viewer's own name or email local
+// part.
+func writeInternal(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	slog.ErrorContext(r.Context(), msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
+}
+
+// writeOpaque is writeInternal for the error mappers that do not carry the
+// request. Same contract: the real error goes to the log, a fixed message goes
+// to the client.
+func writeOpaque(w http.ResponseWriter, msg string, err error) {
+	slog.Error(msg, slog.String("err", err.Error()))
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {

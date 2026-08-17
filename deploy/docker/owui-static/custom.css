@@ -1,8 +1,14 @@
 /*
  * Open WebUI's prebuilt index.html unconditionally links this stylesheet
  * (<link rel="stylesheet" href="/static/custom.css">) from STATIC_DIR. Together
- * with loader.js in this directory it is the only supported way to change how a
- * pinned, unforked Open WebUI image looks.
+ * with loader.js in this directory it changes how the pinned upstream image
+ * looks without rebuilding its bundle.
+ *
+ * NOT A RULE ANY MORE (owner decision 2026-08-11, .wolf/decisions.md D-036):
+ * this file used to call that pair "the only supported way" because forking
+ * Open WebUI was forbidden under D-013. D-013 is revoked. Open WebUI is forked
+ * and heavily modified, so this stylesheet is the old ceiling, not a
+ * constraint, and nothing here may be cited to refuse fork work.
  *
  * Two overrides live here, both added in the 2026-07-26 UI/UX pass:
  *   1. The agent-workspace launcher injected by loader.js.
@@ -166,8 +172,8 @@ html.dark #hive-agent-launcher:hover {
  * Prompts, Tools, and the admin Functions and Models panels) on a large
  * confused-face emoji. An emoji standing in for a structural icon reads as an
  * error state and is the wrong register for a product surface, so it is
- * replaced with the Hive mark drawn as an empty enclosure: the container with
- * nothing in it, which is literally what the state means.
+ * replaced with the Hive mark drawn as an empty cell: the hexagon with nothing
+ * in it, which is literally what the state means.
  *
  * SAFETY OF THIS OVERRIDE (the question a CSS hack into vendored markup has to
  * answer). Verified against the pinned digest in docker-compose.yml by grepping
@@ -215,5 +221,5 @@ html.dark #hive-agent-launcher:hover {
 }
 
 :root {
-  --hive-empty-mark: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20x='11'%20y='11'%20width='42'%20height='42'%20rx='11'%20fill='none'%20stroke='%23000'%20stroke-width='6'/%3E%3C/svg%3E");
+  --hive-empty-mark: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Cpolygon%20points='32,8%2053,20%2053,44%2032,56%2011,44%2011,20'%20fill='none'%20stroke='%23000'%20stroke-width='6'%20stroke-linejoin='round'/%3E%3C/svg%3E");
 }

@@ -1,0 +1,23 @@
+seed Accessibility proof chat: HTTP 200
+seed Second proof chat: HTTP 200
+
+===== after =====
+url: http://localhost:3009/
+[pin] getByRole(button, name="Open Sidebar", expanded=false) -> 1
+[pin] getByRole(button, name="Open Sidebar") (any state)     -> 2
+[pin] getByRole(button, name="Close Sidebar", expanded=true) -> 0
+[pin] clicked the control found by accessible name
+[after click] Close Sidebar, expanded=true -> 1
+[after click] Open Sidebar, expanded=false -> 0
+[surface sidebar] chat rows visible -> 2
+[surface chat-item-menu] row menu buttons by name -> 2
+[surface chat-item-menu] menu items after open -> 0
+[surface chat-message-actions] "Copy" -> 1
+[surface chat-message-actions] "Edit" -> 1
+[surface chat-message-actions] "Read Aloud" -> 1
+[surface chat-message-actions] "Regenerate" -> 1
+[surface chat-message-actions] "Good Response" -> 1
+[surface chat-message-actions] "Bad Response" -> 1
+[surface composer-controls] Controls button -> 1
+[surface composer-controls] panel content after click -> 1
+aria snapshot -> aria-after-sweep.txt

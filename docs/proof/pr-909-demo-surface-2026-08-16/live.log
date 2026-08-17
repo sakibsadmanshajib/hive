@@ -1,0 +1,6 @@
+chat url: https://chat-hive.scubed.co/
+chat rows returned by /api/v1/chats/?page=1: 0
+deployed user menu items: ["Hive","New Chat","Search","Workspace","Folders","Chats","demo@hive-demo.invalid","Update your status","Settings","Admin Panel","Archived Chats","Sign Out"]
+ADMIN PANEL ENTRY PRESENT ON THE DEPLOYED BUILD: true
+console api keys url: https://console-hive.scubed.co/console/api-keys
+console spend alerts url: https://console-hive.scubed.co/console/billing/alerts

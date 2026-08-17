@@ -21,14 +21,35 @@ type AdminChecker interface {
 }
 
 // ActorFor builds an authz.Actor from the already-resolved viewer, chosen
-// membership, and admin-overlay flag. It is a pure mapping function — no DB
-// calls — so it is safe to call from any handler that has already loaded the
+// membership, and admin-overlay flag. It is a pure mapping function, no DB
+// calls, so it is safe to call from any handler that has already loaded the
 // viewer context.
+//
+// A membership carries its role only while it is active. Every workspace-scoped
+// permission in authz.Policy is granted on Role being owner or member, so
+// blanking the role here denies the entire workspace surface for a seat that was
+// merely offered.
+//
+// This is defence in depth and nothing more. It is not what protects the
+// thirteen call sites today: every one of them either passes StatusActive as a
+// literal or has already filtered to an active row, so this branch is currently
+// unreachable in production. The real protection is EnsureViewerContext, which
+// chooses only active memberships, and GetMembershipRole, which reads only
+// active rows. This exists so that a future handler which starts passing a row
+// straight from the database gets a denial instead of an escalation.
+//
+// The platform-admin overlay is deliberately untouched. It comes from its own
+// query, which applies its own active-membership predicate, and it is not a
+// property of this workspace membership.
 func ActorFor(viewer auth.Viewer, chosen Membership, isAdmin bool) authz.Actor {
+	role := chosen.Role
+	if chosen.Status != StatusActive {
+		role = ""
+	}
 	return authz.Actor{
 		UserID:      viewer.UserID,
 		WorkspaceID: chosen.AccountID,
-		Role:        platform.MembershipRole(chosen.Role),
+		Role:        platform.MembershipRole(role),
 		Verified:    viewer.EmailVerified,
 		IsAdmin:     isAdmin,
 	}
@@ -65,7 +86,7 @@ func NewActorResolver(svc *Service, roleSvc *platform.RoleService) authz.ActorRe
 			AccountID: vc.CurrentAccount.ID,
 			UserID:    viewer.UserID,
 			Role:      vc.CurrentAccount.Role,
-			Status:    "active",
+			Status:    StatusActive,
 		}
 
 		isAdmin, err := roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)

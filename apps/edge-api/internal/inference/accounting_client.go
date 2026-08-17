@@ -82,6 +82,13 @@ type FinalizeReservationInput struct {
 	ActualCredits          int64  `json:"actual_credits"`
 	TerminalUsageConfirmed bool   `json:"terminal_usage_confirmed"`
 	Status                 string `json:"status"`
+	// InputTokens and OutputTokens are the metered quantities behind
+	// ActualCredits. Control-plane writes them onto the settlement usage
+	// event, so one row carries both what was consumed and what it cost, and
+	// the console's token counters read a real figure instead of zero (#856).
+	// Optional: a caller that omits them settles exactly as before.
+	InputTokens  int64 `json:"input_tokens,omitempty"`
+	OutputTokens int64 `json:"output_tokens,omitempty"`
 }
 
 // ReleaseReservationInput is the request body for releasing a reservation.

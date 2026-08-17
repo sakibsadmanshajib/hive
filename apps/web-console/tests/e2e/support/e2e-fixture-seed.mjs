@@ -18,7 +18,10 @@
 // Nothing here is browser code. The service-role key stays in this Node
 // process and its callers, never reaches page context, and must never be
 // written to stdout, stderr, a screenshot, or an artifact. Route any error
-// text that could embed it through `redactSecrets` first.
+// text that could embed it through `redactSecrets` first. That is a rule
+// about every printing site in this file, not only the ones at the CLI
+// boundary: the sweep below relays raw client-library messages, and those
+// messages are exactly where a key or a token ends up embedded.
 
 import { createHash, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -51,10 +54,12 @@ const LOCAL_IDS = {
   slugSuffix: "",
 };
 
-const DEFAULT_EMAILS = {
-  verified: "e2e-verified@scubed.com.bd",
-  unverified: "e2e-unverified@scubed.com.bd",
-};
+// No DEFAULT_EMAILS constant lives here any more. It used to supply the two
+// shared live addresses whenever a caller passed none, which made every
+// credential-less local run write a password onto a shared tenant-OWNER
+// account through ensureUser below and revoke every session a concurrent run
+// was holding. A default that silently targets a shared account is the bug, so
+// there is no default: see runScopedEmail.
 
 function sha256Hex(input) {
   return createHash("sha256").update(input, "utf8").digest("hex");
@@ -86,6 +91,32 @@ export function withRunKey(email, runKey) {
   return `${email.slice(0, at)}+${runKey}${email.slice(at)}`;
 }
 
+// runScopedEmail is the gate on every address this module writes a password
+// to. ensureUser sends `password:` on both of its update paths, so an address
+// that is not scoped to this run means overwriting the credential of an
+// account other runs are signed in as. There is no fallback and no shared
+// default: an empty run key throws, and an address that does not already carry
+// the key gets it. Idempotent, because ci.yml passes an address that is
+// already namespaced alongside the same key.
+export function runScopedEmail(email, runKey) {
+  if (typeof email !== "string" || email === "") {
+    throw new Error(
+      "E2E fixture seeding requires an explicit address for every fixture " +
+        "user. It has no default, because the default was a shared live account."
+    );
+  }
+  if (!runKey) {
+    throw new Error(
+      "E2E fixture seeding requires E2E_RUN_KEY. Without it the fixtures " +
+        "target shared live accounts, and seeding overwrites their passwords, " +
+        "which revokes every session other runs are holding (see " +
+        "docs/live-test-auth.md). Export any unique value, for example " +
+        "E2E_RUN_KEY=$(whoami)-$(date +%s)."
+    );
+  }
+  return email.includes(`+${runKey}@`) ? email : withRunKey(email, runKey);
+}
+
 // buildIds returns LOCAL_IDS unchanged when runKey is empty, or a full set of
 // ids deterministically derived from runKey when it is set. CI passes one run
 // key per job attempt, so two concurrent jobs get entirely disjoint rows in
@@ -108,10 +139,53 @@ export function buildIds(runKey) {
   };
 }
 
+// Parameter names that carry a credential. They are matched wherever a
+// `name=value` pair appears, which deliberately includes a URL FRAGMENT and
+// not only a query string.
+//
+// 2026-08-08 incident: an agent's own redactor split URLs on "?" and scrubbed
+// query parameters only. GoTrue hands a session back from
+// GET /auth/v1/verify as a redirect whose credentials live after the "#"
+// (`...#access_token=<jwt>&refresh_token=...`), so that redactor printed a
+// live session token to stdout while looking like it was protecting the log.
+// Anything that only understands query strings is not a redactor.
+const CREDENTIAL_PARAMS = [
+  "access_token",
+  "refresh_token",
+  "provider_token",
+  "provider_refresh_token",
+  "id_token",
+  "token_hash",
+  "hashed_token",
+  "confirmation_token",
+  "recovery_token",
+  "invitation_token",
+  "invite_token",
+  "email_otp",
+  "client_secret",
+  "api_key",
+  "apikey",
+  "password",
+  "secret",
+  "token",
+  "code",
+  "otp",
+];
+// Longest names first so `provider_refresh_token` never degrades to `token`.
+const CREDENTIAL_PARAM_RE = new RegExp(
+  `\\b(${[...CREDENTIAL_PARAMS].sort((a, b) => b.length - a.length).join("|")})=([^&#\\s"'\\\\]+)`,
+  "gi"
+);
+// A bare JWT with no parameter name around it: an access token logged on its
+// own line, an `Authorization: Bearer ...` header, or a service-role key that
+// was passed in rather than read from the environment.
+const BARE_JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+
 // redactSecrets scrubs the service-role key (and anything else worth hiding)
 // out of text that is about to be printed. The fixture CLI runs as a child
 // process whose stdout and stderr are relayed into the CI log on failure, so
-// every message that leaves this module goes through here first.
+// every message that leaves this module goes through here first, as does
+// every message from live-auth.mjs. It is safe to run with verbose logging.
 export function redactSecrets(text, secrets = [process.env.SUPABASE_SERVICE_ROLE_KEY]) {
   let out = String(text);
   for (const secret of secrets) {
@@ -119,6 +193,8 @@ export function redactSecrets(text, secrets = [process.env.SUPABASE_SERVICE_ROLE
       out = out.split(secret).join("<redacted>");
     }
   }
+  out = out.replace(CREDENTIAL_PARAM_RE, (_match, name) => `${name}=<redacted>`);
+  out = out.replace(BARE_JWT_RE, "<redacted>");
   return out;
 }
 
@@ -257,6 +333,60 @@ async function seedTenantsAndMemberships(admin, ids, users) {
   );
   if (tenantUserErr) {
     throw new Error(`tenant_users upsert failed: ${tenantUserErr.message}`);
+  }
+}
+
+// The credits each fixture tenant is funded with. Session chat takes a flat
+// 10000 credit hold before it dispatches, so an account below that figure is
+// refused on quota and never reaches a provider. This is deliberately several
+// holds' worth: a spec that sends more than one turn must not start failing on
+// the second.
+const FIXTURE_GRANT_CREDITS = 1_000_000;
+
+// seedBilling maps each fixture tenant to the account it settles against and
+// funds that account.
+//
+// Before #746 the session chat path took no hold and issued no charge, so a
+// fixture tenant with no tenant_billing_accounts row and no credits still got
+// served. It is now refused with billing_not_configured, which is the correct
+// production behaviour and the wrong fixture: a test tenant that cannot be
+// billed does not exercise a billing gateway at all, it exercises the refusal
+// in front of it. Seeding the mapping and the balance makes the suite run the
+// metered path the way a real tenant does, hold and settlement included.
+//
+// Both writes are upserts on their natural keys, so a re-seed of the fixed
+// local identity is idempotent and never double funds an account. The grant's
+// idempotency key is per account and carries no run entropy for exactly that
+// reason: the unique index on (account_id, entry_type, idempotency_key) is
+// what makes a repeated seed a no-op instead of a second million credits.
+//
+// Runs after seedAccountsAndMemberships and seedTenantsAndMemberships, because
+// tenant_billing_accounts has a foreign key into each.
+async function seedBilling(admin, ids) {
+  const pairs = [
+    { tenant_id: ids.verifiedTenantId, account_id: ids.verifiedPrimaryAccountId },
+    { tenant_id: ids.unverifiedTenantId, account_id: ids.unverifiedAccountId },
+  ];
+
+  const { error: mapErr } = await admin
+    .from("tenant_billing_accounts")
+    .upsert(pairs, { onConflict: "tenant_id" });
+  if (mapErr) {
+    throw new Error(`tenant_billing_accounts upsert failed: ${mapErr.message}`);
+  }
+
+  const { error: grantErr } = await admin.from("credit_ledger_entries").upsert(
+    pairs.map((pair) => ({
+      account_id: pair.account_id,
+      entry_type: "grant",
+      credits_delta: FIXTURE_GRANT_CREDITS,
+      idempotency_key: `e2e-fixture-grant:${pair.account_id}`,
+      metadata: { source: "e2e-fixture-seed" },
+    })),
+    { onConflict: "account_id,entry_type,idempotency_key", ignoreDuplicates: true }
+  );
+  if (grantErr) {
+    throw new Error(`credit_ledger_entries grant upsert failed: ${grantErr.message}`);
   }
 }
 
@@ -454,13 +584,20 @@ async function resetProfilesAndInvitation(
   // COALESCEs every column, so a missing row after this delete reads back as
   // blank fields, never ErrNotFound — there is nothing here for a concurrent
   // read to observe as broken. And there is no concurrent read to begin with:
-  // the fixture CLI runs via execFileSync (fully synchronous — it blocks the
-  // calling test's beforeEach until the child process exits) from a single
-  // Playwright worker (playwright.config.ts pins workers: 1 for exactly this
-  // reason). No spec's page load can ever land inside this function's
-  // execution window, in this run or a concurrent one (account ids are
-  // namespaced per E2E_RUN_KEY, so two jobs never touch the same row). Revisit
-  // if workers ever goes above 1 or this CLI is invoked without blocking.
+  // the fixture CLI runs as a child process that every caller awaits to
+  // completion before its test body starts (tests/e2e/support/fixture-reset.ts)
+  // from a single Playwright worker (playwright.config.ts pins workers: 1 for
+  // exactly this reason), and the context/page fixtures are not built until
+  // after the last beforeEach returns. No spec's page load can ever land inside
+  // this function's execution window, in this run or a concurrent one (account
+  // ids are namespaced per E2E_RUN_KEY, so two jobs never touch the same row).
+  //
+  // This used to say "runs via execFileSync, fully synchronous". It no longer
+  // does: blocking the worker's event loop also froze Playwright's timeout
+  // timer, so a test could overrun its deadline and still be reported as
+  // passed. The guarantee above never depended on the loop being blocked, only
+  // on the await and on workers: 1. Revisit if workers ever goes above 1, or if
+  // a caller stops awaiting this CLI before touching a page.
   const accountIds = [
     ids.verifiedPrimaryAccountId,
     ids.verifiedSecondaryAccountId,
@@ -541,6 +678,25 @@ async function sweepStaleFixtureRuns(admin) {
   const stale = oldAccounts.filter((a) => staleAccountIds.has(a.id));
 
   for (const acct of stale) {
+    // tenant_billing_accounts.account_id is ON DELETE RESTRICT on purpose:
+    // deleting an account that still funds a live tenant must fail loudly
+    // rather than orphan that tenant into unmetered service. A swept fixture
+    // account is the one case where dropping the mapping is correct, so the
+    // sweep unmaps it explicitly. Without this the account delete below fails
+    // the foreign key, the loop logs and skips, and stale fixture rows
+    // accumulate forever.
+    const { error: delMapErr } = await admin
+      .from("tenant_billing_accounts")
+      .delete()
+      .eq("account_id", acct.id);
+    if (delMapErr) {
+      console.error(
+        redactSecrets(
+          `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+        )
+      );
+      continue;
+    }
     // accounts.id cascades to every account-scoped table (memberships,
     // profiles, billing, invitations, credits, api keys). Deleting it first
     // is what makes the user delete below legal: accounts.owner_user_id has
@@ -552,7 +708,7 @@ async function sweepStaleFixtureRuns(admin) {
       .eq("id", acct.id);
     if (delAcctErr) {
       console.error(
-        `sweep: delete account ${acct.id} failed: ${delAcctErr.message}`
+        redactSecrets(`sweep: delete account ${acct.id} failed: ${delAcctErr.message}`)
       );
       continue;
     }
@@ -561,7 +717,9 @@ async function sweepStaleFixtureRuns(admin) {
     );
     if (delUserErr) {
       console.error(
-        `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        redactSecrets(
+          `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        )
       );
     }
   }
@@ -575,8 +733,10 @@ async function sweepStaleFixtureRuns(admin) {
 export async function seedFixtures(admin, opts) {
   const runKey = typeof opts.runKey === "string" ? opts.runKey.trim() : "";
   const ids = buildIds(runKey);
-  const verifiedEmail = opts.verifiedEmail ?? DEFAULT_EMAILS.verified;
-  const unverifiedEmail = opts.unverifiedEmail ?? DEFAULT_EMAILS.unverified;
+  // Throws on an empty run key, so LOCAL_IDS above is now only ever reached by
+  // a caller that has already been rejected here.
+  const verifiedEmail = runScopedEmail(opts.verifiedEmail, runKey);
+  const unverifiedEmail = runScopedEmail(opts.unverifiedEmail, runKey);
 
   await sweepStaleFixtureRuns(admin);
 
@@ -612,6 +772,7 @@ export async function seedFixtures(admin, opts) {
   const users = { verifiedUser, unverifiedUser, inviterUser };
   await seedAccountsAndMemberships(admin, ids, users);
   await seedTenantsAndMemberships(admin, ids, users);
+  await seedBilling(admin, ids);
   await resetProfilesAndInvitation(
     admin,
     ids,

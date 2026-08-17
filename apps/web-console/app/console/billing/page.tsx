@@ -8,6 +8,7 @@ import {
   getInvoices,
   getLedgerEntries,
   getViewer,
+  type LedgerPage,
 } from "@/lib/control-plane/client";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
@@ -44,10 +45,21 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const cursor = params.cursor ?? null;
   const typeFilter = params.type ?? null;
 
-  const [balance, profile, budgetThreshold] = await Promise.all([
+  const [balance, profile, budgetThreshold, recentLedger] = await Promise.all([
     getBalance(),
     getAccountProfile(),
     getBudgetThreshold().catch((): null => null),
+    // Issue #856: the Overview tab hardcoded recentEntries={[]} since PR #89
+    // (the original Go rewrite), so "No transactions yet" rendered
+    // unconditionally regardless of what the ledger held. getLedgerEntries
+    // already reads the correct "entries" wrapper key and is unaffected by
+    // the analytics key-mismatch fixed elsewhere in this change; it was
+    // simply never called for this tab. A failed fetch here degrades to an
+    // empty preview rather than breaking the page, matching budgetThreshold's
+    // own fallback above.
+    getLedgerEntries({ limit: 5 }).catch(
+      (): LedgerPage => ({ entries: [], next_cursor: null }),
+    ),
   ]);
 
   return (
@@ -97,7 +109,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
         <div className="flex flex-col gap-6">
           <BillingOverview
             balance={balance}
-            recentEntries={[]}
+            recentEntries={recentLedger.entries}
             accountCountryCode={profile.country_code}
           />
           <BudgetAlertForm currentThreshold={budgetThreshold} />

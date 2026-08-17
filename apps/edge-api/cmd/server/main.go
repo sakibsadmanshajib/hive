@@ -34,6 +34,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/middleware"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
 	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
@@ -145,11 +146,18 @@ func main() {
 	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
 	accountingClient := inference.NewAccountingClient(resolveControlPlaneBaseURL())
 	litellmClient := inference.NewLiteLLMClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
-	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient)
+	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient).
+		WithStageMetrics(inference.NewStageMetrics(promRegistry))
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
-		Pool:       dbPool,
-		Routing:    routingClient,
+		Pool:    dbPool,
+		Routing: routingClient,
+		// Session chat settles through the same control-plane accounting the
+		// API-key path uses (#746). Without these two the handler refuses
+		// every request: serving inference that cannot be charged is the
+		// defect this wiring closes, not a degraded mode to fall back to.
+		Accounting: accountingClient,
+		Billing:    &metering.PGBillingAccountResolver{Pool: dbPool},
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
@@ -404,10 +412,9 @@ func main() {
 			// configured for right now (see EmbeddingMismatch / checkEmbeddingGuard).
 			ragHandler = ragHandler.WithEmbeddingGuard(ragEmbedModel, ragEmbedDim)
 		}
-		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
-		mux.Handle("/v1/rag/", ragMW(ragMux))
+		registerRAGRoutes(mux, featureGate, ragMux)
 	}
 
 	// Agent task lifecycle routes (#311, agent-subsystem blueprint Step 3.4):
@@ -420,11 +427,9 @@ func main() {
 	{
 		agentTaskClient := edgeagenttask.NewClient(resolveControlPlaneBaseURL())
 		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient)
-		agentTaskMW := featureGate.Require(featuregate.FeatureCowork)
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
-		mux.Handle("/v1/agent/tasks", agentTaskMW(agentTaskMux))
-		mux.Handle("/v1/agent/tasks/", agentTaskMW(agentTaskMux))
+		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)
 	}
 
 	// API routes
@@ -533,13 +538,13 @@ func main() {
 
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
-	// TODO(phase-19-plan-03): budgetGate still resolves the workspace
-	// identity from the API-key bearer token via authzClient.Resolve.
-	// Non-hk_ Bearer JWTs do not map there today, so quota enforcement is
-	// inert for JWT-authenticated traffic — the JWT path remains
-	// pre-billing in Plan 02 by design. Plan 03 will introduce a
-	// ctx-aware budget resolver that reads auth.UserFrom before falling
-	// back to the API-key path.
+	// budgetGate resolves the workspace identity from the API-key bearer
+	// token via authzClient.Resolve, so it stays inert for JWT-authenticated
+	// traffic. That is no longer a hole: session chat takes a real credit
+	// hold before dispatch (chat.startSettlement), so an account with no
+	// credits is refused by the reservation itself rather than by this
+	// middleware. A ctx-aware budget resolver would move that refusal
+	// earlier, it would not add one that is missing.
 	handler = budgetGate.Wrap(handler)
 	if jwtMW != nil {
 		// Auth selector sits inside metrics/CompatHeaders so 401s are still
@@ -1064,6 +1069,17 @@ type shimKeyResolver interface {
 func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string) error {
 	snapshot, err := resolver.Resolve(ctx, shimKey)
 	if err != nil {
+		// A transport failure, timeout, or control-plane 5xx says nothing
+		// about the key itself -- it never reached a verdict. Keep that
+		// distinguishable from "the key does not resolve" so
+		// watchOWUIShimKey below does not tell an operator to mint a
+		// replacement over a transient outage (nearly happened live on
+		// 2026-08-14: a cold control-plane container timed out this same
+		// probe, and rotating the key it names would have broken a working,
+		// long-lived deployment for no reason).
+		if errors.Is(err, authz.ErrUpstreamUnavailable) {
+			return fmt.Errorf("%w: the control plane could not be reached to resolve it", err)
+		}
 		return fmt.Errorf("it does not resolve to a Hive API key: %w", err)
 	}
 	if snapshot.Status != "active" {
@@ -1104,26 +1120,58 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 // actually failed in #717 was the verdict, not its severity, so the fix is that
 // the verdict is now true. A no-op when OWUI_SHIM_KEY is unset, which is the
 // normal state for a deployment with no Open WebUI front-end.
+// owuiShimKeyState is the probe's tri-state verdict. A plain boolean
+// ("healthy") collapsed "transiently unreachable" and "genuinely unusable"
+// into the same "unhealthy" value, so watchOWUIShimKey's change-detection
+// (compare against the last logged state) never fired on a transition
+// between the two: a transient control-plane timeout would log once, and a
+// subsequent genuinely revoked/dead key would log nothing at all, because
+// the boolean never changed. That reintroduced exactly the silence issue
+// #717 exists to prevent, on the branch this PR added (PR #903 security
+// review MEDIUM finding).
+type owuiShimKeyState int
+
+const (
+	owuiShimKeyHealthy owuiShimKeyState = iota
+	owuiShimKeyTransient
+	owuiShimKeyDead
+)
+
 func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string, interval time.Duration) {
 	shimKey = strings.TrimSpace(shimKey)
 	if shimKey == "" {
 		return
 	}
 	reported := false
-	lastHealthy := false
+	var lastState owuiShimKeyState
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, owuiShimKeyProbeTimeout)
 		err := checkOWUIShimKey(probeCtx, resolver, shimKey)
 		cancel()
-		healthy := err == nil
-		if !reported || healthy != lastHealthy {
-			if healthy {
+
+		state := owuiShimKeyDead
+		switch {
+		case err == nil:
+			state = owuiShimKeyHealthy
+		case errors.Is(err, authz.ErrUpstreamUnavailable):
+			state = owuiShimKeyTransient
+		}
+
+		if !reported || state != lastState {
+			switch state {
+			case owuiShimKeyHealthy:
 				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
-			} else {
+			case owuiShimKeyTransient:
+				// Transient: the control plane could not be reached in time,
+				// not a verdict that the key is bad. No "mint a replacement"
+				// advice here -- rotating a working key over a timeout is
+				// the failure this branch exists to prevent.
+				log.Printf("owui: WARN OWUI_SHIM_KEY probe could not reach the control plane (transient, will retry next interval): %v. This is NOT a sign the key is invalid -- do not rotate it over this alone", err)
+			default:
 				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its document RAG embeddings and text-to-speech will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
 			}
 			reported = true
-			lastHealthy = healthy
+			lastState = state
 		}
 		select {
 		case <-ctx.Done():

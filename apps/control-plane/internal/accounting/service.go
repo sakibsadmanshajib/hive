@@ -293,9 +293,22 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		actualCredits = heldCredits
 	}
 
-	releaseCredits := releasableCredits(reservation, actualCredits)
+	// unusedCredits is a fact about the RESERVATION: how much of the hold never
+	// turned into spend. It is what the row records beside consumed_credits, and
+	// on every path except a confirmed overage (where the charge legitimately
+	// exceeds the hold and this is zero) the two sum to reserved_credits.
+	unusedCredits := releasableCredits(reservation, actualCredits)
 
 	if actualCredits > 0 {
+		// The charge key still carries the amount. Flattening it to
+		// "reservation:<id>:charge", the way issue #652 flattened the release
+		// key, needs a migration normalizing the 1866 existing
+		// "charge-<credits>" entries first (issue #663 is the same lesson for
+		// the release key), because until they are normalized a retry after a
+		// crossed deploy would post a SECOND charge under the new key shape
+		// instead of deduplicating against the old one. Tracked separately;
+		// capture-exactly-once rests meanwhile on the reservationOpen status
+		// guard above plus the per-account lock, as it always has.
 		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", actualCredits)), actualCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
@@ -305,19 +318,39 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		}
 	}
 
-	if releaseCredits > 0 {
-		// Idempotency key is "release", not "release-<credits>" (issue #652):
-		// releaseLocked below already keys its full release the same way, and a
-		// key that varies with the amount cannot deduplicate two release
-		// attempts of DIFFERING amounts for the same reservation, which is
-		// exactly the case worth catching. One reservation, one release key,
-		// regardless of which path or how much it releases.
-		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
+	// The ledger releases the WHOLE outstanding hold, including the part the
+	// charge just captured, not merely the unused remainder. A hold is an
+	// authorization, and capture lifts it in full; the charge is what the
+	// customer actually pays. Releasing only the remainder left `actual`
+	// credits sitting in the ledger's reserved bucket forever, and since
+	// GetBalance computes available as posted minus reserved, every settled
+	// request cost the customer its price TWICE: once posted, once withheld
+	// (issue #616, measured live 2026-08-16 -- 143642 credits held against
+	// 1825 reservations that had already settled, one 18-credit completion
+	// moving available by 36). The reaper cannot recover these, because it
+	// only scans holds still in a non-terminal state.
+	//
+	// This is also what the API key counter has always done a few lines below:
+	// ApplyReservationDelta unwinds -heldCredits, never -unusedCredits.
+	//
+	// Idempotency key is "release", not "release-<credits>" (issue #652):
+	// releaseLocked below keys its own release the same way, and a key that
+	// varies with the amount cannot deduplicate two release attempts of
+	// DIFFERING amounts for the same reservation. Both paths now also release
+	// the same quantity, remainingHeldCredits, so whichever arrives first
+	// posts an entry the other would have posted identically.
+	if heldCredits > 0 {
+		entry, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), heldCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
-		}); err != nil {
+			"captured_credits":   actualCredits,
+		})
+		if err != nil {
 			return Reservation{}, fmt.Errorf("accounting: release reserved credits: %w", err)
+		}
+		if err := assertReleasedInFull(reservation.ID, entry, heldCredits); err != nil {
+			return Reservation{}, err
 		}
 	}
 
@@ -330,7 +363,7 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		eventType = usage.UsageEventReconciled
 	}
 
-	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, releaseCredits, input.TerminalUsageConfirmed, nextStatus, reason)
+	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, unusedCredits, input.TerminalUsageConfirmed, nextStatus, reason)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: finalize reservation: %w", err)
 	}
@@ -363,11 +396,27 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		Endpoint:         reservation.Endpoint,
 		ModelAlias:       reservation.ModelAlias,
 		Status:           string(status),
-		HiveCreditDelta:  -actualCredits,
-		CustomerTags:     reservation.CustomerTags,
+		// The quantities behind the charge, when the caller measured them, so
+		// this one row answers both what was consumed and what it cost. Spend
+		// stays the negative credit delta; these are counts, never credits.
+		//
+		// Clamped, because these originate in a provider response and reach
+		// here as external input. CreditsForTokens already clamps them before
+		// pricing, so an unclamped count here would put a negative token total
+		// into usage_events and the console's analytics beside a non-negative
+		// credit delta, and a SUM over that column would silently understate
+		// consumption.
+		InputTokens:     max(input.InputTokens, 0),
+		OutputTokens:    max(input.OutputTokens, 0),
+		HiveCreditDelta: -actualCredits,
+		CustomerTags:    reservation.CustomerTags,
 		InternalMetadata: map[string]any{
-			"reservation_id":           reservation.ID.String(),
-			"released_credits":         releaseCredits,
+			"reservation_id": reservation.ID.String(),
+			// The unused part of the hold, matching the reservation row's
+			// released_credits column. The ledger lifts more than this (the
+			// whole authorization, captured part included), which is a
+			// different question and deliberately not what analytics reads.
+			"released_credits":         unusedCredits,
 			"terminal_usage_confirmed": input.TerminalUsageConfirmed,
 		},
 	}); err != nil {
@@ -436,15 +485,21 @@ func (s *Service) releaseLocked(ctx context.Context, input ReleaseReservationInp
 
 	releaseCredits := remainingHeldCredits(reservation)
 	if releaseCredits > 0 {
-		// Same "release" key finalizeLocked's own partial release uses above
-		// (issue #652): one reservation, one release key, whichever caller
-		// (edge-api settlement fallback or the reaper) reaches it first.
-		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
+		// Same "release" key finalizeLocked's own release uses above (issue
+		// #652): one reservation, one release key, whichever caller (edge-api
+		// settlement fallback or the reaper) reaches it first. Both now compute
+		// the same quantity, remainingHeldCredits, so whichever arrives second
+		// deduplicates against an entry for the identical amount.
+		entry, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
 			"endpoint":    reservation.Endpoint,
 			"model_alias": reservation.ModelAlias,
 			"reason":      input.Reason,
-		}); err != nil {
+		})
+		if err != nil {
 			return Reservation{}, fmt.Errorf("accounting: release reserved credits: %w", err)
+		}
+		if err := assertReleasedInFull(reservation.ID, entry, releaseCredits); err != nil {
+			return Reservation{}, err
 		}
 	}
 
@@ -598,6 +653,53 @@ func reservationOpen(status ReservationStatus) bool {
 	default:
 		return false
 	}
+}
+
+// assertReleasedInFull refuses to treat a reservation as settled when the
+// ledger's release entry does not cover the hold this call meant to lift.
+//
+// PostEntry deduplicates on (account_id, entry_type, idempotency_key) and hands
+// back the FIRST entry, so a release attempt that follows an earlier one for a
+// SMALLER amount returns quietly with the hold only partly lifted. Settlement
+// would then mark the row terminal, and the remainder would be stranded past
+// the reaper, which only scans non-terminal holds: exactly the shape of issue
+// #616 this change exists to end, reintroduced silently. The reachable sequence
+// is a settlement that posted the old partial release and then failed before
+// updating the row, with the retry landing on code that releases in full.
+//
+// Failing here leaves the reservation open, so it stays in the reaper's
+// candidate scan and is reported on every pass instead of a wrong number being
+// written once and disappearing. An unrecognized settlement fact is fatal on
+// the money path (D-034).
+//
+// The comparison is against a POSITIVE amount because a release is stored
+// positive: ledger.ReleaseReservedCredits posts +credits while ReserveCredits
+// posts -credits, which is what makes the two cancel in GetBalance's sum. The
+// live magnitude test would fail on its first settlement if that were inverted.
+//
+// A reservation that trips this cannot self-heal: its charge is already
+// committed, and both settlement paths recompute the same amount and hit the
+// same deduplicated entry. That is deliberate, since the alternatives are
+// writing a number the ledger contradicts or silently dropping credits, but it
+// needs an operator, so the error is typed rather than a bare string for
+// alerting to key on. No reconciliation job is written: nothing drains that
+// table today (issue #600) and the reaper would insert a fresh row every 15
+// minutes for the same stuck reservation.
+type SettlementDivergenceError struct {
+	ReservationID uuid.UUID
+	PostedCredits int64
+	WantCredits   int64
+}
+
+func (e *SettlementDivergenceError) Error() string {
+	return fmt.Sprintf("accounting: reservation %s already carries a %d-credit release, refusing to settle against a %d-credit hold", e.ReservationID, e.PostedCredits, e.WantCredits)
+}
+
+func assertReleasedInFull(reservationID uuid.UUID, entry ledger.LedgerEntry, want int64) error {
+	if entry.CreditsDelta == want {
+		return nil
+	}
+	return &SettlementDivergenceError{ReservationID: reservationID, PostedCredits: entry.CreditsDelta, WantCredits: want}
 }
 
 func remainingHeldCredits(reservation Reservation) int64 {

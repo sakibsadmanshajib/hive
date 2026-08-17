@@ -152,13 +152,42 @@ func CheckAccess(snapshot AuthSnapshot, requestedAlias string, estimatedCredits 
 	}
 
 	// 2. Check expiry.
+	//
+	// A non-empty expires_at that fails to parse is DENIED, not skipped.
+	// This is hardening rather than a fix for a reachable gap: issue #915
+	// and PR #919 established that expiry enforcement already works today
+	// through two independent layers, and that this branch is not
+	// reachable from control-plane, which is the only writer of this
+	// field and always formats it via Go's default time.Time JSON
+	// marshaling (RFC3339Nano), a value time.Parse(time.RFC3339, ...)
+	// already accepts. Producing an unparseable value here would require
+	// writing directly to the shared Redis cache, which is already a full
+	// compromise. Failing closed here is defence in depth against that
+	// state, so a future caller of CheckAccess (or a corrupted cache
+	// entry) cannot silently bypass the expiry check the way the old
+	// "err == nil &&" guard did.
+	//
+	// An empty string is treated the same as a nil pointer (no expiry
+	// set), not as a parse failure: both must keep authorizing exactly as
+	// they do today, since a hardening change that started denying
+	// non-expiring keys would be a live outage.
 	if snapshot.ExpiresAt != nil {
-		exp, err := time.Parse(time.RFC3339, *snapshot.ExpiresAt)
-		if err == nil && exp.Before(time.Now()) {
-			return CheckResult{
-				Allowed:  false,
-				DenyCode: "invalid_api_key",
-				DenyMsg:  "API key has expired",
+		raw := strings.TrimSpace(*snapshot.ExpiresAt)
+		if raw != "" {
+			exp, err := time.Parse(time.RFC3339, raw)
+			switch {
+			case err != nil:
+				return CheckResult{
+					Allowed:  false,
+					DenyCode: "invalid_api_key",
+					DenyMsg:  "API key has an invalid expiry",
+				}
+			case exp.Before(time.Now()):
+				return CheckResult{
+					Allowed:  false,
+					DenyCode: "invalid_api_key",
+					DenyMsg:  "API key has expired",
+				}
 			}
 		}
 	}

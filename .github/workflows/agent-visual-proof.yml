@@ -1,0 +1,716 @@
+name: agent visual proof
+
+# Visual proof of the Cowork agent-task surface, produced in CI on the pull
+# request, before it merges (orchestrator rule 8, owner ruling 2026-08-13).
+#
+# WHY IT CANNOT BE CAPTURED ANYWHERE ELSE
+#
+# A Cowork task only really launches through the socket arm of
+# buildAgentEngine (apps/control-plane/cmd/server/main.go): control-plane
+# hands the launch to an unprivileged host launcher over a Unix socket, and
+# the launcher execs Apptainer. The sandbox image is linux/amd64 and cannot
+# be built on the WSL2 dev box, so a local capture proves nothing: the engine
+# falls back to NotConfiguredEngine and every task fails immediately. Until
+# this workflow existed, the only stack that could launch a task was the demo
+# box, which only runs already-merged code, so proof-before-merge was
+# circular. This job breaks the circle by standing the real thing up per run.
+#
+# The control-plane container is NOT given CAP_SYS_ADMIN or /dev/fuse here,
+# and must never be: the socket arm exists precisely so the process holding
+# the payment and database secrets never needs sandbox-escape-class
+# privilege. The launcher runs as the ordinary runner user instead.
+#
+# WHICH RUNNER, AND WHY THIS ONE
+#
+# GitHub-hosted ubuntu-latest, not the self-hosted demo-box runner.
+#
+#   * Verified, not assumed: the "Prove Apptainer can run this image" step
+#     below execs the real SIF and fails the job when the runner will not
+#     allow it. The hosted image already runs an unprivileged bubblewrap
+#     sandbox in ci.yml's egress-firewall-e2e job with the same two AppArmor
+#     sysctls this job sets, so unprivileged user namespaces are known to
+#     work there; the exec step is what turns that from an inference into a
+#     per-run fact.
+#   * The self-hosted runner was rejected on two counts. It executes pull
+#     request code on the machine that serves the live demo, and
+#     scripts/install-agent-engine-host.sh restarts the hive-agent-engine
+#     systemd unit and rewrites /home/sakib/agent-runtime, so a proof run
+#     would reach straight into the live launcher's state. Running an
+#     untrusted branch on a persistent public-repo runner is also the exact
+#     configuration GitHub warns against. A hosted runner is disposable, so
+#     neither question arises.
+#
+# HOW TO AIM IT AT A PULL REQUEST
+#
+#   gh workflow run "agent visual proof" -f pr=891
+#
+# The checkout below takes refs/pull/<pr>/merge, so the proof is of what
+# would land, and the captures are pushed to a side branch and posted as a
+# comment on that pull request. A capture that lives only in a workflow
+# artifact does not satisfy rule 8.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to prove and to post the captures on
+        required: true
+        type: string
+      scenarios:
+        description: Comma separated scenario names, or "all"
+        required: false
+        default: all
+        type: string
+      sabotage:
+        description: >-
+          Stop the launcher before capturing, to demonstrate that a run which
+          cannot launch anything fails instead of passing with no proof
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/agent-console/**'
+      - 'apps/agent-engine/**'
+      - 'apps/control-plane/internal/agenttask/**'
+      - 'apps/control-plane/internal/agentengine/**'
+      - 'apps/edge-api/internal/agenttask/**'
+      - 'deploy/apptainer/**'
+      - 'deploy/docker/Caddyfile.agent-proof'
+      - 'scripts/install-agent-engine-host.sh'
+      - '.github/workflows/agent-visual-proof.yml'
+
+# No concurrency group on purpose. GitHub holds only one run per group as
+# pending, so a third run cancels the second outright, and a cancelled proof
+# run is a silent absence of proof rather than a loud failure (the lesson
+# ci.yml's web-e2e job records at length). This job is rare and expensive
+# enough that overlapping runs are not the problem worth that trade.
+
+env:
+  # Same pinned release the agent-engine SIF workflow builds with.
+  APPTAINER_VERSION: "1.5.2"
+  RUNTIME_DIR: /mnt/agent-runtime
+  # Inside docs/proof/ on purpose: that is the one directory
+  # tools/lint-no-token-in-proof-captures.mjs scans, and it is the only
+  # automated check that a captured credential never reaches a proof log.
+  CAPTURE_DIR: ${{ github.workspace }}/docs/proof/agent-visual-proof/run-${{ github.run_id }}
+  PROOF_ORIGIN: http://127.0.0.1:3030
+
+jobs:
+  capture:
+    name: Capture Cowork proof (real Apptainer launch)
+    runs-on: ubuntu-latest
+    # Measured: SIF fetch and launcher build ~8 min, stack build and boot
+    # ~12 min, three scenarios with real cold sandboxes ~15 min. 45 leaves
+    # headroom without letting a wedged sandbox burn an hour.
+    timeout-minutes: 45
+    # Every step needs repository secrets, which a fork pull request never
+    # gets, and a fork run would fail on a missing secret rather than on the
+    # change under test. Same gate ci.yml's web-e2e job uses.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      COMPOSE_PROFILES: local
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # Without both of these edge-api logs "phase-19 JWT auth wiring
+      # skipped" at boot and then answers 403 to every Supabase-JWT caller,
+      # which the console renders as "the agent workspace is turned off for
+      # your organization": a real page, and proof of nothing. Measured in
+      # run 31819555736, where the token carried the right tenant and
+      # control-plane reported the gate on. Derived from SUPABASE_URL rather
+      # than added as two more secrets, since both are public URLs.
+      SUPABASE_JWT_ISSUER: ${{ secrets.SUPABASE_URL }}/auth/v1
+      SUPABASE_JWKS_URL: ${{ secrets.SUPABASE_URL }}/auth/v1/.well-known/jwks.json
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      # No live provider keys: nothing in this job asks a model for a
+      # completion, it only proves that a sandbox launches and that its slot
+      # is released. Stubs satisfy LiteLLM's startup validation.
+      OPENROUTER_API_KEY: 'ci-stub-not-used'
+      GROQ_API_KEY: 'ci-stub-not-used'
+      NVIDIA_NIM_API_KEY: 'ci-stub-not-used'
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
+      OPENROUTER_EMBEDDING_FALLBACK_MODEL: ${{ vars.OPENROUTER_EMBEDDING_FALLBACK_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
+      NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      # The console's browser fetches must stay same-origin: edge-api serves
+      # no CORS headers. Empty means relative, which is what the shipped
+      # image is built with; Caddyfile.agent-proof is the same-origin front.
+      NEXT_PUBLIC_EDGE_API_BASE_URL: ''
+      E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Off the root filesystem, which Docker also lives on. See the reclaim
+      # step below.
+      PLAYWRIGHT_BROWSERS_PATH: /mnt/ms-playwright
+    steps:
+      - name: Resolve the pull request under proof
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR: ${{ github.event.inputs.pr }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          pr="${INPUT_PR:-$EVENT_PR}"
+          if [ -z "$pr" ]; then
+            echo "::error::no pull request number to prove"
+            exit 1
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          # refs/pull/N/merge is what would land, which is what rule 8 asks
+          # to be proven, and it is also always current with main.
+          echo "ref=refs/pull/$pr/merge" >> "$GITHUB_OUTPUT"
+          # -R is load bearing: this step runs before the checkout, so there
+          # is no git repository for gh to infer the repository from.
+          gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json number,title,headRefOid \
+            --jq '"proving PR #\(.number): \(.title) at head \(.headRefOid)"'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+
+      - name: Reclaim disk space
+        # This job holds a one gigabyte SIF, five container images including
+        # a Next.js production build, node_modules and a Chromium. Run
+        # 31730077938 filled the root filesystem and failed inside `npx
+        # playwright install` with ENOSPC, which reads as a browser problem
+        # rather than a disk one. The SIF and the browser live on /mnt, which
+        # is the runner's large volume; these preinstalled toolchains, which
+        # nothing here uses, are what frees room for Docker on the root disk.
+        run: |
+          set -euo pipefail
+          # The hosted tool cache is deliberately left alone: setup-node and
+          # the actions runtime live there, and reclaiming it to save a few
+          # more gigabytes breaks the steps below in a way that is much
+          # harder to read than ENOSPC.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost || true
+          sudo mkdir -p /mnt/ms-playwright
+          sudo chown "$(id -un):$(id -gn)" /mnt/ms-playwright
+          df -h / /mnt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Mint this run's internal service token
+        # Random per run and masked. It authenticates control-plane to the
+        # launcher socket and never leaves this job; the demo box's own token
+        # is never used here, so a leak of one cannot reach the other.
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          echo "CONTROL_PLANE_INTERNAL_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Install Apptainer and allow unprivileged user namespaces
+        run: |
+          set -euo pipefail
+          deb="apptainer_${APPTAINER_VERSION}_amd64.deb"
+          curl -fsSL -o "/tmp/${deb}" \
+            "https://github.com/apptainer/apptainer/releases/download/v${APPTAINER_VERSION}/${deb}"
+          sudo apt-get update -qq
+          sudo apt-get install -y "/tmp/${deb}"
+          # Ubuntu's AppArmor restriction blocks unprivileged userns by
+          # default; the same two sysctls ci.yml's egress-firewall-e2e job
+          # sets before it runs bubblewrap.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          apptainer --version
+
+      - name: Start a systemd user session for the launcher
+        # Apptainer enforces the per-session memory, CPU and PID limits
+        # through rootless cgroups, which need a user manager: without
+        # XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS every launch dies with
+        # "cannot use cgroups - DBUS_SESSION_BUS_ADDRESS is not set". A
+        # hosted runner has no login session, so linger creates one.
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$(id -un)"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          if [ ! -S "$runtime/bus" ]; then
+            echo "::error::no systemd user session bus at $runtime/bus"
+            exit 1
+          fi
+          {
+            echo "XDG_RUNTIME_DIR=$runtime"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch the SIF built from these exact image inputs
+        # The installer's own fallback takes the newest artifact called
+        # agent-engine-sif, repo wide, with no relation to the code under
+        # test. That is fine on the demo box and wrong here: a pull request
+        # that changes deploy/apptainer, vendor/openhands or the packs is
+        # precisely a pull request that rebuilds this image, and it would
+        # otherwise be certified with a stale, unrelated one. A proof job
+        # that proves the wrong artifact is worse than no proof job, because
+        # its output carries authority.
+        #
+        # Correlation is by image inputs rather than by commit: the SIF
+        # depends on exactly these three trees, so an artifact whose run
+        # built the same three trees IS the image for this ref, and a run
+        # that changed none of them does not need a rebuild. Matching on the
+        # head SHA alone would demand a fresh build for every unrelated
+        # commit and fail every pull request that touches nothing here.
+        #
+        # Downloaded into RUNTIME_DIR, so the installer below finds a SIF
+        # already in place and never reaches its own fallback.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$RUNTIME_DIR"
+          sudo chown "$(id -un):$(id -gn)" "$RUNTIME_DIR"
+
+          inputs_digest() {
+            for path in deploy/apptainer apps/agent-engine/packs vendor/openhands; do
+              # A path absent at that commit hashes as absent rather than
+              # being skipped, so "the directory was added" is a difference.
+              git rev-parse "$1:$path" 2>/dev/null || echo "absent:$path"
+            done | sha256sum | cut -d' ' -f1
+          }
+
+          want=$(inputs_digest HEAD)
+          echo "image inputs digest for this ref: $want"
+
+          match=""
+          while read -r id sha; do
+            [ -n "$sha" ] || continue
+            git fetch -q --depth=1 origin "$sha" 2>/dev/null || continue
+            got=$(inputs_digest "$sha")
+            echo "artifact $id from $sha: $got"
+            if [ "$got" = "$want" ]; then match="$id"; break; fi
+          done <<<"$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=agent-engine-sif&per_page=30" \
+            --jq '.artifacts[] | select(.expired == false) | "\(.id) \(.workflow_run.head_sha)"')"
+
+          if [ -z "$match" ]; then
+            echo "::error::no unexpired agent-engine-sif artifact was built from these image inputs, so there is no image to prove this ref with. Build one: gh workflow run \"agent-engine SIF\" --ref <this branch>"
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$match/zip" > /tmp/agent-engine-sif.zip
+          python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            /tmp/agent-engine-sif.zip "$RUNTIME_DIR"
+          if [ ! -s "$RUNTIME_DIR/agent-engine.sif" ]; then
+            echo "::error::artifact $match contained no agent-engine.sif"
+            exit 1
+          fi
+          echo "using artifact $match ($(stat -c%s "$RUNTIME_DIR/agent-engine.sif") bytes)"
+
+      - name: Install the agent-engine launch daemon (socket arm)
+        # The shipped installer, unmodified: it fetches the newest CI-built
+        # SIF when the host has none, builds the launcher statically, writes
+        # a 0600 env file and starts a transient systemd user unit. /mnt is
+        # the runner's large volume; the root filesystem has no room for a
+        # multi-gigabyte image.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_DIR: ${{ github.workspace }}
+          HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
+          HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
+          HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          HIVE_AGENT_ENGINE_SESSION_API_KEY: ${{ secrets.HIVE_AGENT_ENGINE_SESSION_API_KEY }}
+          # One slot per user and per tenant, so the ceiling is observable
+          # with a single running task instead of two. This is what makes
+          # "the cancelled task's slot came back" a differential the capture
+          # can show rather than a claim.
+          HIVE_QUOTA_USER_CONCURRENCY: '1'
+          HIVE_QUOTA_TENANT_CONCURRENCY: '1'
+          HIVE_SANDBOX_MEMORY_LIMIT: 2G
+          HIVE_SANDBOX_CPU_LIMIT: '2'
+        run: |
+          set -euo pipefail
+          # RUNTIME_DIR is created, owned and populated with the correlated
+          # SIF by the step above, so the installer's own artifact fallback
+          # never runs here.
+          RUNTIME_DIR="$RUNTIME_DIR" bash scripts/install-agent-engine-host.sh
+
+      - name: Prove Apptainer can run this image on this runner
+        # The evidence behind the runner choice at the top of this file. The
+        # installer's own health check proves the daemon answers; this proves
+        # the sandbox itself can start here, which is the capability the
+        # hosted runner was in question for.
+        run: |
+          set -euo pipefail
+          sif="$RUNTIME_DIR/agent-engine.sif"
+          if [ ! -s "$sif" ]; then
+            echo "::error::no SIF at $sif; run the 'agent-engine SIF' workflow"
+            exit 1
+          fi
+          apptainer exec "$sif" /bin/true
+          echo "rootless apptainer exec of the shipped image: ok"
+
+      - name: Reconstruct SUPABASE_DB_URL
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Session-mode clients are capped at the shared project's pool_size
+          # of 15 and shared with the live demo stack, so a job that booted a
+          # stack on session mode alone could take chat-hive offline.
+          python3 scripts/derive-pooler-dsn.py --self-test
+          # Masked before it is exported. Actions masks the secrets it knows,
+          # but a DSN is a derived value it has never seen, and it carries the
+          # password inside it, so a later step that echoes the variable would
+          # print the credential in clear.
+          dsns=$(python3 scripts/derive-pooler-dsn.py \
+            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
+            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
+            --password "$SUPABASE_DB_PASSWORD")
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            echo "::add-mask::${line#*=}"
+            echo "$line" >> "$GITHUB_ENV"
+          done <<<"$dsns"
+
+      - name: Build the stack images
+        run: |
+          set -euo pipefail
+          docker pull -q redis:8.4-alpine
+          docker pull -q ghcr.io/berriai/litellm:v1.77.7-stable
+          docker buildx bake -f deploy/docker/docker-bake.hcl edge-api control-plane \
+            --load --set '*.cache-from=type=gha,scope=stack' \
+            --set '*.cache-to=type=gha,scope=stack,mode=max'
+
+      - name: Build the agent console image
+        working-directory: deploy/docker
+        run: docker compose --profile local --profile chat build agent-console
+
+      - name: Start the stack with the launcher socket wired in
+        working-directory: deploy/docker
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # THE variable that matters: with it set, buildAgentEngine forwards
+          # every launch to the host daemon and reads none of the path
+          # variables. The directory is bind-mounted into control-plane; the
+          # container gets a socket, not a privilege.
+          HIVE_AGENT_ENGINE_SOCKET: /run/hive-agent/engine.sock
+        run: |
+          set -euo pipefail
+          export HIVE_AGENT_ENGINE_SOCKET_DIR="$RUNTIME_DIR/run"
+          docker compose --profile local --profile chat up -d --no-build \
+            redis litellm control-plane edge-api agent-console
+
+      - name: Wait for the services to become healthy
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+          for svc in control-plane edge-api; do
+            while :; do
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              [ "$state" = "healthy" ] && { echo "$svc: healthy"; break; }
+              if [ "$(date +%s)" -gt "$deadline" ]; then
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 "$svc"
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Assert control-plane took the socket arm
+        # Without this the job could boot a NotConfiguredEngine stack, watch
+        # every task fail instantly, and call the screenshots proof of
+        # something. The negative match matters as much as the positive one.
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          logs=$(docker compose logs --no-color control-plane)
+          if grep -q "agent engine not configured" <<<"$logs"; then
+            echo "::error::control-plane fell back to NotConfiguredEngine; no task can launch"
+            grep "agent engine not configured" <<<"$logs" | tail -3
+            exit 1
+          fi
+          if ! grep -q "agent-engine daemon reachable" <<<"$logs"; then
+            echo "::error::control-plane never reported the launch daemon reachable"
+            grep -i "agent-engine" <<<"$logs" | tail -10 || true
+            exit 1
+          fi
+          echo "control-plane is on the socket arm and the daemon answered /health"
+          # Same class of silent misconfiguration, one service over: edge-api
+          # logs this and then denies every Supabase-JWT caller, which reads
+          # as a disabled feature rather than as a broken deployment.
+          if docker compose logs --no-color edge-api | grep -q "JWT auth wiring skipped"; then
+            echo "::error::edge-api skipped JWT auth wiring, so no browser session can authenticate"
+            exit 1
+          fi
+          echo "edge-api wired Supabase JWT auth"
+
+      - name: Serve the console and edge-api from one origin
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' \
+            "$(docker compose ps -q edge-api)")
+          docker run -d --name agent-proof-proxy --network "$net" -p 3030:80 \
+            -v "$PWD/Caddyfile.agent-proof:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$PROOF_ORIGIN/agent-workspace/tasks" || true)
+            # A success or a redirect to sign-in, nothing else. "Answered at
+            # all" is what let run 31730077938 report "proxy up (HTTP 404)"
+            # and carry a misrouted proxy into the capture.
+            case "$code" in
+              2??|3??) echo "proxy up (HTTP $code)"; exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "::error::the proof origin never answered"
+          docker logs agent-proof-proxy
+          exit 1
+
+      - name: Install the harness dependencies
+        working-directory: apps/web-console
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Seed this run's fixture tenant
+        working-directory: apps/web-console
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Run scoped, so nothing here touches a shared account: E2E_RUN_KEY
+          # namespaces every address, and runScopedEmail throws without it.
+          # The invitation token is generated rather than derived from the
+          # public run id, because the seeder stores its sha256 as a live
+          # pending invitation.
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          E2E_INVITATION_TOKEN="$token" node tests/e2e/support/e2e-auth-fixtures.mjs reset
+          # Cowork is a per-tenant gate and edge-api fails closed on it, so
+          # the console would render no composer at all without this row.
+          node --input-type=module -e '
+            import { buildIds, createAdminClient } from "./tests/e2e/support/e2e-fixture-seed.mjs";
+            const ids = buildIds(process.env.E2E_RUN_KEY);
+            const { error } = await createAdminClient()
+              .from("tenant_settings")
+              .upsert(
+                { tenant_id: ids.verifiedTenantId, key: "ENABLE_COWORK", enabled: true },
+                { onConflict: "tenant_id,key" },
+              );
+            if (error) throw new Error(`ENABLE_COWORK upsert failed: ${error.message}`);
+            console.log("ENABLE_COWORK enabled for this run tenant");
+            console.log(`PROOF_TENANT_ID=${ids.verifiedTenantId}`);
+          ' | tee /tmp/seed.log
+          grep -E '^PROOF_TENANT_ID=' /tmp/seed.log >> "$GITHUB_ENV"
+
+      - name: Assert the Cowork gate reads as on
+        # Run 31816249902 reached the console signed in and rendered "The
+        # agent workspace is turned off for your organization", which is a
+        # capture of a real page and no proof of anything. Asserting the gate
+        # here separates the three places it can be off (the row, the
+        # registry join, the token's tenant claim) from a browser that simply
+        # shows the disabled panel, and it fails on the step that owns the
+        # cause rather than on the one that noticed.
+        run: |
+          set -euo pipefail
+          # X-Internal-Token, not a bearer: control-plane's /internal/* gate is
+          # RequireInternalToken (platform/http/internalauth.go), which fails
+          # closed on anything else and answered 401 to a bearer.
+          gates=$(curl -sS --fail-with-body \
+            -H "X-Internal-Token: $CONTROL_PLANE_INTERNAL_TOKEN" \
+            "http://localhost:8081/internal/featuregate/$PROOF_TENANT_ID")
+          # One line: a `python3 -c` program written across several lines
+          # inside a YAML block has to be indented, and Python rejects a
+          # uniformly indented program.
+          python3 -c 'import json,sys; g=json.loads(sys.argv[1]).get("gates",{}); print("gates:", json.dumps(g,sort_keys=True)); sys.exit(0 if g.get("ENABLE_COWORK") else 1)' "$gates" \
+            || { echo "::error::ENABLE_COWORK is off for the run tenant, so the console renders no Cowork surface"; exit 1; }
+
+      - name: Make the launch impossible (deliberate sabotage run)
+        # The negative control for the whole job: with the launcher stopped
+        # nothing can launch, and this run must go red rather than pass with
+        # an empty capture directory.
+        if: github.event.inputs.sabotage == 'true'
+        run: |
+          set -euo pipefail
+          systemctl --user stop hive-agent-engine.service
+          echo "::warning::launcher stopped on purpose; this run is expected to fail"
+
+      - name: Capture the proof
+        id: capture
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROOF_BASE_URL: ${{ env.PROOF_ORIGIN }}
+          PROOF_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          PROOF_RUNTIME_DIR: ${{ env.RUNTIME_DIR }}
+          PROOF_OUT: ${{ env.CAPTURE_DIR }}
+          PROOF_RUN_TAG: proof-${{ github.run_id }}
+          PROOF_NOTE: PR #${{ steps.target.outputs.pr }} · run ${{ github.run_id }}
+          # On an automatic pull request run only the liveness scenario is in
+          # scope: it proves the surface still launches, which is the part
+          # every agent-surface change can be held to. The behaviour specific
+          # scenarios are what a dispatch aims at a particular fix, because
+          # only the dispatcher knows which behaviours that pull request
+          # claims to change.
+          PROOF_SCENARIOS: ${{ github.event.inputs.scenarios || 'launch-liveness' }}
+          HARNESS_PLAYWRIGHT_ROOT: ${{ github.workspace }}
+        run: node apps/agent-console/proof/harness/capture-live.mjs
+
+      - name: Refuse an empty capture
+        # Belt and braces over the harness's own check: a capture directory
+        # with no images has to fail the job, never pass quietly.
+        run: |
+          set -euo pipefail
+          count=$(find "$CAPTURE_DIR" -name '*.png' | wc -l)
+          echo "captured $count screenshots"
+          [ "$count" -gt 0 ] || { echo "::error::no screenshots captured"; exit 1; }
+
+      - name: Check the text log carries no credential
+        id: lint
+        # Scans docs/proof/ whole, which the captures were written into, so
+        # the same guard that fails a hand-committed leak fails this one.
+        # It cannot inspect pixels; that half is handled by stamp.mjs, whose
+        # footer never carries a URL.
+        #
+        # No continue-on-error: a detected credential fails the job outright.
+        # Every step after this one that could republish the captures is
+        # gated on it below, so the guard cannot fire and be ignored.
+        run: npm run lint:proof-tokens
+
+      - name: Upload the captures
+        # Whenever the capture ran at all, including when it failed partway:
+        # a failure shot is evidence too. Not when it never started, where an
+        # empty directory is the earlier step's failure, not this one's.
+        #
+        # And never when the credential lint failed. This artifact is
+        # downloadable by anyone with the run URL on a public repository, so
+        # an `always()` upload would have detected a leak, blocked it from
+        # the pull request comment, and published it anyway: exactly the PR
+        # #578 leak class the lint exists to stop. A skipped upload here is
+        # not a silent absence either, because the lint step itself is red
+        # and names the file it found.
+        if: always() && steps.capture.conclusion != 'skipped' && steps.lint.conclusion != 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-visual-proof-${{ github.run_id }}
+          path: ${{ env.CAPTURE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Post the captures on the pull request
+        # An artifact is a zip behind an authenticated download, so it is not
+        # proof "posted in the pull request". The images go to a side branch
+        # and are embedded in a comment from their raw URLs. The side branch
+        # is never merged and never touches the pull request's own branch.
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch="ci-proof/pr-${PR}-run-${GITHUB_RUN_ID}"
+          dir="docs/proof/agent-visual-proof/pr-${PR}-run-${GITHUB_RUN_ID}"
+          base=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/heads/$branch" -f sha="$base" >/dev/null
+          body=$(mktemp)
+          {
+            echo "## Cowork visual proof, captured in CI"
+            echo
+            echo "Captured against a stack booted from \`refs/pull/${PR}/merge\` on a hosted"
+            echo "runner, with a real Apptainer sandbox behind the socket arm of the agent"
+            echo "engine, in run [\`${GITHUB_RUN_ID}\`](https://github.com/$GITHUB_REPOSITORY/actions/runs/${GITHUB_RUN_ID})."
+            echo
+          } > "$body"
+          # The payload goes in on stdin, not on argv: a full page PNG is a
+          # few hundred kilobytes base64, and an argument list is not the
+          # place to discover the limit.
+          upload() {
+            python3 -c 'import base64,json,sys;print(json.dumps({"message":sys.argv[2],"branch":sys.argv[3],"content":base64.b64encode(open(sys.argv[1],"rb").read()).decode()}))' \
+              "$1" "ci: visual proof for PR #${PR} (run ${GITHUB_RUN_ID})" "$branch" \
+              | gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$dir/$(basename "$1")" --input - >/dev/null
+          }
+          for file in "$CAPTURE_DIR"/*.png; do
+            name=$(basename "$file")
+            upload "$file"
+            echo "### ${name%.png}" >> "$body"
+            echo >> "$body"
+            echo "![${name%.png}](https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$branch/$dir/$name)" >> "$body"
+            echo >> "$body"
+          done
+          upload "$CAPTURE_DIR/proof-log.txt"
+          {
+            echo "<details><summary>Run log (screenshot stamps carry no URL, and the log is"
+            echo "redacted and linted by \`lint:proof-tokens\`)</summary>"
+            echo
+            echo '```'
+            cat "$CAPTURE_DIR/proof-log.txt"
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$body"
+          gh pr comment "$PR" --body-file "$body"
+
+      - name: Dump the launcher and stack logs on failure
+        if: failure()
+        # No working-directory: a run that failed before the checkout has no
+        # deploy/docker, and a step that cannot even start its shell reports
+        # a directory error instead of the failure that actually happened.
+        run: |
+          journalctl --user -u hive-agent-engine --no-pager -n 200 2>&1 \
+            | python3 scripts/redact-log-credentials.py > /tmp/launcher.log || true
+          if [ -d deploy/docker ]; then
+            (cd deploy/docker && docker compose logs --no-color --timestamps --tail=500 2>&1) \
+              | python3 scripts/redact-log-credentials.py > /tmp/compose.log || true
+          fi
+
+      - name: Upload the failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-visual-proof-logs-${{ github.run_id }}
+          path: |
+            /tmp/launcher.log
+            /tmp/compose.log
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f agent-proof-proxy || true
+          if [ -d deploy/docker ]; then
+            (cd deploy/docker && docker compose down -v --remove-orphans) || true
+          fi
+          systemctl --user stop hive-agent-engine.service || true

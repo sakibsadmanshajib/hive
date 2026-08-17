@@ -1,89 +1,889 @@
-import { expect, test, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 
-// Live probe for the agent-console sidecar (apps/agent-console), which is
-// served under a path prefix on the chat host rather than its own subdomain
-// (deploy/docker/Caddyfile.owui). It has no Playwright project of its own, so
-// it rides along in this environment-driven probe suite next to the
-// web-console staging flows. Endpoints and credentials come from env so the
-// same spec runs against the demo box, staging, or a local stack.
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+
+import controls from "./agent-workspace-controls.json";
+import { reauthenticate } from "../support/live-auth";
+
+/*
+ * Live interaction-coverage probe for the agent-console sidecar
+ * (apps/agent-console), also known as "Cowork" or the agent workspace. It is
+ * served under a path prefix on the chat host rather than its own subdomain
+ * (see deploy/docker/Caddyfile.owui). Endpoints and the identity come from
+ * env so the same spec runs against the demo box, staging, or a local stack.
+ *
+ * Every test title carries a stable [C#] control id. scripts/build-agent-
+ * workspace-coverage.mjs maps those ids against
+ * agent-workspace-controls.json to produce the coverage ledger: proven over
+ * total, with the unproven ones named. Do not renumber an existing id, add a
+ * new one instead, or the coverage history for that control breaks.
+ *
+ * AUTHENTICATION. Sessions come from tests/e2e/support/live-auth.ts, which
+ * mints one through the admin one-time-token flow. It needs no password and
+ * changes none. Setting, resetting or rotating a shared account's password to
+ * obtain a session is forbidden permanently (docs/live-test-auth.md); it
+ * invalidated three concurrent runs on 2026-08-08.
+ *
+ * TASK LIFECYCLE. Since PR #870 the demo box runs real agent tasks through an
+ * unprivileged host launcher, so a submitted task moves queued, then running,
+ * then succeeded over roughly sixteen minutes. It no longer resolves straight
+ * to a terminal "Blocked" state, which is what the previous version of this
+ * file asserted. POST /v1/agent/tasks is synchronous over the launch
+ * (control-plane's CreateTask calls Engine.Launch inline, bounded at five
+ * minutes), so a create can take tens of seconds before it answers with a
+ * running task. The timeouts below are sized for that, not for a stub.
+ *
+ * CONTAINMENT. This suite writes to a live deployment, so the complete set of
+ * writes it can make is stated here rather than inferred:
+ *
+ *   1. POST /v1/agent/tasks, exactly once per run, which is the control under
+ *      test. Cancelled in a `finally` whatever happens.
+ *   2. POST /v1/agent/tasks/{id}/cancel, on that one task.
+ *   3. admin generate_link plus verify, inside live-auth.mjs. Touches no
+ *      password. It moves the account's sign-in timestamps, which any login
+ *      does, and nothing else (evidence:
+ *      docs/proof/live-auth-helper-2026-08-08/README.md).
+ *
+ * That is the whole list, and it is short because the surface is: the agent
+ * console has no destructive control at all, only a composer, two radios, a
+ * submit and a cancel. So containment here is structural rather than a
+ * label-matching guard of the kind PR #811 shipped and was found to have
+ * missed a "Change email" control that called supabase.auth.updateUser. If a
+ * destructive control ever ships on this surface, C23 and C24 fail on the
+ * unclaimed descriptor before any test can click it, which is the intended
+ * order: enumerate, fail, then decide, rather than click and discover.
+ */
 const CHAT = process.env.HIVE_CHAT_BASE_URL ?? "https://chat-hive.scubed.co";
 const WORKSPACE = `${CHAT}/agent-workspace`;
+const TASKS_URL = `${WORKSPACE}/tasks`;
 
-// Must be a user with tenant role OWNER on a tenant whose ENABLE_COWORK
-// feature gate is on, otherwise the console fails closed and renders the
-// "not enabled for your organization" notice instead of the task panel
-// (apps/agent-console/lib/edge-api/gate.ts).
+/*
+ * Must be a user with tenant role OWNER on a tenant whose ENABLE_COWORK
+ * feature gate is on, otherwise the console fails closed and renders the
+ * "not enabled for your organization" notice instead of the task panel
+ * (apps/agent-console/lib/edge-api/gate.ts).
+ *
+ * #848. This USED to default silently to `demo@hive-demo.invalid` "to keep
+ * the suite runnable by hand with no setup." That default is exactly what
+ * put a wall of undeletable "interaction-coverage proof ..." task rows,
+ * stuck Cancelled or Blocked, onto the live account the owner demos to
+ * prospects: confirmed by issue #848 and the 2026-08-11 demo-readiness walk
+ * (issue #858), and every one of them is permanent, since no per-task delete
+ * route exists yet. A control proven by littering the account the audience
+ * sees is not a clean proof, so this fails hard instead of defaulting: set
+ * HIVE_QA_AGENT_EMAIL to an identity dedicated to this measurement, never
+ * let it fall back onto the shared demo account by omission.
+ */
 const AGENT_EMAIL = process.env.HIVE_QA_AGENT_EMAIL ?? "";
 const AGENT_PASSWORD = process.env.HIVE_QA_AGENT_PASSWORD ?? "";
-const HAS_AGENT_CREDS = !!(AGENT_EMAIL && AGENT_PASSWORD);
+const AGENT_EMAIL_FAILURE_REASON =
+  "HIVE_QA_AGENT_EMAIL not set. This suite creates a real, currently undeletable agent " +
+  "task on whatever account it signs in as (issue #848), so it must never silently fall " +
+  "back to the shared demo account. Point it at an identity dedicated to this measurement.";
 
-async function signIn(page: Page) {
-  await page.goto(`${WORKSPACE}/auth/sign-in`);
-  await page.locator("#email").fill(AGENT_EMAIL);
-  await page.locator("#password").fill(AGENT_PASSWORD);
-  await page.click('button[type="submit"]');
-  await page.waitForURL((url) => url.pathname === "/agent-workspace/tasks", {
-    timeout: 25000,
-  });
+/*
+ * live-auth.mjs mints against these three. Without them there is no session
+ * and no honest way to get one.
+ *
+ * A HARD failure, deliberately, not a skip. A skip here is the same defect as
+ * the committed excuse this suite was rewritten to remove, just moved into the
+ * numerator: one renamed secret would quietly drop every authenticated control
+ * out of the run, the builder would count them as skipped rather than missing,
+ * and the job would report a cheerful green at 6 of 23. The coverage floor in
+ * build-agent-workspace-coverage.mjs is the second layer under this one.
+ */
+const MINT_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"];
+const MISSING_MINT_ENV = MINT_ENV.filter((name) => !(process.env[name] ?? "").trim());
+const MINT_FAILURE_REASON =
+  `cannot mint a live session: ${MISSING_MINT_ENV.join(", ")} not set. ` +
+  "See docs/live-test-auth.md. There is no credential-rotating fallback and there must never " +
+  "be one. This fails rather than skips on purpose: a skipped control is not a proven control, " +
+  "and a run that cannot authenticate has not measured this surface at all.";
+
+function requireMintEnv(): void {
+  expect(MISSING_MINT_ENV, MINT_FAILURE_REASON).toEqual([]);
+  expect(AGENT_EMAIL, AGENT_EMAIL_FAILURE_REASON).not.toEqual("");
 }
 
-test("unauthenticated workspace entry redirects to the prefixed sign-in page", async ({
-  page,
-}) => {
-  await page.goto(WORKSPACE);
-  // The whole redirect chain must stay inside /agent-workspace. A target that
-  // drops the basePath leaves Caddy's route for this app and is answered by
-  // Open WebUI's catch-all instead.
-  await expect(page).toHaveURL(`${WORKSPACE}/auth/sign-in`);
-  await expect(page.getByRole("heading", { name: "Agent workspace" })).toBeVisible();
+const PASSWORD_SKIP_REASON =
+  "HIVE_QA_AGENT_PASSWORD not set. Every other authenticated control here is proven from a " +
+  "session minted by tests/e2e/support/live-auth.mjs, which needs no password. This one is the " +
+  "password submit path itself, so it can only be proven by typing a real password into the real " +
+  "form. Supplying an existing password is fine; rotating the shared account to invent one is " +
+  "forbidden (docs/live-test-auth.md).";
+
+/** Installs a freshly minted session on the context. No password involved. */
+async function signIn(page: Page): Promise<void> {
+  await reauthenticate(page.context(), { email: AGENT_EMAIL, targetUrl: WORKSPACE });
+}
+
+/**
+ * Opens the task console and waits for the panel itself, not just the page.
+ *
+ * The h1 renders whether or not Cowork is enabled for the tenant, so
+ * asserting on it would pass against the "turned off for your organization"
+ * notice. The composer only exists when the gate is on.
+ */
+async function openTaskConsole(page: Page): Promise<void> {
+  await page.goto(TASKS_URL);
+  await expect(page).toHaveURL(TASKS_URL);
+  await expect(page.locator("#task-instructions")).toBeVisible({ timeout: 20000 });
+}
+
+const TASK_LIST_GLOB = "**/v1/agent/tasks";
+
+/*
+ * The collection endpoint EXACTLY, path and all, not a substring of it.
+ *
+ * `url().includes("/v1/agent/tasks")` also matches
+ * `/v1/agent/tasks/{id}/cancel`, so a predicate built on it picks the cancel
+ * call out of the network stream just as happily as the create. In the current
+ * file that never bites, because the cancel happens after the create and
+ * `workers: 1` serialises everything. Both of those are properties of this file
+ * rather than of the assertion, and either can change without anyone noticing
+ * the proof went soft, which is precisely how a correlation check rots.
+ */
+const TASKS_ENDPOINT = `${CHAT}/v1/agent/tasks`;
+const isTasksCollection = (url: string): boolean => new URL(url).pathname === "/v1/agent/tasks";
+
+/*
+ * The two wire shapes this file reads back, named rather than inlined as
+ * `unknown`. This repository forbids `any`, `unknown` and unsafe casts in
+ * favour of structurally valid values, so the fields are declared optional and
+ * every read below still guards with `typeof`, which is what makes the shape an
+ * assumption that is checked rather than one that is asserted. Both mirror
+ * apps/agent-console/lib/edge-api/tasks.ts, which is the app's own decoder for
+ * the same payloads.
+ */
+interface AgentTaskWire {
+  id?: string;
+  instructions?: string;
+  status?: string;
+}
+
+interface AgentTaskListWire {
+  tasks?: AgentTaskWire[];
+}
+
+/**
+ * Arms a waiter so its rejection can only ever be delivered at its `await`.
+ *
+ * Every waiter in this file is created before the action it observes, because a
+ * waiter armed afterwards races the event it is waiting for. That leaves the
+ * promise floating while the stack is parked on the action, and a waiter that
+ * times out during that window is an UNHANDLED rejection, which Playwright
+ * turns into an immediate test abort. An abort does not unwind the stack, so
+ * `finally` never runs and the task this test created is orphaned on a shared
+ * box, holding a concurrency slot nothing frees (issue #886).
+ *
+ * Found by deliberately sabotaging the list waiter to a 1ms timeout to prove
+ * the cleanup ran: it did not, and the task was still `running` afterwards.
+ * Attaching a no-op handler here keeps the rejection on the awaited path, where
+ * it is an ordinary throw inside the guarded region.
+ *
+ * ponytail: absorb at the source rather than a try/catch at each await. Three
+ * call sites today, and the next waiter someone adds gets it for free only if
+ * they use this, which is why the name says what it is for.
+ */
+function armed<T>(waiter: Promise<T>): Promise<T> {
+  waiter.catch(() => undefined);
+  return waiter;
+}
+
+/**
+ * Finds a task by the exact brief it was created with, straight from the API.
+ *
+ * Only used by cleanup, and therefore swallows everything: it runs in a
+ * `finally` whose job is to reclaim a sandbox, so a failure here must never
+ * replace the error that sent us there. Returns an empty string when the task
+ * cannot be found or the call cannot be made.
+ */
+async function findTaskIdByBrief(
+  request: APIRequestContext,
+  authHeader: string,
+  brief: string,
+): Promise<string> {
+  try {
+    const listed = await request.get(TASKS_ENDPOINT, {
+      headers: { Authorization: authHeader },
+    });
+    if (!listed.ok()) return "";
+    const body: AgentTaskListWire = await listed.json();
+    const match = (body.tasks ?? []).find((task) => task.instructions === brief);
+    return typeof match?.id === "string" ? match.id : "";
+  } catch {
+    return "";
+  }
+}
+
+/*
+ * Every focusable control on a screen, as a stable descriptor.
+ *
+ * What this actually defends, stated as a fraction rather than as a property of
+ * the whole suite: 9 of the 24 controls carry a non-empty `dom` entry (C1, C2,
+ * C3, C9, C10, C11, C12, C13, C17), and only those 9 are compared against what
+ * the deployed page renders. The other 15 are behaviours rather than elements
+ * (two redirects, an API status, four error states, three submit paths, the
+ * engine notice, the empty state, the noValidate finding, and these two guards
+ * themselves), and no DOM sweep can enumerate a behaviour: there is no node to
+ * find for "an expired session is reported". Their only defence is that each
+ * has a test, which is what the not-run, duplicate-tag and floor checks in the
+ * build script enforce.
+ *
+ * So the accurate claim is narrow: a new focusable CONTROL cannot ship on
+ * either screen without raising the denominator. A new behaviour can, and the
+ * suite would not notice. Widening that honestly needs the states driven, which
+ * is one test per control, which is the thing that already exists. A sweep at
+ * rest would find none of the conditional regions and would only look like a
+ * guard.
+ */
+/*
+ * ponytail: light DOM only, and the claim in the ledger is worded to match.
+ * Known ceiling, stated rather than hidden: querySelectorAll does not cross a
+ * shadow root or an iframe document, the descriptor is deduplicated into a Set
+ * so N identical Cancel buttons collapse to one, and only the two screens in
+ * the states this file drives are inventoried, so a control that appears only
+ * in a state nothing here reaches is not seen. This app has no shadow DOM and
+ * no iframes today (it is a plain Next app, and its own middleware sets
+ * frame-ancestors 'none'), so the ceiling costs nothing yet. Widen to a
+ * recursive walk over shadowRoot and frameLocator the day either appears.
+ */
+const FOCUSABLE_SELECTOR =
+  'a[href], button, input:not([type="hidden"]), textarea, select, iframe, summary, ' +
+  '[contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
+
+async function focusableInventory(page: Page): Promise<string[]> {
+  return page.evaluate((selector) => {
+    const clean = (value: string) =>
+      value
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 40);
+    const found = new Set<string>();
+    for (const node of Array.from(document.querySelectorAll(selector))) {
+      const tag = node.tagName.toLowerCase();
+      let type = "";
+      let radioValue = "";
+      let label = "";
+      if (node instanceof HTMLInputElement) {
+        type = node.type;
+        if (node.type === "radio") radioValue = `=${node.value}`;
+        label = clean(node.getAttribute("aria-label") ?? "");
+      } else if (node instanceof HTMLButtonElement) {
+        type = node.type;
+        label = clean(node.textContent ?? "");
+      } else if (node instanceof HTMLAnchorElement) {
+        label = clean(node.textContent ?? "");
+      } else {
+        label = clean(node.getAttribute("aria-label") ?? "");
+      }
+      const id = node.id ? `#${node.id}` : "";
+      found.add(
+        `${tag}${type ? `[${type}]` : ""}${id}${radioValue}${label ? `:${label}` : ""}`,
+      );
+    }
+    return [...found].sort();
+  }, FOCUSABLE_SELECTOR);
+}
+
+function ledgerInventory(screen: string): string[] {
+  return controls.controls
+    .filter((control) => control.screen === screen && control.dom)
+    .map((control) => control.dom)
+    .sort();
+}
+
+test.describe("sign-in entry (no session required)", () => {
+  test("[C6] unauthenticated workspace entry redirects to the prefixed sign-in page", async ({
+    page,
+  }) => {
+    await page.goto(WORKSPACE);
+    // The whole redirect chain must stay inside /agent-workspace. A target that
+    // drops the basePath leaves Caddy's route for this app and is answered by
+    // Open WebUI's catch-all instead.
+    await expect(page).toHaveURL(`${WORKSPACE}/auth/sign-in`);
+    // "Agent workspace" is the eyebrow label (a span), not the page heading.
+    // The actual h1 is the sign-in title. Confirmed live 2026-08-08.
+    await expect(page.getByRole("heading", { name: "Sign in to run agent tasks" })).toBeVisible();
+    await expect(page.getByText("Agent workspace", { exact: true })).toBeVisible();
+  });
+
+  test("[C7] unauthenticated direct /tasks visit also redirects to sign-in", async ({ page }) => {
+    // Separate middleware branch from C6 (pathname.startsWith("/tasks") vs
+    // pathname === "/"): proves the guard is not just on the bare root.
+    await page.goto(`${WORKSPACE}/tasks`);
+    await expect(page).toHaveURL(`${WORKSPACE}/auth/sign-in`);
+  });
+
+  test("[C1][C2] email and password inputs accept and reflect input", async ({ page }) => {
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    const email = page.locator("#email");
+    const password = page.locator("#password");
+    await expect(email).toHaveAttribute("type", "email");
+    await expect(password).toHaveAttribute("type", "password");
+    await email.fill("proof-of-effect@example.com");
+    await password.fill("whatever-proof-1");
+    await expect(email).toHaveValue("proof-of-effect@example.com");
+    // Masked field: the value is set, but never rendered as plaintext.
+    await expect(password).toHaveValue("whatever-proof-1");
+  });
+
+  test("[C5] required fields are advisory only, because the form is noValidate", async ({
+    page,
+  }) => {
+    // Confirmed live 2026-08-08: the sign-in form carries `noValidate`, so the
+    // `required` attributes on #email and #password are an accessibility
+    // signal only and the browser never blocks the click. The real guard is
+    // server side. An empty-credentials submit still fires the token request
+    // and still lands on the same visible error as a wrong password.
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    await expect(page.locator("#email")).toHaveAttribute("required", "");
+    await expect(page.locator("#password")).toHaveAttribute("required", "");
+    const tokenResponse = armed(
+      page.waitForResponse(
+        (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+      ),
+    );
+    await page.click('button[type="submit"]');
+    const response = await tokenResponse;
+    // Exactly 400. A range assertion here also passes on a 500 from a broken
+    // auth service, which is the opposite of what this control claims.
+    expect(response.status()).toBe(400);
+    await expect(page.locator('p[role="alert"]')).toBeVisible();
+  });
+
+  test("[C3][C4] submit with wrong credentials fires the token request and renders the error alert", async ({
+    page,
+  }) => {
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    const tokenResponse = armed(
+      page.waitForResponse(
+        (res) => res.url().includes("/auth/v1/token") && res.request().method() === "POST",
+      ),
+    );
+    await page.locator("#email").fill("proof-of-effect@example.com");
+    await page.locator("#password").fill("definitely-wrong-password-123");
+    await page.click('button[type="submit"]');
+    const response = await tokenResponse;
+    expect(response.status()).toBe(400);
+    // Scoped to the app's own alert paragraph. A bare getByRole("alert") also
+    // matches Next.js's global route-announcer div (role="alert",
+    // id="__next-route-announcer__", present on every Next page for a11y
+    // navigation announcements), which is a strict-mode violation. Found live
+    // 2026-08-08 and worth remembering for every other alert-role assertion in
+    // this codebase's Next apps.
+    await expect(page.locator('p[role="alert"]')).toBeVisible();
+    await expect(page.locator('p[role="alert"]')).toContainText("Invalid login credentials");
+    // Still on sign-in: a failed grant must not navigate.
+    await expect(page).toHaveURL(`${WORKSPACE}/auth/sign-in`);
+  });
+
+  test("[C22] agent-task API is reachable on the chat origin and still requires auth", async ({
+    request,
+  }) => {
+    // The task console calls this path same-origin. It must be routed here (so
+    // not a 404) and must reject an unauthenticated caller (so not a 200).
+    const response = await request.get(TASKS_ENDPOINT);
+    expect(response.status()).toBe(401);
+  });
+
+  test("[C24] every focusable control on the sign-in screen is claimed by the ledger", async ({
+    page,
+  }) => {
+    /*
+     * Half of the denominator check, and deliberately the half that needs no
+     * session, so it is outside the authenticated group's gate entirely. C23
+     * does the same for the task console. A guard against gaming the
+     * denominator must not share a gate with the thing it guards: put both
+     * halves behind the session and one absent environment variable disables
+     * the guard exactly when the numerator is also collapsing.
+     */
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    await expect(page.locator("#email")).toBeVisible();
+    expect(
+      await focusableInventory(page),
+      "the sign-in screen renders a focusable control the ledger does not claim, or claims one " +
+        "it no longer renders. Add or remove the matching entry in agent-workspace-controls.json.",
+    ).toEqual(ledgerInventory("sign-in"));
+  });
 });
 
-test("sign-in lands on the task console and not on the chat app", async ({ page }) => {
-  test.skip(!HAS_AGENT_CREDS, "HIVE_QA_AGENT_EMAIL / HIVE_QA_AGENT_PASSWORD not set");
-  await signIn(page);
+test.describe("authenticated task console", () => {
+  test.beforeEach(requireMintEnv);
 
-  // Regression guard: this used to resolve to a bare /tasks, which Open WebUI
-  // answered by redirecting to its own /auth login page.
-  await expect(page).toHaveURL(`${WORKSPACE}/tasks`);
-  await expect(page.getByRole("heading", { name: "Start a task" })).toBeVisible();
-});
+  test("[C8] sign-in with valid credentials lands on the task console, not the chat app", async ({
+    page,
+  }) => {
+    test.skip(!AGENT_PASSWORD, PASSWORD_SKIP_REASON);
+    await page.goto(`${WORKSPACE}/auth/sign-in`);
+    await page.locator("#email").fill(AGENT_EMAIL);
+    await page.locator("#password").fill(AGENT_PASSWORD);
+    await page.click('button[type="submit"]');
+    // Regression guard: this used to resolve to a bare /tasks, which Open WebUI
+    // answered by redirecting to its own /auth login page.
+    await page.waitForURL(TASKS_URL, { timeout: 25000 });
+    await expect(page.getByRole("heading", { name: "Give the agent a task" })).toBeVisible();
+  });
 
-test("task console loads the task list instead of erroring", async ({ page }) => {
-  test.skip(!HAS_AGENT_CREDS, "HIVE_QA_AGENT_EMAIL / HIVE_QA_AGENT_PASSWORD not set");
-  await signIn(page);
+  test("[C9] the Back to chat link returns to the chat origin", async ({ page }) => {
+    await signIn(page);
+    await openTaskConsole(page);
+    const link = page.getByRole("link", { name: /Back to chat/i });
+    await expect(link).toHaveAttribute("href", "/");
+    await link.click();
+    await page.waitForURL((url) => url.pathname === "/" || url.pathname === "");
+    expect(new URL(page.url()).origin).toBe(new URL(CHAT).origin);
+  });
 
-  // Regression guard for the cross-origin fetch: edge-api serves no CORS
-  // headers, so a non-relative base URL failed preflight and the panel
-  // rendered this error for every list, create, and cancel call.
-  await expect(page.getByText("Could not load tasks.")).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Tasks" })).toBeVisible();
-});
+  test("[C10][C11][C12] composer textarea and pack radios reflect selection", async ({ page }) => {
+    await signIn(page);
+    await openTaskConsole(page);
+    const textarea = page.locator("#task-instructions");
+    await textarea.fill("Prove the composer records what I type.");
+    await expect(textarea).toHaveValue("Prove the composer records what I type.");
 
-test("a coding-pack task can be started and cancelled", async ({ page }) => {
-  test.skip(!HAS_AGENT_CREDS, "HIVE_QA_AGENT_EMAIL / HIVE_QA_AGENT_PASSWORD not set");
-  await signIn(page);
+    const coding = page.getByRole("radio", { name: "Coding" });
+    const knowledge = page.getByRole("radio", { name: "Knowledge work" });
+    await expect(coding).toBeChecked();
+    // Clicking the label, not .check() on the input. The input is `peer
+    // sr-only` and the visible control is the span inside its label
+    // (apps/agent-console/components/task-console.tsx), so .check() times out
+    // with "label intercepts pointer events". Clicking the label is both what
+    // makes this pass and what a real user does.
+    await page.locator('label:has(input[value="knowledge-work-pack"])').click();
+    await expect(knowledge).toBeChecked();
+    await expect(coding).not.toBeChecked();
+    // Selecting the pack swaps the hint copy under the toggle.
+    await expect(
+      page.getByText("Researches, reads documents, and writes up an answer."),
+    ).toBeVisible();
+  });
 
-  const tasks = page.getByRole("region", { name: "Tasks" });
-  await page.getByRole("button", { name: "Start coding pack" }).click();
+  test("[C13] submitting an empty task shows the inline validation message, fires no request", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openTaskConsole(page);
+    let createFired = false;
+    await page.route(TASK_LIST_GLOB, (route) => {
+      if (route.request().method() === "POST") createFired = true;
+      return route.continue();
+    });
+    await page.getByRole("button", { name: "Start task" }).click();
+    await expect(
+      page.getByText("Describe the task first. The agent needs a goal to work from."),
+    ).toBeVisible();
+    expect(createFired).toBe(false);
+  });
 
-  const task = tasks.getByRole("listitem").first();
-  await expect(task).toContainText("Coding pack");
-  // "queued" is the correct resting state wherever the Apptainer sandbox is
-  // not configured on the control-plane host: agenttask.NotConfiguredEngine
-  // persists the task and leaves it queued rather than failing the request.
-  await expect(task).toContainText("queued", { timeout: 15000 });
+  test("[C14][C15][C16][C17] a real task is created, its row is marked cancelled on request, and a second cancel is refused", async ({
+    page,
+    request,
+  }) => {
+    /*
+     * One create per run, on purpose. control-plane's CreateTask launches the
+     * sandbox inline and only answers once the launch returns, which is tens
+     * of seconds on a warm box and is bounded at five minutes. Every control
+     * this test carries is downstream of that one create, so splitting them
+     * would mean launching several real sandboxes on a shared demo box for no
+     * extra coverage. The task is cancelled in the `finally` below whatever
+     * happens, so a hard assertion firing mid-test cannot orphan one.
+     *
+     * Do not read a repeated Blocked row as a flake in this test. Cancel is a
+     * database transition only: it never reaches the engine, so the sandbox is
+     * never told to stop and the concurrency slot it holds is not returned
+     * (issue #886). Observed on the demo box, two cancels were enough to hold
+     * both of HIVE_QUOTA_USER_CONCURRENCY's slots for over half an hour, after
+     * which every create was refused instantly with "agent engine could not
+     * start the task". That is the deployment answering honestly, and it is
+     * why this test cancels exactly one task per run and no more.
+     */
+    test.setTimeout(360_000);
+    await signIn(page);
+    await openTaskConsole(page);
 
-  await task.getByRole("button", { name: "Cancel" }).click();
-  await expect(task).toContainText("cancelled", { timeout: 15000 });
-  // Cancel is offered only while the task is still cancellable.
-  await expect(task.getByRole("button", { name: "Cancel" })).toHaveCount(0);
-});
+    /*
+     * Identity, not timing. `findTaskIdByBrief` matches on this exact string to
+     * decide what the cleanup cancels, so it has to be unique against a shared
+     * live box rather than merely unlikely to collide. A `Date.now()` suffix
+     * alone rests on no two runs starting in the same millisecond, which is an
+     * assumption about scheduling rather than a property of the value, and a
+     * collision would have one run cancel a task another run created.
+     */
+    const brief = `interaction-coverage proof ${Date.now()} ${randomUUID()}`;
+    const createRequest = armed(
+      page.waitForRequest((req) => isTasksCollection(req.url()) && req.method() === "POST", {
+        timeout: 30_000,
+      }),
+    );
+    const createResponse = armed(
+      page.waitForResponse(
+        (res) => isTasksCollection(res.url()) && res.request().method() === "POST",
+        { timeout: 330_000 },
+      ),
+    );
+    await page.locator("#task-instructions").fill(brief);
+    // C14: Ctrl+Enter is the submit path being proven here. C13 above proves
+    // the Start task button reaches the same handler.
+    await page.locator("#task-instructions").press("Control+Enter");
 
-test("agent-task API is reachable on the chat origin and still requires auth", async ({
-  request,
-}) => {
-  // The task console calls this path same-origin. It must be routed here (not
-  // 404) and must reject an unauthenticated caller (not 200).
-  const response = await request.get(`${CHAT}/v1/agent/tasks`);
-  expect(response.status()).toBe(401);
+    /*
+     * From here to the `finally`, everything is guarded.
+     *
+     * The guarded region opens the instant the POST has left the browser,
+     * because that is the instant a task can exist on the box, and it is the
+     * only boundary that makes the header's promise true. An earlier version
+     * opened the `try` further down and left `page.reload()` and the list wait
+     * outside it: a slow reload or a list GET that never resolved inside its 60
+     * second budget threw before `finally` existed, and orphaned exactly the
+     * sandbox this block is here to reclaim. Fixing the instance rather than
+     * the window is how that came back, so the window is what moved.
+     *
+     * `authHeader` is read before the `try` on purpose: `finally` needs it to
+     * cancel, and reading a header off a request that has already been
+     * delivered cannot throw.
+     */
+    const submitted = await createRequest;
+    const authHeader = submitted.headers()["authorization"];
+    let createdId = "";
+
+    try {
+      /*
+       * Proof attribution. Both waiters are armed before the keypress, because
+       * a waiter armed afterwards races the response it is waiting for, but
+       * "the next POST that looks right" is not the same claim as "the response
+       * to the request this keypress made". PR #809's sibling gate shipped with
+       * only the shape match and it was a real bug there: any qualifying
+       * response inside the settle window counted as proof. Object identity
+       * closes it.
+       */
+      const response = await createResponse;
+      expect(
+        response.request() === submitted,
+        "the awaited response must belong to the create request this keypress issued, not merely " +
+          "to the next POST on that path that happened to arrive",
+      ).toBe(true);
+
+      // Asserted as a boolean rather than with toMatch, so a failure prints
+      // "false" instead of echoing a live bearer token into the report, the
+      // trace and the CI log.
+      expect(
+        typeof authHeader === "string" && authHeader.startsWith("Bearer "),
+        "the create request must carry a bearer token, otherwise the cancel assertions below " +
+          "would be asserting against an unauthenticated 401",
+      ).toBe(true);
+
+      /*
+       * C15. Soft, and the only soft assertion in this file. It still fails the
+       * test, so nothing is hidden, but the body continues and the task this
+       * created is still cancelled at the end rather than left holding a sandbox
+       * on a shared box.
+       *
+       * A soft failure makes Playwright append a second, spurious error reading
+       * "Test timeout of 30000ms exceeded" even when the body ran to completion
+       * well inside the raised timeout above. Confirmed against a throwaway spec
+       * that logged testInfo.timeout as 120000 and printed its last line before
+       * the runner reported the same 30000. Ignore that line and read the
+       * assertion error underneath it.
+       *
+       * It fails against the demo box today, and the cause is a real defect
+       * rather than a flake (issue #881): edge-api's control-plane client has a 15 second
+       * timeout (apps/edge-api/internal/agenttask/client.go) while
+       * control-plane's CreateTask blocks inline on Engine.Launch with a five
+       * minute bound (apps/control-plane/internal/agenttask/service.go). Any
+       * launch slower than 15 seconds answers the browser with a 500 while the
+       * task is created and runs to completion, so the composer says "Could not
+       * start the task" about a task that is running. Measured live on
+       * 2026-08-11: 18.0s to a 500, and the task reached `succeeded`.
+       */
+      expect
+        .soft(
+          response.status(),
+          "POST /v1/agent/tasks must answer 201. A 500 here, with the task still appearing in " +
+            "the list below, is issue #881, the edge-api create timeout described above.",
+        )
+        .toBe(201);
+
+      /*
+       * Seeded from the create body first, so the cleanup can reach a task the
+       * list read below misses. The body is the task object itself (edge-api's
+       * handleCreate does writeJSON(w, StatusCreated, task)), so the id is at the
+       * top level, verified against the live route. On the #881 path the create
+       * answers 500 with an error envelope and this stays empty, which is why the
+       * list read is still the primary source.
+       */
+      // createdId is declared above the try, so `finally` can always see it.
+      if (response.ok()) {
+        const created: AgentTaskWire | null = await response.json().catch(() => null);
+        if (typeof created?.id === "string") createdId = created.id;
+      }
+
+      /*
+       * The create's proof of effect is read from the server rather than from
+       * the create response body, so it holds whatever the status code was: the
+       * row is persisted and comes back from the list. That is also a stronger
+       * claim than trusting the body the create echoed.
+       */
+      const listResponse = armed(
+        page.waitForResponse(
+          (res) =>
+            isTasksCollection(res.url()) &&
+            res.request().method() === "GET" &&
+            res.status() === 200,
+          { timeout: 60_000 },
+        ),
+      );
+      await page.reload();
+      const listed: AgentTaskListWire = await (
+        await listResponse
+      ).json();
+      const match = (listed.tasks ?? []).find((task) => task.instructions === brief);
+      if (typeof match?.id === "string") createdId = match.id;
+
+      expect(
+        createdId,
+        "the submitted task must come back from GET /v1/agent/tasks, otherwise nothing was created",
+      ).not.toBe("");
+
+      const tasks = page.getByRole("region", { name: "Tasks" });
+      const row = tasks.getByRole("listitem").filter({ hasText: brief }).first();
+      await expect(row).toBeVisible();
+      /*
+       * C16. The engine notice is derived from the newest task carrying the
+       * engine-unavailable sentinel. Since #870 the demo box has a working
+       * runtime, so the correct rendering is its absence, and its presence here
+       * means the launcher is down. The previous version of this file asserted
+       * the notice was present, which was true only while the runtime was
+       * unconfigured.
+       */
+      await expect(
+        page.getByRole("status").filter({ hasText: "The agent runtime is not configured" }),
+      ).toHaveCount(0);
+      /*
+       * Non-terminal, so the row offers Cancel. "Blocked" is what both engine
+       * sentinels read as, and there are exactly two ways to get one:
+       * the runtime is unconfigured on this deployment, which the notice
+       * asserted just above would also show; or the launcher refused this
+       * particular launch, which on a repeated run is the held quota slot in
+       * issue #886.
+       */
+      await expect(
+        row,
+        "the task must reach a non-terminal state so cancel is exercisable. Blocked means the " +
+          "launcher refused it: either no runtime is configured, or the user's concurrency slots " +
+          "are still held by earlier cancelled tasks (issue #886).",
+      ).not.toContainText("Blocked");
+      const cancel = row.getByRole("button", { name: "Cancel" });
+      await expect(cancel).toBeVisible();
+
+      /*
+       * C17, UI half. What this proves and nothing more: the button is offered
+       * on a non-terminal row, pressing it moves that row to Cancelled, and the
+       * button is then withdrawn. It does NOT prove the sandbox stopped, and it
+       * cannot: control-plane's Engine interface has only Launch, and
+       * Service.Cancel is a bare database transition, so nothing on this path
+       * can reach the running sandbox at all (issue #886). Any wording that
+       * claims this control stops a task would be a false proof.
+       */
+      await cancel.click();
+      await expect(row).toContainText("Cancelled", { timeout: 30_000 });
+      await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+
+      /*
+       * C17, server half. Hiding a button proves nothing about the server
+       * refusing the call, and this is the assertion the previous version got
+       * inverted: it asserted only ">= 400", which stays green if the route is
+       * unmounted and 404s, or if the caller is unauthenticated and gets a 401.
+       * The contract says 409 on an already-terminal task
+       * (apps/control-plane/internal/agenttask/SYNC_CONTRACT.md), so that is
+       * what is asserted.
+       */
+      const cancelAgain = await request.post(`${TASKS_ENDPOINT}/${createdId}/cancel`, {
+        headers: { Authorization: authHeader },
+      });
+      expect(cancelAgain.status()).toBe(409);
+    } finally {
+      /*
+       * Cleanup, never an assertion, and it must not mask the real failure.
+       * Without this, any throw above leaves a live task on a shared box. Cancel
+       * is all this suite can reach, and per #886 it does not free the sandbox,
+       * but a cancelled row is still the closest thing to putting the box back
+       * as it was found.
+       *
+       * The id is re-derived here when nothing above got far enough to name it,
+       * which is the case that matters: a throw between the create and the list
+       * read means a task exists that this test never learned the id of, and
+       * "we could not name it" is not a reason to leave it running. Everything
+       * in here is failure-tolerant by construction, so a cleanup that cannot
+       * reach the API stays silent rather than replacing the real error.
+       */
+      if (!createdId) {
+        createdId = await findTaskIdByBrief(request, authHeader, brief);
+      }
+      if (createdId) {
+        await request
+          .post(`${TASKS_ENDPOINT}/${createdId}/cancel`, {
+            headers: { Authorization: authHeader },
+          })
+          .catch(() => undefined);
+      }
+    }
+  });
+
+  test("[C18] the empty state renders when the account has no tasks", async ({ page }) => {
+    await signIn(page);
+    /*
+     * The list is stubbed empty rather than gated on the live account being
+     * empty. The previous version skipped itself whenever the account already
+     * had history, which every earlier test in this file guarantees by
+     * creating one, so the control switched itself off permanently after its
+     * first run. Deleting live rows to reach the state is out of scope, and
+     * the rendering rule under test is `tasks.length === 0`, which this
+     * exercises exactly.
+     */
+    await page.route(TASK_LIST_GLOB, (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ tasks: [] }),
+        });
+      }
+      return route.continue();
+    });
+    await openTaskConsole(page);
+    await expect(page.getByText("Nothing submitted yet")).toBeVisible();
+  });
+
+  test("[C19] a failing task list load renders the retry banner, not a crash", async ({ page }) => {
+    await signIn(page);
+    await page.route(TASK_LIST_GLOB, (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({ status: 503, body: "{}" });
+      }
+      return route.continue();
+    });
+    await openTaskConsole(page);
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Could not load your tasks" }),
+    ).toBeVisible({ timeout: 20000 });
+  });
+
+  test("[C20] a failing task create renders its own error, keeps the draft text", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openTaskConsole(page);
+    await page.route(TASK_LIST_GLOB, (route) => {
+      if (route.request().method() === "POST") {
+        return route.fulfill({ status: 500, body: "{}" });
+      }
+      return route.continue();
+    });
+    const brief = "this text must survive a failed submit";
+    await page.locator("#task-instructions").fill(brief);
+    await page.getByRole("button", { name: "Start task" }).click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Could not start the task" }),
+    ).toBeVisible();
+    await expect(page.locator("#task-instructions")).toHaveValue(brief);
+  });
+
+  test("[C21] an expired session is reported in place of a silent failure", async ({
+    page,
+    context,
+  }) => {
+    await signIn(page);
+    await openTaskConsole(page);
+    // Drop the Supabase session cookies client side without navigating, then
+    // try to act. This is what a real expiry looks like from the page's point
+    // of view: getSession() resolves to null.
+    await context.clearCookies();
+    await page.locator("#task-instructions").fill("should not be sent");
+    await page.getByRole("button", { name: "Start task" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Your session expired" })).toBeVisible({
+      timeout: 15000,
+    });
+  });
+
+  test("[C23] every focusable control on the task console is claimed by the ledger", async ({
+    page,
+  }) => {
+    /*
+     * The denominator check for the authenticated screen. Without this, the
+     * coverage ratio is only as honest as the author's enumeration: a control
+     * that ships without a ledger entry raises neither the total nor the proven
+     * count, and the percentage goes up.
+     *
+     * Its sign-in half is C24, deliberately in the unauthenticated group above:
+     * this half needs a session and the other does not, and a guard against
+     * gaming that shares a gate with the thing it guards fails open in exactly
+     * the case that matters. The gate is now a hard failure rather than a skip
+     * as well, which is the other half of that fix.
+     *
+     * The task list is stubbed to a fixed pair (one running row, one terminal
+     * row) so both the Cancel-offered and Cancel-withheld renderings are on
+     * screen in the same pass, and so the inventory does not change with
+     * whatever history the live account happens to hold.
+     */
+    await signIn(page);
+    const now = new Date().toISOString();
+    const stubbed = {
+      tasks: [
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          pack: "coding-pack",
+          instructions: "enumeration fixture, running",
+          status: "running",
+          engine_session_ref: "",
+          result_summary_ref: "",
+          error_message: "",
+          created_at: now,
+          updated_at: now,
+          started_at: now,
+          finished_at: null,
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000002",
+          pack: "knowledge-work-pack",
+          instructions: "enumeration fixture, finished",
+          status: "succeeded",
+          engine_session_ref: "",
+          result_summary_ref: "",
+          error_message: "",
+          created_at: now,
+          updated_at: now,
+          started_at: now,
+          finished_at: now,
+        },
+      ],
+    };
+    await page.route(TASK_LIST_GLOB, (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(stubbed),
+        });
+      }
+      return route.continue();
+    });
+
+    await openTaskConsole(page);
+    await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(1);
+    expect(
+      await focusableInventory(page),
+      "the task console renders a focusable control the ledger does not claim, or claims one it " +
+        "no longer renders. Add or remove the matching entry in agent-workspace-controls.json.",
+    ).toEqual(ledgerInventory("tasks"));
+
+    /*
+     * The one "not present" claim in the ledger, turned into an assertion.
+     * The task console has no live transcript surface yet, which is why no
+     * control enumerates one. If a transcript pane ships, this fails and
+     * forces it into the ledger instead of leaving it silently uncounted.
+     */
+    await expect(page.getByRole("log")).toHaveCount(0);
+  });
 });

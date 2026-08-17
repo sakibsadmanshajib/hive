@@ -18,21 +18,28 @@ import (
 // validation), and for the dedicated unconfigured-engine coverage below.
 // Tests that need a task to land somewhere non-terminal (running) use
 // newRunningTestHandler instead.
-func newTestHandler() *agenttask.Handler {
+//
+// Both helpers return the Service alongside the Handler because create is now
+// asynchronous over the launch (issue #881): any assertion about a launch
+// outcome has to wait for it with Service.WaitIdle first.
+func newTestHandler() (*agenttask.Handler, *agenttask.Service) {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
-	return agenttask.NewHandler(svc)
+	return agenttask.NewHandler(svc), svc
 }
 
 // newRunningTestHandler wires a fakeEngine that always launches
 // successfully, so created tasks land in StatusRunning rather than
 // immediately StatusFailed.
-func newRunningTestHandler() *agenttask.Handler {
+func newRunningTestHandler() (*agenttask.Handler, *agenttask.Service) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-http-test"})
-	return agenttask.NewHandler(svc)
+	return agenttask.NewHandler(svc), svc
 }
 
+// Create answers with the persisted queued task rather than waiting for the
+// sandbox launch (issue #881). The caller learns the launch outcome from the
+// same poll it already does for every later state change.
 func TestHandler_Create_HappyPath(t *testing.T) {
-	h := newRunningTestHandler()
+	h, svc := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
@@ -47,21 +54,36 @@ func TestHandler_Create_HappyPath(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp["status"] != "running" {
-		t.Errorf("expected status running, got %v", resp["status"])
+	if resp["status"] != "queued" {
+		t.Errorf("expected status queued, got %v", resp["status"])
 	}
 	if _, ok := resp["tenant_id"]; ok {
 		t.Error("response must never echo tenant_id")
+	}
+
+	// The launch still lands, it just lands on the read path.
+	svc.WaitIdle()
+	getW := httptest.NewRecorder()
+	h.InternalMux().ServeHTTP(getW, httptest.NewRequest(http.MethodGet,
+		"/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+resp["id"].(string), nil))
+	var got map[string]any
+	if err := json.NewDecoder(getW.Body).Decode(&got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got["status"] != "running" {
+		t.Errorf("expected the launched task to read as running, got %v", got["status"])
 	}
 }
 
 // TestHandler_Create_EngineNotConfigured_FailsVisibly is the HTTP-layer
 // guard for the bug report ("agents don't work, stuck in queue forever, no
-// error surfaced"): a create call against an unconfigured engine must come
-// back as a task the caller can see is dead, not a healthy-looking queued
-// one, and the error text must stay customer-safe.
+// error surfaced"): a task submitted against an unconfigured engine must
+// become one the caller can see is dead, not sit queued forever, and the
+// error text must stay customer-safe. Since issue #881 the create response
+// itself is the queued row and the failure arrives on the next read, which
+// is the same path every other state change already travels.
 func TestHandler_Create_EngineNotConfigured_FailsVisibly(t *testing.T) {
-	h := newTestHandler()
+	h, svc := newTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
@@ -72,9 +94,18 @@ func TestHandler_Create_EngineNotConfigured_FailsVisibly(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201 (task row is still persisted), got %d: %s", w.Code, w.Body.String())
 	}
-	var resp map[string]any
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	var created map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+
+	svc.WaitIdle()
+	getW := httptest.NewRecorder()
+	h.InternalMux().ServeHTTP(getW, httptest.NewRequest(http.MethodGet,
+		"/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+created["id"].(string), nil))
+	var resp map[string]any
+	if err := json.NewDecoder(getW.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode get: %v", err)
 	}
 	if resp["status"] != "failed" {
 		t.Errorf("expected status failed (never queued forever), got %v", resp["status"])
@@ -89,7 +120,7 @@ func TestHandler_Create_EngineNotConfigured_FailsVisibly(t *testing.T) {
 }
 
 func TestHandler_Create_InvalidPack_Returns400(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "not-a-pack"})
@@ -103,7 +134,7 @@ func TestHandler_Create_InvalidPack_Returns400(t *testing.T) {
 }
 
 func TestHandler_Create_InvalidTenantID_Returns400(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	req := httptest.NewRequest(http.MethodPost, "/internal/agent-tasks/not-a-uuid/"+uuid.New().String(), nil)
 	w := httptest.NewRecorder()
 	h.InternalMux().ServeHTTP(w, req)
@@ -114,7 +145,7 @@ func TestHandler_Create_InvalidTenantID_Returns400(t *testing.T) {
 }
 
 func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
-	h := newRunningTestHandler()
+	h, svc := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "knowledge-work-pack"})
@@ -124,6 +155,7 @@ func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
 	var created map[string]any
 	_ = json.NewDecoder(createW.Body).Decode(&created)
 	taskID := created["id"].(string)
+	svc.WaitIdle()
 
 	listReq := httptest.NewRequest(http.MethodGet, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String(), nil)
 	listW := httptest.NewRecorder()
@@ -150,7 +182,7 @@ func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
 }
 
 func TestHandler_Get_UnknownTask_Returns404(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 	req := httptest.NewRequest(http.MethodGet, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+uuid.New().String(), nil)
 	w := httptest.NewRecorder()
@@ -162,7 +194,7 @@ func TestHandler_Get_UnknownTask_Returns404(t *testing.T) {
 }
 
 func TestHandler_Cancel_HappyPath(t *testing.T) {
-	h := newRunningTestHandler()
+	h, svc := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
@@ -172,6 +204,9 @@ func TestHandler_Cancel_HappyPath(t *testing.T) {
 	var created map[string]any
 	_ = json.NewDecoder(createW.Body).Decode(&created)
 	taskID := created["id"].(string)
+	// Cancel a task whose launch has landed, so this covers the running-task
+	// path rather than racing the background launch.
+	svc.WaitIdle()
 
 	cancelReq := httptest.NewRequest(http.MethodPost, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String()+"/"+taskID+"/cancel", nil)
 	cancelW := httptest.NewRecorder()
@@ -194,7 +229,7 @@ func TestHandler_Cancel_HappyPath(t *testing.T) {
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 	req := httptest.NewRequest(http.MethodDelete, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String(), nil)
 	w := httptest.NewRecorder()

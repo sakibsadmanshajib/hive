@@ -12,9 +12,13 @@
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "e2e:phase-19": "playwright test --project=phase-19",
-    "e2e:phase-19:verify-collection": "bash scripts/verify-phase19-collection.sh",
+    "e2e:agent-workspace": "playwright test --project=agent-workspace --reporter=list,json,./tests/e2e/support/flake-reporter.ts",
+    "e2e:verify-collection": "node scripts/verify-spec-collection.mjs",
     "e2e:owui": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui",
-    "e2e:owui:perf": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui-perf"
+    "e2e:owui:perf": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui-perf",
+    "e2e:chat-coverage": "playwright test --config=e2e/chat-coverage/playwright.chat-coverage.config.ts --project=chat-coverage",
+    "e2e:chat-coverage:self-check": "playwright test --config=e2e/chat-coverage/playwright.chat-coverage.config.ts --project=chat-coverage-break-proof",
+    "chat-coverage:floors": "node scripts/update-chat-coverage-floors.mjs"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "~1.19.0",

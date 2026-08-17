@@ -1,0 +1,47 @@
+- button "Open Sidebar":
+  - button "Open Sidebar"
+  - link "New Chat":
+    - /url: /
+  - button "Search"
+  - link "Notes":
+    - /url: /notes
+  - link "Workspace":
+    - /url: /workspace
+    - img
+- button "User menu":
+  - button "User menu":
+    - img "Open User Profile Menu"
+- navigation:
+  - button "Select a model"
+  - button "Add Model":
+    - img
+  - button "Set as default"
+  - button "Temporary Chat"
+  - button "Controls"
+  - button "User menu":
+    - button "User menu"
+- text: Hello, User
+- paragraph: How can I help you today?
+- button "More":
+  - button "More"
+- button "Integrations":
+  - button "Integrations"
+- button "Voice Input":
+  - img
+- button "Voice mode"
+- text: Suggested
+- list:
+  - listitem: Explain options trading if I'm familiar with buying and selling stocks
+  - listitem: Tell me a fun fact about the Roman Empire
+  - listitem: Show me a code snippet of a website's sticky header
+  - listitem: Help me study vocabulary for a college entrance exam
+  - listitem: Overcome procrastination give me tips
+  - listitem: Give me ideas for what to do with my kids' art
+- region "Notifications alt+T":
+  - list:
+    - status:
+      - button "Close toast":
+        - img
+      - img
+      - text: You're now logged in.
+- text: Open WebUI

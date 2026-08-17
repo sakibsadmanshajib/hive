@@ -25,6 +25,11 @@ import (
 // healthResponse is the JSON body returned by the /health endpoint.
 type healthResponse struct {
 	Status string `json:"status"`
+	// Reason names the missing dependency when Status is "degraded". It is a
+	// fixed string, never an error from the driver: the connection error
+	// carries the database user, host and pooler addresses, and /health is a
+	// public endpoint on the ingress tunnel.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RouterConfig holds dependencies for building the HTTP router.
@@ -51,6 +56,16 @@ type RouterConfig struct {
 
 	// BudgetsHandler handles budget threshold CRUD and alert dismissal endpoints.
 	BudgetsHandler *budgets.Handler
+
+	// DBReady reports whether the database pool opened at startup. Every
+	// tenant-scoped and service-to-service route below is mounted only when its
+	// DB-backed handler exists, so a control-plane that came up without a pool
+	// serves none of them: /internal/apikeys/resolve 404s and edge-api reports
+	// the resulting resolution failure to the caller as "Incorrect API key
+	// provided". /health must therefore refuse to claim health without it,
+	// otherwise the container healthcheck passes and traffic is routed to a
+	// process that cannot authenticate a single request. See issue #816.
+	DBReady bool
 
 	// Mux is an optional pre-created *http.ServeMux. When provided, routes are
 	// registered on it (enabling callers to add routes after NewRouter returns).
@@ -146,7 +161,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux = http.NewServeMux()
 	}
 
-	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/health", healthHandler(cfg.DBReady))
 
 	// internal wraps a service-to-service handler with the shared-secret guard.
 	internal := func(h http.Handler) http.Handler {
@@ -218,6 +233,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedBudgets := cfg.AuthMiddleware.Require(cfg.BudgetsHandler)
 		mux.Handle("/api/v1/accounts/current/budget", protectedBudgets)
 		mux.Handle("/api/v1/accounts/current/budget/dismiss", protectedBudgets)
+		// The Phase 14 workspace surface. budgets.Handler has always dispatched
+		// these two prefixes, but they were never mounted here, so every
+		// request fell through to the /api/v1/ catch-all and came back 404.
+		// That made a hard spend cap and a spend alert impossible to save from
+		// the console even though the handler and its own tests were correct.
+		mux.Handle("/api/v1/budgets/", protectedBudgets)
+		mux.Handle("/api/v1/spend-alerts/", protectedBudgets)
 	}
 
 	if cfg.AccountingHandler != nil && cfg.AuthMiddleware != nil {
@@ -359,8 +381,24 @@ func NewRouter(cfg RouterConfig) http.Handler {
 }
 
 // handleHealth responds with {"status":"ok"} for liveness probes.
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+// healthHandler reports readiness, not liveness. The process starts without a
+// database pool on purpose so the failure is inspectable rather than a crash
+// loop, but a poolless control-plane cannot serve any tenant-scoped route, so
+// reporting 200 here is what turns a transient database outage at boot into a
+// silent, permanent one: the compose healthcheck goes green, dependent services
+// start, and every caller gets a misleading credential error instead.
+func healthHandler(dbReady bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !dbReady {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(healthResponse{
+				Status: "degraded",
+				Reason: "database unavailable",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+	}
 }

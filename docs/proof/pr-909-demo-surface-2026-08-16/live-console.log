@@ -1,0 +1,5 @@
+/console/api-keys attempt 1: status 500, expected content false, gateway error false
+/console/api-keys attempt 2: status 200, expected content true, gateway error false
+/console/billing/alerts attempt 1: status 200, expected content true, gateway error false
+api keys captured: true
+spend alerts captured: true

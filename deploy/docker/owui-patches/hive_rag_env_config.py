@@ -61,14 +61,26 @@ RAG_CONFIG_ENV = {
     "ui.enable_login_form": "ENABLE_LOGIN_FORM",
 }
 
-# Same idea, boolean-valued: the stock surfaces Hive does not ship (#772).
-# Every gate on these three is `$config.features.enable_* && (role === 'admin'
-# || <permission>)`, so unlike the workspace surfaces the feature flag alone
-# hides them from administrators too, and no bundle rewrite is needed.
+# Same idea, boolean-valued.
+#
+# The first three are the stock surfaces Hive does not ship (#772). Every gate
+# on them is `$config.features.enable_* && (role === 'admin' || <permission>)`,
+# so unlike the workspace surfaces the feature flag alone hides them from
+# administrators too, and no bundle rewrite is needed.
+#
+# `rag.enable_hybrid_search` is here for #832, and it is the same first-boot
+# trap rather than a surface: the demo box had it persisted as true from its
+# very first boot, so the compose default could never move it. Leaving it true
+# while no reranking model is configured is what made every knowledge-backed
+# answer time out, because Open WebUI's RerankCompressor falls back to
+# re-embedding the query and every retrieved document when it has no reranker
+# (retrieval/utils.py). docker-compose.yml carries the reasoning and the
+# measured numbers.
 FEATURE_CONFIG_ENV = {
     "notes.enable": "ENABLE_NOTES",
     "calendar.enable": "ENABLE_CALENDAR",
     "automations.enable": "ENABLE_AUTOMATIONS",
+    "rag.enable_hybrid_search": "ENABLE_RAG_HYBRID_SEARCH",
 }
 
 # Keys Open WebUI stores as a JSON boolean rather than a string. The value has

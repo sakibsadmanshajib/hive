@@ -69,9 +69,12 @@ func TestDispatchHappyPathWritesLLMTraceAndAuditsChatRequest(t *testing.T) {
 
 	tenantID := uuid.New()
 	userID := uuid.New()
+	accounting, billing := billedDeps(t)
 	handler := chat.NewDispatch(chat.Deps{
 		Pool:       pool,
 		Routing:    newPassthroughRoutingClient(t),
+		Accounting: accounting,
+		Billing:    billing,
 		LiteLLMURL: upstream.URL,
 		DeploySHA:  "test",
 		Env:        "test",
@@ -153,8 +156,11 @@ func TestDispatchUpstreamErrorIsProviderBlind(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	accounting, billing := billedDeps(t)
 	handler := chat.NewDispatch(chat.Deps{
 		Routing:    newPassthroughRoutingClient(t),
+		Accounting: accounting,
+		Billing:    billing,
 		LiteLLMURL: upstream.URL,
 		DeploySHA:  "test",
 		Env:        "test",
@@ -217,8 +223,11 @@ func TestDispatchResolvesAliasToLiteLLMModelName(t *testing.T) {
 	}))
 	defer routing.Close()
 
+	accounting, billing := billedDeps(t)
 	handler := chat.NewDispatch(chat.Deps{
 		Routing:    inference.NewRoutingClient(routing.URL),
+		Accounting: accounting,
+		Billing:    billing,
 		LiteLLMURL: upstream.URL,
 		DeploySHA:  "test",
 		Env:        "test",

@@ -30,6 +30,9 @@ process.stdin.on('end', () => {
     if (/--no-verify/.test(cmd)) {
       console.log('WARNING: --no-verify skips pre-commit hooks. Code must pass all checks. Only proceed if the user explicitly asked to skip hooks.');
     }
+    if (/ECC_GATEGUARD\s*=\s*(off|0|false|disabled?)/i.test(cmd) || /ECC_DISABLED_HOOKS\s*=/.test(cmd)) {
+      console.log('WARNING: this disables a GateGuard enforcement hook. Fulfill the gate\'s fact-forcing request and retry instead, unless the owner explicitly asked for this override.');
+    }
     if (/\brm\s+(-\w*r\w*f|-\w*f\w*r)\b/.test(cmd) && !/node_modules|\.cache|dist|build|tmp/.test(cmd)) {
       console.log('WARNING: rm -rf on non-standard target detected. Verify this is safe and intended before proceeding.');
     }

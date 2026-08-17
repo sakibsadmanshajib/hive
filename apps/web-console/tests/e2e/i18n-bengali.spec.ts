@@ -10,7 +10,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 import {
   E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
   E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
@@ -44,20 +44,8 @@ test.describe("Bengali console chrome", () => {
   // Fixture reset mutates global Supabase state — run serially.
   test.describe.configure({ mode: "serial" });
 
-  test.beforeEach(async () => {
-    try {
-      execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-        cwd: process.cwd(),
-        env: { ...process.env, NODE_OPTIONS: "" },
-        stdio: "pipe",
-      });
-    } catch (err: unknown) {
-      const e = err as { stdout?: Buffer; stderr?: Buffer };
-      process.stderr.write(
-        `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
-      );
-      throw err;
-    }
+  test.beforeEach(async ({}, testInfo) => {
+    await reseedFixtures(testInfo);
   });
 
   test("nav renders Bengali labels and the switcher returns to English", async ({

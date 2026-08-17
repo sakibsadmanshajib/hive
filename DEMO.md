@@ -30,18 +30,37 @@ docker compose \
 
 Optional local inference: set `OLLAMA_BASE_URL=http://ollama:11434` in `.env` and uncomment the ollama entries in `deploy/litellm/config.yaml`.
 
-### Agent-engine SIF (required for agent/coding surfaces)
+### Agent-engine runtime (required for agent/coding surfaces)
 
 The agent-engine runs each session inside an Apptainer SIF built from `deploy/apptainer/agent-engine.def`. It is `linux/amd64` only and cannot be built on WSL2.
 
+Control-plane never execs Apptainer itself. It hands each launch to an unprivileged host launcher over a Unix socket, so the SIF has to sit on the host beside that launcher, not inside a container.
+
 ```bash
-# On an apptainer host:
-make agent-sif          # -> deploy/apptainer/agent-engine.sif
-# Or pull the CI-built image:
-gh run download -n agent-engine-sif -D /opt/hive
+# On the host, once per deploy, run from the repository root (the compose step
+# above leaves the shell in deploy/docker). Fetches the CI-built .sif if the
+# host has none, builds the launcher, and restarts its systemd user unit.
+# RUNTIME_DIR defaults to /home/sakib/agent-runtime inside the script, so set
+# it explicitly and reuse the same path in HIVE_AGENT_ENGINE_SOCKET_DIR below.
+cd "$(git rev-parse --show-toplevel)"
+RUNTIME_DIR="$HOME/agent-runtime" \
+HIVE_AGENT_ENGINE_LLM_MODEL=openai/hive-default \
+HIVE_AGENT_ENGINE_LLM_BASE_URL=https://api-hive.scubed.co/v1 \
+HIVE_AGENT_ENGINE_LLM_API_KEY=REPLACE_WITH_GATEWAY_KEY \
+CONTROL_PLANE_INTERNAL_TOKEN=REPLACE_WITH_INTERNAL_TOKEN \
+  bash scripts/install-agent-engine-host.sh
 ```
 
-Set `HIVE_AGENT_SIF_PATH` in `.env` to the resulting `.sif` path.
+Then point control-plane at the socket in `.env`. A dotenv file does no shell
+expansion, so write the same absolute path the installer used, with `/run`
+appended (for example `/home/hive/agent-runtime/run`):
+
+```dotenv
+HIVE_AGENT_ENGINE_SOCKET_DIR=/home/REPLACE_WITH_HOST_USER/agent-runtime/run
+HIVE_AGENT_ENGINE_SOCKET=/run/hive-agent/engine.sock
+```
+
+`deploy-demo-box.yml` already does both on every deploy. `HIVE_AGENT_SIF_PATH` is a different variable that gates nothing here: it only feeds the standalone binary's `-sif` default and the compose smoke-test service. Full detail, including the in-process fallback arm and its five variables: `deploy/apptainer/README.md`.
 
 ### Verify
 
@@ -60,7 +79,10 @@ service still reports healthy). Prove the whole path instead:
 
 ```bash
 export EDGE_API_URL=http://localhost:8080   # or the deployed edge origin
-python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env
+python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env,
+                                            # plus RAG_VERIFY_PASSWORD once its
+                                            # member account exists (it will not
+                                            # rotate that account's password)
 ```
 
 It uploads a document with a unique marker, waits for embedding, then requires
@@ -68,6 +90,19 @@ the marker back out of vector search and out of the grounded answer. Prints
 PASS or the first step that could not be proven. Note that the serverless
 embedding route is slow and uneven, so the script retries each step a few
 times and prints every attempt.
+
+The chat account you will present from needs one more check, because Open WebUI
+keeps "Enter Key Behavior" as a per-user setting and a shared account carries
+whatever the last automated run left on it. With that preference on, Enter
+inserts a newline instead of sending, the send arrow still works, and there is
+no error anywhere on screen (issue #855, found on the demo account on
+2026-08-11).
+
+```bash
+cd apps/web-console
+node scripts/demo-chat-settings.mjs <demo account email>            # exit 1 on drift
+node scripts/demo-chat-settings.mjs <demo account email> --repair   # correct it
+```
 
 Do not present until all are green.
 
@@ -83,6 +118,7 @@ For each surface: what to show, what it proves, and the current limit to narrate
 - **Connectors / MCP**: local admin-curated marketplace becomes OpenHands `mcpServers` JSON bind-mounted into the SIF. Proves operator-curated tools. Limit: remote/OAuth MCP out of scope (#309); no one-click install (#390).
 - **Policies / RBAC / Settings**: role assignment, policy toggles, sovereign posture. Proves departmental separation in one tenant. Limit: no SSO admin config (#388), no SCIM (#385).
 - **RAG** (`/v1/rag/chat`): ingest a doc, ask a grounded question. Proves retrieval over the customer's own docs. Embedding model and dimension are admin-selectable (`packages/embedmodel`), and the vector column plus HNSW index are provisioned dynamically to match. Demo default: qwen3-embedding-8b MRL-reduced to 1024-dim (`vector(1024)`, HNSW cosine), a native Matryoshka reduction, not truncation. Works with the `.env.example` defaults; no separate setup beyond the standard `OPENROUTER_API_KEY` / `LITELLM_MASTER_KEY` config.
+- **Knowledge** (chat, Workspace > Knowledge): create a collection, upload a document, then attach it to a chat with the `+` menu > Attach Knowledge and ask something only that document answers. Proves grounded answers over the customer's own documents in the chat surface itself, and the answer carries a source citation. This is Open WebUI's own store (pgvector `document_chunk`), which is a different store from the `/v1/rag/chat` API below. Limit: the answer takes roughly 30 seconds because a single gateway embedding call currently costs 7 to 17 seconds (#865), so narrate over the wait rather than hiding it. The empty create form is refused by the browser's own `required` validation, which is correct behaviour and not a broken button (#832).
 - **Voice** (`/v1/audio`): transcription via the OpenAI-Whisper-compatible API (parakeet en, faster-whisper bangla). Proves on-box speech-to-text. Limit: confirm input is not garbled with a clean sample first.
 - **Artifacts** (`/v1/artifacts` + isolated caddy-artifacts): publish a static artifact, open it on the isolated host. Proves isolated static hosting. Limit: no persistent/API/live-data artifacts (#381).
 

@@ -1,0 +1,72 @@
+Issue #826 proof: the workspace switcher was not broken, the spec helper was
+
+Substrate: a full stack booted from main at f7d9293f -- control-plane and
+redis from deploy/docker/docker-compose.yml against the staging Supabase
+project, and a production `next build` / `next start` of apps/web-console
+pointed at it, hit with a real Chromium browser (Playwright). Fixture rows
+were namespaced with a private E2E_RUN_KEY so no other run's accounts were
+touched. Both accounts in the screenshot are seeded E2E fixtures, not real
+customers.
+
+WHAT WAS IN DOUBT
+
+Issue #826 raised two possibilities and said which one it was mattered:
+either the switch had stopped taking effect (the sidebar control PR #786
+shipped would then be worse than the dead button it replaced, because it
+looks like it works), or a workspace member could edit that workspace's
+budget caps (an authorization hole on a money surface).
+
+Neither is true. Driving the same product build with a correctly awaited
+navigation, the switch takes effect, survives a reload, and the destination
+workspace enforces its role gate.
+
+01-member-workspace-budget-read-only.png
+  Captured after: sign in as the seeded verified user, switch from the
+  workspace they own to "E2E Shared Workspace" where they are only a member,
+  reload, then navigate to /console/billing/budget. Three things are visible
+  at once, and all three are the correct behavior:
+
+    - the sidebar switcher shows "E2E Shared Workspace (cu[rrent])", so the
+      switch survived both the reload and a subsequent navigation. It is
+      server-rendered from the hive_account_id cookie, so this is the server
+      agreeing about which workspace is current, not client state.
+    - both cap inputs are greyed out and the Save budget button is disabled.
+    - the read-only notice "Only the workspace owner can edit budget caps."
+      is rendered.
+
+  There is no address bar in this capture and no credential appears in it.
+  The account label shown is a seeded fixture identity.
+
+THE ACTUAL DEFECT
+
+tests/e2e/support/workspace-switch.ts waited for the switch with
+page.waitForURL(). The account-switch handler always 303s back to /console,
+so on the console the URL is identical before and after, and
+Frame.waitForURL short-circuits to waitForLoadState whenever the current URL
+already matches (playwright-core/lib/client/frame.js:162). The wait therefore
+returned immediately, every time, without observing the switch, and whatever
+the caller did next raced the in-flight POST.
+
+THE DEPLOYED BOX
+
+Checked at the same time, signed in as demo@hive-demo.invalid through the
+audited live-auth helper (docs/live-test-auth.md; nothing rotated). That
+account holds one workspace, so the sidebar correctly renders the static
+label branch and no interactive control at all, meaning there is no
+selection for it to lose. Combined with the run above on the same commit,
+no user is losing a workspace selection today.
+
+02-deployed-single-workspace-static-label.png
+  console-hive.scubed.co signed in as the demo account. The sidebar shows a
+  plain "WORKSPACE / Hive Demo" label, and querying the page for a combobox
+  named "Switch workspace" returned zero matches, which is the
+  memberships.length <= 1 branch of components/workspace-switcher.tsx and
+  confirms the deployed build carries PR #786. No address bar appears in a
+  Playwright screenshot and no credential is visible; the only identity shown
+  is the demo fixture account.
+
+FALSIFICATION
+
+Each assertion these two specs rest on was broken on purpose and confirmed
+red before this fix was proposed as final. See the pull request body for the
+four runs and the exact failure each one produced.

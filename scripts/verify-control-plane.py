@@ -18,12 +18,11 @@ Usage (from the repo root, on a host that can reach the stack):
     python3 scripts/verify-control-plane.py
 
 Required env: SUPABASE_URL, SUPABASE_ANON_KEY, CONTROL_PLANE_INTERNAL_TOKEN,
-and HIVE_VERIFY_PASSWORD for the caller below.
+HIVE_VERIFY_PASSWORD, and HIVE_VERIFY_EMAIL for the caller below.
 
 Optional env:
     HIVE_CONTROL_PLANE_URL   default http://localhost:8081
     HIVE_EDGE_API_URL        default http://localhost:8080
-    HIVE_VERIFY_EMAIL        default demo@hive-demo.invalid
     HIVE_VERIFY_TENANT_SLUG  default hive-demo
 
 The caller identified by HIVE_VERIFY_EMAIL must already exist and be both a
@@ -34,6 +33,15 @@ This script signs in with an existing password and never rotates it. Rotating
 would revoke every live session for that account, and the control-plane
 resolves each bearer against GoTrue on every request, so a rotation here knocks
 out anyone else testing concurrently with the same account.
+
+HIVE_VERIFY_EMAIL has no default, and must never be demo@hive-demo.invalid
+(issue #848). Not rotating the password only means this script does not lock
+other callers out; it still mints a real API key and sends a real
+POST /v1/chat/completions through it (see "api-key lifecycle" below), which is
+a real write and a real spend against whatever tenant the caller belongs to.
+The key itself is revoked at cleanup, but the chat completion it sent is not
+undone. Point this at a dedicated verification identity, never the account
+the owner demos to prospects.
 """
 import base64
 import hashlib
@@ -46,7 +54,7 @@ import urllib.request
 
 CP = os.environ.get("HIVE_CONTROL_PLANE_URL", "http://localhost:8081").rstrip("/")
 EDGE = os.environ.get("HIVE_EDGE_API_URL", "http://localhost:8080").rstrip("/")
-EMAIL = os.environ.get("HIVE_VERIFY_EMAIL", "demo@hive-demo.invalid")
+EMAIL = os.environ.get("HIVE_VERIFY_EMAIL", "").strip()
 TENANT_SLUG = os.environ.get("HIVE_VERIFY_TENANT_SLUG", "hive-demo")
 
 failures: list[str] = []
@@ -89,6 +97,12 @@ def main() -> None:
     anon = env("SUPABASE_ANON_KEY")
     internal_token = env("CONTROL_PLANE_INTERNAL_TOKEN")
     password = env("HIVE_VERIFY_PASSWORD")
+    if not EMAIL:
+        sys.exit(
+            "error: HIVE_VERIFY_EMAIL is not set. This script mints a real API key and "
+            "sends a real chat completion through it (issue #848); it must never default "
+            "to the shared demo account. Point it at a dedicated verification identity."
+        )
 
     print(f"control-plane {CP} | edge-api {EDGE} | caller {EMAIL}")
 

@@ -42,6 +42,11 @@ Known cosmetic residue in `02`: the horizontal rule that belonged to the "or"
 divider still renders, without the word "or". That is upstream's own markup
 gating and it is not worth forking a pinned image over.
 
+> Note added 2026-08-11: the closing clause above reflected the no-fork rule in
+> force on the capture date. That rule is revoked (owner 2026-08-11,
+> `.wolf/decisions.md` D-036) and Open WebUI is now forked and heavily modified.
+> The captures are unchanged, since they record what the stack did that day.
+
 ## 2. Sign-in copy follows the journey
 
 | | |

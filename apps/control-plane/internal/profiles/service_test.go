@@ -181,6 +181,12 @@ func (s *stubRepo) ListMembersByAccountID(_ context.Context, accountID uuid.UUID
 	return members, nil
 }
 
+// ActivateMembership exists to satisfy accounts.Repository. No test in this
+// package walks the invitation flow.
+func (s *stubRepo) ActivateMembership(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return accounts.ErrNotFound
+}
+
 func (s *stubRepo) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {
 	for i := range s.memberships {
 		if s.memberships[i].AccountID == accountID && s.memberships[i].UserID == userID {

@@ -1,0 +1,42 @@
+# One origin in front of the agent console and edge-api, for the CI visual
+# proof job (.github/workflows/agent-visual-proof.yml) only. Never deployed.
+#
+# It exists because the console's browser fetches are deliberately relative
+# (NEXT_PUBLIC_EDGE_API_BASE_URL is empty in the shipped image) and edge-api
+# serves no CORS headers, so the task console only works when something
+# serves both under one origin. In production that something is
+# Caddyfile.owui; standing the whole chat surface up in CI to get two routes
+# is not worth it.
+#
+# ponytail: the two routes below are copied from Caddyfile.owui rather than
+# shared with it. Known ceiling: a route change there does not reach here.
+# The proof this file supports is about the agent surface, not about the
+# proxy, and the routes are two lines; if they grow, boot the real thing.
+# handle blocks, not bare matchers plus a respond: Caddy sorts directives into
+# its own canonical order rather than the order written, and `respond` sorts
+# ahead of `reverse_proxy`, so a trailing catch-all 404 answers every request
+# including the two that should have been proxied. Measured: run 31730077938
+# reported "proxy up (HTTP 404)" for /agent-workspace/tasks. handle blocks are
+# mutually exclusive and evaluated in written order, which is what this needs.
+:80 {
+	handle /agent-workspace* {
+		reverse_proxy agent-console:3000
+	}
+
+	handle /v1/agent/* {
+		reverse_proxy edge-api:8080
+	}
+
+	# Served on this origin in production too (Caddyfile.owui). The harness
+	# reads it to say whether a missing Cowork surface is the tenant's gate
+	# or the session, instead of leaving the next run to guess.
+	handle /v1/featuregate* {
+		reverse_proxy edge-api:8080
+	}
+
+	# Nothing else is served: an unmatched path is a bug in the harness, not
+	# a route to invent.
+	handle {
+		respond 404
+	}
+}
