@@ -144,8 +144,17 @@ describe('the four calls', () => {
 		await expect(listTasks('t')).rejects.toBeInstanceOf(AgentTaskError);
 	});
 
-	it('treats a response with no tasks array as an empty list', async () => {
-		fetchMock.mockResolvedValue(jsonResponse({}));
+	it('reads a null tasks array as an empty list, because Go marshals nil that way', async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ tasks: null }));
 		await expect(listTasks('t')).resolves.toEqual([]);
+	});
+
+	it('refuses to report an unreadable payload as an empty list', async () => {
+		// Saying "no tasks" when the truth is "could not read the answer" is the
+		// exact failure this surface exists to stop making.
+		for (const body of [{}, { tasks: 'nope' }, { tasks: { a: 1 } }]) {
+			fetchMock.mockResolvedValue(jsonResponse(body));
+			await expect(listTasks('t')).rejects.toThrow('Failed to parse tasks response');
+		}
 	});
 });

@@ -16,10 +16,21 @@
 	export let disabled = false;
 	/** Renders the spinner in place of the arrow. Chat's upload-pending state. */
 	export let pending = false;
+	/**
+	 * Accessible name. The button's only content is an arrow glyph, so without
+	 * this a screen reader reads it as "button" and nothing else.
+	 *
+	 * Undefined by default, which omits the attribute entirely, because chat
+	 * wraps this button in a Tooltip and adding an attribute there would make
+	 * the extraction visible on a surface it is supposed to leave untouched.
+	 * The agent composer has no tooltip and passes its own label.
+	 */
+	export let label: string | undefined = undefined;
 </script>
 
 <button
 	{id}
+	aria-label={label}
 	class="{!disabled || pending
 		? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
 		: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"

@@ -324,6 +324,10 @@ def check_upstream_body_is_returned_verbatim() -> None:
     response = run(proxy.list_tasks(Request(), USER))
     check(isinstance(response, JSONResponse), 'the proxy must answer with the upstream JSON')
     check(
+        response.status_code == 403,
+        f'the upstream status must survive rather than flatten to 200, got {response.status_code}',
+    )
+    check(
         response.content == {'error': {'message': 'Cowork is not enabled for this tenant.'}},
         "edge-api's own error sentence must survive to the browser",
     )

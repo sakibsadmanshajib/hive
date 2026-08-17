@@ -3,6 +3,7 @@ package auth_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -221,6 +222,51 @@ func TestOWUIUnwrap_HeaderCarrierWinsOverBodyMetadata(t *testing.T) {
 
 	if captured.authorization != "Bearer header-jwt" {
 		t.Fatalf("authorization = %q, want the header carrier to win", captured.authorization)
+	}
+}
+
+// The header winning must not skip the body rewrite. __metadata is stripped
+// unconditionally because forwarding proxy-layer fields would leak them to
+// downstream handlers, into the audit chain and on to a provider, and a carrier
+// that returned early would have quietly reintroduced exactly that.
+func TestOWUIUnwrap_HeaderCarrierStillStripsMetadataFromTheBody(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+
+	var forwarded []byte
+	var authorization string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		forwarded, _ = io.ReadAll(r.Body)
+		authorization = r.Header.Get("Authorization")
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "hive-fast",
+		"__metadata": map[string]any{
+			"upstream_auth": "Bearer body-jwt",
+			"chat_id":       "internal-only",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testShimKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.UpstreamAuthHeader, "Bearer header-jwt")
+
+	mw(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if authorization != "Bearer header-jwt" {
+		t.Fatalf("authorization = %q, want the header carrier to win", authorization)
+	}
+	if bytes.Contains(forwarded, []byte("__metadata")) {
+		t.Fatalf("__metadata survived to the handler: %s", forwarded)
+	}
+	if bytes.Contains(forwarded, []byte("body-jwt")) {
+		t.Fatalf("a token survived in the forwarded body: %s", forwarded)
+	}
+	if !bytes.Contains(forwarded, []byte("hive-fast")) {
+		t.Fatalf("the rest of the body did not survive: %s", forwarded)
 	}
 }
 
