@@ -184,6 +184,19 @@ RUN python3 /tmp/apply_tenant_role_patch.py \
 # whole persisted config off, which would also revert every setting an
 # administrator changed in its own UI. The module names no model itself; the
 # alias comes from the environment (D-001).
+# Stop provisioning storing a new user's email address as their display name.
+# Supabase's OAuth authorization server sends no name claim and no user
+# metadata (the same finding that defeated OAUTH_ROLES_CLAIM above), and
+# nothing collects a name at sign up, so Open WebUI's fallback wrote the
+# address into `name` and the product greeted five of six accounts on the demo
+# box by their own email address. The claim is still preferred when present;
+# only the fallback changes. Existing rows are deliberately not rewritten.
+COPY deploy/docker/owui-patches/hive_display_name.py /app/backend/open_webui/utils/hive_display_name.py
+COPY deploy/docker/owui-patches/apply_display_name_patch.py /tmp/apply_display_name_patch.py
+RUN python3 /tmp/apply_display_name_patch.py \
+    && grep -q 'display_name_from_email(email)' /app/backend/open_webui/utils/oauth.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/oauth.py').read_text())"
+
 COPY deploy/docker/owui-patches/hive_rag_env_config.py /app/backend/open_webui/utils/hive_rag_env_config.py
 COPY deploy/docker/owui-patches/apply_rag_env_config_patch.py /tmp/apply_rag_env_config_patch.py
 RUN python3 /tmp/apply_rag_env_config_patch.py \

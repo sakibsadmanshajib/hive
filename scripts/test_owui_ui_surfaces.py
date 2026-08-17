@@ -415,7 +415,13 @@ def test_the_suggested_prompts_block_is_gone_from_the_source() -> None:
     hidden, so this asserts at the source rather than at a feature flag: the
     component is deleted, neither placeholder references it, and the sample
     content is out of the backend default. A vendor update that reintroduces any
-    of the three puts someone else's product back on our landing page."""
+    of the three puts someone else's product back on our landing page.
+
+    The two front end assertions are the load bearing ones. This image builds
+    only the front end from the vendored tree and takes its backend from the
+    pinned upstream image, so the `config.py` assertion guards our source rather
+    than the running deployment, where the six stock prompts are still persisted
+    and simply have nothing left to render them."""
     src = REPO / "vendor" / "open-webui" / "src"
     component = src / "lib" / "components" / "chat" / "Suggestions.svelte"
     assert not component.exists(), f"{component} must stay deleted"
