@@ -409,6 +409,29 @@ def test_the_build_patch_fails_when_a_rewrite_matches_nothing() -> None:
 # 2. Feature flags (compose value + persisted-config reconcile)
 # --------------------------------------------------------------------------
 
+def test_the_suggested_prompts_block_is_gone_from_the_source() -> None:
+    """The chat landing surface rendered upstream's six sample starter prompts
+    under a "Suggested" heading. The owner asked for the block itself gone, not
+    hidden, so this asserts at the source rather than at a feature flag: the
+    component is deleted, neither placeholder references it, and the sample
+    content is out of the backend default. A vendor update that reintroduces any
+    of the three puts someone else's product back on our landing page."""
+    src = REPO / "vendor" / "open-webui" / "src"
+    component = src / "lib" / "components" / "chat" / "Suggestions.svelte"
+    assert not component.exists(), f"{component} must stay deleted"
+
+    for placeholder in ("Placeholder.svelte", "ChatPlaceholder.svelte"):
+        text = (src / "lib" / "components" / "chat" / placeholder).read_text(encoding="utf-8")
+        assert "Suggestions" not in text, f"{placeholder} must not render suggestions"
+        assert "suggestion_prompts" not in text, f"{placeholder} must not read suggestion prompts"
+
+    config = (
+        REPO / "vendor" / "open-webui" / "backend" / "open_webui" / "config.py"
+    ).read_text(encoding="utf-8")
+    for sample in ("Roman Empire", "options trading", "procrastinate"):
+        assert sample not in config, f"upstream sample prompt {sample!r} is back in config.py"
+
+
 def test_compose_turns_the_flag_backed_surfaces_off() -> None:
     compose = COMPOSE.read_text()
     for variable in FLAG_VARIABLES:

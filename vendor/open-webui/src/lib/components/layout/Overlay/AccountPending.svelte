@@ -3,6 +3,7 @@
 	import { marked } from 'marked';
 
 	import { getAdminDetails, userSignOut } from '$lib/apis/auths';
+	import { markSignedOut } from '$lib/hive/sso-redirect';
 	import { onMount, tick, getContext } from 'svelte';
 	import { config } from '$lib/stores';
 
@@ -75,8 +76,11 @@
 								return null;
 							});
 							localStorage.removeItem('token');
-							// signed_out stops the sign in page handing this user straight
-							// back to the provider they just signed out of.
+							// Stored as well as passed in the URL, so it survives the next
+							// navigation and the backend's own redirect. Without it the sign
+							// in page hands this user straight back to the provider they
+							// just signed out of.
+							markSignedOut();
 							location.href = res?.redirect_url ?? '/auth?signed_out=1';
 						}}>{$i18n.t('Sign Out')}</button
 					>

@@ -6,6 +6,7 @@
 
 	import { getUsage } from '$lib/apis';
 	import { getSessionUser, userSignOut } from '$lib/apis/auths';
+	import { markSignedOut } from '$lib/hive/sso-redirect';
 
 	import {
 		showSettings,
@@ -526,9 +527,12 @@
 					user.set(null);
 					localStorage.removeItem('token');
 
-					// signed_out keeps the sign in page from handing the user straight
-					// back to the provider, whose own session usually outlives ours.
-					// Without it, signing out is unreachable on an SSO only deployment.
+					// The marker keeps the sign in page from handing the user straight
+					// back to the provider, whose own session outlives ours and which
+					// publishes no end session endpoint. It is stored rather than only
+					// passed in the URL, because it has to survive the next navigation
+					// too, and it is set even when the backend supplies its own redirect.
+					markSignedOut();
 					location.href = res?.redirect_url ?? '/auth?signed_out=1';
 					show = false;
 				}}

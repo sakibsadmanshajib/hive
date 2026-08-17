@@ -16,7 +16,6 @@
 
 	export let modelIds = [];
 	export let models = [];
-	export let atSelectedModel;
 
 
 	let mounted = false;

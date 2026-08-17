@@ -1,4 +1,4 @@
-.PHONY: gen-permissions agent-sif test-scripts
+.PHONY: gen-permissions agent-sif test-scripts test-owui-frontend
 
 # Codegen for the permissions registry → TypeScript mirror.
 # Runs inside the `toolchain` profile container (Go + tools). The toolchain
@@ -37,3 +37,8 @@ test-scripts:
 	python3 scripts/derive-pooler-dsn.py --self-test
 	python3 scripts/test_caddy_console_auth_origin.py --self-check
 	python3 scripts/restore-storage-objects.py --self-check
+
+# Node, not python, and it downloads a pinned vitest, so it is deliberately not
+# folded into test-scripts, which is pure python with no network.
+test-owui-frontend:
+	sh scripts/test-owui-hive-frontend.sh

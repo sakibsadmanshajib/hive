@@ -722,6 +722,16 @@ jobs:
               validate --config - --adapter caddyfile < "$f"
           done
 
+      # The Hive authored half of the vendored chat front end. Same reason as
+      # the step above: nothing ran these. `test:frontend` in that package is
+      # referenced only by an upstream workflow file this repository never
+      # executes, so the sign in redirect decision, the one piece of that front
+      # end that can lock every user out, had no pre-merge check on it. The
+      # script copies the directory out and runs a pinned vitest, because
+      # running it in place would need a full npm install of the chat front end.
+      - if: needs.changes.outputs.run != 'false'
+        run: make test-owui-frontend
+
   agent-console-unit:
     name: Agent console (type + unit + build)
     runs-on: ubuntu-latest

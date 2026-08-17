@@ -53,16 +53,43 @@ def test_plus_addressing_is_a_routing_tag_not_a_name() -> None:
     assert derive("first.last+chat@example.com") == "First Last"
 
 
-def test_deliberate_casing_survives() -> None:
-    """Capitalizing every word would turn McDonald into Mcdonald, and a name the
-    person already spelled correctly is not ours to rewrite."""
-    assert derive("McDonald@example.com") == "McDonald"
-    assert derive("first.McDonald@example.com") == "First McDonald"
+def test_casing_is_normalized_because_the_caller_lower_cases_first() -> None:
+    """`handle_callback` lower cases the address before provisioning, so there is
+    never mixed case to preserve by the time this runs. Asserting the real
+    behaviour rather than a nicer sounding promise the code does not keep."""
+    assert derive("mcdonald@example.com") == "Mcdonald"
+    assert derive("first.mcdonald@example.com") == "First Mcdonald"
+
+
+def test_a_hostile_address_cannot_smuggle_control_or_bidi_characters() -> None:
+    """The value is rendered next to other people's names, so a right to left
+    override that makes one string display as another does not belong in it."""
+    derived = derive("e\u202evil@example.com")
+    assert "\u202e" not in derived, derived
+    assert derived == "Evil"
+
+
+def test_a_very_long_local_part_is_capped() -> None:
+    """A wall of text is not a name, and it reaches every surface that renders
+    one."""
+    derived = derive("a" * 500 + "@example.com")
+    assert len(derived) <= 64, len(derived)
 
 
 def test_digits_are_left_alone() -> None:
     assert derive("user123@example.com") == "User123"
     assert derive("42@example.com") == "42"
+
+
+def test_incidental_whitespace_does_not_reach_the_display_name() -> None:
+    """A stray space around the claim value would otherwise be stored and then
+    rendered in the greeting."""
+    assert derive("  first.last@example.com  ") == "First Last"
+
+
+def test_a_quoted_local_part_does_not_produce_stray_quotes() -> None:
+    """Legal but rare. The quotes are syntax, not part of anyone's name."""
+    assert derive('"first.last"@example.com') == "First Last"
 
 
 def test_an_underivable_address_falls_back_to_the_address() -> None:
