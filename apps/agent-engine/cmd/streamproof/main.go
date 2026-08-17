@@ -75,8 +75,15 @@ import (
 )
 
 const (
-	// Small on purpose: this run is billed against a real Hive account. It
-	// still asks for one shell command before the sentence, as an end-to-end
+	// Small on purpose: this run is billed against a real Hive account. The
+	// prose comes first and the shell command second, because an OpenHands
+	// agent ends a turn through the finish tool, so a prompt whose whole answer
+	// is the closing sentence tends to put that sentence inside a tool call and
+	// emit no MessageEvent at all. A delta only carries prose, so that run has
+	// nothing to observe and the harness reports it inconclusive. Asking for a
+	// message before the command is what makes prose reliably exist.
+	//
+	// The shell command stays, as an end-to-end
 	// check that tool calling WORKS under stream=true: the SDK reassembles the
 	// call from streamed chunks, and a capture that records an ActionEvent and
 	// an ObservationEvent proves that reassembly produced a call the sandbox
@@ -84,7 +91,7 @@ const (
 	// cannot be: a StreamingDeltaEvent only ever carries content or
 	// reasoning_content (event_service.py), so no tool-argument fragment can
 	// appear in this capture, and the tool phase produces no deltas at all.
-	proofPrompt = "Run the shell command: echo hive-streaming-proof. Then finish by writing a plain chat message, not a tool call, containing exactly this sentence and nothing else: Hive streaming proof ok."
+	proofPrompt = "Do these two things in order. First, send a plain text chat message, with no tool call in it, saying: starting the streaming proof. Second, run the shell command: echo hive-streaming-proof. Then finish."
 
 	deltaKind           = "StreamingDeltaEvent"
 	messageKind         = "MessageEvent"
