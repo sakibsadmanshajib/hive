@@ -136,8 +136,13 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			// that can read it is a handler that could later be taught to
 			// trust it, and a header a client controls must never become a
 			// principal by that route.
+			// Presence is tested on the header map rather than on the trimmed
+			// value, so a whitespace-only or repeated header is removed too.
+			// Header.Del drops every value under the key, which is what makes
+			// "stripped on every branch" true rather than nearly true.
+			_, carrierPresent := r.Header[http.CanonicalHeaderKey(UpstreamAuthHeader)]
 			carrier := strings.TrimSpace(r.Header.Get(UpstreamAuthHeader))
-			if carrier != "" {
+			if carrierPresent {
 				r = r.Clone(r.Context())
 				r.Header.Del(UpstreamAuthHeader)
 			}
@@ -145,24 +150,20 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if carrier != "" {
-				// Fail closed on a carrier that is present but unusable. The
-				// only thing that sets this header is our own forwarder, so a
-				// value it cannot mean is a broken forwarder, and forwarding
-				// with the shim key still on Authorization would bill and
-				// audit the call against the shim's principal.
-				token := ""
+			// Fail closed on a carrier that is present but unusable. The only
+			// thing that sets this header is our own forwarder, so a value it
+			// cannot mean is a broken forwarder, and forwarding with the shim
+			// key still on Authorization would bill and audit the call against
+			// the shim's principal.
+			headerToken := ""
+			if carrierPresent {
 				if len(carrier) <= maxOWUIBearerToken {
-					token = normalizeUpstreamAuth(carrier)
+					headerToken = normalizeUpstreamAuth(carrier)
 				}
-				if token == "" {
+				if headerToken == "" {
 					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
 					return
 				}
-				r2 := r.Clone(context.WithValue(r.Context(), owuiUnwrappedKey{}, true))
-				r2.Header.Set("Authorization", "Bearer "+token)
-				next.ServeHTTP(w, r2)
-				return
 			}
 			// This check has to come before the pass-through below, not
 			// after it. A per-user path can only receive its user token in a
@@ -172,6 +173,12 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			// rejection further down simply by omitting Content-Type.
 			jsonBody := r.Body != nil && isJSONContent(r.Header.Get("Content-Type"))
 			if !jsonBody {
+				// The bodyless case the header carrier exists for. Nothing to
+				// read, nothing to strip, so forward immediately.
+				if headerToken != "" {
+					forwardUnwrapped(w, r, next, headerToken, nil)
+					return
+				}
 				if requiresPerUserAuth(r.URL.Path) {
 					warnMissingUpstreamAuth(r, 0, true)
 					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", missingUserTokenMessage)
@@ -199,7 +206,22 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				writeAuthError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "request body too large")
 				return
 			}
-			rewritten, token, status := unwrapOWUIBody(raw)
+			// The body is parsed even when the header already supplied the
+			// token, because __metadata must be stripped either way. Forwarding
+			// it would leak proxy-layer fields to downstream handlers, to the
+			// audit chain and on to a provider, which is the reason the strip
+			// is unconditional in unwrapOWUIBody.
+			rewritten, bodyToken, status := unwrapOWUIBody(raw)
+			token := bodyToken
+			if headerToken != "" {
+				// The header wins. It is the carrier our own forwarder sets on
+				// the request line, and a body that also carries one is either
+				// a second forwarder or a caller trying its luck; neither
+				// should be able to displace the credential already accepted.
+				token = headerToken
+				forwardUnwrapped(w, r, next, token, rewritten)
+				return
+			}
 			switch status {
 			case unwrapTokenTooLong:
 				writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
@@ -225,21 +247,43 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				// Authorization, which is the intended credential for
 				// this path (see requiresPerUserAuth).
 			}
-			// Forward a clone rather than mutating the inbound request
-			// in place — keeps this middleware side-effect free for any
-			// handler or middleware that retains a reference to the
-			// original *http.Request. r.Clone deep-copies the header map.
-			r2 := r.Clone(r.Context())
-			r2.Body = io.NopCloser(bytes.NewReader(rewritten))
-			r2.ContentLength = int64(len(rewritten))
-			r2.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
-			if token != "" {
-				r2.Header.Set("Authorization", "Bearer "+token)
-				r2 = r2.WithContext(context.WithValue(r2.Context(), owuiUnwrappedKey{}, true))
-			}
-			next.ServeHTTP(w, r2)
+			forwardUnwrapped(w, r, next, token, rewritten)
 		})
 	}
+}
+
+// forwardUnwrapped hands the request on with the per-user token on
+// Authorization and the context marked unwrapped, which is what lets
+// JWTMiddleware apply its tenant fallback (#269). An empty token forwards
+// unchanged credentials, which is the pass-through case on a path where the
+// shim key is itself the intended credential.
+//
+// A nil body leaves the request's own body alone, for the bodyless carrier
+// case where there is nothing to rewrite; a non-nil body replaces it with the
+// version that has __metadata stripped.
+//
+// Forwarding a clone rather than mutating the inbound request in place keeps
+// this middleware side-effect free for any handler or middleware that retains
+// a reference to the original *http.Request. r.Clone deep-copies the header
+// map.
+func forwardUnwrapped(
+	w http.ResponseWriter,
+	r *http.Request,
+	next http.Handler,
+	token string,
+	body []byte,
+) {
+	r2 := r.Clone(r.Context())
+	if body != nil {
+		r2.Body = io.NopCloser(bytes.NewReader(body))
+		r2.ContentLength = int64(len(body))
+		r2.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
+	if token != "" {
+		r2.Header.Set("Authorization", "Bearer "+token)
+		r2 = r2.WithContext(context.WithValue(r2.Context(), owuiUnwrappedKey{}, true))
+	}
+	next.ServeHTTP(w, r2)
 }
 
 // missingUserTokenMessage is the customer-facing reason for a shim-key

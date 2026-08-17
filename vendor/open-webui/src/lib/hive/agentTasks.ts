@@ -176,9 +176,23 @@ export const listTasks = async (token: string): Promise<AgentTask[]> => {
 	if (!isRecord(body)) {
 		throw new Error('Failed to parse tasks response');
 	}
+	/*
+	 * `tasks` absent is a payload we cannot read; `tasks: null` is a real empty
+	 * list, because edge-api answers `map[string]any{"tasks": tasks}` and Go
+	 * marshals a nil slice as null (apps/edge-api/internal/agenttask/handler.go).
+	 * Returning an empty list for the first case would tell the user they have
+	 * no tasks when the truth is that we could not read the answer, which is the
+	 * failure mode this whole surface exists to stop making.
+	 */
+	if (!('tasks' in body)) {
+		throw new Error('Failed to parse tasks response');
+	}
 	const rows = body['tasks'];
-	if (!Array.isArray(rows)) {
+	if (rows === null) {
 		return [];
+	}
+	if (!Array.isArray(rows)) {
+		throw new Error('Failed to parse tasks response');
 	}
 	const tasks: AgentTask[] = [];
 	for (const row of rows) {

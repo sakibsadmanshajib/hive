@@ -80,8 +80,6 @@
 
 	$: selectedPack = PACKS.find((option) => option.value === pack) ?? PACKS[0];
 	$: givenUp = failures >= MAX_POLL_FAILURES;
-	$: active = tasks.some((task) => IN_FLIGHT_STATUSES.has(task.status));
-	$: shouldPoll = failures > 0 ? !givenUp : active;
 	/*
 	 * The load failure reads off the failure count rather than being written into
 	 * `error`, so the sentence cannot outlive the retry it promises: when the loop
@@ -113,7 +111,24 @@
 			clearTimeout(pollTimer);
 			pollTimer = null;
 		}
-		if (destroyed || !shouldPoll) {
+		if (destroyed) {
+			return;
+		}
+		/*
+		 * Decided here from the current values rather than read off the `$:`
+		 * statements above. Svelte flushes reactive statements after the current
+		 * synchronous block, so a schedulePoll() called immediately after
+		 * assigning `tasks` or `failures` would decide on the previous values,
+		 * and the first poll after a submit would stop the loop that the newly
+		 * queued task is the whole reason to keep running.
+		 */
+		const stopped = failures >= MAX_POLL_FAILURES;
+		const anyInFlight = tasks.some((task) => IN_FLIGHT_STATUSES.has(task.status));
+		// Only a queued or running task can change without the user doing
+		// anything, so a healthy list of finished tasks stops polling entirely.
+		// A failure run keeps polling until it gives up, because the list on
+		// screen may be stale rather than settled.
+		if (!(failures > 0 ? !stopped : anyInFlight)) {
 			return;
 		}
 		/*
@@ -304,6 +319,7 @@
 						id="hive-agent-send"
 						disabled={!canSubmit}
 						pending={submitting}
+						label={$i18n.t('Start task')}
 					/>
 				</div>
 			</div>
