@@ -470,6 +470,18 @@ jobs:
             !apps/web-console/playwright-report-owui/index.html
           retention-days: 5
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          # Proof captures, kept out of the HTML report's own folder because
+          # that folder is cleared when the report is written. Page screenshots
+          # only: Playwright captures the page, not browser chrome, and the
+          # routes captured carry no credential in their URLs.
+          name: owui-proof-captures
+          path: apps/web-console/playwright-report-owui-proof
+          if-no-files-found: warn
+          retention-days: 5
+
+      - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: owui-compose-logs
