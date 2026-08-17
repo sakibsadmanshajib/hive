@@ -50,13 +50,57 @@ Frozen frontend, tracked backend: upstream frontend features are not taken, back
 arrive by bumping the image digest, and when a digest bump crosses a release the subtree is
 pulled to the matching tag and the four edits above are replayed.
 
-Frontend npm advisories are ours now. `vendor/open-webui` belongs in Dependabot's scope.
+## Dependency advisories, triaged once
+
+Frontend npm advisories are ours now, because the lockfile is. `npm audit` against the
+vendored `package-lock.json` reported 29 advisories at the time this tree landed: 1 critical,
+15 high, 12 moderate, 1 low. The point of this section is that the next reader does not repeat
+the analysis.
+
+**The critical one and most of the high cluster do not ship.** They sit under `vitest`,
+`vite`, `vite-node`, `cypress`, `esbuild`, `extract-zip`, `@cypress/request` and `uuid`, all
+of which are `devDependencies`. `npm run build` emits a static bundle; none of that tooling is
+in it, and none of it runs in this image. Left alone deliberately.
+
+Four are direct `dependencies`, so they need an answer rather than a shrug. Reachability was
+read in this tree, not assumed:
+
+| Package | Ships in the bundle | Reachable how | Fix upstream | Verdict |
+|---|---|---|---|---|
+| `xlsx` | Yes | `src/lib/utils/excelToTable.ts` dynamically imports it to parse a spreadsheet the user uploaded | **None available.** The long unpatched SheetJS package | The one that actually matters. Prototype pollution and ReDoS against attacker supplied input. Needs a real decision: replace the parser, or move spreadsheet parsing server side. Not a doc note's job to decide |
+| `dompurify` | Yes | Imported by a dozen components, and it is the sanitiser this application trusts for rendered content | Available | Upgrade on its own, with the XSS-relevant call sites exercised. Deliberately not bundled into the fork commit |
+| `undici` | **No** | Only `scripts/prepare-pyodide.js`, a build time Node script that fetches Pyodide wheels | Available | Build time only, on our own builder. Upgrade with the next lockfile touch |
+| `sharp` (via `@huggingface/transformers`, `kokoro-js`) | **No** | Native Node module behind the transformers package's Node backend. Verified: the built output contains no import of it | None available | Not reachable in a browser build. No action |
+
+Nothing above was upgraded in the commit that vendored this tree, on purpose: a dependency
+bump inside the same change that introduces 4,900 files is unreviewable, and three of the four
+need their own verification.
+
+**Nothing is watching this tree yet.** There is no `.github/dependabot.yml` anywhere in this
+repository. That gap predates the fork, but the fork is what makes it expensive, so wiring
+Dependabot at `vendor/open-webui` is the follow-up that keeps this section from going stale.
 
 ## What has not been retired yet
 
-The bundle rewrites in `deploy/docker/owui-patches/` still run, against our own build rather
-than against a prebuilt one, and every one of their nineteen literal rewrites still matches
-byte for byte because the same source and the same lockfile minify the same way. Replacing
-them with source deletions is the natural next change and it is deliberately not in this one:
-another change was in flight against `hive_ui_surfaces.py` at the time, and two edits to that
-file from different directions is how a surface silently comes back.
+The bundle rewrites in `deploy/docker/owui-patches/` still run, and they run **against the
+stock bundle that ships inside the pinned upstream image, not against our own build**. The
+ordering in `Dockerfile.open-webui` is deliberate and is the whole reason they still pass:
+every rewrite executes earlier in the final stage, then `rm -rf /app/build` plus
+`COPY --from=frontend` discard that bundle and replace it with the Hive source build, last.
+The rewrites therefore never see the Hive-built output at all.
+
+That matters for whoever retires this layer. What the rewrites protect today is **not** the
+bundle we ship: it is a drift check on upstream. They fail the build if a future image digest
+moves the stock bundle out from under the source tree we track. Every surface they remove is
+removed again, independently, in the vendored source, and that source removal is what actually
+reaches a user.
+
+The reason they cannot simply be pointed at our own build: those rewrites match on minified
+identifiers, which the minifier allocates per chunk, so any edit to our source renames them.
+Measured on the first build of this stage, three of nineteen stopped matching surfaces that
+had not come back, and an identifier-tolerant pattern for two of them then matched sibling
+components that must not be touched.
+
+Replacing them with source deletions is the natural next change and it is deliberately not in
+this one: another change was in flight against `hive_ui_surfaces.py` at the time, and two
+edits to that file from different directions is how a surface silently comes back.
