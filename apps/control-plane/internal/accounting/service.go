@@ -203,18 +203,23 @@ func (s *Service) ExpandReservation(ctx context.Context, input ExpandReservation
 			return err
 		}
 
-		reservation, err = s.repo.ExpandReservation(ctx, input.AccountID, input.ReservationID, input.AdditionalCredits, "expanded")
+		// Expansion carries its hold in the same transaction as the row, for
+		// the reason create does (issue #918). This path had the identical
+		// defect and it is worse here, because settlement releases from the ROW:
+		// a row raised to 2500 while the ledger still holds 500 releases 2500
+		// against 500 ever taken, crediting the account 2000 it never paid.
+		reservation, err = s.repo.ExpandReservation(ctx, input.AccountID, input.ReservationID, input.AdditionalCredits, "expanded", ReservationHold{
+			IdempotencyKey: s.idempotencyKey(input.ReservationID, fmt.Sprintf("expand-%d", input.AdditionalCredits)),
+			Credits:        input.AdditionalCredits,
+			Metadata: map[string]any{
+				"endpoint":           reservation.Endpoint,
+				"model_alias":        reservation.ModelAlias,
+				"additional_credits": input.AdditionalCredits,
+				"policy_mode":        reservation.PolicyMode,
+			},
+		})
 		if err != nil {
 			return fmt.Errorf("accounting: expand reservation: %w", err)
-		}
-
-		if _, err := s.ledgerSvc.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("expand-%d", input.AdditionalCredits)), input.AdditionalCredits, map[string]any{
-			"endpoint":           reservation.Endpoint,
-			"model_alias":        reservation.ModelAlias,
-			"additional_credits": input.AdditionalCredits,
-			"policy_mode":        reservation.PolicyMode,
-		}); err != nil {
-			return fmt.Errorf("accounting: reserve expanded credits: %w", err)
 		}
 
 		if attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID); err != nil {

@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,6 +75,15 @@ func TestReservationRowAndHoldAreWrittenAtomically_Live(t *testing.T) {
 	}, "reserved", ReservationHold{IdempotencyKey: holdKey, Credits: 500})
 	if err == nil {
 		t.Fatal("expected CreateReservation to fail when the hold cannot be posted")
+	}
+	// WHICH failure matters. Every assertion below also holds for a call
+	// rejected before the transaction opened (the guards on hold.Credits and
+	// hold.IdempotencyKey do exactly that), so without pinning the failure to
+	// the hold post itself, moving poisoned-key detection into a pre-flight
+	// check would keep this test green while proving nothing about the
+	// transaction boundary it exists to pin.
+	if !strings.Contains(err.Error(), "post reservation hold") {
+		t.Fatalf("expected the failure to come from the hold post inside the transaction, got %v", err)
 	}
 
 	rows, holds := countRowsAndHolds(t, pool, accountID)
@@ -150,4 +160,83 @@ func countRowsAndHolds(t *testing.T, pool *pgxpool.Pool, accountID uuid.UUID) (i
 		t.Fatalf("count rows: %v", err)
 	}
 	return rows, holds
+}
+
+// The expand path had the identical defect, and worse consequences, so it gets
+// the identical proof. Settlement releases what the ROW says is held, so a row
+// raised to 2500 while the ledger still holds 500 hands back 2500 against 500
+// ever taken: 2000 credits created out of nothing, the same mechanism and the
+// same magnitude class as the ten production rows.
+func TestExpandReservationRaisesTheRowAndTheHoldTogether_Live(t *testing.T) {
+	pool := newAccountingTestPool(t)
+	accountID := seedReleaseIdempotencyAccount(t, pool)
+	ctx := context.Background()
+
+	repo := NewPgxRepository(pool)
+	usageSvc := usage.NewService(usage.NewPgxRepository(pool))
+	ledgerSvc := ledger.NewService(ledger.NewPgxRepository(pool))
+
+	attempt, err := usageSvc.StartAttempt(ctx, usage.StartAttemptInput{
+		AccountID:     accountID,
+		RequestID:     uuid.NewString(),
+		AttemptNumber: 1,
+		Endpoint:      "/v1/chat/completions",
+		ModelAlias:    "hive-fast",
+		Status:        usage.AttemptStatusAccepted,
+	})
+	if err != nil {
+		t.Fatalf("start attempt: %v", err)
+	}
+
+	reservationID := uuid.New()
+	if _, err := repo.CreateReservation(ctx, Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: attempt.ID,
+		ReservationKey:   buildReservationKey(accountID, attempt.RequestID, 1),
+		RequestID:        attempt.RequestID,
+		AttemptNumber:    1,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "hive-fast",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  500,
+	}, "reserved", ReservationHold{
+		IdempotencyKey: "reservation:" + reservationID.String() + ":reserve",
+		Credits:        500,
+	}); err != nil {
+		t.Fatalf("CreateReservation: %v", err)
+	}
+
+	expandKey := "reservation:" + reservationID.String() + ":expand-2000"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.credit_idempotency_keys (account_id, operation_type, idempotency_key)
+		 VALUES ($1, 'reservation_hold', $2)`, accountID, expandKey); err != nil {
+		t.Fatalf("poison idempotency key: %v", err)
+	}
+
+	_, err = repo.ExpandReservation(ctx, accountID, reservationID, 2000, "expanded",
+		ReservationHold{IdempotencyKey: expandKey, Credits: 2000})
+	if err == nil {
+		t.Fatal("expected ExpandReservation to fail when its hold cannot be posted")
+	}
+	if !strings.Contains(err.Error(), "post reservation hold") {
+		t.Fatalf("expected the failure to come from the hold post inside the transaction, got %v", err)
+	}
+
+	stored, err := repo.GetReservation(ctx, accountID, reservationID)
+	if err != nil {
+		t.Fatalf("reload reservation: %v", err)
+	}
+	if stored.ReservedCredits != 500 {
+		t.Fatalf("row was raised to %d while the ledger still holds 500; settlement would release the difference against credits never taken", stored.ReservedCredits)
+	}
+
+	balance, err := ledgerSvc.GetBalance(ctx, accountID)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if balance.ReservedCredits != 500 {
+		t.Fatalf("reserved = %d, want the original 500", balance.ReservedCredits)
+	}
 }

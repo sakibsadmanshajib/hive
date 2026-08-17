@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 type Service struct {
 	repo Repository
+
+	// account id -> last time its over-release anomaly was logged (issue #918).
+	anomalyLogged sync.Map
 }
 
 func NewService(repo Repository) *Service {
@@ -24,19 +29,41 @@ func (s *Service) GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceS
 	}
 	// A reservation cannot legitimately have more released than held, so this
 	// is a corruption signal and the only place the system notices it (issue
-	// #918). Logged at error, on every read, deliberately: it is not
+	// #918). Logged at error, throttled per account below, because it is not
 	// self-healing, it needs an operator, and it stayed hidden for a month
 	// while ABS made it look like an ordinary hold. It does not fail the read,
 	// because refusing to answer would take an affected account off the air
 	// without repairing anything, and the balance being returned is now the
 	// honest one.
-	if balance.OverReleasedReservations > 0 {
+	if balance.OverReleasedReservations > 0 && s.shouldLogAnomaly(accountID) {
 		slog.ErrorContext(ctx, "ledger: account has reservations released beyond what was ever held, manual reconciliation required",
 			"account_id", accountID.String(),
 			"over_released_reservations", balance.OverReleasedReservations,
 			"over_released_credits", balance.OverReleasedCredits)
 	}
 	return balance, nil
+}
+
+// shouldLogAnomaly rate-limits the line above to once per account per interval.
+//
+// The condition is persistent by construction: it needs an operator and cannot
+// clear itself. GetBalance runs on every reservation create and on every
+// balance read, so logging each time would emit at whatever rate the tenant
+// sends traffic, which makes the error stream useless exactly for the account
+// that needs attention.
+//
+// ponytail: in-process and per instance, so N instances emit N lines per
+// interval. That is the right ceiling for a signal meant to be noticed rather
+// than counted; if it ever needs to be counted, this is where a metric goes.
+func (s *Service) shouldLogAnomaly(accountID uuid.UUID) bool {
+	const interval = 15 * time.Minute
+	now := time.Now()
+	last, seen := s.anomalyLogged.Load(accountID)
+	if seen && now.Sub(last.(time.Time)) < interval {
+		return false
+	}
+	s.anomalyLogged.Store(accountID, now)
+	return true
 }
 
 func (s *Service) ListEntries(ctx context.Context, accountID uuid.UUID, limit int) ([]LedgerEntry, error) {

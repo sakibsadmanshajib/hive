@@ -123,18 +123,35 @@ func PostEntryTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, input Post
 // separately in OverReleasedCredits, and Service.GetBalance logs it, rather
 // than being folded into a number a customer would read as a hold.
 //
-// Cost: the same rows the old query already scanned on the (account_id,
-// created_at) index, with a hash aggregate on reservation_id on top. No extra
-// index, and reservation_id needs none, since the grouping never leaves the
-// account's own slice.
+// Cost, measured on a scratch database with the real schema, one account
+// holding 5000 entries across 1667 reservations among 55000 rows: 6.2ms against
+// the old query's 3.4ms, two index-driven scans and a hash aggregate instead of
+// one streaming pass. That is the price of not lying about the number, paid
+// inside the per-account critical section on the create path.
+//
+// It is deliberately NOT written as a CTE referenced twice: Postgres inlines a
+// CTE only when it is referenced exactly once, so the obvious shape
+// materializes the account's whole ledger slice into a tuplestore on every
+// call. There is no Materialize or CTE Scan node in the plan above.
+//
+// ponytail: the hash aggregate is sized by the account's RESERVATION count
+// (465kB at 1667 of them), so an account with a hundred thousand reservations
+// spills past a default work_mem. Nothing near that exists today, and the
+// upgrade path when it does is a rolled-up per-account balance rather than a
+// smarter query.
 func (r *pgxRepository) GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceSummary, error) {
 	row := r.pool.QueryRow(ctx, `
-		WITH entries AS (
-			SELECT id, entry_type, credits_delta, reservation_id
-			FROM public.credit_ledger_entries
-			WHERE account_id = $1
-		),
-		holds AS (
+		SELECT
+			COALESCE((
+				SELECT SUM(credits_delta)
+				FROM public.credit_ledger_entries
+				WHERE account_id = $1
+				  AND entry_type IN ('grant', 'adjustment', 'usage_charge', 'refund')
+			), 0) AS posted_credits,
+			COALESCE(SUM(GREATEST(-holds.net, 0)), 0) AS reserved_credits,
+			COALESCE(SUM(GREATEST(holds.net, 0)), 0) AS over_released_credits,
+			COALESCE(COUNT(*) FILTER (WHERE holds.net > 0), 0) AS over_released_reservations
+		FROM (
 			-- Grouped per reservation, and a NULL reservation_id groups per ROW.
 			-- SQL puts every NULL in one bucket, which would net unrelated
 			-- entries against each other and reintroduce, for exactly those
@@ -143,18 +160,11 @@ func (r *pgxRepository) GetBalance(ctx context.Context, accountID uuid.UUID) (Ba
 			-- not in this set), but PostEntryInput.ReservationID is a pointer,
 			-- so nothing stops one, and it would hide inside the shared bucket.
 			SELECT SUM(credits_delta) AS net
-			FROM entries
-			WHERE entry_type IN ('reservation_hold', 'reservation_release')
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1
+			  AND entry_type IN ('reservation_hold', 'reservation_release')
 			GROUP BY reservation_id, CASE WHEN reservation_id IS NULL THEN id END
-		)
-		SELECT
-			COALESCE((
-				SELECT SUM(credits_delta) FROM entries
-				WHERE entry_type IN ('grant', 'adjustment', 'usage_charge', 'refund')
-			), 0) AS posted_credits,
-			COALESCE((SELECT SUM(GREATEST(-net, 0)) FROM holds), 0) AS reserved_credits,
-			COALESCE((SELECT SUM(GREATEST(net, 0)) FROM holds), 0) AS over_released_credits,
-			COALESCE((SELECT COUNT(*) FROM holds WHERE net > 0), 0) AS over_released_reservations
+		) AS holds
 	`, accountID)
 
 	var balance BalanceSummary

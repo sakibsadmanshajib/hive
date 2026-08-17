@@ -28,7 +28,7 @@ type ReservationHold struct {
 type Repository interface {
 	CreateReservation(ctx context.Context, reservation Reservation, reason string, hold ReservationHold) (Reservation, error)
 	GetReservation(ctx context.Context, accountID, reservationID uuid.UUID) (Reservation, error)
-	ExpandReservation(ctx context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string) (Reservation, error)
+	ExpandReservation(ctx context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string, hold ReservationHold) (Reservation, error)
 	FinalizeReservation(ctx context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error)
 	ReleaseReservation(ctx context.Context, accountID, reservationID uuid.UUID, releasedCredits int64, reason string) (Reservation, error)
 	CreateReconciliationJob(ctx context.Context, reservationID, requestAttemptID uuid.UUID, reason string) error
@@ -102,16 +102,8 @@ func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reser
 	// ledger never held; the reaper then released that row and credited the
 	// account for credits it never had taken. Ten production reservations, 25000
 	// credits, are in that state. Here a failed hold rolls the row back with it.
-	if _, err := ledger.PostEntryTx(ctx, tx, created.AccountID, ledger.PostEntryInput{
-		EntryType:      ledger.EntryTypeReservationHold,
-		CreditsDelta:   -hold.Credits,
-		IdempotencyKey: hold.IdempotencyKey,
-		RequestID:      reservation.RequestID,
-		AttemptID:      &created.RequestAttemptID,
-		ReservationID:  &created.ID,
-		Metadata:       hold.Metadata,
-	}); err != nil {
-		return Reservation{}, fmt.Errorf("accounting: post reservation hold: %w", err)
+	if err := postReservationHold(ctx, tx, created.AccountID, created.ID, created.RequestAttemptID, reservation.RequestID, hold); err != nil {
+		return Reservation{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -119,6 +111,37 @@ func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reser
 	}
 
 	return created, nil
+}
+
+// postReservationHold writes one hold inside the caller's transaction and
+// refuses to accept a deduplicated entry that belongs to a DIFFERENT
+// reservation.
+//
+// PostEntryTx returns the stored entry when the idempotency key has already
+// been used, which is right for a replay and wrong here: an entry carrying
+// another reservation's id means this row would commit with no hold of its own,
+// the exact state issue #918 exists to eliminate, and the reaper would later
+// release it against nothing. Unreachable from the service today, which derives
+// the key from a freshly generated reservation id, but Repository is exported
+// and its contract promises the row and its hold exist together
+// unconditionally.
+func postReservationHold(ctx context.Context, tx pgx.Tx, accountID, reservationID, attemptID uuid.UUID, requestID string, hold ReservationHold) error {
+	entry, err := ledger.PostEntryTx(ctx, tx, accountID, ledger.PostEntryInput{
+		EntryType:      ledger.EntryTypeReservationHold,
+		CreditsDelta:   -hold.Credits,
+		IdempotencyKey: hold.IdempotencyKey,
+		RequestID:      requestID,
+		AttemptID:      &attemptID,
+		ReservationID:  &reservationID,
+		Metadata:       hold.Metadata,
+	})
+	if err != nil {
+		return fmt.Errorf("accounting: post reservation hold: %w", err)
+	}
+	if entry.ReservationID == nil || *entry.ReservationID != reservationID {
+		return fmt.Errorf("accounting: post reservation hold: idempotency key %q already holds credits for another reservation", hold.IdempotencyKey)
+	}
+	return nil
 }
 
 func (r *pgxRepository) GetReservation(ctx context.Context, accountID, reservationID uuid.UUID) (Reservation, error) {
@@ -134,7 +157,14 @@ func (r *pgxRepository) GetReservation(ctx context.Context, accountID, reservati
 	return reservation, nil
 }
 
-func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string) (Reservation, error) {
+func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string, hold ReservationHold) (Reservation, error) {
+	if hold.Credits <= 0 {
+		return Reservation{}, fmt.Errorf("accounting: expansion hold must be greater than zero, got %d", hold.Credits)
+	}
+	if strings.TrimSpace(hold.IdempotencyKey) == "" {
+		return Reservation{}, fmt.Errorf("accounting: expansion hold requires an idempotency key")
+	}
+
 	metadata, err := json.Marshal(map[string]any{"additional_credits": additionalCredits})
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: marshal expand metadata: %w", err)
@@ -155,7 +185,8 @@ func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reserv
 		RETURNING id, account_id, request_attempt_id, reservation_key, policy_mode, status, reserved_credits, consumed_credits, released_credits, terminal_usage_confirmed, created_at, updated_at
 	`, accountID, reservationID, additionalCredits)
 
-	if _, err := scanReservationCore(row); err != nil {
+	expanded, err := scanReservationCore(row)
+	if err != nil {
 		return Reservation{}, err
 	}
 
@@ -165,6 +196,14 @@ func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reserv
 		VALUES ($1, 'expanded', $2, $3, $4::jsonb)
 	`, reservationID, additionalCredits, reason, metadata); err != nil {
 		return Reservation{}, fmt.Errorf("accounting: insert expanded event: %w", err)
+	}
+
+	// Same transaction as the raised reserved_credits, for the same reason the
+	// create path posts its hold here (issue #918), and it matters more on this
+	// path: settlement releases what the ROW says is held, so a row raised
+	// without its matching ledger hold hands back credits that were never taken.
+	if err := postReservationHold(ctx, tx, accountID, reservationID, expanded.RequestAttemptID, expanded.RequestID, hold); err != nil {
+		return Reservation{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
