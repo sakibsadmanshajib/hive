@@ -164,6 +164,22 @@ const raise = async (response: Response, fallback: string): Promise<never> => {
 	throw new AgentTaskError(response.status, message ?? `${fallback}: ${response.status}`);
 };
 
+/**
+ * Whether a failure is a refusal that another attempt cannot change.
+ *
+ * 401 means this session cannot reach the agent service at all; 403 means the
+ * tenant does not hold the Cowork gate. Everything else, a network blip, a 5xx,
+ * an unreadable payload, is worth retrying. The two must not share copy,
+ * because the retry message promises something a refusal can never deliver,
+ * and a poll that keeps asking a settled question is a request every few
+ * seconds forever.
+ *
+ * A function rather than an inline check in the component, so the decision has
+ * a test. The component itself has no test harness in this tree.
+ */
+export const isRefusal = (error: unknown): error is AgentTaskError =>
+	error instanceof AgentTaskError && (error.status === 401 || error.status === 403);
+
 export const listTasks = async (token: string): Promise<AgentTask[]> => {
 	const response = await fetch(`${AGENT_API_BASE_URL}/tasks`, {
 		method: 'GET',

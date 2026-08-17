@@ -7,6 +7,7 @@ import {
 	decodeTask,
 	describeTask,
 	ENGINE_UNAVAILABLE_MESSAGE,
+	isRefusal,
 	listTasks
 } from './agentTasks';
 
@@ -141,7 +142,22 @@ describe('the four calls', () => {
 		fetchMock.mockResolvedValue(
 			jsonResponse({ detail: 'Your Hive sign-in could not be confirmed.' }, 401)
 		);
+		// The sentence, not only the type: extraction regressing to the generic
+		// fallback would still throw the right class with the wrong text.
+		await expect(listTasks('t')).rejects.toThrow('Your Hive sign-in could not be confirmed.');
 		await expect(listTasks('t')).rejects.toBeInstanceOf(AgentTaskError);
+	});
+
+	it('separates a refusal from a failure worth retrying', () => {
+		// The list stops polling on a refusal and keeps polling on anything else,
+		// so this predicate decides whether the screen promises a retry it cannot
+		// deliver.
+		expect(isRefusal(new AgentTaskError(401, 'no'))).toBe(true);
+		expect(isRefusal(new AgentTaskError(403, 'gated'))).toBe(true);
+		expect(isRefusal(new AgentTaskError(500, 'boom'))).toBe(false);
+		expect(isRefusal(new AgentTaskError(429, 'slow down'))).toBe(false);
+		expect(isRefusal(new Error('network'))).toBe(false);
+		expect(isRefusal(null)).toBe(false);
 	});
 
 	it('reads a null tasks array as an empty list, because Go marshals nil that way', async () => {

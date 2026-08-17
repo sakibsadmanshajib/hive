@@ -4,13 +4,13 @@
 	import ComposerShell from './ComposerShell.svelte';
 	import ComposerSendButton from './ComposerSendButton.svelte';
 	import {
-		AgentTaskError,
 		cancelTask,
 		createTask,
 		describeTask,
 		elapsed,
 		IN_FLIGHT_STATUSES,
 		isEngineUnavailable,
+		isRefusal,
 		listTasks,
 		TERMINAL_STATUSES,
 		type AgentTask,
@@ -165,7 +165,7 @@
 			blocked = null;
 			failures = 0;
 		} catch (e) {
-			if (e instanceof AgentTaskError && (e.status === 401 || e.status === 403)) {
+			if (isRefusal(e)) {
 				blocked = e.message;
 				failures = 0;
 			} else {
@@ -231,14 +231,26 @@
 			const updated = await cancelTask(sessionToken(), id);
 			tasks = tasks.map((task) => (task.id === updated.id ? updated : task));
 			announcement = 'Task cancelled.';
+			// Cancelling the last in-flight task should stop the loop now rather
+			// than after one more request against a list that cannot change.
+			schedulePoll();
 		} catch {
 			error = 'Could not cancel that task.';
 		}
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {
-		// The chat composer's own behaviour, because this reads as the same
-		// control: Enter sends, Shift+Enter is a newline.
+		/*
+		 * Enter sends, Shift+Enter is a newline. This is a deliberate change from
+		 * the surface being replaced, which used Ctrl or Cmd plus Enter and left
+		 * plain Enter to insert a newline "because a task brief is prose and often
+		 * more than one line". That reasoning was sound for a form. It stops
+		 * applying here: the owner's requirement is that this reads as the same
+		 * control as the chat composer, and a control that looks identical and
+		 * answers the same key differently is worse than one that looks different.
+		 * Shift+Enter still writes the multi-line brief the old comment was
+		 * protecting, and `isComposing` keeps an IME's own Enter out of it.
+		 */
 		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
 			event.preventDefault();
 			void submit();
@@ -317,7 +329,13 @@
 			</div>
 
 			<div class="hv-agent-row">
-				<fieldset class="hv-agent-packs">
+				<!--
+					aria-describedby points at the one line under the composer, so a
+					screen reader hears what the selected mode does when it lands on
+					this group. The surface this replaces wired the same relationship
+					and losing it would have made the hint sighted-only.
+				-->
+				<fieldset class="hv-agent-packs" aria-describedby="hive-agent-pack-hint">
 					<legend class="sr-only">{$i18n.t('Kind of task')}</legend>
 					{#each PACKS as option (option.value)}
 						<label class="hv-agent-pack">
