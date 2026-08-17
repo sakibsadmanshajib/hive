@@ -55,16 +55,57 @@ HIDDEN_SURFACES = {
     "notes": "flag",
     "calendar": "flag",
     "automations": "flag",
+    # 2026-08-17. Upstream's Memory feature, whose only surface here is the
+    # Settings > Personalization tab. Nobody chose it: `ENABLE_MEMORIES`
+    # defaults to true upstream, and while it is on, every chat turn this
+    # deployment sends carries `features.memory: true` and pays for a lookup
+    # against a second, Open WebUI owned memory store. Hive's memory subsystem
+    # is one subsystem on Hive's own Postgres (.wolf/decisions.md D-020) and
+    # does not exist yet, so this is not an early version of it, it is a
+    # competing one.
+    "memories": "flag",
     "vendor-links": "bundle",
+    # 2026-08-17, both found by reading the Settings dialog this change was
+    # already photographing: the Admin Panel entry's twin in the dialog's
+    # bottom-left corner, which #909 left behind, and the vendor's own
+    # translation-contribution link under the language picker.
+    "settings-admin-link": "bundle",
+    "settings-vendor-translate-link": "bundle",
     "changelog-modal": "bundle",
     "about-vendor-copyright": "bundle",
     "about-creator-credit": "bundle",
     "about-vendor-social": "bundle",
 }
 
+# The flag-backed half of the table above, as the environment variables that
+# own it. Every one of these has to be stated in three places to actually be
+# off everywhere: the image (a fresh or compose-less run), docker-compose.yml
+# (the value an already-booted deployment reconciles from) and the reconcile
+# map itself (without which the compose value never reaches a persisted row).
+FLAG_VARIABLES = (
+    "ENABLE_NOTES",
+    "ENABLE_CALENDAR",
+    "ENABLE_AUTOMATIONS",
+    "ENABLE_MEMORIES",
+)
+
 
 def _rewrite(surface: str):
     return next(r for r in hive_ui_surfaces.REWRITES if r.surface == surface)
+
+
+def _image_env() -> dict:
+    """The ENABLE_* defaults Dockerfile.open-webui bakes into the image.
+
+    Read out of the Dockerfile rather than out of a built image so this needs
+    no Docker: PR CI never builds Dockerfile.open-webui (only owui-nightly.yml
+    and deploy-demo-box.yml do), which is exactly the gap that let the image
+    and the compose file disagree in the first place.
+    """
+    pairs = re.findall(
+        r"^\s*(?:ENV\s+)?(ENABLE_\w+)=(\S+?)\s*\\?$", DOCKERFILE.read_text(), re.MULTILINE
+    )
+    return dict(pairs)
 
 
 class FakeConfig:
@@ -120,6 +161,8 @@ def test_each_rewrite_still_targets_its_own_surface() -> None:
         "usermenu-playground-item": ('==="admin"',),
         "usermenu-admin-panel": ('==="admin"',),
         "usermenu-vendor-links": ('==="admin"',),
+        "settings-admin-link": ('==="admin"',),
+        "settings-vendor-translate-link": ('"en-US"', "license_metadata"),
         "changelog-modal": ("get show()",),
         "about-vendor-copyright": ("Open WebUI Inc.", "openwebui.com"),
         "about-creator-link": ("Timothy J. Baek", "github.com/tjbck"),
@@ -368,8 +411,49 @@ def test_the_build_patch_fails_when_a_rewrite_matches_nothing() -> None:
 
 def test_compose_turns_the_flag_backed_surfaces_off() -> None:
     compose = COMPOSE.read_text()
-    for variable in ("ENABLE_NOTES", "ENABLE_CALENDAR", "ENABLE_AUTOMATIONS"):
+    for variable in FLAG_VARIABLES:
         assert f'{variable}: "false"' in compose, variable
+
+
+def test_the_image_itself_ships_the_flag_backed_surfaces_off() -> None:
+    """The compose values above only reach a deployment that repeats them.
+
+    Every flag here is off on the demo box, and was off before this test
+    existed, purely because docker-compose.yml names it. The image did not
+    carry that position, so a plain `docker run` of the Hive image, which is
+    exactly how this repo builds its own before/after proof screenshots,
+    rendered Notes, Calendar, Automations and the Personalization tab in full.
+    That is what the owner saw on 2026-08-17.
+
+    A Docker `ENV` default, rather than a rewrite of upstream's `os.getenv`
+    line, because it survives a digest bump with no literal to drift and
+    compose still overrides it: an enterprise deployment that wants Notes back
+    sets the variable to true and the reconcile below flips the persisted row.
+    """
+    declared = _image_env()
+    for variable in FLAG_VARIABLES:
+        assert declared.get(variable) == "false", (variable, declared)
+
+
+def test_the_update_nag_is_off_in_the_image_and_not_in_the_reconcile() -> None:
+    """Upstream's "A new version is now available" banner, which links a Hive
+    customer to another vendor's release notes.
+
+    docker-compose.yml has set `ENABLE_VERSION_UPDATE_CHECK` false since #143,
+    so like the flags above it was off on the deployment and on everywhere
+    else; it appeared in both of this change's own before and after captures
+    until the image carried it too.
+
+    It is deliberately NOT in FEATURE_CONFIG_ENV. Unlike the four above it is
+    a plain environment read (`env.py`, surfaced straight into `/api/config`
+    rather than through `config.get`), so there is no persisted row to
+    reconcile and an entry there would write a key nothing reads, which is a
+    no-op shaped like a control. That is the ENABLE_ADMIN_PANEL mistake the
+    test above this one exists to prevent, so assert the absence too.
+    """
+    assert _image_env().get("ENABLE_VERSION_UPDATE_CHECK") == "false", _image_env()
+    assert "ENABLE_VERSION_UPDATE_CHECK" not in hive_rag_env_config.FEATURE_CONFIG_ENV.values()
+    assert "ENABLE_VERSION_UPDATE_CHECK" not in hive_rag_env_config.RAG_CONFIG_ENV.values()
 
 
 def test_compose_no_longer_sets_variables_open_webui_does_not_read() -> None:
@@ -386,22 +470,22 @@ def test_compose_no_longer_sets_variables_open_webui_does_not_read() -> None:
 
 def test_flag_backed_surfaces_are_reconciled_onto_a_booted_database() -> None:
     """Open WebUI seeds every DEFAULT_CONFIG key on first boot and the row wins
-    forever after, so without this the compose values above are a no-op on the
-    demo box."""
-    for variable in ("ENABLE_NOTES", "ENABLE_CALENDAR", "ENABLE_AUTOMATIONS"):
+    forever after, so without this neither the compose values nor the image
+    defaults above reach the demo box, whose rows were seeded on in 2026."""
+    for variable in FLAG_VARIABLES:
         assert variable in hive_rag_env_config.FEATURE_CONFIG_ENV.values(), variable
 
-    config = FakeConfig({"notes.enable": True, "calendar.enable": True, "automations.enable": True})
+    keys = [key for key, var in hive_rag_env_config.FEATURE_CONFIG_ENV.items() if var in FLAG_VARIABLES]
+    assert len(keys) == len(FLAG_VARIABLES), keys
+
+    config = FakeConfig({key: True for key in keys})
     applied = asyncio.run(
-        hive_rag_env_config.reconcile(
-            config,
-            {"ENABLE_NOTES": "false", "ENABLE_CALENDAR": "false", "ENABLE_AUTOMATIONS": "false"},
-        )
+        hive_rag_env_config.reconcile(config, {variable: "false" for variable in FLAG_VARIABLES})
     )
-    for key in ("notes.enable", "calendar.enable", "automations.enable"):
+    for key in keys:
         # Booleans, not the string "false": a non-empty string is truthy both
         # in Python and in the frontend that reads it back out of /api/config,
-        # so a string here would leave all three surfaces visible.
+        # so a string here would leave every one of these surfaces visible.
         assert config.stored[key] is False, (key, config.stored[key])
         assert applied[key] is False, (key, applied[key])
 
@@ -431,6 +515,57 @@ def _removed_surface_pattern() -> re.Pattern:
     )
     assert match, "Caddyfile.owui no longer defines the `removed` path_regexp"
     return re.compile(match.group(1))
+
+
+def _blocked_pattern() -> re.Pattern:
+    match = re.search(
+        r"^\s*path_regexp\s+blocked\s+(\S+)\s*$", CADDYFILE.read_text(), re.MULTILINE
+    )
+    assert match, "Caddyfile.owui no longer defines the `blocked` path_regexp"
+    return re.compile(match.group(1))
+
+
+def test_the_notes_api_is_blocked_because_its_router_enforces_no_flag() -> None:
+    """The one removed feature whose backend does not refuse on its own flag.
+
+    Turning a feature flag off is an honest removal only when the flag reaches
+    the API too. In the pinned v0.10.2 image `calendar.py` checks
+    `calendar.enable` on all 13 of its routes, `automations.py` checks
+    `automations.enable` on all 8, and `memories.py` checks `memories.enable`
+    on all 11, so for those three the flag is the whole control and a second
+    one here would be decoration. `notes.py` checks `notes.enable` on none of
+    its 9 routes: it imports the config module only for the admin export and
+    access-control constants. With the navigation entry gone and the page route
+    already 404'd, every one of those 9 endpoints stayed callable by any signed
+    in user, which is precisely a hidden entry pointing at live code.
+    """
+    pattern = _blocked_pattern()
+    for path in (
+        "/api/v1/notes",
+        "/api/v1/notes/",
+        "/api/v1/notes/01234567-89ab-cdef-0123-456789abcdef",
+        "/api/v1/notes/01234567-89ab-cdef-0123-456789abcdef/update",
+        "//api/v1/notes",
+        "/API/V1/Notes",
+    ):
+        assert pattern.match(path), path
+
+
+def test_the_notes_block_spares_every_api_hive_keeps() -> None:
+    pattern = _blocked_pattern()
+    for path in (
+        "/api/config",
+        "/api/v1/chats/",
+        "/api/v1/knowledge/list",
+        "/api/v1/files/",
+        "/api/v1/retrieval/query/collection",
+        "/api/v1/auths/",
+        "/openai/models",
+        # Not a prefix match: only the whole segment counts.
+        "/api/v1/notesomething",
+        "/notes",
+    ):
+        assert not pattern.match(path), path
 
 
 def test_removed_routes_are_unreachable_by_url() -> None:
@@ -465,9 +600,11 @@ def test_the_block_spares_the_surfaces_hive_keeps() -> None:
         "/workspace/knowledge",
         "/workspace/knowledge/abc",
         # Open WebUI's own APIs, including the ones the sidebar and the chat
-        # request path call on every load.
+        # request path call on every load. This regex is scoped to page routes
+        # and must not reach any of them; the separate `blocked` regex is where
+        # /api/v1/notes is refused, asserted above.
         "/api/config",
-        "/api/v1/notes/",
+        "/api/v1/chats/",
         "/api/v1/knowledge/list",
         "/api/v1/models",
         "/_app/immutable/nodes/7.js",
@@ -501,7 +638,16 @@ def test_every_hidden_surface_has_a_live_mechanism() -> None:
         "notes": ("", "ENABLE_NOTES", "notes"),
         "calendar": ("", "ENABLE_CALENDAR", "calendar"),
         "automations": ("", "ENABLE_AUTOMATIONS", "automations"),
+        # Settings > Personalization is a dialog tab, not a route, so there is
+        # no page path for Caddy to block. Its API is refused by its own
+        # router on the same flag, asserted separately above.
+        "memories": ("", "ENABLE_MEMORIES", ""),
         "vendor-links": ("usermenu-vendor-links", "ENABLE_", ""),
+        # Both live inside the Settings dialog, which is not a route, so there
+        # is no page path for Caddy to block. /admin/settings, where the first
+        # one pointed, is already covered by the separate @blocked admin regex.
+        "settings-admin-link": ("settings-admin-link", "ENABLE_", ""),
+        "settings-vendor-translate-link": ("settings-vendor-translate-link", "ENABLE_", ""),
         "changelog-modal": ("changelog-modal", "ENABLE_", ""),
         # Settings > About is a dialog, not a route, so there is no path for
         # Caddy to block; the bundle rewrite is the whole mechanism.

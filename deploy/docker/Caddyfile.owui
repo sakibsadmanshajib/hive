@@ -85,8 +85,23 @@
   # the configured URL, so no rule on this origin can see them. Removing
   # that panel is the control that reaches them, and it happens at image
   # build time -- see deploy/docker/owui-patches/remove_integrations_tab.py.
+  #
+  # `notes` is the one removed product surface whose API needs a rule here.
+  # Turning a feature flag off is an honest removal only when the flag reaches
+  # the API too, and for the rest of #772's flag-backed list it does: in the
+  # pinned v0.10.2 image calendar.py checks `calendar.enable` on all 13 of its
+  # routes, automations.py checks `automations.enable` on all 8, and
+  # memories.py checks `memories.enable` on all 11, so a second control here
+  # would be decoration. notes.py checks `notes.enable` on none of its 9. With
+  # the navigation entry gone from the bundle and the /notes page already
+  # answered below, all nine endpoints stayed callable by any signed-in user,
+  # which is the "hidden entry pointing at live code" shape this block exists
+  # to prevent. Nothing in the interface calls them: every caller in the
+  # front end (the sidebar's pinned note list, the message input's Attach
+  # Notes tab and its note-from-prompt action, the note link token) renders
+  # only under `$config.features.enable_notes`.
   @blocked {
-    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|terminal_servers|tool_servers)))/?(?:/.*)?$
+    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|notes|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|terminal_servers|tool_servers)))/?(?:/.*)?$
   }
   respond @blocked 404
 

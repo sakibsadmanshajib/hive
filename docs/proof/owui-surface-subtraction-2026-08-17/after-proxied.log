@@ -1,0 +1,7 @@
+[after-proxied] sidebar entries: ["sidebar-new-chat-button: ","sidebar-new-chat-button: New Chat","sidebar-search-button: Search","sidebar-workspace-button: Workspace","sidebar-folder-button: Folders","sidebar-folder-button: Chats"]
+[after-proxied] user menu: ["Update your status","Settings","Archived Chats","Workspace","Sign Out"]
+[after-proxied] settings tabs: ["General","Interface","Audio","Data Controls","Account","About"]
+[after-proxied] settings admin links: 0
+[after-proxied] settings vendor links: []
+[after-proxied] console errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+[after-proxied] failed requests: ["404 /api/v1/terminals/"]

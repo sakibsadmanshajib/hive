@@ -1,0 +1,7 @@
+[before] sidebar entries: ["sidebar-new-chat-button: ","sidebar-new-chat-button: New Chat","sidebar-search-button: Search","sidebar-notes-button: Notes","sidebar-workspace-button: Workspace","sidebar-folder-button: Folders","sidebar-folder-button: Chats"]
+[before] user menu: ["Update your status","Settings","Archived Chats","Workspace","Notes","Calendar","Automations","Sign Out"]
+[before] settings tabs: ["General","Interface","Personalization","Audio","Data Controls","Account","About"]
+[before] settings admin links: 1
+[before] settings vendor links: ["https://github.com/open-webui/open-webui/blob/main/docs/CONTRIBUTING.md#-translations-and-internationalization"]
+[before] console errors: []
+[before] failed requests: []

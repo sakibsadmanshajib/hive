@@ -1,0 +1,19 @@
+notes.enable in /api/config:
+  enable_notes = False  enable_calendar = False  enable_automations = False  enable_memories = False
+
+authenticated, straight at the after image (no proxy):
+  GET  /api/v1/notes/        -> 200
+  POST /api/v1/notes/create  -> 200
+  GET  /api/v1/calendars/    -> 403
+  GET  /api/v1/memories/     -> 404
+
+authenticated, through Caddy as configured on main:
+  GET  /api/v1/notes/        -> 200
+  POST /api/v1/notes/create  -> 200
+
+authenticated, through Caddy as configured on this branch:
+  GET  /api/v1/notes/        -> 404
+  POST /api/v1/notes/create  -> 404
+  GET  /api/config           -> 200
+  GET  /api/v1/chats/        -> 200
+  GET  /api/v1/knowledge/    -> 200

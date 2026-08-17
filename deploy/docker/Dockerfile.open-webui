@@ -11,6 +11,53 @@
 # days -- get written permission or an enterprise license first.
 FROM ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4
 
+# The stock product surfaces Hive does not ship, turned off in the image
+# itself rather than only in docker-compose.yml.
+#
+# All four were already off on the demo box, and only there. docker-compose.yml
+# names the first three and owui-patches/hive_rag_env_config.py reconciles them
+# onto the already-booted database, which is a complete control for that one
+# deployment and for nothing else. The image kept upstream's defaults, all of
+# which are on, so a plain `docker run` of the Hive image rendered Notes,
+# Calendar, Automations and Settings > Personalization in full. That is not a
+# hypothetical: it is how this repo builds its own before/after proof
+# screenshots, and it is the interface the owner was looking at on 2026-08-17
+# when he asked for these to go. "Off" has to be a property of the product,
+# not of one compose file that a bare run, an enterprise override or the next
+# proof harness can fail to repeat.
+#
+#   ENABLE_NOTES / ENABLE_CALENDAR / ENABLE_AUTOMATIONS -- three upstream
+#     surfaces with no Hive counterpart (#772). Their navigation entries, their
+#     page routes and their APIs all go with the flag, except the notes API,
+#     which Caddyfile.owui blocks because notes.py checks the flag on none of
+#     its nine routes.
+#   ENABLE_MEMORIES -- upstream's own Memory feature, whose only surface here
+#     is Settings > Personalization. Nobody chose it, and while it is on every
+#     chat turn carries `features.memory: true` and pays for a lookup against a
+#     second, Open WebUI owned memory store. Hive's memory subsystem is one
+#     subsystem on Hive's own Postgres (.wolf/decisions.md D-020) and is not
+#     built yet, so this is a competitor to it rather than an early version.
+#
+# ENV rather than a rewrite of upstream's own `os.getenv(..., 'True')` lines:
+# there is no literal to drift on a digest bump, and compose still overrides
+# it, so an enterprise deployment that wants Notes back sets the variable to
+# true and hive_rag_env_config.py flips the persisted row on the next boot.
+# These are persisted config keys, so on a deployment that has already booted
+# the compose value plus that reconcile is still what reaches the database;
+# this line governs a first boot and every run with no compose at all.
+# ENABLE_VERSION_UPDATE_CHECK rides along for the same reason and is not the
+# same kind of switch: it is a plain environment read rather than persisted
+# config, so it needs no reconcile entry and adding one would be a no-op that
+# reads like a control. docker-compose.yml has set it false since #143, and the
+# image still nagged "A new version (v0.11.0) is now available" over another
+# vendor's release notes on any run that did not repeat that line, including
+# the before and after captures taken for this change.
+ENV ENABLE_NOTES=false \
+    ENABLE_CALENDAR=false \
+    ENABLE_AUTOMATIONS=false \
+    ENABLE_MEMORIES=false \
+    ENABLE_VERSION_UPDATE_CHECK=false
+
 # Root cause of "(Open WebUI)" in /api/config, /manifest.json,
 # /opensearch.xml, and the client-rendered <title>/meta description: this
 # 2-line block. WEBUI_NAME itself is still fully configurable via env var
@@ -113,9 +160,16 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
 # permission-based hide hides nothing from the people who use it. v0.10.2 has
 # no environment variable for any of them either; in particular ENABLE_PLUGINS,
 # which third-party Open WebUI hardening guides recommend for exactly this,
-# does not exist anywhere in this image. Notes, Calendar and Automations do
-# have real flags and are handled by docker-compose.yml plus the reconcile
-# above, not here.
+# does not exist anywhere in this image. Notes, Calendar, Automations and the
+# Memory feature do have real flags and are handled by the ENV block at the top
+# of this file plus docker-compose.yml and the reconcile above, not here.
+#
+# Two more entries were added on 2026-08-17, both inside the Settings dialog
+# and both found by looking at the screen rather than at an issue: the "Admin
+# Settings" link in its bottom-left corner, which is the twin of the user
+# menu's Admin Panel entry #909 removed and points at the same 404'd /admin
+# route, and the vendor's "Help us translate Open WebUI!" link under the
+# language picker.
 #
 # The image ships a prebuilt bundle and no frontend source, so this rewrites
 # that bundle. It asserts every rewrite matched its exact expected site count,

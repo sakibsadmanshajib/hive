@@ -1,0 +1,7 @@
+[after] sidebar entries: ["sidebar-new-chat-button: ","sidebar-new-chat-button: New Chat","sidebar-search-button: Search","sidebar-workspace-button: Workspace","sidebar-folder-button: Folders","sidebar-folder-button: Chats"]
+[after] user menu: ["Update your status","Settings","Archived Chats","Workspace","Sign Out"]
+[after] settings tabs: ["General","Interface","Audio","Data Controls","Account","About"]
+[after] settings admin links: 0
+[after] settings vendor links: []
+[after] console errors: []
+[after] failed requests: []

@@ -28,12 +28,18 @@ Why this is a build-time rewrite of the compiled bundle and not configuration:
   `ENABLE_MODEL_FILTER` and `ENABLE_ADMIN_PANEL` were no-ops here). Even if it
   existed, a switch that removes "the workspace interface" wholesale would
   take Knowledge with it, which this deployment needs.
-* Notes, Calendar and Automations are the exception and are NOT handled here:
-  those three do have real feature flags (`ENABLE_NOTES`, `ENABLE_CALENDAR`,
-  `ENABLE_AUTOMATIONS`) whose gates are `$config.features.enable_*` AND the
-  role check, so turning the flag off hides them from admins too. They are
-  persisted config, so docker-compose.yml sets them and
-  hive_rag_env_config.py reconciles them onto an already-booted database.
+* Notes, Calendar, Automations and the Memory feature behind Settings >
+  Personalization are the exception and are NOT handled here: those four do
+  have real feature flags (`ENABLE_NOTES`, `ENABLE_CALENDAR`,
+  `ENABLE_AUTOMATIONS`, `ENABLE_MEMORIES`) whose gates are
+  `$config.features.enable_*` AND the role check, so turning the flag off
+  hides them from admins too, and their routers refuse on the same flag.
+  Dockerfile.open-webui sets all four false as image defaults, so a run with
+  no compose at all still gets the reduced product; they are also persisted
+  config, so docker-compose.yml repeats them and hive_rag_env_config.py
+  reconciles them onto an already-booted database, which is what reaches the
+  demo box. `/api/v1/notes` is the one exception to the exception: notes.py
+  checks its flag on none of its 9 routes, so Caddyfile.owui blocks it.
 
 The image ships a prebuilt, minified SvelteKit bundle and no frontend source,
 so each rewrite below is a verbatim substring of that bundle. That makes them
@@ -181,6 +187,42 @@ REWRITES = (
         upstream="src/lib/components/layout/Sidebar/UserMenu.svelte, the {#if role === 'admin'} wrapping /admin",
         find='T(Ie,_=>{q()==="admin"&&_(De)})',
         replace="T(Ie,_=>{!1&&_(De)})",
+    ),
+    Rewrite(
+        # 2026-08-17. The Admin Panel entry #846 removed from the user menu has
+        # a twin, in the bottom-left corner of the Settings dialog, and #909
+        # took only the first. It navigates to /admin/settings, which
+        # Caddyfile.owui 404s under the same @blocked admin regex, so it is the
+        # identical defect: every tenant owner passes `role === "admin"`, sees
+        # a permanent "Admin Settings" control below the tab list, and clicking
+        # it always fails. Found by looking at the screen this change was
+        # already photographing rather than by re-reading the issue.
+        surface="settings-admin-link",
+        upstream="src/lib/components/chat/SettingsModal.svelte, the {#if $user?.role === 'admin'} /admin/settings anchor",
+        find='J(me,le=>{d(),n(()=>{var he;return((he=d())==null?void 0:he.role)==="admin"})&&le($e)})',
+        replace="J(me,le=>{!1&&le($e)})",
+    ),
+    Rewrite(
+        # 2026-08-17, and the same kind of miss: Settings > General still
+        # carries "Couldn't find your language? Help us translate Open WebUI!"
+        # under the language picker, linking a Hive customer to the vendor's
+        # contributing guide by name. Same family as the Documentation and
+        # Releases links removed above and the About de-branding below, both of
+        # which were done from an issue's quoted list rather than from the
+        # screen.
+        #
+        # Gated off rather than emptied, because the surviving block is walked
+        # positionally: `R=o(a(pe))` takes the div's first text node and then
+        # its anchor sibling, so removing either would desynchronise the walker.
+        # Its own condition is `language === "en-US" && !license_metadata`,
+        # which every session on this deployment satisfies.
+        surface="settings-vendor-translate-link",
+        upstream="src/lib/components/chat/Settings/General.svelte, the translation-contribution link",
+        find=(
+            'J(Te,E=>{r(),d(),n(()=>{var pe;return r().language==="en-US"&&'
+            '!(((pe=d())==null?void 0:pe.license_metadata)??!1)})&&E(De)})'
+        ),
+        replace="J(Te,E=>{!1&&E(De)})",
     ),
     Rewrite(
         # Open WebUI's release-notes dialog. It opens itself on first load

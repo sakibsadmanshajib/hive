@@ -65,6 +65,18 @@
       "sha256": "ea3ddfe01c42955d1fbf195234a494b4f50749f35bdcb236c64c15b46c1f5443",
       "text": "4\"),i=x(t,\"strokeWidth\",8,\"1.5\");var n=$y();Z(()=>{Ue(n,\"stroke-width\",i()),ct(n,0,Yr(s()))}),b(e,n)}var Py=B('<button class=\" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition\"><div class=\" self-center p-1.5\"><!></div></button>'),Ty=B('<div class=\"-translate-x-0.5 mr-1 mt-1 self-start flex flex-none items-center text-gray-600 dark:text-gray-400\"><!></div>'),Iy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Dy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"save-temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ly=B('<button aria-label=\"New Chat\"><div class=\" m-auto self-center\"><!></div></button>'),By=B('<button class=\"flex cursor-pointer px-2 py-2 round"
     },
+    "settings-admin-link": {
+      "file": "nodes/2.u-NXhYVX.js",
+      "offset": 311027,
+      "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
+      "text": "1 md:flex-none md:mt-auto flex select-none text-left transition ${l(),n(()=>{var Ye;return(Ye=l())!=null&&Ye.highContrastMode?\"hover:bg-gray-200 dark:hover:bg-gray-800\":\"text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white\"})??\"\"}`),c(Be,qe)},[()=>(T(),n(()=>T().t(\"Admin Settings\")))]),X(\"click\",he,async qe=>{qe.preventDefault(),await ua(\"/admin/settings\"),ae(!1)}),i(le,he)};J(me,le=>{d(),n(()=>{var he;return((he=d())==null?void 0:he.role)===\"admin\"})&&le($e)})}t(D);var Me=o(D,2),Oe=a(Me);{var Ne=le=>{Cm(le,{getModels:b,saveSettings:de,$$events:{save:()=>{Re.success(T().t(\"Settings saved successfully!\"))}}})},Te=le=>{Wm(le,{saveSettings:de,$$events:{save:()=>{Re.success(T().t(\"Settings saved successfully!\"))}}})},De=le=>{Vh(le,{saveSettings:async he=>{await de(he),Re.success(T().t(\"Settings saved successfully!\"))}})},Ce=le=>{s1(le,{saveSettings:async he"
+    },
+    "settings-vendor-translate-link": {
+      "file": "nodes/2.u-NXhYVX.js",
+      "offset": 175369,
+      "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
+      "text": "o(me,2);{var De=E=>{var pe=ym(),R=o(a(pe));t(pe),A(()=>{ot(pe,1,`mb-2 text-xs ${l(),n(()=>{var H;return((H=l())==null?void 0:H.highContrastMode)??!1?\"text-gray-800 dark:text-gray-100\":\"text-gray-400 dark:text-gray-500\"})??\"\"}`),ot(R,1,`font-medium underline ${l(),n(()=>{var H;return((H=l())==null?void 0:H.highContrastMode)??!1?\"text-gray-700 dark:text-gray-200\":\"text-gray-300\"})??\"\"}`)}),i(E,pe)};J(Te,E=>{r(),d(),n(()=>{var pe;return r().language===\"en-US\"&&!(((pe=d())==null?void 0:pe.license_metadata)??!1)})&&E(De)})}var Ce=o(Te,2),Se=a(Ce),Ue=a(Se),Ke=a(Ue,!0);t(Ue);var oe=o(Ue,2),U=a(oe);{var le=E=>{var pe=qi(),R=a(pe,!0);t(pe),A(H=>c(R,H),[()=>(r(),n(()=>r().t(\"On\")))]),i(E,pe)},he=E=>{var pe=qi(),R=a(pe,!0);t(pe),A(H=>c(R,H),[()=>(r(),n(()=>r().t(\"Off\")))]),i(E,pe)};J(U,E=>{e(h)===!0?E(le):E(he,-1)})}t(oe),t(Se),t(Ce),t(ne);var Ze=o(ne,2);{var rt=E=>{var pe=wm(),R=o(tt(pe),2),H=a(R),We=a(H,!0);t(H);var He"
+    },
     "sidebar-playground-item": {
       "file": "nodes/2.u-NXhYVX.js",
       "offset": 121297,
