@@ -4,6 +4,7 @@
 	import ComposerShell from './ComposerShell.svelte';
 	import ComposerSendButton from './ComposerSendButton.svelte';
 	import {
+		AgentTaskError,
 		cancelTask,
 		createTask,
 		describeTask,
@@ -71,6 +72,15 @@
 	let error: string | null = null;
 	let announcement = '';
 	let failures = 0;
+	/*
+	 * A refusal no amount of retrying can change, carrying the server's own
+	 * sentence. 401 means this session cannot reach the agent service at all;
+	 * 403 means this tenant does not hold the Cowork gate. Both are separated
+	 * from the ordinary failure count because the ordinary copy promises a
+	 * retry, and a promise the loop cannot keep is the exact failure this
+	 * surface exists to stop making.
+	 */
+	let blocked: string | null = null;
 	let nowMs = Date.now();
 
 	let promptEl: HTMLTextAreaElement | null = null;
@@ -92,7 +102,9 @@
 				? 'Could not load your tasks. Reload the page to try again.'
 				: 'Could not load your tasks. Retrying automatically.';
 	// A stale list outranks a one-off create or cancel error.
-	$: alertMessage = loadFailure ?? error;
+	// A refusal outranks both, because it is the only one of the three that is
+	// still true after another attempt.
+	$: alertMessage = blocked ?? loadFailure ?? error;
 	/*
 	 * Current state, not history. `tasks` is newest first, so the newest task is
 	 * the only one that says anything about how this deployment is configured
@@ -111,7 +123,9 @@
 			clearTimeout(pollTimer);
 			pollTimer = null;
 		}
-		if (destroyed) {
+		// A refusal is not retried. Polling through a 401 or a 403 would issue a
+		// request every few seconds forever against an answer that cannot change.
+		if (destroyed || blocked !== null) {
 			return;
 		}
 		/*
@@ -148,9 +162,15 @@
 		try {
 			tasks = await listTasks(sessionToken());
 			error = null;
+			blocked = null;
 			failures = 0;
-		} catch {
-			failures = failures + 1;
+		} catch (e) {
+			if (e instanceof AgentTaskError && (e.status === 401 || e.status === 403)) {
+				blocked = e.message;
+				failures = 0;
+			} else {
+				failures = failures + 1;
+			}
 		}
 		nowMs = Date.now();
 		schedulePoll();
@@ -183,6 +203,9 @@
 			// the row the user just created sits under an alert telling them to
 			// reload, which the create just disproved.
 			failures = 0;
+			// A create that round-trips also disproves a refusal, so the refusal
+			// message goes with the failure count rather than outliving both.
+			blocked = null;
 			tasks = [task, ...tasks];
 			instructions = '';
 			resize();
@@ -358,7 +381,10 @@
 			<ul class="hv-agent-rows">
 				{#each tasks as task (task.id)}
 					{@const view = describeTask(task, nowMs)}
-					<li class="hv-agent-task">
+					<!-- Stable hook for the end-to-end spec, which asserts that every
+					     row the API returned actually painted. A styling class would
+					     do the job until someone renames it. -->
+					<li class="hv-agent-task" data-hive-task-row={task.id}>
 						<div class="hv-agent-task-head">
 							<!--
 								The brief the user wrote is the row's headline. Three rows on the
