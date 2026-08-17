@@ -135,6 +135,18 @@ samp,
 	color: var(--hv-ink);
 }
 
+/*
+ * Press feedback. A row that does not respond under the finger reads as dead,
+ * and this is the one place a transform is worth it: it is short, it is on a
+ * control the user has already decided to press, and it confirms the interface
+ * heard them. Scale rather than a colour change, because the colour change is
+ * already spent on hover.
+ */
+.hv-nav-row:active {
+	transform: scale(0.98);
+	transition-duration: 100ms;
+}
+
 .hv-nav-row-active::before {
 	content: '';
 	position: absolute;
@@ -203,6 +215,10 @@ samp,
 @media (prefers-reduced-motion: reduce) {
 	.hv-nav-row {
 		transition: none;
+	}
+
+	.hv-nav-row:active {
+		transform: none;
 	}
 }
 
