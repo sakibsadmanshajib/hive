@@ -452,7 +452,15 @@ jobs:
           python3 scripts/derive-pooler-dsn.py --self-test
           # stdout is the KEY=value pairs; the script logs a password-free
           # host/port/params summary on stderr.
-          python3 scripts/derive-pooler-dsn.py --dsn "$existing" >> "$GITHUB_ENV"
+          #
+          # --session-max-conns 6 keeps this box's budget exactly where it has
+          # been. Six is no longer the script's default: an ephemeral consumer
+          # now gets four, because three CI stacks boot per push and six each
+          # asked for 18 of the project's 15 session slots before this box's own
+          # share was counted. This is the one long-lived deployment, it serves
+          # real chat traffic, and it is the consumer that budget was written
+          # for, so it asks for it by name.
+          python3 scripts/derive-pooler-dsn.py --dsn "$existing" --session-max-conns 6 >> "$GITHUB_ENV"
 
       - name: Rebuild + recreate changed services
         # `--build` only rebuilds layers whose inputs changed (Docker build
