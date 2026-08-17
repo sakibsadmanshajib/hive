@@ -20,6 +20,7 @@ import { getModels } from '$lib/apis';
 type ModelsRequest = ReturnType<typeof getModels>;
 
 let inFlight: ModelsRequest | null = null;
+let inFlightToken: string | null = null;
 
 /**
  * Starts the model list request early. Safe to call more than once: only the
@@ -30,6 +31,7 @@ export const prefetchModels = (token: string | null | undefined): void => {
 		return;
 	}
 
+	inFlightToken = token;
 	inFlight = getModels(token, null);
 
 	// A prefetch that nobody collects (the user is signed out mid-startup, or
@@ -41,16 +43,31 @@ export const prefetchModels = (token: string | null | undefined): void => {
 };
 
 /**
- * Hands over the in-flight request, if there is one, and forgets it. Returns
- * null when no prefetch is pending, which tells the caller to fetch normally.
+ * Hands over the in-flight request, if there is one started under this same
+ * token, and forgets it. Returns null when there is nothing to hand over,
+ * which tells the caller to fetch normally.
  */
-export const consumeModelPrefetch = (): ModelsRequest | null => {
+export const consumeModelPrefetch = (token: string | null | undefined): ModelsRequest | null => {
 	const pending = inFlight;
+	const pendingToken = inFlightToken;
 	inFlight = null;
+	inFlightToken = null;
+
+	// A prefetch belongs to the session that started it. The sign-in page
+	// navigates client side rather than reloading, so one tab can start this
+	// request under one token and then mount the application under another:
+	// a model list is a tenant's entitlement, and handing one principal's list
+	// to a different principal is not a thing to leave to chance for the sake
+	// of a few hundred milliseconds. Mismatch means fetch normally.
+	if (!pending || !token || pendingToken !== token) {
+		return null;
+	}
+
 	return pending;
 };
 
 /** Test seam: drops any pending request without consuming it. */
 export const resetModelPrefetch = (): void => {
 	inFlight = null;
+	inFlightToken = null;
 };

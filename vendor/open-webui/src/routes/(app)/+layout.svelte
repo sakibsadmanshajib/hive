@@ -124,7 +124,7 @@
 		// extra models from the user's own settings, which were not known when
 		// the request was started, so that case fetches normally.
 		if (!directConnections) {
-			const prefetched = consumeModelPrefetch();
+			const prefetched = consumeModelPrefetch(localStorage.token);
 			if (prefetched) {
 				models.set(await prefetched);
 				return;

@@ -21,7 +21,7 @@ describe('model prefetch', () => {
 		prefetchModels('token');
 
 		expect(getModels).toHaveBeenCalledTimes(1);
-		await expect(consumeModelPrefetch()).resolves.toEqual([{ id: 'hive-auto' }]);
+		await expect(consumeModelPrefetch('token')).resolves.toEqual([{ id: 'hive-auto' }]);
 	});
 
 	it('issues nothing without a token, so a signed-out load stays silent', () => {
@@ -30,7 +30,7 @@ describe('model prefetch', () => {
 		prefetchModels(undefined);
 
 		expect(getModels).not.toHaveBeenCalled();
-		expect(consumeModelPrefetch()).toBeNull();
+		expect(consumeModelPrefetch('token')).toBeNull();
 	});
 
 	it('hands the request over exactly once', async () => {
@@ -38,11 +38,23 @@ describe('model prefetch', () => {
 
 		prefetchModels('token');
 
-		expect(consumeModelPrefetch()).not.toBeNull();
+		expect(consumeModelPrefetch('token')).not.toBeNull();
 		// A second consumer has to fetch for itself rather than receive a
 		// promise that has already been read, which is what keeps a later
 		// refresh going to the network.
-		expect(consumeModelPrefetch()).toBeNull();
+		expect(consumeModelPrefetch('token')).toBeNull();
+	});
+
+	it('refuses to hand a list started under one token to another', async () => {
+		getModels.mockResolvedValue([{ id: 'tenant-a-model' }]);
+
+		prefetchModels('token-a');
+
+		// The sign-in page navigates client side, so a tab can start this
+		// request under one session and mount the application under another.
+		// The second principal has to fetch its own list.
+		expect(consumeModelPrefetch('token-b')).toBeNull();
+		expect(consumeModelPrefetch('token-a')).toBeNull();
 	});
 
 	it('still rejects for its consumer, so a failed load is not silently empty', async () => {
@@ -50,7 +62,7 @@ describe('model prefetch', () => {
 
 		prefetchModels('token');
 
-		await expect(consumeModelPrefetch()).rejects.toThrow('gateway down');
+		await expect(consumeModelPrefetch('token')).rejects.toThrow('gateway down');
 	});
 
 	it('leaves an uncollected failure handled', async () => {
