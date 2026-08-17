@@ -26,10 +26,23 @@
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import { redirect } from '@sveltejs/kit';
+	import {
+		clearSsoAttempt,
+		markSsoAttempt,
+		readSsoAttemptAt,
+		ssoAutoRedirectDecision
+	} from '$lib/hive/sso-redirect';
 
 	const i18n = getContext('i18n');
 
 	let loaded = false;
+
+	// Why the visitor is looking at this page rather than being sent straight to
+	// the provider. Each one gets a message, because a sign in page that reappears
+	// with no explanation reads as a broken product.
+	let signInError: string | null = null;
+	let signInInterrupted = false;
+	let signedOut = false;
 
 	let mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
 
@@ -42,9 +55,15 @@
 
 	let ldapUsername = '';
 
+	const hasExistingSession = () =>
+		Boolean(localStorage.token) ||
+		document.cookie.split('; ').some((cookie) => cookie.startsWith('token='));
+
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
-			console.log(sessionUser);
+			// The round trip produced a session, so the loop guard has nothing left
+			// to guard against.
+			clearSsoAttempt();
 			toast.success($i18n.t(`You're now logged in.`));
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
@@ -182,27 +201,29 @@
 
 		await oauthCallbackHandler();
 		form = $page.url.searchParams.get('form');
+		signedOut = $page.url.searchParams.get('signed_out') !== null;
+		signInError = error;
 
-		// Auto-redirect to SSO when OAUTH_AUTO_REDIRECT is enabled and the
-		// deployment is unambiguously SSO-only (single provider, no login form,
-		// no LDAP). Suppressed by ?form=, ?error=, onboarding, trusted-header
-		// auth, or an existing session/token.
-		if ($config?.oauth?.auto_redirect && !form && !error) {
-			const providers = Object.keys($config?.oauth?.providers ?? {});
-			if (
-				providers.length === 1 &&
-				$config?.features?.auth !== false &&
-				$config?.features?.enable_login_form === false &&
-				!$config?.features?.enable_ldap &&
-				!$config?.features?.auth_trusted_header &&
-				!$config?.onboarding &&
-				!localStorage.token &&
-				!document.cookie.split('; ').some((c) => c.startsWith('token='))
-			) {
-				window.location.href = `${WEBUI_BASE_URL}/oauth/${providers[0]}/login`;
-				return;
-			}
+		// With one provider and no password form, this page offers a choice that
+		// does not exist, so hand the visitor straight to the provider. Every
+		// reason not to, including a round trip that came back without a session,
+		// is decided in one tested place.
+		const decision = ssoAutoRedirectDecision($config, {
+			form,
+			error,
+			signedOut,
+			hasSession: hasExistingSession(),
+			lastAttemptAt: readSsoAttemptAt(),
+			now: Date.now()
+		});
+
+		if (decision.redirect) {
+			markSsoAttempt();
+			window.location.href = `${WEBUI_BASE_URL}/oauth/${decision.provider}/login`;
+			return;
 		}
+
+		signInInterrupted = decision.reason === 'recent-attempt';
 
 		loaded = true;
 		setLogoImage();
@@ -437,18 +458,49 @@
 								</div>
 							</form>
 
+							{#if signInInterrupted || signInError || signedOut}
+								<div
+									class="mt-4 rounded-2xl px-4 py-3 text-left text-sm {signedOut &&
+									!signInInterrupted &&
+									!signInError
+										? 'bg-gray-700/5 dark:bg-gray-100/5 text-gray-700 dark:text-gray-300'
+										: 'bg-red-500/10 text-red-800 dark:text-red-300'}"
+									role={signedOut && !signInInterrupted && !signInError ? 'status' : 'alert'}
+								>
+									<div class="font-medium">
+										{#if signInInterrupted || signInError}
+											{$i18n.t('Sign in did not complete.')}
+										{:else}
+											{$i18n.t(`You're now logged out.`)}
+										{/if}
+									</div>
+									<div class="mt-1">
+										{#if signInError}
+											{signInError}
+										{:else if signInInterrupted}
+											{$i18n.t(
+												'Your sign in provider sent you back without a session. Try again below, and tell your administrator if it keeps happening.'
+											)}
+										{:else}
+											{$i18n.t('Sign in again when you are ready.')}
+										{/if}
+									</div>
+								</div>
+							{/if}
+
 							{#if Object.keys($config?.oauth?.providers ?? {}).length > 0}
-								<div class="inline-flex items-center justify-center w-full">
-									<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
-									{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+								{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+									<div class="inline-flex items-center justify-center w-full">
+										<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
 										<span
 											class="px-3 text-sm font-medium text-gray-900 dark:text-white bg-transparent"
 											>{$i18n.t('or')}</span
 										>
-									{/if}
-
-									<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
-								</div>
+										<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
+									</div>
+								{:else}
+									<div class="mt-5"></div>
+								{/if}
 								<div class="flex flex-col space-y-2">
 									{#if $config?.oauth?.providers?.google}
 										<button

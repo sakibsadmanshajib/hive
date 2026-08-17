@@ -75,7 +75,9 @@
 								return null;
 							});
 							localStorage.removeItem('token');
-							location.href = res?.redirect_url ?? '/auth';
+							// signed_out stops the sign in page handing this user straight
+							// back to the provider they just signed out of.
+							location.href = res?.redirect_url ?? '/auth?signed_out=1';
 						}}>{$i18n.t('Sign Out')}</button
 					>
 				</div>

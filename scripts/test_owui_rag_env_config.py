@@ -229,6 +229,39 @@ def test_compose_leaves_hybrid_search_off_by_default() -> None:
     ), "docker-compose.yml must default Open WebUI hybrid retrieval to off (issue #832)"
 
 
+def test_sso_auto_redirect_is_reconciled_as_a_json_boolean() -> None:
+    """The sign in page offered a single control, "Continue with Hive", which is
+    a choice between one option. `oauth.auto_redirect` sends the visitor
+    straight to the provider instead. It is in Open WebUI's DEFAULT_CONFIG, so
+    the demo box seeded it false on its first boot and compose alone could never
+    move it, the same first-boot trap as every key above."""
+    config = FakeConfig({"oauth.auto_redirect": False})
+    applied = reconcile(config, {"OAUTH_AUTO_REDIRECT": "true"})
+    assert applied["oauth.auto_redirect"] is True, applied
+    assert config.stored["oauth.auto_redirect"] is True, config.stored
+
+
+def test_sso_auto_redirect_can_be_turned_back_off() -> None:
+    """A deployment that adds a second provider, or re-enables the password
+    form, needs the picker back. The page checks those conditions itself at
+    runtime, and this is the deployment-wide off switch in front of them."""
+    config = FakeConfig({"oauth.auto_redirect": True})
+    reconcile(config, {"OAUTH_AUTO_REDIRECT": "false"})
+    assert config.stored["oauth.auto_redirect"] is False, config.stored
+
+
+def test_compose_turns_sso_auto_redirect_on() -> None:
+    """The reconcile only helps if compose names a value. Asserted against the
+    file because the whole point of the change is that a visitor never sees the
+    intermediate page."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        'OAUTH_AUTO_REDIRECT: "true"' in compose
+    ), "docker-compose.yml must enable the single-provider sign in redirect"
+
+
 def test_speech_to_text_is_pointed_at_the_gateway() -> None:
     """The Bengali dictation failure. Open WebUI ships `audio.stt.engine` as ""
     (its "use my own bundled Whisper" value) and seeds it on first boot, so the

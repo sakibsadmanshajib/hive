@@ -26,6 +26,7 @@ test-scripts:
 	python3 scripts/test_install_owui_jwt_forward.py
 	python3 scripts/test_owui_rag_env_config.py
 	python3 scripts/test_owui_ui_surfaces.py
+	python3 scripts/test_owui_display_name.py
 	python3 scripts/test_caddy_owui_blocklist.py
 	python3 scripts/test_owui_model_picker_filter.py
 	python3 scripts/generate-enterprise-jwt-keys.py --self-check

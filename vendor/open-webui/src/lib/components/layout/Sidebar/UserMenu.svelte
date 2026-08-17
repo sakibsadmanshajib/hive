@@ -526,7 +526,10 @@
 					user.set(null);
 					localStorage.removeItem('token');
 
-					location.href = res?.redirect_url ?? '/auth';
+					// signed_out keeps the sign in page from handing the user straight
+					// back to the provider, whose own session usually outlives ours.
+					// Without it, signing out is unreachable on an SSO only deployment.
+					location.href = res?.redirect_url ?? '/auth?signed_out=1';
 					show = false;
 				}}
 			>
