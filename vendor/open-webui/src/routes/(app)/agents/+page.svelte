@@ -67,7 +67,7 @@
 		</nav>
 	{/if}
 
-	<div class="hv-panel-region overflow-y-auto">
+	<div class="hv-panel-region">
 		<AgentTasks />
 	</div>
 </div>

@@ -128,6 +128,59 @@ func TestOWUIUnwrap_HeaderCarrierStrippedWhenDisabled(t *testing.T) {
 	}
 }
 
+// The case that made the strip presence-gated rather than value-gated.
+//
+// Go's wire-level parser trims only ASCII space and tab (RFC 7230 OWS), while
+// strings.TrimSpace treats U+00A0 as whitespace too, so a header carrying a
+// non-breaking space arrives with a non-empty value that trims to "". A strip
+// gated on the trimmed value would leave that header on the request and hand
+// it to the handler, which is the one thing this header must never do.
+func TestOWUIUnwrap_HeaderCarrierPresentButBlank_StrippedAndRejected(t *testing.T) {
+	for name, value := range map[string]string{
+		"spaces":             "   ",
+		"tab":                "\t",
+		"non-breaking space": " ",
+		"bare scheme":        "Bearer ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+			next, captured := newCarrierHandler()
+
+			req := carrierRequest(http.MethodGet, "/v1/agent/tasks", "Bearer "+testShimKey, "")
+			req.Header.Set(auth.UpstreamAuthHeader, value)
+
+			rec := httptest.NewRecorder()
+			mw(next).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401 for a carrier that carries nothing", rec.Code)
+			}
+			if captured.served {
+				t.Fatal("a blank carrier must not reach the handler")
+			}
+		})
+	}
+}
+
+// The same shape on a request that is otherwise a plain pass-through: the
+// header is not honoured, and it still does not survive.
+func TestOWUIUnwrap_BlankHeaderCarrierStrippedOnPassThrough(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCarrierHandler()
+
+	req := carrierRequest(http.MethodGet, "/v1/models", "Bearer hk_live_real_key", "")
+	req.Header.Set(auth.UpstreamAuthHeader, " ")
+
+	mw(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !captured.served {
+		t.Fatal("a non-shim request must pass through")
+	}
+	if captured.carrierSeen {
+		t.Fatal("a blank carrier must be stripped even when it is ignored")
+	}
+}
+
 func TestOWUIUnwrap_HeaderCarrierOverLongToken_Rejects401(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCarrierHandler()

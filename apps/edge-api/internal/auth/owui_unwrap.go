@@ -362,6 +362,15 @@ func normalizeUpstreamAuth(value string) string {
 	if hasSpace && strings.EqualFold(scheme, "Bearer") {
 		return strings.TrimSpace(rest)
 	}
+	// A scheme word and nothing else is not a bare token. Without this, a
+	// carrier of "Bearer " arrives here as "Bearer" after the trim above, takes
+	// the bare-token arm, and is promoted to the credential "Bearer Bearer" --
+	// a nonsense token that then fails JWKS validation and reports itself as
+	// the user's session being invalid. Refusing it here names the real cause
+	// at the boundary that produced it.
+	if strings.EqualFold(value, "Bearer") {
+		return ""
+	}
 	return value
 }
 
