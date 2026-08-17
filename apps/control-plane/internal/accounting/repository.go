@@ -10,10 +10,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 )
 
+// ReservationHold is the ledger hold that must land in the same transaction as
+// the reservation row it authorizes (issue #918). Passing it into
+// CreateReservation rather than posting it separately afterwards is what makes
+// "a reservation row exists if and only if its hold exists" a database
+// guarantee instead of an ordering convention.
+type ReservationHold struct {
+	IdempotencyKey string
+	Credits        int64
+	Metadata       map[string]any
+}
+
 type Repository interface {
-	CreateReservation(ctx context.Context, reservation Reservation, reason string) (Reservation, error)
+	CreateReservation(ctx context.Context, reservation Reservation, reason string, hold ReservationHold) (Reservation, error)
 	GetReservation(ctx context.Context, accountID, reservationID uuid.UUID) (Reservation, error)
 	ExpandReservation(ctx context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string) (Reservation, error)
 	FinalizeReservation(ctx context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error)
@@ -30,7 +42,7 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 	return &pgxRepository{pool: pool}
 }
 
-func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reservation, reason string) (Reservation, error) {
+func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reservation, reason string, hold ReservationHold) (Reservation, error) {
 	metadata, err := json.Marshal(map[string]any{
 		"policy_mode":    reservation.PolicyMode,
 		"request_id":     reservation.RequestID,
@@ -69,6 +81,24 @@ func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reser
 		VALUES ($1, 'reserved', $2, $3, $4::jsonb)
 	`, created.ID, created.ReservedCredits, reason, metadata); err != nil {
 		return Reservation{}, fmt.Errorf("accounting: insert reserved event: %w", err)
+	}
+
+	// The hold goes in THIS transaction (issue #918). It used to be posted by
+	// the service afterwards, through the ledger's own transaction, so a hold
+	// that failed to post left a committed reservation row claiming credits the
+	// ledger never held; the reaper then released that row and credited the
+	// account for credits it never had taken. Ten production reservations, 25000
+	// credits, are in that state. Here a failed hold rolls the row back with it.
+	if _, err := ledger.PostEntryTx(ctx, tx, created.AccountID, ledger.PostEntryInput{
+		EntryType:      ledger.EntryTypeReservationHold,
+		CreditsDelta:   -hold.Credits,
+		IdempotencyKey: hold.IdempotencyKey,
+		RequestID:      reservation.RequestID,
+		AttemptID:      &created.RequestAttemptID,
+		ReservationID:  &created.ID,
+		Metadata:       hold.Metadata,
+	}); err != nil {
+		return Reservation{}, fmt.Errorf("accounting: post reservation hold: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

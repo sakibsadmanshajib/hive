@@ -102,8 +102,17 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 			return fmt.Errorf("accounting: start attempt: %w", err)
 		}
 
+		reservationID := uuid.New()
+
+		// Row and hold, one transaction (issue #918). The hold used to be a
+		// separate ledger call made right here, after the row had already
+		// committed, so a hold that failed left a reservation claiming credits
+		// the ledger never held, and the reaper later released that row against
+		// nothing, crediting an account for credits never taken from it. The
+		// repository writes both or neither now, so the invariant is the
+		// database's to keep rather than this function's.
 		reservation, err = s.repo.CreateReservation(ctx, Reservation{
-			ID:               uuid.New(),
+			ID:               reservationID,
 			AccountID:        input.AccountID,
 			RequestAttemptID: attempt.ID,
 			ReservationKey:   buildReservationKey(input.AccountID, input.RequestID, input.AttemptNumber),
@@ -115,17 +124,17 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 			PolicyMode:       input.PolicyMode,
 			Status:           ReservationStatusActive,
 			ReservedCredits:  input.EstimatedCredits,
-		}, "reserved")
+		}, "reserved", ReservationHold{
+			IdempotencyKey: s.idempotencyKey(reservationID, "reserve"),
+			Credits:        input.EstimatedCredits,
+			Metadata: map[string]any{
+				"policy_mode": input.PolicyMode,
+				"endpoint":    input.Endpoint,
+				"model_alias": input.ModelAlias,
+			},
+		})
 		if err != nil {
 			return fmt.Errorf("accounting: create reservation: %w", err)
-		}
-
-		if _, err := s.ledgerSvc.ReserveCredits(ctx, input.AccountID, input.RequestID, &attempt.ID, &reservation.ID, s.idempotencyKey(reservation.ID, "reserve"), input.EstimatedCredits, map[string]any{
-			"policy_mode": input.PolicyMode,
-			"endpoint":    input.Endpoint,
-			"model_alias": input.ModelAlias,
-		}); err != nil {
-			return fmt.Errorf("accounting: reserve credits: %w", err)
 		}
 
 		if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{

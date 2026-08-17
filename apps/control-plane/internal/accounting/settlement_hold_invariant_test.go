@@ -85,6 +85,9 @@ func TestSettlementReturnsReservedToZero(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newRepoStub()
 			ledgerSvc := newReaperLedger(grant)
+			// The hold lands with the row (issue #918), so the fake repository
+			// posts it to the fake ledger the way production does.
+			repo.ledger = ledgerSvc
 			svc := NewService(repo, ledgerSvc, concurrentUsage{})
 			ctx := context.Background()
 			accountID := uuid.New()
@@ -162,6 +165,7 @@ func TestSettlementReturnsReservedToZero(t *testing.T) {
 func TestSettlementRefusesToSettleAgainstAPartialRelease(t *testing.T) {
 	repo := newRepoStub()
 	ledgerSvc := newReaperLedger(300000)
+	repo.ledger = ledgerSvc
 	svc := NewService(repo, ledgerSvc, concurrentUsage{})
 	ctx := context.Background()
 	accountID := uuid.New()

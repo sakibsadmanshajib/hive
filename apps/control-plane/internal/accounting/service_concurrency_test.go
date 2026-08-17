@@ -51,16 +51,26 @@ func (l *serializingLedger) RefundCredits(_ context.Context, _ uuid.UUID, _ stri
 	return ledger.LedgerEntry{ID: uuid.New(), EntryType: ledger.EntryTypeRefund, CreditsDelta: credits}, nil
 }
 
-// concurrentRepo is a goroutine-safe repoStub for the race test.
+// concurrentRepo is a goroutine-safe repoStub for the race test. It applies the
+// hold to the shared balance itself, because the production repository writes
+// the hold in the same transaction as the row (issue #918); modelling it
+// anywhere else would leave the race test measuring a sequence the system no
+// longer performs.
 type concurrentRepo struct {
-	mu    sync.Mutex
-	count int
+	mu     sync.Mutex
+	count  int
+	ledger *serializingLedger
 }
 
-func (r *concurrentRepo) CreateReservation(_ context.Context, reservation Reservation, _ string) (Reservation, error) {
+func (r *concurrentRepo) CreateReservation(ctx context.Context, reservation Reservation, _ string, hold ReservationHold) (Reservation, error) {
 	r.mu.Lock()
 	r.count++
 	r.mu.Unlock()
+	if r.ledger != nil {
+		if _, err := r.ledger.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, nil, &reservation.ID, hold.IdempotencyKey, hold.Credits, hold.Metadata); err != nil {
+			return Reservation{}, err
+		}
+	}
 	return reservation, nil
 }
 func (r *concurrentRepo) GetReservation(context.Context, uuid.UUID, uuid.UUID) (Reservation, error) {
@@ -103,8 +113,8 @@ func (concurrentUsage) ListAttempts(context.Context, uuid.UUID, string, int) ([]
 // using the supplied account locker, and returns how many succeeded.
 func runConcurrentReservations(t *testing.T, locker AccountLocker, balance, each int64, n int) (int, *serializingLedger) {
 	t.Helper()
-	repo := &concurrentRepo{}
 	ledgerSvc := &serializingLedger{available: balance}
+	repo := &concurrentRepo{ledger: ledgerSvc}
 	svc := NewService(repo, ledgerSvc, concurrentUsage{}).WithAccountLocker(locker)
 
 	accountID := uuid.New()
@@ -197,8 +207,10 @@ func TestCreateReservationAcquiresAccountLock(t *testing.T) {
 	if len(locker.accounts) != 1 || locker.accounts[0] != accountID {
 		t.Fatalf("expected lock keyed on account %s, got %#v", accountID, locker.accounts)
 	}
-	if len(ledgerSvc.reserveCalls) != 1 {
-		t.Fatalf("expected the reserve hold to be posted inside the lock, got %d reserve calls", len(ledgerSvc.reserveCalls))
+	// The hold is written with the row now (issue #918), so the thing that must
+	// happen inside the lock is the repository call that carries it.
+	if len(repo.holds) != 1 || repo.holds[0].Credits != 50 {
+		t.Fatalf("expected the 50-credit hold to be written inside the lock, got %#v", repo.holds)
 	}
 }
 

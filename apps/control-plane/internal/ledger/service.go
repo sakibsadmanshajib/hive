@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,7 +18,25 @@ func NewService(repo Repository) *Service {
 }
 
 func (s *Service) GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceSummary, error) {
-	return s.repo.GetBalance(ctx, accountID)
+	balance, err := s.repo.GetBalance(ctx, accountID)
+	if err != nil {
+		return balance, err
+	}
+	// A reservation cannot legitimately have more released than held, so this
+	// is a corruption signal and the only place the system notices it (issue
+	// #918). Logged at error, on every read, deliberately: it is not
+	// self-healing, it needs an operator, and it stayed hidden for a month
+	// while ABS made it look like an ordinary hold. It does not fail the read,
+	// because refusing to answer would take an affected account off the air
+	// without repairing anything, and the balance being returned is now the
+	// honest one.
+	if balance.OverReleasedReservations > 0 {
+		slog.ErrorContext(ctx, "ledger: account has reservations released beyond what was ever held, manual reconciliation required",
+			"account_id", accountID.String(),
+			"over_released_reservations", balance.OverReleasedReservations,
+			"over_released_credits", balance.OverReleasedCredits)
+	}
+	return balance, nil
 }
 
 func (s *Service) ListEntries(ctx context.Context, accountID uuid.UUID, limit int) ([]LedgerEntry, error) {

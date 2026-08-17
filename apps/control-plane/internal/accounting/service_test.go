@@ -219,6 +219,17 @@ type repoStub struct {
 	reservations       map[uuid.UUID]Reservation
 	reconciliationJobs []reconciliationJob
 	releaseEventCounts map[uuid.UUID]int
+	holds              []ReservationHold
+
+	// Optional fake ledger. The production repository posts the hold in its own
+	// transaction (issue #918), so a test whose subject is the account balance
+	// has to see the hold land here, or its fixture silently starts from an
+	// unreserved balance.
+	ledger holdPoster
+}
+
+type holdPoster interface {
+	ReserveCredits(ctx context.Context, accountID uuid.UUID, requestID string, attemptID, reservationID *uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (ledger.LedgerEntry, error)
 }
 
 func newRepoStub() *repoStub {
@@ -228,13 +239,26 @@ func newRepoStub() *repoStub {
 	}
 }
 
-func (r *repoStub) CreateReservation(_ context.Context, reservation Reservation, reason string) (Reservation, error) {
+// CreateReservation records the hold alongside the row, because the production
+// repository now writes both in one transaction (issue #918). Tests assert on
+// r.holds where they used to assert on the ledger's reserve calls; without
+// recording it here, the assertion that a hold is taken at all would quietly
+// stop checking anything.
+func (r *repoStub) CreateReservation(ctx context.Context, reservation Reservation, reason string, hold ReservationHold) (Reservation, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	now := time.Now().UTC()
 	reservation.CreatedAt = now
 	reservation.UpdatedAt = now
 	r.reservations[reservation.ID] = reservation
+	r.holds = append(r.holds, hold)
+	poster := r.ledger
+	r.mu.Unlock()
+
+	if poster != nil {
+		if _, err := poster.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, hold.IdempotencyKey, hold.Credits, hold.Metadata); err != nil {
+			return Reservation{}, err
+		}
+	}
 	return reservation, nil
 }
 
@@ -386,8 +410,13 @@ func TestCreateReservationAllowsTemporaryOverageWithinBuffer(t *testing.T) {
 	if reservation.Status != ReservationStatusActive {
 		t.Fatalf("expected active reservation, got %s", reservation.Status)
 	}
-	if len(ledgerSvc.reserveCalls) != 1 {
-		t.Fatalf("expected one reserve ledger call, got %d", len(ledgerSvc.reserveCalls))
+	// The hold rides with the row now (issue #918), so it is recorded by the
+	// repository rather than posted through the ledger service afterwards.
+	if len(repo.holds) != 1 || repo.holds[0].Credits != 10100 {
+		t.Fatalf("expected one 10100-credit hold written with the reservation, got %#v", repo.holds)
+	}
+	if len(ledgerSvc.reserveCalls) != 0 {
+		t.Fatalf("hold must not be posted in a second transaction, got %#v", ledgerSvc.reserveCalls)
 	}
 	if len(usageSvc.startCalls) != 1 {
 		t.Fatalf("expected one usage start call, got %d", len(usageSvc.startCalls))

@@ -30,16 +30,41 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 }
 
 func (r *pgxRepository) PostEntry(ctx context.Context, accountID uuid.UUID, input PostEntryInput) (LedgerEntry, error) {
-	metadataBytes, err := json.Marshal(normalizeMetadata(input.Metadata))
-	if err != nil {
-		return LedgerEntry{}, fmt.Errorf("ledger: marshal metadata: %w", err)
-	}
-
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return LedgerEntry{}, fmt.Errorf("ledger: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	entry, err := PostEntryTx(ctx, tx, accountID, input)
+	if err != nil {
+		return LedgerEntry{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return LedgerEntry{}, fmt.Errorf("ledger: commit tx: %w", err)
+	}
+
+	return entry, nil
+}
+
+// PostEntryTx writes one ledger entry inside a transaction the CALLER owns and
+// commits. It exists so a write that must be atomic with a ledger entry can be
+// exactly that, rather than two transactions and a hope.
+//
+// The caller today is the accounting repository's reservation create (issue
+// #918): a reservation row and its hold used to be written separately, so a
+// hold that failed to post left a row claiming credits the ledger never held,
+// and the reaper later released that row against nothing. One transaction makes
+// the invariant structural: the row exists if and only if its hold does.
+//
+// Same body as PostEntry, deliberately not duplicated: two implementations of a
+// ledger write is how the two books drift apart.
+func PostEntryTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, input PostEntryInput) (LedgerEntry, error) {
+	metadataBytes, err := json.Marshal(normalizeMetadata(input.Metadata))
+	if err != nil {
+		return LedgerEntry{}, fmt.Errorf("ledger: marshal metadata: %w", err)
+	}
 
 	result, err := tx.Exec(ctx, `
 		INSERT INTO public.credit_idempotency_keys
@@ -52,14 +77,10 @@ func (r *pgxRepository) PostEntry(ctx context.Context, accountID uuid.UUID, inpu
 	}
 
 	if result.RowsAffected() == 0 {
-		existing, err := r.lookupExistingEntry(ctx, tx, accountID, input.EntryType, input.IdempotencyKey)
-		if err != nil {
-			return LedgerEntry{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return LedgerEntry{}, fmt.Errorf("ledger: commit duplicate tx: %w", err)
-		}
-		return existing, nil
+		// Already posted under this key: hand back the stored entry. The caller
+		// commits, so a duplicate is still a clean no-op for whatever else its
+		// transaction is doing.
+		return lookupExistingEntry(ctx, tx, accountID, input.EntryType, input.IdempotencyKey)
 	}
 
 	row := tx.QueryRow(ctx, `
@@ -83,30 +104,59 @@ func (r *pgxRepository) PostEntry(ctx context.Context, accountID uuid.UUID, inpu
 		return LedgerEntry{}, fmt.Errorf("ledger: update idempotency key: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return LedgerEntry{}, fmt.Errorf("ledger: commit tx: %w", err)
-	}
-
 	return entry, nil
 }
 
+// GetBalance sums the account's ledger into posted, reserved and available.
+//
+// Reserved is computed PER RESERVATION and clamped at zero, then added up. It
+// used to be ABS of one account-wide sum, and that ABS is how issue #918 stayed
+// invisible: a reservation released without ever having been held pushes the
+// sum positive, and ABS renders that positive number as though credits were on
+// hold. Worse, the phantom nets against genuine in-flight holds first, so the
+// customer-facing available balance was wrong in BOTH directions on the two
+// production accounts in that state, understating one by 2000 and overstating
+// the other by 1000.
+//
+// A positive net for a single reservation is not a balance to render, it is a
+// corruption signal: more credits came back than ever went out. It is reported
+// separately in OverReleasedCredits, and Service.GetBalance logs it, rather
+// than being folded into a number a customer would read as a hold.
+//
+// Cost: the same rows the old query already scanned on the (account_id,
+// created_at) index, with a hash aggregate on reservation_id on top. No extra
+// index, and reservation_id needs none, since the grouping never leaves the
+// account's own slice.
 func (r *pgxRepository) GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceSummary, error) {
 	row := r.pool.QueryRow(ctx, `
+		WITH entries AS (
+			SELECT entry_type, credits_delta, reservation_id
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1
+		),
+		holds AS (
+			SELECT reservation_id, SUM(credits_delta) AS net
+			FROM entries
+			WHERE entry_type IN ('reservation_hold', 'reservation_release')
+			GROUP BY reservation_id
+		)
 		SELECT
-			COALESCE(SUM(CASE
-				WHEN entry_type IN ('grant', 'adjustment', 'usage_charge', 'refund') THEN credits_delta
-				ELSE 0
-			END), 0) AS posted_credits,
-			ABS(COALESCE(SUM(CASE
-				WHEN entry_type IN ('reservation_hold', 'reservation_release') THEN credits_delta
-				ELSE 0
-			END), 0)) AS reserved_credits
-		FROM public.credit_ledger_entries
-		WHERE account_id = $1
+			COALESCE((
+				SELECT SUM(credits_delta) FROM entries
+				WHERE entry_type IN ('grant', 'adjustment', 'usage_charge', 'refund')
+			), 0) AS posted_credits,
+			COALESCE((SELECT SUM(GREATEST(-net, 0)) FROM holds), 0) AS reserved_credits,
+			COALESCE((SELECT SUM(GREATEST(net, 0)) FROM holds), 0) AS over_released_credits,
+			COALESCE((SELECT COUNT(*) FROM holds WHERE net > 0), 0) AS over_released_reservations
 	`, accountID)
 
 	var balance BalanceSummary
-	if err := row.Scan(&balance.PostedCredits, &balance.ReservedCredits); err != nil {
+	if err := row.Scan(
+		&balance.PostedCredits,
+		&balance.ReservedCredits,
+		&balance.OverReleasedCredits,
+		&balance.OverReleasedReservations,
+	); err != nil {
 		return BalanceSummary{}, fmt.Errorf("ledger: get balance: %w", err)
 	}
 	balance.AvailableCredits = balance.PostedCredits - balance.ReservedCredits
@@ -276,7 +326,7 @@ func scanInvoiceRow(scanner entryScanner) (InvoiceRow, error) {
 	return inv, nil
 }
 
-func (r *pgxRepository) lookupExistingEntry(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, entryType EntryType, idempotencyKey string) (LedgerEntry, error) {
+func lookupExistingEntry(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, entryType EntryType, idempotencyKey string) (LedgerEntry, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
 		FROM public.credit_ledger_entries
