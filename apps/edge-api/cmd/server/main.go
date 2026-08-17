@@ -1022,6 +1022,17 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 		ShimKey: strings.TrimSpace(os.Getenv("OWUI_SHIM_KEY")),
 	})
 	selector = owuiUnwrap(selector)
+	// A real Anthropic SDK client (Anthropic(api_key=...), the default and
+	// documented construction) sends the credential on x-api-key, never
+	// Authorization. auth.Selector only inspects Authorization, and
+	// anthropic.APIKeyNormalizer used to be wired solely at the mux leaf
+	// (mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(...))), which
+	// sits inside this middleware, not outside it: the selector above always
+	// ran first and never saw the header. Every x-api-key-only request fell
+	// through to the JWT path and 401'd regardless of key validity. Applying
+	// the same normalizer here, before the selector, fixes that for every
+	// /v1/* route (a no-op wherever Authorization is already set).
+	selector = anthropic.APIKeyNormalizer(selector)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)

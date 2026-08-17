@@ -11,6 +11,28 @@ import (
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
+// headerlessRecorder is a minimal http.ResponseWriter that only captures a
+// status and body, used to invoke apierr.WriteProviderBlindUpstreamError (the
+// single source of truth for the provider-blind sanitizer) without a real
+// client connection, so its OpenAI-shaped output can be reshaped into the
+// Anthropic envelope below rather than duplicating the sanitizer's regexes.
+type headerlessRecorder struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (r *headerlessRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *headerlessRecorder) WriteHeader(status int) { r.status = status }
+
+func (r *headerlessRecorder) Write(p []byte) (int, error) { return r.body.Write(p) }
+
 // maxTranslatedBodyBytes bounds how much of a buffered response the translator
 // holds in memory, matching the ceiling the OpenAI sync path already applies
 // when reading an upstream body.
@@ -181,18 +203,21 @@ func (t *translatingWriter) finish() error {
 	}
 }
 
+// forwardError reshapes a non-2xx delegated response into the Anthropic error
+// envelope. The delegated chain already ran the response through the
+// provider-blind sanitizer at the upstream boundary (WriteProviderBlindUpstreamError
+// for the empty/overflow case, or its own refusal body otherwise); this only
+// changes the wire shape, never the sanitized content, so a real Anthropic
+// SDK client can parse the result instead of silently getting an envelope its
+// exception classes were never built to read.
 func (t *translatingWriter) forwardError() {
 	if t.overflow || t.body.Len() == 0 {
-		apierr.WriteProviderBlindUpstreamError(t.dst, t.clientAlias, t.status, "")
+		rec := &headerlessRecorder{}
+		apierr.WriteProviderBlindUpstreamError(rec, t.clientAlias, t.status, "")
+		reshapeToAnthropicError(t.dst, t.status, rec.body.Bytes())
 		return
 	}
-	contentType := t.header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/json"
-	}
-	t.dst.Header().Set("Content-Type", contentType)
-	t.dst.WriteHeader(t.status)
-	_, _ = t.dst.Write(t.body.Bytes())
+	reshapeToAnthropicError(t.dst, t.status, t.body.Bytes())
 }
 
 func (t *translatingWriter) writeTranslated() error {
@@ -225,8 +250,7 @@ func (t *translatingWriter) writeTranslated() error {
 }
 
 func (t *translatingWriter) writeUpstreamError(message string) {
-	code := "upstream_error"
-	apierr.WriteError(t.dst, http.StatusBadGateway, "api_error", message, &code)
+	writeAnthropicError(t.dst, http.StatusBadGateway, message, "upstream_error")
 }
 
 // parseOAIResult reads a completed OpenAI-shaped response, accepting either a

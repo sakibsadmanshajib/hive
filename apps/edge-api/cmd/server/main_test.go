@@ -1101,6 +1101,91 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// TestAuthSelectorMiddlewareAcceptsXAPIKeyHeader is the regression guard for the
+// bug that blocked every real Anthropic SDK client from ever authenticating: a
+// caller built with only base_url + api_key overridden sends "x-api-key",
+// never "Authorization". anthropic.APIKeyNormalizer, which rewrites that
+// header to "Authorization: Bearer", was wired only at the mux leaf
+// (mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(anthropicHandler))),
+// but auth.Selector runs OUTSIDE the mux, in authSelectorMiddleware, and
+// inspects Authorization before the leaf-level normalizer ever gets a chance
+// to run. A request bearing only x-api-key therefore had no Authorization
+// header at the point Selector decided which path to take, fell through to
+// the JWT path unconditionally, and 401'd with "missing bearer" regardless of
+// how valid the key was. This test drives authSelectorMiddleware directly, the
+// same construction main() performs, with a jwtMW stand-in that always 401s so
+// a pass can only happen by reaching the API-key path.
+func TestAuthSelectorMiddlewareAcceptsXAPIKeyHeader(t *testing.T) {
+	t.Setenv("OWUI_SHIM_KEY", "")
+
+	var jwtInvoked, apiKeyInvoked bool
+	var sawAuthorization string
+	jwtMW := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			jwtInvoked = true
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKeyInvoked = true
+		sawAuthorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := authSelectorMiddleware(jwtMW, next)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+	req.Header.Set("x-api-key", "hk_live_test_key")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if jwtInvoked {
+		t.Errorf("an x-api-key request must never reach the JWT path")
+	}
+	if !apiKeyInvoked {
+		t.Fatalf("an x-api-key request must reach the API-key path")
+	}
+	if sawAuthorization != "Bearer hk_live_test_key" {
+		t.Errorf("x-api-key must be normalised to Authorization: Bearer before the API-key path runs, got %q", sawAuthorization)
+	}
+	if rr.Code != http.StatusOK {
+		t.Errorf("status: want 200 got %d", rr.Code)
+	}
+}
+
+// TestAuthSelectorMiddlewareStillRoutesJWTBearerToJWTPath pins the JWT half of
+// the same selector, so the x-api-key normalisation added above cannot regress
+// a session bearer token (never hk_-prefixed, never x-api-key) onto the
+// API-key path.
+func TestAuthSelectorMiddlewareStillRoutesJWTBearerToJWTPath(t *testing.T) {
+	t.Setenv("OWUI_SHIM_KEY", "")
+
+	var jwtInvoked, apiKeyInvoked bool
+	jwtMW := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			jwtInvoked = true
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKeyInvoked = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := authSelectorMiddleware(jwtMW, next)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer some.jwt.token")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if !jwtInvoked || apiKeyInvoked {
+		t.Errorf("a non-hk_ Authorization bearer must route to the JWT path only, jwtInvoked=%v apiKeyInvoked=%v", jwtInvoked, apiKeyInvoked)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
