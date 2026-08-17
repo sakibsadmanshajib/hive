@@ -1,0 +1,258 @@
+/*
+ * Hive shell styling for the forked chat frontend.
+ *
+ * Loaded once, after upstream's own stylesheets, from src/routes/+layout.svelte.
+ * Everything here is Hive authored; upstream files carry only the insertion
+ * points that reference it.
+ *
+ * Three jobs, in order:
+ *   1. bring in the shared design tokens,
+ *   2. load the brand's type and point upstream's font utilities at it,
+ *   3. style the Hive navigation rows.
+ *
+ * The palette itself is not here. Upstream funnels its entire surface and ink
+ * scale through twelve `--color-gray-*` values plus white and black in
+ * src/tailwind.css, so the brand's warm ramp is applied there, at the one place
+ * every `bg-gray-50` and `dark:text-white` in the application reads from.
+ */
+
+@import '../../../../../packages/hive-tokens/tokens.css';
+
+/*
+ * Hanken Grotesk is the brand's only family and carries display and interface
+ * both, separated by weight. Geist Mono is a product only addition for
+ * identifiers and machine output. Both are SIL Open Font License 1.1 and both
+ * are served from this deployment rather than from a font CDN, which is not a
+ * preference: an enterprise buying this product for data sovereignty should
+ * not have its users' page loads reaching a third party on every visit.
+ *
+ * Subset the way Google Fonts subsets, so a Latin only page never downloads
+ * the extended range. `font-display: swap` matches every other face upstream
+ * declares.
+ */
+@font-face {
+	font-family: 'Hanken Grotesk';
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url('/assets/fonts/HankenGrotesk-Variable-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Hanken Grotesk';
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url('/assets/fonts/HankenGrotesk-Variable-latin-ext.woff2') format('woff2');
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+		U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+		U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Geist Mono';
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url('/assets/fonts/GeistMono-Variable-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+ * Point upstream's three font hooks at the one Hive family. `.font-secondary`
+ * was a display serif; the brand has no serif at all, so hierarchy is carried
+ * by weight rather than by a contrast of families.
+ */
+html,
+pre {
+	font-family: var(--hv-font-sans);
+}
+
+.font-primary {
+	font-family: var(--hv-font-sans);
+}
+
+.font-secondary {
+	font-family: var(--hv-font-display);
+}
+
+code,
+kbd,
+samp,
+.tiptap pre {
+	font-family: var(--hv-font-mono);
+}
+
+/* ------------------------------------------------------------------ *
+ * Navigation rows
+ *
+ * 32px row, 8px radius, 20px icon, label at 13px weight 500. Idle is
+ * secondary ink; hover adds a raised ground; the current row carries the
+ * raised ground plus a 2px coral bar on its inside edge. The bar is load
+ * bearing rather than decorative: it is the second, non colour signal of
+ * the current destination, alongside `aria-current`.
+ * ------------------------------------------------------------------ */
+
+.hv-nav {
+	display: flex;
+	flex-direction: column;
+	gap: var(--hv-space-1);
+	padding-inline: var(--hv-space-2);
+	padding-block: var(--hv-space-1);
+}
+
+.hv-nav-rail {
+	padding-inline: 0;
+	align-items: center;
+}
+
+.hv-nav-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: var(--hv-space-3);
+	min-height: var(--hv-nav-row);
+	padding-inline: var(--hv-space-2);
+	border-radius: var(--hv-radius-sm);
+	color: var(--hv-ink-secondary);
+	text-decoration: none;
+	outline: none;
+	/* Rule 1 of the motion catalogue: a control operated many times a day
+	 * changes instantly, except for the hover ground. */
+	transition: background-color var(--hv-duration-fast) linear;
+}
+
+.hv-nav-row:hover {
+	background-color: var(--hv-surface-raised);
+	color: var(--hv-ink);
+}
+
+.hv-nav-row-active {
+	background-color: var(--hv-surface-raised);
+	color: var(--hv-ink);
+}
+
+.hv-nav-row-active::before {
+	content: '';
+	position: absolute;
+	inset-inline-start: 0;
+	inset-block: 6px;
+	width: 2px;
+	border-radius: var(--hv-radius-pill);
+	background-color: var(--hv-accent);
+}
+
+/*
+ * Two rings, so the focus indicator stays visible on the accent itself. A
+ * single coral ring on a coral ground would be invisible, which fails WCAG
+ * 2.2 success criterion 2.4.11.
+ */
+.hv-nav-row:focus-visible {
+	box-shadow:
+		0 0 0 2px var(--hv-canvas),
+		0 0 0 4px var(--hv-focus-ring);
+}
+
+.hv-nav-icon {
+	width: 20px;
+	height: 20px;
+	flex: none;
+}
+
+.hv-nav-label {
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+	font-weight: var(--hv-weight-label);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.hv-nav-row-rail {
+	width: 36px;
+	height: 36px;
+	justify-content: center;
+	padding-inline: 0;
+	gap: 0;
+}
+
+.hv-nav-row-rail.hv-nav-row-active::before {
+	inset-block: 8px;
+}
+
+/*
+ * The design system's 44px touch floor and its 32px nav row cannot both hold
+ * in a stacked list without rows overlapping their neighbours, so the row
+ * grows on a coarse pointer instead of extending an invisible hit area over
+ * the row above it.
+ */
+@media (pointer: coarse) {
+	.hv-nav-row {
+		min-height: 44px;
+	}
+
+	.hv-nav-row-rail {
+		width: 44px;
+		height: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hv-nav-row {
+		transition: none;
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * The agent destination
+ * ------------------------------------------------------------------ */
+
+.hv-panel {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	height: 100%;
+	background-color: var(--hv-canvas);
+}
+
+.hv-panel-region {
+	position: relative;
+	flex: 1 1 auto;
+	display: flex;
+	min-height: 0;
+}
+
+.hv-panel-frame {
+	flex: 1 1 auto;
+	width: 100%;
+	border: 0;
+	display: block;
+	background-color: transparent;
+	/* Colour scheme is inherited by the embedded document through its own
+	 * copy of these tokens; nothing here paints over it. */
+	color-scheme: inherit;
+}
+
+/*
+ * The line sits behind the frame rather than the frame being hidden until it
+ * loads. An unpainted frame is transparent, so the line shows through and the
+ * panel's own ground covers it the moment it paints. Deliberate: hiding the
+ * frame until a `load` event would leave a permanent "Opening the agent
+ * workspace" on any request where that event never arrives, which is the
+ * failure that looks like a hang.
+ */
+.hv-panel-loading {
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin: 0;
+	color: var(--hv-ink-muted);
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+}

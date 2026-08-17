@@ -217,7 +217,15 @@ jobs:
     permissions:
       actions: read
       contents: read
-    timeout-minutes: 15
+    # 15 until the chat frontend was forked. The Open WebUI image now compiles
+    # vendor/open-webui from source before it starts, and the first deploy that
+    # touches that tree has no layer cache on the box to hit: measured on a
+    # development machine, `npm ci` about 90 seconds and `npm run build` about
+    # 420 seconds, on top of everything this job already does. A deploy that
+    # trips its own timeout mid recreate is the worst outcome available, so the
+    # ceiling moves rather than the build. Subsequent deploys that leave the
+    # vendored tree alone hit the cache and cost nothing extra.
+    timeout-minutes: 30
     steps:
       - name: Pull latest main
         # Root cause of the 2026-08-13 outage (every deploy since failing
@@ -283,9 +291,11 @@ jobs:
           # checkout, other writers (git gc --auto, a human on the box) can
           # legitimately hold this lock, and the workflow-level concurrency
           # group only serializes this workflow's own runs against each
-          # other. 15 minutes matches this job's own timeout-minutes below,
+          # other. 30 minutes matches this job's own timeout-minutes above,
           # so a lock younger than that is still someone's live operation.
-          find .git -maxdepth 1 -name index.lock -mmin +15 -delete
+          # Both moved together when the chat frontend build landed; they are
+          # one invariant and must not drift apart.
+          find .git -maxdepth 1 -name index.lock -mmin +30 -delete
           git checkout main
 
           # The token below authenticates ANY public github.com repo, not
