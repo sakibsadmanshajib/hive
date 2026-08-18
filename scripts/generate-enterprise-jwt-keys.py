@@ -20,8 +20,8 @@ GOTRUE_JWT_SECRET fallback in conf.FindPublicKeyByKid.
 
 This script prints two values:
 
-  ENTERPRISE_JWT_KEYS   the private signing set, for GoTrue only. Contains the
-                        EC private scalar. Secret.
+  ENTERPRISE_JWT_KEYS   the signing set, for GoTrue only. Carries the EC
+                        private scalar and the legacy symmetric key. Secret.
   ENTERPRISE_JWT_JWKS   the verification set, for PostgREST. Carries the EC
                         public key plus the legacy symmetric key so PostgREST
                         can verify both the new ES256 user tokens and the
@@ -157,10 +157,21 @@ def generate_ec_jwk(kid):
 def legacy_symmetric_jwk(secret):
     """The existing GOTRUE_JWT_SECRET expressed as an oct JWK.
 
-    GoTrue keeps validating the HS256 anon and service_role keys through its
-    plain secret, but PostgREST is handed a JWKS instead of a raw secret and
-    would otherwise lose the ability to verify them. No kid is set: those
-    tokens carry no kid header, and a keyed entry would not match them.
+    This goes in BOTH printed values, for two different reasons.
+
+    In GOTRUE_JWT_KEYS, because once GoTrue is given a key set it validates
+    incoming tokens against that set alone. Observed directly on v2.189.0: with
+    only the EC key configured, GoTrue answers every admin call made with the
+    HS256 service_role key "signing method HS256 is invalid" (HTTP 403), which
+    breaks the seeding scripts, the invite flow and every other admin path.
+    Carrying the legacy key here, verify-only, restores them.
+
+    In the verification set, because PostgREST is handed a JWKS instead of a
+    raw secret and would otherwise lose the ability to check those same tokens.
+
+    No kid is set: the legacy tokens carry no kid header, and a keyed entry
+    could not match them. key_ops is verify only, never sign, so it cannot
+    become a second signing key, which GoTrue rejects outright.
     """
     return {
         "kty": "oct",
@@ -173,10 +184,9 @@ def legacy_symmetric_jwk(secret):
 def build(secret):
     kid = str(uuid.uuid4())
     private_jwk, public_jwk = generate_ec_jwk(kid)
-    keys = json.dumps([private_jwk], separators=(",", ":"))
-    jwks = json.dumps(
-        {"keys": [public_jwk, legacy_symmetric_jwk(secret)]}, separators=(",", ":")
-    )
+    legacy = legacy_symmetric_jwk(secret)
+    keys = json.dumps([private_jwk, legacy], separators=(",", ":"))
+    jwks = json.dumps({"keys": [public_jwk, legacy]}, separators=(",", ":"))
     return keys, jwks
 
 
@@ -187,8 +197,15 @@ def self_check():
     keys = json.loads(keys_raw)
     jwks = json.loads(jwks_raw)
 
-    assert isinstance(keys, list) and len(keys) == 1, "JWT_KEYS must be a one-key array"
+    assert isinstance(keys, list) and len(keys) == 2, "JWT_KEYS carries the EC key and the legacy key"
     private_jwk = keys[0]
+
+    # The legacy key has to travel with the signing key or GoTrue stops
+    # accepting the HS256 anon and service_role keys entirely.
+    legacy_in_keys = [k for k in keys if k["kty"] == "oct"]
+    assert len(legacy_in_keys) == 1, "the legacy symmetric key must be in JWT_KEYS"
+    assert legacy_in_keys[0]["key_ops"] == ["verify"], "the legacy key must never sign"
+    assert base64.urlsafe_b64decode(legacy_in_keys[0]["k"] + "==").decode("utf-8") == secret
 
     # GoTrue rejects a key set with no signing key or with more than one.
     signing = [k for k in keys if "sign" in k.get("key_ops", [])]

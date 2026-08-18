@@ -103,8 +103,15 @@ services:
       # is rejected and the gateway will not come up. Generate the value
       # with scripts/generate-enterprise-jwt-keys.py; GoTrue accepts exactly
       # one signing key, so rotation is a replace and forces a re-login.
-      # The legacy HS256 anon and service_role keys keep working: they carry
-      # no kid and fall back to GOTRUE_JWT_SECRET above.
+      #
+      # That generated value also carries the legacy symmetric key, verify
+      # only, and it has to. Once GoTrue is given a key set it validates
+      # incoming tokens against that set alone: observed on this pin, an admin
+      # call made with the HS256 service_role key is refused with "signing
+      # method HS256 is invalid" (HTTP 403) when the EC key is configured by
+      # itself, which would break the seeding scripts and the invite flow.
+      # GOTRUE_JWT_SECRET below stays set regardless, since Storage validates
+      # against the raw secret.
       GOTRUE_JWT_KEYS: ${ENTERPRISE_JWT_KEYS:?set ENTERPRISE_JWT_KEYS in .env (scripts/generate-enterprise-jwt-keys.py)}
       GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
