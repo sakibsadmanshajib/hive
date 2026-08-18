@@ -231,7 +231,7 @@ func (t *SSETranslator) openTextBlock() {
 	t.hasOpenBlock = true
 	t.writeEvent("content_block_start", StreamEvent{
 		Type:  "content_block_start",
-		Index: 0,
+		Index: indexPtr(0),
 		ContentBlock: &StreamContentBlock{
 			Type: "text",
 			Text: "",
@@ -242,7 +242,7 @@ func (t *SSETranslator) openTextBlock() {
 func (t *SSETranslator) emitTextDelta(text string) {
 	t.writeEvent("content_block_delta", StreamEvent{
 		Type:  "content_block_delta",
-		Index: t.openBlockIndex,
+		Index: indexPtr(t.openBlockIndex),
 		Delta: &StreamDelta{
 			Type: "text_delta",
 			Text: text,
@@ -286,7 +286,7 @@ func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 		t.hasOpenBlock = true
 		t.writeEvent("content_block_start", StreamEvent{
 			Type:  "content_block_start",
-			Index: nextIndex,
+			Index: indexPtr(nextIndex),
 			ContentBlock: &StreamContentBlock{
 				Type: "tool_use",
 				ID:   tc.ID,
@@ -298,7 +298,7 @@ func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 	if tc.Function.Arguments != "" {
 		t.writeEvent("content_block_delta", StreamEvent{
 			Type:  "content_block_delta",
-			Index: bs.blockIndex,
+			Index: indexPtr(bs.blockIndex),
 			Delta: &StreamDelta{
 				Type:        "input_json_delta",
 				PartialJSON: tc.Function.Arguments,
@@ -310,9 +310,15 @@ func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 func (t *SSETranslator) emitContentBlockStop(index int) {
 	t.writeEvent("content_block_stop", StreamEvent{
 		Type:  "content_block_stop",
-		Index: index,
+		Index: indexPtr(index),
 	})
 }
+
+// indexPtr exists only so StreamEvent.Index (a pointer, so message_start and
+// message_delta events which never set it serialize with no "index" key at
+// all) can still be assigned the address of a literal int at each
+// content_block_* call site.
+func indexPtr(i int) *int { return &i }
 
 func (t *SSETranslator) emitMessageDelta() {
 	if t.stopReason == "" {

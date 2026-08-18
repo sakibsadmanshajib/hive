@@ -189,7 +189,14 @@ type CountTokensResponse struct {
 // StreamEvent is a typed SSE event emitted in an Anthropic streaming response.
 type StreamEvent struct {
 	Type  string `json:"type"`
-	Index int    `json:"index,omitempty"`
+	// Index is a pointer because 0 is a valid, common index (the first and
+	// often only content block) that must still serialize, while message_start
+	// and message_delta (which reuse this same struct and never set Index) must
+	// carry no "index" key at all -- the real Anthropic protocol has no such
+	// field on those two event types. A plain int with `omitempty` dropped the
+	// key for index 0 as readily as for "unset", which is exactly the bug this
+	// type used to have (see TestSSETranslator_FirstBlockIndexIsPresentAndZero).
+	Index *int   `json:"index,omitempty"`
 
 	// message_start
 	Message *StreamMessage `json:"message,omitempty"`
