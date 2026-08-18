@@ -1,4 +1,11 @@
-# Chat first paint, before and after
+# Chat composer readiness, before and after
+
+The directory keeps its `chat-first-paint` name because commit messages and
+pull request comments already point at it, but the measured milestone is not
+first paint. First contentful paint was never the problem here: it lands
+between 172 and 348 ms warm. Every "before" and "after" figure below is the
+moment the composer (`#chat-input`) becomes visible, which is when the product
+can actually be used.
 
 Measured against the live deployment at `https://chat-hive.scubed.co/`, signed
 in through the audited one-time-token mint (`live-auth.mjs`), with a
