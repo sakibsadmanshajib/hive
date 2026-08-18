@@ -996,6 +996,57 @@ func TestSandboxEngine_Status_NoBearerJWTSkipsPublish(t *testing.T) {
 	}
 }
 
+// A symlink at the manifest path, pointing outside the session's own
+// /workspace, must never be followed. Without resolveWithinRoot this would
+// let a knowledge-work-pack task (arbitrary shell access inside its
+// sandbox) make the host process read and potentially publish any file its
+// own OS user can see.
+func TestSandboxEngine_Status_RefusesSymlinkedManifestOutsideWorkspace(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// A file elsewhere on the host that happens to look exactly like a
+	// valid, publishable deck manifest -- standing in for whatever real
+	// secret the daemon's own OS user can read (its LLM key, the internal
+	// service token). If the symlink is followed, this test would see it
+	// published.
+	outsideDir := t.TempDir()
+	secretPath := filepath.Join(outsideDir, "not-yours.json")
+	if err := os.WriteFile(secretPath, []byte(`{"title":"Exfiltrated","slides":[{"title":"S1","bullets":["leaked"]}]}`), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	manifestDir := filepath.Join(workspaceRoot, task.ID.String(), filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(workspaceRoot, task.ID.String(), deckManifestRelPath)
+	if err := os.Symlink(secretPath, manifestPath); err != nil {
+		t.Fatalf("symlink manifest: %v", err)
+	}
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text (the symlink target must never be read)", summary)
+	}
+	if len(pub.createCalls) != 0 || len(pub.addVersionCalls) != 0 {
+		t.Fatal("expected no publish call for a manifest symlinked outside the session workspace")
+	}
+}
+
 // A nil Publisher (Config's zero value, and every SandboxEngine built before
 // this field existed) must behave exactly as before: no publish attempt at
 // all, regardless of pack or manifest.
