@@ -164,21 +164,65 @@ const raise = async (response: Response, fallback: string): Promise<never> => {
 	throw new AgentTaskError(response.status, message ?? `${fallback}: ${response.status}`);
 };
 
+export interface Refusal {
+	kind: 'signin' | 'not-enabled';
+	message: string;
+}
+
 /**
- * Whether a failure is a refusal that another attempt cannot change.
+ * A failure that another attempt cannot change, in words a person can act on.
  *
  * 401 means this session cannot reach the agent service at all; 403 means the
- * tenant does not hold the Cowork gate. Everything else, a network blip, a 5xx,
- * an unreadable payload, is worth retrying. The two must not share copy,
- * because the retry message promises something a refusal can never deliver,
- * and a poll that keeps asking a settled question is a request every few
- * seconds forever.
+ * feature is not enabled for this organization. Everything else, a network
+ * blip, a 5xx, an unreadable payload, is worth retrying and is not a refusal.
+ * The two must not share copy: the retry message promises something a refusal
+ * can never deliver, and a poll that keeps asking a settled question is a
+ * request every few seconds forever.
+ *
+ * The copy is ours, not the server's. edge-api's own sentence for a closed
+ * feature gate is accurate and useless to the person reading it: it says access
+ * was denied without saying who can change that or what is safe to do
+ * meanwhile. This is the same register the surface being replaced used for a
+ * deployment with no agent runtime, and for the same reason.
  *
  * A function rather than an inline check in the component, so the decision has
- * a test. The component itself has no test harness in this tree.
+ * a test; the component itself has no test harness in this tree.
  */
-export const isRefusal = (error: unknown): error is AgentTaskError =>
-	error instanceof AgentTaskError && (error.status === 401 || error.status === 403);
+export const describeRefusal = (error: unknown): Refusal | null => {
+	if (!(error instanceof AgentTaskError)) {
+		return null;
+	}
+	if (error.status === 401) {
+		return {
+			kind: 'signin',
+			message:
+				'Your sign-in could not be confirmed for the agent service, so tasks cannot be listed or started. Sign in again, and if it keeps happening contact your administrator.'
+		};
+	}
+	if (error.status === 403) {
+		return {
+			kind: 'not-enabled',
+			message:
+				'The agent service is not enabled for this organization, so there are no tasks to show and none can be started. An administrator can turn it on. Nothing is wrong with your account, and the rest of Hive is unaffected.'
+		};
+	}
+	return null;
+};
+
+/**
+ * Whether the composer should accept a submission.
+ *
+ * `blocked` is in here, and that is the point: a refused surface that still
+ * takes typing and still lights its send button invites a person to write a
+ * task brief and press a key that cannot work. Refusing at the control, with
+ * the reason on screen, is the honest shape.
+ */
+export const canStartTask = (state: {
+	instructions: string;
+	submitting: boolean;
+	blocked: Refusal | null;
+}): boolean =>
+	state.instructions.trim().length > 0 && !state.submitting && state.blocked === null;
 
 export const listTasks = async (token: string): Promise<AgentTask[]> => {
 	const response = await fetch(`${AGENT_API_BASE_URL}/tasks`, {

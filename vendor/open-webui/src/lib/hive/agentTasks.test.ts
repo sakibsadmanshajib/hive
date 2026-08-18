@@ -6,8 +6,9 @@ import {
 	createTask,
 	decodeTask,
 	describeTask,
+	canStartTask,
+	describeRefusal,
 	ENGINE_UNAVAILABLE_MESSAGE,
-	isRefusal,
 	listTasks
 } from './agentTasks';
 
@@ -150,14 +151,21 @@ describe('the four calls', () => {
 
 	it('separates a refusal from a failure worth retrying', () => {
 		// The list stops polling on a refusal and keeps polling on anything else,
-		// so this predicate decides whether the screen promises a retry it cannot
-		// deliver.
-		expect(isRefusal(new AgentTaskError(401, 'no'))).toBe(true);
-		expect(isRefusal(new AgentTaskError(403, 'gated'))).toBe(true);
-		expect(isRefusal(new AgentTaskError(500, 'boom'))).toBe(false);
-		expect(isRefusal(new AgentTaskError(429, 'slow down'))).toBe(false);
-		expect(isRefusal(new Error('network'))).toBe(false);
-		expect(isRefusal(null)).toBe(false);
+		// so this decides whether the screen promises a retry it cannot deliver.
+		expect(describeRefusal(new AgentTaskError(401, 'access denied'))?.kind).toBe('signin');
+		expect(describeRefusal(new AgentTaskError(403, 'access denied'))?.kind).toBe('not-enabled');
+		expect(describeRefusal(new AgentTaskError(500, 'boom'))).toBeNull();
+		expect(describeRefusal(new AgentTaskError(429, 'slow down'))).toBeNull();
+		expect(describeRefusal(new Error('network'))).toBeNull();
+		expect(describeRefusal(null)).toBeNull();
+	});
+
+	it('replaces the raw server sentence with copy a person can act on', () => {
+		// edge-api's own words for a closed gate are accurate and useless: they
+		// say access was denied without saying who can change it.
+		const gated = describeRefusal(new AgentTaskError(403, 'access denied'))!;
+		expect(gated.message).not.toContain('access denied');
+		expect(gated.message).toContain('administrator');
 	});
 
 	it('reads a null tasks array as an empty list, because Go marshals nil that way', async () => {
@@ -172,5 +180,24 @@ describe('the four calls', () => {
 			fetchMock.mockResolvedValue(jsonResponse(body));
 			await expect(listTasks('t')).rejects.toThrow('Failed to parse tasks response');
 		}
+	});
+});
+
+describe('canStartTask', () => {
+	const base = { instructions: 'do a thing', submitting: false, blocked: null };
+
+	it('refuses to submit into a surface that is refused', () => {
+		// The rough edge this closes: a tenant without the feature could type a
+		// brief and press send into a surface that could only answer no.
+		expect(canStartTask(base)).toBe(true);
+		expect(
+			canStartTask({ ...base, blocked: { kind: 'not-enabled', message: 'x' } })
+		).toBe(false);
+		expect(canStartTask({ ...base, blocked: { kind: 'signin', message: 'x' } })).toBe(false);
+	});
+
+	it('still refuses an empty brief and a submission already in flight', () => {
+		expect(canStartTask({ ...base, instructions: '   ' })).toBe(false);
+		expect(canStartTask({ ...base, submitting: true })).toBe(false);
 	});
 });

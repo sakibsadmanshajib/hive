@@ -4,16 +4,18 @@
 	import ComposerShell from './ComposerShell.svelte';
 	import ComposerSendButton from './ComposerSendButton.svelte';
 	import {
+		canStartTask,
 		cancelTask,
 		createTask,
+		describeRefusal,
 		describeTask,
 		elapsed,
 		IN_FLIGHT_STATUSES,
 		isEngineUnavailable,
-		isRefusal,
 		listTasks,
 		TERMINAL_STATUSES,
 		type AgentTask,
+		type Refusal,
 		type TaskPack
 	} from './agentTasks';
 
@@ -80,7 +82,7 @@
 	 * retry, and a promise the loop cannot keep is the exact failure this
 	 * surface exists to stop making.
 	 */
-	let blocked: string | null = null;
+	let blocked: Refusal | null = null;
 	let nowMs = Date.now();
 
 	let promptEl: HTMLTextAreaElement | null = null;
@@ -104,7 +106,7 @@
 	// A stale list outranks a one-off create or cancel error.
 	// A refusal outranks both, because it is the only one of the three that is
 	// still true after another attempt.
-	$: alertMessage = blocked ?? loadFailure ?? error;
+	$: alertMessage = blocked?.message ?? loadFailure ?? error;
 	/*
 	 * Current state, not history. `tasks` is newest first, so the newest task is
 	 * the only one that says anything about how this deployment is configured
@@ -114,7 +116,7 @@
 	 */
 	$: engineUnavailable = tasks.length > 0 && isEngineUnavailable(tasks[0]);
 	$: nearLimit = instructions.length > MAX_INSTRUCTIONS * 0.8;
-	$: canSubmit = instructions.trim().length > 0 && !submitting;
+	$: canSubmit = canStartTask({ instructions, submitting, blocked });
 
 	const sessionToken = (): string => localStorage.token ?? '';
 
@@ -165,8 +167,9 @@
 			blocked = null;
 			failures = 0;
 		} catch (e) {
-			if (isRefusal(e)) {
-				blocked = e.message;
+			const refusal = describeRefusal(e);
+			if (refusal) {
+				blocked = refusal;
 				failures = 0;
 			} else {
 				failures = failures + 1;
@@ -177,7 +180,9 @@
 	};
 
 	const submit = async () => {
-		if (submitting) {
+		// A refused surface must not take a submission it cannot deliver. The
+		// control is disabled too; this is the guard for the keyboard path.
+		if (submitting || blocked !== null) {
 			return;
 		}
 		const trimmed = instructions.trim();
@@ -323,7 +328,10 @@
 					aria-required="true"
 					aria-invalid={invalid}
 					aria-describedby={invalid ? 'hive-agent-error hive-agent-pack-hint' : 'hive-agent-pack-hint'}
-					placeholder={$i18n.t('Describe the task in your own words')}
+					disabled={blocked !== null}
+					placeholder={blocked
+						? $i18n.t('Tasks cannot be started right now')
+						: $i18n.t('Describe the task in your own words')}
 					class="hv-agent-input scrollbar-hidden"
 				></textarea>
 			</div>
@@ -344,6 +352,7 @@
 								name="hive-agent-pack"
 								value={option.value}
 								checked={pack === option.value}
+								disabled={blocked !== null}
 								on:change={() => (pack = option.value)}
 								class="sr-only"
 							/>
@@ -481,6 +490,18 @@
 
 	.hv-agent-input::placeholder {
 		color: var(--hv-ink-muted);
+	}
+
+	/* Refused, and it should look it. A control that reads as live and then
+	   does nothing is worse than one that says it is unavailable. */
+	.hv-agent-input:disabled {
+		color: var(--hv-ink-disabled);
+		cursor: not-allowed;
+	}
+
+	.hv-agent-pack input:disabled + .hv-agent-pack-label {
+		color: var(--hv-ink-disabled);
+		cursor: not-allowed;
 	}
 
 	.hv-agent-row {
