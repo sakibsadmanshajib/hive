@@ -923,34 +923,94 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       NEXT_PUBLIC_APP_URL: http://localhost:3000
-      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+      # HIVE_API_KEY is deliberately NOT the repository secret any more. This
+      # job seeds its own key, on its own database, in the step below, and a
+      # job-level env entry would take precedence over the value that step
+      # writes to $GITHUB_ENV and silently point the SDK suites back at the
+      # shared account.
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Reconstruct SUPABASE_DB_URL
+      - name: Start a throwaway Postgres and apply the real schema
         shell: bash
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # The script URL-encodes the password, which is stored in its raw
-          # decoded form, and emits both DSNs: a capped session-mode
-          # SUPABASE_DB_URL for control-plane, which needs session state, and a
-          # transaction-mode SUPABASE_DB_POOL_URL for edge-api and open-webui,
-          # which do not. Session-mode clients are capped at the project's
-          # pool_size of 15 and shared with the live demo stack, so a CI job that
-          # booted a stack on session mode alone could take chat-hive offline.
-          python3 scripts/derive-pooler-dsn.py --self-test
-          python3 scripts/derive-pooler-dsn.py \
-            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
-            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
-            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+          # supabase/postgres, and this exact tag, because it is what
+          # migration-applier-tests.yml already proves the chain against.
+          # pgvector, which go-tests uses, would also work for the plain SQL
+          # but has no pg_cron: 20260729_02 then takes its documented
+          # absent-extension branch, raises a NOTICE, creates no retention job
+          # and still reports success, which is a migration that silently did
+          # half its work.
+          #
+          # docker run rather than a `services:` container so the image is
+          # pulled only inside this job (which the `if:` above already gates
+          # hard) and so the invocation matches migration-applier-tests.yml.
+          docker run -d --name hive-ci-db -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            supabase/postgres:17.6.1.136
+          for _ in $(seq 1 90); do
+            if docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          if ! docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1; then
+            echo "::error::the throwaway Postgres never became ready"
+            docker logs hive-ci-db | tail -40
+            exit 1
+          fi
+
+          # What the Supabase platform provides on a hosted project and this
+          # image leaves to its own superuser. Over the container's local
+          # socket as supabase_admin, because `postgres` is not a superuser on
+          # this image and cannot install pg_cron or write into auth.
+          docker exec -i hive-ci-db psql -U supabase_admin -d postgres \
+            -v ON_ERROR_STOP=1 < .github/ci/throwaway-db-superuser-prep.sql
+
+          export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+                 PGPASSWORD=postgres PGDATABASE=postgres
+          scripts/ci-throwaway-db.sh
+
+          # The address a compose container reaches this database on.
+          # localhost inside those containers is the container itself, and the
+          # docker0 gateway is routable from every bridge network the compose
+          # project creates.
+          gw=$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')
+          dsn="postgres://postgres:postgres@${gw}:5432/postgres?sslmode=disable"
+          echo "SUPABASE_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # edge-api prefers SUPABASE_DB_POOL_URL when set. There is no pooler
+          # here and none is wanted: the pooler existed to keep this job off
+          # the shared project's 15 session-mode client slots, and the job no
+          # longer touches that project at all.
+          echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
+
+      - name: Seed this run's API key on the throwaway database
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          # Generated per run and masked. There is no shared CI key to leak
+          # and no shared account behind it, which is also why
+          # .github/workflows/pr-cleanup.yml is gone: it existed to purge the
+          # rows this job used to write into the shared project.
+          key=$(scripts/ci-seed-api-key.sh | sed -n 's/^HIVE_API_KEY=//p')
+          if [ -z "$key" ]; then
+            echo "::error::the seeder printed no HIVE_API_KEY line"
+            exit 1
+          fi
+          echo "::add-mask::$key"
+          echo "HIVE_API_KEY=$key" >> "$GITHUB_ENV"
 
       - name: Pre-verify secrets reached runner env
         shell: bash
@@ -1105,6 +1165,10 @@ jobs:
         if: always()
         working-directory: deploy/docker
         run: docker compose down -v --remove-orphans || true
+
+      - name: Tear down the throwaway database
+        if: always()
+        run: docker rm -f hive-ci-db || true
 
       - name: File or update tracking issue on failure
         # Only for main-branch-relevant triggers (post-merge push, daily
