@@ -124,6 +124,13 @@ umask 077
   printf '%s=%q\n' HIVE_AGENT_ENGINE_SESSION_API_KEY "${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}"
   printf '%s=%q\n' CONTROL_PLANE_URL "${CONTROL_PLANE_URL:-http://127.0.0.1:8081}"
   printf '%s=%q\n' CONTROL_PLANE_INTERNAL_TOKEN "$CONTROL_PLANE_INTERNAL_TOKEN"
+  # Same reasoning as CONTROL_PLANE_URL above: this daemon runs as a bare
+  # host process, not inside the compose network, so edge-api's compose DNS
+  # name ("edge-api:8080", the Go binary's own default) does not resolve
+  # here. Optional in the sense that an empty value just disables
+  # knowledge-work-pack artifact publishing (issue #312/#300 wiring) rather
+  # than failing the daemon.
+  printf '%s=%q\n' EDGE_API_URL "${EDGE_API_URL:-http://127.0.0.1:8080}"
   printf '%s=%q\n' HIVE_QUOTA_TENANT_CONCURRENCY "${HIVE_QUOTA_TENANT_CONCURRENCY:-4}"
   printf '%s=%q\n' HIVE_QUOTA_USER_CONCURRENCY "${HIVE_QUOTA_USER_CONCURRENCY:-2}"
   printf '%s=%q\n' HIVE_SANDBOX_MEMORY_LIMIT "${HIVE_SANDBOX_MEMORY_LIMIT:-4G}"

@@ -35,6 +35,7 @@ func (e *Engine) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		UserID:       t.UserID,
 		Pack:         string(t.Pack),
 		Instructions: t.Instructions,
+		BearerJWT:    t.BearerJWT,
 	})
 }
 

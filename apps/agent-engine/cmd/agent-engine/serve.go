@@ -40,6 +40,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
 )
 
@@ -54,6 +55,11 @@ type launchRequest struct {
 	UserID       uuid.UUID `json:"user_id"`
 	Pack         string    `json:"pack"`
 	Instructions string    `json:"instructions"`
+	// BearerJWT is the task's own user's bearer JWT, forwarded from
+	// edge-api's task-create handler through control-plane untouched (see
+	// apps/agent-engine/internal/engine.Task.BearerJWT's doc comment). Never
+	// logged.
+	BearerJWT string `json:"bearer_jwt"`
 }
 
 type launchResponse struct {
@@ -136,7 +142,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return append(append([]string(nil), hosts...), llmHost), nil
 	}
 
-	engine := engineapi.New(engineapi.Config{
+	engineCfg := engineapi.Config{
 		SIFPath:       sifPath,
 		PacksDir:      packsDir,
 		WorkspaceRoot: workspaceRoot,
@@ -154,7 +160,23 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
 		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
 		PidsLimit:              envInt("HIVE_SANDBOX_PIDS_LIMIT", 512),
-	})
+	}
+	// EDGE_API_URL is optional: an operator who sets it to the empty string
+	// leaves engineCfg.Publisher at its true zero value (a nil interface, not
+	// an interface wrapping a nil *artifactsclient.Client — those are not
+	// the same thing in Go, and the latter would panic the first time
+	// engine.SandboxEngine.Status tried to call through it), so
+	// knowledge-work-pack deck output just never publishes and Status keeps
+	// returning the agent's own final-response text exactly as it always
+	// has. "http://edge-api:8080" only resolves for this daemon's own host
+	// when it runs inside the compose network; the real host launcher
+	// (scripts/install-agent-engine-host.sh) always sets this explicitly to
+	// the box's published edge-api port instead, mirroring how that script
+	// already overrides CONTROL_PLANE_URL's own compose-shaped default.
+	if edgeAPIURL := envOr("EDGE_API_URL", "http://edge-api:8080"); edgeAPIURL != "" {
+		engineCfg.Publisher = artifactsclient.New(edgeAPIURL)
+	}
+	engine := engineapi.New(engineCfg)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /launch", func(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +193,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			UserID:       req.UserID,
 			Pack:         req.Pack,
 			Instructions: req.Instructions,
+			BearerJWT:    req.BearerJWT,
 		})
 		if err != nil {
 			log.Printf("agent-engine: launch task %s: %v", req.ID, err)

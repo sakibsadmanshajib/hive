@@ -18,13 +18,18 @@ type fakeClient struct {
 	createErr error
 	getErr    error
 	cancelErr error
+
+	// lastBearerJWT records what handleCreate passed through, so a test can
+	// assert on it without a real control-plane.
+	lastBearerJWT string
 }
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{tasks: make(map[uuid.UUID]Task)}
 }
 
-func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions string) (Task, error) {
+func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions, bearerJWT string) (Task, error) {
+	f.lastBearerJWT = bearerJWT
 	if f.createErr != nil {
 		return Task{}, f.createErr
 	}
@@ -80,6 +85,45 @@ func TestHandleCreate_HappyPath(t *testing.T) {
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreate_ForwardsBearerJWT(t *testing.T) {
+	client := newFakeClient()
+	h := NewHandler(client)
+	body, _ := json.Marshal(createTaskRequest{Pack: "knowledge-work-pack"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	req.Header.Set("Authorization", "Bearer eyJ.fake.jwt")
+	w := httptest.NewRecorder()
+	h.routeTasks(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if client.lastBearerJWT != "eyJ.fake.jwt" {
+		t.Errorf("expected the Authorization bearer value forwarded to Create, got %q", client.lastBearerJWT)
+	}
+}
+
+// An API-key-authenticated request (Hive's own "hk_"-prefixed scheme) is not
+// a Supabase JWT and edge-api's own JWT-gated /v1/artifacts route would
+// never accept it, so it must never be forwarded as if it were one.
+func TestHandleCreate_DoesNotForwardAPIKeyAsBearerJWT(t *testing.T) {
+	client := newFakeClient()
+	h := NewHandler(client)
+	body, _ := json.Marshal(createTaskRequest{Pack: "coding-pack"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	req.Header.Set("Authorization", "Bearer hk_not_a_jwt")
+	w := httptest.NewRecorder()
+	h.routeTasks(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if client.lastBearerJWT != "" {
+		t.Errorf("expected no bearer JWT forwarded for an API-key request, got %q", client.lastBearerJWT)
 	}
 }
 

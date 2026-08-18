@@ -17,14 +17,19 @@ import (
 
 // Slide is one slide: a title plus bullet points.
 type Slide struct {
-	Title   string
-	Bullets []string
+	Title   string   `json:"title"`
+	Bullets []string `json:"bullets"`
 }
 
-// Deck is a full slide deck.
+// Deck is a full slide deck. JSON tags let this type double as the wire
+// shape for the in-sandbox agent's deck manifest (apps/agent-engine/
+// internal/engine's deckManifest embeds it) — the agent has no Go toolchain
+// available inside the sandbox, so it cannot call Render itself; it writes a
+// deck definition as JSON instead, and the host-side engine unmarshals
+// straight into this type before rendering.
 type Deck struct {
-	Title  string
-	Slides []Slide
+	Title  string  `json:"title"`
+	Slides []Slide `json:"slides"`
 }
 
 // Render validates d and returns a self-contained HTML document: one
