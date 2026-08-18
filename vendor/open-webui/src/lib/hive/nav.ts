@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'chats' | 'agents' | 'knowledge';
+export type HiveNavIcon = 'agents' | 'knowledge';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -28,13 +28,6 @@ export interface HiveNavItem {
 }
 
 export const HIVE_NAV: readonly HiveNavItem[] = [
-	{
-		id: 'chats',
-		label: 'Chats',
-		href: '/',
-		icon: 'chats',
-		activePaths: ['/', '/c']
-	},
 	{
 		id: 'agents',
 		label: 'Agents',
@@ -54,8 +47,8 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 /**
  * Whether a nav row is the current destination.
  *
- * Exact match on '/' rather than prefix match, otherwise the Chats row would
- * be active on every route in the application.
+ * Exact match on '/' rather than prefix match: none of the current rows link
+ * to the chat root, so a prefix match on '/' would light up every route.
  */
 export const isNavItemActive = (item: HiveNavItem, pathname: string): boolean => {
 	const path = normalizePath(pathname);

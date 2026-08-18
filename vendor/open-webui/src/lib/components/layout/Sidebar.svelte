@@ -4,6 +4,7 @@
 	import Sortable from 'sortablejs';
 
 	import { goto } from '$app/navigation';
+	import { sidebarDefaultExpanded } from '$lib/hive/sidebar-default';
 	import {
 		user,
 		chats,
@@ -561,7 +562,12 @@
 			document.documentElement.style.setProperty('--sidebar-width', `${w}px`);
 		});
 
-		showSidebar.set(!$mobile ? localStorage.sidebar === 'true' : false);
+		// A first-time visitor (no stored choice yet) now defaults to expanded,
+		// so Folders and Recents are visible without an extra click -- both
+		// render correctly once expanded (confirmed live), the collapsed
+		// default was the whole complaint. An explicit prior choice, expanded
+		// or collapsed, is preserved either way. See sidebar-default.ts.
+		showSidebar.set(!$mobile ? sidebarDefaultExpanded(localStorage.sidebar) : false);
 
 		const unsubscribers = [
 			mobile.subscribe((value) => {
