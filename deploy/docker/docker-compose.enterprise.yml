@@ -119,13 +119,17 @@ services:
       GOTRUE_JWT_AUD: authenticated
       # Must match what edge-api expects in SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL.
       # Default is the in-stack service name, not localhost.
-      # Drives the whole OpenID discovery document and the iss claim on every
-      # token, including the OAuth id_token. Left empty it yields relative
-      # endpoints and an id_token with no iss, so it is not optional. It must
-      # equal edge-api's SUPABASE_JWT_ISSUER, which defaults to the same value.
-      # For a deployment browsers reach, override BOTH with the public https
-      # auth origin.
-      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://caddy-supabase/auth/v1}
+      # Same variable as API_EXTERNAL_URL above, on purpose: the issuer and the
+      # external URL are the same origin, and one auth origin is one setting.
+      # It drives the whole OpenID discovery document and the iss claim on
+      # every token, including the OAuth id_token, and edge-api's
+      # SUPABASE_JWT_ISSUER derives from it too, so the pair cannot drift.
+      #
+      # The default is the in-network gateway name, which is correct only for
+      # a stack carrying no browser traffic. Any deployment a browser reaches
+      # sets ENTERPRISE_AUTH_EXTERNAL_URL to the public https auth origin, and
+      # that one edit moves all three.
+      GOTRUE_JWT_ISSUER: ${ENTERPRISE_AUTH_EXTERNAL_URL:-http://caddy-supabase/auth/v1}
       # OAuth 2.1 authorization server. Open WebUI signs in through it, so
       # without this the chat front end has no login path at all on a
       # self-hosted stack. Needs v2.180.0 or newer, hence the pin above.
@@ -397,7 +401,7 @@ services:
       # the way hosted Supabase does, so the JWKS path has no prefix. The
       # issuer is a string comparison against the token claim, never fetched,
       # so it stays the in-network name GoTrue actually stamps.
-      SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-${ENTERPRISE_JWT_ISSUER:-http://caddy-supabase/auth/v1}}
+      SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-${ENTERPRISE_AUTH_EXTERNAL_URL:-http://caddy-supabase/auth/v1}}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-https://caddy-supabase/auth/v1/.well-known/jwks.json}
       SUPABASE_JWKS_CA_FILE: ${SUPABASE_JWKS_CA_FILE:-/etc/hive/supabase-ca/caddy/pki/authorities/local/root.crt}
     volumes:

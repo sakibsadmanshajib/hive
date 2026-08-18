@@ -19,10 +19,20 @@ OAuth server at all, and answers 404 on every route this script uses.
 
 Usage
 -----
-    GOTRUE_ADMIN_URL=http://caddy-supabase/auth/v1 \\
-    SERVICE_ROLE_KEY=... \\
-    OWUI_REDIRECT_URI=https://chat.example.com/oauth/oidc/callback \\
-        python3 scripts/register-owui-oauth-client.py
+GoTrue is not published on a host port, so this runs on the compose network
+rather than from a host shell, where "caddy-supabase" does not resolve:
+
+    docker run --rm --network <project>_default
+        -e GOTRUE_ADMIN_URL=http://caddy-supabase/auth/v1
+        -e SERVICE_ROLE_KEY="$ENTERPRISE_SERVICE_ROLE_KEY"
+        -e OWUI_REDIRECT_URI=https://chat.example.com/oauth/oidc/callback
+        -e HIVE_CHAT_URL=https://chat.example.com
+        -v "$PWD/scripts:/s:ro" python:3.12-alpine python3 /s/register-owui-oauth-client.py
+
+The network name is the compose project name plus "_default"; a stack started
+as "-p hive" gives "hive_default". Point GOTRUE_ADMIN_URL somewhere else
+instead if a deployment does publish the gateway, for instance at the public
+https auth origin.
 
 Prints the two .env lines on success. The secret is shown exactly once, at
 creation, because GoTrue stores only its hash. Idempotent: a client already
