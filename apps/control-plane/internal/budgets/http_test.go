@@ -147,6 +147,12 @@ func (s *accountsRepoStub) CreateProfile(_ context.Context, _ accounts.AccountPr
 	return nil
 }
 
+func (s *accountsRepoStub) ProvisionDefaultWorkspace(_ context.Context, acct accounts.Account, membership accounts.Membership, _ accounts.AccountProfile) (uuid.UUID, bool, error) {
+	s.accountsMap[acct.ID] = &acct
+	s.memberships = append(s.memberships, membership)
+	return acct.ID, false, nil
+}
+
 func (s *accountsRepoStub) GetAccountByID(_ context.Context, id uuid.UUID) (*accounts.Account, error) {
 	acct, ok := s.accountsMap[id]
 	if !ok {

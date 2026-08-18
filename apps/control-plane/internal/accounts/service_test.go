@@ -21,14 +21,17 @@ type stubRepo struct {
 	activeTenants map[uuid.UUID]uuid.UUID // user id -> tenant id, for ActiveTenantID
 	acceptCalled  bool
 
-	// simulateSelfRace, when set, makes the next CreateAccount call fail with
-	// ErrSlugTaken exactly once and, as a side effect, write raceAccount and
-	// raceMembership directly — modeling a concurrent request for the same
-	// viewer that committed its own provisioning first. See
+	// raceWinnerAccountID, when non-nil, makes ProvisionDefaultWorkspace
+	// behave as production does when a concurrent request for the same
+	// viewer already committed under the advisory lock: raceWinnerAccount
+	// and raceWinnerMembership become visible as part of that call (not
+	// before — the outer, unlocked membership check in EnsureViewerContext
+	// must still see nothing, exactly like the real TOCTOU window), and the
+	// call reports wonElsewhere instead of inserting its own rows. See
 	// TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers.
-	simulateSelfRace bool
-	raceAccount      *accounts.Account
-	raceMembership   *accounts.Membership
+	raceWinnerAccountID  uuid.UUID
+	raceWinnerAccount    *accounts.Account
+	raceWinnerMembership *accounts.Membership
 }
 
 func newStubRepo() *stubRepo {
@@ -57,19 +60,28 @@ func (s *stubRepo) ActiveTenantID(_ context.Context, userID uuid.UUID) (uuid.UUI
 }
 
 func (s *stubRepo) CreateAccount(_ context.Context, acct accounts.Account) error {
-	if s.simulateSelfRace {
-		s.simulateSelfRace = false
-		s.accountsMap[s.raceAccount.ID] = s.raceAccount
-		s.memberships = append(s.memberships, *s.raceMembership)
-		return accounts.ErrSlugTaken
+	s.accountsMap[acct.ID] = &acct
+	return nil
+}
+
+// ProvisionDefaultWorkspace mirrors pgxRepository's contract (see its doc
+// comment in repository.go): recover a concurrent winner if raceWinnerAccountID
+// is set, otherwise insert unless the slug collides with an existing account.
+func (s *stubRepo) ProvisionDefaultWorkspace(_ context.Context, acct accounts.Account, membership accounts.Membership, profile accounts.AccountProfile) (uuid.UUID, bool, error) {
+	if s.raceWinnerAccountID != uuid.Nil {
+		s.accountsMap[s.raceWinnerAccount.ID] = s.raceWinnerAccount
+		s.memberships = append(s.memberships, *s.raceWinnerMembership)
+		return s.raceWinnerAccountID, true, nil
 	}
 	for _, existing := range s.accountsMap {
 		if existing.Slug == acct.Slug {
-			return accounts.ErrSlugTaken
+			return uuid.Nil, false, accounts.ErrSlugTaken
 		}
 	}
 	s.accountsMap[acct.ID] = &acct
-	return nil
+	s.memberships = append(s.memberships, membership)
+	s.profiles[profile.AccountID] = &profile
+	return acct.ID, false, nil
 }
 
 func (s *stubRepo) CreateMembership(_ context.Context, m accounts.Membership) error {
@@ -283,9 +295,11 @@ func TestEnsureDefaultAccount_VerifiedOwnerHasKeyPermissions(t *testing.T) {
 // the CI flake behind "could not load your workspace": Next.js Server
 // Components call getViewer() unmemoized per component, so a brand-new
 // viewer's very first page load can fire two concurrent
-// provisionDefaultWorkspace attempts. Both derive the identical slug from the
-// same viewer, so the loser hits accounts.slug's unique constraint. Losing
-// that race must recover the winner's workspace, not surface a 500.
+// provisionDefaultWorkspace attempts. repo.ProvisionDefaultWorkspace
+// serializes them on a per-viewer advisory lock in production; here the stub
+// models the second (losing) call's lock-scoped re-check finding the first's
+// committed row, which must be recovered rather than surfaced as a 500 or a
+// second, duplicate workspace.
 func TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers(t *testing.T) {
 	repo := newStubRepo()
 	svc := accounts.NewService(repo)
@@ -298,15 +312,15 @@ func TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers(t *testin
 	}
 
 	winningAccountID := uuid.New()
-	repo.simulateSelfRace = true
-	repo.raceAccount = &accounts.Account{
+	repo.raceWinnerAccountID = winningAccountID
+	repo.raceWinnerAccount = &accounts.Account{
 		ID:          winningAccountID,
 		Slug:        "racer-user-s-workspace",
 		DisplayName: "Racer User's Workspace",
 		AccountType: "personal",
 		OwnerUserID: viewer.UserID,
 	}
-	repo.raceMembership = &accounts.Membership{
+	repo.raceWinnerMembership = &accounts.Membership{
 		ID:        uuid.New(),
 		AccountID: winningAccountID,
 		UserID:    viewer.UserID,
@@ -323,6 +337,12 @@ func TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers(t *testin
 	}
 	if len(vc.Memberships) != 1 {
 		t.Fatalf("expected 1 membership recovered from the race, got %d", len(vc.Memberships))
+	}
+	// The bug this guards against: a second personal workspace silently
+	// created for the same viewer because the losing request didn't see the
+	// winner's row yet. Exactly one account must exist for this viewer.
+	if len(repo.accountsMap) != 1 {
+		t.Fatalf("expected exactly 1 account to exist after the race, got %d", len(repo.accountsMap))
 	}
 }
 
