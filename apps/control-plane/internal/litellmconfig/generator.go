@@ -5,6 +5,7 @@
 package litellmconfig
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -160,7 +161,9 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 		existingPath = configPath
 	}
 
-	if existingRaw, readErr := os.ReadFile(existingPath); readErr == nil {
+	existingRaw, readErr := os.ReadFile(existingPath)
+	fileExisted := readErr == nil
+	if fileExisted {
 		var existingMap map[string]interface{}
 		if parseErr := yaml.Unmarshal(existingRaw, &existingMap); parseErr != nil {
 			return fmt.Errorf("litellmconfig: parse existing config: %w", parseErr)
@@ -176,6 +179,19 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 	finalData, err := yaml.Marshal(merged)
 	if err != nil {
 		return fmt.Errorf("litellmconfig: marshal merged: %w", err)
+	}
+
+	// No-op guard: every caller (including the deploy pipeline, on every
+	// deploy regardless of whether anything routing-related changed) hits
+	// this unconditionally, and a LiteLLM restart is a real, if brief, chat
+	// interruption. yaml.v3 marshals map[string]interface{} keys in a fixed
+	// order, and this function is the only writer of configPath, so once one
+	// sync has run, its own output is exactly what the next no-op sync's
+	// merge would reproduce byte for byte. Skipping here means every future
+	// caller gets this for free, rather than each one needing its own diff.
+	if fileExisted && bytes.Equal(existingRaw, finalData) {
+		slog.Info("litellmconfig: write and restart: config unchanged, skipping restart")
+		return nil
 	}
 
 	// Ensure the target directory exists.

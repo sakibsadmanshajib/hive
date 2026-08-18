@@ -282,6 +282,31 @@ func TestWriteAndRestartCallsRestarterOnSuccess(t *testing.T) {
 	assert.True(t, strings.Contains(string(data), "model_list"), "written file must contain model_list")
 }
 
+func TestWriteAndRestartSkipsRestartWhenConfigUnchanged(t *testing.T) {
+	// A DB-managed route's model can't change without this same Sync/
+	// WriteAndRestart call, and this call fires on every deploy regardless
+	// of whether anything model-related changed, so a second call with
+	// identical inputs must be a true no-op: no second restart, no second
+	// live-chat interruption.
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	cfg := litellmconfig.Config{
+		Models: twoModels(),
+		GeneralSettings: litellmconfig.GeneralSettings{
+			MasterKey: "test-key",
+		},
+		ExistingConfigPath: configPath,
+	}
+
+	r := &mockRestarter{}
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r))
+	assert.Equal(t, 1, r.calls, "first call writes a new file and must restart")
+
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r))
+	assert.Equal(t, 1, r.calls, "second call with identical config must skip the restart")
+}
+
 func TestWriteAndRestartPreservesExistingKeys(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
