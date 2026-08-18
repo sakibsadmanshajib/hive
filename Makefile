@@ -29,3 +29,4 @@ test-scripts:
 	python3 scripts/test_caddy_owui_blocklist.py
 	python3 scripts/test_owui_model_picker_filter.py
 	python3 scripts/generate-enterprise-jwt-keys.py --self-check
+	python3 scripts/register-owui-oauth-client.py --self-check

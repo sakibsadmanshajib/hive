@@ -41,17 +41,19 @@ type SupabaseJWTConfig struct {
 	// ClockSkew tolerates small clock drift between this process and the
 	// token issuer. Defaults to 30s when zero.
 	ClockSkew time.Duration
-	// CAFile optionally names a PEM file holding an extra certificate
-	// authority to trust when fetching JWKSURL, on top of the system
-	// roots. It exists for the self-hosted (enterprise) deployment, where
-	// the JWKS is served by an in-stack TLS terminator holding a private
-	// CA's certificate rather than a publicly trusted one. Leave empty on
-	// deployments whose JWKS host presents a public certificate.
+	// CAFile optionally names a PEM file holding the certificate authority
+	// to trust when fetching JWKSURL. When set it REPLACES the system
+	// roots for that one fetch, so the named authority is the only one
+	// that can vouch for the JWKS host. It exists for the self-hosted
+	// (enterprise) deployment, where the JWKS is served by an in-stack TLS
+	// terminator on a compose service name, holding a private CA's
+	// certificate that no public authority could issue. Leave it empty on
+	// deployments whose JWKS host presents a publicly trusted certificate.
 	//
-	// This is deliberately additive to the https-only rule enforced at
-	// the caller, not a way around it: the transport still requires TLS
-	// and still verifies the chain and hostname. What changes is which
-	// authority may vouch for the certificate.
+	// This never weakens the https-only rule enforced at the caller: the
+	// transport still requires TLS and still verifies the chain and the
+	// hostname. It narrows which authority is acceptable, it does not skip
+	// verification.
 	CAFile string
 }
 
@@ -110,23 +112,29 @@ func NewSupabaseJWTValidator(ctx context.Context, cfg SupabaseJWTConfig) (*Supab
 	return &SupabaseJWTValidator{cfg: cfg, cache: cache}, nil
 }
 
-// httpClientTrusting returns an HTTP client that trusts the system roots plus
-// whatever certificate authority the PEM file at path holds. An unreadable
-// file, or one carrying no certificate, is fatal rather than a silent
-// downgrade to the system pool: a deployment that asked for a private CA and
-// silently did not get one would fail later, at the first token, with a much
-// worse error.
+// httpClientTrusting returns an HTTP client that trusts exactly one
+// certificate authority: whatever the PEM file at path holds. The system
+// roots are deliberately NOT included.
+//
+// Naming a CA file is a statement that the JWKS is served by a specific,
+// operator-controlled authority, which for this deployment is an in-stack TLS
+// terminator on a compose service name that no public authority could ever
+// issue for. Keeping the public roots in the pool alongside it would leave
+// every public CA able to vouch for that fetch for no benefit, so the file
+// replaces the trust set rather than extending it. A deployment whose JWKS
+// host presents a publicly trusted certificate simply leaves the variable
+// unset and gets the system pool, which is the default path.
+//
+// An unreadable file, or one carrying no certificate, is fatal rather than a
+// silent fall back to the system pool: a deployment that asked for a private
+// CA and quietly did not get one would fail later, at the first token, with a
+// far worse error.
 func httpClientTrusting(path string) (*http.Client, error) {
 	pemBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("auth: read jwks ca file: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		// A platform without a system pool still gets the private CA,
-		// which is the only authority this client actually needs.
-		pool = x509.NewCertPool()
-	}
+	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemBytes) {
 		return nil, fmt.Errorf("auth: jwks ca file %q holds no certificate", path)
 	}

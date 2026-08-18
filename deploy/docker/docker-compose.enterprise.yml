@@ -119,6 +119,19 @@ services:
       # For a deployment browsers reach, override BOTH with the public https
       # auth origin.
       GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://caddy-supabase/auth/v1}
+      # OAuth 2.1 authorization server. Open WebUI signs in through it, so
+      # without this the chat front end has no login path at all on a
+      # self-hosted stack. Needs v2.180.0 or newer, hence the pin above.
+      #
+      # AUTHORIZATION_PATH is a path on GOTRUE_SITE_URL (the web-console
+      # origin), where the consent page already lives. GoTrue has no built-in
+      # consent UI and redirects there instead.
+      #
+      # Dynamic registration stays OFF and unset: it is an unauthenticated
+      # client-creation endpoint, and this deployment needs exactly one client,
+      # registered by scripts/register-owui-oauth-client.py.
+      GOTRUE_OAUTH_SERVER_ENABLED: ${ENTERPRISE_OAUTH_SERVER_ENABLED:-true}
+      GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH: ${ENTERPRISE_OAUTH_CONSENT_PATH:-/oauth/consent}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
       GOTRUE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
@@ -383,6 +396,16 @@ services:
     volumes:
       # Read-only view of caddy-supabase's state, for one file: the local
       # authority's root certificate. Nothing else in edge-api reads it.
+      #
+      # Stated plainly because it is not obvious: this volume also holds that
+      # authority's PRIVATE key, and Docker cannot mount a single file out of
+      # a named volume. The exposure is real but empty: this authority is
+      # trusted by exactly one process, edge-api itself, so holding its key
+      # buys an attacker only the ability to forge a JWKS for the service he
+      # has already compromised. Splitting the certificate into its own volume
+      # would need a copy container between Caddy and edge-api, which is more
+      # moving parts than the risk justifies. Revisit if anything else ever
+      # trusts this authority.
       - caddy-supabase-data:/etc/hive/supabase-ca:ro
 
   control-plane:

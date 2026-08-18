@@ -21,6 +21,14 @@
 # /health, verified in the pinned image), so /storage/v1/s3 lands on /s3 the
 # way the hosted S3-compatible endpoint does.
 #
+# The gateway is not an authorization boundary and must not be mistaken for
+# one: GoTrue, PostgREST and Storage each authenticate every request they
+# receive, and each of the three prefixes below is meant to reach its backend.
+# There is therefore nothing here for a path-confusion trick to unlock, since
+# no route is protected BY this file. What the file does control is which
+# backends are reachable from which listener, which is why the public listener
+# below carries a smaller route set than the internal one.
+#
 # TLS, and why the https listener exists at all: edge-api refuses a plain http
 # SUPABASE_JWKS_URL (apps/edge-api/cmd/server/main.go), because anything on
 # the path to an http JWKS can swap the key set and mint tokens this gateway
@@ -42,7 +50,8 @@
 	auto_https disable_redirects
 }
 
-(supabase_routes) {
+# Internal routes: everything, for consumers inside the compose network.
+(supabase_internal) {
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999
 	}
@@ -53,15 +62,56 @@
 		reverse_proxy supabase-storage:5000
 	}
 	handle {
-		respond "hive self-hosted supabase gateway" 200
+		respond 404
+	}
+}
+
+# Browser-facing routes: /auth/v1 only, deliberately.
+#
+# PostgREST and Storage are NOT exposed on the public hostname. Hosted
+# Supabase does expose them, because serving browsers directly is its product;
+# here nothing does. control-plane and edge-api reach the database directly and
+# mediate every file operation with the service key, so a public /rest/v1 would
+# put the whole public schema one anon key away from the internet, governed
+# only by whatever grants happen to exist, and a public /storage/v1 would do
+# the same for objects. Neither buys anything. Sign-in and the OAuth flow are
+# the only parts a browser needs, and those are all under /auth/v1.
+#
+# Add a prefix here only together with the RLS policies and grants that make it
+# safe to serve anonymously.
+(supabase_public) {
+	# GoTrue's admin API is not browser surface. It is guarded by the
+	# service_role key, and that key is only ever used server side and in
+	# network, so refusing it at the edge costs nothing and means a leaked
+	# service key cannot be used from outside the box at all. Same posture as
+	# the Caddyfile.owui mutation blocks. Source order matters here: handle
+	# blocks are mutually exclusive and evaluated in the order written, so
+	# this has to precede the catch-all proxy below.
+	@admin path /auth/v1/admin /auth/v1/admin/*
+	handle @admin {
+		respond 404
+	}
+	handle_path /auth/v1/* {
+		reverse_proxy supabase-auth:9999
+	}
+	handle {
+		respond 404
 	}
 }
 
 https://caddy-supabase {
 	tls internal
-	import supabase_routes
+	import supabase_internal
 }
 
-http://caddy-supabase, http://{$SUPABASE_DOMAIN:supabase.localhost} {
-	import supabase_routes
+http://caddy-supabase {
+	import supabase_internal
+}
+
+# No host port is published for this service. Until cutover the gateway is
+# reachable only from inside the compose network, which is what keeps a
+# stack standing "alongside" from carrying any traffic. Publishing a port, or
+# pointing a tunnel at this listener, is a cutover step and not a bring-up one.
+http://{$SUPABASE_DOMAIN:supabase.localhost} {
+	import supabase_public
 }

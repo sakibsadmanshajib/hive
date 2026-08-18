@@ -2,12 +2,19 @@ package auth_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -115,4 +122,52 @@ func TestJWTValidator_CAFileWithoutCertificate_FailsClosed(t *testing.T) {
 		CAFile:  path,
 	})
 	require.ErrorContains(t, err, "holds no certificate")
+}
+
+func TestJWTValidator_CAFileReplacesSystemRoots(t *testing.T) {
+	_, _, jwksJSON := newTestKey(t)
+	srv := privateCAJWKSServer(t, jwksJSON)
+
+	// A CA file naming a DIFFERENT authority must not reach this server. That
+	// is what proves the file is the trust set rather than an addition to it:
+	// if the system roots were still in the pool, or if the file were merely
+	// advisory, this would connect.
+	//
+	// The other authority has to be genuinely unrelated. httptest hands every
+	// TLS server the same built-in certificate, so a second httptest server
+	// would not be a different issuer at all.
+	unrelated := unrelatedCAFile(t)
+
+	_, err := auth.NewSupabaseJWTValidator(context.Background(), auth.SupabaseJWTConfig{
+		Issuer:  caTestIssuer,
+		JWKSURL: srv.URL + "/jwks",
+		CAFile:  unrelated,
+	})
+	require.Error(t, err)
+}
+
+// unrelatedCAFile writes a self-signed certificate that signed nothing in this
+// test, and returns its path.
+func unrelatedCAFile(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "unrelated-authority"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "unrelated-ca.pem")
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	}), 0o600))
+	return path
 }
