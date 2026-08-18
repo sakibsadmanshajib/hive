@@ -4,7 +4,7 @@
 	import Sortable from 'sortablejs';
 
 	import { goto } from '$app/navigation';
-	import { sidebarDefaultExpanded } from '$lib/hive/sidebar-default';
+	import { sidebarDefaultExpanded, shouldPersistSidebarChoice } from '$lib/hive/sidebar-default';
 	import {
 		user,
 		chats,
@@ -583,7 +583,15 @@
 				}
 			}),
 			showSidebar.subscribe(async (value) => {
-				localStorage.sidebar = value;
+				// Mobile's forced collapse (the mobile.subscribe callback above)
+				// fires this same subscriber, and unconditionally persisting here
+				// would overwrite an explicit desktop choice with 'false' on a
+				// visitor's first mobile visit, silently reverting the sidebar
+				// default (or the user's own prior choice) the next time they are
+				// back on desktop. See shouldPersistSidebarChoice.
+				if (shouldPersistSidebarChoice($mobile)) {
+					localStorage.sidebar = value;
+				}
 
 				// nav element is not available on the first render
 				const navElement = document.getElementsByTagName('nav')[0];

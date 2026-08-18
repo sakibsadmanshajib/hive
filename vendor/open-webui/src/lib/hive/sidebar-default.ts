@@ -20,3 +20,16 @@
  * Hive authored. Everything under src/lib/hive/ is ours (see nav.ts).
  */
 export const sidebarDefaultExpanded = (stored: string | null | undefined): boolean => stored !== 'false';
+
+/*
+ * Whether the current sidebar open/closed state should be persisted to
+ * localStorage.
+ *
+ * Sidebar.svelte forces the sidebar closed whenever the viewport becomes
+ * mobile (a transient drawer, not a setting), and that forced change flows
+ * through the same subscriber that persists a real, user-initiated toggle.
+ * Persisting unconditionally would let one mobile visit silently overwrite
+ * an explicit desktop choice (or the expanded default above) with 'false',
+ * so the desktop preference is only ever written from a desktop context.
+ */
+export const shouldPersistSidebarChoice = (mobile: boolean): boolean => !mobile;

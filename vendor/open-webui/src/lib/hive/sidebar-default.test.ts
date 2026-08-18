@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sidebarDefaultExpanded } from './sidebar-default';
+import { sidebarDefaultExpanded, shouldPersistSidebarChoice } from './sidebar-default';
 
 describe('sidebarDefaultExpanded', () => {
 	it('defaults a first-time visitor (no stored value yet) to expanded', () => {
@@ -23,5 +23,17 @@ describe('sidebarDefaultExpanded', () => {
 
 	it('keeps a user who explicitly expanded it (or accepted the new default) expanded', () => {
 		expect(sidebarDefaultExpanded('true')).toBe(true);
+	});
+});
+
+describe('shouldPersistSidebarChoice', () => {
+	it('persists a real toggle made on desktop', () => {
+		expect(shouldPersistSidebarChoice(false)).toBe(true);
+	});
+
+	it('does not persist the forced collapse mobile applies on its own', () => {
+		// A mobile visit's forced showSidebar=false must never overwrite an
+		// explicit desktop choice (or the expanded default) with 'false'.
+		expect(shouldPersistSidebarChoice(true)).toBe(false);
 	});
 });
