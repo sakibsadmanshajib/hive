@@ -149,6 +149,10 @@ func TestWriteProviderBlindUpstreamErrorHidesFallbackRoutingInternals(t *testing
 
 	WriteProviderBlindUpstreamError(w, "hive-fast", http.StatusNotFound, raw)
 
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+
 	resp := decodeOpenAIError(t, w)
 	assertNoProviderLeak(t, resp.Error.Message)
 	for _, forbidden := range []string{
@@ -162,8 +166,24 @@ func TestWriteProviderBlindUpstreamErrorHidesFallbackRoutingInternals(t *testing
 			t.Fatalf("expected routing internals stripped, found %q in %q", forbidden, resp.Error.Message)
 		}
 	}
-	if !strings.Contains(resp.Error.Message, "hive-fast") {
-		t.Fatalf("expected alias in sanitized message, got %q", resp.Error.Message)
+	if resp.Error.Message != "hive-fast is not available." {
+		t.Fatalf("message = %q, want %q", resp.Error.Message, "hive-fast is not available.")
+	}
+}
+
+func TestProviderBlindLooksLikeRoutingInternalsRequiresSpecificToken(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	// "retried:" alone, with none of LiteLLM's specific bookkeeping tokens,
+	// must NOT trigger the routing-internals collapse: a legitimate upstream
+	// message can plausibly use ordinary English like this, and over-collapsing
+	// it would throw away real detail for no safety gain (security review
+	// finding on this PR).
+	WriteProviderBlindUpstreamError(w, "hive-default", http.StatusBadGateway, "request failed, retried: 3 times before giving up")
+
+	resp := decodeOpenAIError(t, w)
+	if resp.Error.Message != "request failed, retried: 3 times before giving up" {
+		t.Fatalf("expected message to pass through unchanged, got %q", resp.Error.Message)
 	}
 }
 

@@ -216,12 +216,13 @@ func providerBlindLooksLikeTransportFailure(message string) bool {
 }
 
 func providerBlindLooksLikeRoutingInternals(message string) bool {
-	for _, token := range []string{
-		"fallback model group",
-		"model_group=",
-		"fallbacks=[",
-		"retried:",
-	} {
+	// "retried: N times" deliberately excluded: it is ordinary English a
+	// legitimate upstream message could use on its own, so alone it risked
+	// collapsing safe error text (security review finding on this PR). The
+	// three tokens below are specific to LiteLLM's own bookkeeping
+	// vocabulary and already fully cover issue #965's reported leak shape
+	// without it.
+	for _, token := range []string{"fallback model group", "model_group=", "fallbacks=["} {
 		if strings.Contains(message, token) {
 			return true
 		}

@@ -68,6 +68,15 @@
 --   second run of this file affects zero rows and errors on nothing.
 -- =============================================================================
 
+-- Wrapped in a transaction (database review finding on this PR): these two
+-- UPDATEs enforce the "one route, one price" invariant together. Without
+-- BEGIN/COMMIT, apply-migrations.sh commits each statement independently, and
+-- a request landing on ListRouteCandidates/LoadAliasPricing between them
+-- could read the new route with the old price, or vice versa. Same gap
+-- pre-existed in 20260801_01/20260801_14; closed here since this migration
+-- is specifically the one guarding that invariant.
+BEGIN;
+
 -- 1. Point route-groq-fast back at the model Groq currently serves.
 UPDATE public.provider_routes
    SET provider_model = 'groq/openai/gpt-oss-20b'
@@ -81,3 +90,5 @@ UPDATE public.model_aliases
        updated_at           = now()
  WHERE alias_id = 'hive-fast'
    AND (input_price_credits <> 10500 OR output_price_credits <> 42000);
+
+COMMIT;
