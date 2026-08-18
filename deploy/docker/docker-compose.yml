@@ -756,6 +756,13 @@ services:
       # holds the admin role (#748) or the proxy write-verb gap (#949); it
       # only stops an admin session from reading across tenants once it
       # exists.
+      #
+      # BYPASS_ADMIN_ACCESS_CONTROL has an undocumented second name: unset,
+      # it falls back to ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS (also default
+      # true, config.py:2032). Irrelevant here because this line sets
+      # BYPASS_ADMIN_ACCESS_CONTROL directly and os.getenv's own default
+      # never triggers, but named so a future edit auditing this block does
+      # not have to rediscover the alias by reading the vendored source.
       BYPASS_ADMIN_ACCESS_CONTROL: "false"
       ENABLE_ADMIN_CHAT_ACCESS: "false"
       # #772: stock Open WebUI surfaces with no Hive counterpart. These three
