@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -697,9 +698,22 @@ type fakePublisher struct {
 	createErr     error
 	addVersionErr error
 	url           string
+
+	// started and gate, when both non-nil, let a test observe exactly when
+	// Create begins and control exactly when it returns — used to force a
+	// deterministic interleaving of two concurrent Status calls instead of
+	// hoping the scheduler produces one.
+	started chan struct{}
+	gate    chan struct{}
 }
 
 func (f *fakePublisher) Create(_ context.Context, bearerJWT, name, html string) (artifactsclient.Artifact, error) {
+	if f.started != nil {
+		f.started <- struct{}{}
+	}
+	if f.gate != nil {
+		<-f.gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalls = append(f.createCalls, struct{ bearerJWT, name, html string }{bearerJWT, name, html})
@@ -1044,6 +1058,190 @@ func TestSandboxEngine_Status_RefusesSymlinkedManifestOutsideWorkspace(t *testin
 	}
 	if len(pub.createCalls) != 0 || len(pub.addVersionCalls) != 0 {
 		t.Fatal("expected no publish call for a manifest symlinked outside the session workspace")
+	}
+}
+
+// Security review finding (HIGH): a resolve-then-reopen-by-string fix (an
+// earlier version of readCapped, using filepath.EvalSymlinks then a plain
+// os.Open) checks one path string and opens a second, unsynchronized,
+// resolution of the same string. The agent-server is still alive at this
+// point (it keeps running after its conversation finishes, and this runs
+// before reap kills it), so hostile code in the sandbox can swap the file
+// for a symlink in the window between the two. This does not rely on
+// winning a precise race: hammering a real rename/symlink swap against real
+// reads for enough iterations gives a two-step implementation a realistic
+// chance of returning the secret's content at least once. os.Root's
+// single-syscall resolve-and-open (readCapped's whole point now) should
+// never do so, however many iterations run.
+func TestReadCapped_SwapDuringOpenNeverReadsOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	manifestDir := filepath.Join(root, filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(root, deckManifestRelPath)
+
+	outsideDir := t.TempDir()
+	secretPath := filepath.Join(outsideDir, "secret.json")
+	const secretMarker = "SECRET-SHOULD-NEVER-BE-READ"
+	if err := os.WriteFile(secretPath, []byte(secretMarker), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+	safeContent := []byte("safe content, not the secret")
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.WriteFile(manifestPath, safeContent, 0o600)
+			_ = os.Remove(manifestPath)
+			_ = os.Symlink(secretPath, manifestPath)
+			_ = os.Remove(manifestPath)
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	for i := 0; i < 500; i++ {
+		r, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatalf("OpenRoot: %v", err)
+		}
+		data, err := readCapped(r, deckManifestRelPath, maxDeckManifestBytes)
+		_ = r.Close()
+		if err == nil && string(data) == secretMarker {
+			t.Fatal("readCapped returned content from outside its root during a live symlink swap")
+		}
+	}
+}
+
+// Security review finding (MEDIUM-HIGH): a FIFO at the manifest path, with
+// no file-type check and no O_NONBLOCK, hangs a plain os.Open(name)
+// forever — nothing here ever opens the other end for writing — which
+// leaks the goroutine, the quota slot, and the whole session, since reap()
+// never runs while this is stuck. Deterministic, no race needed: mkfifo and
+// call Status once.
+func TestSandboxEngine_Status_RejectsFIFOManifestWithoutHanging(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	manifestDir := filepath.Join(workspaceRoot, task.ID.String(), filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(workspaceRoot, task.ID.String(), deckManifestRelPath)
+	if err := syscall.Mkfifo(manifestPath, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	type result struct {
+		summary string
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		done <- result{summary, statusErr}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Status: %v", r.err)
+		}
+		if r.summary != "fallback text" {
+			t.Fatalf("resultSummary = %q, want the agent's own final-response text", r.summary)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Status did not return within 2s: a FIFO at the manifest path hung the open, exactly the finding this test guards")
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatal("expected no publish call for a FIFO manifest")
+	}
+}
+
+// Go review finding: two concurrent Status calls for the same session each
+// independently observed the terminal execution status, each fetched the
+// final response and called publishDeckArtifact, and each returned its own
+// locally computed result — two Create calls, two different real artifact
+// URLs for one task, and whichever one lost the race to cache in
+// sess.terminal was silently orphaned. This forces the exact interleaving:
+// the first call is parked inside Create (holding sess.finishMu) when the
+// second one starts, so the second is guaranteed to block on that lock
+// rather than possibly running to completion first.
+func TestSandboxEngine_Status_ConcurrentCallsPublishExactlyOnce(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{
+		url:     "/artifacts/only-once",
+		started: make(chan struct{}, 1),
+		gate:    make(chan struct{}),
+	}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Race","slides":[{"title":"S1","bullets":["x"]}]}`)
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	type result struct {
+		summary string
+		err     error
+	}
+	results := make(chan result, 2)
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		results <- result{summary, statusErr}
+	}()
+
+	// Wait until the first call is actually inside Create (so it already
+	// holds sess.finishMu) before starting the second.
+	<-pub.started
+
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		results <- result{summary, statusErr}
+	}()
+
+	// No signal exists for "a goroutine is now blocked on a mutex"; this
+	// short, one-time sleep is deliberate margin for the second goroutine to
+	// actually reach and block on finishMu.Lock() before the gate opens, not
+	// a poll loop.
+	time.Sleep(20 * time.Millisecond)
+	close(pub.gate)
+
+	first := <-results
+	second := <-results
+	for _, r := range []result{first, second} {
+		if r.err != nil {
+			t.Fatalf("Status: %v", r.err)
+		}
+		if r.summary != pub.url {
+			t.Fatalf("resultSummary = %q, want %q", r.summary, pub.url)
+		}
+	}
+	if len(pub.createCalls) != 1 {
+		t.Fatalf("expected exactly one Create call across two concurrent Status calls, got %d", len(pub.createCalls))
 	}
 }
 

@@ -43,8 +43,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -303,6 +303,18 @@ type session struct {
 	pack      string
 	bearerJWT string
 
+	// finishMu serializes finishTerminal for this one session: two Status
+	// calls can each independently observe the same terminal execution
+	// status from the agent-server (asking does not change it), and without
+	// this both would fetch the final response, both would run
+	// publishDeckArtifact's network call, and both would return their own
+	// locally computed result even though only one outcome ever gets
+	// cached — two real artifacts created for one task, one of them
+	// orphaned forever. Scoped to this one session, never
+	// SandboxEngine.mu, so holding it across that network call never blocks
+	// any other session's Status call.
+	finishMu sync.Mutex
+
 	// reaped and terminal are guarded by SandboxEngine.mu.
 	reaped   bool
 	terminal *terminalOutcome
@@ -541,10 +553,7 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 		return "", "", "", err
 	}
 
-	e.mu.Lock()
-	replay := sess.terminal
-	e.mu.Unlock()
-	if replay != nil {
+	if replay := e.replayOf(sess); replay != nil {
 		return replay.status, replay.resultSummary, replay.errMessage, nil
 	}
 
@@ -554,9 +563,52 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 	}
 
 	switch info.ExecutionStatus {
+	case controlclient.StatusIdle:
+		return StatusQueued, "", "", nil
+	case controlclient.StatusFinished, controlclient.StatusErrored, controlclient.StatusStuck,
+		controlclient.StatusPaused, controlclient.StatusDeleting:
+		return e.finishTerminal(ctx, sess, id, info.ExecutionStatus)
+	default: // running, waiting_for_confirmation, or a future value
+		return StatusRunning, "", "", nil
+	}
+}
+
+// replayOf returns sess's cached terminal outcome, or nil if it has not
+// reached one yet.
+func (e *SandboxEngine) replayOf(sess *session) *terminalOutcome {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return sess.terminal
+}
+
+// finishTerminal handles sess's first-observed terminal execStatus: fetches
+// the final response, publishes a knowledge-work-pack deck if there is one,
+// and reaps the session. sess.finishMu (see its doc comment) guarantees
+// this body runs to completion for at most one caller at a time per
+// session — every other concurrent Status call for the same sessionRef
+// blocks on the same lock and then takes the double-checked replay below,
+// instead of each independently fetching the final response and each
+// calling publishDeckArtifact's network call.
+func (e *SandboxEngine) finishTerminal(ctx context.Context, sess *session, id uuid.UUID, execStatus controlclient.ExecutionStatus) (Status, string, string, error) {
+	sess.finishMu.Lock()
+	defer sess.finishMu.Unlock()
+
+	// Someone else may have finished this session while this call waited
+	// for finishMu.
+	if replay := e.replayOf(sess); replay != nil {
+		return replay.status, replay.resultSummary, replay.errMessage, nil
+	}
+
+	var status Status
+	var resultSummary, errMessage string
+	switch execStatus {
 	case controlclient.StatusFinished:
 		summary, err := sess.client.FinalResponse(ctx, id)
 		if err != nil {
+			// Not reaped: the agent-server said finished but this call
+			// could not fetch the summary. sess.terminal stays nil, so the
+			// next Status call (this is a transient-error path, not a
+			// terminal one) retries the whole thing.
 			return "", "", "", fmt.Errorf("engine: get final response: %w", err)
 		}
 		status, resultSummary = StatusSucceeded, summary
@@ -572,16 +624,12 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 			resultSummary = url
 		}
 	case controlclient.StatusErrored, controlclient.StatusStuck:
-		status, errMessage = StatusFailed, fmt.Sprintf("agent-server execution_status=%s", info.ExecutionStatus)
-	case controlclient.StatusPaused, controlclient.StatusDeleting:
+		status, errMessage = StatusFailed, fmt.Sprintf("agent-server execution_status=%s", execStatus)
+	default: // StatusPaused, StatusDeleting
 		// paused only ever happens via this package's own Cancel today
 		// (ponytail: an externally-triggered pause would also read as
 		// cancelled here — no other component pauses a conversation yet).
 		status = StatusCancelled
-	case controlclient.StatusIdle:
-		return StatusQueued, "", "", nil
-	default: // running, waiting_for_confirmation, or a future value
-		return StatusRunning, "", "", nil
 	}
 
 	// Terminal. Nothing else ever frees this session: the agent-server is a
@@ -621,19 +669,26 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 		return "", false
 	}
 
-	manifestPath := filepath.Join(sess.workingDir, deckManifestRelPath)
-	realPath, err := resolveWithinRoot(sess.workingDir, manifestPath)
+	// os.Root confines every resolution below to sess.workingDir at the
+	// syscall level (openat2 RESOLVE_BENEATH on Linux): the escape check and
+	// the open happen as one atomic step, not a resolve-then-reopen-by-string
+	// sequence. That distinction is the fix, not decoration -- a resolve
+	// followed by a second Open call on the resolved path string leaves a
+	// window between the two where hostile code (still alive: the
+	// agent-server keeps running after its conversation finishes, and this
+	// call happens before reap() below stops it) can swap the file for a
+	// symlink and defeat the very check meant to catch exactly that.
+	root, err := os.OpenRoot(sess.workingDir)
+	if err != nil {
+		log.Printf("engine: open workspace root for deck manifest: %v", err)
+		return "", false
+	}
+	defer func() { _ = root.Close() }()
+
+	data, err := readCapped(root, deckManifestRelPath, maxDeckManifestBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false // the ordinary case: this task did not produce a deck
 	}
-	if err != nil {
-		// Includes a rejected symlink escape (resolveWithinRoot's own error).
-		// No detail from err ever names a real host path here, only "outside
-		// <root>", so this is safe to log as-is.
-		log.Printf("engine: deck manifest %s: %v", deckManifestRelPath, err)
-		return "", false
-	}
-	data, err := readCapped(realPath, maxDeckManifestBytes)
 	if err != nil {
 		log.Printf("engine: deck manifest %s: %v", deckManifestRelPath, err)
 		return "", false
@@ -659,57 +714,60 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 	}
 	if err != nil {
 		// Never log sess.bearerJWT or html (tenant-authored deck content).
-		log.Printf("engine: publish deck artifact: %v", err)
+		// The unauthorized case is called out by name rather than left as an
+		// unremarkable status number: a task that runs long enough to
+		// outlive its own bearer JWT's TTL would otherwise fail every
+		// publish with nothing distinguishing it from any other transient
+		// error in the log.
+		if errors.Is(err, artifactsclient.ErrUnauthorized) {
+			log.Printf("engine: publish deck artifact: bearer JWT rejected, likely expired: %v", err)
+		} else {
+			log.Printf("engine: publish deck artifact: %v", err)
+		}
 		return "", false
 	}
 	return artifact.URL, true
 }
 
-// resolveWithinRoot fully resolves path (following every symlink in it,
-// including the final component) and refuses the result unless it still
-// lands inside root.
+// readCapped opens name inside root — never escaping it, and immune to a
+// concurrent symlink swap between a check and an open, because os.Root
+// resolves and opens in one syscall (openat2 RESOLVE_BENEATH on Linux)
+// rather than a resolve-then-reopen-by-string sequence — and reads it fully,
+// but only if the opened descriptor is a regular file of at most limit
+// bytes.
 //
-// Without this, a knowledge-work-pack task — which has arbitrary shell
-// access inside its sandbox, same trust tier as the coding pack — could
-// replace deckManifestRelPath with a symlink to any absolute path this
-// process can read: this daemon runs as the same unprivileged OS user that
-// owns its own runtime state (scripts/install-agent-engine-host.sh writes
-// HIVE_AGENT_ENGINE_LLM_API_KEY and CONTROL_PLANE_INTERNAL_TOKEN to a file
-// under that same account), and a symlink target is an ordinary string with
-// no container-namespace translation applied to it. A file the task could
-// coax into looking like a deck manifest would then have this process
-// publish its contents as a world-of-the-tenant-readable artifact; even one
-// that does not parse still leaks existence/size as a timing or error-shape
-// oracle. Resolving and bounds-checking before ever opening the file closes
-// both.
-func resolveWithinRoot(root, path string) (string, error) {
-	realRoot, err := filepath.EvalSymlinks(root)
+// The type check runs on the already-open descriptor via f.Stat(), never on
+// a path via a separate os.Stat/os.Lstat call: fstat on an open fd cannot be
+// swapped out from under it, so this is the type check that actually
+// matches what ReadAll below reads. Rejecting anything but a regular file is
+// not optional hardening: a task can run `mkfifo` at deckManifestRelPath,
+// and a plain os.Open on a FIFO opened for read blocks forever until
+// something opens it for write — which nothing here ever does — hanging
+// this goroutine, its quota slot, and the whole session (reap() never runs
+// while this call is stuck). O_NONBLOCK is what makes the open on a FIFO
+// return immediately instead of blocking, so the Stat check below gets a
+// chance to reject it; it has no effect on reads from a genuine regular
+// file, which is the only thing this is ever meant to succeed on.
+//
+// A file exactly at limit+1 bytes or larger is rejected outright rather
+// than silently truncated to limit bytes and parsed as if that were the
+// whole deck — a truncated manifest would otherwise either fail JSON
+// decoding (confusing) or, worse, decode successfully into a partial deck
+// nobody asked to publish.
+func readCapped(root *os.Root, name string, limit int64) ([]byte, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", fmt.Errorf("resolve root: %w", err)
-	}
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err // ordinary os.ErrNotExist included, unwrapped for errors.Is
-	}
-	rel, err := filepath.Rel(realRoot, real)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%s resolves outside its session workspace", deckManifestRelPath)
-	}
-	return real, nil
-}
-
-// readCapped reads path fully only if it is at most limit bytes. A file
-// exactly at limit+1 bytes or larger is rejected outright rather than
-// silently truncated to limit bytes and parsed as if that were the whole
-// deck — a truncated manifest would otherwise either fail JSON decoding
-// (confusing) or, worse, decode successfully into a partial deck nobody
-// asked to publish.
-func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path) // #nosec G304 -- path is resolveWithinRoot's output, already confirmed to resolve inside the session's own workspace
-	if err != nil {
-		return nil, err
+		return nil, err // ordinary os.ErrNotExist included, unwrapped for errors.Is
 	}
 	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (mode %s)", name, fi.Mode())
+	}
 
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
@@ -733,6 +791,14 @@ func (e *SandboxEngine) reap(sess *session, outcome *terminalOutcome) error {
 	}
 	sess.reaped = true
 	sess.terminal = outcome
+	// The one call that could still need it (publishDeckArtifact, inside
+	// finishTerminal) always runs before reap: reap is either finishTerminal's
+	// own last step, or Cancel's, and Cancel never publishes. Nothing reads
+	// bearerJWT after this point, and reap() never deletes the session from
+	// e.sessions (poller retries need it), so without this a completed
+	// knowledge-work-pack task's JWT would otherwise sit in this process's
+	// memory for the rest of its life.
+	sess.bearerJWT = ""
 	e.mu.Unlock()
 
 	killErr := sess.proc.Kill()

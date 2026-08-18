@@ -161,19 +161,19 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
 		PidsLimit:              envInt("HIVE_SANDBOX_PIDS_LIMIT", 512),
 	}
-	// EDGE_API_URL is optional: an operator who sets it to the empty string
-	// leaves engineCfg.Publisher at its true zero value (a nil interface, not
-	// an interface wrapping a nil *artifactsclient.Client — those are not
-	// the same thing in Go, and the latter would panic the first time
-	// engine.SandboxEngine.Status tried to call through it), so
-	// knowledge-work-pack deck output just never publishes and Status keeps
+	// EDGE_API_URL is the kill switch for knowledge-work-pack artifact
+	// publishing, and it is off unless explicitly set: no envOr, no guessed
+	// default. This writes to external storage (edge-api's artifacts
+	// backend) on every completed knowledge-work-pack task, so "on by
+	// default with a compose-DNS guess neither this process nor an operator
+	// can turn off" (the shape an earlier version of this had, caught in
+	// review: envOr's fallback made the `!= ""` check always true) is not
+	// acceptable. Left unset, engineCfg.Publisher stays nil and Status keeps
 	// returning the agent's own final-response text exactly as it always
-	// has. "http://edge-api:8080" only resolves for this daemon's own host
-	// when it runs inside the compose network; the real host launcher
-	// (scripts/install-agent-engine-host.sh) always sets this explicitly to
-	// the box's published edge-api port instead, mirroring how that script
-	// already overrides CONTROL_PLANE_URL's own compose-shaped default.
-	if edgeAPIURL := envOr("EDGE_API_URL", "http://edge-api:8080"); edgeAPIURL != "" {
+	// has. scripts/install-agent-engine-host.sh sets it explicitly for the
+	// demo box; anywhere else, publishing is off until someone deliberately
+	// turns it on.
+	if edgeAPIURL := os.Getenv("EDGE_API_URL"); edgeAPIURL != "" {
 		engineCfg.Publisher = artifactsclient.New(edgeAPIURL)
 	}
 	engine := engineapi.New(engineCfg)
