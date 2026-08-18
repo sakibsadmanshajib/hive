@@ -31,15 +31,27 @@ export const prefetchModels = (token: string | null | undefined): void => {
 		return;
 	}
 
+	const request = getModels(token, null);
 	inFlightToken = token;
-	inFlight = getModels(token, null);
+	inFlight = request;
 
-	// A prefetch that nobody collects (the user is signed out mid-startup, or
-	// the app layout never mounts) must not surface as an unhandled rejection.
-	// Attaching this handler marks the rejection handled without settling the
-	// promise the consumer receives, so consumeModelPrefetch still rejects for
-	// its caller exactly as a direct getModels call would.
-	inFlight.catch(() => {});
+	request.catch(() => {
+		// Two jobs here. First, a prefetch that nobody collects (the user is
+		// signed out mid-startup, or the app layout never mounts) must not
+		// surface as an unhandled rejection. Second, a failure must not stick:
+		// leaving a rejected promise in the slot would make every later caller
+		// inherit one dead request, both by short-circuiting prefetchModels and
+		// by handing the same rejection to whoever collects it. Dropping it
+		// means the next caller fetches for itself, which is the same thing it
+		// would have done had no prefetch been attempted.
+		//
+		// Guarded on identity so a slow failure cannot clear a newer request
+		// that has already replaced it.
+		if (inFlight === request) {
+			inFlight = null;
+			inFlightToken = null;
+		}
+	});
 };
 
 /**

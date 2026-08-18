@@ -1,4 +1,6 @@
-## Headline: paired, interleaved, shipped bundle
+## Headline: paired, interleaved, post-guard bundle
+
+Every median below is an upper median: with an even sample count the upper of the two middle observations is taken rather than their mean. Every raw sample is listed, so any other statistic can be recomputed.
 
 Eight pairs. Each pair loads both bundles back to back in the same browser process, alternating which arm goes first, so machine load drift hits both arms equally. Bundles verified distinct by their compiled `APP_BUILD_HASH` (`perf-baseline` and `perf-after2`), each set on the build invocation that produced it.
 
@@ -47,7 +49,7 @@ API waterfall for one run (start -> end, duration):
 composer visible at 3115 ms
 ```
 
-## After, first revision of this branch
+## After, pre-guard bundle, the first revision of this branch
 composer visible, ms: 1783, 1920, 2026, 2091, 2192, 2298
 median: 2091 ms
 
@@ -72,7 +74,7 @@ API waterfall for one run (start -> end, duration):
 composer visible at 2026 ms
 ```
 
-## After, shipped bundle including the session guard
+## After, post-guard bundle, which is what this branch ships
 composer visible, ms: 3123, 3831
 median: 3831 ms
 

@@ -18,15 +18,15 @@ all other static assets go to the live deployment untouched.
 - **Before** arm: bundle built from `main` at `1dc67ee69`.
 - **After** arm: bundle built from this branch.
 
-Both bundles were rebuilt and remeasured after the session guard commit, so the numbers below describe the code this branch actually ships.
+Two datasets are reported below and they are not the same build. Read the labels rather than the headline number.
 
 Two passes were taken. The headline is the paired one, because it is the only
 shape that survives a shared machine whose load moved by a factor of three
 during the work.
 
-**Paired and interleaved, eight pairs, shipped bundle.** Each pair loads both
-bundles back to back in the same browser process, alternating which arm goes
-first.
+**Paired and interleaved, eight pairs. Post-guard bundle, which is what this
+branch ships.** Each pair loads both bundles back to back in the same browser
+process, alternating which arm goes first.
 
 | | Before | After |
 |---|---|---|
@@ -35,12 +35,21 @@ first.
 | Pairs won by the after arm | | 8 of 8 |
 | Serial API round trips before the composer | 5 | 2 |
 
-**Sequential, six loads per arm, calmer window, first revision of the branch.**
+**Sequential, six loads per arm, calmer window. Pre-guard bundle**, that is,
+the first revision of this branch, before the session-tagging commit. Kept
+because it is an independent window, not because it describes the shipped
+build.
 
 | | Before | After |
 |---|---|---|
 | Composer visible, median | 3115 ms | 2091 ms |
 | Composer visible, range | 1872 to 3301 ms | 1783 to 2298 ms |
+
+Every figure in these tables is an upper median: with an even sample count the
+upper of the two middle observations is taken rather than their mean. Stated so
+the numbers can be recomputed from the raw samples in `timings.md`. The
+conventional median tells the same story: 4804.5 ms against 2347 ms on the
+paired pass, and 3000.5 ms against 2058.5 ms on the sequential one.
 
 Both passes agree on direction and on rough magnitude. The paired window was
 busy, load average 20 to 35 on a 24 core machine, which inflates both arms and

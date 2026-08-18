@@ -57,12 +57,30 @@ describe('model prefetch', () => {
 		expect(consumeModelPrefetch('token-a')).toBeNull();
 	});
 
-	it('still rejects for its consumer, so a failed load is not silently empty', async () => {
+	it('drops a failed request rather than handing the failure on', async () => {
 		getModels.mockRejectedValue(new Error('gateway down'));
 
 		prefetchModels('token');
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		await expect(consumeModelPrefetch('token')).rejects.toThrow('gateway down');
+		// Nothing to collect, so the caller fetches for itself: the same thing
+		// it would have done had no prefetch been attempted. Handing over the
+		// dead promise instead would turn one failed request into an empty
+		// model list with no retry.
+		expect(consumeModelPrefetch('token')).toBeNull();
+	});
+
+	it('lets a later call retry after a failure', async () => {
+		getModels.mockRejectedValueOnce(new Error('gateway down'));
+
+		prefetchModels('token');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		getModels.mockResolvedValue([{ id: 'hive-auto' }]);
+		prefetchModels('token');
+
+		expect(getModels).toHaveBeenCalledTimes(2);
+		await expect(consumeModelPrefetch('token')).resolves.toEqual([{ id: 'hive-auto' }]);
 	});
 
 	it('leaves an uncollected failure handled', async () => {
