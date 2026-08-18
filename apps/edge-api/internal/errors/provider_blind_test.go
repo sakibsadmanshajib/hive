@@ -137,6 +137,36 @@ func TestWriteProviderBlindUpstreamErrorHidesInternalTransportDetails(t *testing
 	assertNoProviderLeak(t, resp.Error.Message)
 }
 
+func TestWriteProviderBlindUpstreamErrorHidesFallbackRoutingInternals(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	// Reproduces issue #965: a model_not_found upstream response wrapped in
+	// LiteLLM's own fallback-group bookkeeping. No literal provider name
+	// appears in "No fallback model group found ... Fallbacks=[...] ...
+	// Retried: 3 times", so the provider-name regex alone never catches it;
+	// the message must still not reach the customer.
+	raw := `upstream error - {"error":{"message":"The model ` + "`llama-3.1-8b-instant`" + ` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}} No fallback model group found for original model_group=hive-fast. Fallbacks=[{'hive-fast': ['hive-fast']}, {'hive-fast': ['hive-fast']}, {'hive-fast': ['hive-fast']}]. Upstream provider Retried: 3 times`
+
+	WriteProviderBlindUpstreamError(w, "hive-fast", http.StatusNotFound, raw)
+
+	resp := decodeOpenAIError(t, w)
+	assertNoProviderLeak(t, resp.Error.Message)
+	for _, forbidden := range []string{
+		"fallback model group",
+		"model_group=",
+		"fallbacks=",
+		"retried:",
+		"llama-3.1-8b-instant",
+	} {
+		if strings.Contains(strings.ToLower(resp.Error.Message), forbidden) {
+			t.Fatalf("expected routing internals stripped, found %q in %q", forbidden, resp.Error.Message)
+		}
+	}
+	if !strings.Contains(resp.Error.Message, "hive-fast") {
+		t.Fatalf("expected alias in sanitized message, got %q", resp.Error.Message)
+	}
+}
+
 func decodeOpenAIError(t *testing.T, w *httptest.ResponseRecorder) OpenAIError {
 	t.Helper()
 
