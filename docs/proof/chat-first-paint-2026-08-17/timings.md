@@ -1,4 +1,30 @@
-## Headline: paired, interleaved, post-guard bundle
+## Headline: paired, interleaved, final bundle
+
+Six pairs against the bundle this branch ships, `APP_BUILD_HASH` `perf-final`,
+in a calm window (system load average about 10 on a 24 core machine). Each pair
+loads both bundles back to back in the same browser process, alternating which
+arm goes first, so any drift hits both arms equally.
+
+| pair | before | after |
+|---|---|---|
+| 0 | 3611 ms | 2138 ms |
+| 1 | 3097 ms | 1916 ms |
+| 2 | 2972 ms | 1990 ms |
+| 3 | 3452 ms | 1576 ms |
+| 4 | 2654 ms | 1889 ms |
+| 5 | 2518 ms | 1870 ms |
+| **upper median** | **3097 ms** | **1916 ms** |
+| conventional median | 3034.5 ms | 1902.5 ms |
+| median total blocking time | 602 ms | 527 ms |
+
+The after arm wins all six pairs. Upper median improvement 1181 ms,
+conventional median improvement 1132.0 ms, about 38 per cent of the wait.
+
+Medians here are stated both ways because every sample count is even: the upper
+median takes the upper of the two middle observations, the conventional median
+their mean. Every raw sample is listed so either can be recomputed.
+
+## Supporting: paired, interleaved, post-guard bundle, busy window
 
 Every median below is an upper median: with an even sample count the upper of the two middle observations is taken rather than their mean. Every raw sample is listed, so any other statistic can be recomputed.
 

@@ -18,43 +18,42 @@ all other static assets go to the live deployment untouched.
 - **Before** arm: bundle built from `main` at `1dc67ee69`.
 - **After** arm: bundle built from this branch.
 
-Two datasets are reported below and they are not the same build. Read the labels rather than the headline number.
+Three passes were taken, on two builds and in two very different machine load
+conditions. The headline is the last one: paired, on the bundle this branch
+actually ships, in a calm window. The other two are kept because they are
+independent windows that agree, and because a disagreement would have been the
+interesting outcome.
 
-Two passes were taken. The headline is the paired one, because it is the only
-shape that survives a shared machine whose load moved by a factor of three
-during the work.
-
-**Paired and interleaved, eight pairs. Post-guard bundle, which is what this
-branch ships.** Each pair loads both bundles back to back in the same browser
-process, alternating which arm goes first.
+**Headline. Paired and interleaved, six pairs, final bundle** (`APP_BUILD_HASH`
+`perf-final`), system load average about 10 on a 24 core machine. Each pair
+loads both bundles back to back in the same browser process, alternating which
+arm goes first.
 
 | | Before | After |
 |---|---|---|
-| Composer visible, median | 5134 ms | 2510 ms |
-| Median total blocking time | 1525 ms | 797 ms |
-| Pairs won by the after arm | | 8 of 8 |
+| Composer visible, upper median | 3097 ms | 1916 ms |
+| Composer visible, conventional median | 3034.5 ms | 1902.5 ms |
+| Composer visible, range | 2518 to 3611 ms | 1576 to 2138 ms |
+| Median total blocking time | 602 ms | 527 ms |
+| Pairs won by the after arm | | 6 of 6 |
 | Serial API round trips before the composer | 5 | 2 |
 
-**Sequential, six loads per arm, calmer window. Pre-guard bundle**, that is,
-the first revision of this branch, before the session-tagging commit. Kept
-because it is an independent window, not because it describes the shipped
-build.
+**Supporting, paired, eight pairs, post-guard bundle, busy window** (load
+average 20 to 35): 5134 ms against 2510 ms upper median, after arm winning all
+eight pairs, median total blocking time 1525 ms against 797 ms.
 
-| | Before | After |
-|---|---|---|
-| Composer visible, median | 3115 ms | 2091 ms |
-| Composer visible, range | 1872 to 3301 ms | 1783 to 2298 ms |
+**Supporting, sequential, six loads per arm, pre-guard bundle** (the first
+revision of this branch, before the session-tagging commit): 3115 ms against
+2091 ms upper median.
 
-Every figure in these tables is an upper median: with an even sample count the
-upper of the two middle observations is taken rather than their mean. Stated so
-the numbers can be recomputed from the raw samples in `timings.md`. The
-conventional median tells the same story: 4804.5 ms against 2347 ms on the
-paired pass, and 3000.5 ms against 2058.5 ms on the sequential one.
+All three agree on direction and on rough magnitude. The gap widens under load
+for a reason that is a property rather than an artifact: a loaded client pays
+scheduling delay on every extra serial step, so chain depth hurts most exactly
+when the machine is least able to absorb it.
 
-Both passes agree on direction and on rough magnitude. The paired window was
-busy, load average 20 to 35 on a 24 core machine, which inflates both arms and
-widens the gap, because a loaded client pays scheduling delay on every extra
-serial step.
+Medians are stated as upper medians throughout, since every sample count is
+even, with the conventional median given alongside on the headline. Every raw
+sample is in `timings.md`.
 
 **Which bundle was which.** Each arm's build was invoked with its own
 `APP_BUILD_HASH`, which Vite compiles into the bundle, and the value was read
