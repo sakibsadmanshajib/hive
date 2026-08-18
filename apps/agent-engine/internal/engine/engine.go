@@ -71,8 +71,11 @@ type Task struct {
 	// edge-api's task-create handler (the only place that ever sees it) and
 	// threaded through control-plane and the /launch call untouched. Never
 	// persisted anywhere: agenttask.Task carries the same field but it is
-	// never written to public.agent_tasks, and this session only holds it in
-	// memory for the task's lifetime. It exists so a knowledge-work-pack
+	// never written to public.agent_tasks, and the session this becomes
+	// (session.bearerJWT) is cleared by reap() the moment the task reaches
+	// any terminal state — see reap's doc comment for why that still needs
+	// saying explicitly rather than assumed from "the session gets cleaned
+	// up." It exists so a knowledge-work-pack
 	// session that produces a deck (see publishDeckArtifact) can publish it
 	// through apps/edge-api/internal/artifacts as the task's own tenant/user
 	// — never as an internal-token identity, which would let this process
