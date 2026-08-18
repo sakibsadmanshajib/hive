@@ -148,7 +148,7 @@ func main() {
 
 	// Infrastructure routes (no unsupported middleware). /metrics is not among
 	// them; it is served on metricsListenAddr instead.
-	registerInfraRoutes(mux, specPath)
+	registerInfraRoutes(mux, specPath, authzClient.Degraded)
 
 	// Inference routes
 	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
@@ -637,15 +637,34 @@ const metricsListenAddr = ":9102"
 // registerInfraRoutes registers the unauthenticated infrastructure endpoints on
 // the public mux. /metrics is deliberately not registered here; see
 // metricsListenAddr.
-func registerInfraRoutes(mux *http.ServeMux, specPath string) {
-	mux.HandleFunc("/health", handleHealth)
+//
+// healthy is called on every /health request; it must not block or touch the
+// network, so /health cannot become another consumer of a pool it exists to
+// report on. It typically wraps authz.Client.Degraded(), which is fed by real
+// traffic on the authorize/budget-gate hot paths rather than a synthetic
+// probe: /health used to be a hardcoded 200 regardless of whether edge-api
+// could actually reach control-plane to resolve a key, so a pool-contention
+// window that made every real request fail still reported this endpoint
+// healthy throughout.
+func registerInfraRoutes(mux *http.ServeMux, specPath string, healthy func() bool) {
+	mux.HandleFunc("/health", handleHealth(healthy))
 	mux.Handle("/docs/", docs.SwaggerHandler(specPath))
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func handleHealth(healthy func() bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if healthy != nil && !healthy() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "degraded",
+				"reason": "control-plane resolve unavailable",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 func loadStorageConfigFromEnv() (storageConfig, error) {

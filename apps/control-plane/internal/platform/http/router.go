@@ -72,15 +72,24 @@ type RouterConfig struct {
 	// BudgetsHandler handles budget threshold CRUD and alert dismissal endpoints.
 	BudgetsHandler *budgets.Handler
 
-	// DBReady reports whether the database pool opened at startup. Every
-	// tenant-scoped and service-to-service route below is mounted only when its
-	// DB-backed handler exists, so a control-plane that came up without a pool
-	// serves none of them: /internal/apikeys/resolve 404s and edge-api reports
-	// the resulting resolution failure to the caller as "Incorrect API key
-	// provided". /health must therefore refuse to claim health without it,
-	// otherwise the container healthcheck passes and traffic is routed to a
-	// process that cannot authenticate a single request. See issue #816.
-	DBReady bool
+	// DBReady is called on every /health request; it must not block or touch
+	// the network (no new query, no new connection) so /health cannot become
+	// another consumer of a pool it exists to report on.
+	//
+	// It reports whether the database is usable right now, not just whether
+	// the pool opened at startup. Every tenant-scoped and service-to-service
+	// route below is mounted only when its DB-backed handler exists, so a
+	// control-plane that came up without a pool serves none of them:
+	// /internal/apikeys/resolve 404s and edge-api reports the resulting
+	// resolution failure to the caller as "Incorrect API key provided". A
+	// callback rather than a bool captured once at startup: a pgxpool.Pool is
+	// never nil again after a successful boot even when every checkout is
+	// timing out under runtime pool contention, so a boot-time bool alone
+	// reports 200 through exactly the outage this exists to catch. The
+	// callback typically combines `pool != nil` with a live signal (see
+	// platform/db.ResolveHealth) fed by real traffic on the resolve path, not
+	// a synthetic probe. See issues #816 and #836.
+	DBReady func() bool
 
 	// ProvisioningReady reports whether signup tenant provisioning is wired
 	// and working (D-023). A nil func means nothing reported it, which is
@@ -408,10 +417,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 // reporting 200 here is what turns a transient database outage at boot into a
 // silent, permanent one: the compose healthcheck goes green, dependent services
 // start, and every caller gets a misleading credential error instead.
-func healthHandler(dbReady bool, provisioningReady func() (bool, string)) http.HandlerFunc {
+func healthHandler(dbReady func() bool, provisioningReady func() (bool, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if !dbReady {
+		if !dbReady() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(healthResponse{
 				Status: healthStatusDegraded,

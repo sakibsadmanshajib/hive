@@ -14,6 +14,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
 )
 
 func errIs(err, target error) bool { return errors.Is(err, target) }
@@ -43,11 +44,26 @@ type Handler struct {
 	policy     authz.Policy
 	testVC     *accounts.ViewerContext // non-nil in tests to bypass real accounts service
 	testActor  *authz.Actor            // non-nil in tests to supply a canned Actor
+
+	// resolveHealth is optional and, when set, records whether
+	// /internal/apikeys/resolve — the endpoint edge-api's whole authorization
+	// path depends on — is currently reaching real verdicts or failing on
+	// something infrastructural. See platform/db.ResolveHealth.
+	resolveHealth *db.ResolveHealth
 }
 
 // NewHandler returns a new Handler.
 func NewHandler(svc *Service, accountSvc *accounts.Service) *Handler {
 	return &Handler{svc: svc, accountSvc: accountSvc, policy: authz.NewPolicy()}
+}
+
+// WithResolveHealth returns a copy of the handler wired to record resolve
+// outcomes into the given tracker, so /health can reflect runtime pool
+// contention rather than only the pool's state at boot.
+func (h *Handler) WithResolveHealth(rh *db.ResolveHealth) *Handler {
+	cloned := *h
+	cloned.resolveHealth = rh
+	return &cloned
 }
 
 // WithRoleService returns a copy of the handler wired with the platform role
@@ -537,11 +553,35 @@ func (h *Handler) handleInternalResolve(w http.ResponseWriter, r *http.Request) 
 
 	snapshot, err := h.svc.ResolveSnapshot(r.Context(), body.TokenHash)
 	if err != nil {
+		if h.resolveHealth != nil {
+			if isKeyVerdictError(err) {
+				// A real verdict (key not found, revoked, disabled, expired)
+				// means the database answered; this is not a pool problem.
+				h.resolveHealth.RecordSuccess()
+			} else {
+				h.resolveHealth.RecordFailure()
+			}
+		}
 		handleKeyError(w, err)
 		return
 	}
 
+	if h.resolveHealth != nil {
+		h.resolveHealth.RecordSuccess()
+	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// isKeyVerdictError reports whether err is one of the sentinel errors that
+// mean control-plane reached a real, database-backed answer about the key,
+// as opposed to an infrastructural failure (pool checkout timeout,
+// connection error) that never reached one. Mirrors handleKeyError's own
+// classification, kept separate rather than folded into it: handleKeyError
+// backs every apikeys route, and a failure on, say, updating a key's limits
+// says nothing about whether resolve — the one endpoint edge-api's
+// authorization path depends on — is healthy.
+func isKeyVerdictError(err error) bool {
+	return errIs(err, ErrNotFound) || errIs(err, ErrRevoked) || errIs(err, ErrDisabled) || errIs(err, ErrNotActive)
 }
 
 // --- helpers ---

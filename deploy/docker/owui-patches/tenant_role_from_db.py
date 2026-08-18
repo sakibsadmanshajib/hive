@@ -44,13 +44,37 @@ try:
     if hive_email and hive_db_url:
         import psycopg2 as hive_psycopg2
 
-        hive_conn = hive_psycopg2.connect(
-            hive_db_url,
-            connect_timeout=5,
-            options="-c statement_timeout=3000 -c lock_timeout=3000",
-        )
+        # PGVECTOR_DB_URL is meant to carry Supavisor's transaction-mode
+        # DSN (SUPABASE_DB_POOL_URL_LIBPQ), not the session-mode one --
+        # docker-compose.yml already maps it that way -- because this
+        # lookup runs on every single login and must not hold a session
+        # slot against the 15-client ceiling every other consumer shares
+        # (control-plane, edge-api, CI). SUPABASE_DB_POOL_URL_LIBPQ being
+        # unset falls back to the session DSN, which still works but
+        # costs a session slot per login; that gap is deployment
+        # configuration, tracked separately, not something this fragment
+        # can fix. What this fragment fixes: whichever DSN arrives here,
+        # the timeout mechanism below must actually work under
+        # transaction mode once that gap closes.
+        #
+        # Verified live against the actual pooler, not assumed from
+        # documentation: a `-c statement_timeout=... -c lock_timeout=...`
+        # startup `options` string, which is what this used to pass to
+        # connect(), is silently accepted and then silently ignored by
+        # Supavisor transaction mode -- the connection succeeds and SHOW
+        # reports the role's untouched default (measured 2 minutes / no
+        # lock_timeout) instead of the requested 3 seconds. No error, no
+        # warning, just a much longer possible stall on this login-path
+        # query than intended. `SET LOCAL` after connecting, inside the
+        # one implicit transaction this cursor block runs in, measured
+        # correctly on the same pooler (3s/3s), and is the exact pattern
+        # every RLS `set_config(..., true)` call in this codebase already
+        # relies on for the same reason.
+        hive_conn = hive_psycopg2.connect(hive_db_url, connect_timeout=5)
         try:
             with hive_conn.cursor() as hive_cur:
+                hive_cur.execute("SET LOCAL statement_timeout = 3000")
+                hive_cur.execute("SET LOCAL lock_timeout = 3000")
                 hive_cur.execute(
                     "SELECT tu.role FROM public.tenant_users tu "
                     "JOIN auth.users u ON u.id = tu.user_id "

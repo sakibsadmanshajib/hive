@@ -357,7 +357,7 @@ func identityMiddleware(h http.Handler) http.Handler { return h }
 // be registered alongside the other unauthenticated infrastructure routes.
 func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
 	mux := http.NewServeMux()
-	registerInfraRoutes(mux, "testdata/openapi.yaml")
+	registerInfraRoutes(mux, "testdata/openapi.yaml", func() bool { return true })
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -370,6 +370,54 @@ func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHealthReactsToRuntimeAuthzDegradation is the regression guard for the
+// gap this closes: /health used to be a hardcoded 200 with no dependency on
+// anything, so a control-plane pool-contention window that made every real
+// /v1/chat/completions and /v1/models call fail (retryable 503
+// upstream_unavailable, per authz.Client.Resolve's own classification) still
+// reported this endpoint healthy throughout the outage. The healthy callback
+// must be consulted per request, not baked in once at router construction.
+func TestHealthReactsToRuntimeAuthzDegradation(t *testing.T) {
+	healthy := true
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml", func() bool { return healthy })
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health while healthy = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	healthy = false
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health while degraded = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+
+	healthy = true
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health after recovery = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHealthTreatsNilHealthyCallbackAsHealthy verifies a nil callback (e.g. a
+// caller that has not wired the authz client's Degraded method) does not
+// panic and defaults to healthy, matching the previous unconditional-200
+// behavior for any caller that has not opted in yet.
+func TestHealthTreatsNilHealthyCallbackAsHealthy(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml", nil)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health with nil healthy callback = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 

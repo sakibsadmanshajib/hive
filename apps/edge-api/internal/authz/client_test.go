@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -238,6 +239,67 @@ func TestResolveClassifiesControlPlane5xxAsUpstreamUnavailable(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUpstreamUnavailable) {
 		t.Fatalf("expected ErrUpstreamUnavailable for a control-plane 5xx, got %v", err)
+	}
+	if !client.Degraded() {
+		t.Fatalf("Degraded() = false after an ErrUpstreamUnavailable resolve, want true")
+	}
+}
+
+// TestDegraded_DefaultsHealthy verifies a freshly constructed Client reports
+// healthy before Resolve has ever been called: no traffic yet must not read
+// as degraded.
+func TestDegraded_DefaultsHealthy(t *testing.T) {
+	client := &Client{}
+	if client.Degraded() {
+		t.Fatalf("Degraded() = true on a fresh Client, want false")
+	}
+}
+
+// TestDegraded_NilClientReportsHealthy verifies a nil *Client (e.g. a health
+// handler wired before the real authz client exists) reports healthy rather
+// than panicking.
+func TestDegraded_NilClientReportsHealthy(t *testing.T) {
+	var client *Client
+	if client.Degraded() {
+		t.Fatalf("Degraded() = true on a nil Client, want false")
+	}
+}
+
+// TestDegraded_ClearsAfterSubsequentSuccess verifies Degraded reflects only
+// the most recent outcome: a resolve that reaches a real verdict after a
+// prior failure clears the flag, so /health recovers without a restart once
+// the underlying contention clears.
+func TestDegraded_ClearsAfterSubsequentSuccess(t *testing.T) {
+	failing := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing {
+			http.Error(w, `{"error":"request could not be completed"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key_id":"` + uuid.NewString() + `","status":"active"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	if _, err := client.Resolve(context.Background(), "Bearer hk_test"); !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable while the server is failing, got %v", err)
+	}
+	if !client.Degraded() {
+		t.Fatal("expected Degraded() = true while the server is failing")
+	}
+
+	failing = false
+	if _, err := client.Resolve(context.Background(), "Bearer hk_test2"); err != nil {
+		t.Fatalf("expected a successful resolve once the server recovers, got %v", err)
+	}
+	if client.Degraded() {
+		t.Fatal("expected Degraded() = false after a successful resolve, want the flag cleared")
 	}
 }
 

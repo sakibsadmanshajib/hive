@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -108,6 +109,16 @@ type Client struct {
 
 	// ResolveOverride is a test hook for bypassing Redis/control-plane I/O.
 	ResolveOverride func(ctx context.Context, rawToken string) (AuthSnapshot, error)
+
+	// resolveDegraded tracks whether the most recent resolve attempt that
+	// actually reached Redis or control-plane came back ErrUpstreamUnavailable
+	// rather than a real verdict. Fed by real traffic on Authorize's hot path
+	// and BudgetGate's workspace-identity resolver (the two callers that share
+	// this Client), so it costs nothing beyond an atomic store per call and
+	// needs no separate probe. Zero value is healthy: a freshly built Client
+	// that has served no traffic yet must not report degraded for having no
+	// data. See Degraded.
+	resolveDegraded atomic.Bool
 }
 
 // NewClient returns a new Client.
@@ -210,7 +221,7 @@ const resolveClientTimeout = 10 * time.Second
 
 // Resolve returns the AuthSnapshot for the given raw token or Bearer header.
 // It checks Redis first, then falls back to the control plane.
-func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, error) {
+func (c *Client) Resolve(ctx context.Context, rawToken string) (snap AuthSnapshot, err error) {
 	if c != nil && c.ResolveOverride != nil {
 		return c.ResolveOverride(ctx, rawToken)
 	}
@@ -219,6 +230,18 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 	if rawToken == "" {
 		return AuthSnapshot{}, errors.New("authz: empty token")
 	}
+
+	// Everything below this line actually reaches Redis or control-plane, so
+	// it is what Degraded() reports on. A nil error, or a non-nil error that
+	// is a genuine verdict (not found, revoked, disabled, expired), both mean
+	// the dependency answered; only ErrUpstreamUnavailable means it did not.
+	defer func() {
+		if errors.Is(err, ErrUpstreamUnavailable) {
+			c.resolveDegraded.Store(true)
+		} else {
+			c.resolveDegraded.Store(false)
+		}
+	}()
 
 	h := sha256.Sum256([]byte(rawToken))
 	tokenHash := strings.ToLower(hex.EncodeToString(h[:]))
@@ -326,7 +349,6 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 		return AuthSnapshot{}, fmt.Errorf("authz: read response: %w: %w", ErrUpstreamUnavailable, err)
 	}
 
-	var snap AuthSnapshot
 	if err := json.Unmarshal(respBytes, &snap); err != nil {
 		// A malformed body is a control-plane-side bug, not a verdict on the
 		// key; same "no usable verdict" shape as the cases above.
@@ -345,4 +367,19 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 	}
 
 	return snap, nil
+}
+
+// Degraded reports whether the most recent Resolve call that reached Redis or
+// control-plane came back ErrUpstreamUnavailable. It is not a synthetic
+// probe — it costs nothing beyond an atomic read, and observes only real
+// traffic — so /health can react to runtime pool contention on control-plane
+// without edge-api adding a single extra connection or request anywhere.
+//
+// A c == nil receiver reports healthy rather than panicking, so /health stays
+// usable even if it is ever wired before the authz client is constructed.
+func (c *Client) Degraded() bool {
+	if c == nil {
+		return false
+	}
+	return c.resolveDegraded.Load()
 }
