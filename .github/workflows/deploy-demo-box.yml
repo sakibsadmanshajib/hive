@@ -840,6 +840,19 @@ jobs:
         # own 30s internal timeout (litellmconfig/restart.go), so a shorter
         # client timeout would fire while the server side is still legitimately
         # working and misreport a slow-but-successful sync as a failure.
+        #
+        # A 200 here is not trusted blindly. Traced through WriteAndRestart
+        # (litellmconfig/generator.go): it writes the new config, and only
+        # calls Restart() if that write succeeded; Restart()'s own error
+        # propagates straight back up, so any half-applied outcome (write
+        # failed, or write succeeded but the container restart call failed)
+        # is a non-200 here, caught by the retry loop below. The one gap that
+        # design can't close on its own is the restart API call succeeding
+        # while the LiteLLM process itself fails to come up with the new
+        # config (a bad merge, a crash loop). That is exactly what the next
+        # step re-derives independently from LiteLLM's own live /model/info
+        # rather than from this step's exit code, so a sync that reports
+        # success but reconciled nothing still fails the job, one step later.
         working-directory: /home/sakib/hive
         run: |
           set -euo pipefail
