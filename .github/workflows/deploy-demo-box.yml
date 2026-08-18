@@ -34,6 +34,19 @@ on:
       # supabase/migrations and hive_jwt_forward gaps below: a paths filter
       # with a missing entry does not fail loud, it just never runs.
       - 'apps/web-console/**'
+      # deploy/docker/Dockerfile.open-webui's frontend build stage COPYs this
+      # tree directly (`COPY vendor/open-webui ./`) to compile the forked chat
+      # frontend from source (see that Dockerfile's own header comment and the
+      # `deploy` job's timeout-minutes comment below, both of which already
+      # documented this as a real build input). It had no entry here, so PR
+      # #971 (nav fixes touching only this tree) merged and triggered no
+      # deploy at all, until an audit against every deploy/docker/Dockerfile.*
+      # COPY source (2026-08-18) found the gap. Same failure class as
+      # apps/web-console above: `.github/ci/lint-deploy-paths-filter.mjs`
+      # (wired into ci.yml's repo-policy-lints job) now checks every
+      # Dockerfile in deploy/docker/ against this list so the next missing
+      # entry fails a PR check instead of silently never deploying.
+      - 'vendor/open-webui/**'
       - 'packages/**'
       - 'deploy/docker/**'
       - 'deploy/litellm/**'

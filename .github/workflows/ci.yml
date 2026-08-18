@@ -619,6 +619,16 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: node .github/ci/lint-workflow-check-names.mjs
 
+      # Deploy path-filter coverage: every COPY/ADD source in every
+      # deploy/docker/Dockerfile.* must have a matching entry in
+      # deploy-demo-box.yml's push.paths, or a merge to main that only
+      # touches that source ships silently to nowhere. Lives here for the
+      # same reason lint-workflow-check-names.mjs does: this job is a
+      # required check, so the guard cannot be bypassed by a change that
+      # only touches workflows or Dockerfiles.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/lint-deploy-paths-filter.mjs
+
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:tenant-setting
       - if: needs.changes.outputs.run != 'false'
