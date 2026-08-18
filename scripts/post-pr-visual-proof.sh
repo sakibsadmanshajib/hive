@@ -232,6 +232,20 @@ for img in "${images[@]}"; do
   staged="${stage_dir}/${name}"
   cp -- "$img" "$staged"
   gh release upload "$release_tag" "$staged" --repo "$repo" >/dev/null
+
+  # Read the published name back rather than trusting the name we sent.
+  # GitHub rewrites asset names on upload, and the URL below is built from our
+  # name, so "we sanitized it, therefore it matches" is exactly the kind of
+  # correct-by-construction claim this whole script exists to stop us making.
+  # A herestring, not a pipe: `grep -q` exits early, and under `pipefail` the
+  # resulting SIGPIPE on gh would fail a lookup that actually succeeded.
+  published="$(gh release view "$release_tag" --repo "$repo" --json assets --jq '.assets[].name')"
+  grep -Fxq -- "$name" <<<"$published" || {
+    echo "::error:: upload reported success, but the release holds no asset named '$name'." >&2
+    echo "::error:: GitHub renamed it, so the comment URL would 404. Not posting a proof that does not render." >&2
+    exit 1
+  }
+
   url="https://github.com/${repo}/releases/download/${release_tag}/${name}"
   # Record every published URL as it goes. An upload failure part way through
   # a multi-image run aborts with the earlier images already public and no

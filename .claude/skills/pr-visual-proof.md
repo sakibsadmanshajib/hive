@@ -57,6 +57,15 @@ gh release delete-asset visual-proof-assets <asset-name> --repo <owner/repo> --y
 Deleting the asset does not unpublish what was already fetched or indexed.
 Treat a leaked credential as compromised and revoke it, do not just delete.
 
+## Where captures must not be written
+
+Never write a capture into a test reporter's own output directory. Playwright's
+HTML reporter **clears its output directory before writing**, so proof captured
+into `playwright-report/` (or whatever `outputFolder` is set to) is created and
+then deleted, and the run looks like it produced nothing. This cost a full
+capture pass on PR #951. Write captures to a scratch dir or to
+`docs/proof/<slug>/`, never to a directory a reporter owns.
+
 ## What renders, and what does not
 
 Raced empirically on scratch PR #959 with real browser screenshots, logged in
