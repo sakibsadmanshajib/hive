@@ -214,7 +214,7 @@ jobs:
           OPENROUTER_AUTO_MODEL=openrouter/openai/gpt-4.1-mini
           OPENROUTER_EMBEDDING_MODEL=openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free
           OPENROUTER_EMBEDDING_FALLBACK_MODEL=openrouter/qwen/qwen3-embedding-8b
-          GROQ_FAST_MODEL=groq/llama-3.1-8b-instant
+          GROQ_FAST_MODEL=groq/openai/gpt-oss-20b
           GROQ_REASONING_MODEL=groq/openai/gpt-oss-120b
           NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-$SUPABASE_URL}
           NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-$SUPABASE_ANON_KEY}

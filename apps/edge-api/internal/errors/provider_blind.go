@@ -80,6 +80,16 @@ func sanitizeProviderBlindMessage(alias string, httpStatus int, raw string) stri
 	if providerBlindLooksLikeTransportFailure(lowerRaw) || providerBlindLooksLikeTransportFailure(lowerMessage) {
 		return fmt.Sprintf("%s is temporarily unavailable.", resourceLabel)
 	}
+	if providerBlindLooksLikeRoutingInternals(lowerRaw) || providerBlindLooksLikeRoutingInternals(lowerMessage) {
+		// LiteLLM's own fallback-group bookkeeping (issue #965): "No fallback
+		// model group found for original model_group=X. Fallbacks=[...].
+		// Retried: N times." Carries no provider name, so the regexes above
+		// never touch it, but it is still internal routing detail no
+		// customer-facing error should carry. Collapse the whole message
+		// rather than trying to scrub an open-ended, LiteLLM-versioned
+		// bookkeeping format field by field.
+		return fmt.Sprintf("%s is not available.", resourceLabel)
+	}
 	if providerBlindLooksLikeAuthFailure(httpStatus, lowerRaw) || providerBlindLooksLikeAuthFailure(httpStatus, lowerMessage) {
 		return fmt.Sprintf("%s request was rejected by the upstream provider.", resourceLabel)
 	}
@@ -198,6 +208,21 @@ func providerBlindLooksLikeTransportFailure(message string) bool {
 		"no such host",
 		"econnrefused",
 	} {
+		if strings.Contains(message, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerBlindLooksLikeRoutingInternals(message string) bool {
+	// "retried: N times" deliberately excluded: it is ordinary English a
+	// legitimate upstream message could use on its own, so alone it risked
+	// collapsing safe error text (security review finding on this PR). The
+	// three tokens below are specific to LiteLLM's own bookkeeping
+	// vocabulary and already fully cover issue #965's reported leak shape
+	// without it.
+	for _, token := range []string{"fallback model group", "model_group=", "fallbacks=["} {
 		if strings.Contains(message, token) {
 			return true
 		}

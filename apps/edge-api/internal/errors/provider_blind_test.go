@@ -137,6 +137,56 @@ func TestWriteProviderBlindUpstreamErrorHidesInternalTransportDetails(t *testing
 	assertNoProviderLeak(t, resp.Error.Message)
 }
 
+func TestWriteProviderBlindUpstreamErrorHidesFallbackRoutingInternals(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	// Reproduces issue #965: a model_not_found upstream response wrapped in
+	// LiteLLM's own fallback-group bookkeeping. No literal provider name
+	// appears in "No fallback model group found ... Fallbacks=[...] ...
+	// Retried: 3 times", so the provider-name regex alone never catches it;
+	// the message must still not reach the customer.
+	raw := `upstream error - {"error":{"message":"The model ` + "`llama-3.1-8b-instant`" + ` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}} No fallback model group found for original model_group=hive-fast. Fallbacks=[{'hive-fast': ['hive-fast']}, {'hive-fast': ['hive-fast']}, {'hive-fast': ['hive-fast']}]. Upstream provider Retried: 3 times`
+
+	WriteProviderBlindUpstreamError(w, "hive-fast", http.StatusNotFound, raw)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+
+	resp := decodeOpenAIError(t, w)
+	assertNoProviderLeak(t, resp.Error.Message)
+	for _, forbidden := range []string{
+		"fallback model group",
+		"model_group=",
+		"fallbacks=",
+		"retried:",
+		"llama-3.1-8b-instant",
+	} {
+		if strings.Contains(strings.ToLower(resp.Error.Message), forbidden) {
+			t.Fatalf("expected routing internals stripped, found %q in %q", forbidden, resp.Error.Message)
+		}
+	}
+	if resp.Error.Message != "hive-fast is not available." {
+		t.Fatalf("message = %q, want %q", resp.Error.Message, "hive-fast is not available.")
+	}
+}
+
+func TestProviderBlindLooksLikeRoutingInternalsRequiresSpecificToken(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	// "retried:" alone, with none of LiteLLM's specific bookkeeping tokens,
+	// must NOT trigger the routing-internals collapse: a legitimate upstream
+	// message can plausibly use ordinary English like this, and over-collapsing
+	// it would throw away real detail for no safety gain (security review
+	// finding on this PR).
+	WriteProviderBlindUpstreamError(w, "hive-default", http.StatusBadGateway, "request failed, retried: 3 times before giving up")
+
+	resp := decodeOpenAIError(t, w)
+	if resp.Error.Message != "request failed, retried: 3 times before giving up" {
+		t.Fatalf("expected message to pass through unchanged, got %q", resp.Error.Message)
+	}
+}
+
 func decodeOpenAIError(t *testing.T, w *httptest.ResponseRecorder) OpenAIError {
 	t.Helper()
 
