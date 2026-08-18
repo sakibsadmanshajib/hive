@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 test.use({ storageState: "e2e/phase-19/owui/.auth/owui-user.json" });
 
@@ -40,6 +40,38 @@ const TASKS_ENDPOINT = "/api/v1/hive/agent/tasks";
  */
 const PROOF_DIR = "playwright-report-owui-proof";
 
+
+/*
+ * Put the sidebar in the state the assertion is about, rather than assuming it.
+ *
+ * Both nav variants are always in the DOM: an icon-only rail whose name lives
+ * on `aria-label`, and an expanded row that renders the same string as text.
+ * Only one is visible at a time, and `.first()` resolves to the rail either
+ * way, so a text assertion written against `.first()` reads the icon and finds
+ * "".
+ *
+ * This fixture's sidebar starts collapsed, which is the other half: the
+ * expanded-state assertions never had their precondition, and the collapsed
+ * test waited forever for a "Close Sidebar" control that is only present when
+ * the sidebar is open. Neither had ever actually run before the sign-in
+ * readiness fix in this branch, so neither had ever been observed failing.
+ */
+async function setSidebar(page: Page, state: "expanded" | "collapsed") {
+  const opener = page.getByLabel("Open Sidebar").first();
+  const closer = page.getByLabel("Close Sidebar").first();
+  const toPress = state === "expanded" ? opener : closer;
+  if (await toPress.isVisible().catch(() => false)) {
+    await toPress.click();
+  }
+  // The opposite control is what proves the new state, through Open WebUI's
+  // own chrome rather than through its store.
+  await expect(state === "expanded" ? closer : opener).toBeVisible();
+}
+
+/** The nav row a person can actually see, of the two the DOM always holds. */
+const visibleNavRow = (page: Page, id: string) =>
+  page.locator(`${NAV_ROW(id)}:visible`).first();
+
 test("the sidebar carries labelled Chats, Agents and Knowledge destinations", async ({
   page,
 }) => {
@@ -47,6 +79,7 @@ test("the sidebar carries labelled Chats, Agents and Knowledge destinations", as
   await page.goto("/");
 
   await expect(page.locator(SIDEBAR)).toBeVisible();
+  await setSidebar(page, "expanded");
 
   for (const [id, label, href] of [
     ["chats", "Chats", "/"],
@@ -54,9 +87,8 @@ test("the sidebar carries labelled Chats, Agents and Knowledge destinations", as
     // The full path. /knowledge alone is a 404 on this deployment.
     ["knowledge", "Knowledge", "/workspace/knowledge"],
   ] as const) {
-    // `.first()` because the same list renders twice, once expanded and once on
-    // the collapsed rail, and only one of the two is on screen at a time.
-    const row = page.locator(`${SIDEBAR} ${NAV_ROW(id)}`).first();
+    // The visible one of the two, not `.first()`: see setSidebar above.
+    const row = visibleNavRow(page, id);
     await expect(row, `${id} row missing from the sidebar`).toBeVisible();
     await expect(row).toHaveAttribute("href", href);
     // A label, not an unlabelled icon. This is the specific complaint.
@@ -289,13 +321,10 @@ test("the collapsed rail keeps every destination", async ({ page }) => {
 
   await expect(page.locator(SIDEBAR)).toBeVisible();
 
-  // Collapse through Open WebUI's own control rather than by writing its store:
-  // the assertion is about what a person sees after pressing it.
-  await page.getByLabel("Close Sidebar").first().click();
-  await expect(page.getByLabel("Open Sidebar").first()).toBeVisible();
+  await setSidebar(page, "collapsed");
 
   for (const id of ["chats", "agents", "knowledge"]) {
-    const row = page.locator(NAV_ROW(id)).first();
+    const row = visibleNavRow(page, id);
     await expect(row, `${id} vanished when the sidebar collapsed`).toBeVisible();
     // Collapsed rows carry no visible label, so the accessible name is the only
     // thing naming them and it must not be empty.
