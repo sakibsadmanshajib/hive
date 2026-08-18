@@ -189,6 +189,23 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 	// sync has run, its own output is exactly what the next no-op sync's
 	// merge would reproduce byte for byte. Skipping here means every future
 	// caller gets this for free, rather than each one needing its own diff.
+	//
+	// This skip does NOT weaken the deploy pipeline's guarantee that the
+	// running LiteLLM actually serves what the DB says. The file on disk
+	// matching the desired config is not proof the live process has it
+	// loaded (a crash-restart, an out-of-band restart, or a corrupted boot
+	// could leave a stale process running against a correct file). That
+	// case is caught by a check that reads neither this file nor this
+	// function's return value: deploy-demo-box.yml's "Assert model catalog
+	// prices agree with the model LiteLLM will call" step queries LiteLLM's
+	// own live /model/info over HTTP, which reflects whatever the running
+	// process actually has loaded right now, and fails the deploy loudly on
+	// any mismatch against the DB, independent of whether this sync wrote,
+	// restarted, or skipped. Previously an unconditional restart on every
+	// deploy could incidentally paper over a drifted process without
+	// anyone noticing there had been a drift; skipping when nothing changed
+	// does not remove that safety net, it just stops relying on an
+	// incidental restart to provide it.
 	if fileExisted && bytes.Equal(existingRaw, finalData) {
 		slog.Info("litellmconfig: write and restart: config unchanged, skipping restart")
 		return nil
