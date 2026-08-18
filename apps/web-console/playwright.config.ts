@@ -9,6 +9,22 @@ export default defineConfig({
   // concurrently races on that reset and flaps sessions mid-test, so we
   // serialize.
   workers: 1,
+  // Stop a wedged shared fixture from eating the whole job. When the Supabase
+  // seeding the suite depends on goes slow, every credentialed spec fails
+  // identically in beforeEach, each one burns its two retries, and the job
+  // walks into its own 25 minute cap. GitHub then reports the job cancelled
+  // rather than failed, which skips every `if: failure()` step, so the run
+  // that most needed the compose log, the Next.js log and the pool exhaustion
+  // annotation uploads none of them. Four pull requests hit exactly that on
+  // 2026-08-17 and 2026-08-18, at 25m20s to 25m23s each, with no artifact to
+  // read afterwards. Five failures is well past the point where the remaining
+  // specs can still tell anyone anything new, and stopping there leaves the
+  // job inside its cap and its diagnostics intact.
+  // ponytail: a flat count, not a "was it the fixture" check. If a genuine
+  // product regression ever breaks more than five specs at once, this truncates
+  // the list; the html report still names the five, and the fix for that is to
+  // run the suite again once the first failures are addressed.
+  maxFailures: process.env.CI ? 5 : 0,
   // A retry-pass must not be able to report success. Two layers, because
   // either one alone has a hole:
   //
