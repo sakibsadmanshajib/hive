@@ -303,6 +303,44 @@ func TestDegraded_ClearsAfterSubsequentSuccess(t *testing.T) {
 	}
 }
 
+// TestDegraded_CacheHitDoesNotClearAPriorFailure is the regression guard for
+// PR #975 review finding 2: a Redis cache hit never contacts control-plane,
+// so it must not touch resolveDegraded either way. The original code ran the
+// degraded-tracking defer before the cache-hit early return, so any cache hit
+// reset the tracker to healthy without having checked anything -- during a
+// real outage the cache-hit ratio is exactly when that matters most, so the
+// health signal would have reported healthy while the outage was ongoing.
+func TestDegraded_CacheHitDoesNotClearAPriorFailure(t *testing.T) {
+	rawToken := "Bearer hk_cached"
+	tokenHash := HashBearerToken(rawToken)
+	snap := AuthSnapshot{KeyID: "key-1", Status: "active"}
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+
+	cache := &fakeSnapshotStore{values: map[string]string{
+		"auth:key:{" + tokenHash + "}": string(encoded),
+	}}
+
+	// No server at all: a cache hit must never dial out, so baseURL points at
+	// nothing reachable. If the code under test ever tries anyway, the
+	// request errors and the test's own assertions below catch it.
+	client := &Client{cache: cache, httpClient: http.DefaultClient, baseURL: "http://127.0.0.1:1"}
+	client.resolveDegraded.Store(true) // simulate an outage already in progress
+
+	got, err := client.Resolve(context.Background(), rawToken)
+	if err != nil {
+		t.Fatalf("expected the cache hit to resolve without error, got %v", err)
+	}
+	if got.KeyID != snap.KeyID {
+		t.Fatalf("expected cached snapshot %+v, got %+v", snap, got)
+	}
+	if !client.Degraded() {
+		t.Fatal("a cache hit cleared Degraded() without ever contacting control-plane; it must leave a prior failure in place")
+	}
+}
+
 // A 200 status only means the headers arrived; the client's own Timeout still
 // covers the body read (net/http cancels the request context mid-read when it
 // fires), so a response that starts with a 200 and then stalls before

@@ -231,18 +231,6 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (snap AuthSnapsho
 		return AuthSnapshot{}, errors.New("authz: empty token")
 	}
 
-	// Everything below this line actually reaches Redis or control-plane, so
-	// it is what Degraded() reports on. A nil error, or a non-nil error that
-	// is a genuine verdict (not found, revoked, disabled, expired), both mean
-	// the dependency answered; only ErrUpstreamUnavailable means it did not.
-	defer func() {
-		if errors.Is(err, ErrUpstreamUnavailable) {
-			c.resolveDegraded.Store(true)
-		} else {
-			c.resolveDegraded.Store(false)
-		}
-	}()
-
 	h := sha256.Sum256([]byte(rawToken))
 	tokenHash := strings.ToLower(hex.EncodeToString(h[:]))
 	redisKey := "auth:key:{" + tokenHash + "}"
@@ -253,6 +241,12 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (snap AuthSnapsho
 		if err == nil {
 			var snap AuthSnapshot
 			if err := json.Unmarshal([]byte(cached), &snap); err == nil {
+				// A cache hit never contacts control-plane, so it must not
+				// touch resolveDegraded either way: recording success here
+				// would clear a real, still-ongoing outage without having
+				// checked anything, which is exactly the failure mode this
+				// tracker exists to prevent. Leave it at whatever the last
+				// actual round trip observed (PR #975 review finding 2).
 				return snap, nil
 			}
 			// on decode error, fall through to fetch
@@ -261,6 +255,18 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (snap AuthSnapsho
 			// TODO: hook up logger
 		}
 	}
+
+	// Everything from here on actually reaches control-plane, so it is what
+	// Degraded() reports on. A nil error, or a non-nil error that is a
+	// genuine verdict (not found, revoked, disabled, expired), both mean
+	// control-plane answered; only ErrUpstreamUnavailable means it did not.
+	defer func() {
+		if errors.Is(err, ErrUpstreamUnavailable) {
+			c.resolveDegraded.Store(true)
+		} else {
+			c.resolveDegraded.Store(false)
+		}
+	}()
 
 	// 2. Fallback to control plane.
 	body := fmt.Sprintf(`{"token_hash":%q}`, tokenHash)
