@@ -806,6 +806,60 @@ jobs:
           echo "SMOKE FAIL"
           exit 1
 
+      - name: Sync LiteLLM model list from the DB catalog (issue #713)
+        # control-plane's litellmconfig service (Phase 20 Plan 03) already
+        # generates deploy/litellm/config.yaml's model_list directly from
+        # provider_routes.provider_model and can trigger a LiteLLM restart via
+        # the Docker socket it already has mounted, but nothing in this
+        # pipeline ever called it, so every deploy kept running whatever
+        # env-var template (os.environ/GROQ_FAST_MODEL and siblings) was last
+        # baked into the box's own .env. That is exactly the two-mechanisms-
+        # one-checked shape that let hive-fast silently point at a Groq model
+        # the catalog had already been corrected away from (issue #965): a
+        # migration can update the DB and still never reach the running
+        # gateway. Calling this endpoint on every deploy makes the DB the
+        # only source of truth for every DB-managed route's upstream model,
+        # which is the fix issue #713 asked for rather than another env var.
+        #
+        # POST /internal/litellm/sync is guarded by RequireInternalToken
+        # (X-Internal-Token), the same internal auth edge-api already uses
+        # for service-to-service calls to control-plane, so no new secret is
+        # introduced here. CONTROL_PLANE_INTERNAL_TOKEN is read from the
+        # box's own .env, same pattern as the agent-engine launcher step
+        # above. Retried briefly since this runs immediately after the smoke
+        # test above already confirmed control-plane healthy over HTTPS, so a
+        # failure here past the first attempt or two is a real one, not a
+        # cold-start race, and is intentionally not swallowed: a sync failure
+        # (a genuine 5xx, not a transient connection reset while the
+        # container finishes booting) fails this job rather than silently
+        # leaving LiteLLM on a stale model list.
+        working-directory: /home/sakib/hive
+        run: |
+          set -euo pipefail
+
+          token=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2-)
+          if [ -z "$token" ]; then
+            echo "::error::CONTROL_PLANE_INTERNAL_TOKEN is missing or empty in the box's .env"
+            exit 1
+          fi
+
+          status=""
+          for i in 1 2 3; do
+            status=$(curl -sS -o /tmp/litellm-sync-response.json -w '%{http_code}' \
+              --connect-timeout 2 --max-time 10 \
+              -X POST -H "X-Internal-Token: $token" \
+              http://localhost:8081/internal/litellm/sync) || status="000"
+            if [ "$status" = "200" ]; then
+              echo "LiteLLM config synced from provider_routes"
+              exit 0
+            fi
+            echo "attempt $i: sync returned $status, retry in 5s"
+            sleep 5
+          done
+          echo "::error::litellm sync failed after 3 attempts, last status $status"
+          cat /tmp/litellm-sync-response.json 2>/dev/null || true
+          exit 1
+
       - name: Assert model catalog prices agree with the model LiteLLM will call
         # Issue #689. provider_routes.provider_model is metadata nobody reads at
         # dispatch time: the model LiteLLM actually sends upstream resolves at
@@ -875,20 +929,27 @@ jobs:
         # two-mechanisms-one-checked shape as #689 itself, just moved one
         # field over.
         #
-        # Known circularity, not solved here: apps/control-plane/internal/
-        # litellmconfig's config sync (issue #701, fixed by #705; #707 tracks
-        # the remaining gaps in what it preserves) writes a DB-managed route's
-        # `litellm_params.model` straight from provider_routes.provider_model,
-        # the same column this step's DB side reads. After that sync runs
-        # against a DB-managed route, this comparison cannot fail even if the
-        # env-var mechanism the sync bypasses is wrong, because both sides
-        # would trace back to the identical database value. Today the check
-        # is real: the live config on a freshly recreated box is still the
-        # first-boot seed with `os.environ/...` templates, genuinely
-        # independent of the DB. The api_base comparison above only partially
-        # covers the gap (it still catches an api_base drift after a sync);
-        # it does not restore independence to the model-string comparison.
-        # See issue #713 for the actual fix; not attempted here.
+        # Known circularity (issue #713, wired in by the preceding step): the
+        # previous step now calls apps/control-plane/internal/litellmconfig's
+        # config sync (issue #701, fixed by #705; #707 tracks the remaining
+        # gaps in what it preserves) on every deploy, which writes a
+        # DB-managed route's `litellm_params.model` straight from
+        # provider_routes.provider_model, the same column this step's DB side
+        # reads. That means this comparison can no longer fail for a
+        # DB-managed route even if the sync's own query or the generator's
+        # adapter logic is wrong, because both sides trace back to the
+        # identical database read. What this step still catches: the sync
+        # step above failing outright (it fails the job itself before this
+        # one runs), a route this catalog thinks is DB-managed but the sync
+        # query's join excludes (a real drift the two steps would otherwise
+        # disagree on), or an api_base mismatch on a route the sync does not
+        # cover. It no longer catches a bad `provider_model` value reaching a
+        # stale env-var template, because that mechanism is no longer in the
+        # loop for any route the sync's query returns. This is an accepted,
+        # narrower scope for this step now that issue #713 is fixed, not a
+        # regression: the two-mechanisms-one-checked shape #689 and #965 both
+        # hit is what #713 removed, and a check that could still fail on it
+        # would mean the sync had not actually taken effect.
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
