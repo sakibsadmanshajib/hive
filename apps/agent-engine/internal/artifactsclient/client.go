@@ -38,6 +38,11 @@ import (
 	"time"
 )
 
+// ErrUnauthorized is returned when edge-api rejects bearerJWT (401 or 403),
+// most likely because it expired. Wrapped, never returned bare, so callers
+// use errors.Is.
+var ErrUnauthorized = errors.New("artifactsclient: bearer JWT rejected")
+
 // Client publishes artifacts to an edge-api instance at baseURL.
 type Client struct {
 	baseURL string
@@ -112,6 +117,14 @@ func (c *Client) post(ctx context.Context, bearerJWT, path string, body map[stri
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// Distinct from the generic branch below so a caller (engine's
+		// publishDeckArtifact logs distinctly on this) can tell "the bearer
+		// JWT was rejected, likely expired" apart from every other failure
+		// shape, rather than that surfacing only as an unremarkable status
+		// number an operator has to already be looking for.
+		return Artifact{}, fmt.Errorf("%w: status %d from %s", ErrUnauthorized, resp.StatusCode, path)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return Artifact{}, fmt.Errorf("artifactsclient: unexpected status %d from %s", resp.StatusCode, path)
 	}
