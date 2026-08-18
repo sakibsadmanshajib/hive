@@ -275,3 +275,32 @@ export function isEngineUnavailable(task: AgentTask): boolean {
 export function isEngineLaunchFailure(task: AgentTask): boolean {
   return task.status === "failed" && task.error_message === ENGINE_LAUNCH_FAILED_MESSAGE;
 }
+
+/**
+ * Matches the exact shape apps/edge-api/internal/artifacts/handler.go's
+ * storeVersion emits: "/artifacts/{id}" or "/artifacts/{id}/v/{n}". A task's
+ * result_summary_ref is this shape only when a knowledge-work-pack session
+ * published a real artifact (apps/agent-engine/internal/engine's
+ * publishDeckArtifact); every other task's result_summary_ref is the agent's
+ * own free-text final response, which this must not mistake for a link.
+ */
+const ARTIFACT_REF_PATTERN = /^\/artifacts\/[^/]+(\/v\/\d+)?$/;
+
+/**
+ * Resolves a task's result_summary_ref to an absolute, openable artifact
+ * URL, or null when ref is not that shape (the plain-text fallback case) or
+ * NEXT_PUBLIC_ARTIFACTS_BASE_URL is not configured for this deployment.
+ * Artifacts are deliberately served from their own origin
+ * (deploy/docker/Caddyfile.artifacts), never this app's, so ref alone -- a
+ * bare path -- is never a usable href on its own.
+ */
+export function artifactUrl(ref: string): string | null {
+  if (!ARTIFACT_REF_PATTERN.test(ref)) {
+    return null;
+  }
+  const base = process.env.NEXT_PUBLIC_ARTIFACTS_BASE_URL;
+  if (!base) {
+    return null;
+  }
+  return base.replace(/\/+$/, "") + ref;
+}

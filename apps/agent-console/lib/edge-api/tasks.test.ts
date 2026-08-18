@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 
 import {
   AgentTaskError,
+  artifactUrl,
   cancelTask,
   createTask,
   ENGINE_LAUNCH_FAILED_MESSAGE,
@@ -44,6 +45,7 @@ const TASK: AgentTask = {
 describe("edge-api tasks client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("listTasks sends a Bearer-authorized GET and decodes the tasks array", async () => {
@@ -200,5 +202,43 @@ describe("edge-api tasks client", () => {
     expect(TERMINAL_STATUSES.has("cancelled")).toBe(true);
     expect(TERMINAL_STATUSES.has("queued")).toBe(false);
     expect(TERMINAL_STATUSES.has("running")).toBe(false);
+  });
+
+  describe("artifactUrl", () => {
+    it("resolves an artifact ref to an absolute URL when configured", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
+      expect(artifactUrl("/artifacts/abc-123")).toBe(
+        "https://artifacts.example.com/artifacts/abc-123",
+      );
+    });
+
+    it("resolves a versioned artifact ref", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
+      expect(artifactUrl("/artifacts/abc-123/v/2")).toBe(
+        "https://artifacts.example.com/artifacts/abc-123/v/2",
+      );
+    });
+
+    it("strips a trailing slash from the configured base", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com/");
+      expect(artifactUrl("/artifacts/abc-123")).toBe(
+        "https://artifacts.example.com/artifacts/abc-123",
+      );
+    });
+
+    it("returns null for the plain-text final-response fallback shape", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
+      expect(artifactUrl("the agent's own summary text")).toBeNull();
+    });
+
+    it("returns null when NEXT_PUBLIC_ARTIFACTS_BASE_URL is not configured", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "");
+      expect(artifactUrl("/artifacts/abc-123")).toBeNull();
+    });
+
+    it("returns null for an empty ref", () => {
+      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
+      expect(artifactUrl("")).toBeNull();
+    });
   });
 });

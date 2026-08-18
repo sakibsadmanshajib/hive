@@ -72,6 +72,7 @@ func (r *Remote) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		"user_id":      t.UserID,
 		"pack":         string(t.Pack),
 		"instructions": t.Instructions,
+		"bearer_jwt":   t.BearerJWT,
 	}, &out)
 	if err != nil {
 		return "", err

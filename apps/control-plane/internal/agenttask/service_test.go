@@ -120,10 +120,23 @@ type fakeEngine struct {
 
 	mu        sync.Mutex
 	cancelled []string
+	// lastLaunched records the exact Task the most recent Launch call
+	// received, so a test can assert on fields (like BearerJWT) that never
+	// reach the returned session reference.
+	lastLaunched agenttask.Task
 }
 
-func (f *fakeEngine) Launch(context.Context, agenttask.Task) (string, error) {
+func (f *fakeEngine) Launch(_ context.Context, t agenttask.Task) (string, error) {
+	f.mu.Lock()
+	f.lastLaunched = t
+	f.mu.Unlock()
 	return f.sessionRef, f.err
+}
+
+func (f *fakeEngine) lastLaunchedTask() agenttask.Task {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastLaunched
 }
 
 func (f *fakeEngine) Cancel(_ context.Context, sessionRef string) error {
@@ -219,7 +232,7 @@ func (s *slotEngine) cancelCount() int {
 // launch outcome has to read the settled row rather than the create return.
 func createSettled(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.UUID, pack agenttask.Pack) agenttask.Task {
 	t.Helper()
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "", "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -244,7 +257,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 	}
 	done := make(chan result, 1)
 	go func() {
-		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
 		done <- result{task: task, err: err}
 	}()
 
@@ -262,7 +275,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 
 func TestService_CreateTask_InvalidPack(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{})
-	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "")
+	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", "")
 	if !errors.Is(err, agenttask.ErrInvalidPack) {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
 	}
@@ -308,6 +321,36 @@ func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing
 	}
 }
 
+// TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt guards the
+// wiring apps/agent-engine/internal/artifactsclient's own package doc
+// requires: the task-lifecycle code that authenticated the task-start
+// request must supply that same JWT to the engine, and it must never become
+// a database column public.agent_tasks's own row can leak back out through
+// Get/List.
+func TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt(t *testing.T) {
+	engine := &fakeEngine{sessionRef: "session-123"}
+	svc := agenttask.NewService(newFakeRepository(), engine)
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", "test-user-jwt")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle()
+
+	if got := engine.lastLaunchedTask().BearerJWT; got != "test-user-jwt" {
+		t.Errorf("Engine.Launch got BearerJWT %q, want %q", got, "test-user-jwt")
+	}
+
+	settled, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if settled.BearerJWT != "" {
+		t.Errorf("expected BearerJWT to never round-trip through the repository, got %q", settled.BearerJWT)
+	}
+}
+
 // TestService_CreateTask_EngineLaunchFails_SanitizesErrorMessage guards the
 // PR #606 review finding: a generic Launch failure (anything but
 // ErrEngineNotConfigured) must never persist err.Error() verbatim into the
@@ -340,7 +383,7 @@ func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{})
 	tenantID, ownerID, otherID := uuid.New(), uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}
@@ -359,10 +402,10 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{})
 	tenantID, userA, userB := uuid.New(), uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", ""); err != nil {
 		t.Fatalf("seed userA task: %v", err)
 	}
-	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, "", ""); err != nil {
 		t.Fatalf("seed userB task: %v", err)
 	}
 
@@ -585,7 +628,7 @@ func TestService_LaunchSucceedsButTransitionFails_TaskFailsVisibly(t *testing.T)
 	svc := agenttask.NewService(repo, eng)
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -648,7 +691,7 @@ func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
 	svc := agenttask.NewService(repo, eng)
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -676,7 +719,7 @@ func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(repo, eng)
 	tenantID, userID := uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", ""); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	svc.WaitIdle() // a panic escaping the recover takes the whole test binary down
@@ -692,7 +735,7 @@ func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), panickingEngine{})
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

@@ -33,7 +33,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -44,7 +48,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/deckgen"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressproxy"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
@@ -59,6 +65,22 @@ type Task struct {
 	UserID       uuid.UUID
 	Pack         string
 	Instructions string // free-text prompt/goal; empty means no initial message is sent
+
+	// BearerJWT is the real per-task user's own bearer JWT, captured once by
+	// edge-api's task-create handler (the only place that ever sees it) and
+	// threaded through control-plane and the /launch call untouched. Never
+	// persisted anywhere: agenttask.Task carries the same field but it is
+	// never written to public.agent_tasks, and this session only holds it in
+	// memory for the task's lifetime. It exists so a knowledge-work-pack
+	// session that produces a deck (see publishDeckArtifact) can publish it
+	// through apps/edge-api/internal/artifacts as the task's own tenant/user
+	// — never as an internal-token identity, which would let this process
+	// forge an arbitrary tenant_id (see artifactsclient's package doc).
+	// Empty when the caller never supplied one (e.g. an API-key-authenticated
+	// task create, which is not backed by a Supabase JWT): publishDeckArtifact
+	// then just skips publishing, exactly as if the task were not a
+	// knowledge-work-pack task at all.
+	BearerJWT string
 }
 
 // Status mirrors apps/control-plane/internal/agenttask.Status's values
@@ -140,6 +162,68 @@ type Config struct {
 	MemoryLimit string
 	CPULimit    string
 	PidsLimit   int
+
+	// Publisher, when set, is used to publish a knowledge-work-pack session's
+	// declared deck output (see publishDeckArtifact) once its task succeeds.
+	// A nil Publisher (the zero value, and every existing caller/test before
+	// this field existed) disables the feature outright: Status behaves
+	// exactly as it did before, returning the agent's own final-response
+	// text. *artifactsclient.Client satisfies this structurally — callers
+	// never need to name the unexported interface type, only pass a value
+	// with matching Create/AddVersion methods (cmd/agent-engine/serve.go
+	// does exactly that, conditionally on EDGE_API_URL being configured).
+	Publisher deckPublisher
+}
+
+// deckPublisher is the narrow surface SandboxEngine needs from
+// artifactsclient.Client, so tests can substitute a fake without a real
+// edge-api. Method signatures mirror artifactsclient.Client's exactly.
+type deckPublisher interface {
+	Create(ctx context.Context, bearerJWT, name, html string) (artifactsclient.Artifact, error)
+	AddVersion(ctx context.Context, bearerJWT, artifactID, html string) (artifactsclient.Artifact, error)
+}
+
+const (
+	// packKnowledgeWork mirrors apps/control-plane/internal/agenttask's
+	// PackKnowledgeWork constant value. Redeclared rather than imported: that
+	// package lives in a different Go module (control-plane), and Go modules
+	// cannot import one another's internal packages — the exact cross-module
+	// limitation this file's own package doc already describes for Task and
+	// Status.
+	packKnowledgeWork = "knowledge-work-pack"
+
+	// deckManifestRelPath is the one file publishDeckArtifact ever looks at
+	// under a session's /workspace, relative to its root. Deliberately not a
+	// glob or a directory scan: a sandbox task can write arbitrary scratch
+	// files (build output, temp state, cloned repos), and treating any of
+	// that as "the output" would either publish garbage or make the actual
+	// bound (how many files, how large) implicit in whatever the task
+	// happened to leave behind. A single well-known path is a hard, visible
+	// rule instead: nothing here is "the deck" unless the deck-generation
+	// skill (apps/agent-engine/packs/knowledge-work-pack/skills/deck-
+	// generation/AGENTS.md) wrote exactly this file.
+	deckManifestRelPath = ".hive/deck.json"
+
+	// maxDeckManifestBytes bounds the manifest read below. This is a JSON
+	// deck definition (a title plus slide titles/bullets), not the rendered
+	// HTML — 1 MiB is generous for any deck a human would present, and
+	// exceeding it is treated as a loud, explicit "too large to publish"
+	// skip (see readCapped), never a silent truncation. The rendered HTML
+	// itself is bounded separately and independently by edge-api's own
+	// artifacts.MaxHTMLSize (5 MiB) on the actual publish call.
+	maxDeckManifestBytes = 1 << 20
+)
+
+// deckManifest is the wire shape the deck-generation skill writes to
+// deckManifestRelPath. Embeds deckgen.Deck directly (same JSON field names)
+// plus one optional field this package interprets itself.
+type deckManifest struct {
+	deckgen.Deck
+	// ArtifactID, when non-empty, publishes as a new version of that existing
+	// artifact (AddVersion) instead of creating a new one (Create) — the
+	// deck-generation skill sets this when a task is explicitly regenerating
+	// a deck it (or a prior task) already published.
+	ArtifactID string `json:"artifact_id"`
 }
 
 func (c Config) withDefaults() Config {
@@ -210,6 +294,13 @@ type session struct {
 	sessionDir     string // removed when reaped; holds only Unix sockets
 	workingDir     string // removed when reaped; the sandbox's /workspace bind mount
 	release        func() // frees this session's quota slot; safe to call repeatedly
+
+	// pack and bearerJWT are captured from Task at Launch and read back by
+	// publishDeckArtifact when this session's task succeeds. bearerJWT is
+	// never logged and never leaves this process except as the
+	// Authorization header on the one edge-api call it authenticates.
+	pack      string
+	bearerJWT string
 
 	// reaped and terminal are guarded by SandboxEngine.mu.
 	reaped   bool
@@ -427,6 +518,8 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		sessionDir:     sessionDir,
 		workingDir:     workingDir,
 		release:        release,
+		pack:           t.Pack,
+		bearerJWT:      t.BearerJWT,
 	}
 	e.mu.Lock()
 	e.sessions[convo.ID.String()] = sess
@@ -466,6 +559,17 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 			return "", "", "", fmt.Errorf("engine: get final response: %w", err)
 		}
 		status, resultSummary = StatusSucceeded, summary
+
+		// Runs before reap() below removes sess.workingDir: this is the last
+		// point anything can still read what the sandbox wrote to
+		// /workspace. A publish failure of any kind (no manifest, malformed
+		// manifest, edge-api rejected it, network error) intentionally falls
+		// back to the agent's own text summary above rather than touching
+		// the task's success/failure at all — see publishDeckArtifact's doc
+		// comment for the reasoning.
+		if url, ok := e.publishDeckArtifact(ctx, sess); ok {
+			resultSummary = url
+		}
 	case controlclient.StatusErrored, controlclient.StatusStuck:
 		status, errMessage = StatusFailed, fmt.Sprintf("agent-server execution_status=%s", info.ExecutionStatus)
 	case controlclient.StatusPaused, controlclient.StatusDeleting:
@@ -486,6 +590,93 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 	// leaking their sandbox process, directories and quota slot.
 	_ = e.reap(sess, &terminalOutcome{status: status, resultSummary: resultSummary, errMessage: errMessage})
 	return status, resultSummary, errMessage, nil
+}
+
+// publishDeckArtifact looks for sess's declared deck output
+// (deckManifestRelPath under its /workspace) and, if present and valid,
+// renders and publishes it through e.cfg.Publisher, returning the artifact's
+// stable URL. ok is false for every non-error, entirely normal case too: no
+// manifest at all is what almost every task (every coding-pack task, and
+// most knowledge-work-pack tasks that were not a deck request) looks like,
+// and is not logged.
+//
+// Every failure case here — a malformed manifest, a render error, edge-api
+// rejecting or being unreachable — is deliberately absorbed rather than
+// propagated: the sandboxed agent's own conversation already succeeded, and
+// a storage-side problem publishing its output must not silently rewrite
+// that into a failed task. The other half of that same design choice is
+// what the caller does with a false ok: it leaves resultSummary as the
+// agent's own final-response text rather than fabricating a link, so the
+// task-console never renders a URL that does not resolve (see
+// apps/agent-console/components/task-console.tsx).
+func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) (url string, ok bool) {
+	if sess.pack != packKnowledgeWork || e.cfg.Publisher == nil {
+		return "", false
+	}
+	if sess.bearerJWT == "" {
+		// Expected for an API-key-authenticated task create (no Supabase JWT
+		// exists to forward) — see Task.BearerJWT's doc comment. Not an
+		// operator problem, so no log line.
+		return "", false
+	}
+
+	manifestPath := filepath.Join(sess.workingDir, deckManifestRelPath)
+	data, err := readCapped(manifestPath, maxDeckManifestBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false // the ordinary case: this task did not produce a deck
+	}
+	if err != nil {
+		log.Printf("engine: deck manifest %s: %v", deckManifestRelPath, err)
+		return "", false
+	}
+
+	var manifest deckManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		log.Printf("engine: deck manifest %s is not valid JSON: %v", deckManifestRelPath, err)
+		return "", false
+	}
+
+	html, err := deckgen.Render(manifest.Deck)
+	if err != nil {
+		log.Printf("engine: render deck manifest %s: %v", deckManifestRelPath, err)
+		return "", false
+	}
+
+	var artifact artifactsclient.Artifact
+	if manifest.ArtifactID != "" {
+		artifact, err = e.cfg.Publisher.AddVersion(ctx, sess.bearerJWT, manifest.ArtifactID, html)
+	} else {
+		artifact, err = e.cfg.Publisher.Create(ctx, sess.bearerJWT, manifest.Title, html)
+	}
+	if err != nil {
+		// Never log sess.bearerJWT or html (tenant-authored deck content).
+		log.Printf("engine: publish deck artifact: %v", err)
+		return "", false
+	}
+	return artifact.URL, true
+}
+
+// readCapped reads path fully only if it is at most limit bytes. A file
+// exactly at limit+1 bytes or larger is rejected outright rather than
+// silently truncated to limit bytes and parsed as if that were the whole
+// deck — a truncated manifest would otherwise either fail JSON decoding
+// (confusing) or, worse, decode successfully into a partial deck nobody
+// asked to publish.
+func readCapped(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path) // #nosec G304 -- path is filepath.Join(sess.workingDir, a fixed constant), never caller-supplied
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("exceeds %d byte limit", limit)
+	}
+	return data, nil
 }
 
 // reap frees everything sess holds and records outcome for later Status
