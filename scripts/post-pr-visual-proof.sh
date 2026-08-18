@@ -45,9 +45,16 @@
 # or fragment (invitation accept, password reset, magic link, OAuth
 # callback) must be masked in both the text log and the screenshot PIXELS
 # before calling this script. `npm run lint:proof-tokens` only catches the
-# text half. Masking the image is on whoever captured it. This repository is
-# public and permanent once uploaded: review every image before invoking
-# this script, not after.
+# text half, and it only ever scans committed files under docs/proof/.
+#
+# Nothing scans what this script uploads. A release asset is blob storage
+# attached to a tag, not a git object, so GitHub secret scanning, push
+# protection and GitGuardian never see it, and neither does our own linter.
+# Under the old committed-file mechanism a leaked credential had two chances
+# to be caught after the fact; here it has none. Masking the image is on
+# whoever captured it, and it is the only control. This repository is public
+# and an upload is permanent: review every image before invoking this script,
+# not after.
 #
 # Usage:
 #   scripts/post-pr-visual-proof.sh <pr-number> <image1> [image2 ...] \
@@ -59,6 +66,30 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 <pr-number> <image1> [image2 ...] [--caption \"text\"]" >&2
+  exit 1
+}
+
+# GitHub rewrites a release asset's name on upload: characters outside a safe
+# set are substituted, so an asset uploaded as `name space test.png` is
+# published as `name.space.test.png` (verified against this repo's own release,
+# not assumed). This script builds the markdown URL from the name it chose
+# locally, so any name GitHub would rewrite yields a URL that points at
+# nothing: a 404 image, posted by a script that exited 0. Markdown compounds
+# it, terminating a URL at the first space and treating `#` as a fragment.
+# Folding the name into the safe set first makes the published name and the URL
+# identical by construction. Names already inside the set upload verbatim
+# (again, verified against existing assets).
+sanitize_asset_name() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+# Preflight self-test, mirroring the MUST_CATCH/MUST_ALLOW pattern the repo's
+# tools/lint-*.mjs guards use. If the sanitizer ever stops holding, this fails
+# here rather than silently posting a proof that does not render.
+[ "$(sanitize_asset_name 'name space test.png')" = "name_space_test.png" ] &&
+  [ "$(sanitize_asset_name 'a#b?c&d%e.png')" = "a_b_c_d_e.png" ] &&
+  [ "$(sanitize_asset_name 'safe-name_1.0.png')" = "safe-name_1.0.png" ] || {
+  echo "::error:: sanitize_asset_name self-test failed; refusing to post a proof that may not render" >&2
   exit 1
 }
 
@@ -86,21 +117,80 @@ done
 
 for img in "${images[@]}"; do
   [ -f "$img" ] || { echo "::error:: no such file: $img" >&2; exit 1; }
+  # `cp` dereferences a symlink by default, so a link sitting in a capture
+  # directory would publish its target's bytes rather than the file the caller
+  # named and looked at. Refuse rather than resolve: what gets reviewed for
+  # credentials must be what gets uploaded.
+  if [ -L "$img" ]; then
+    echo "::error:: refusing a symlink (publish the real file you reviewed): $img" >&2
+    exit 1
+  fi
+  # An upload here is public and permanent, so refuse anything that is not an
+  # image rather than discover afterwards that a stray shell glob matched a
+  # log, a dotenv or a dump. GitHub would happily host any of them.
+  case "${img,,}" in
+    *.png|*.jpg|*.jpeg|*.gif|*.webp) ;;
+    *)
+      echo "::error:: not an image (png/jpg/jpeg/gif/webp): $img" >&2
+      echo "::error:: GitHub renders no other type inline, and an upload cannot be unpublished." >&2
+      exit 1
+      ;;
+  esac
 done
 
 repo="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
 # Created once, then reused forever. Never delete this release: every proof
-# image this script has ever posted links into it by name. A single
-# credential-bearing asset found later can be pulled with
-# `gh release delete-asset visual-proof-assets <name> --repo "$repo" --yes`
-# without touching any other proof this release holds.
+# image this script has ever posted links into it by name.
+#
+# If a credential-bearing asset is found later, REVOKE THE CREDENTIAL FIRST,
+# then pull the one asset with
+# `gh release delete-asset visual-proof-assets <name> --repo "$repo" --yes`,
+# which leaves every other proof in this release untouched. Deleting the asset
+# is not revocation and does not close the incident: the token stays valid
+# until revoked or consumed, the PR comment and its download URL remain in the
+# timeline and the API, the notification emails GitHub already sent are not
+# retractable, and release-asset downloads are not logged anywhere we can read,
+# so the exposure cannot be bounded after the fact.
 release_tag="visual-proof-assets"
 
+# Resolve the PR BEFORE anything is uploaded. The comment is posted last, so
+# without this a mistyped or non-existent PR number is only discovered after
+# every image is already public and permanent, with no comment referencing it
+# and no way to unpublish.
+#
+# `--json state` is load-bearing: it forces the API round trip. `--json number`
+# looks like the natural choice and is useless here, because gh answers it
+# from the argument itself and exits 0 for a PR that does not exist (verified:
+# `gh pr view 99999999 --json number` prints `{"number":99999999}`, status 0).
+# That made an earlier version of this guard a no-op that published assets for
+# a nonexistent PR. Do not "simplify" this field.
+gh pr view "$pr" --repo "$repo" --json state >/dev/null || {
+  echo "::error:: no such pull request in $repo: $pr (nothing was uploaded)" >&2
+  exit 1
+}
+
+# Non-blocking manifest. This runs unattended under agents, so a confirmation
+# prompt would hang; printing what is about to become public still gives the
+# caller, and anyone reading the transcript afterwards, the chance to catch a
+# wrong file before it is irreversible.
+{
+  echo "About to publish ${#images[@]} file(s) to a PUBLIC, PERMANENT release."
+  echo "  repo:    $repo"
+  echo "  release: $release_tag"
+  echo "  pr:      #$pr"
+  for img in "${images[@]}"; do echo "  file:    $img"; done
+  echo "An uploaded asset cannot be unpublished. Credentials must already be masked in the PIXELS."
+} >&2
+
 if ! gh release view "$release_tag" --repo "$repo" >/dev/null 2>&1; then
+  # Several agents run this concurrently, so two can both see no release and
+  # both try to create it. Losing that race is not an error: re-check instead
+  # of aborting and losing the proof this run was meant to post.
   gh release create "$release_tag" --repo "$repo" \
     --title "Visual proof assets" \
     --notes "Permanent host for PR visual-proof screenshots (scripts/post-pr-visual-proof.sh). Never delete this release. Remove one leaked asset with \`gh release delete-asset $release_tag <name> --repo $repo --yes\` rather than the whole release." \
-    --target main
+    --target main \
+    || gh release view "$release_tag" --repo "$repo" >/dev/null
 fi
 
 body_file="$(mktemp)"
@@ -125,7 +215,7 @@ for img in "${images[@]}"; do
   # `gh release upload` derives the published asset name from the file it
   # is given, not from a `#label` suffix (that only sets a cosmetic display
   # label), so the rename has to happen on disk first.
-  name="pr${pr}-${stamp}-${RANDOM}-${base}"
+  name="$(sanitize_asset_name "pr${pr}-${stamp}-${RANDOM}-${base}")"
   staged="${stage_dir}/${name}"
   cp "$img" "$staged"
   gh release upload "$release_tag" "$staged" --repo "$repo" >/dev/null
