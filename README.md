@@ -99,13 +99,15 @@ docker compose down -v           # Stop and remove volumes (DB/cache/images)
 export OPENAI_API_KEY="<API_KEY>"
 export OPENAI_BASE_URL="https://api-hive.scubed.co/v1"
 
+# Note: api-hive.scubed.co is the demo/staging deployment. Replace with your Hive base URL in production.
+
 # Python
 pip install openai
 python -c "
 from openai import OpenAI
 client = OpenAI()
 msg = client.chat.completions.create(
-    model='hive-fast',
+    model='hive-default',
     messages=[{'role': 'user', 'content': 'Hello'}]
 )
 print(msg.choices[0].message.content)
@@ -120,7 +122,7 @@ const client = new OpenAI({
   baseURL: 'https://api-hive.scubed.co/v1'
 });
 client.chat.completions.create({
-  model: 'hive-fast',
+  model: 'hive-default',
   messages: [{role: 'user', content: 'Hello'}]
 }).then(msg => console.log(msg.choices[0].message.content));
 "
@@ -129,6 +131,8 @@ client.chat.completions.create({
 ### Anthropic-compatible SDK
 
 See [`docs/anthropic-sdk-integration.md`](docs/anthropic-sdk-integration.md) for the exact integration path, base URL, and tested model aliases.
+
+**Note:** The `x-api-key` authentication fix was merged in PR #954 (2026-08-17). End-to-end verification with a real credential against the deployed gateway is pending; see the integration guide for current verification status before relying on this in production.
 
 ```bash
 # Python example
@@ -140,7 +144,7 @@ client = Anthropic(
 )
 
 message = client.messages.create(
-    model="hive-fast",
+    model="hive-default",
     max_tokens=256,
     messages=[{"role": "user", "content": "Hello"}],
 )
@@ -308,16 +312,16 @@ Planning ground truth, UAT results, and deferred scope live in the project vault
 
 ## Key Documents
 
-- **Integration guide** — `docs/anthropic-sdk-integration.md` for Anthropic SDK setup
-- **Testing** — `docs/live-test-auth.md` for E2E authentication protocol
-- **Agent runtime** — `deploy/apptainer/README.md` for sandbox image and configuration
-- **Operational** — `CLAUDE.md` for testing gotchas, agent engine setup, and regulatory stance
-- **Development** — `.claude/rules/orchestrator.md` for coding pipeline and merge policy
-- **Chat fork** — The Open WebUI frontend is a vendored fork, heavily modified; see `CLAUDE.md` for licensing and architecture notes
+- **Integration guide**: `docs/anthropic-sdk-integration.md` for Anthropic SDK setup
+- **Testing**: `docs/live-test-auth.md` for E2E authentication protocol
+- **Agent runtime**: `deploy/apptainer/README.md` for sandbox image and configuration
+- **Operational**: `CLAUDE.md` for testing gotchas, agent engine setup, and regulatory stance
+- **Development**: `.claude/rules/orchestrator.md` for coding pipeline and merge policy
+- **Chat fork**: The Open WebUI frontend is a vendored fork, heavily modified; see `CLAUDE.md` for licensing and architecture notes
 
 ## Known Limitations
 
-- **Open WebUI licence carve-out**: The branding modification (removing upstream's "(Open WebUI)" suffix) is permitted under the Open WebUI licence only while deployments stay at or under 50 end users per rolling 30 days, or hold written vendor permission, or hold an enterprise licence. This constraint is tracked but not gated; current deployments are within the threshold.
+- **Open WebUI licence carve-out**: The branding modification (removing upstream's "(Open WebUI)" suffix) is permitted under the Open WebUI licence only while deployments stay at or under 50 end users per rolling 30 days, or hold written vendor permission, or hold an enterprise licence. This is an accepted risk with no gate and no tracking issue (owner decision, D-041); current deployments are within the threshold.
 - **Extended thinking, prompt caching, and server-side tools**: Anthropic-specific features like `thinking`, `cache_control`, `container`, `inference_geo` are not implemented. Neither OpenRouter nor Groq (the configured providers) support Anthropic's native versions, so this is a provider-capability gap, not an oversight.
 - **Batch API success path**: The `/v1/batches` endpoint processes submissions and failures correctly, but the success path (`status=completed`) is not exercisable with the current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports OpenAI, Azure, Vertex AI, and Anthropic; OpenRouter and Groq have no native batch API.
 
