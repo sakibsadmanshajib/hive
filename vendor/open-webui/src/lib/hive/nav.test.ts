@@ -11,8 +11,10 @@ const byId = (id: string): HiveNavItem => {
 };
 
 describe('HIVE_NAV', () => {
-	it('names the three destinations the shell ships', () => {
-		expect(HIVE_NAV.map((item) => item.id)).toEqual(['chats', 'agents', 'knowledge']);
+	it('names the two destinations the shell ships', () => {
+		// 'chats' was dropped: its href ('/') duplicated New Chat and no list
+		// view was ever built behind it (PR #938 added it for row parity only).
+		expect(HIVE_NAV.map((item) => item.id)).toEqual(['agents', 'knowledge']);
 	});
 
 	it('points the agent destination at a route inside this application', () => {
@@ -36,19 +38,8 @@ describe('HIVE_NAV', () => {
 });
 
 describe('isNavItemActive', () => {
-	const chats = byId('chats');
 	const agents = byId('agents');
 	const knowledge = byId('knowledge');
-
-	it('marks Chats current on the chat root and on an open conversation', () => {
-		expect(isNavItemActive(chats, '/')).toBe(true);
-		expect(isNavItemActive(chats, '/c/abc-123')).toBe(true);
-	});
-
-	it('does not leave Chats current on every other route', () => {
-		expect(isNavItemActive(chats, '/agents')).toBe(false);
-		expect(isNavItemActive(chats, '/workspace/knowledge')).toBe(false);
-	});
 
 	it('marks Agents current on the agent destination and below it', () => {
 		expect(isNavItemActive(agents, '/agents')).toBe(true);
@@ -61,15 +52,22 @@ describe('isNavItemActive', () => {
 		expect(isNavItemActive(knowledge, '/workspace/knowledgebase')).toBe(false);
 	});
 
-	it('treats an empty or missing pathname as the chat root', () => {
-		expect(isNavItemActive(chats, '')).toBe(true);
+	it('treats an empty or missing pathname as no match, since no row links to it', () => {
 		expect(isNavItemActive(agents, '')).toBe(false);
+		expect(isNavItemActive(knowledge, '')).toBe(false);
 	});
 
-	it('marks exactly one row current for any route the shell links to', () => {
-		for (const route of ['/', '/c/abc', '/agents', '/workspace/knowledge']) {
+	it('marks exactly one row current on each row\'s own destination', () => {
+		for (const route of ['/agents', '/workspace/knowledge']) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));
 			expect(active.length).toBe(1);
+		}
+	});
+
+	it('marks no row current on the chat root, since Chats is no longer a nav row', () => {
+		for (const route of ['/', '/c/abc-123']) {
+			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));
+			expect(active.length).toBe(0);
 		}
 	});
 });
