@@ -290,6 +290,30 @@ test("proof capture: the agent surface, natively, in both palettes", async ({
   await page.screenshot({ path: `${PROOF_DIR}/chat-after.png`, fullPage: false });
 
   /*
+   * The same two composers again at 1280 by 720.
+   *
+   * This is Playwright's default viewport, which is what owui.setup.ts runs at,
+   * and therefore the width of the only "before" capture of chat's composer
+   * that exists: the signed-in page in main's own nightly failure screenshot.
+   * A before at 1280 and an after at 1440 is not a comparison, because a reader
+   * cannot tell a layout change from a reflow, and that is exactly the
+   * judgement these images are for. Same width or it proves nothing.
+   */
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.goto("/agents");
+  const agentComposer1280 = page
+    .locator("#hive-agent-instructions")
+    .locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]")
+    .first();
+  await expect(agentComposer1280).toBeVisible();
+  await agentComposer1280.screenshot({ path: `${PROOF_DIR}/composer-agent-1280.png` });
+
+  await page.goto("/");
+  await expect(chatComposer).toBeVisible();
+  await chatComposer.screenshot({ path: `${PROOF_DIR}/composer-chat-1280.png` });
+
+  /*
    * The extraction has to be invisible on the chat surface, and two images a
    * human eyeballs is a weak way to prove that. These are the classes that
    * carry the composer's shape, asserted on chat's own container, so drift in
