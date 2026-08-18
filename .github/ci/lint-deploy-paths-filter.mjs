@@ -21,15 +21,25 @@
 // It does not (and cannot, without executing the compose profile logic)
 // check docker-compose.yml's own inputs (env files, bind mounts, image
 // digests) or the workflow's own script/scripts: entries -- those are listed
-// by hand in the paths filter today and are not COPY sources. It also only
-// understands the two glob shapes this filter actually uses: an exact
-// literal ('go.work') and a directory wildcard ('apps/edge-api/**'). A third
-// shape showing up in the filter would need this matcher extended.
+// by hand in the paths filter today and are not COPY sources. On the filter
+// side it only understands the two glob shapes this filter actually uses: an
+// exact literal ('go.work') and a directory wildcard ('apps/edge-api/**'). A
+// third shape showing up in the filter would need this matcher extended.
+//
+// A Docker COPY source can itself carry a `*` (`go.work.sum*`, meaning "copy
+// this file if it exists"). Docker resolves that against the real build
+// context, so this script does the same rather than string-matching the
+// glob literally: it expands the wildcard against the actual files on disk
+// and checks each real match. Comparing the un-expanded glob text against
+// the filter would have made `go.work.sum*` equal to the literal filter
+// entry `go.work.sum` by construction, silently approving a future
+// `go.work.sum.bak` that the real Docker build would also pick up and that
+// the filter does not cover (CodeRabbit review, PR #976).
 //
 // Run: node .github/ci/lint-deploy-paths-filter.mjs
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
 
 const WORKFLOW_FILE = '.github/workflows/deploy-demo-box.yml';
@@ -57,6 +67,35 @@ function isCovered(source, filters) {
   });
 }
 
+function escapeRegExpLiteral(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Expands one COPY/ADD source token against the real repository tree. A
+// plain path (no `*`) is returned as-is, trailing slash stripped so a
+// directory copy compares equal to the filter's `/**`-stripped prefix. A
+// wildcard is resolved the way Docker resolves it: only within the final
+// path segment, against whatever actually exists in that directory today. A
+// wildcard matching nothing (the "copy if present" idiom, and the file is
+// not present) expands to nothing, same as Docker would copy nothing.
+function expandSource(rawSrc) {
+  const src = rawSrc.replace(/\/+$/, '');
+  if (!src.includes('*')) return [src];
+
+  const dir = dirname(src);
+  const base = dir === '.' ? src : src.slice(dir.length + 1);
+  const pattern = new RegExp(`^${base.split('*').map(escapeRegExpLiteral).join('.*')}$`);
+  const prefix = dir === '.' ? '' : `${dir}/`;
+
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => pattern.test(e)).map((e) => `${prefix}${e}`);
+}
+
 // Extracts COPY/ADD host-filesystem sources from one Dockerfile's text.
 // Joins backslash line continuations first, then reads instruction lines.
 // Skips `--from=<stage>` copies: those read a previous build stage's
@@ -75,13 +114,7 @@ function copySources(text) {
     const args = tokens.filter((t) => !t.startsWith('--'));
     // COPY/ADD needs at least one source and one destination.
     if (args.length < 2) continue;
-    for (const src of args.slice(0, -1)) {
-      // Docker allows a trailing `*` for "copy if present"; strip it so
-      // `go.work.sum*` compares equal to the filter's literal `go.work.sum`.
-      // Strip a trailing `/` the same way so a directory COPY compares
-      // equal to the `/**`-stripped filter prefix.
-      sources.push(src.replace(/\*+$/, '').replace(/\/+$/, ''));
-    }
+    for (const src of args.slice(0, -1)) sources.push(...expandSource(src));
   }
   return sources;
 }
