@@ -824,29 +824,39 @@ jobs:
         # POST /internal/litellm/sync is guarded by RequireInternalToken
         # (X-Internal-Token), the same internal auth edge-api already uses
         # for service-to-service calls to control-plane, so no new secret is
-        # introduced here. CONTROL_PLANE_INTERNAL_TOKEN is read from the
-        # box's own .env, same pattern as the agent-engine launcher step
-        # above. Retried briefly since this runs immediately after the smoke
-        # test above already confirmed control-plane healthy over HTTPS, so a
-        # failure here past the first attempt or two is a real one, not a
-        # cold-start race, and is intentionally not swallowed: a sync failure
-        # (a genuine 5xx, not a transient connection reset while the
-        # container finishes booting) fails this job rather than silently
-        # leaving LiteLLM on a stale model list.
+        # introduced here. CONTROL_PLANE_INTERNAL_TOKEN is read directly from
+        # the box's own .env: compose always sources control-plane's real
+        # token from there regardless of whether a GitHub secret is also set
+        # for other steps, so there is no fallback to try. Retried since this
+        # runs immediately after the smoke test above already confirmed
+        # control-plane healthy over HTTPS, so a failure here past the first
+        # attempt or two is a real one, not a cold-start race, and is
+        # intentionally not swallowed: a sync failure (a genuine non-200, not
+        # a transient connection reset while the container finishes booting)
+        # fails this job rather than silently leaving LiteLLM on a stale
+        # model list. --max-time is 35s, not the more typical 10s used
+        # elsewhere in this file: the endpoint's own work is a DB query, an
+        # atomic config write, and a Docker container restart bounded by its
+        # own 30s internal timeout (litellmconfig/restart.go), so a shorter
+        # client timeout would fire while the server side is still legitimately
+        # working and misreport a slow-but-successful sync as a failure.
         working-directory: /home/sakib/hive
         run: |
           set -euo pipefail
 
-          token=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2-)
+          token=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2- || true)
           if [ -z "$token" ]; then
             echo "::error::CONTROL_PLANE_INTERNAL_TOKEN is missing or empty in the box's .env"
             exit 1
           fi
 
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+
           status=""
           for i in 1 2 3; do
-            status=$(curl -sS -o /tmp/litellm-sync-response.json -w '%{http_code}' \
-              --connect-timeout 2 --max-time 10 \
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              --connect-timeout 2 --max-time 35 \
               -X POST -H "X-Internal-Token: $token" \
               http://localhost:8081/internal/litellm/sync) || status="000"
             if [ "$status" = "200" ]; then
@@ -857,7 +867,7 @@ jobs:
             sleep 5
           done
           echo "::error::litellm sync failed after 3 attempts, last status $status"
-          cat /tmp/litellm-sync-response.json 2>/dev/null || true
+          cat "$response_file" 2>/dev/null || true
           exit 1
 
       - name: Assert model catalog prices agree with the model LiteLLM will call
