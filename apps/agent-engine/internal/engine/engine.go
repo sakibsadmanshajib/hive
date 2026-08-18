@@ -43,6 +43,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -621,10 +622,18 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 	}
 
 	manifestPath := filepath.Join(sess.workingDir, deckManifestRelPath)
-	data, err := readCapped(manifestPath, maxDeckManifestBytes)
+	realPath, err := resolveWithinRoot(sess.workingDir, manifestPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false // the ordinary case: this task did not produce a deck
 	}
+	if err != nil {
+		// Includes a rejected symlink escape (resolveWithinRoot's own error).
+		// No detail from err ever names a real host path here, only "outside
+		// <root>", so this is safe to log as-is.
+		log.Printf("engine: deck manifest %s: %v", deckManifestRelPath, err)
+		return "", false
+	}
+	data, err := readCapped(realPath, maxDeckManifestBytes)
 	if err != nil {
 		log.Printf("engine: deck manifest %s: %v", deckManifestRelPath, err)
 		return "", false
@@ -656,6 +665,39 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 	return artifact.URL, true
 }
 
+// resolveWithinRoot fully resolves path (following every symlink in it,
+// including the final component) and refuses the result unless it still
+// lands inside root.
+//
+// Without this, a knowledge-work-pack task — which has arbitrary shell
+// access inside its sandbox, same trust tier as the coding pack — could
+// replace deckManifestRelPath with a symlink to any absolute path this
+// process can read: this daemon runs as the same unprivileged OS user that
+// owns its own runtime state (scripts/install-agent-engine-host.sh writes
+// HIVE_AGENT_ENGINE_LLM_API_KEY and CONTROL_PLANE_INTERNAL_TOKEN to a file
+// under that same account), and a symlink target is an ordinary string with
+// no container-namespace translation applied to it. A file the task could
+// coax into looking like a deck manifest would then have this process
+// publish its contents as a world-of-the-tenant-readable artifact; even one
+// that does not parse still leaks existence/size as a timing or error-shape
+// oracle. Resolving and bounds-checking before ever opening the file closes
+// both.
+func resolveWithinRoot(root, path string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err // ordinary os.ErrNotExist included, unwrapped for errors.Is
+	}
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s resolves outside its session workspace", deckManifestRelPath)
+	}
+	return real, nil
+}
+
 // readCapped reads path fully only if it is at most limit bytes. A file
 // exactly at limit+1 bytes or larger is rejected outright rather than
 // silently truncated to limit bytes and parsed as if that were the whole
@@ -663,7 +705,7 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 // (confusing) or, worse, decode successfully into a partial deck nobody
 // asked to publish.
 func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path) // #nosec G304 -- path is filepath.Join(sess.workingDir, a fixed constant), never caller-supplied
+	f, err := os.Open(path) // #nosec G304 -- path is resolveWithinRoot's output, already confirmed to resolve inside the session's own workspace
 	if err != nil {
 		return nil, err
 	}
