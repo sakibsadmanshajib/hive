@@ -638,32 +638,39 @@ const metricsListenAddr = ":9102"
 // the public mux. /metrics is deliberately not registered here; see
 // metricsListenAddr.
 //
-// healthy is called on every /health request; it must not block or touch the
-// network, so /health cannot become another consumer of a pool it exists to
-// report on. It typically wraps authz.Client.Degraded(), which is fed by real
+// degraded is called on every /health request; it must not block or touch
+// the network, so /health cannot become another consumer of a pool it exists
+// to report on. It is typically authz.Client.Degraded itself, fed by real
 // traffic on the authorize/budget-gate hot paths rather than a synthetic
 // probe: /health used to be a hardcoded 200 regardless of whether edge-api
 // could actually reach control-plane to resolve a key, so a pool-contention
 // window that made every real request fail still reported this endpoint
 // healthy throughout.
-func registerInfraRoutes(mux *http.ServeMux, specPath string, healthy func() bool) {
-	mux.HandleFunc("/health", handleHealth(healthy))
+//
+// The parameter is named and read as "degraded", not "healthy", on purpose
+// (PR #975 CodeRabbit review): authz.Client.Degraded already returns true
+// when unhealthy, and a "healthy" name checked as !healthy() silently
+// inverted that polarity, so a fully healthy edge-api reported 503 and an
+// actual control-plane outage reported 200 -- a second lie in the exact fix
+// meant to stop this endpoint from lying.
+func registerInfraRoutes(mux *http.ServeMux, specPath string, degraded func() bool) {
+	mux.HandleFunc("/health", handleHealth(degraded))
 	mux.Handle("/docs/", docs.SwaggerHandler(specPath))
 }
 
-func handleHealth(healthy func() bool) http.HandlerFunc {
+func handleHealth(degraded func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if healthy != nil && !healthy() {
+		if degraded != nil && degraded() {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"status": "degraded",
 				"reason": "control-plane resolve unavailable",
 			})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 }
 

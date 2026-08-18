@@ -133,3 +133,20 @@ func TestNewRouterHealthReactsToRuntimeChange(t *testing.T) {
 		t.Fatalf("GET /health after recovery = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
+
+// TestNewRouterHealthWithNilDBReadyDoesNotPanic is the regression guard for
+// PR #975 CodeRabbit review: RouterConfig{} (its zero value, e.g. from a test
+// or a caller that has not wired DBReady yet) leaves DBReady nil, and
+// healthHandler used to call it unconditionally, panicking the whole process
+// on the very first /health request. A nil callback must be treated as
+// "not ready" (503), the same as a callback that returns false, not as a
+// crash.
+func TestNewRouterHealthWithNilDBReadyDoesNotPanic(t *testing.T) {
+	h := NewRouter(RouterConfig{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health with nil DBReady = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}

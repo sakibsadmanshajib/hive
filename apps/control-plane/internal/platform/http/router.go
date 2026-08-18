@@ -420,7 +420,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 func healthHandler(dbReady func() bool, provisioningReady func() (bool, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if !dbReady() {
+		if dbReady == nil || !dbReady() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(healthResponse{
 				Status: healthStatusDegraded,
