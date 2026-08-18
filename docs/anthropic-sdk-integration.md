@@ -3,8 +3,10 @@
 This is the exact, tested path for using an unmodified Anthropic SDK client
 (or an Anthropic-Messages-compatible agent CLI) against Hive by changing only
 the base URL and the API key. Every claim below was verified against the live
-deployed gateway and the real, installed `anthropic` SDK (Python 0.122.0) on
-2026-08-17, not assumed from memory. See
+deployed gateway (`https://api-hive.scubed.co`) with a fresh key minted
+through the real developer console (`console-hive.scubed.co`), using the
+real, installed `anthropic` SDK (Python 0.122.0), on 2026-08-18, after PR
+#954's fix and this document's own fix were both deployed. See
 `apps/edge-api/internal/anthropic/` for the implementation and
 `apps/edge-api/internal/anthropic/*_test.go` for the test suite this doc is
 backed by.
@@ -32,6 +34,13 @@ The key itself is a Hive API key (`hk_...`), minted from the developer console
 Hive never talks to Anthropic itself; it translates the wire protocol and
 dispatches to whichever provider the requested alias routes to.
 
+**Confirmed live 2026-08-18**: an `x-api-key` request against the deployed
+gateway with a key minted through the actual console `POST
+/api/v1/accounts/current/api-keys` route no longer 401s. A bogus key correctly
+answers `401 authentication_error` in the real Anthropic error shape
+(`{"type":"error","error":{"type":"authentication_error", "code":
+"invalid_api_key", ...}}`), and a valid key reaches the model.
+
 ## Python
 
 ```python
@@ -43,7 +52,7 @@ client = Anthropic(
 )
 
 message = client.messages.create(
-    model="hive-fast",
+    model="hive-default",
     max_tokens=256,
     messages=[{"role": "user", "content": "Hello"}],
 )
@@ -54,7 +63,7 @@ Streaming:
 
 ```python
 with client.messages.stream(
-    model="hive-fast",
+    model="hive-default",
     max_tokens=256,
     messages=[{"role": "user", "content": "Hello"}],
 ) as stream:
@@ -73,7 +82,7 @@ const client = new Anthropic({
 });
 
 const message = await client.messages.create({
-  model: "hive-fast",
+  model: "hive-default",
   max_tokens: 256,
   messages: [{ role: "user", content: "Hello" }],
 });
@@ -84,11 +93,11 @@ const message = await client.messages.create({
 Live from `GET https://api-hive.scubed.co/catalog/models` (no auth required,
 provider-blind by design — it never names the upstream provider):
 
-| Alias | What it is |
-| --- | --- |
-| `hive-default` | Balanced default, stable |
-| `hive-fast` | Low-latency, stable |
-| `hive-auto` | Preview, widens internally when needed |
+| Alias | What it is | Verified live 2026-08-18 |
+| --- | --- | --- |
+| `hive-default` | Balanced default, stable | Non-streaming, streaming, and tool-use all confirmed with the real SDK. Use this as the example model. |
+| `hive-auto` | Preview, widens internally when needed | Non-streaming confirmed. |
+| `hive-fast` | Low-latency, stable | **Currently broken — do not use as an example model.** See "Known limitations" below. |
 
 `hive-embedding-default`, `hive-stt`, `hive-tts` also appear in the catalog but
 are not chat models and do not answer `/v1/messages`. An alias not in this
@@ -112,7 +121,6 @@ key works the same way. For a config shaped like OpenCode's provider block:
         "apiKey": "<API_KEY>"
       },
       "models": {
-        "hive-fast": {},
         "hive-default": {},
         "hive-auto": {}
       }
@@ -121,15 +129,35 @@ key works the same way. For a config shaped like OpenCode's provider block:
 }
 ```
 
+`hive-fast` is deliberately left out of this example; see "Known limitations."
+
 ## Known limitations (verified, not guessed)
 
-- **`x-api-key` authentication requires this PR's fix to be deployed.**
-  Before it, every `/v1/messages` request authenticated with the SDK's default
-  `api_key=` construction 401s with `missing bearer`, regardless of key
-  validity — reproduced live against the deployed box with the real SDK. If
-  you hit that specific error, the fix has not deployed yet; using
-  `auth_token=` instead of `api_key=` (forcing an `Authorization: Bearer`
-  header) is the workaround, not a normal part of this integration.
+- **`hive-fast` is currently broken on both `/v1/messages` and
+  `/v1/chat/completions`, and its failure response leaks internal routing
+  detail.** The alias's live route resolves to Groq's `llama-3.1-8b-instant`,
+  which Groq now answers with `model_not_found` ("does not exist or you do
+  not have access to it"), reproduced live 2026-08-18 on both surfaces. The
+  gateway's own error message forwards that upstream text, plus LiteLLM's
+  internal fallback-group bookkeeping (`Fallbacks=[{'hive-fast':
+  ['hive-fast']}, ...]`, retry counts), verbatim into the customer-visible
+  response. No literal provider name appears, so this survives the existing
+  provider-name sanitizer, but the fallback-group internals are still
+  implementation detail that should never reach a caller. Tracked as a
+  separate defect from PR #954 (which this document otherwise verifies); use
+  `hive-default` or `hive-auto` until it is fixed.
+- **A console user who owns more than one workspace may have their default
+  ("current") account be one with no billing mapping, and the console gives
+  no warning about it.** A key minted from `/console/api-keys` while the
+  session's default account has no `tenant_billing_accounts` row answers
+  every `/v1/messages` request with `403 permission_error` /
+  `account_not_provisioned` — the key looks completely normal at mint time.
+  The console reads the target account from an `hive_account_id` cookie (sent
+  as `X-Hive-Account-ID` to control-plane) if one is set, defaulting to the
+  session's first membership otherwise; there is no UI affordance today that
+  surfaces which of a multi-workspace user's accounts is "current" before a
+  key is minted, or that warns a freshly minted key is unusable. Reproduced
+  live 2026-08-18 (not part of PR #954's scope; filed separately).
 - **Error envelope is Anthropic-shaped only for errors this surface itself
   raises or forwards from a resolved request** (bad model, bad request body,
   a resolved key's own refusal). A request that fails before it ever resolves

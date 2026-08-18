@@ -408,3 +408,75 @@ func TestSSETranslator_UsageInMessageDelta(t *testing.T) {
 		}
 	}
 }
+
+// TestSSETranslator_FirstBlockIndexIsPresentAndZero is the regression guard
+// for a bug the real Anthropic Python SDK's own streaming accumulator
+// (anthropic/lib/streaming/_messages.py: accumulate_event indexes
+// current_snapshot.content[event.index]) caught live and every existing test
+// here missed: StreamEvent.Index carried `json:"index,omitempty"`, so Go's
+// encoder dropped the field entirely whenever a block's index was the zero
+// value, which is every single-text-block or single-tool-call response, the
+// overwhelmingly common case. The wire event arrived with no "index" key at
+// all rather than "index":0, so the real SDK decoded it as None and crashed
+// with "TypeError: list indices must be integers or slices, not NoneType" on
+// the very first content_block_start. Confirmed live 2026-08-18 against
+// api-hive.scubed.co with anthropic==0.122.0: client.messages.stream(...)
+// on hive-default raised exactly that.
+//
+// The existing tests never caught this because they decode into
+// map[string]interface{} and use the comma-ok pattern
+// (blockStarts[0]["index"].(float64)), which silently yields the zero value
+// on a MISSING key exactly as readily as on a present key holding 0 — the
+// same failure mode this repo's own "tests that camouflage bugs" lesson
+// describes. This test instead checks key PRESENCE via json.RawMessage,
+// which a missing field cannot satisfy.
+func TestSSETranslator_FirstBlockIndexIsPresentAndZero(t *testing.T) {
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-idx0","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-idx0","model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-idx0","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "m")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+
+	checked := 0
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+			t.Fatalf("parse event %q: %v", payload, err)
+		}
+		var evType string
+		_ = json.Unmarshal(raw["type"], &evType)
+		if evType != "content_block_start" && evType != "content_block_delta" && evType != "content_block_stop" {
+			continue
+		}
+		indexRaw, present := raw["index"]
+		if !present {
+			t.Errorf("%s: \"index\" key absent from wire JSON (payload=%s); the real Anthropic SDK requires this key even when the value is 0", evType, payload)
+			continue
+		}
+		var index int
+		if err := json.Unmarshal(indexRaw, &index); err != nil {
+			t.Errorf("%s: index present but not an int: %v", evType, err)
+			continue
+		}
+		if index != 0 {
+			t.Errorf("%s: want index 0, got %d", evType, index)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no content_block_* events were found to check")
+	}
+}
