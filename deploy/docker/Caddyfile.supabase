@@ -1,0 +1,67 @@
+# Supabase API gateway for the self-hosted (enterprise) profile.
+#
+# Hosted Supabase puts Kong in front of GoTrue, PostgREST and Storage, which
+# is what lets every consumer hold ONE base URL and append the familiar
+# /auth/v1, /rest/v1 and /storage/v1 prefixes. The enterprise compose had no
+# equivalent, so those consumers would each have to learn a different host and
+# a different path shape:
+#
+#   apps/control-plane/internal/auth/client.go builds supabaseURL + /auth/v1/user
+#   @supabase/ssr appends /auth/v1 and /rest/v1 to its base
+#   the seeding scripts derive both from a single base URL
+#
+# Standalone GoTrue serves /user with no prefix, and PostgREST is a different
+# host entirely, so a bare SUPABASE_URL=http://supabase-auth:9999 is wrong for
+# all of them. This file is the Kong replacement: same prefixes, no second
+# proxy technology, expressed in the reverse proxy this repo already runs for
+# three other origins.
+#
+# handle_path strips the matched prefix, which is exactly Kong's behaviour
+# here. Storage keeps its own root-level routes (/s3, /object, /bucket,
+# /health, verified in the pinned image), so /storage/v1/s3 lands on /s3 the
+# way the hosted S3-compatible endpoint does.
+#
+# TLS, and why the https listener exists at all: edge-api refuses a plain http
+# SUPABASE_JWKS_URL (apps/edge-api/cmd/server/main.go), because anything on
+# the path to an http JWKS can swap the key set and mint tokens this gateway
+# would accept. That guard is NOT relaxed for self-hosting. `tls internal`
+# terminates real TLS using Caddy's own local certificate authority, and
+# edge-api is pointed at that authority through SUPABASE_JWKS_CA_FILE, so the
+# chain and the hostname are still verified. No public DNS name and no ACME
+# account are involved, so it behaves identically on a laptop, in CI and on an
+# air-gapped box.
+#
+# The plain-http listener on the same names is for the in-network consumers
+# that do not carry the CA (control-plane, the seeding scripts) and for an
+# external TLS terminator in front (Cloudflare Tunnel on the demo box). The
+# explicit http:// scheme is the same reasoning as Caddyfile.owui and
+# Caddyfile.artifacts: without it Caddy turns on automatic HTTPS and redirects
+# plain HTTP back to itself, which loops forever behind a terminator.
+
+{
+	auto_https disable_redirects
+}
+
+(supabase_routes) {
+	handle_path /auth/v1/* {
+		reverse_proxy supabase-auth:9999
+	}
+	handle_path /rest/v1/* {
+		reverse_proxy supabase-rest:3000
+	}
+	handle_path /storage/v1/* {
+		reverse_proxy supabase-storage:5000
+	}
+	handle {
+		respond "hive self-hosted supabase gateway" 200
+	}
+}
+
+https://caddy-supabase {
+	tls internal
+	import supabase_routes
+}
+
+http://caddy-supabase, http://{$SUPABASE_DOMAIN:supabase.localhost} {
+	import supabase_routes
+}

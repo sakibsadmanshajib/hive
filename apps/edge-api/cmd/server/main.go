@@ -51,6 +51,11 @@ type jwtAuthEnv struct {
 	Issuer   string
 	Audience string
 	JWKSURL  string
+	// CAFile is optional and names a PEM certificate authority to trust
+	// for the JWKS fetch, on top of the system roots. The self-hosted
+	// (enterprise) profile serves its JWKS through an in-stack TLS
+	// terminator using a private CA, which no public root vouches for.
+	CAFile string
 }
 
 type storageConfig struct {
@@ -486,6 +491,7 @@ func main() {
 			Issuer:      jwtCfg.Issuer,
 			JWKSURL:     jwtCfg.JWKSURL,
 			JWTAudience: jwtCfg.Audience,
+			CAFile:      jwtCfg.CAFile,
 		})
 		if err != nil {
 			log.Fatalf("failed to initialize Supabase JWT validator: %v", err)
@@ -989,7 +995,12 @@ func loadJWTAuthEnv() (jwtAuthEnv, error) {
 		return jwtAuthEnv{}, fmt.Errorf("SUPABASE_JWKS_URL must be https (got %q)", jwksURL)
 	}
 
-	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL}, nil
+	// Optional, and additive only: the https requirement above still
+	// holds, chain and hostname verification still happen. This names an
+	// extra authority, it does not turn verification off.
+	caFile := strings.TrimSpace(os.Getenv("SUPABASE_JWKS_CA_FILE"))
+
+	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL, CAFile: caFile}, nil
 }
 
 // jwtAuditLogger returns the audit hook handed to the JWT middleware. For

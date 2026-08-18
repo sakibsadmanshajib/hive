@@ -21,6 +21,8 @@
 #   ENTERPRISE_JWT_SECRET       openssl rand -base64 48  (min 32 chars)
 #   ENTERPRISE_ANON_KEY         sign {"role":"anon"} JWT with ENTERPRISE_JWT_SECRET
 #   ENTERPRISE_SERVICE_ROLE_KEY sign {"role":"service_role"} JWT with ENTERPRISE_JWT_SECRET
+#   ENTERPRISE_JWT_KEYS         scripts/generate-enterprise-jwt-keys.py
+#   ENTERPRISE_JWT_JWKS         same command, printed on the second line
 #
 # See .env.example for the full ENTERPRISE_* block and generation instructions.
 
@@ -55,12 +57,21 @@ services:
     restart: unless-stopped
 
   # ── supabase-auth (GoTrue) ─────────────────────────────────────────────────
-  # Local JWT issuer. edge-api validates tokens against this service via
-  # SUPABASE_JWKS_URL=http://supabase-auth:9999/.well-known/jwks.json.
+  # Local JWT issuer. edge-api validates tokens against its JWKS, reached
+  # through the caddy-supabase gateway over TLS, never directly over http:
+  # SUPABASE_JWKS_URL=https://caddy-supabase/auth/v1/.well-known/jwks.json.
   # Set ENTERPRISE_MAILER_AUTOCONFIRM=true for air-gapped installs without SMTP.
   supabase-auth:
-    # Pinned to immutable digest. Refresh: docker pull supabase/gotrue:v2.170.0 && docker inspect --format='{{index .RepoDigests 0}}' supabase/gotrue:v2.170.0
-    image: supabase/gotrue:v2.170.0@sha256:0cfa54e096dcae4ed30162811fa8794f7c443708c41973329e07f7d44c1cc3e7
+    # Pinned to immutable digest. Refresh: docker pull supabase/gotrue:v2.189.0 && docker inspect --format='{{index .RepoDigests 0}}' supabase/gotrue:v2.189.0
+    #
+    # Bumped from v2.170.0 (2025-03-06), which predates the OAuth 2.1
+    # authorization server entirely: on that tag /oauth/authorize and both
+    # well-known discovery documents answer 404, verified by running the image
+    # rather than by reading notes. Open WebUI signs in through that server
+    # (OPENID_PROVIDER_URL in docker-compose.yml), so self-hosting on the old
+    # pin would have silently lost chat login. The server first ships in
+    # v2.180.0; v2.189.0 is what upstream's own self-host compose pins.
+    image: supabase/gotrue:v2.189.0@sha256:385184459f57569c54c25209f51f3b2be99ddd7c4ce9e3555b5d3eea8447b7cf
     profiles:
       - enterprise
     depends_on:
@@ -69,8 +80,12 @@ services:
     environment:
       GOTRUE_API_HOST: "0.0.0.0"
       GOTRUE_API_PORT: "9999"
-      # Required by GoTrue v2: the public-facing base URL for auth links in emails.
-      API_EXTERNAL_URL: ${ENTERPRISE_SITE_URL:-http://localhost:9999}
+      # The AUTH origin, not the app origin. It is the base GoTrue puts in
+      # email links and, with the issuer below, in its discovery document, so
+      # it must be the externally reachable address of THIS service. Distinct
+      # from GOTRUE_SITE_URL below, which is the web-console origin: deriving
+      # both from one variable cannot be correct for either.
+      API_EXTERNAL_URL: ${ENTERPRISE_AUTH_EXTERNAL_URL:-http://caddy-supabase/auth/v1}
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
       GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
@@ -79,13 +94,31 @@ services:
       # Set ENTERPRISE_DISABLE_SIGNUP=false in .env to re-enable self-serve signup.
       GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
       GOTRUE_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env (openssl rand -base64 48)}
+      # Asymmetric signing key set, and the reason this profile can
+      # authenticate at all. With GOTRUE_JWT_SECRET alone GoTrue signs HS256
+      # and its /.well-known/jwks.json publishes an EMPTY key set: the
+      # handler skips every symmetric key (internal/api/jwks.go, verified in
+      # this exact pinned image). edge-api validates with jwt.WithKeySet
+      # against that endpoint and fails its initial refresh, so every token
+      # is rejected and the gateway will not come up. Generate the value
+      # with scripts/generate-enterprise-jwt-keys.py; GoTrue accepts exactly
+      # one signing key, so rotation is a replace and forces a re-login.
+      # The legacy HS256 anon and service_role keys keep working: they carry
+      # no kid and fall back to GOTRUE_JWT_SECRET above.
+      GOTRUE_JWT_KEYS: ${ENTERPRISE_JWT_KEYS:?set ENTERPRISE_JWT_KEYS in .env (scripts/generate-enterprise-jwt-keys.py)}
       GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
       # Must match what edge-api expects in SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL.
       # Default is the in-stack service name, not localhost.
-      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://supabase-auth:9999}
+      # Drives the whole OpenID discovery document and the iss claim on every
+      # token, including the OAuth id_token. Left empty it yields relative
+      # endpoints and an id_token with no iss, so it is not optional. It must
+      # equal edge-api's SUPABASE_JWT_ISSUER, which defaults to the same value.
+      # For a deployment browsers reach, override BOTH with the public https
+      # auth origin.
+      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://caddy-supabase/auth/v1}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
       GOTRUE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
@@ -100,7 +133,14 @@ services:
       # Enable the custom access token hook so JWTs include tenant_id, tenants,
       # and role claims. Migration 20260516_07 installs public.custom_access_token_hook;
       # without this flag GoTrue issues plain tokens and all RLS/authz middleware breaks.
-      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
+      # Overridable for one specific case: a database that has not had the
+      # migrations applied yet has no public.custom_access_token_hook, and
+      # GoTrue fails every token issuance when the hook it is told to call
+      # does not exist. Standing the stack up before loading the schema is
+      # exactly that case. Default stays true, because a deployment serving
+      # traffic without the hook issues tokens with no tenant claim and every
+      # authz check downstream then behaves as if the user belongs nowhere.
+      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: ${ENTERPRISE_CUSTOM_ACCESS_TOKEN_HOOK_ENABLED:-true}
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: "pg-functions://postgres/public/custom_access_token_hook"
       # Auth rate limits and password policy (OSFI B-10 / PIPEDA baseline).
       # Units: requests per hour (GoTrue float64 rate). GoTrue source defaults:
@@ -168,17 +208,24 @@ services:
       PGRST_DB_URI: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
       PGRST_DB_SCHEMAS: "public,storage,graphql_public"
       PGRST_DB_ANON_ROLE: anon
-      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
+      # A JWKS, not a raw secret: GoTrue now signs user tokens with ES256, so
+      # a symmetric-only secret here would reject every one of them. The
+      # generated set carries the EC public key AND the legacy symmetric key,
+      # so the HS256 anon and service_role keys keep validating too.
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_JWKS:?set ENTERPRISE_JWT_JWKS in .env (scripts/generate-enterprise-jwt-keys.py)}
       PGRST_DB_USE_LEGACY_GUCS: "false"
       PGRST_APP_SETTINGS_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
       PGRST_APP_SETTINGS_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
-    healthcheck:
-      # ponytail: postgrest image has no wget/curl; /dev/tcp is a bash builtin TCP probe.
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3000' 2>/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 15s
+    # No healthcheck, deliberately. The postgrest image ships the binary and
+    # nothing else: it has no /bin/sh, so every CMD-SHELL probe answers
+    # "exec: /bin/sh: no such file or directory" and the container is marked
+    # unhealthy forever. The previous probe here did exactly that, and because
+    # supabase-storage waited on service_healthy, the whole enterprise profile
+    # could never finish starting. A check that can never pass is worse than
+    # none: it blocks every dependent instead of reporting anything.
+    # ponytail: dependents wait on service_started; add a real check if the
+    # image ever grows a shell, or by enabling PGRST_ADMIN_SERVER_PORT and
+    # probing /ready from a container that has an HTTP client.
     restart: unless-stopped
 
   # ── supabase-storage ───────────────────────────────────────────────────────
@@ -195,12 +242,18 @@ services:
       supabase-db:
         condition: service_healthy
       supabase-rest:
-        condition: service_healthy
+        # service_started, not service_healthy: see the note on supabase-rest.
+        condition: service_started
     environment:
       ANON_KEY: ${ENTERPRISE_ANON_KEY:?set ENTERPRISE_ANON_KEY in .env (sign anon JWT with ENTERPRISE_JWT_SECRET)}
       SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:?set ENTERPRISE_SERVICE_ROLE_KEY in .env (sign service_role JWT)}
       POSTGREST_URL: http://supabase-rest:3000
+      # Storage takes the raw secret here (it hands this to jsonwebtoken as an
+      # HMAC key, so a JWKS document in this variable would break the anon and
+      # service_role keys it is given) and takes the asymmetric set separately
+      # through JWT_JWKS, which is the variable its own config reads for that.
       PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
+      JWT_JWKS: ${ENTERPRISE_JWT_JWKS:?set ENTERPRISE_JWT_JWKS in .env (scripts/generate-enterprise-jwt-keys.py)}
       DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
       FILE_SIZE_LIMIT: ${ENTERPRISE_STORAGE_FILE_SIZE_LIMIT:-52428800}
       STORAGE_BACKEND: file
@@ -213,7 +266,10 @@ services:
     volumes:
       - supabase-storage-data:/var/lib/storage
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/status || exit 1"]
+      # 127.0.0.1, not localhost: the storage image resolves localhost to ::1
+      # first, the server binds IPv4 only, and the probe then fails with
+      # "connection refused" forever while the service is in fact serving.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5000/status || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -257,6 +313,54 @@ services:
         echo "Bucket init complete."
     restart: "no"
 
+  # ── caddy-supabase (the Kong replacement) ──────────────────────────────────
+  # One gateway in front of GoTrue, PostgREST and Storage, so a single
+  # SUPABASE_URL with the familiar /auth/v1, /rest/v1 and /storage/v1 prefixes
+  # keeps working exactly as it does against hosted Supabase. Without it every
+  # consumer would need a different host and a different path shape, and
+  # apps/control-plane/internal/auth/client.go, @supabase/ssr and the seeding
+  # scripts would each break in a different way. See Caddyfile.supabase.
+  #
+  # It also carries the TLS listener edge-api's JWKS fetch requires. That
+  # guard (https only) is not relaxed for self-hosting: Caddy terminates real
+  # TLS with its own local certificate authority, and edge-api trusts exactly
+  # that authority through SUPABASE_JWKS_CA_FILE.
+  #
+  # Same image and volume pattern as caddy-owui, caddy-console and
+  # caddy-artifacts, with its own named volumes so certificate state never
+  # mixes between origins.
+  #
+  # The healthcheck is an HTTPS request to this service's own name, routed
+  # through to GoTrue's /health: it proves the TLS listener answers AND that
+  # the prefix routing reaches an upstream. It also gives edge-api a
+  # service_healthy condition to wait on, so the certificate authority file
+  # exists on the shared volume before the first JWKS fetch.
+  caddy-supabase:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-auth:
+        condition: service_healthy
+    environment:
+      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN:-supabase.localhost}
+    volumes:
+      - ./Caddyfile.supabase:/etc/caddy/Caddyfile:ro
+      - caddy-supabase-data:/data
+      - caddy-supabase-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate --no-verbose --tries=1 -O /dev/null https://caddy-supabase/auth/v1/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
   # ── depends_on overrides for edge-api and control-plane ───────────────────
   # The base docker-compose.yml already declares required:false stubs for
   # supabase-auth and supabase-storage. This override adds supabase-init so
@@ -266,6 +370,20 @@ services:
     depends_on:
       supabase-init:
         condition: service_completed_successfully
+      caddy-supabase:
+        condition: service_healthy
+    environment:
+      # Self-hosted GoTrue serves its routes at the root, not under /auth/v1
+      # the way hosted Supabase does, so the JWKS path has no prefix. The
+      # issuer is a string comparison against the token claim, never fetched,
+      # so it stays the in-network name GoTrue actually stamps.
+      SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-${ENTERPRISE_JWT_ISSUER:-http://caddy-supabase/auth/v1}}
+      SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-https://caddy-supabase/auth/v1/.well-known/jwks.json}
+      SUPABASE_JWKS_CA_FILE: ${SUPABASE_JWKS_CA_FILE:-/etc/hive/supabase-ca/caddy/pki/authorities/local/root.crt}
+    volumes:
+      # Read-only view of caddy-supabase's state, for one file: the local
+      # authority's root certificate. Nothing else in edge-api reads it.
+      - caddy-supabase-data:/etc/hive/supabase-ca:ro
 
   control-plane:
     depends_on:
@@ -279,3 +397,7 @@ volumes:
   # Object files written by the Storage API local filesystem backend.
   # Holds hive-files and hive-images bucket contents on the box filesystem.
   supabase-storage-data:
+  # caddy-supabase's certificate and configuration state. The local authority's
+  # root certificate lives here and is mounted read-only into edge-api.
+  caddy-supabase-data:
+  caddy-supabase-config:

@@ -6,8 +6,12 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +41,18 @@ type SupabaseJWTConfig struct {
 	// ClockSkew tolerates small clock drift between this process and the
 	// token issuer. Defaults to 30s when zero.
 	ClockSkew time.Duration
+	// CAFile optionally names a PEM file holding an extra certificate
+	// authority to trust when fetching JWKSURL, on top of the system
+	// roots. It exists for the self-hosted (enterprise) deployment, where
+	// the JWKS is served by an in-stack TLS terminator holding a private
+	// CA's certificate rather than a publicly trusted one. Leave empty on
+	// deployments whose JWKS host presents a public certificate.
+	//
+	// This is deliberately additive to the https-only rule enforced at
+	// the caller, not a way around it: the transport still requires TLS
+	// and still verifies the chain and hostname. What changes is which
+	// authority may vouch for the certificate.
+	CAFile string
 }
 
 // Claims holds the subset of token claims the edge-api consumes downstream.
@@ -77,13 +93,52 @@ func NewSupabaseJWTValidator(ctx context.Context, cfg SupabaseJWTConfig) (*Supab
 		cfg.ClockSkew = 30 * time.Second
 	}
 	cache := jwk.NewCache(ctx)
-	if err := cache.Register(cfg.JWKSURL, jwk.WithRefreshInterval(cfg.JWKSTTL)); err != nil {
+	registerOpts := []jwk.RegisterOption{jwk.WithRefreshInterval(cfg.JWKSTTL)}
+	if cfg.CAFile != "" {
+		client, err := httpClientTrusting(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		registerOpts = append(registerOpts, jwk.WithHTTPClient(client))
+	}
+	if err := cache.Register(cfg.JWKSURL, registerOpts...); err != nil {
 		return nil, fmt.Errorf("auth: jwks register: %w", err)
 	}
 	if _, err := cache.Refresh(ctx, cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("auth: jwks initial refresh: %w", err)
 	}
 	return &SupabaseJWTValidator{cfg: cfg, cache: cache}, nil
+}
+
+// httpClientTrusting returns an HTTP client that trusts the system roots plus
+// whatever certificate authority the PEM file at path holds. An unreadable
+// file, or one carrying no certificate, is fatal rather than a silent
+// downgrade to the system pool: a deployment that asked for a private CA and
+// silently did not get one would fail later, at the first token, with a much
+// worse error.
+func httpClientTrusting(path string) (*http.Client, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("auth: read jwks ca file: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		// A platform without a system pool still gets the private CA,
+		// which is the only authority this client actually needs.
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("auth: jwks ca file %q holds no certificate", path)
+	}
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    pool,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}, nil
 }
 
 // Parse validates the token signature, issuer, audience, and expiration,
