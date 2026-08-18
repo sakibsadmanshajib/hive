@@ -107,6 +107,14 @@ while [ $# -gt 0 ]; do
       caption="$2"
       shift 2
       ;;
+    -*)
+      # Without this arm an unknown flag falls through to the catch-all and is
+      # treated as an image path, surfacing later as a misleading "no such
+      # file: --verbose". It also keeps a leading-dash path out of `basename`
+      # and `cp`, which would otherwise parse it as their own option.
+      echo "::error:: unknown option: $1 (for a file whose name starts with a dash, pass ./$1)" >&2
+      usage
+      ;;
     *)
       images+=("$1")
       shift
@@ -165,7 +173,9 @@ release_tag="visual-proof-assets"
 # That made an earlier version of this guard a no-op that published assets for
 # a nonexistent PR. Do not "simplify" this field.
 gh pr view "$pr" --repo "$repo" --json state >/dev/null || {
-  echo "::error:: no such pull request in $repo: $pr (nothing was uploaded)" >&2
+  # Do not name a cause this has not established: the same failure covers a
+  # nonexistent PR, an unauthenticated or under-scoped gh, and a network error.
+  echo "::error:: could not resolve pull request $pr in $repo (see the gh error above: it may not exist, or gh may be unauthenticated). Nothing was uploaded." >&2
   exit 1
 }
 
@@ -193,9 +203,12 @@ if ! gh release view "$release_tag" --repo "$repo" >/dev/null 2>&1; then
     || gh release view "$release_tag" --repo "$repo" >/dev/null
 fi
 
-body_file="$(mktemp)"
+# One temp object, one trap, installed before anything else can fail: with two
+# separate mktemp calls and the trap after both, a failure of the second leaks
+# the first, because `set -e` exits before the trap exists.
 stage_dir="$(mktemp -d)"
-trap 'rm -f "$body_file"; rm -rf "$stage_dir"' EXIT
+trap 'rm -rf "$stage_dir"' EXIT
+body_file="${stage_dir}/comment-body.md"
 
 {
   echo "## Visual proof"
@@ -207,7 +220,7 @@ trap 'rm -f "$body_file"; rm -rf "$stage_dir"' EXIT
 } > "$body_file"
 
 for img in "${images[@]}"; do
-  base="$(basename "$img")"
+  base="$(basename -- "$img")"
   stamp="$(date -u +%Y%m%d%H%M%S)"
   # Namespaced by PR, a UTC timestamp and a short random suffix so two
   # proofs on the same PR, or two agents proving two different PRs at the
@@ -217,10 +230,19 @@ for img in "${images[@]}"; do
   # label), so the rename has to happen on disk first.
   name="$(sanitize_asset_name "pr${pr}-${stamp}-${RANDOM}-${base}")"
   staged="${stage_dir}/${name}"
-  cp "$img" "$staged"
+  cp -- "$img" "$staged"
   gh release upload "$release_tag" "$staged" --repo "$repo" >/dev/null
+  url="https://github.com/${repo}/releases/download/${release_tag}/${name}"
+  # Record every published URL as it goes. An upload failure part way through
+  # a multi-image run aborts with the earlier images already public and no
+  # comment posted, and the name embeds $RANDOM, so without this line the
+  # caller cannot name what they need to clean up.
+  echo "  published: $url" >&2
   {
-    echo "![${base}](https://github.com/${repo}/releases/download/${release_tag}/${name})"
+    # The label is the sanitized name, not the raw basename: a basename
+    # containing `]` would close the label early and the image would not
+    # render, from a run that still exited 0. Alt text is cosmetic.
+    echo "![${name}](${url})"
     echo
   } >> "$body_file"
 done
