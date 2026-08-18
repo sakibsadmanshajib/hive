@@ -20,6 +20,15 @@ type stubRepo struct {
 	emails        map[uuid.UUID]string    // user id -> auth.users email
 	activeTenants map[uuid.UUID]uuid.UUID // user id -> tenant id, for ActiveTenantID
 	acceptCalled  bool
+
+	// simulateSelfRace, when set, makes the next CreateAccount call fail with
+	// ErrSlugTaken exactly once and, as a side effect, write raceAccount and
+	// raceMembership directly — modeling a concurrent request for the same
+	// viewer that committed its own provisioning first. See
+	// TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers.
+	simulateSelfRace bool
+	raceAccount      *accounts.Account
+	raceMembership   *accounts.Membership
 }
 
 func newStubRepo() *stubRepo {
@@ -48,6 +57,17 @@ func (s *stubRepo) ActiveTenantID(_ context.Context, userID uuid.UUID) (uuid.UUI
 }
 
 func (s *stubRepo) CreateAccount(_ context.Context, acct accounts.Account) error {
+	if s.simulateSelfRace {
+		s.simulateSelfRace = false
+		s.accountsMap[s.raceAccount.ID] = s.raceAccount
+		s.memberships = append(s.memberships, *s.raceMembership)
+		return accounts.ErrSlugTaken
+	}
+	for _, existing := range s.accountsMap {
+		if existing.Slug == acct.Slug {
+			return accounts.ErrSlugTaken
+		}
+	}
 	s.accountsMap[acct.ID] = &acct
 	return nil
 }
@@ -256,6 +276,102 @@ func TestEnsureDefaultAccount_VerifiedOwnerHasKeyPermissions(t *testing.T) {
 	}
 	if !contains(vc.Permissions, "api_keys.write") {
 		t.Error("expected api_keys.write in Permissions for verified owner")
+	}
+}
+
+// TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers reproduces
+// the CI flake behind "could not load your workspace": Next.js Server
+// Components call getViewer() unmemoized per component, so a brand-new
+// viewer's very first page load can fire two concurrent
+// provisionDefaultWorkspace attempts. Both derive the identical slug from the
+// same viewer, so the loser hits accounts.slug's unique constraint. Losing
+// that race must recover the winner's workspace, not surface a 500.
+func TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers(t *testing.T) {
+	repo := newStubRepo()
+	svc := accounts.NewService(repo)
+
+	viewer := auth.Viewer{
+		UserID:        uuid.New(),
+		Email:         "racer@example.com",
+		EmailVerified: true,
+		FullName:      "Racer User",
+	}
+
+	winningAccountID := uuid.New()
+	repo.simulateSelfRace = true
+	repo.raceAccount = &accounts.Account{
+		ID:          winningAccountID,
+		Slug:        "racer-user-s-workspace",
+		DisplayName: "Racer User's Workspace",
+		AccountType: "personal",
+		OwnerUserID: viewer.UserID,
+	}
+	repo.raceMembership = &accounts.Membership{
+		ID:        uuid.New(),
+		AccountID: winningAccountID,
+		UserID:    viewer.UserID,
+		Role:      "owner",
+		Status:    "active",
+	}
+
+	vc, err := svc.EnsureViewerContext(context.Background(), viewer, uuid.Nil)
+	if err != nil {
+		t.Fatalf("EnsureViewerContext error: %v", err)
+	}
+	if vc.CurrentAccount.ID != winningAccountID {
+		t.Errorf("expected to recover the concurrent winner's account %v, got %v", winningAccountID, vc.CurrentAccount.ID)
+	}
+	if len(vc.Memberships) != 1 {
+		t.Fatalf("expected 1 membership recovered from the race, got %d", len(vc.Memberships))
+	}
+}
+
+// TestEnsureDefaultAccount_SlugCollisionFromDifferentViewer_RetriesWithSuffix
+// covers the other trigger for the same unique constraint: two different
+// viewers whose display names collapse to the same slug (buildSlug has no
+// per-user uniqueifier). Unlike the self-race case, this viewer holds no
+// membership after the collision, so provisioning must retry with a
+// de-duplicated slug rather than recover a workspace that is not theirs.
+func TestEnsureDefaultAccount_SlugCollisionFromDifferentViewer_RetriesWithSuffix(t *testing.T) {
+	repo := newStubRepo()
+	svc := accounts.NewService(repo)
+
+	otherUserID := uuid.New()
+	otherAccountID := uuid.New()
+	// buildSlug("Same Name's Workspace") == "same-name-s-workspace" — pinned
+	// here to force the collision without exporting the algorithm to this
+	// blackbox test package.
+	repo.accountsMap[otherAccountID] = &accounts.Account{
+		ID:          otherAccountID,
+		Slug:        "same-name-s-workspace",
+		DisplayName: "Same Name's Workspace",
+		AccountType: "personal",
+		OwnerUserID: otherUserID,
+	}
+	repo.memberships = append(repo.memberships, accounts.Membership{
+		ID:        uuid.New(),
+		AccountID: otherAccountID,
+		UserID:    otherUserID,
+		Role:      "owner",
+		Status:    "active",
+	})
+
+	viewer := auth.Viewer{
+		UserID:        uuid.New(),
+		Email:         "samename@example.com",
+		EmailVerified: true,
+		FullName:      "Same Name",
+	}
+
+	vc, err := svc.EnsureViewerContext(context.Background(), viewer, uuid.Nil)
+	if err != nil {
+		t.Fatalf("EnsureViewerContext error: %v", err)
+	}
+	if vc.CurrentAccount.ID == otherAccountID {
+		t.Fatal("expected a distinct account for the colliding different-viewer case, got the other viewer's account")
+	}
+	if len(vc.Memberships) != 1 {
+		t.Fatalf("expected 1 membership for the new viewer, got %d", len(vc.Memberships))
 	}
 }
 

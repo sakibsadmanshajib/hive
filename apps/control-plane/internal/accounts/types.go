@@ -150,6 +150,16 @@ var ErrLastOwner = errors.New("accounts: workspace must keep at least one owner"
 // workspace provisioning did not produce one.
 var ErrNoActiveWorkspace = errors.New("accounts: no active workspace available")
 
+// ErrSlugTaken is returned when creating an account collides with an
+// existing accounts.slug value. buildSlug has no per-user uniqueifier, so
+// this fires in two distinct situations that provisionDefaultWorkspace tells
+// apart: two concurrent requests provisioning the *same* viewer's first
+// workspace (Next.js Server Components call getViewer() unmemoized per
+// component, so a brand-new user's first page load can race this insert),
+// and two different viewers whose display names happen to collapse to the
+// same slug.
+var ErrSlugTaken = errors.New("accounts: workspace slug already taken")
+
 // ErrEmailNotVerified is returned when a viewer whose email address is not
 // verified tries to accept an invitation. Accepting is what grants the role, so
 // it carries at least the verification requirement that issuing an invitation

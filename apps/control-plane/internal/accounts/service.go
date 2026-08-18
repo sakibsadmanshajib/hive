@@ -166,22 +166,65 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 	}, nil
 }
 
+// maxSlugAttempts bounds the de-duplication retry in provisionDefaultWorkspace
+// below. One attempt recovers the self-race case (see the loop body); the
+// rest exist only for the rare different-viewer collision, which a second
+// de-duplicated slug resolves in practice.
+const maxSlugAttempts = 3
+
 // provisionDefaultWorkspace creates a default personal account, owner membership,
 // and core profile row for the viewer.
 func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Viewer) error {
 	displayName := buildDisplayName(viewer.FullName, viewer.Email)
-	slug := buildSlug(displayName)
-
+	baseSlug := buildSlug(displayName)
 	accountID := uuid.New()
-	acct := Account{
-		ID:          accountID,
-		Slug:        slug,
-		DisplayName: displayName,
-		AccountType: "personal",
-		OwnerUserID: viewer.UserID,
-	}
-	if err := s.repo.CreateAccount(ctx, acct); err != nil {
-		return fmt.Errorf("accounts: create default account: %w", err)
+
+	var slug string
+	for attempt := 0; ; attempt++ {
+		slug = baseSlug
+		if attempt > 0 {
+			slug = baseSlug + "-" + uuid.New().String()[:8]
+		}
+
+		acct := Account{
+			ID:          accountID,
+			Slug:        slug,
+			DisplayName: displayName,
+			AccountType: "personal",
+			OwnerUserID: viewer.UserID,
+		}
+		err := s.repo.CreateAccount(ctx, acct)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrSlugTaken) {
+			return fmt.Errorf("accounts: create default account: %w", err)
+		}
+
+		// The slug collided. buildSlug has no per-user uniqueifier, so this
+		// fires in two different situations (see ErrSlugTaken's doc comment):
+		//
+		//  1. A concurrent request for this SAME viewer already won the
+		//     provisioning race (Next.js Server Components call getViewer()
+		//     unmemoized per component, so a brand-new user's first page load
+		//     can fire this insert twice). That request's account and
+		//     membership already committed, so re-listing memberships here
+		//     finds them and there is nothing left for this call to do — the
+		//     caller re-lists again right after this returns and picks it up.
+		//  2. A genuinely different viewer's display name collapsed to the
+		//     same slug. This viewer still has no active membership, so fall
+		//     through and retry with a de-duplicated slug instead of failing
+		//     their first-ever sign-in.
+		memberships, listErr := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
+		if listErr != nil {
+			return fmt.Errorf("accounts: list memberships after slug collision: %w", listErr)
+		}
+		if len(activeMemberships(memberships)) > 0 {
+			return nil
+		}
+		if attempt+1 >= maxSlugAttempts {
+			return fmt.Errorf("accounts: create default account: slug %q still taken after %d attempts", baseSlug, maxSlugAttempts)
+		}
 	}
 
 	membership := Membership{

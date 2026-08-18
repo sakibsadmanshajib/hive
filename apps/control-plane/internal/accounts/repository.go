@@ -115,11 +115,22 @@ func (r *pgxRepository) ActiveTenantID(ctx context.Context, userID uuid.UUID) (u
 	return tenantID, true, nil
 }
 
+// CreateAccount inserts one account row.
+//
+// UNIQUE (slug) is what surfaces as ErrSlugTaken. See its doc comment in
+// types.go for the two situations that trips it, and provisionDefaultWorkspace
+// in service.go for how each is told apart and recovered — without this
+// translation the raw pgx unique-violation escaped as an opaque
+// "could not load your workspace" 500.
 func (r *pgxRepository) CreateAccount(ctx context.Context, acct Account) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO public.accounts (id, slug, display_name, account_type, owner_user_id)
 		VALUES ($1, $2, $3, $4, $5)
 	`, acct.ID, acct.Slug, acct.DisplayName, acct.AccountType, acct.OwnerUserID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+		return ErrSlugTaken
+	}
 	return err
 }
 
