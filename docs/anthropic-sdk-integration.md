@@ -108,8 +108,15 @@ AndNeverDispatched`).
 
 ## Agent CLI config (OpenCode / Claude-Code-compatible clients)
 
-Any CLI that lets you override an Anthropic-compatible provider's base URL and
-key works the same way. For a config shaped like OpenCode's provider block:
+**The base URL convention here is not the same as the raw SDK's above.**
+OpenCode's Anthropic provider is `@ai-sdk/anthropic` (Vercel AI SDK), and it
+does not append `/v1` itself the way the official `anthropic` package does
+-- it appends only `/messages` to whatever `baseURL` you give it. Confirmed
+live 2026-08-18: pointing OpenCode's config at
+`https://api-hive.scubed.co` (no `/v1`, matching the raw-SDK convention
+above) produced a real `404` at `https://api-hive.scubed.co/messages`. The
+`baseURL` below therefore carries `/v1` explicitly, unlike the Python/TS
+examples above it.
 
 ```json
 {
@@ -117,7 +124,7 @@ key works the same way. For a config shaped like OpenCode's provider block:
     "hive": {
       "npm": "@ai-sdk/anthropic",
       "options": {
-        "baseURL": "https://api-hive.scubed.co",
+        "baseURL": "https://api-hive.scubed.co/v1",
         "apiKey": "<API_KEY>"
       },
       "models": {
@@ -130,6 +137,13 @@ key works the same way. For a config shaped like OpenCode's provider block:
 ```
 
 `hive-fast` is deliberately left out of this example; see "Known limitations."
+
+**This full round trip is not yet confirmed working end to end.** With the
+`/v1` correction above in place, `opencode run "..." -m hive/hive-default`
+produced no output and no error at all within 45 seconds, at `--log-level
+DEBUG`, and was killed rather than investigated further in this pass. The
+URL-shape bug above is real and fixed in this doc, but treat the OpenCode
+path as unverified until someone gets a real completion back through it.
 
 ## Known limitations (verified, not guessed)
 
