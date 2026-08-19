@@ -22,7 +22,7 @@
 #   ENTERPRISE_ANON_KEY         sign {"role":"anon"} JWT with ENTERPRISE_JWT_SECRET
 #   ENTERPRISE_SERVICE_ROLE_KEY sign {"role":"service_role"} JWT with ENTERPRISE_JWT_SECRET
 #   ENTERPRISE_JWT_KEYS         scripts/generate-enterprise-jwt-keys.py
-#   ENTERPRISE_JWT_JWKS         same command, printed on the second line
+#   ENTERPRISE_JWT_VERIFY_KEYS         same command, printed on the second line
 #
 # See .env.example for the full ENTERPRISE_* block and generation instructions.
 
@@ -171,6 +171,13 @@ services:
       #   EMAIL_SENT=30, VERIFY=30, OTP=30, TOKEN_REFRESH=150.
       # We set all four explicitly so they are visible and tunable per deployment.
       # GOTRUE_RATE_LIMIT_EMAIL_SENT: max magic-link/invite emails sent per hour.
+      # Without this, none of the four limits below is ever consulted:
+      # GoTrue's performRateLimiting falls through to a header-keyed path that
+      # returns immediately when the header name is empty, so the limits read
+      # as configured while doing nothing at all. caddy-supabase overwrites
+      # this header inbound (never appends), so its value cannot be chosen by
+      # the caller.
+      GOTRUE_RATE_LIMIT_HEADER: ${ENTERPRISE_RATE_LIMIT_HEADER:-X-Forwarded-For}
       GOTRUE_RATE_LIMIT_EMAIL_SENT: ${ENTERPRISE_RATE_LIMIT_EMAIL_SENT:-30}
       # GOTRUE_RATE_LIMIT_VERIFY: max OTP/magic-link verification attempts per hour.
       GOTRUE_RATE_LIMIT_VERIFY: ${ENTERPRISE_RATE_LIMIT_VERIFY:-30}
@@ -236,7 +243,7 @@ services:
       # a symmetric-only secret here would reject every one of them. The
       # generated set carries the EC public key AND the legacy symmetric key,
       # so the HS256 anon and service_role keys keep validating too.
-      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_JWKS:?set ENTERPRISE_JWT_JWKS in .env (scripts/generate-enterprise-jwt-keys.py)}
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_VERIFY_KEYS:?set ENTERPRISE_JWT_VERIFY_KEYS in .env (scripts/generate-enterprise-jwt-keys.py)}
       PGRST_DB_USE_LEGACY_GUCS: "false"
       PGRST_APP_SETTINGS_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
       PGRST_APP_SETTINGS_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
@@ -277,7 +284,7 @@ services:
       # service_role keys it is given) and takes the asymmetric set separately
       # through JWT_JWKS, which is the variable its own config reads for that.
       PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
-      JWT_JWKS: ${ENTERPRISE_JWT_JWKS:?set ENTERPRISE_JWT_JWKS in .env (scripts/generate-enterprise-jwt-keys.py)}
+      JWT_JWKS: ${ENTERPRISE_JWT_VERIFY_KEYS:?set ENTERPRISE_JWT_VERIFY_KEYS in .env (scripts/generate-enterprise-jwt-keys.py)}
       DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
       FILE_SIZE_LIMIT: ${ENTERPRISE_STORAGE_FILE_SIZE_LIMIT:-52428800}
       STORAGE_BACKEND: file
@@ -385,6 +392,49 @@ services:
         max-file: "3"
     restart: unless-stopped
 
+  # ── supabase-ca-export ─────────────────────────────────────────────────────
+  # Copies caddy-supabase's local authority certificate into a volume of its
+  # own, world readable, and exits.
+  #
+  # Two reasons, both found by review rather than by design. First, Caddy
+  # writes /data/caddy/pki as 0700 root and root.crt as 0600 root, so the
+  # published edge-api image (Dockerfile.edge-api.prod, USER app at uid 10001)
+  # could not read it: SUPABASE_JWKS_CA_FILE would fail with permission denied
+  # and the process would exit at boot. That worked only under the dev
+  # Dockerfile, which runs as root, and would have broken on the first deploy
+  # of the published image, during cutover. Second, mounting Caddy's whole data
+  # directory handed edge-api the authority's PRIVATE key, plus anything else
+  # that directory ever comes to hold (a publicly trusted certificate for
+  # SUPABASE_DOMAIN, an ACME account key), and put all of it into any backup of
+  # that volume.
+  #
+  # Exporting one public certificate removes both. edge-api mounts only the
+  # export, and the export holds exactly one file.
+  supabase-ca-export:
+    # Same pinned image as caddy-supabase, so this adds no pull.
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    profiles:
+      - enterprise
+    depends_on:
+      caddy-supabase:
+        condition: service_healthy
+    volumes:
+      - caddy-supabase-data:/src:ro
+      - supabase-ca:/out
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        SRC=/src/caddy/pki/authorities/local/root.crt
+        if [ ! -f "$${SRC}" ]; then
+          echo "caddy has not written its local authority yet: $${SRC}"
+          exit 1
+        fi
+        install -m 0644 "$${SRC}" /out/root.crt
+        echo "exported the local authority certificate, readable by non-root"
+    restart: "no"
+
   # ── depends_on overrides for edge-api and control-plane ───────────────────
   # The base docker-compose.yml already declares required:false stubs for
   # supabase-auth and supabase-storage. This override adds supabase-init so
@@ -394,30 +444,22 @@ services:
     depends_on:
       supabase-init:
         condition: service_completed_successfully
-      caddy-supabase:
-        condition: service_healthy
+      supabase-ca-export:
+        condition: service_completed_successfully
     environment:
-      # Self-hosted GoTrue serves its routes at the root, not under /auth/v1
-      # the way hosted Supabase does, so the JWKS path has no prefix. The
+      # Standalone GoTrue serves its routes at the root, with no /auth/v1
+      # prefix; the caddy-supabase gateway puts the hosted prefixes back, which
+      # is why the URL below carries /auth/v1 while GoTrue itself does not. The
       # issuer is a string comparison against the token claim, never fetched,
-      # so it stays the in-network name GoTrue actually stamps.
+      # so it stays whatever GoTrue actually stamps.
       SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-${ENTERPRISE_AUTH_EXTERNAL_URL:-http://caddy-supabase/auth/v1}}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-https://caddy-supabase/auth/v1/.well-known/jwks.json}
-      SUPABASE_JWKS_CA_FILE: ${SUPABASE_JWKS_CA_FILE:-/etc/hive/supabase-ca/caddy/pki/authorities/local/root.crt}
+      SUPABASE_JWKS_CA_FILE: ${SUPABASE_JWKS_CA_FILE:-/etc/hive/supabase-ca/root.crt}
     volumes:
-      # Read-only view of caddy-supabase's state, for one file: the local
-      # authority's root certificate. Nothing else in edge-api reads it.
-      #
-      # Stated plainly because it is not obvious: this volume also holds that
-      # authority's PRIVATE key, and Docker cannot mount a single file out of
-      # a named volume. The exposure is real but empty: this authority is
-      # trusted by exactly one process, edge-api itself, so holding its key
-      # buys an attacker only the ability to forge a JWKS for the service he
-      # has already compromised. Splitting the certificate into its own volume
-      # would need a copy container between Caddy and edge-api, which is more
-      # moving parts than the risk justifies. Revisit if anything else ever
-      # trusts this authority.
-      - caddy-supabase-data:/etc/hive/supabase-ca:ro
+      # One file, the local authority's certificate, exported by the one-shot
+      # service above. Nothing Caddy owns is mounted here: no private key, and
+      # nothing that volume may come to hold later.
+      - supabase-ca:/etc/hive/supabase-ca:ro
 
   control-plane:
     depends_on:
@@ -435,3 +477,6 @@ volumes:
   # root certificate lives here and is mounted read-only into edge-api.
   caddy-supabase-data:
   caddy-supabase-config:
+  # The exported authority certificate, and only that. Public material, so
+  # unlike caddy-supabase-data this one is safe in a backup.
+  supabase-ca:

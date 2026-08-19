@@ -20,19 +20,27 @@ OAuth server at all, and answers 404 on every route this script uses.
 Usage
 -----
 GoTrue is not published on a host port, so this runs on the compose network
-rather than from a host shell, where "caddy-supabase" does not resolve:
+rather than from a host shell, where "caddy-supabase" does not resolve. Pass
+the service_role key by FILE, never as a literal on the command line: a value
+in argv is visible in ps for the container's life, in shell history, and in
+docker inspect afterwards.
 
     docker run --rm --network <project>_default
+        --env-file /path/to/.env
         -e GOTRUE_ADMIN_URL=http://caddy-supabase/auth/v1
-        -e SERVICE_ROLE_KEY="$ENTERPRISE_SERVICE_ROLE_KEY"
         -e OWUI_REDIRECT_URI=https://chat.example.com/oauth/oidc/callback
         -e HIVE_CHAT_URL=https://chat.example.com
         -v "$PWD/scripts:/s:ro" python:3.12-alpine python3 /s/register-owui-oauth-client.py
 
-The network name is the compose project name plus "_default"; a stack started
-as "-p hive" gives "hive_default". Point GOTRUE_ADMIN_URL somewhere else
-instead if a deployment does publish the gateway, for instance at the public
-https auth origin.
+The env file needs SERVICE_ROLE_KEY; the enterprise .env already carries the
+same value as ENTERPRISE_SERVICE_ROLE_KEY, so either add the alias or export it
+from a wrapper. The network name is the compose project name plus "_default";
+a stack started as "-p hive" gives "hive_default".
+
+Keep GOTRUE_ADMIN_URL on the compose network. The service_role key travels in
+an Authorization header, so a plain http URL that leaves the box puts an
+omnipotent credential on the wire, and the public listener refuses
+/auth/v1/admin/* by design anyway.
 
 Prints the two .env lines on success. The secret is shown exactly once, at
 creation, because GoTrue stores only its hash. Idempotent: a client already
@@ -106,9 +114,10 @@ def api(base, path, token, method="GET", body=None):
         raw = exc.read().decode("utf-8", "replace")
         if exc.code == 404:
             raise SystemExit(
-                "GoTrue answered 404 for " + path + ". That endpoint exists only "
-                "when the OAuth server is enabled (GOTRUE_OAUTH_SERVER_ENABLED) "
-                "and only on v2.180.0 or newer. Check the image tag first."
+                "GoTrue answered 404 for " + path + ". Most likely this is pointed at "
+                "the PUBLIC gateway listener, which refuses /auth/v1/admin/* on purpose: "
+                "use the in-network address. Otherwise the OAuth server is off "
+                "(GOTRUE_OAUTH_SERVER_ENABLED) or the image predates v2.180.0."
             ) from None
         if exc.code in (401, 403):
             raise SystemExit(

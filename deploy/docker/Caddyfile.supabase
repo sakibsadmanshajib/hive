@@ -83,16 +83,40 @@
 	# GoTrue's admin API is not browser surface. It is guarded by the
 	# service_role key, and that key is only ever used server side and in
 	# network, so refusing it at the edge costs nothing and means a leaked
-	# service key cannot be used from outside the box at all. Same posture as
-	# the Caddyfile.owui mutation blocks. Source order matters here: handle
-	# blocks are mutually exclusive and evaluated in the order written, so
-	# this has to precede the catch-all proxy below.
-	@admin path /auth/v1/admin /auth/v1/admin/*
+	# service key cannot be used from outside the box.
+	#
+	# /invite is in this list because it is the one route upstream guards
+	# with requireAdminCredentials while leaving it OUTSIDE the /admin
+	# group (internal/api/api.go at v2.189.0). Without it a leaked service
+	# key could still create users and send invitations from the internet.
+	# Re-read that route list on every GoTrue bump: the invariant is
+	# upstream's, not ours, and this matcher is the only thing tracking it.
+	#
+	# Source order matters: handle blocks are mutually exclusive and are
+	# evaluated in the order written, so this has to precede the proxy
+	# below. scripts/test_caddy_supabase_routes.py fails if it stops doing
+	# so, because a reordering that reopens the admin API changes nothing
+	# else observable.
+	@admin path /auth/v1/admin /auth/v1/admin/* /auth/v1/invite
 	handle @admin {
 		respond 404
 	}
 	handle_path /auth/v1/* {
-		reverse_proxy supabase-auth:9999
+		reverse_proxy supabase-auth:9999 {
+			# Replace, never append. GoTrue keys its rate limits on this
+			# header (GOTRUE_RATE_LIMIT_HEADER), and Caddy's default is to
+			# append the client address to whatever the client already
+			# sent, so a caller could hand itself a fresh bucket per
+			# request just by varying the value it sends.
+			#
+			# ponytail: {remote_host} is the immediate peer, so once a
+			# Cloudflare Tunnel fronts this listener every user shares one
+			# bucket. That is a stricter limit rather than a weaker one, so
+			# it is safe to ship; swap to the tunnel's CF-Connecting-IP
+			# when the tunnel is actually put in front, which is a cutover
+			# step and not a bring-up one.
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 	handle {
 		respond 404
@@ -108,10 +132,23 @@ http://caddy-supabase {
 	import supabase_internal
 }
 
-# No host port is published for this service. Until cutover the gateway is
-# reachable only from inside the compose network, which is what keeps a
-# stack standing "alongside" from carrying any traffic. Publishing a port, or
-# pointing a tunnel at this listener, is a cutover step and not a bring-up one.
-http://{$SUPABASE_DOMAIN:supabase.localhost} {
+# The public site listens on its OWN port, and that is the whole point.
+#
+# Host matching alone enforces nothing: the Host header is client supplied and
+# matched case insensitively, so while both site blocks shared port 80 a
+# request arriving with "Host: caddy-supabase" got the full internal route set,
+# including /rest/v1, /storage/v1 and the admin API. The smaller public route
+# set was enforced by the client choosing to be honest. On its own port the
+# listener enforces it.
+#
+# Consequence for whoever does the cutover: publish or tunnel port 8080 ONLY.
+# Ports 80 and 443 are the in-network surface and must never be exposed.
+http://{$SUPABASE_DOMAIN:supabase.localhost}:8080 {
 	import supabase_public
+}
+
+# Any other Host arriving on the public port matches no site above, and Caddy
+# would otherwise answer an empty 200. Answer nothing useful instead.
+:8080 {
+	respond 404
 }

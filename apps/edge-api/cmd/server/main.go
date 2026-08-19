@@ -51,10 +51,13 @@ type jwtAuthEnv struct {
 	Issuer   string
 	Audience string
 	JWKSURL  string
-	// CAFile is optional and names a PEM certificate authority to trust
-	// for the JWKS fetch, on top of the system roots. The self-hosted
-	// (enterprise) profile serves its JWKS through an in-stack TLS
-	// terminator using a private CA, which no public root vouches for.
+	// CAFile is optional and names the PEM certificate authority to trust
+	// for the JWKS fetch. When set it REPLACES the system roots for that
+	// one fetch, so it must not be set on a JWKS host whose certificate is
+	// publicly trusted: that would break the fetch rather than harden it.
+	// The self-hosted (enterprise) profile serves its JWKS through an
+	// in-stack TLS terminator using a private authority, which is the case
+	// this exists for.
 	CAFile string
 }
 
@@ -995,9 +998,10 @@ func loadJWTAuthEnv() (jwtAuthEnv, error) {
 		return jwtAuthEnv{}, fmt.Errorf("SUPABASE_JWKS_URL must be https (got %q)", jwksURL)
 	}
 
-	// Optional, and additive only: the https requirement above still
-	// holds, chain and hostname verification still happen. This names an
-	// extra authority, it does not turn verification off.
+	// Optional. The https requirement above still holds, and chain and
+	// hostname verification still happen: this narrows WHICH authority is
+	// acceptable for that one fetch, replacing the system roots rather
+	// than extending them. It never turns verification off.
 	caFile := strings.TrimSpace(os.Getenv("SUPABASE_JWKS_CA_FILE"))
 
 	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL, CAFile: caFile}, nil

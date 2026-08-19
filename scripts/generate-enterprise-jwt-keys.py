@@ -22,12 +22,15 @@ This script prints two values:
 
   ENTERPRISE_JWT_KEYS   the signing set, for GoTrue only. Carries the EC
                         private scalar and the legacy symmetric key. Secret.
-  ENTERPRISE_JWT_JWKS   the verification set, for PostgREST. Carries the EC
+  ENTERPRISE_JWT_VERIFY_KEYS  the verification set, for PostgREST. Carries the EC
                         public key plus the legacy symmetric key so PostgREST
                         can verify both the new ES256 user tokens and the
                         existing HS256 anon and service_role keys. The
                         symmetric entry is the HMAC secret in another
-                        encoding, so this value is secret too.
+                        encoding, so this value is secret too, whatever the
+                        word "verify" suggests: anyone holding either printed
+                        value can sign HS256 tokens. key_ops is how GoTrue
+                        picks a signing key, not a capability restriction.
 
 Both go in .env, which is never committed. Neither is ever logged.
 
@@ -272,7 +275,7 @@ def main():
     keys, jwks = build(secret)
     print("# Paste both lines into .env. Secret material: never commit, never log.")
     print("ENTERPRISE_JWT_KEYS=" + keys)
-    print("ENTERPRISE_JWT_JWKS=" + jwks)
+    print("ENTERPRISE_JWT_VERIFY_KEYS=" + jwks)
     return 0
 
 
