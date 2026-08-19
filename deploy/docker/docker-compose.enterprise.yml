@@ -310,8 +310,15 @@ services:
   # ── supabase-init ──────────────────────────────────────────────────────────
   # One-shot container: creates the hive-files and hive-images buckets via the
   # Storage API. Runs once per compose up; restart: "no" prevents re-runs.
-  # Bucket creation is idempotent: a 409 from an existing bucket is treated as
-  # success (|| true) so re-runs after a container recreate do not fail.
+  #
+  # Re-running has to be a no-op, and getting that right needs the response
+  # BODY, not just the status. The Storage API answers a duplicate bucket with
+  # HTTP 400 carrying {"statusCode":"409","error":"Duplicate"}, so a status-only
+  # check for 409 never matches and the second `up` of any enterprise stack
+  # fails here. That is not cosmetic: edge-api and control-plane both wait on
+  # this container completing successfully, so a stack that came up cleanly the
+  # first time refuses to start the second, which is the restart shape a
+  # cutover has.
   supabase-init:
     # Pinned to immutable digest. Refresh: docker pull curlimages/curl:8.7.1 && docker inspect --format='{{index .RepoDigests 0}}' curlimages/curl:8.7.1
     image: curlimages/curl:8.7.1@sha256:25d29daeb9b14b89e2fa8cc17c70e4b188bca1466086907c2d9a4b56b59d8e21
@@ -332,13 +339,20 @@ services:
         AUTH_HEADER="Authorization: Bearer $${SERVICE_KEY}"
         for BUCKET in hive-files hive-images; do
           echo "Creating bucket: $${BUCKET}"
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$${STORAGE_URL}/bucket" \
+          RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "$${STORAGE_URL}/bucket" \
             -H "Content-Type: application/json" \
             -H "$${AUTH_HEADER}" \
             -d "{\"id\":\"$${BUCKET}\",\"name\":\"$${BUCKET}\",\"public\":false}")
+          HTTP_STATUS=$(echo "$${RESPONSE}" | tail -n1)
+          BODY=$(echo "$${RESPONSE}" | sed '$$d')
           case "$${HTTP_STATUS}" in
-            2*|409) echo "  bucket $${BUCKET}: ok (status $${HTTP_STATUS})" ;;
-            *)      echo "  bucket $${BUCKET}: FAILED (status $${HTTP_STATUS})"; exit 1 ;;
+            2*) echo "  bucket $${BUCKET}: created" ;;
+            400|409)
+              case "$${BODY}" in
+                *Duplicate*|*already*exists*) echo "  bucket $${BUCKET}: already exists" ;;
+                *) echo "  bucket $${BUCKET}: FAILED ($${HTTP_STATUS}) $${BODY}"; exit 1 ;;
+              esac ;;
+            *) echo "  bucket $${BUCKET}: FAILED ($${HTTP_STATUS}) $${BODY}"; exit 1 ;;
           esac
         done
         echo "Bucket init complete."
