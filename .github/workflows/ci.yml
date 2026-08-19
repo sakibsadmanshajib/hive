@@ -1508,9 +1508,14 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           # Fixture seeding runs in this step's own Node child process
-          # (tests/e2e/support/e2e-auth-fixtures.mjs), so it needs admin
-          # auth here. Step-scoped rather than job-level, matching every
-          # other consumer of this secret in this job.
+          # (tests/e2e/support/e2e-auth-fixtures.mjs), so it needs admin auth.
+          # It reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the
+          # environment, and both come from $GITHUB_ENV, written by the
+          # throwaway stack step. Naming the repository secret here again
+          # would hand the seeder the hosted project's key while it talks to
+          # this run's own GoTrue, and GoTrue answers "invalid JWT: token
+          # signature is invalid" to every admin call. Measured, in run
+          # 32266955684: fourteen specs failed that way with no other cause.
           #
           # This used to POST to a deployed `e2e-fixtures` Supabase Edge
           # Function instead, which kept the key out of this step but put
@@ -1520,7 +1525,6 @@ jobs:
           # `supabase functions deploy`. Seeding in-process removes that
           # skew, and removes the deploy step from the critical path of
           # any pull request that touches the fixtures.
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # E2E_RUN_KEY, and the three identity values below it, namespace
           # every fixture row this job's specs touch (see
           # apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs,
