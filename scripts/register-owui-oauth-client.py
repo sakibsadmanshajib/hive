@@ -190,9 +190,23 @@ def main():
 
     payload = build_payload([redirect], client_uri)
 
-    _, listing = api(base, "/admin/oauth/clients", token)
+    # The listing is paginated. Reading only the first page and finding no
+    # match would register a SECOND client with a second secret, which is
+    # exactly what the idempotency check exists to prevent.
+    # ponytail: one large page plus a refusal, rather than a pagination loop.
+    # This deployment registers one client; if that ever stops being true the
+    # loop is the upgrade, and until then refusing beats guessing.
+    page_size = 1000
+    _, listing = api(base, "/admin/oauth/clients?per_page=" + str(page_size), token)
     clients = listing.get("clients", listing) if isinstance(listing, dict) else listing
-    existing = find_existing(clients or [], payload)
+    clients = clients or []
+    if len(clients) >= page_size:
+        raise SystemExit(
+            "GoTrue returned a full page of OAuth clients, so the listing may be "
+            "truncated and an existing registration could be missed. Refusing to "
+            "register rather than risk a duplicate client; check by hand."
+        )
+    existing = find_existing(clients, payload)
     if existing:
         print("# Client already registered; leaving it alone. GoTrue stores only a hash")
         print("# of the secret, so the secret cannot be printed again. Rotate through")
