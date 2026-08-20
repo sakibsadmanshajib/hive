@@ -1,0 +1,170 @@
+# Supabase API gateway for the self-hosted (enterprise) profile.
+#
+# Hosted Supabase puts Kong in front of GoTrue, PostgREST and Storage, which
+# is what lets every consumer hold ONE base URL and append the familiar
+# /auth/v1, /rest/v1 and /storage/v1 prefixes. The enterprise compose had no
+# equivalent, so those consumers would each have to learn a different host and
+# a different path shape:
+#
+#   apps/control-plane/internal/auth/client.go builds supabaseURL + /auth/v1/user
+#   @supabase/ssr appends /auth/v1 and /rest/v1 to its base
+#   the seeding scripts derive both from a single base URL
+#
+# Standalone GoTrue serves /user with no prefix, and PostgREST is a different
+# host entirely, so a bare SUPABASE_URL=http://supabase-auth:9999 is wrong for
+# all of them. This file is the Kong replacement: same prefixes, no second
+# proxy technology, expressed in the reverse proxy this repo already runs for
+# three other origins.
+#
+# handle_path strips the matched prefix, which is exactly Kong's behaviour
+# here. Storage keeps its own root-level routes (/s3, /object, /bucket,
+# /health, verified in the pinned image), so /storage/v1/s3 lands on /s3 the
+# way the hosted S3-compatible endpoint does.
+#
+# The gateway is not an authorization boundary and must not be mistaken for
+# one: GoTrue, PostgREST and Storage each authenticate every request they
+# receive, and each of the three prefixes below is meant to reach its backend.
+# There is therefore nothing here for a path-confusion trick to unlock, since
+# no route is protected BY this file. What the file does control is which
+# backends are reachable from which listener, which is why the public listener
+# below carries a smaller route set than the internal one.
+#
+# TLS, and why the https listener exists at all: edge-api refuses a plain http
+# SUPABASE_JWKS_URL (apps/edge-api/cmd/server/main.go), because anything on
+# the path to an http JWKS can swap the key set and mint tokens this gateway
+# would accept. That guard is NOT relaxed for self-hosting. `tls internal`
+# terminates real TLS using Caddy's own local certificate authority, and
+# edge-api is pointed at that authority through SUPABASE_JWKS_CA_FILE, so the
+# chain and the hostname are still verified. No public DNS name and no ACME
+# account are involved, so it behaves identically on a laptop, in CI and on an
+# air-gapped box.
+#
+# The plain-http listener on the same names is for the in-network consumers
+# that do not carry the CA (control-plane, the seeding scripts) and for an
+# external TLS terminator in front (Cloudflare Tunnel on the demo box). The
+# explicit http:// scheme is the same reasoning as Caddyfile.owui and
+# Caddyfile.artifacts: without it Caddy turns on automatic HTTPS and redirects
+# plain HTTP back to itself, which loops forever behind a terminator.
+
+{
+	auto_https disable_redirects
+}
+
+# Internal routes: everything, for consumers inside the compose network.
+(supabase_internal) {
+	handle_path /auth/v1/* {
+		reverse_proxy supabase-auth:9999
+	}
+	handle_path /rest/v1/* {
+		reverse_proxy supabase-rest:3000
+	}
+	handle_path /storage/v1/* {
+		reverse_proxy supabase-storage:5000
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Browser-facing routes: /auth/v1 only, deliberately.
+#
+# PostgREST and Storage are NOT exposed on the public hostname. Hosted
+# Supabase does expose them, because serving browsers directly is its product;
+# here nothing does. control-plane and edge-api reach the database directly and
+# mediate every file operation with the service key, so a public /rest/v1 would
+# put the whole public schema one anon key away from the internet, governed
+# only by whatever grants happen to exist, and a public /storage/v1 would do
+# the same for objects. Neither buys anything. Sign-in and the OAuth flow are
+# the only parts a browser needs, and those are all under /auth/v1.
+#
+# Add a prefix here only together with the RLS policies and grants that make it
+# safe to serve anonymously.
+(supabase_public) {
+	# GoTrue's admin API is not browser surface. It is guarded by the
+	# service_role key, and that key is only ever used server side and in
+	# network, so refusing it at the edge costs nothing and means a leaked
+	# service key cannot be used from outside the box.
+	#
+	# /invite is in this list because it is the one route upstream guards
+	# with requireAdminCredentials while leaving it OUTSIDE the /admin
+	# group (internal/api/api.go at v2.189.0). Without it a leaked service
+	# key could still create users and send invitations from the internet.
+	# Re-read that route list on every GoTrue bump: the invariant is
+	# upstream's, not ours, and this matcher is the only thing tracking it.
+	#
+	# Source order matters: handle blocks are mutually exclusive and are
+	# evaluated in the order written, so this has to precede the proxy
+	# below. scripts/test_caddy_supabase_routes.py fails if it stops doing
+	# so, because a reordering that reopens the admin API changes nothing
+	# else observable.
+	@admin path /auth/v1/admin /auth/v1/admin/* /auth/v1/invite
+	handle @admin {
+		respond 404
+	}
+	handle_path /auth/v1/* {
+		reverse_proxy supabase-auth:9999 {
+			# GoTrue keys its rate limits on X-Forwarded-For
+			# (GOTRUE_RATE_LIMIT_HEADER), so what lands here decides whose
+			# bucket a request spends.
+			#
+			# This Caddy already replaces the header rather than appending,
+			# because appending only happens for a peer listed in
+			# trusted_proxies and none is configured. The line is therefore
+			# not what makes the value trustworthy today; it makes it stay
+			# trustworthy. The cutover will want trusted_proxies set, so the
+			# tunnel's client address survives, and that is exactly the
+			# setting that turns appending back on. Leave this here through
+			# that change.
+			#
+			# Sb-Forwarded-For is stripped because GoTrue reads it BEFORE
+			# the configured header (performRateLimiting checks
+			# sbff.GetIPAddress first). It is gated on
+			# GOTRUE_SB_FORWARDED_FOR_ENABLED, which defaults false, so it
+			# is inert today and one flag away from handing the bucket key
+			# back to the caller.
+			#
+			# ponytail: {remote_host} is the immediate peer, so behind a
+			# tunnel this is ONE bucket for the whole deployment, not merely
+			# a stricter per-user one: 30 token refreshes an hour shared by
+			# everybody, and one user can lock out the rest. Acceptable
+			# while nothing is tunnelled here; at cutover set
+			# trusted_proxies and rewrite from the tunnel's client-IP header
+			# instead, keeping ENTERPRISE_RATE_LIMIT_HEADER in step.
+			header_up X-Forwarded-For {remote_host}
+			header_up -Sb-Forwarded-For
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+
+https://caddy-supabase {
+	tls internal
+	import supabase_internal
+}
+
+http://caddy-supabase {
+	import supabase_internal
+}
+
+# The public site listens on its OWN port, and that is the whole point.
+#
+# Host matching alone enforces nothing: the Host header is client supplied and
+# matched case insensitively, so while both site blocks shared port 80 a
+# request arriving with "Host: caddy-supabase" got the full internal route set,
+# including /rest/v1, /storage/v1 and the admin API. The smaller public route
+# set was enforced by the client choosing to be honest. On its own port the
+# listener enforces it.
+#
+# Consequence for whoever does the cutover: publish or tunnel port 8080 ONLY.
+# Ports 80 and 443 are the in-network surface and must never be exposed.
+http://{$SUPABASE_DOMAIN:supabase.localhost}:8080 {
+	import supabase_public
+}
+
+# Any other Host arriving on the public port matches no site above, and Caddy
+# would otherwise answer an empty 200. Answer nothing useful instead.
+:8080 {
+	respond 404
+}

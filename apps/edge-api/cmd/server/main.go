@@ -51,6 +51,14 @@ type jwtAuthEnv struct {
 	Issuer   string
 	Audience string
 	JWKSURL  string
+	// CAFile is optional and names the PEM certificate authority to trust
+	// for the JWKS fetch. When set it REPLACES the system roots for that
+	// one fetch, so it must not be set on a JWKS host whose certificate is
+	// publicly trusted: that would break the fetch rather than harden it.
+	// The self-hosted (enterprise) profile serves its JWKS through an
+	// in-stack TLS terminator using a private authority, which is the case
+	// this exists for.
+	CAFile string
 }
 
 type storageConfig struct {
@@ -486,6 +494,7 @@ func main() {
 			Issuer:      jwtCfg.Issuer,
 			JWKSURL:     jwtCfg.JWKSURL,
 			JWTAudience: jwtCfg.Audience,
+			CAFile:      jwtCfg.CAFile,
 		})
 		if err != nil {
 			log.Fatalf("failed to initialize Supabase JWT validator: %v", err)
@@ -989,7 +998,13 @@ func loadJWTAuthEnv() (jwtAuthEnv, error) {
 		return jwtAuthEnv{}, fmt.Errorf("SUPABASE_JWKS_URL must be https (got %q)", jwksURL)
 	}
 
-	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL}, nil
+	// Optional. The https requirement above still holds, and chain and
+	// hostname verification still happen: this narrows WHICH authority is
+	// acceptable for that one fetch, replacing the system roots rather
+	// than extending them. It never turns verification off.
+	caFile := strings.TrimSpace(os.Getenv("SUPABASE_JWKS_CA_FILE"))
+
+	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL, CAFile: caFile}, nil
 }
 
 // jwtAuditLogger returns the audit hook handed to the JWT middleware. For

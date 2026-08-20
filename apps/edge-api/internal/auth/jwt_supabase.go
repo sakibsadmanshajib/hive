@@ -6,8 +6,13 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +42,20 @@ type SupabaseJWTConfig struct {
 	// ClockSkew tolerates small clock drift between this process and the
 	// token issuer. Defaults to 30s when zero.
 	ClockSkew time.Duration
+	// CAFile optionally names a PEM file holding the certificate authority
+	// to trust when fetching JWKSURL. When set it REPLACES the system
+	// roots for that one fetch, so the named authority is the only one
+	// that can vouch for the JWKS host. It exists for the self-hosted
+	// (enterprise) deployment, where the JWKS is served by an in-stack TLS
+	// terminator on a compose service name, holding a private CA's
+	// certificate that no public authority could issue. Leave it empty on
+	// deployments whose JWKS host presents a publicly trusted certificate.
+	//
+	// This never weakens the https-only rule enforced at the caller: the
+	// transport still requires TLS and still verifies the chain and the
+	// hostname. It narrows which authority is acceptable, it does not skip
+	// verification.
+	CAFile string
 }
 
 // Claims holds the subset of token claims the edge-api consumes downstream.
@@ -76,14 +95,75 @@ func NewSupabaseJWTValidator(ctx context.Context, cfg SupabaseJWTConfig) (*Supab
 	if cfg.ClockSkew == 0 {
 		cfg.ClockSkew = 30 * time.Second
 	}
-	cache := jwk.NewCache(ctx)
-	if err := cache.Register(cfg.JWKSURL, jwk.WithRefreshInterval(cfg.JWKSTTL)); err != nil {
+	// Without an error sink the refresh loop swallows every failure: httprc
+	// keeps serving the last good key set and Cache.Get returns it with no
+	// error, so a JWKS that stopped being fetchable stays trusted until the
+	// process restarts, silently. Recreating caddy-supabase's volume does
+	// exactly that, since Caddy then mints a fresh authority that the
+	// boot-time pool does not know. Trust cannot widen this way, because the
+	// pool is fixed at boot, so it is fail-stale rather than fail-open. It
+	// should still be visible rather than silent.
+	cache := jwk.NewCache(ctx, jwk.WithErrSink(jwksRefreshLogger{url: cfg.JWKSURL}))
+	registerOpts := []jwk.RegisterOption{jwk.WithRefreshInterval(cfg.JWKSTTL)}
+	if cfg.CAFile != "" {
+		client, err := httpClientTrusting(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		registerOpts = append(registerOpts, jwk.WithHTTPClient(client))
+	}
+	if err := cache.Register(cfg.JWKSURL, registerOpts...); err != nil {
 		return nil, fmt.Errorf("auth: jwks register: %w", err)
 	}
 	if _, err := cache.Refresh(ctx, cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("auth: jwks initial refresh: %w", err)
 	}
 	return &SupabaseJWTValidator{cfg: cfg, cache: cache}, nil
+}
+
+// jwksRefreshLogger reports background JWKS refresh failures. The refresh loop
+// requires a sink that does not block, so this only logs.
+type jwksRefreshLogger struct{ url string }
+
+func (l jwksRefreshLogger) Error(err error) {
+	log.Printf("auth.jwks.refresh_failed url=%s err=%v (still serving the last good key set)", l.url, err)
+}
+
+// httpClientTrusting returns an HTTP client that trusts exactly one
+// certificate authority: whatever the PEM file at path holds. The system
+// roots are deliberately NOT included.
+//
+// Naming a CA file is a statement that the JWKS is served by a specific,
+// operator-controlled authority, which for this deployment is an in-stack TLS
+// terminator on a compose service name that no public authority could ever
+// issue for. Keeping the public roots in the pool alongside it would leave
+// every public CA able to vouch for that fetch for no benefit, so the file
+// replaces the trust set rather than extending it. A deployment whose JWKS
+// host presents a publicly trusted certificate simply leaves the variable
+// unset and gets the system pool, which is the default path.
+//
+// An unreadable file, or one carrying no certificate, is fatal rather than a
+// silent fall back to the system pool: a deployment that asked for a private
+// CA and quietly did not get one would fail later, at the first token, with a
+// far worse error.
+func httpClientTrusting(path string) (*http.Client, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("auth: read jwks ca file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("auth: jwks ca file %q holds no certificate", path)
+	}
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    pool,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}, nil
 }
 
 // Parse validates the token signature, issuer, audience, and expiration,
