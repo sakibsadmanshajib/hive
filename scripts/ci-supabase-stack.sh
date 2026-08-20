@@ -186,7 +186,45 @@ server {
   listen 80;
   # supabase-js takes ONE base URL and appends /auth/v1 and /rest/v1 itself,
   # so a job cannot point it at GoTrue and PostgREST separately.
-  location /auth/v1/ { proxy_pass http://supabase-auth:9999/; }
+  location /auth/v1/ {
+    # This gateway answers the CORS preflight itself instead of proxying it,
+    # because GoTrue refuses the one supabase-js actually sends.
+    #
+    # GoTrue's CORS allow-list is a fixed set (Accept, Authorization,
+    # Content-Type, X-Client-Info, X-Supabase-Api-Version and a few more) and
+    # `apikey` is NOT in it. supabase-js puts `apikey` on every request, so the
+    # browser preflight asks for a header GoTrue will not allow, and GoTrue
+    # answers 204 with no Access-Control-* headers whatsoever. The browser then
+    # blocks the request before it is sent: signInWithPassword rejects with
+    # "Failed to fetch", which apps/web-console/lib/auth/auth-error.ts (an
+    # allow-list by design) degrades to generic "Something went wrong on our
+    # end" copy. Every credentialed spec then dies in its own signIn() helper on
+    # a navigation timeout, 25 seconds at a time, naming nothing.
+    #
+    # On a hosted Supabase project this never surfaces because Kong terminates
+    # CORS at the edge and never asks GoTrue about it. This is that same
+    # termination, and it is the reason the gateway exists rather than an extra.
+    #
+    # PostgREST deliberately gets no such block: it already echoes the requested
+    # headers back with an Access-Control-Allow-Origin, so adding one here would
+    # emit the header twice and browsers reject a duplicated value.
+    if ($request_method = OPTIONS) {
+      add_header Access-Control-Allow-Origin  "*" always;
+      add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+      # Echoed rather than hardcoded, the way PostgREST answers the same
+      # preflight. A fixed list is what broke this in the first place, and a
+      # future supabase-js that adds one more header would break it again with
+      # the same symptom that names nothing.
+      add_header Access-Control-Allow-Headers $http_access_control_request_headers always;
+      add_header Access-Control-Max-Age       86400 always;
+      add_header Content-Length 0 always;
+      return 204;
+    }
+    # Only the preflight is short-circuited. The real request still reaches
+    # GoTrue, which sets its own Access-Control-Allow-Origin on the response, so
+    # no header is emitted twice.
+    proxy_pass http://supabase-auth:9999/;
+  }
   location /rest/v1/ { proxy_pass http://supabase-rest:3000/; }
   location = /healthz { return 200 "ok\n"; }
 }
@@ -211,6 +249,56 @@ if [ "$code" != "200" ]; then
   exit 1
 fi
 log "PostgREST is serving the migrated schema through the gateway"
+
+# ---------------------------------------------------------------------------
+# CORS preflight, asserted here rather than discovered in Playwright.
+#
+# Everything above this line can be healthy while the browser is still unable to
+# make a single call, because a preflight refusal is invisible to curl: the two
+# readiness checks above pass, the stack reports itself up, and the failure then
+# surfaces twenty minutes later as a navigation timeout inside signIn(), with
+# the real error already swallowed by the console's generic auth copy. That is
+# what happened, so this asserts the browser's own request shape at the point
+# where a failure can still name its cause.
+#
+# The request shape is not arbitrary. Per the Fetch spec a browser sends
+# Access-Control-Request-Headers lowercased and lexicographically sorted, and
+# rs/cors (which GoTrue uses) relies on that ordering, so an unsorted probe
+# gets answers a browser would never get. `apikey` is in the list because
+# supabase-js always sends it, and it is the header GoTrue rejects.
+# ---------------------------------------------------------------------------
+browser_request_headers='apikey,authorization,content-type,x-client-info,x-supabase-api-version'
+assert_preflight() {
+  local label="$1" path="$2" method="$3" headers allow_origin allow_headers
+  headers="$(curl -s -o /dev/null -D - -X OPTIONS "${base}${path}" \
+    -H 'Origin: http://localhost:3000' \
+    -H "Access-Control-Request-Method: ${method}" \
+    -H "Access-Control-Request-Headers: ${browser_request_headers}" | tr -d '\r' || true)"
+  allow_origin="$(printf '%s\n' "$headers" | grep -i '^access-control-allow-origin:' || true)"
+  allow_headers="$(printf '%s\n' "$headers" | grep -i '^access-control-allow-headers:' || true)"
+  if [ -z "$allow_origin" ]; then
+    log "::error::${label} refused the browser CORS preflight: no Access-Control-Allow-Origin in the response. Every supabase-js call from the browser will fail with 'Failed to fetch' before it is sent."
+    printf '%s\n' "$headers" >&2
+    return 1
+  fi
+  # Presence of the origin header is not enough. A preflight can be answered
+  # while still omitting the one header supabase-js cannot do without, and the
+  # browser blocks that request just as completely.
+  if ! printf '%s\n' "$allow_headers" | grep -qi 'apikey'; then
+    log "::error::${label} answered the preflight but did not allow the 'apikey' header, which supabase-js sends on every request. Got: ${allow_headers:-<none>}"
+    return 1
+  fi
+  log "${label} accepts the browser CORS preflight, apikey included"
+  return 0
+}
+
+preflight_failures=0
+assert_preflight "GoTrue (/auth/v1)"   "/auth/v1/token?grant_type=password" POST || preflight_failures=$((preflight_failures + 1))
+assert_preflight "PostgREST (/rest/v1)" "/rest/v1/tenants?select=id"        GET  || preflight_failures=$((preflight_failures + 1))
+if [ "$preflight_failures" -ne 0 ]; then
+  log "::error::the gateway is up but unusable from a browser; not handing these values to a job that will only fail inside Playwright"
+  exit 1
+fi
 
 # The gateway address a container on another docker network reaches. Not
 # localhost: inside those containers that is the container itself.
