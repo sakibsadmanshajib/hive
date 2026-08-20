@@ -1739,7 +1739,14 @@ jobs:
 
       - name: Tear down the throwaway Supabase
         if: always()
-        run: docker rm -f supabase-gw supabase-rest supabase-auth hive-ci-db || true
+        # The network too, not just the containers. It is a no-op on a hosted
+        # runner, which is discarded whole, but scripts/ci-supabase-stack.sh is
+        # also run by hand during development and there the leftovers do
+        # accumulate. Removing the containers first is what frees the network to
+        # be removed at all.
+        run: |
+          docker rm -f supabase-gw supabase-rest supabase-auth hive-ci-db || true
+          docker network rm hive-ci-supabase || true
 
   # ------------------------------------------------------------------
   # Egress firewall e2e (issue #342 item 6). Live proof that the Linux

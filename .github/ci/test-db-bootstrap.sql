@@ -7,19 +7,35 @@
 -- provide. Never run against a real environment — supabase/migrations/ are
 -- the only source of truth for actual schema.
 --
--- Two images run this file and it has to be a no-op on the parts either one
--- already has:
+-- Every statement below is guarded on absence rather than written as a plain
+-- CREATE. Be precise about why, because the reason is not what CI currently
+-- proves:
 --
---   * pgvector/pgvector, used by ci.yml's go-tests job, has none of this. It
---     gets every object below.
---   * supabase/postgres, used by scripts/ci-throwaway-db.sh, ships the auth
---     schema, auth.users, auth.uid(), auth.jwt() and the supabase_auth_admin
---     role already, all owned by the supabase_admin superuser. The bootstrap
---     connects as postgres, which is NOT a superuser on that image, so an
---     unconditional CREATE OR REPLACE FUNCTION auth.uid() fails with "must be
---     owner of function uid" and an unconditional CREATE ROLE fails with
---     "role already exists". Every statement here is therefore guarded on
---     absence rather than written as a plain CREATE.
+--   * pgvector/pgvector:pg17 is the ONLY image any caller runs this against
+--     today. ci.yml's go-tests job applies it to a pgvector service container,
+--     and scripts/ci-throwaway-db.sh's non-gotrue branch applies it to the
+--     pgvector container ci.yml's live-integration job starts. On that image
+--     none of these objects pre-exist and postgres IS a superuser, so the
+--     guards are all no-ops and nothing here is under test.
+--   * supabase/postgres is NOT currently a caller. An earlier revision of this
+--     branch used it for the throwaway database and was reverted (the postgres
+--     role is not a superuser there, which forced a second connection as
+--     supabase_admin for pg_cron and for auth-schema writes). The guards were
+--     written against that image and are kept deliberately, because they cost
+--     nothing and the alternative is rediscovering the failures below. They are
+--     a defence against a future caller, not a description of a current one.
+--
+-- What was observed on supabase/postgres while it was a caller, and what the
+-- guards therefore avoid: it ships the auth schema, auth.users, auth.uid(),
+-- auth.jwt() and supabase_auth_admin already, all owned by the supabase_admin
+-- superuser, so an unconditional CREATE OR REPLACE FUNCTION auth.uid() fails
+-- with "must be owner of function uid" and an unconditional CREATE ROLE fails
+-- with "role already exists".
+--
+-- Consequence worth stating plainly: because no CI leg runs this file against
+-- supabase/postgres, a future edit that dropped a guard would ship green. If
+-- that image ever becomes a caller again, add a leg that exercises it here
+-- rather than trusting these comments.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DO $$
