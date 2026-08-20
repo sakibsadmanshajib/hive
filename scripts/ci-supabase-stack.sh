@@ -205,9 +205,15 @@ server {
     # CORS at the edge and never asks GoTrue about it. This is that same
     # termination, and it is the reason the gateway exists rather than an extra.
     #
-    # PostgREST deliberately gets no such block: it already echoes the requested
-    # headers back with an Access-Control-Allow-Origin, so adding one here would
-    # emit the header twice and browsers reject a duplicated value.
+    # PostgREST deliberately gets no such block: it already answers this exact
+    # preflight itself, echoing the requested headers back with an
+    # Access-Control-Allow-Origin, so a block there would be redundant. Note
+    # that it would NOT duplicate the header, which an earlier version of this
+    # comment claimed: a `return 204` short-circuits before proxy_pass, so the
+    # upstream is never reached and never contributes a second copy. Measured.
+    # Duplication is only reachable on the REAL response, which is why the
+    # gateway's add_header directives live inside the `if` below rather than at
+    # location level, and why assert_single_cors_origin further down exists.
     if ($request_method = OPTIONS) {
       add_header Access-Control-Allow-Origin  "*" always;
       add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
@@ -334,9 +340,44 @@ assert_preflight() {
   return 0
 }
 
+# The preflight is only half of the browser's contract, and it is the half that
+# cannot break by duplication: `return 204` short-circuits before proxy_pass, so
+# only one component ever answers an OPTIONS. The REAL response is the half that
+# can. There the gateway proxies to GoTrue, GoTrue sets its own
+# Access-Control-Allow-Origin, and if the gateway's add_header directives were
+# ever moved out of the `if` to location level, nginx would emit the gateway's
+# copy too. A browser rejects a duplicated Access-Control-Allow-Origin exactly
+# as hard as a missing one, and nothing above this line would notice:
+# assert_preflight probes only OPTIONS, and header_value() takes `head -1`, so
+# it could not see a second copy even if it looked.
+#
+# Verified by mutation before this was written: moving the add_header out of the
+# `if` leaves every preflight assertion green while the real response carries
+# two Access-Control-Allow-Origin headers.
+#
+# /rest/v1 is deliberately not probed here. The gateway adds no header on that
+# prefix at all, so duplication is impossible there by construction, and only
+# the path that can actually break is worth an assertion.
+assert_single_cors_origin() {
+  local label="$1" path="$2" method="$3" count
+  # grep -c exits 1 on zero matches, which pipefail would otherwise turn into a
+  # script-killing failure rather than the named error below.
+  count="$(curl -s -o /dev/null -D - -X "$method" "${base}${path}" \
+    -H "Origin: ${preflight_origin}" \
+    -H "apikey: ${service_role_key}" \
+    | tr -d '\r' | grep -ci '^access-control-allow-origin:' || true)"
+  if [ "$count" != "1" ]; then
+    log "::error::${label} returned ${count} Access-Control-Allow-Origin header(s) on a real ${method}, not exactly 1. A browser rejects a duplicated value as hard as a missing one, and every credentialed spec would fail inside signIn() naming nothing."
+    return 1
+  fi
+  log "${label} sets exactly one Access-Control-Allow-Origin on a real ${method}"
+  return 0
+}
+
 preflight_failures=0
 assert_preflight "GoTrue (/auth/v1)"   "/auth/v1/token?grant_type=password" POST || preflight_failures=$((preflight_failures + 1))
 assert_preflight "PostgREST (/rest/v1)" "/rest/v1/tenants?select=id"        GET  || preflight_failures=$((preflight_failures + 1))
+assert_single_cors_origin "GoTrue (/auth/v1)" "/auth/v1/settings" GET || preflight_failures=$((preflight_failures + 1))
 if [ "$preflight_failures" -ne 0 ]; then
   log "::error::the gateway is up but unusable from a browser; not handing these values to a job that will only fail inside Playwright"
   exit 1
