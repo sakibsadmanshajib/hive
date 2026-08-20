@@ -50,8 +50,55 @@
 	auto_https disable_redirects
 }
 
+# The CORS preflight for /auth/v1, answered here instead of being proxied.
+#
+# GoTrue's CORS allow-list is a fixed set (Accept, Authorization, Content-Type,
+# X-Client-Info, X-Supabase-Api-Version and a few more) and `apikey` is NOT in
+# it. supabase-js puts `apikey` on every request, so the browser preflight asks
+# for a header GoTrue will not allow, and GoTrue answers 204 with no
+# Access-Control-* headers at all. The browser then blocks the request before it
+# is sent: signInWithPassword rejects with "Failed to fetch", which
+# apps/web-console/lib/auth/auth-error.ts degrades to generic copy, and every
+# credentialed spec dies later in its own signIn() helper naming nothing.
+#
+# On a hosted Supabase project this never surfaces because Kong terminates CORS
+# at the edge and never asks GoTrue about it. This is that same termination, and
+# it is the same block scripts/ci-supabase-stack.sh installs in front of the
+# throwaway CI stack, expressed in Caddy.
+#
+# Two properties are load bearing and both fail silently:
+#
+#   * The headers live INSIDE a preflight-only handle. Hoisted to snippet level
+#     they would also land on the proxied response, next to the
+#     Access-Control-Allow-Origin GoTrue sets itself, and a browser rejects a
+#     duplicated Access-Control-Allow-Origin exactly as hard as a missing one.
+#     A preflight-only probe cannot see that, so it needs saying here.
+#   * Access-Control-Allow-Headers is ECHOED, not a fixed list, the way
+#     PostgREST answers the same preflight. A fixed list is what broke this in
+#     the first place, and a future supabase-js that adds one more header would
+#     break it again with the same symptom that names nothing.
+#
+# /rest/v1 and /storage/v1 get no such block. PostgREST already answers this
+# preflight itself, and neither is exposed to a browser on the public listener.
+(supabase_auth_cors_preflight) {
+	@auth_preflight {
+		method OPTIONS
+		path /auth/v1/*
+	}
+	handle @auth_preflight {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+			Access-Control-Allow-Headers {header.Access-Control-Request-Headers}
+			Access-Control-Max-Age "86400"
+		}
+		respond 204
+	}
+}
+
 # Internal routes: everything, for consumers inside the compose network.
 (supabase_internal) {
+	import supabase_auth_cors_preflight
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999
 	}
@@ -101,6 +148,10 @@
 	handle @admin {
 		respond 404
 	}
+	# After @admin on purpose: an OPTIONS to /auth/v1/admin is refused with the
+	# rest of the admin API rather than told it would be welcome. Before the
+	# proxy for the reason the snippet documents.
+	import supabase_auth_cors_preflight
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999 {
 			# GoTrue keys its rate limits on X-Forwarded-For

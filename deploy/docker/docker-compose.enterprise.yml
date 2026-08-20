@@ -403,10 +403,31 @@ services:
       - caddy-supabase-data:/data
       - caddy-supabase-config:/config
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate --no-verbose --tries=1 -O /dev/null https://caddy-supabase/auth/v1/health || exit 1"]
-      interval: 5s
+      # CMD, not CMD-SHELL, and plain http rather than https: one process per
+      # probe instead of three. The old probe ran `sh -c` around a busybox wget
+      # that forks `ssl_client` for the TLS leg, and on the demo box every one
+      # of those probes leaked a pid charge in the container's cgroup. It
+      # reached the 12376 ceiling after about nineteen hours, and from then on
+      # the kernel could not fork the probe at all: `docker exec` answered
+      # "procReady not received", the check recorded exit -1 forever, and the
+      # container reported unhealthy while Caddy itself was serving and
+      # renewing certificates normally. pids.current stayed pegged with a single
+      # live process in the cgroup, so the charges were stale, not real tasks.
+      #
+      # No other container on that box leaks, and all of them are probed on the
+      # same interval; this one was the only three-process probe. Fewer forks
+      # per probe and a third of the probe rate is the mitigation available at
+      # this layer. The interval is not a regression: a gateway with a single
+      # dependency does not need a five-second health signal, and a real outage
+      # is still reported inside a minute.
+      #
+      # https was never the point. The in-network listener answers the same
+      # route, and --no-check-certificate meant the TLS leg was verifying
+      # nothing anyway, so it cost three processes to prove less.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://caddy-supabase/auth/v1/health"]
+      interval: 15s
       timeout: 3s
-      retries: 10
+      retries: 5
       start_period: 15s
     logging:
       driver: json-file

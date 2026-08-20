@@ -46,7 +46,18 @@ COMPOSE = HERE / "deploy" / "docker" / "docker-compose.enterprise.yml"
 
 PUBLIC_SNIPPET = "supabase_public"
 INTERNAL_SNIPPET = "supabase_internal"
+CORS_SNIPPET = "supabase_auth_cors_preflight"
 PUBLIC_PORT = "8080"
+
+# All four are required for a browser to accept the preflight, and the echo
+# placeholder is what keeps Allow-Headers from being a list that goes stale.
+CORS_RESPONSE_HEADERS = [
+    "Access-Control-Allow-Origin",
+    "Access-Control-Allow-Methods",
+    "Access-Control-Allow-Headers",
+    "Access-Control-Max-Age",
+]
+CORS_ECHO_PLACEHOLDER = "{header.Access-Control-Request-Headers}"
 
 # Upstream guards /invite with requireAdminCredentials while leaving it outside
 # the /admin group, so it needs naming separately. Re-read GoTrue's route list
@@ -200,6 +211,85 @@ def check_public_snippet(public):
         )
 
 
+def check_cors_preflight(blocks, public, internal):
+    """The /auth/v1 CORS preflight is terminated by the gateway, and its headers
+    stay inside the preflight-only handle.
+
+    Both halves fail silently and in opposite directions. Remove the block and
+    GoTrue answers the browser's preflight with no Access-Control-* headers at
+    all, because `apikey` is not on its fixed allow-list, so every supabase-js
+    call fails with "Failed to fetch" before it is sent. Hoist the headers out
+    of the handle to snippet level and they also land on the PROXIED response
+    beside the Access-Control-Allow-Origin GoTrue sets itself, and a browser
+    rejects a duplicated value exactly as hard as a missing one. A probe that
+    only sends OPTIONS cannot see the second case.
+    """
+    try:
+        body = snippet_body(blocks, CORS_SNIPPET)
+    except AssertionError:
+        fail(
+            "snippet " + CORS_SNIPPET + " is gone: GoTrue answers the browser's own preflight "
+            "with no Access-Control-* headers, because `apikey`, which supabase-js sends on "
+            "every request, is not on its fixed allow-list"
+        )
+        return
+
+    if "method OPTIONS" not in body:
+        fail(CORS_SNIPPET + " no longer matches on OPTIONS, so it can short-circuit a real request")
+    if "path /auth/v1/*" not in body:
+        fail(CORS_SNIPPET + " no longer scopes itself to /auth/v1")
+
+    handle_at = body.find("handle @auth_preflight")
+    if handle_at == -1:
+        fail(CORS_SNIPPET + " has no preflight-only handle; its headers would reach real responses")
+    for name in CORS_RESPONSE_HEADERS:
+        at = body.find(name)
+        if at == -1:
+            fail(CORS_SNIPPET + " no longer sets " + name + ", and a browser needs all four")
+        elif handle_at != -1 and at < handle_at:
+            fail(
+                name + " is set outside `handle @auth_preflight`, so it also lands on the "
+                "proxied response next to GoTrue's own; a duplicated "
+                "Access-Control-Allow-Origin blocks the browser as hard as a missing one"
+            )
+
+    # Echoed, not enumerated. A fixed list is what broke this in the first
+    # place, and the next header supabase-js adds would break it identically.
+    if CORS_ECHO_PLACEHOLDER not in body:
+        fail(
+            "Access-Control-Allow-Headers is no longer echoed from "
+            + CORS_ECHO_PLACEHOLDER + "; a fixed list breaks the moment supabase-js sends one "
+            "more header, with the same symptom that names nothing"
+        )
+
+    for label, snippet in (("public", public), ("internal", internal)):
+        if CORS_SNIPPET not in imports(snippet):
+            fail("the " + label + " snippet no longer imports " + CORS_SNIPPET)
+        if "Access-Control-Allow-Origin" in snippet:
+            fail(
+                "the " + label + " snippet sets Access-Control-Allow-Origin itself; the one "
+                "place that may is the preflight-only handle in " + CORS_SNIPPET
+            )
+
+    # Order inside the public snippet: after the admin refusal, so an OPTIONS to
+    # /auth/v1/admin is refused with the rest of the admin API rather than told
+    # it would be welcome, and before the proxy, or GoTrue answers it instead.
+    admin_at = public.find("handle @admin")
+    import_at = public.find("import " + CORS_SNIPPET)
+    proxy_at = public.find("handle_path /auth/v1/*")
+    if -1 not in (admin_at, import_at) and import_at < admin_at:
+        fail(
+            "the public snippet imports " + CORS_SNIPPET + " before `handle @admin`, so a "
+            "preflight to /auth/v1/admin is answered 204 instead of refused with the rest "
+            "of the admin API"
+        )
+    if -1 not in (import_at, proxy_at) and import_at > proxy_at:
+        fail(
+            "the public snippet imports " + CORS_SNIPPET + " after the /auth/v1 proxy, so the "
+            "preflight reaches GoTrue and is refused there"
+        )
+
+
 def check_sites(blocks):
     """Nothing bound to the public port may reach the internal route set.
 
@@ -279,6 +369,7 @@ def main():
     internal = snippet_body(blocks, INTERNAL_SNIPPET)
 
     check_public_snippet(public)
+    check_cors_preflight(blocks, public, internal)
     for prefix in INTERNAL_ONLY_PREFIXES:
         if prefix not in internal:
             fail("the internal snippet no longer routes " + prefix + ", which in-stack callers need")
