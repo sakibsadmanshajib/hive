@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { reseedFixtures } from "./support/fixture-reset";
 
 // Guards the workspace-scoped admin panels against a silently wrong gate.
 //
@@ -43,7 +44,23 @@ test.describe("workspace admin panels", () => {
     "set E2E_WORKSPACE_OWNER_EMAIL and E2E_WORKSPACE_OWNER_PASSWORD to run"
   );
 
-  test.beforeEach(async ({ page }) => {
+  // Seed before signing in, rather than relying on another spec having done it.
+  //
+  // This account used to be a long-lived one on the shared hosted project, so
+  // the spec could sign in without seeding anything and did. Now that CI runs
+  // against a throwaway Supabase, the account exists only because some spec
+  // seeded it earlier in the same process, which today means auth-shell.spec.ts
+  // happening to sort before this file under `workers: 1`. That is a real
+  // dependency on filename order, and the failure it produces if the order ever
+  // changes (rename, skip, or running this file on its own) is a 25 second
+  // waitForURL timeout inside signIn() that names nothing, which is the exact
+  // shape this branch removed elsewhere.
+  //
+  // reseedFixtures is idempotent and is what the other console specs already
+  // call, so this is the established pattern rather than a new mechanism. It
+  // charges its own wall time to the hook instead of to the test's budget.
+  test.beforeEach(async ({ page }, testInfo) => {
+    await reseedFixtures(testInfo);
     await signIn(page);
   });
 

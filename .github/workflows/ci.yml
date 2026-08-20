@@ -216,22 +216,21 @@ jobs:
           #     images even though the path isn't under apps/.
           #   - deploy/docker/*   the compose files and Dockerfiles the
           #     job runs (`docker compose ... up`, docker-bake.hcl).
-          #   - scripts/derive-pooler-dsn.py   executed directly by this
-          #     job's own "Reconstruct SUPABASE_DB_URL" step.
+          #   - scripts/ci-throwaway-db.sh, scripts/ci-supabase-stack.sh
+          #     the two the job runs to build its own database and its own
+          #     GoTrue plus PostgREST before anything boots.
+          #   - supabase/migrations/*   this job now APPLIES the chain
+          #     itself, onto a throwaway Postgres, so a migration file is
+          #     part of what the browser flow exercises. It used to be
+          #     excluded here, correctly at the time, because the job ran
+          #     against the shared project's already-live schema that a
+          #     merged migration did not change until `supabase db push`.
+          #     That is no longer true and the exclusion had to go with it.
           #   - .github/workflows/ci.yml   this file, so a change to the
           #     web-e2e job definition (or to this gate) proves itself
           #     by actually running, instead of the new wiring going
           #     untested the way the routing integration tests did
           #     before issue #655.
-          # Deliberately excluded: supabase/migrations/*. This job never
-          # applies the migration chain itself (unlike go-tests' own
-          # ephemeral Postgres); it runs against the shared Supabase
-          # project's already-live schema, which a new migration file
-          # does not change until separately deployed with
-          # `supabase db push`. A migration-only PR cannot affect what
-          # the browser flow exercises today. This was one of the four
-          # PRs above, and is exactly why it should not have run this
-          # suite.
           run="false"
           web_e2e="false"
           while IFS= read -r f; do
@@ -249,7 +248,10 @@ jobs:
               apps/web-console/* | apps/edge-api/* | apps/control-plane/* \
               | packages/storage/* | packages/audit-canonical/* \
               | packages/embedmodel/* | deploy/docker/* \
-              | scripts/derive-pooler-dsn.py | .github/workflows/ci.yml)
+              | supabase/migrations/* | deploy/supabase/init/* \
+              | scripts/ci-throwaway-db.sh | scripts/ci-supabase-stack.sh \
+              | scripts/apply-migrations.sh | .github/ci/test-db-bootstrap.sql \
+              | .github/workflows/ci.yml)
                 web_e2e="true"
                 ;;
             esac
@@ -854,7 +856,14 @@ jobs:
   live-integration:
     name: Live integration (SDK tests + smoke)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 35, matching web-e2e, because this job took on the same added work: the
+    # same bounded psql fallback, a container start, and the full migration
+    # chain. Measured on run 32378996099 the whole job was 3m43s and the
+    # database step 17 seconds, so this is tail headroom rather than routine
+    # need. Leaving it at 30 while web-e2e went to 35 would mean the one job
+    # that pays for real provider completions is also the one that gets
+    # cancelled first on a degraded runner, with an empty step log to read.
+    timeout-minutes: 35
     # Run on push to main (post-merge gate) or on PRs that carry the
     # run-live-integration label. The label gate lets contributors
     # explicitly opt in without running paid completions on every PR.
@@ -923,34 +932,108 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       NEXT_PUBLIC_APP_URL: http://localhost:3000
-      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+      # HIVE_API_KEY is deliberately NOT the repository secret any more. This
+      # job seeds its own key, on its own database, in the step below, and a
+      # job-level env entry would take precedence over the value that step
+      # writes to $GITHUB_ENV and silently point the SDK suites back at the
+      # shared account.
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Reconstruct SUPABASE_DB_URL
+      - name: Start a throwaway Postgres and apply the real schema
         shell: bash
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # The script URL-encodes the password, which is stored in its raw
-          # decoded form, and emits both DSNs: a capped session-mode
-          # SUPABASE_DB_URL for control-plane, which needs session state, and a
-          # transaction-mode SUPABASE_DB_POOL_URL for edge-api and open-webui,
-          # which do not. Session-mode clients are capped at the project's
-          # pool_size of 15 and shared with the live demo stack, so a CI job that
-          # booted a stack on session mode alone could take chat-hive offline.
-          python3 scripts/derive-pooler-dsn.py --self-test
-          python3 scripts/derive-pooler-dsn.py \
-            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
-            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
-            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the fallback, and it is bounded: on 2026-08-19 a
+          # bare `sudo apt-get update -qq` here hung for the job's entire
+          # 25 minute budget and emitted not one line, so the job was
+          # cancelled with no output to read. A hang that produces no
+          # evidence is worse than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
+
+          # The same image and tag ci.yml's own go-tests job already runs its
+          # RLS suites against, so there is one throwaway-Postgres approach in
+          # this repository rather than two. docker run rather than a
+          # `services:` container so the image is pulled only inside this job,
+          # which the `if:` above already gates hard, matching
+          # migration-applier-tests.yml.
+          #
+          # This image has no pg_cron, so 20260729_02 takes its documented
+          # absent-extension branch and schedules no nightly purge. The
+          # bootstrap below prints which branch was taken every run, so that
+          # stays a stated fact rather than a silent difference; a database
+          # that exists for the length of one job is never around at 21:00 UTC
+          # to run the job anyway.
+          docker run -d --name hive-ci-db -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=hive_ci \
+            pgvector/pgvector:pg17
+          for _ in $(seq 1 90); do
+            if docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          if ! docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1; then
+            echo "::error::the throwaway Postgres never became ready"
+            docker logs hive-ci-db | tail -40
+            exit 1
+          fi
+
+          export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+                 PGPASSWORD=postgres PGDATABASE=hive_ci
+          scripts/ci-throwaway-db.sh
+
+          # The address a compose container reaches this database on.
+          # localhost inside those containers is the container itself, and the
+          # docker0 gateway is routable from every bridge network the compose
+          # project creates.
+          gw=$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')
+          dsn="postgres://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
+          echo "SUPABASE_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # edge-api prefers SUPABASE_DB_POOL_URL when set. There is no pooler
+          # here and none is wanted: the pooler existed to keep this job off
+          # the shared project's 15 session-mode client slots, and the job no
+          # longer touches that project at all.
+          echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
+
+      - name: Seed this run's API key on the throwaway database
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: hive_ci
+        run: |
+          set -euo pipefail
+          # Generated per run and masked. There is no shared CI key to leak
+          # and no shared account behind it, which is also why
+          # .github/workflows/pr-cleanup.yml is gone: it existed to purge the
+          # rows this job used to write into the shared project.
+          key=$(scripts/ci-seed-api-key.sh | sed -n 's/^HIVE_API_KEY=//p')
+          if [ -z "$key" ]; then
+            echo "::error::the seeder printed no HIVE_API_KEY line"
+            exit 1
+          fi
+          echo "::add-mask::$key"
+          echo "HIVE_API_KEY=$key" >> "$GITHUB_ENV"
 
       - name: Pre-verify secrets reached runner env
         shell: bash
@@ -1049,6 +1132,20 @@ jobs:
             cat /tmp/models.json
             exit 1
           fi
+          # A 200 alone is not evidence the catalog survived the migration
+          # chain: an empty `.data` answers 200 too, and the line below prints
+          # nothing and exits 0 on it, so this step passed over a database with
+          # no aliases at all. That matters much more now than it did against
+          # the shared project's already-populated schema, because this job
+          # builds its catalog from the chain on every run.
+          #
+          # hive-default is seeded by supabase/migrations/20260331_01_model_catalog.sql,
+          # so its absence means the chain did not deliver the catalog.
+          if ! jq -e '.data | map(.id) | index("hive-default")' /tmp/models.json >/dev/null; then
+            echo "::error::/v1/models answered 200 but does not list hive-default, so the throwaway database has no model catalog. Aliases present: $(jq -r '[.data[].id] | join(", ")' /tmp/models.json)"
+            exit 1
+          fi
+          echo "/v1/models lists hive-default"
           jq -r '.data[0:3] | .[] | .id' /tmp/models.json
 
       - name: Run SDK suites in parallel (JS + Python + Java)
@@ -1106,6 +1203,10 @@ jobs:
         working-directory: deploy/docker
         run: docker compose down -v --remove-orphans || true
 
+      - name: Tear down the throwaway database
+        if: always()
+        run: docker rm -f hive-ci-db || true
+
       - name: File or update tracking issue on failure
         # Only for main-branch-relevant triggers (post-merge push, daily
         # cron): a labeled PR run failing is already visible to its author
@@ -1153,15 +1254,31 @@ jobs:
   web-e2e:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # This job boots against the shared Supabase project's session mode
-    # pooler (pool_size 15), and concurrent runs exhaust it: on 2026-08-01,
-    # four unrelated PRs (#644, #646, #647, #648) ran this job at
-    # overlapping times and all four failed with `page.goto:
-    # net::ERR_ABORTED` / a 30s context timeout, which reads as a front end
-    # bug rather than the database contention it actually is (issue #631).
+    # 25 until this job started standing up its own Postgres, GoTrue and
+    # PostgREST before the stack. Measured on run 32378996099: the throwaway
+    # Supabase step took 28 seconds and the whole job 5m49s, so the happy path
+    # is nowhere near either budget. The headroom is for the tail, not the
+    # median: the psql fallback below can spend up to about 18 minutes on a
+    # runner image whose apt is degraded, and that has to be able to finish and
+    # fail by name rather than be cancelled with an empty step log.
+    timeout-minutes: 35
+    # HISTORY, and it is history now: this job used to boot against the shared
+    # Supabase project's session mode pooler (pool_size 15), and concurrent runs
+    # exhausted it. On 2026-08-01 four unrelated PRs (#644, #646, #647, #648)
+    # ran this job at overlapping times and all four failed with `page.goto:
+    # net::ERR_ABORTED` / a 30s context timeout, which reads as a front end bug
+    # rather than the database contention it actually was (issue #631).
     #
-    # An earlier version of this fix serialized every web-e2e run with a
+    # That coupling is GONE. The job now stands up its own Postgres, GoTrue and
+    # PostgREST and opens no connection to Supavisor at all, so contention is no
+    # longer a reason for anything here. The path gate below survives on its own
+    # merits, stated plainly so the next reader does not go looking for a pooler
+    # this job never touches: it exists to keep a full browser suite off pull
+    # requests that cannot affect the browser flow, which is runner minutes, and
+    # it now also has to fire for migration and stack-script changes because the
+    # job applies the migration chain itself.
+    #
+    # An earlier version of the old fix serialized every web-e2e run with a
     # job-level `concurrency:` group. That was reverted: GitHub Actions
     # only holds one job per concurrency group as pending, so a third
     # queued run cancels the second outright before it ever executes.
@@ -1178,10 +1295,11 @@ jobs:
     # here uses. Two of the four PRs above, the migration baseline script
     # and its probe, touched no path that can reach the booted browser
     # flow and should not have run this job at all; this gate is
-    # deterministic and reviewable in a diff, unlike a queue race. It
-    # reduces how often web-e2e runs, which reduces how often two runs
-    # land on the shared pool at the same time, but does not eliminate the
-    # coupling. That real fix stays open on #631.
+    # deterministic and reviewable in a diff, unlike a queue race.
+    #
+    # It was kept after the throwaway stack landed because the minutes argument
+    # stands on its own. The shared-pool argument for it does not, and #631 is
+    # what this branch closes: there is no shared pool left to land on.
     if: >-
       needs.changes.outputs.run == 'true' &&
       needs.changes.outputs.web_e2e == 'true' &&
@@ -1196,13 +1314,13 @@ jobs:
       # Activate the in-stack docker redis profile for every compose call
       # in this job (see live-integration job for the rationale).
       COMPOSE_PROFILES: local
-      # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env.
-      # Only the steps that actually need admin auth scope it in their own
-      # `env:` blocks: `Start core stack` (docker compose interpolation for
-      # control-plane), `Build + start Next.js` (/auth/callback route), and
-      # the Playwright step (fixture seeding, see its own comment).
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY and the two
+      # NEXT_PUBLIC_ mirrors are deliberately NOT job-level entries any more.
+      # This job stands up its own GoTrue and PostgREST (see the throwaway
+      # stack step below) and writes all five to $GITHUB_ENV, and a job-level
+      # entry takes precedence over what a step writes there, which would
+      # silently point the browser and the fixture seeder back at the shared
+      # hosted project.
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -1231,10 +1349,11 @@ jobs:
       S3_USE_SSL: 'true'
       S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
       S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       NEXT_PUBLIC_APP_URL: http://localhost:3000
-      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+      # HIVE_API_KEY is gone with the shared project. It only ever fed
+      # openai-sdk.spec.ts, which skips on `!HIVE_API_KEY || !EDGE_BASE_URL`
+      # and was already skipping here because this job has never set
+      # EDGE_BASE_URL. Removing it changes no spec's outcome.
     steps:
       - uses: actions/checkout@v4
 
@@ -1246,26 +1365,97 @@ jobs:
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
-      - name: Reconstruct SUPABASE_DB_URL
+      - name: Start a throwaway Supabase (Postgres, GoTrue, PostgREST)
         shell: bash
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # Emits a capped session-mode SUPABASE_DB_URL for control-plane and a
-          # transaction-mode SUPABASE_DB_POOL_URL for edge-api and open-webui.
-          # Session-mode clients are capped at the project's pool_size of 15 and
-          # shared with the live demo stack, so a CI job that booted a stack on
-          # session mode alone could take chat-hive offline.
-          python3 scripts/derive-pooler-dsn.py --self-test
-          python3 scripts/derive-pooler-dsn.py \
-            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
-            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
-            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the fallback, and it is bounded: on 2026-08-19 a
+          # bare `sudo apt-get update -qq` here hung for the job's entire
+          # 25 minute budget and emitted not one line, so the job was
+          # cancelled with no output to read. A hang that produces no
+          # evidence is worse than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
+
+          # Same image and tag this file's own go-tests job already uses, so
+          # there is one throwaway-Postgres approach in this repository.
+          docker run -d --name hive-ci-db -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=hive_ci \
+            pgvector/pgvector:pg17
+          for _ in $(seq 1 90); do
+            if docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          if ! docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1; then
+            echo "::error::the throwaway Postgres never became ready"
+            docker logs hive-ci-db | tail -40
+            exit 1
+          fi
+
+          export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+                 PGPASSWORD=postgres PGDATABASE=hive_ci
+
+          # A database alone is not enough here, and the coupling is not
+          # separable: this job's fixture seeder talks supabase-js
+          # (auth.admin.createUser against /auth/v1, .from(table) against
+          # /rest/v1) and the browser signs in through @supabase/ssr, while
+          # GoTrue's custom access token hook (20260516_07) runs INSIDE the
+          # database holding the user rows and raises no_active_membership for
+          # a user with no tenant_users row. Cloud auth over a throwaway
+          # database therefore fails every login. See scripts/ci-supabase-stack.sh.
+          #
+          # Its stdout is the five values the rest of the job needs. Each is
+          # masked before it is exported: they are worth nothing outside this
+          # runner, but a job log is public.
+          scripts/ci-supabase-stack.sh --port 9000 > /tmp/supabase-env
+          # set -e covers a non-zero exit, and nothing covers a zero exit with
+          # truncated stdout: the loop below and the two sed calls all succeed
+          # on an empty file, and the job then dies inside Playwright with an
+          # unset SUPABASE_URL, three steps from the cause.
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                   SUPABASE_URL_FROM_CONTAINER; do
+            if ! grep -q "^$v=." /tmp/supabase-env; then
+              echo "::error::the throwaway Supabase stack printed no $v line"
+              exit 1
+            fi
+          done
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in
+              *_KEY=*) echo "::add-mask::${line#*=}" ;;
+            esac
+            echo "$line" >> "$GITHUB_ENV"
+          done < /tmp/supabase-env
+          # The two NEXT_PUBLIC_ mirrors the browser and the Next.js build read.
+          # The browser reaches the gateway on localhost; a container reaches it
+          # on the docker bridge gateway, which is why the stack script emits
+          # both forms.
+          sed -n 's/^SUPABASE_URL=/NEXT_PUBLIC_SUPABASE_URL=/p'          /tmp/supabase-env >> "$GITHUB_ENV"
+          sed -n 's/^SUPABASE_ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/p' /tmp/supabase-env >> "$GITHUB_ENV"
+
+          gw=$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')
+          dsn="postgres://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
+          echo "SUPABASE_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # No pooler here and none wanted: the transaction-mode DSN existed to
+          # keep this job off the shared project's 15 session-mode slots, and
+          # the job no longer touches that project.
+          echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: Cache third-party images (redis, litellm)
         id: img-cache
@@ -1304,7 +1494,11 @@ jobs:
       - name: Start core stack (no rebuild — images already loaded)
         working-directory: deploy/docker
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # control-plane calls GET /auth/v1/user on SUPABASE_URL from inside a
+          # container, where localhost is the container itself. The throwaway
+          # stack publishes its gateway on the runner, so the service gets the
+          # docker bridge form of the same URL the browser uses.
+          SUPABASE_URL: ${{ env.SUPABASE_URL_FROM_CONTAINER }}
         run: |
           # `--profile local` activates the in-stack docker redis. Staging
           # uses Upstash via REDIS_URL and never carries that profile.
@@ -1363,11 +1557,12 @@ jobs:
       - name: Build + start Next.js (points at booted control-plane)
         working-directory: apps/web-console
         env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY and
+          # SUPABASE_SERVICE_ROLE_KEY all come from $GITHUB_ENV now, written by
+          # the throwaway stack step. Repeating them here as step env would
+          # override those values with the shared project's.
           NEXT_PUBLIC_APP_URL: http://localhost:3000
           CONTROL_PLANE_BASE_URL: http://localhost:8081
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           npm run build
           nohup npm start > /tmp/nextjs.log 2>&1 &
@@ -1398,9 +1593,14 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           # Fixture seeding runs in this step's own Node child process
-          # (tests/e2e/support/e2e-auth-fixtures.mjs), so it needs admin
-          # auth here. Step-scoped rather than job-level, matching every
-          # other consumer of this secret in this job.
+          # (tests/e2e/support/e2e-auth-fixtures.mjs), so it needs admin auth.
+          # It reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the
+          # environment, and both come from $GITHUB_ENV, written by the
+          # throwaway stack step. Naming the repository secret here again
+          # would hand the seeder the hosted project's key while it talks to
+          # this run's own GoTrue, and GoTrue answers "invalid JWT: token
+          # signature is invalid" to every admin call. Measured, in run
+          # 32266955684: fourteen specs failed that way with no other cause.
           #
           # This used to POST to a deployed `e2e-fixtures` Supabase Edge
           # Function instead, which kept the key out of this step but put
@@ -1410,7 +1610,6 @@ jobs:
           # `supabase functions deploy`. Seeding in-process removes that
           # skew, and removes the deploy step from the critical path of
           # any pull request that touches the fixtures.
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # E2E_RUN_KEY, and the three identity values below it, namespace
           # every fixture row this job's specs touch (see
           # apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs,
@@ -1448,8 +1647,15 @@ jobs:
           # E2E_PLATFORM_ADMIN_* names are still read as a fallback, so an
           # existing secret keeps working: after issue #758 the account only
           # needs to be OWNER of its workspace, not a platform admin.
-          E2E_WORKSPACE_OWNER_EMAIL: ${{ secrets.E2E_PLATFORM_ADMIN_EMAIL }}
-          E2E_WORKSPACE_OWNER_PASSWORD: ${{ secrets.E2E_PLATFORM_ADMIN_PASSWORD }}
+          # The run's own seeded verified user, which the seeder makes OWNER of
+          # this run's tenant (confirmed on the issued JWT: tenants[0].role is
+          # OWNER). It used to be a shared cloud account, which does not exist
+          # on a throwaway Supabase, and an unset value makes
+          # console-workspace-admin.spec.ts skip itself by name rather than
+          # fail: a silent hole inside a green check. Pointing it at the
+          # fixture user means the spec now always runs.
+          E2E_WORKSPACE_OWNER_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
+          E2E_WORKSPACE_OWNER_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
         # Selects by PROJECT, never by file path (issue #813). The
         # `chromium` project's testDir is apps/web-console/tests/e2e, so a
         # spec added to that directory runs here the day it lands with no
@@ -1477,28 +1683,6 @@ jobs:
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
-
-      - name: Name a shared session-pool exhaustion on failure
-        if: failure()
-        # Diagnosis, not dispensation. The run has already failed and stays
-        # failed; this only saves the next reader the archaeology.
-        #
-        # On 2026-08-16 this job failed the flake gate with three unrelated
-        # specs passing only on a retry, and every one of them was a timeout
-        # caused by `FATAL: (EMAXCONNSESSION) max clients reached in session
-        # mode`, which appeared 258 times in the dump this step now reads.
-        # Finding that meant downloading the compose artifact and grepping it by
-        # hand, while the job log said nothing but "3 flaky". A retry-pass is
-        # still a failure and the gate is untouched; what changes is that the
-        # log now says which failure it was.
-        run: |
-          set -uo pipefail
-          log=/tmp/compose-web-e2e-api.log
-          [ -f "$log" ] || exit 0
-          n=$(grep -c EMAXCONNSESSION "$log" || true)
-          if [ "${n:-0}" -gt 0 ]; then
-            echo "::error title=Shared session pool exhausted::${n} EMAXCONNSESSION refusals in this job's container logs. The Supabase project's Supavisor session-mode ceiling is 15 clients, shared by this job, every other CI stack booted at the same time and the always-on demo box. Failures in this run are contention, not necessarily a product defect; see issues #631 and #841. Do not raise the retry count or the timeouts to survive it."
-          fi
 
       - name: Upload compose logs
         if: failure()
@@ -1565,6 +1749,17 @@ jobs:
         if: always()
         working-directory: deploy/docker
         run: docker compose down -v --remove-orphans || true
+
+      - name: Tear down the throwaway Supabase
+        if: always()
+        # The network too, not just the containers. It is a no-op on a hosted
+        # runner, which is discarded whole, but scripts/ci-supabase-stack.sh is
+        # also run by hand during development and there the leftovers do
+        # accumulate. Removing the containers first is what frees the network to
+        # be removed at all.
+        run: |
+          docker rm -f supabase-gw supabase-rest supabase-auth hive-ci-db || true
+          docker network rm hive-ci-supabase || true
 
   # ------------------------------------------------------------------
   # Egress firewall e2e (issue #342 item 6). Live proof that the Linux
