@@ -59,8 +59,23 @@ psql --no-psqlrc -qX -v ON_ERROR_STOP=1 \
   >&2 <<'SQL'
 BEGIN;
 
--- One synthetic identity. ON CONFLICT so a re-run against the same throwaway
--- database is a no-op rather than a duplicate-slug failure.
+-- One synthetic identity.
+--
+-- The ON CONFLICT clauses below make a re-run against the same throwaway
+-- database SURVIVE rather than fail on a duplicate slug. They do not make it a
+-- no-op, and an earlier version of this comment claimed they did. A second run
+-- inserts another auth.users row (that CTE has no conflict target), reuses the
+-- existing tenant and account, and then mints a second active api_key with its
+-- own policy and its own credit grant. The four assertions below still pass,
+-- because each one is scoped to the token_hash this run just generated.
+--
+-- That is acceptable here and nowhere else: this script is invoked exactly once
+-- per throwaway database, by a job that destroys it minutes later, so the
+-- accumulation has nothing to accumulate into. It is written down rather than
+-- left to be discovered because the same script pointed at a database that
+-- outlives one job would quietly grow orphan identities, duplicate live
+-- credentials and repeated grants, and the assertions would report green
+-- through all of it.
 WITH u AS (
   INSERT INTO auth.users (id, email)
   VALUES (gen_random_uuid(), format('%s@ci.invalid', :'slug'))

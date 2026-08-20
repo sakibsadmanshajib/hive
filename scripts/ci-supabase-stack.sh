@@ -125,7 +125,13 @@ if ! docker inspect -f '{{.State.Running}}' "$db_container" 2>/dev/null | grep -
 fi
 docker network connect --alias supabase-db "$network" "$db_container" 2>/dev/null || true
 
-db_url="postgres://${db_user}:${db_password}@supabase-db:5432/${db_name}"
+# Percent-encoded, because these three now come from the caller's environment
+# rather than being fixed literals. A password containing @ or / or ? silently
+# reshapes this URI: GoTrue and PostgREST would parse a different host or
+# database and fail as a connection error naming neither. The defaults are safe
+# and would not need this; a caller's PGPASSWORD is not guaranteed to be.
+urlenc() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+db_url="postgres://$(urlenc "$db_user"):$(urlenc "$db_password")@supabase-db:5432/$(urlenc "$db_name")"
 
 log "==> auth schema and roles, before GoTrue migrates into them"
 psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -f "$repo_root/deploy/supabase/init/00-extensions.sql" >/dev/null

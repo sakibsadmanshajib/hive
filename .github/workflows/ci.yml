@@ -1132,6 +1132,20 @@ jobs:
             cat /tmp/models.json
             exit 1
           fi
+          # A 200 alone is not evidence the catalog survived the migration
+          # chain: an empty `.data` answers 200 too, and the line below prints
+          # nothing and exits 0 on it, so this step passed over a database with
+          # no aliases at all. That matters much more now than it did against
+          # the shared project's already-populated schema, because this job
+          # builds its catalog from the chain on every run.
+          #
+          # hive-default is seeded by supabase/migrations/20260331_01_model_catalog.sql,
+          # so its absence means the chain did not deliver the catalog.
+          if ! jq -e '.data | map(.id) | index("hive-default")' /tmp/models.json >/dev/null; then
+            echo "::error::/v1/models answered 200 but does not list hive-default, so the throwaway database has no model catalog. Aliases present: $(jq -r '[.data[].id] | join(", ")' /tmp/models.json)"
+            exit 1
+          fi
+          echo "/v1/models lists hive-default"
           jq -r '.data[0:3] | .[] | .id' /tmp/models.json
 
       - name: Run SDK suites in parallel (JS + Python + Java)
