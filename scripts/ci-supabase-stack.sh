@@ -217,7 +217,6 @@ server {
       # the same symptom that names nothing.
       add_header Access-Control-Allow-Headers $http_access_control_request_headers always;
       add_header Access-Control-Max-Age       86400 always;
-      add_header Content-Length 0 always;
       return 204;
     }
     # Only the preflight is short-circuited. The real request still reaches
@@ -268,23 +267,66 @@ log "PostgREST is serving the migrated schema through the gateway"
 # supabase-js always sends it, and it is the header GoTrue rejects.
 # ---------------------------------------------------------------------------
 browser_request_headers='apikey,authorization,content-type,x-client-info,x-supabase-api-version'
+preflight_origin='http://localhost:3000'
+
+# Every check below is on an exact token, never a substring. `grep -q apikey`
+# would be satisfied by `x-vendor-apikey-hint`, and a check that can be
+# satisfied by something other than the thing it names is a check that cannot
+# reliably go red.
+header_value() {
+  printf '%s\n' "$1" | grep -i "^$2:" | head -1 | cut -d: -f2- | tr -d ' '
+}
+has_token() {
+  printf '%s' "$1" | tr 'A-Z,' 'a-z\n' | grep -qx "$2"
+}
+
 assert_preflight() {
-  local label="$1" path="$2" method="$3" headers allow_origin allow_headers
-  headers="$(curl -s -o /dev/null -D - -X OPTIONS "${base}${path}" \
-    -H 'Origin: http://localhost:3000' \
+  local label="$1" path="$2" method="$3"
+  local dump status headers allow_origin allow_headers allow_methods
+  dump="$(mktemp)"
+  status="$(curl -s -o /dev/null -D "$dump" -w '%{http_code}' -X OPTIONS "${base}${path}" \
+    -H "Origin: ${preflight_origin}" \
     -H "Access-Control-Request-Method: ${method}" \
-    -H "Access-Control-Request-Headers: ${browser_request_headers}" | tr -d '\r' || true)"
-  allow_origin="$(printf '%s\n' "$headers" | grep -i '^access-control-allow-origin:' || true)"
-  allow_headers="$(printf '%s\n' "$headers" | grep -i '^access-control-allow-headers:' || true)"
+    -H "Access-Control-Request-Headers: ${browser_request_headers}" || true)"
+  headers="$(tr -d '\r' < "$dump")"
+  rm -f "$dump"
+
+  # A preflight is only successful on a 2xx. A 404 or a 502 can still carry an
+  # Access-Control-Allow-Origin (nginx `add_header ... always` emits it on error
+  # responses too), so checking the header without the status would pass on a
+  # gateway that is routing the preflight nowhere at all.
+  case "$status" in
+    2??) ;;
+    *)
+      log "::error::${label} answered the browser CORS preflight with HTTP ${status}, which a browser treats as a failed preflight."
+      printf '%s\n' "$headers" >&2
+      return 1
+      ;;
+  esac
+
+  allow_origin="$(header_value "$headers" 'access-control-allow-origin')"
+  allow_headers="$(header_value "$headers" 'access-control-allow-headers')"
+  allow_methods="$(header_value "$headers" 'access-control-allow-methods')"
+
   if [ -z "$allow_origin" ]; then
     log "::error::${label} refused the browser CORS preflight: no Access-Control-Allow-Origin in the response. Every supabase-js call from the browser will fail with 'Failed to fetch' before it is sent."
     printf '%s\n' "$headers" >&2
     return 1
   fi
+  # A non-empty value is not the same as a usable one: a browser rejects any
+  # origin that is neither the wildcard nor its own.
+  if [ "$allow_origin" != "*" ] && [ "$allow_origin" != "$preflight_origin" ]; then
+    log "::error::${label} allowed the origin '${allow_origin}', which is neither '*' nor '${preflight_origin}', so the browser blocks the request anyway."
+    return 1
+  fi
+  if ! has_token "$allow_methods" "$(printf '%s' "$method" | tr 'A-Z' 'a-z')"; then
+    log "::error::${label} answered the preflight but did not allow the ${method} method. Got: ${allow_methods:-<none>}"
+    return 1
+  fi
   # Presence of the origin header is not enough. A preflight can be answered
   # while still omitting the one header supabase-js cannot do without, and the
   # browser blocks that request just as completely.
-  if ! printf '%s\n' "$allow_headers" | grep -qi 'apikey'; then
+  if ! has_token "$allow_headers" 'apikey'; then
     log "::error::${label} answered the preflight but did not allow the 'apikey' header, which supabase-js sends on every request. Got: ${allow_headers:-<none>}"
     return 1
   fi
