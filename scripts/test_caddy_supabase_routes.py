@@ -74,7 +74,7 @@ def fail(msg):
 def strip_comments(text):
     """Drop whole-line comments so a commented-out directive cannot satisfy a
     check, and a comment mentioning a prefix cannot trip one."""
-    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("#"))
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
 
 
 # Caddy placeholders are brace delimited too ({$SUPABASE_DOMAIN:...},
@@ -222,10 +222,15 @@ def check_sites(blocks):
                     + INTERNAL_SNIPPET + ", which puts /rest/v1, /storage/v1 and the admin "
                     "API back on the public listener"
                 )
-            if PUBLIC_SNIPPET not in used and "reverse_proxy" in body:
+            # Every proxy definition on this port has to live in the public
+            # snippet, which is the thing under review. A site that imports it
+            # and then adds its own handle_path would pass an "imports the
+            # right snippet" check while publishing whatever it likes.
+            if "reverse_proxy" in body:
                 fail(
-                    "site `" + header + "` is bound to the public port and proxies without "
-                    "importing " + PUBLIC_SNIPPET + ", so it bypasses the public route set"
+                    "site `" + header + "` is bound to the public port and proxies directly; "
+                    "proxy definitions belong in the " + PUBLIC_SNIPPET + " snippet, where the "
+                    "route set is reviewed, not in a site block beside it"
                 )
         elif PUBLIC_SNIPPET in used:
             fail("site `" + header + "` imports " + PUBLIC_SNIPPET + " off the public port")
