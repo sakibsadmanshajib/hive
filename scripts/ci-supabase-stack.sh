@@ -92,6 +92,15 @@ service_role_key="$(mint_key service_role)"
 # resolve it by name.
 # ---------------------------------------------------------------------------
 docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
+# docker network connect exits non-zero both when the container is already
+# attached and when it does not exist, and `|| true` cannot tell those apart.
+# Without this check a caller that renamed or failed to start the database
+# container gets "GoTrue never became healthy" forty lines later, which names
+# the wrong component.
+if ! docker inspect -f '{{.State.Running}}' "$db_container" 2>/dev/null | grep -qx true; then
+  log "::error::the database container '$db_container' is not running; start it before this script"
+  exit 1
+fi
 docker network connect --alias supabase-db "$network" "$db_container" 2>/dev/null || true
 
 db_url="postgres://${db_user}:${db_password}@supabase-db:5432/${db_name}"

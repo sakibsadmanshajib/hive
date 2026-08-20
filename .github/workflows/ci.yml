@@ -939,8 +939,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the fallback, and it is bounded: on 2026-08-19 a
+          # bare `sudo apt-get update -qq` here hung for the job's entire
+          # 25 minute budget and emitted not one line, so the job was
+          # cancelled with no output to read. A hang that produces no
+          # evidence is worse than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
 
           # The same image and tag ci.yml's own go-tests job already runs its
           # RLS suites against, so there is one throwaway-Postgres approach in
@@ -1215,7 +1233,10 @@ jobs:
   web-e2e:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 until this job started standing up its own Postgres, GoTrue and
+    # PostgREST before the stack. Measured: the throwaway Supabase step takes
+    # about two and a half minutes, and the rest of the job is unchanged.
+    timeout-minutes: 35
     # This job boots against the shared Supabase project's session mode
     # pooler (pool_size 15), and concurrent runs exhaust it: on 2026-08-01,
     # four unrelated PRs (#644, #646, #647, #648) ran this job at
@@ -1313,8 +1334,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the fallback, and it is bounded: on 2026-08-19 a
+          # bare `sudo apt-get update -qq` here hung for the job's entire
+          # 25 minute budget and emitted not one line, so the job was
+          # cancelled with no output to read. A hang that produces no
+          # evidence is worse than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
 
           # Same image and tag this file's own go-tests job already uses, so
           # there is one throwaway-Postgres approach in this repository.
@@ -1350,6 +1389,17 @@ jobs:
           # masked before it is exported: they are worth nothing outside this
           # runner, but a job log is public.
           scripts/ci-supabase-stack.sh --port 9000 > /tmp/supabase-env
+          # set -e covers a non-zero exit, and nothing covers a zero exit with
+          # truncated stdout: the loop below and the two sed calls all succeed
+          # on an empty file, and the job then dies inside Playwright with an
+          # unset SUPABASE_URL, three steps from the cause.
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                   SUPABASE_URL_FROM_CONTAINER; do
+            if ! grep -q "^$v=." /tmp/supabase-env; then
+              echo "::error::the throwaway Supabase stack printed no $v line"
+              exit 1
+            fi
+          done
           while IFS= read -r line; do
             [ -n "$line" ] || continue
             case "$line" in
