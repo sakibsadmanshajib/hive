@@ -1472,14 +1472,26 @@ jobs:
         # as justified debt in tests/dark-spec-allowlist.json.
         run: npx playwright test --project=chromium
 
+      # The five diagnostic steps below all carry `failure() || cancelled()`
+      # rather than plain `failure()`. When this job walks into its own
+      # `timeout-minutes: 25` cap, GitHub reports it cancelled, not failed, and
+      # a plain `failure()` step is skipped. That is not a corner case here: on
+      # 2026-08-17 and 2026-08-18 six pull requests and one push to main hit
+      # the cap at 25m20s to 25m23s each, and every one of them uploaded
+      # nothing but the Playwright report, which the `always()` step below is
+      # the only reason survived. The slowest, least explicable failures were
+      # the ones with no compose log, no Next.js log and no pool annotation.
+      # `cancelled()` also covers a concurrency-group cancel, where these steps
+      # cost a few seconds and upload a mostly empty artifact; that is the
+      # cheaper side of the trade.
       - name: Dump compose logs on failure
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
       - name: Name a shared session-pool exhaustion on failure
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         # Diagnosis, not dispensation. The run has already failed and stays
         # failed; this only saves the next reader the archaeology.
         #
@@ -1501,7 +1513,7 @@ jobs:
           fi
 
       - name: Upload compose logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: compose-logs-web-e2e-api
@@ -1510,7 +1522,7 @@ jobs:
           retention-days: 5
 
       - name: Redact the Next.js server log on failure
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         # The console renders an error boundary ("Something went wrong on this
         # page", plus a digest) when a server component throws, and the cause is
         # only ever in this log. On 2026-08-16 an invitation-acceptance spec
@@ -1528,7 +1540,7 @@ jobs:
           fi
 
       - name: Upload the redacted Next.js server log
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-log-web-e2e
