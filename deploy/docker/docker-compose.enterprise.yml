@@ -174,9 +174,18 @@ services:
       # Without this, none of the four limits below is ever consulted:
       # GoTrue's performRateLimiting falls through to a header-keyed path that
       # returns immediately when the header name is empty, so the limits read
-      # as configured while doing nothing at all. caddy-supabase overwrites
-      # this header inbound (never appends), so its value cannot be chosen by
-      # the caller.
+      # as configured while doing nothing at all.
+      #
+      # The value has to be trustworthy, and today it is: this Caddy replaces
+      # a client-sent X-Forwarded-For rather than appending to it, because
+      # appending happens only for a peer listed in trusted_proxies and none
+      # is configured. caddy-supabase rewrites it explicitly anyway, so the
+      # guarantee survives the cutover, which will want trusted_proxies set.
+      #
+      # Changing this name alone breaks that: the gateway rewrites
+      # X-Forwarded-For specifically, so pointing GoTrue at another header
+      # keys its limits on something the caller sends. The two are checked
+      # against each other by scripts/test_caddy_supabase_routes.py.
       GOTRUE_RATE_LIMIT_HEADER: ${ENTERPRISE_RATE_LIMIT_HEADER:-X-Forwarded-For}
       GOTRUE_RATE_LIMIT_EMAIL_SENT: ${ENTERPRISE_RATE_LIMIT_EMAIL_SENT:-30}
       # GOTRUE_RATE_LIMIT_VERIFY: max OTP/magic-link verification attempts per hour.

@@ -103,19 +103,35 @@
 	}
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999 {
-			# Replace, never append. GoTrue keys its rate limits on this
-			# header (GOTRUE_RATE_LIMIT_HEADER), and Caddy's default is to
-			# append the client address to whatever the client already
-			# sent, so a caller could hand itself a fresh bucket per
-			# request just by varying the value it sends.
+			# GoTrue keys its rate limits on X-Forwarded-For
+			# (GOTRUE_RATE_LIMIT_HEADER), so what lands here decides whose
+			# bucket a request spends.
 			#
-			# ponytail: {remote_host} is the immediate peer, so once a
-			# Cloudflare Tunnel fronts this listener every user shares one
-			# bucket. That is a stricter limit rather than a weaker one, so
-			# it is safe to ship; swap to the tunnel's CF-Connecting-IP
-			# when the tunnel is actually put in front, which is a cutover
-			# step and not a bring-up one.
+			# This Caddy already replaces the header rather than appending,
+			# because appending only happens for a peer listed in
+			# trusted_proxies and none is configured. The line is therefore
+			# not what makes the value trustworthy today; it makes it stay
+			# trustworthy. The cutover will want trusted_proxies set, so the
+			# tunnel's client address survives, and that is exactly the
+			# setting that turns appending back on. Leave this here through
+			# that change.
+			#
+			# Sb-Forwarded-For is stripped because GoTrue reads it BEFORE
+			# the configured header (performRateLimiting checks
+			# sbff.GetIPAddress first). It is gated on
+			# GOTRUE_SB_FORWARDED_FOR_ENABLED, which defaults false, so it
+			# is inert today and one flag away from handing the bucket key
+			# back to the caller.
+			#
+			# ponytail: {remote_host} is the immediate peer, so behind a
+			# tunnel this is ONE bucket for the whole deployment, not merely
+			# a stricter per-user one: 30 token refreshes an hour shared by
+			# everybody, and one user can lock out the rest. Acceptable
+			# while nothing is tunnelled here; at cutover set
+			# trusted_proxies and rewrite from the tunnel's client-IP header
+			# instead, keeping ENTERPRISE_RATE_LIMIT_HEADER in step.
 			header_up X-Forwarded-For {remote_host}
+			header_up -Sb-Forwarded-For
 		}
 	}
 	handle {

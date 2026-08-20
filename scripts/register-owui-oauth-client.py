@@ -190,12 +190,16 @@ def main():
 
     payload = build_payload([redirect], client_uri)
 
-    # The listing is paginated. Reading only the first page and finding no
-    # match would register a SECOND client with a second secret, which is
-    # exactly what the idempotency check exists to prevent.
+    # Insurance, not a live fix: at v2.189.0 this handler carries an explicit
+    # "TODO(cemal) :: Add pagination" and returns every row unbounded, so
+    # per_page is ignored and the response is always complete. The refusal
+    # below therefore cannot fire on this pin. It stays because the day
+    # upstream does paginate, reading only the first page would silently
+    # register a SECOND client with a second secret, which is exactly what
+    # this check exists to prevent.
     # ponytail: one large page plus a refusal, rather than a pagination loop.
-    # This deployment registers one client; if that ever stops being true the
-    # loop is the upgrade, and until then refusing beats guessing.
+    # This deployment registers one client; the loop is the upgrade if that
+    # ever stops being true, and until then refusing beats guessing.
     page_size = 1000
     _, listing = api(base, "/admin/oauth/clients?per_page=" + str(page_size), token)
     clients = listing.get("clients", listing) if isinstance(listing, dict) else listing

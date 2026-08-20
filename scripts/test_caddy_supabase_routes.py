@@ -1,26 +1,37 @@
 #!/usr/bin/env python3
 """Pin the Caddyfile.supabase route split against silent reopening.
 
-Three properties in this file are load bearing, and all three fail silently:
-the config stays valid, Caddy starts, every legitimate request still works,
-and the only difference is that something which should be refused is not.
+Several properties in that file are load bearing, and every one of them fails
+silently: the config stays valid, Caddy starts, every legitimate request still
+works, and the only difference is that something which should be refused is
+not. The cutover rests on them.
 
-  1. The public site listens on its OWN port. While the public and internal
+  1. Nothing on the public port reaches the internal route set. While the two
      site blocks shared port 80, a request carrying "Host: caddy-supabase"
-     against the public port received the full internal route set: /rest/v1,
-     /storage/v1 and the admin API. Host matching is client supplied and case
-     insensitive, so it enforced nothing. A separate port does.
-  2. The @admin refusal precedes the proxy inside the public snippet. handle
-     blocks are mutually exclusive and evaluated in written order, so swapping
-     those two blocks moves /auth/v1/admin/users from 404 to a proxied request
-     with nothing else observable changing, and no other test in this
-     repository fails.
-  3. The public snippet exposes /auth/v1 alone. PostgREST connects to Postgres
-     as a superuser and a token's role claim selects a database role, so a
-     publicly reachable /rest/v1 is the whole schema behind whatever grants
-     happen to exist. Storage is the same argument for objects.
+     against the public port received /rest/v1, /storage/v1 and the admin API,
+     because a client-supplied Host header was the only thing selecting
+     between them.
+  2. The @admin refusal precedes the proxy INSIDE the public snippet. handle
+     directives are evaluated in written order, so moving that one block below
+     the proxy takes /auth/v1/admin/users and /auth/v1/invite from 404 to
+     proxied, with nothing else observable changing.
+  3. The public snippet exposes /auth/v1 alone. PostgREST connects as a
+     superuser and a token's role claim selects a database role, so a publicly
+     reachable /rest/v1 is the whole schema behind whatever grants happen to
+     exist. Storage is the same argument for objects.
+  4. The rate-limit bucket key cannot be chosen by the caller: X-Forwarded-For
+     is rewritten to the peer address, and Sb-Forwarded-For, which GoTrue reads
+     FIRST, is stripped.
 
-Same shape as test_caddy_owui_blocklist.py: the file is parsed rather than
+The checks are structural rather than name based, which matters more than it
+sounds. An earlier version of this file looked for the string "@admin" and for
+a site block spelled "caddy-supabase". Both passed while the protection was
+gone: "@admin" finds the matcher DEFINITION, which Caddy treats as
+order-independent, and a new site block on :8080 under any other name imports
+whatever it likes. So this parses the file into snippets and site blocks and
+asks about ports and imports.
+
+Same spirit as test_caddy_owui_blocklist.py: the file is parsed rather than
 duplicated, so editing the Caddyfile is what this measures. No framework, no
 Docker, no network. Run via `make test-scripts`.
 """
@@ -29,19 +40,29 @@ import pathlib
 import re
 import sys
 
-CADDYFILE = pathlib.Path(__file__).resolve().parent.parent / "deploy" / "docker" / "Caddyfile.supabase"
+HERE = pathlib.Path(__file__).resolve().parent.parent
+CADDYFILE = HERE / "deploy" / "docker" / "Caddyfile.supabase"
+COMPOSE = HERE / "deploy" / "docker" / "docker-compose.enterprise.yml"
 
 PUBLIC_SNIPPET = "supabase_public"
 INTERNAL_SNIPPET = "supabase_internal"
+PUBLIC_PORT = "8080"
 
 # Upstream guards /invite with requireAdminCredentials while leaving it outside
 # the /admin group, so it needs naming separately. Re-read GoTrue's route list
-# on every image bump: this list is tracking someone else's invariant.
+# on every image bump: this tracks someone else's invariant. At v2.189.0
+# requireAdminCredentials appears exactly twice, on /invite and on the group.
 REQUIRED_ADMIN_PATHS = ["/auth/v1/admin", "/auth/v1/admin/*", "/auth/v1/invite"]
 
-# Never reachable from the public listener without RLS policies and grants
-# that do not exist yet.
-FORBIDDEN_PUBLIC_PREFIXES = ["/rest/v1", "/storage/v1"]
+# Never reachable from the public listener without the RLS policies and grants
+# that would make it safe, and there are none.
+INTERNAL_ONLY_PREFIXES = ["/rest/v1", "/storage/v1"]
+
+# The bucket key GoTrue is told to use, and the value it must carry.
+RATE_LIMIT_HEADER = "X-Forwarded-For"
+RATE_LIMIT_VALUE = "{remote_host}"
+# Read before the configured header by performRateLimiting, so it has to go.
+STRIPPED_HEADER = "Sb-Forwarded-For"
 
 failures = []
 
@@ -50,40 +71,104 @@ def fail(msg):
     failures.append(msg)
 
 
-def snippet_body(text, name):
-    """Return the body of a Caddy snippet definition, e.g. (name) { ... }."""
-    start = text.index("(" + name + ") {")
+def strip_comments(text):
+    """Drop whole-line comments so a commented-out directive cannot satisfy a
+    check, and a comment mentioning a prefix cannot trip one."""
+    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("#"))
+
+
+# Caddy placeholders are brace delimited too ({$SUPABASE_DOMAIN:...},
+# {remote_host}), and counting them as block braces cuts a site header in half.
+# They never contain whitespace, which is what separates them from a real
+# block brace, so they are masked out for the depth walk and restored after.
+PLACEHOLDER = re.compile(r"\{([^{}\s]*)\}")
+
+
+def mask_placeholders(text):
+    return PLACEHOLDER.sub(lambda m: "\x01" + m.group(1) + "\x02", text)
+
+
+def unmask_placeholders(text):
+    return text.replace("\x01", "{").replace("\x02", "}")
+
+
+def parse_blocks(raw):
+    """Split a Caddyfile into (header, body) pairs at brace depth zero.
+
+    Header is whatever precedes the opening brace: "(snippet_name)" for a
+    snippet, an address list for a site, empty for the global options block.
+    """
+    text = mask_placeholders(raw)
+    blocks = []
     depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
+    header_start = 0
+    body_start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
             depth += 1
-        elif text[i] == "}":
+            if depth == 1:
+                header = text[header_start:i].strip()
+                body_start = i + 1
+        elif ch == "}":
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
-    raise AssertionError("unbalanced braces in snippet " + name)
+                blocks.append((unmask_placeholders(header), unmask_placeholders(text[body_start:i])))
+                header_start = i + 1
+            elif depth < 0:
+                raise AssertionError("unbalanced closing brace in the Caddyfile")
+    if depth != 0:
+        raise AssertionError("unbalanced opening brace in the Caddyfile")
+    return blocks
 
 
-def main():
-    text = CADDYFILE.read_text()
+def ports_of(address):
+    """The TCP port a single site address binds.
 
-    public = snippet_body(text, PUBLIC_SNIPPET)
-    internal = snippet_body(text, INTERNAL_SNIPPET)
+    ":8080" is a port-only address (any host). Otherwise an explicit :port
+    suffix wins, and failing that the scheme decides: https is 443, anything
+    else is 80. Placeholders such as {$SUPABASE_DOMAIN:supabase.localhost} may
+    contain colons, so the port is read from the tail after the last brace.
+    """
+    addr = address.strip().rstrip(",")
+    if not addr:
+        return None
+    tail = addr[addr.rindex("}") + 1:] if "}" in addr else addr
+    m = re.search(r":(\d+)$", tail)
+    if m:
+        return m.group(1)
+    return "443" if addr.startswith("https://") else "80"
 
-    # 1. The admin refusal has to come first, or it never runs.
-    admin_at = public.find("@admin")
+
+def snippet_body(blocks, name):
+    for header, body in blocks:
+        if header == "(" + name + ")":
+            return body
+    raise AssertionError("snippet " + name + " is missing from the Caddyfile")
+
+
+def imports(body):
+    return set(re.findall(r"^\s*import\s+(\S+)", body, re.M))
+
+
+def check_public_snippet(public):
+    # The admin refusal has to come first, or it never runs. Search for the
+    # handle DIRECTIVE, not the @admin matcher definition: Caddy orders
+    # directives, and treats a named matcher's definition as position
+    # independent, so anchoring on the definition passes while the protection
+    # is gone.
+    admin_at = public.find("handle @admin")
     proxy_at = public.find("handle_path /auth/v1/*")
     if admin_at == -1:
-        fail("the public snippet has no @admin matcher; the admin API is reachable from outside")
+        fail("the public snippet has no `handle @admin` block; the admin API is reachable from outside")
     if proxy_at == -1:
         fail("the public snippet no longer proxies /auth/v1")
     if admin_at != -1 and proxy_at != -1 and admin_at > proxy_at:
         fail(
-            "the @admin handle now follows handle_path /auth/v1/*, so it never matches: "
-            "handle blocks are evaluated in written order and the proxy takes the request first"
+            "`handle @admin` now follows `handle_path /auth/v1/*`, so it never matches: "
+            "handle directives are evaluated in written order and the proxy takes the "
+            "request first (/auth/v1/admin/* and /auth/v1/invite become proxied)"
         )
 
-    # 2. Every admin-credentialed route upstream keeps outside /admin.
     matcher = re.search(r"@admin\s+path\s+([^\n]+)", public)
     if not matcher:
         fail("could not read the @admin path matcher out of the public snippet")
@@ -93,44 +178,107 @@ def main():
             if want not in declared:
                 fail("the @admin matcher no longer covers " + want)
 
-    # 3. Nothing but auth on the public listener.
-    for prefix in FORBIDDEN_PUBLIC_PREFIXES:
+    for prefix in INTERNAL_ONLY_PREFIXES:
         if prefix in public:
             fail(
-                "the public snippet mentions " + prefix + ": that backend must not be reachable "
-                "from a browser without the RLS policies and grants to make it safe"
+                "the public snippet mentions " + prefix + ": that backend must not be "
+                "reachable from a browser without the RLS policies and grants to make it safe"
             )
-    for prefix in FORBIDDEN_PUBLIC_PREFIXES:
+
+    # Pin the VALUE, not just the header name: rewriting it from another
+    # request header hands the rate-limit bucket straight back to the caller.
+    if (RATE_LIMIT_HEADER + " " + RATE_LIMIT_VALUE) not in public:
+        fail(
+            "the public proxy no longer rewrites " + RATE_LIMIT_HEADER + " to "
+            + RATE_LIMIT_VALUE + ", so the GoTrue rate-limit bucket may be caller-chosen"
+        )
+    if ("-" + STRIPPED_HEADER) not in public:
+        fail(
+            "the public proxy no longer strips " + STRIPPED_HEADER + ", which GoTrue reads "
+            "BEFORE the configured header, so enabling one GoTrue flag would let a caller "
+            "pick its own rate-limit bucket"
+        )
+
+
+def check_sites(blocks):
+    """Nothing bound to the public port may reach the internal route set.
+
+    Structural on purpose: a new site block on :8080 under any name at all is
+    caught, because the question asked is about the port and the imports, not
+    about the hostname anyone happened to write.
+    """
+    public_sites = []
+    for header, body in blocks:
+        if not header or header.startswith("("):
+            continue
+        addresses = [a for a in re.split(r"[,\s]+", header) if a]
+        on_public = any(ports_of(a) == PUBLIC_PORT for a in addresses)
+        used = imports(body)
+        if on_public:
+            public_sites.append(header)
+            if INTERNAL_SNIPPET in used:
+                fail(
+                    "site `" + header + "` is bound to the public port and imports "
+                    + INTERNAL_SNIPPET + ", which puts /rest/v1, /storage/v1 and the admin "
+                    "API back on the public listener"
+                )
+            if PUBLIC_SNIPPET not in used and "reverse_proxy" in body:
+                fail(
+                    "site `" + header + "` is bound to the public port and proxies without "
+                    "importing " + PUBLIC_SNIPPET + ", so it bypasses the public route set"
+                )
+        elif PUBLIC_SNIPPET in used:
+            fail("site `" + header + "` imports " + PUBLIC_SNIPPET + " off the public port")
+
+    if not public_sites:
+        fail(
+            "no site is bound to port " + PUBLIC_PORT + ": the public route set has to live on "
+            "its own listener, or the split depends on the client sending an honest Host header"
+        )
+
+    domain_site = [h for h in public_sites if "SUPABASE_DOMAIN" in h]
+    if not domain_site:
+        fail("the SUPABASE_DOMAIN site is not bound to port " + PUBLIC_PORT)
+
+    catch_all = [h for h in public_sites if h.strip() == ":" + PUBLIC_PORT]
+    if not catch_all:
+        fail(
+            "no catch-all on :" + PUBLIC_PORT + "; an unmatched Host there gets Caddy's "
+            "empty 200 instead of a refusal"
+        )
+
+
+def check_rate_limit_agreement():
+    """GoTrue keys its limits on the header named in compose, and the Caddyfile
+    rewrites a header by name. Two settings that must agree, in two files, with
+    nothing else noticing when they stop."""
+    compose = strip_comments(COMPOSE.read_text())
+    m = re.search(r"GOTRUE_RATE_LIMIT_HEADER:\s*\$\{ENTERPRISE_RATE_LIMIT_HEADER:-([^}]+)\}", compose)
+    if not m:
+        fail("could not read the GOTRUE_RATE_LIMIT_HEADER default out of the enterprise compose file")
+        return
+    configured = m.group(1).strip()
+    if configured != RATE_LIMIT_HEADER:
+        fail(
+            "GoTrue is told to key its rate limits on " + configured + " while the gateway "
+            "rewrites " + RATE_LIMIT_HEADER + ", so the header GoTrue reads is whatever the "
+            "caller sent (ENTERPRISE_RATE_LIMIT_HEADER can do this silently at runtime too)"
+        )
+
+
+def main():
+    text = strip_comments(CADDYFILE.read_text())
+    blocks = parse_blocks(text)
+
+    public = snippet_body(blocks, PUBLIC_SNIPPET)
+    internal = snippet_body(blocks, INTERNAL_SNIPPET)
+
+    check_public_snippet(public)
+    for prefix in INTERNAL_ONLY_PREFIXES:
         if prefix not in internal:
             fail("the internal snippet no longer routes " + prefix + ", which in-stack callers need")
-
-    # 4. The public site keeps its own listener port, and the internal sites
-    #    keep theirs. Host matching alone is not enforcement.
-    public_site = re.search(r"http://\{\$SUPABASE_DOMAIN[^}]*\}(:\d+)?\s*\{", text)
-    if not public_site:
-        fail("could not find the public site block")
-    elif public_site.group(1) != ":8080":
-        fail(
-            "the public site no longer binds its own port (found "
-            + str(public_site.group(1))
-            + "): sharing a port with the internal sites makes the route split depend on the "
-            "client sending an honest Host header"
-        )
-    if not re.search(r"^:8080\s*\{", text, re.M):
-        fail("no catch-all on :8080; an unmatched Host there gets Caddy's empty 200")
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("http://caddy-supabase", "https://caddy-supabase")) and ":8080" in stripped:
-            fail("an internal site is bound to the public port 8080: " + stripped)
-
-    # 5. The rate-limit key must not be caller-controlled. GoTrue keys its
-    #    limits on this header, and Caddy appends to an inbound value unless
-    #    told to replace it.
-    if "header_up X-Forwarded-For" not in public:
-        fail(
-            "the public proxy no longer overwrites X-Forwarded-For, so a caller can vary it and "
-            "hand itself a fresh GoTrue rate-limit bucket per request"
-        )
+    check_sites(blocks)
+    check_rate_limit_agreement()
 
     if failures:
         print("Caddyfile.supabase route split: FAIL")
