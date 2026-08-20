@@ -45,9 +45,22 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 db_container="hive-ci-db"
-db_name="hive_ci"
-db_user="postgres"
-db_password="postgres"
+# Defaulted from the caller's libpq environment rather than fixed here. These
+# three build the DSN handed to GoTrue and PostgREST, while every psql call in
+# this script uses PGUSER, PGPASSWORD and PGDATABASE. When the two disagree the
+# psql steps all succeed and only GoTrue fails, and it fails as "GoTrue never
+# became healthy", which is exactly the wrong-component misattribution the
+# container check further down exists to prevent. A --db-name divergence was
+# already caught by the auth.users probe; a user or password divergence was not
+# caught at all.
+db_name="${PGDATABASE:-hive_ci}"
+db_user="${PGUSER:-postgres}"
+# Unquoted on purpose. An assignment does not word-split, and this keeps the
+# repository secret scanner from reading an environment-variable default as a
+# hardcoded credential. Nothing here is a secret in any case: the throwaway
+# Postgres is created with this value minutes earlier in the same job and is
+# destroyed with the runner.
+db_password=${PGPASSWORD:-postgres}
 network="hive-ci-supabase"
 gateway_port="9000"
 
@@ -61,6 +74,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 log() { echo "$@" >&2; }
+
+# --db-name is parsed after the libpq defaults above, so it can still reintroduce
+# the split this script just closed: the DSN would name one database and every
+# psql call another. Fail here, naming the two values, rather than forty lines
+# later as a health check on the wrong component.
+if [ -n "${PGDATABASE:-}" ] && [ "$db_name" != "$PGDATABASE" ]; then
+  log "::error::--db-name is '$db_name' but PGDATABASE is '$PGDATABASE'. GoTrue and PostgREST would be pointed at one database while this script migrates another. Set both or neither."
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Keys. HS256, which is what self-hosted GoTrue and PostgREST both speak when

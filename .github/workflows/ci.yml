@@ -856,7 +856,14 @@ jobs:
   live-integration:
     name: Live integration (SDK tests + smoke)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 35, matching web-e2e, because this job took on the same added work: the
+    # same bounded psql fallback, a container start, and the full migration
+    # chain. Measured on run 32378996099 the whole job was 3m43s and the
+    # database step 17 seconds, so this is tail headroom rather than routine
+    # need. Leaving it at 30 while web-e2e went to 35 would mean the one job
+    # that pays for real provider completions is also the one that gets
+    # cancelled first on a degraded runner, with an empty step log to read.
+    timeout-minutes: 35
     # Run on push to main (post-merge gate) or on PRs that carry the
     # run-live-integration label. The label gate lets contributors
     # explicitly opt in without running paid completions on every PR.
@@ -1234,17 +1241,30 @@ jobs:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
     # 25 until this job started standing up its own Postgres, GoTrue and
-    # PostgREST before the stack. Measured: the throwaway Supabase step takes
-    # about two and a half minutes, and the rest of the job is unchanged.
+    # PostgREST before the stack. Measured on run 32378996099: the throwaway
+    # Supabase step took 28 seconds and the whole job 5m49s, so the happy path
+    # is nowhere near either budget. The headroom is for the tail, not the
+    # median: the psql fallback below can spend up to about 18 minutes on a
+    # runner image whose apt is degraded, and that has to be able to finish and
+    # fail by name rather than be cancelled with an empty step log.
     timeout-minutes: 35
-    # This job boots against the shared Supabase project's session mode
-    # pooler (pool_size 15), and concurrent runs exhaust it: on 2026-08-01,
-    # four unrelated PRs (#644, #646, #647, #648) ran this job at
-    # overlapping times and all four failed with `page.goto:
-    # net::ERR_ABORTED` / a 30s context timeout, which reads as a front end
-    # bug rather than the database contention it actually is (issue #631).
+    # HISTORY, and it is history now: this job used to boot against the shared
+    # Supabase project's session mode pooler (pool_size 15), and concurrent runs
+    # exhausted it. On 2026-08-01 four unrelated PRs (#644, #646, #647, #648)
+    # ran this job at overlapping times and all four failed with `page.goto:
+    # net::ERR_ABORTED` / a 30s context timeout, which reads as a front end bug
+    # rather than the database contention it actually was (issue #631).
     #
-    # An earlier version of this fix serialized every web-e2e run with a
+    # That coupling is GONE. The job now stands up its own Postgres, GoTrue and
+    # PostgREST and opens no connection to Supavisor at all, so contention is no
+    # longer a reason for anything here. The path gate below survives on its own
+    # merits, stated plainly so the next reader does not go looking for a pooler
+    # this job never touches: it exists to keep a full browser suite off pull
+    # requests that cannot affect the browser flow, which is runner minutes, and
+    # it now also has to fire for migration and stack-script changes because the
+    # job applies the migration chain itself.
+    #
+    # An earlier version of the old fix serialized every web-e2e run with a
     # job-level `concurrency:` group. That was reverted: GitHub Actions
     # only holds one job per concurrency group as pending, so a third
     # queued run cancels the second outright before it ever executes.
@@ -1261,10 +1281,11 @@ jobs:
     # here uses. Two of the four PRs above, the migration baseline script
     # and its probe, touched no path that can reach the booted browser
     # flow and should not have run this job at all; this gate is
-    # deterministic and reviewable in a diff, unlike a queue race. It
-    # reduces how often web-e2e runs, which reduces how often two runs
-    # land on the shared pool at the same time, but does not eliminate the
-    # coupling. That real fix stays open on #631.
+    # deterministic and reviewable in a diff, unlike a queue race.
+    #
+    # It was kept after the throwaway stack landed because the minutes argument
+    # stands on its own. The shared-pool argument for it does not, and #631 is
+    # what this branch closes: there is no shared pool left to land on.
     if: >-
       needs.changes.outputs.run == 'true' &&
       needs.changes.outputs.web_e2e == 'true' &&
@@ -1648,28 +1669,6 @@ jobs:
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
-
-      - name: Name a shared session-pool exhaustion on failure
-        if: failure()
-        # Diagnosis, not dispensation. The run has already failed and stays
-        # failed; this only saves the next reader the archaeology.
-        #
-        # On 2026-08-16 this job failed the flake gate with three unrelated
-        # specs passing only on a retry, and every one of them was a timeout
-        # caused by `FATAL: (EMAXCONNSESSION) max clients reached in session
-        # mode`, which appeared 258 times in the dump this step now reads.
-        # Finding that meant downloading the compose artifact and grepping it by
-        # hand, while the job log said nothing but "3 flaky". A retry-pass is
-        # still a failure and the gate is untouched; what changes is that the
-        # log now says which failure it was.
-        run: |
-          set -uo pipefail
-          log=/tmp/compose-web-e2e-api.log
-          [ -f "$log" ] || exit 0
-          n=$(grep -c EMAXCONNSESSION "$log" || true)
-          if [ "${n:-0}" -gt 0 ]; then
-            echo "::error title=Shared session pool exhausted::${n} EMAXCONNSESSION refusals in this job's container logs. The Supabase project's Supavisor session-mode ceiling is 15 clients, shared by this job, every other CI stack booted at the same time and the always-on demo box. Failures in this run are contention, not necessarily a product defect; see issues #631 and #841. Do not raise the retry count or the timeouts to survive it."
-          fi
 
       - name: Upload compose logs
         if: failure()
