@@ -63,7 +63,22 @@ CORS_ECHO_PLACEHOLDER = "{header.Access-Control-Request-Headers}"
 # the /admin group, so it needs naming separately. Re-read GoTrue's route list
 # on every image bump: this tracks someone else's invariant. At v2.189.0
 # requireAdminCredentials appears exactly twice, on /invite and on the group.
-REQUIRED_ADMIN_PATHS = ["/auth/v1/admin", "/auth/v1/admin/*", "/auth/v1/invite"]
+# Every entry needs its trailing-slash form as well. Caddy's `path` matcher is
+# EXACT, while GoTrue's router registers both `pattern` and `pattern/`, so
+# /auth/v1/invite/ matched nothing and was proxied through. /auth/v1/admin/*
+# covered the admin group only by accident of its wildcard.
+#
+# /oauth/clients/register is dynamic OAuth client registration, live because
+# this deployment sets GOTRUE_OAUTH_SERVER_ENABLED=true. Public, it would let
+# anyone mint a client for this issuer.
+REQUIRED_ADMIN_PATHS = [
+    "/auth/v1/admin",
+    "/auth/v1/admin/*",
+    "/auth/v1/invite",
+    "/auth/v1/invite/*",
+    "/auth/v1/oauth/clients/register",
+    "/auth/v1/oauth/clients/register/*",
+]
 
 # Self-service account creation, refused on the public listener so that the
 # posture survives someone editing GOTRUE_DISABLE_SIGNUP. /otp and /magiclink
@@ -71,8 +86,9 @@ REQUIRED_ADMIN_PATHS = ["/auth/v1/admin", "/auth/v1/admin/*", "/auth/v1/invite"]
 # so they are signup routes wearing a login name.
 REQUIRED_SELF_SERVICE_BLOCKED_PATHS = [
     "/auth/v1/signup",
-    "/auth/v1/otp",
+    "/auth/v1/signup/*",
     "/auth/v1/magiclink",
+    "/auth/v1/magiclink/*",
 ]
 
 # Every login and recovery route the product actually uses. Blocking one of
@@ -80,6 +96,13 @@ REQUIRED_SELF_SERVICE_BLOCKED_PATHS = [
 # them: a matcher that swallowed /token would pass a "signup is blocked" test
 # while locking every user out.
 REQUIRED_PUBLIC_AUTH_PATHS = [
+    # /otp is on this list, not on the blocked list, and the reason is a live
+    # caller: apps/web-console/components/email-settings-card.tsx sends
+    # signInWithOtp to re-send an email verification, passing
+    # shouldCreateUser false so it cannot create anything. The first draft of
+    # the deny list blocked it, which would have been an outage on a working
+    # feature to close a hole GOTRUE_DISABLE_SIGNUP already closes.
+    "/auth/v1/otp",
     "/auth/v1/token",
     "/auth/v1/authorize",
     "/auth/v1/callback",
@@ -108,8 +131,20 @@ def fail(msg):
 
 def strip_comments(text):
     """Drop whole-line comments so a commented-out directive cannot satisfy a
-    check, and a comment mentioning a prefix cannot trip one."""
-    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
+    check, and a comment mentioning a prefix cannot trip one.
+
+    Backslash continuations are folded in the same pass, and that is load
+    bearing rather than tidy. Caddy lets a directive span lines with a trailing
+    backslash, and every matcher check below reads its argument list with a
+    pattern that stops at the newline. A path list broken across two lines
+    therefore looked like a SHORTER list, and the checks reported the entries on
+    the later lines as missing, which is the benign direction. The dangerous
+    direction is the same shape: a list that grew onto a second line would have
+    had its new entries invisible to the over-block assertions. Folding first
+    means the formatting of the file cannot change what these checks see.
+    """
+    folded = re.sub(r"\\\n\s*", " ", text)
+    return "\n".join(line for line in folded.splitlines() if not line.strip().startswith("#"))
 
 
 # Caddy placeholders are brace delimited too ({$SUPABASE_DOMAIN:...},
@@ -266,7 +301,9 @@ def check_public_snippet(public):
         # The inverse, which is the failure a signup-only test cannot see: a
         # deny list that grew until it took a route the product needs.
         for keep in REQUIRED_PUBLIC_AUTH_PATHS:
-            if keep in declared:
+            # Both the bare form and its wildcard, since blocking either one
+            # takes the route out.
+            if keep in declared or (keep + "/*") in declared:
                 fail(
                     "the @selfserve matcher now blocks " + keep + ", which is a login "
                     "or recovery route the product uses: this locks users out rather "

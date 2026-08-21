@@ -139,12 +139,27 @@
 	# Re-read that route list on every GoTrue bump: the invariant is
 	# upstream's, not ours, and this matcher is the only thing tracking it.
 	#
+	# Every entry carries its trailing-slash form, and that is not
+	# decoration. Caddy's `path` matcher is EXACT, while GoTrue's router
+	# registers both `pattern` and `pattern/` for a mounted group, so
+	# `/auth/v1/invite/` matched nothing here and was proxied straight
+	# through. `/auth/v1/admin/*` already covered the admin group by
+	# accident of its wildcard; `/auth/v1/invite` did not, and neither did
+	# the self-service list below until a review caught it.
+	#
+	# /oauth/clients/register is here because this deployment sets
+	# GOTRUE_OAUTH_SERVER_ENABLED=true, which turns on dynamic OAuth client
+	# registration. Left public, anyone on the internet could mint a client
+	# for this issuer. It is administrative surface in the same sense as
+	# /admin, so it is refused in the same place.
+	#
 	# Source order matters: handle blocks are mutually exclusive and are
 	# evaluated in the order written, so this has to precede the proxy
 	# below. scripts/test_caddy_supabase_routes.py fails if it stops doing
 	# so, because a reordering that reopens the admin API changes nothing
 	# else observable.
-	@admin path /auth/v1/admin /auth/v1/admin/* /auth/v1/invite
+	@admin path /auth/v1/admin /auth/v1/admin/* /auth/v1/invite /auth/v1/invite/* \
+		/auth/v1/oauth/clients/register /auth/v1/oauth/clients/register/*
 	handle @admin {
 		respond 404
 	}
@@ -165,27 +180,37 @@
 	# which is the property worth having: a posture that survives someone
 	# editing one variable.
 	#
-	# Three routes, because /signup is not the only one that creates a user:
+	# /signup and /magiclink, and NOT /otp. All three can create a user,
+	# since /otp and its deprecated alias /magiclink create one unless the
+	# caller passes should_create_user false and the default is to create.
+	# The reason /otp is nevertheless left reachable is that a real caller
+	# uses it: apps/web-console/components/email-settings-card.tsx sends
+	# signInWithOtp to re-send an email verification, and it passes
+	# shouldCreateUser false, so it cannot create anything. Refusing that
+	# route here would have been a self-inflicted outage on a live feature to
+	# close a hole GOTRUE_DISABLE_SIGNUP already closes, and the first draft
+	# of this block did exactly that. The over-block assertions in
+	# scripts/test_caddy_supabase_routes.py now name /otp so it cannot be
+	# re-blocked without someone reading this.
 	#
-	#   /signup     the direct one.
-	#   /otp        creates the user unless the caller passes
-	#               should_create_user false, and the DEFAULT is to create.
-	#   /magiclink  the deprecated alias of /otp, same behaviour.
+	# Consequence stated plainly rather than overclaimed: creation via /otp is
+	# stopped by the FLAG alone, not by routing. /signup and /magiclink are
+	# stopped by both. So the flag is still the control that matters and the
+	# gateway is a second lock on the two routes nothing legitimate calls.
 	#
-	# Cost of refusing /otp and /magiclink publicly: passwordless email login
-	# is not available on the public origin. Nothing uses it. Sign-in is
-	# password (POST /token) or the OAuth flow (/authorize, /callback), both
-	# still reachable, and so are /verify, /recover, /resend, /user, /logout
-	# and the discovery documents. The admin one-time-token flow this repo uses
-	# for live test sessions goes through /admin/generate_link on the INTERNAL
-	# listener, which this does not touch.
+	# Everything else stays reachable: password sign-in (POST /token), the
+	# OAuth flow (/authorize, /callback), /verify, /recover, /resend, /user,
+	# /logout and the discovery documents. The admin one-time-token flow this
+	# repo uses for live test sessions goes through /admin/generate_link on the
+	# INTERNAL listener, which this does not touch.
 	#
 	# Re-enabling self-service signup is therefore a deliberate two-part
 	# change, here and on the flag, and it should not be done without the
 	# provisioning path .wolf/decisions.md D-023 describes: a user created with
 	# no tenant membership gets a token with no tenant claim, and the
 	# reconciliation that is supposed to give it one is not built yet.
-	@selfserve path /auth/v1/signup /auth/v1/otp /auth/v1/magiclink
+	@selfserve path /auth/v1/signup /auth/v1/signup/* \
+		/auth/v1/magiclink /auth/v1/magiclink/*
 	handle @selfserve {
 		respond 404
 	}
