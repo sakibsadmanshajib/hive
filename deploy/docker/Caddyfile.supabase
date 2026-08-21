@@ -148,6 +148,47 @@
 	handle @admin {
 		respond 404
 	}
+	# Self-service account creation, refused at the edge rather than left to a
+	# flag.
+	#
+	# GOTRUE_DISABLE_SIGNUP is the real control and it covers every creation
+	# path including the two below, but it is one environment variable away
+	# from open, and the deployment it protects had it set to false. Paired
+	# with GOTRUE_MAILER_AUTOCONFIRM, which defaults to true, that state means
+	# anyone who can reach this listener gets a confirmed account without ever
+	# proving control of the address they used. That was harmless only while
+	# nothing tunnelled to this port; it becomes live the moment a public auth
+	# origin exists, which is the next change to this stack.
+	#
+	# So the flag is set correctly AND the routes are refused here. Flipping
+	# the flag back no longer reopens the internet-facing surface on its own,
+	# which is the property worth having: a posture that survives someone
+	# editing one variable.
+	#
+	# Three routes, because /signup is not the only one that creates a user:
+	#
+	#   /signup     the direct one.
+	#   /otp        creates the user unless the caller passes
+	#               should_create_user false, and the DEFAULT is to create.
+	#   /magiclink  the deprecated alias of /otp, same behaviour.
+	#
+	# Cost of refusing /otp and /magiclink publicly: passwordless email login
+	# is not available on the public origin. Nothing uses it. Sign-in is
+	# password (POST /token) or the OAuth flow (/authorize, /callback), both
+	# still reachable, and so are /verify, /recover, /resend, /user, /logout
+	# and the discovery documents. The admin one-time-token flow this repo uses
+	# for live test sessions goes through /admin/generate_link on the INTERNAL
+	# listener, which this does not touch.
+	#
+	# Re-enabling self-service signup is therefore a deliberate two-part
+	# change, here and on the flag, and it should not be done without the
+	# provisioning path .wolf/decisions.md D-023 describes: a user created with
+	# no tenant membership gets a token with no tenant claim, and the
+	# reconciliation that is supposed to give it one is not built yet.
+	@selfserve path /auth/v1/signup /auth/v1/otp /auth/v1/magiclink
+	handle @selfserve {
+		respond 404
+	}
 	# After @admin on purpose: an OPTIONS to /auth/v1/admin is refused with the
 	# rest of the admin API rather than told it would be welcome. Before the
 	# proxy for the reason the snippet documents.
@@ -217,5 +258,15 @@ http://{$SUPABASE_DOMAIN:supabase.localhost}:8080 {
 # Any other Host arriving on the public port matches no site above, and Caddy
 # would otherwise answer an empty 200. Answer nothing useful instead.
 :8080 {
+	respond 404
+}
+
+# The same catch-all the public port has had all along, for the in-network port,
+# which never got one. An unmatched Host on 80 answered an empty 200, and while
+# that reaches no backend and is therefore not an exposure, it is a lie: a probe
+# reading 200 concludes the request was proxied and GoTrue answered. That
+# happened while verifying this file, and the wrong conclusion nearly went into
+# a PR as evidence. A 404 cannot be misread.
+:80 {
 	respond 404
 }

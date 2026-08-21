@@ -65,6 +65,30 @@ CORS_ECHO_PLACEHOLDER = "{header.Access-Control-Request-Headers}"
 # requireAdminCredentials appears exactly twice, on /invite and on the group.
 REQUIRED_ADMIN_PATHS = ["/auth/v1/admin", "/auth/v1/admin/*", "/auth/v1/invite"]
 
+# Self-service account creation, refused on the public listener so that the
+# posture survives someone editing GOTRUE_DISABLE_SIGNUP. /otp and /magiclink
+# are here because they create a user too: should_create_user defaults to true,
+# so they are signup routes wearing a login name.
+REQUIRED_SELF_SERVICE_BLOCKED_PATHS = [
+    "/auth/v1/signup",
+    "/auth/v1/otp",
+    "/auth/v1/magiclink",
+]
+
+# Every login and recovery route the product actually uses. Blocking one of
+# these would be a self-inflicted outage, so the deny list is checked against
+# them: a matcher that swallowed /token would pass a "signup is blocked" test
+# while locking every user out.
+REQUIRED_PUBLIC_AUTH_PATHS = [
+    "/auth/v1/token",
+    "/auth/v1/authorize",
+    "/auth/v1/callback",
+    "/auth/v1/verify",
+    "/auth/v1/recover",
+    "/auth/v1/user",
+    "/auth/v1/logout",
+]
+
 # Never reachable from the public listener without the RLS policies and grants
 # that would make it safe, and there are none.
 INTERNAL_ONLY_PREFIXES = ["/rest/v1", "/storage/v1"]
@@ -215,6 +239,40 @@ def check_public_snippet(public):
             if want not in declared:
                 fail("the @admin matcher no longer covers " + want)
 
+    # Same ordering trap as @admin, same reasoning: anchor on the handle
+    # directive, because a named matcher's definition is position independent
+    # and would pass while the protection was dead.
+    selfserve_at = public.find("handle @selfserve")
+    if selfserve_at == -1:
+        fail(
+            "the public snippet has no `handle @selfserve` block, so self-service "
+            "account creation is reachable from outside and the only thing stopping "
+            "it is GOTRUE_DISABLE_SIGNUP, one environment variable away from open"
+        )
+    elif proxy_at != -1 and selfserve_at > proxy_at:
+        fail(
+            "`handle @selfserve` now follows `handle_path /auth/v1/*`, so it never "
+            "matches and /auth/v1/signup is proxied again"
+        )
+
+    selfserve = re.search(r"@selfserve\s+path\s+([^\n]+)", public)
+    if not selfserve:
+        fail("could not read the @selfserve path matcher out of the public snippet")
+    else:
+        declared = selfserve.group(1).split()
+        for want in REQUIRED_SELF_SERVICE_BLOCKED_PATHS:
+            if want not in declared:
+                fail("the @selfserve matcher no longer covers " + want)
+        # The inverse, which is the failure a signup-only test cannot see: a
+        # deny list that grew until it took a route the product needs.
+        for keep in REQUIRED_PUBLIC_AUTH_PATHS:
+            if keep in declared:
+                fail(
+                    "the @selfserve matcher now blocks " + keep + ", which is a login "
+                    "or recovery route the product uses: this locks users out rather "
+                    "than closing signup"
+                )
+
     for prefix in INTERNAL_ONLY_PREFIXES:
         if prefix in public:
             fail(
@@ -339,6 +397,27 @@ def check_cors_preflight(blocks, public, internal):
         )
 
 
+def check_unmatched_host_catch_alls(text):
+    """Both listeners must answer 404 to a Host that matches no site block.
+
+    Caddy answers an EMPTY 200 to an unmatched host, and the public port has had
+    a `:8080 { respond 404 }` catch-all for that reason from the start. Port 80
+    did not, and while an empty 200 reaches no backend and is therefore not an
+    exposure, it is actively misleading: a probe reading 200 concludes the
+    request was proxied and the upstream answered it. That happened during this
+    file's own verification and the wrong conclusion nearly shipped as evidence.
+    """
+    for port, label in (("8080", "public"), ("80", "in-network")):
+        block = re.search(
+            r"^:" + port + r"\s*\{\s*\n\s*respond 404\s*\n\s*\}", text, re.MULTILINE
+        )
+        if not block:
+            fail(
+                "no `:" + port + " { respond 404 }` catch-all for the " + label + " listener: "
+                "an unmatched Host gets Caddy's empty 200, which reads as a proxied success"
+            )
+
+
 def check_sites(blocks):
     """Nothing bound to the public port may reach the internal route set.
 
@@ -425,6 +504,7 @@ def main():
     check_sites(blocks)
     check_rate_limit_agreement()
 
+    check_unmatched_host_catch_alls(text)
     if failures:
         print("Caddyfile.supabase route split: FAIL")
         for f in failures:

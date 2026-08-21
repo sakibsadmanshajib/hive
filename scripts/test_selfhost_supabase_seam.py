@@ -42,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "deploy" / "docker" / "docker-compose.yml"
 ENTERPRISE = ROOT / "deploy" / "docker" / "docker-compose.enterprise.yml"
+DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "deploy-demo-box.yml"
 
 # The Supabase data plane: the services that must answer before any application
 # service can authenticate, read the database or store an object.
@@ -127,6 +128,7 @@ def env_value(block: str, key: str) -> str:
 
 BASE_TEXT = BASE.read_text()
 ENT_TEXT = ENTERPRISE.read_text()
+DEPLOY_TEXT = DEPLOY_WORKFLOW.read_text()
 BASE_SERVICES = split_services(BASE_TEXT)
 ENT_SERVICES = split_services(ENT_TEXT)
 
@@ -302,6 +304,77 @@ def test_open_webui_oidc_discovery_uses_the_browser_facing_origin() -> None:
     assert "SUPABASE_PUBLIC_URL" in value, value
     assert value.startswith('"${SUPABASE_PUBLIC_URL:-'), value
     assert "SUPABASE_URL" in value, value
+
+
+def _compose_flags() -> str:
+    """The one flag definition every step in the deploy workflow uses."""
+    match = re.search(
+        r"^  HIVE_COMPOSE_FLAGS: >-\n((?:^    .*\n)+)", DEPLOY_TEXT, re.MULTILINE
+    )
+    assert match, "deploy-demo-box.yml has no HIVE_COMPOSE_FLAGS block"
+    return " ".join(line.strip() for line in match.group(1).splitlines())
+
+
+def test_the_deploy_invocation_and_the_compose_project_agree() -> None:
+    """The seam only exists for a command that resolves BOTH compose files. A
+    deploy step that resolves only the base file resolves a different project,
+    so it reads a stack missing every Supabase service and reports green over
+    it, and the one step carrying `--remove-orphans` deletes them outright.
+
+    Both halves are asserted, because either one alone is worse than useless:
+    the file without a profile makes compose refuse every command
+    (`depends on undefined service`), and the profile without the file activates
+    nothing. The profile name is checked against what the data-plane services
+    actually carry rather than against a literal, so renaming the profile in the
+    compose file without updating the workflow fails here."""
+    flags = _compose_flags()
+    assert "-f docker-compose.yml" in flags, flags
+    assert "-f docker-compose.enterprise.yml" in flags, flags
+
+    declared = {
+        p for svc in DATA_PLANE for p in profiles_of(ENT_SERVICES[svc])
+    }
+    common = set.intersection(*(profiles_of(ENT_SERVICES[svc]) for svc in DATA_PLANE))
+    assert common, f"the data plane shares no profile: {declared}"
+    active = {m.group(1) for m in re.finditer(r"--profile (\S+)", flags)}
+    assert active & common, (
+        f"the deploy activates {sorted(active)}, none of which covers the whole "
+        f"data plane (needs one of {sorted(common)})"
+    )
+
+    # Every dependency the override blocks name has to be covered by that same
+    # profile, or the invocation is refused outright rather than merely
+    # incomplete.
+    for svc in ("edge-api", "control-plane"):
+        deps = set(
+            re.findall(r"^      ([A-Za-z0-9][A-Za-z0-9._-]*):\s*$", ENT_SERVICES[svc], re.MULTILINE)
+        )
+        assert deps <= DATA_PLANE, f"{svc} depends on {sorted(deps - DATA_PLANE)}"
+
+
+def test_no_deploy_step_spells_its_own_compose_flags() -> None:
+    """Four steps in this workflow run docker compose, and each used to rebuild
+    the flag list by hand. A fifth step added later with a copied-and-trimmed
+    list is the recurrence this guards: it would read a different project and
+    report green over a box missing services, which is indistinguishable from
+    healthy in a log.
+
+    So the rule is not "the flags are right somewhere", it is that no step
+    spells them at all."""
+    invocations = re.findall(r"docker compose[^\n)]*", DEPLOY_TEXT)
+    # Prose in comments mentions `docker compose exec` and `docker compose ps`;
+    # only lines that are actually run matter, and those are the ones that pass
+    # flags or subcommands rather than sitting inside a sentence.
+    offenders = [
+        i for i in invocations
+        if ("--env-file" in i or "--profile" in i or " -f " in i)
+        and "$HIVE_COMPOSE_FLAGS" not in i
+    ]
+    assert not offenders, offenders
+    # And the definition is genuinely used, so this test cannot pass by the
+    # workflow having no invocations at all.
+    used = DEPLOY_TEXT.count("$HIVE_COMPOSE_FLAGS")
+    assert used >= 4, f"only {used} steps use the shared definition"
 
 
 def main() -> int:
