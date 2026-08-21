@@ -19,11 +19,78 @@
 # upstream that derives an absolute URL from request scheme sees the scheme
 # users actually arrive on, same pattern as Caddyfile.owui.
 http://{$CONSOLE_DOMAIN:console.localhost} {
-  reverse_proxy web-console-prod:3000 {
-    header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
-    transport http {
-      response_header_timeout 30s
-      dial_timeout 5s
+  # The public auth origin, served from this app's OWN origin rather than a
+  # second public hostname.
+  #
+  # A self-hosted data plane has no browser-reachable Supabase address of its
+  # own: SUPABASE_URL is `http://caddy-supabase`, a compose service name, so
+  # every browser-facing consumer (supabase-js in this app's bundle, and the
+  # endpoints inside GoTrue's own OIDC discovery document) pointed at an
+  # address that resolves nowhere. That is what took browser login down after
+  # the cutover, and this route is the fix.
+  #
+  # Why here and not on a hostname of its own:
+  #
+  #   * The tunnel in front of this box is REMOTELY managed. There is no
+  #     ingress config on the box (`~/.cloudflared` holds credentials and
+  #     nothing else), so a new public hostname is a Cloudflare dashboard edit
+  #     that no file in this repository and no deploy step can make or
+  #     reproduce. This route needs neither a new hostname nor a new DNS
+  #     record.
+  #   * Same origin means supabase-js makes same-origin requests, so the
+  #     gateway's CORS termination stops standing between a user and a working
+  #     sign-in, and no third-party-cookie behaviour is involved at all.
+  #   * It covers everything this app asks Supabase for. Measured, not
+  #     assumed: apps/web-console has no `.from()` and no `.storage` call
+  #     anywhere, only auth, so /auth/v1 is the whole surface its bundle uses.
+  #     Nothing in the app serves a path under /auth/v1 either, so this
+  #     shadows no route of its own (app/auth holds sign-in, sign-up,
+  #     callback and friends; there is no `v1` among them).
+  #
+  # The upstream is caddy-supabase's PUBLIC listener on 8080, and that choice
+  # is the security boundary, not a detail. Port 80 on that container carries
+  # the internal route set, which is /rest/v1, /storage/v1 and an unrefused
+  # admin API; supabase-auth:9999 is GoTrue with no route filtering at all.
+  # Either one here would publish all of that to the internet through this
+  # hostname. Port 8080 is the listener whose route set is reviewed, where the
+  # admin API, /invite, dynamic OAuth client registration, /signup and
+  # /magiclink are refused. See Caddyfile.supabase.
+  #
+  # `handle`, never `handle_path`: the prefix must survive, because the public
+  # listener is the thing that strips it before handing the request to GoTrue.
+  # Stripping here would deliver /token to a listener expecting /auth/v1/token
+  # and every route would 404.
+  #
+  # Host is rewritten because caddy-supabase's public site block is host
+  # matched on SUPABASE_DOMAIN, and an unmatched Host on that port hits its
+  # catch-all and answers 404 to everything. Both sides spell the SAME
+  # expression, `{$SUPABASE_DOMAIN:supabase.localhost}`, and both containers
+  # read that variable from the one project env file, so they agree by
+  # construction rather than by someone remembering to keep two values in
+  # step. scripts/test_caddy_console_auth_origin.py fails if they diverge.
+  #
+  # An inbound X-Forwarded-For is not a concern here even though this appends
+  # to it: the public listener replaces the header outright with its own peer
+  # address before GoTrue sees it, so the rate-limit bucket key still cannot
+  # be chosen by the caller.
+  handle /auth/v1 /auth/v1/* {
+    reverse_proxy caddy-supabase:8080 {
+      header_up Host {$SUPABASE_DOMAIN:supabase.localhost}
+      header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
+      transport http {
+        response_header_timeout 30s
+        dial_timeout 5s
+      }
+    }
+  }
+
+  handle {
+    reverse_proxy web-console-prod:3000 {
+      header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
+      transport http {
+        response_header_timeout 30s
+        dial_timeout 5s
+      }
     }
   }
 }
