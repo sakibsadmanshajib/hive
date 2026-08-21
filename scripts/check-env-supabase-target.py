@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Refuse an env file that points half of the stack at a hosted Supabase project
+and the other half at the self-hosted data plane.
+
+Why this exists
+---------------
+The self-hosted values in docker-compose.enterprise.yml are `${VAR:-default}`
+forms, so a variable that is set and non-empty beats them. A cutover that
+rewrites SUPABASE_URL and SUPABASE_DB_URL but leaves a stale hosted
+SUPABASE_JWKS_URL behind therefore comes up healthy, serves traffic, and quietly
+keeps a Supabase Cloud project as a valid token issuer for this deployment. Every
+consumer is happy, nothing logs anything, and the mixed state survives until the
+cloud project is deleted underneath it.
+
+This is the check for that, and it deliberately reads a real env file rather than
+anything in the repository, because the mixed state only ever exists in one.
+
+Usage
+-----
+    check-env-supabase-target.py .env
+    check-env-supabase-target.py --self-check
+
+Exit 0 when the file is coherently hosted OR coherently self-hosted, 1 when it
+mixes the two or is internally inconsistent. Values are never printed: the report
+names variables and a verdict.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+# A hosted Supabase project, in any of the forms these variables can carry.
+HOSTED = re.compile(r"\.supabase\.co\b|\.pooler\.supabase\.com\b", re.IGNORECASE)
+
+# Every variable that decides where a server-side consumer looks for Supabase.
+# NEXT_PUBLIC_* and SUPABASE_PUBLIC_URL are deliberately absent: they are
+# browser-facing and a self-hosted deployment reaches them through a public
+# origin, which is a different address from the in-network gateway and is not
+# evidence of a mixed state.
+SERVER_SIDE = (
+    "SUPABASE_URL",
+    "SUPABASE_DB_URL",
+    "SUPABASE_DB_POOL_URL",
+    "SUPABASE_DB_POOL_URL_LIBPQ",
+    "SUPABASE_JWT_ISSUER",
+    "SUPABASE_JWKS_URL",
+    "S3_ENDPOINT",
+)
+
+# Set only by a deployment running its own data plane.
+SELF_HOSTED_MARKERS = ("ENTERPRISE_DB_PASSWORD", "ENTERPRISE_JWT_SECRET")
+
+
+def parse_env(text: str) -> dict:
+    out = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+def check(env: dict) -> tuple[int, list]:
+    """Return (exit code, report lines). Never includes a value."""
+    report = []
+    self_hosted = [k for k in SELF_HOSTED_MARKERS if env.get(k)]
+    hosted_vars = [k for k in SERVER_SIDE if env.get(k) and HOSTED.search(env[k])]
+
+    if not self_hosted:
+        report.append("no ENTERPRISE_* data-plane secret set, treating this as a hosted deployment")
+        if hosted_vars:
+            report.append(f"hosted targets, consistent with that: {' '.join(hosted_vars)}")
+        return 0, report
+
+    report.append(f"self-hosted data plane configured ({' '.join(self_hosted)})")
+    failed = False
+
+    if hosted_vars:
+        report.append(
+            "MIXED STATE: these still point at a hosted Supabase project and will "
+            f"beat the enterprise defaults: {' '.join(hosted_vars)}"
+        )
+        failed = True
+
+    jwks = env.get("SUPABASE_JWKS_URL", "")
+    if jwks and not jwks.startswith("https://"):
+        report.append("SUPABASE_JWKS_URL is not https, and edge-api refuses a plain-http JWKS URL")
+        failed = True
+    if jwks and not env.get("SUPABASE_JWKS_CA_FILE"):
+        report.append(
+            "SUPABASE_JWKS_URL is set but SUPABASE_JWKS_CA_FILE is not, so the "
+            "gateway's local certificate authority is not trusted and the first "
+            "JWKS refresh fails at boot"
+        )
+        failed = True
+
+    issuer = env.get("SUPABASE_JWT_ISSUER", "")
+    external = env.get("ENTERPRISE_AUTH_EXTERNAL_URL", "")
+    if issuer and external and issuer.rstrip("/") != external.rstrip("/"):
+        report.append(
+            "SUPABASE_JWT_ISSUER and ENTERPRISE_AUTH_EXTERNAL_URL disagree, so "
+            "GoTrue stamps an issuer edge-api rejects and every token fails with "
+            "no boot error anywhere"
+        )
+        failed = True
+
+    dsn = env.get("SUPABASE_DB_URL", "")
+    if dsn.startswith("postgres://"):
+        report.append(
+            "SUPABASE_DB_URL uses the short postgres:// scheme. libpq and pgx "
+            "accept it, SQLAlchemy does not, so Open WebUI's pgvector store fails "
+            "with NoSuchModuleError. Use postgresql://"
+        )
+        failed = True
+
+    for key in ("SUPABASE_DB_POOL_URL", "SUPABASE_DB_POOL_URL_LIBPQ"):
+        value = env.get(key, "")
+        if value and ":6543/" in value:
+            report.append(
+                f"{key} names port 6543, which exists only on a Supavisor pooler. "
+                "A self-hosted Postgres serves every mode on 5432"
+            )
+            failed = True
+
+    access, secret = env.get("S3_ACCESS_KEY", ""), env.get("S3_SECRET_KEY", "")
+    if access and access == secret:
+        report.append(
+            "S3_ACCESS_KEY and S3_SECRET_KEY are the same value. SigV4 sends the "
+            "access key id in the clear in the Authorization header, so the secret "
+            "is disclosed on every request"
+        )
+        failed = True
+
+    if not failed:
+        report.append("coherently self-hosted, no hosted target left on a server-side variable")
+    return (1 if failed else 0), report
+
+
+GOOD_SELF_HOSTED = """
+ENTERPRISE_DB_PASSWORD=x
+ENTERPRISE_JWT_SECRET=y
+ENTERPRISE_AUTH_EXTERNAL_URL=http://caddy-supabase/auth/v1
+SUPABASE_URL=http://caddy-supabase
+SUPABASE_PUBLIC_URL=https://auth.example.test
+NEXT_PUBLIC_SUPABASE_URL=https://auth.example.test
+SUPABASE_DB_URL=postgresql://postgres:pw@supabase-db:5432/postgres
+SUPABASE_DB_POOL_URL=
+SUPABASE_DB_POOL_URL_LIBPQ=
+SUPABASE_JWT_ISSUER=http://caddy-supabase/auth/v1
+SUPABASE_JWKS_URL=https://caddy-supabase/auth/v1/.well-known/jwks.json
+SUPABASE_JWKS_CA_FILE=/etc/hive/supabase-ca/root.crt
+S3_ENDPOINT=http://caddy-supabase/storage/v1/s3
+S3_ACCESS_KEY=aaa
+S3_SECRET_KEY=bbb
+"""
+
+GOOD_HOSTED = """
+SUPABASE_URL=https://ref.supabase.co
+SUPABASE_DB_URL=postgresql://u:p@aws-1-x.pooler.supabase.com:5432/postgres
+SUPABASE_JWKS_URL=https://ref.supabase.co/auth/v1/.well-known/jwks.json
+S3_ENDPOINT=https://ref.supabase.co/storage/v1/s3
+"""
+
+
+def self_check() -> int:
+    """Each mutation below is one way the cutover has actually gone wrong or could."""
+    good = parse_env(GOOD_SELF_HOSTED)
+    code, report = check(good)
+    assert code == 0, report
+
+    code, report = check(parse_env(GOOD_HOSTED))
+    assert code == 0, report
+
+    # A quoted value and an `export ` prefix must parse, or every check below is
+    # vacuous on a real env file that uses either.
+    quoted = parse_env('export SUPABASE_URL="http://caddy-supabase"\n')
+    assert quoted == {"SUPABASE_URL": "http://caddy-supabase"}, quoted
+    # A commented line is not a setting.
+    assert parse_env("# SUPABASE_URL=https://ref.supabase.co\n") == {}
+
+    mutations = {
+        "stale hosted jwks url": {"SUPABASE_JWKS_URL": "https://ref.supabase.co/auth/v1/.well-known/jwks.json"},
+        "stale hosted identity url": {"SUPABASE_URL": "https://ref.supabase.co"},
+        "stale hosted db dsn": {"SUPABASE_DB_URL": "postgresql://u:p@aws-1-x.pooler.supabase.com:5432/postgres"},
+        "stale hosted s3 endpoint": {"S3_ENDPOINT": "https://ref.supabase.co/storage/v1/s3"},
+        "stale hosted issuer": {"SUPABASE_JWT_ISSUER": "https://ref.supabase.co/auth/v1"},
+        "plain http jwks": {"SUPABASE_JWKS_URL": "http://caddy-supabase/auth/v1/.well-known/jwks.json"},
+        "jwks without a ca file": {"SUPABASE_JWKS_CA_FILE": ""},
+        "issuer disagreement": {"SUPABASE_JWT_ISSUER": "http://supabase-auth:9999"},
+        "short dsn scheme": {"SUPABASE_DB_URL": "postgres://postgres:pw@supabase-db:5432/postgres"},
+        "invented pooler port": {"SUPABASE_DB_POOL_URL": "postgresql://postgres:pw@supabase-db:6543/postgres"},
+        "s3 secret equals its own id": {"S3_SECRET_KEY": "aaa"},
+    }
+    for label, patch in mutations.items():
+        env = dict(good)
+        env.update(patch)
+        code, report = check(env)
+        assert code == 1, f"{label} did not fail: {report}"
+
+    # A browser-facing public origin is not evidence of a mixed state, even
+    # while it still names the hosted project during a staged cutover.
+    env = dict(good)
+    env["NEXT_PUBLIC_SUPABASE_URL"] = "https://ref.supabase.co"
+    env["SUPABASE_PUBLIC_URL"] = "https://ref.supabase.co"
+    code, report = check(env)
+    assert code == 0, report
+
+    print(f"check-env-supabase-target self-check: OK ({len(mutations) + 5} cases)")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("env_file", nargs="?", help="path to the env file to check")
+    parser.add_argument("--self-check", action="store_true")
+    args = parser.parse_args()
+
+    if args.self_check:
+        return self_check()
+    if not args.env_file:
+        parser.error("give an env file, or --self-check")
+
+    path = Path(args.env_file)
+    if not path.exists():
+        print(f"check-env-supabase-target: no such file: {path}")
+        return 1
+    code, report = check(parse_env(path.read_text()))
+    for line in report:
+        print(f"  {line}")
+    print(f"check-env-supabase-target: {'FAIL' if code else 'ok'} ({path})")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -275,7 +275,11 @@ services:
   # Supabase Storage API with local filesystem backend.
   # No MinIO: STORAGE_BACKEND=file writes object data to the supabase-storage-data
   # volume. No S3 call leaves the box.
-  # S3_ENDPOINT for edge-api and control-plane: http://supabase-storage:5000/object/s3
+  # S3_ENDPOINT for edge-api and control-plane is the GATEWAY form,
+  # http://caddy-supabase/storage/v1/s3, not this service directly: the
+  # gateway restores the hosted /storage/v1 prefix and Storage serves /s3
+  # at its own root, so the two together reproduce the hosted path exactly.
+  # The /object/s3 path this comment used to name answers on no listener.
   supabase-storage:
     # Pinned to immutable digest. Refresh: docker pull supabase/storage-api:v1.11.13 && docker inspect --format='{{index .RepoDigests 0}}' supabase/storage-api:v1.11.13
     image: supabase/storage-api:v1.11.13@sha256:1e85dad48e8b3e85890a555e5114dc7ee48c2e8be4cfd97dd4e3564b4f104fcd

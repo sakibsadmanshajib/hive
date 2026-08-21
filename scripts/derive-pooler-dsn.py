@@ -205,6 +205,30 @@ def without_params(dsn: str, *keys: str) -> str:
     return urlunsplit(parts._replace(query=encode_query(query)))
 
 
+def normalize_scheme(dsn: str) -> str:
+    """Return dsn with the `postgres://` scheme rewritten to `postgresql://`.
+
+    libpq and pgx accept both spellings, so a DSN written either way reaches
+    control-plane and edge-api intact and nothing here ever noticed the
+    difference. SQLAlchemy accepts only `postgresql://`: it looks the scheme up
+    in its dialect registry and `postgres` was removed from that registry in
+    SQLAlchemy 1.4. Open WebUI's pgvector store is a SQLAlchemy consumer of the
+    libpq flavour below, so a `postgres://` DSN reaches it as
+    `NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgres` and the
+    container never becomes healthy. Observed on the demo box during the
+    self-hosted Supabase cutover, from an operator-written DSN using the short
+    spelling.
+
+    Normalising here rather than at each consumer is the one place all three
+    derived DSNs pass through, and the rewrite is a no-op for the two drivers
+    that already accepted both.
+    """
+    parts = urlsplit(dsn)
+    if parts.scheme == "postgres":
+        return urlunsplit(parts._replace(scheme="postgresql"))
+    return dsn
+
+
 def with_port(dsn: str, port: int) -> str:
     parts = urlsplit(dsn)
     if parts.hostname is None:
@@ -233,6 +257,7 @@ def derive(
     session_max_conns is this consumer's share of the project's 15 session slots.
     It defaults to the ephemeral budget; a long-lived deployment passes its own.
     """
+    dsn = normalize_scheme(dsn)
     parts = urlsplit(dsn)
     host = parts.hostname
     if not host:
@@ -367,6 +392,26 @@ def self_test() -> int:
     assert ":5432/" in d_transaction and ":6543/" not in d_transaction, d_transaction
     assert ":5432/" in d_libpq and "pool_max_conns" not in d_libpq, d_libpq
 
+    # The short `postgres://` spelling is normalised in ALL THREE outputs.
+    # libpq and pgx accept it, so nothing downstream of them ever complained;
+    # SQLAlchemy removed `postgres` from its dialect registry in 1.4, and Open
+    # WebUI's pgvector store consumes the libpq flavour, so the short spelling
+    # reached it as NoSuchModuleError and the container never went healthy.
+    short = "postgres://postgres:pw@supabase-db:5432/postgres"
+    s_session, s_transaction, s_libpq = derive(short)
+    for flavour in (s_session, s_transaction, s_libpq):
+        assert flavour.startswith("postgresql://"), flavour
+        assert not flavour.startswith("postgres://"), flavour
+    # Nothing else about the DSN moves: same host, port, credential, database.
+    assert "@supabase-db:5432/postgres" in s_libpq, s_libpq
+    # And the long spelling is untouched, so this is a normalisation and not a
+    # rewrite that could mangle an already-correct DSN.
+    assert derive(direct) == (d_session, d_transaction, d_libpq)
+    # A pooler host normalises too, port move and all.
+    short_pooler = pooler.replace("postgresql://", "postgres://", 1)
+    for flavour in derive(short_pooler):
+        assert flavour.startswith("postgresql://"), flavour
+
     # An explicit pool_max_conns in the input is the deployment's call, not ours.
     pinned, _, pinned_libpq = derive(pooler + "?pool_max_conns=2")
     assert "pool_max_conns=2" in pinned, pinned
@@ -398,7 +443,7 @@ def self_test() -> int:
         assert "options=-c%20statement_timeout%3D3000" in flavour, flavour
         assert "+" not in urlsplit(flavour).query, flavour
 
-    print("derive-pooler-dsn: self-test ok (43 assertions)")
+    print("derive-pooler-dsn: self-test ok (52 assertions)")
     return 0
 
 

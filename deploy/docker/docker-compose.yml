@@ -310,7 +310,12 @@ services:
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       REDIS_URL: ${REDIS_URL}
       # Enterprise profile: set to local Storage endpoint:
-      #   S3_ENDPOINT=http://supabase-storage:5000/storage/v1/s3
+      #   S3_ENDPOINT=http://caddy-supabase/storage/v1/s3
+      # Through the gateway, not straight at supabase-storage: the
+      # gateway is what restores the hosted /storage/v1 prefix, and
+      # Storage itself serves /s3 at its own root. Two earlier versions
+      # of this comment named the service directly, one of them with an
+      # /object/s3 path that no listener answers.
       #   S3_ACCESS_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
       #   S3_SECRET_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
       #   S3_REGION=local
@@ -666,7 +671,21 @@ services:
       ENABLE_LOGIN_FORM: "false"
       ENABLE_OAUTH_SIGNUP: "true"
       OAUTH_PROVIDER_NAME: "Hive"
-      OPENID_PROVIDER_URL: "${SUPABASE_URL}/auth/v1/.well-known/openid-configuration"
+      # The BROWSER-facing auth origin, which is not always the same value as
+      # SUPABASE_URL. Open WebUI fetches this document server side, but every
+      # endpoint inside it (authorize, token, the issuer) is then resolved by
+      # the browser, so a compose service name here is unreachable and login
+      # dies at the redirect with nothing in any log naming the cause.
+      #
+      # Against hosted Supabase the two are identical and the default keeps
+      # that. Against the self-hosted data plane SUPABASE_URL is the in-network
+      # gateway (http://caddy-supabase), which a browser cannot resolve, so that
+      # deployment sets SUPABASE_PUBLIC_URL to its public https auth origin.
+      # ENTERPRISE_AUTH_EXTERNAL_URL has to move with it: GoTrue builds this
+      # document and the iss claim on its id_token from that one variable, and
+      # an OIDC client rejects a token whose issuer does not match the
+      # document's.
+      OPENID_PROVIDER_URL: "${SUPABASE_PUBLIC_URL:-${SUPABASE_URL}}/auth/v1/.well-known/openid-configuration"
       OAUTH_CLIENT_ID: ${SUPABASE_OAUTH_CLIENT_ID:-}
       OAUTH_CLIENT_SECRET: ${SUPABASE_OAUTH_CLIENT_SECRET:-}
       OAUTH_SCOPES: "openid email profile"

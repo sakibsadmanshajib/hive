@@ -152,13 +152,20 @@ def test_no_named_network_splits_the_seam() -> None:
     A `networks:` key on any of these services, or a top-level `networks:`
     block, re-splits them, and the symptom is an unresolvable service name
     rather than a compose error."""
+    # Either form, block or flow, with or without a trailing comment, and
+    # network_mode alongside networks. A regex anchored on end-of-line missed
+    # `networks: [supa]` and `networks:  # comment` completely, which is the
+    # shape of an assertion that cannot fail.
+    top_level = re.compile(r"^networks:(\s|$)", re.MULTILINE)
+    per_service = re.compile(r"^    (networks|network_mode):(\s|$)", re.MULTILINE)
     for name, text in (("base", BASE_TEXT), ("enterprise", ENT_TEXT)):
-        assert not re.search(r"^networks:\s*$", text, re.MULTILINE), name
+        assert not top_level.search(text), name
     watched = DATA_PLANE | {"edge-api", "control-plane", "open-webui"}
     for source in (BASE_SERVICES, ENT_SERVICES):
         for svc, block in source.items():
             if svc in watched:
-                assert not re.search(r"^    networks:\s*$", block, re.MULTILINE), svc
+                found = per_service.search(block)
+                assert not found, f"{svc}: {found.group(0) if found else ''}"
 
 
 def test_selfhost_profile_covers_exactly_the_data_plane() -> None:
@@ -170,7 +177,15 @@ def test_selfhost_profile_covers_exactly_the_data_plane() -> None:
     with_selfhost = {
         svc for svc, block in ENT_SERVICES.items() if "selfhost" in profiles_of(block)
     }
-    assert with_selfhost == DATA_PLANE, sorted(with_selfhost ^ DATA_PLANE)
+    # The expectation is derived from the file rather than from the list at the
+    # top of this module, so a service ADDED to the enterprise file without the
+    # profile fails here. Comparing only against the constant could not catch
+    # that, because the constant would still equal itself.
+    introduced = set(ENT_SERVICES) - set(BASE_SERVICES)
+    assert with_selfhost == introduced, sorted(with_selfhost ^ introduced)
+    # And that set is still the data plane this module documents, so a genuine
+    # addition has to be considered here rather than sliding in silently.
+    assert introduced == DATA_PLANE, sorted(introduced ^ DATA_PLANE)
     # Every one of them keeps `enterprise` too, so a genuine enterprise install
     # is unaffected by the addition.
     for svc in DATA_PLANE:
@@ -192,11 +207,20 @@ def test_edge_api_reads_its_jwks_over_tls_with_the_exported_authority() -> None:
     ca = env_value(block, "SUPABASE_JWKS_CA_FILE")
     assert ca, "edge-api has no SUPABASE_JWKS_CA_FILE default"
     ca_path = ca.split(":-")[-1].rstrip("}")
+    mount_dir, _, ca_name = ca_path.rpartition("/")
+    assert ca_name, ca_path
     assert re.search(
-        r"^      - supabase-ca:" + re.escape(ca_path.rsplit("/", 1)[0]) + r":ro\s*$",
+        r"^      - supabase-ca:" + re.escape(mount_dir) + r":ro\s*$",
         block,
         re.MULTILINE,
     ), block
+    # The mount is a directory and the variable names a file inside it, so
+    # matching the directory is not enough on its own: the one-shot export has
+    # to publish that exact filename or edge-api opens nothing.
+    export = ENT_SERVICES["supabase-ca-export"]
+    assert re.search(r"install -m 0644 .* /out/" + re.escape(ca_name), export), (
+        f"supabase-ca-export does not publish {ca_name}, which SUPABASE_JWKS_CA_FILE names"
+    )
 
 
 def test_the_issuer_edge_api_checks_is_the_issuer_gotrue_stamps() -> None:
@@ -209,6 +233,13 @@ def test_the_issuer_edge_api_checks_is_the_issuer_gotrue_stamps() -> None:
     assert "ENTERPRISE_AUTH_EXTERNAL_URL" in gotrue, gotrue
     assert "ENTERPRISE_AUTH_EXTERNAL_URL" in external, external
     assert "ENTERPRISE_AUTH_EXTERNAL_URL" in edge, edge
+    # Substring presence is not agreement: both sides can mention the variable
+    # and still resolve differently, which is exactly how this drifts. GoTrue's
+    # issuer and its external URL must be the SAME expression, and edge-api's
+    # must fall back to it with no other default in between.
+    assert gotrue == external, (gotrue, external)
+    fallback = re.fullmatch(r"\$\{SUPABASE_JWT_ISSUER:-(.+)\}", edge)
+    assert fallback and fallback.group(1) == gotrue, (edge, gotrue)
 
 
 def test_open_webui_pgvector_dsn_comes_from_the_libpq_flavour() -> None:
@@ -234,8 +265,48 @@ def test_no_hosted_supabase_host_is_hardcoded_in_the_data_plane() -> None:
         assert "pooler.supabase.com" not in bare, line
 
 
+def test_loading_the_enterprise_file_requires_activating_its_profile() -> None:
+    """Passing `-f docker-compose.enterprise.yml` without `enterprise` or
+    `selfhost` does not merely leave the data plane stopped, it invalidates the
+    WHOLE project: `edge-api` carries no profile of its own, so compose refuses
+    every command with `depends on undefined service`. Confirmed on the demo box
+    while building this seam.
+
+    That is only survivable while every service the override blocks depend on is
+    inside the data-plane profile set, so one profile activation covers all of
+    them. A new dependency outside that set would need its own profile flag and
+    would break the documented invocation with no warning."""
+    for svc in ("edge-api", "control-plane"):
+        block = ENT_SERVICES[svc]
+        depends = set(re.findall(r"^      ([A-Za-z0-9][A-Za-z0-9._-]*):\s*$", block, re.MULTILINE))
+        # The override blocks declare depends_on and environment; environment
+        # keys are upper case with no trailing colon-only line, so what this
+        # picks up is the dependency names.
+        outside = {d for d in depends if d not in DATA_PLANE}
+        assert not outside, f"{svc} depends on {sorted(outside)}, outside the profile set"
+        assert depends, f"{svc} override declares no dependency, so this check is vacuous"
+
+
+def test_open_webui_oidc_discovery_uses_the_browser_facing_origin() -> None:
+    """Open WebUI fetches the discovery document server side, but the browser
+    then resolves every endpoint inside it, so a compose service name there kills
+    login at the redirect with nothing in any log naming the cause. The variable
+    has to be separable from control-plane's in-network SUPABASE_URL, while
+    still defaulting to it so hosted Supabase is unaffected."""
+    value = env_value(BASE_SERVICES["open-webui"], "OPENID_PROVIDER_URL")
+    assert "SUPABASE_PUBLIC_URL" in value, value
+    assert value.startswith('"${SUPABASE_PUBLIC_URL:-'), value
+    assert "SUPABASE_URL" in value, value
+
+
 def main() -> int:
-    tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
+    # The parser guard runs FIRST, deliberately. Alphabetical order put it last,
+    # so a silent parse failure would have been reported by whichever assertion
+    # happened to sort earliest rather than by the guard written to catch it.
+    named = {name: value for name, value in globals().items() if name.startswith("test_")}
+    guard = "test_the_parser_actually_found_the_services"
+    order = [guard] + sorted(n for n in named if n != guard)
+    tests = [named[n] for n in order]
     for test in tests:
         test()
     print(f"test_selfhost_supabase_seam: ok ({len(tests)} checks)")
