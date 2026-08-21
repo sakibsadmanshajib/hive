@@ -237,7 +237,14 @@ services:
     restart: unless-stopped
 
   # ── supabase-rest (PostgREST) ──────────────────────────────────────────────
-  # Auto REST API over local Postgres. control-plane uses this as SUPABASE_URL.
+  # Auto REST API over local Postgres, reached through the caddy-supabase
+  # gateway at /rest/v1, exactly as hosted Supabase serves it.
+  #
+  # This is NOT what control-plane's SUPABASE_URL points at, which is what this
+  # comment used to say. control-plane appends /auth/v1/user to that base, and
+  # PostgREST cannot serve an auth route, so pointing it here breaks every
+  # identity lookup. SUPABASE_URL is the gateway, and the gateway is what makes
+  # one base URL correct for the auth, rest and storage prefixes at once.
   supabase-rest:
     # Pinned to immutable digest. Refresh: docker pull postgrest/postgrest:v12.2.3 && docker inspect --format='{{index .RepoDigests 0}}' postgrest/postgrest:v12.2.3
     image: postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
