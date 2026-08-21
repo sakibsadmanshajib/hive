@@ -41,6 +41,13 @@
 # and fails loudly with "No such file or directory" rather than silently
 # reading the wrong file.
 #
+# `docker run -i` is required, because scripts/apply-migrations.sh pipes the
+# ledger DDL into psql on stdin. The cost is that this consumes the caller's
+# stdin, so a caller whose own stdin is something it still needs (a script fed
+# to `bash -s`, a `while read` loop reading a stream) must redirect it:
+# `scripts/stack-psql.sh ... </dev/null`. A GitHub Actions `run:` step gets
+# /dev/null already, which is why every caller in this repository is safe.
+#
 # Usage
 # -----
 #   scripts/stack-psql.sh -tAc 'SELECT 1'                 # libpq env vars
