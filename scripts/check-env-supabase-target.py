@@ -122,13 +122,56 @@ def check(env: dict) -> tuple[int, list]:
     # the pin, and every token is rejected with nothing logged.
     external = env.get("ENTERPRISE_AUTH_EXTERNAL_URL", "") or COMPOSE_DEFAULT_AUTH_ORIGIN
     issuer = env.get("SUPABASE_JWT_ISSUER", "") or external
-    if issuer.rstrip("/") != external.rstrip("/"):
+    # EXACT comparison, not one with the slashes stripped off both sides.
+    # Nothing downstream is lenient: compose passes these strings through
+    # verbatim, and edge-api hands the issuer to jwt.WithIssuer, which is a
+    # string equality test. So a trailing slash on one side only is a real
+    # mismatch that rejects every token GoTrue issues, and stripping it here
+    # reported the environment as fine while the box was broken. Third instance
+    # of this defect on one branch, after two on the gateway path matchers, which
+    # is why the rule below refuses the character outright rather than tolerating
+    # it at a fourth site.
+    if issuer != external:
         report.append(
             "SUPABASE_JWT_ISSUER and ENTERPRISE_AUTH_EXTERNAL_URL disagree, so "
             "GoTrue stamps an issuer edge-api rejects and every token fails with "
             "no boot error anywhere"
         )
         failed = True
+
+    # No trailing slash on any URL variable, which is the general form of the
+    # defect above rather than one more instance of it.
+    #
+    # Two distinct things go wrong with a trailing slash, and tolerating it at
+    # the point of comparison only ever fixes the first:
+    #
+    #   * exact comparison. The issuer check above, and edge-api's own
+    #     jwt.WithIssuer, are string equality.
+    #   * string concatenation. docker-compose.yml builds Open WebUI's discovery
+    #     URL from a base plus /auth/v1/.well-known/openid-configuration, so a
+    #     base ending in a slash yields a double slash in the path and the
+    #     discovery fetch 404s. A comparison that stripped slashes would have
+    #     called that environment healthy.
+    #
+    # Refusing the character is one rule that covers both, and it costs an
+    # operator nothing: none of these values is meaningful with a trailing slash.
+    for key in (
+        "SUPABASE_URL",
+        "SUPABASE_PUBLIC_URL",
+        "SUPABASE_JWT_ISSUER",
+        "SUPABASE_JWKS_URL",
+        "ENTERPRISE_AUTH_EXTERNAL_URL",
+        "S3_ENDPOINT",
+        "NEXT_PUBLIC_SUPABASE_URL",
+    ):
+        if env.get(key, "").endswith("/"):
+            report.append(
+                f"{key} ends with a trailing slash. These values are compared "
+                "exactly and concatenated with a path, so a trailing slash "
+                "either rejects every token or produces a double slash the "
+                "upstream answers 404 to"
+            )
+            failed = True
 
     # All three DSN variables, not just the one a hand cutover usually edits.
     # SUPABASE_DB_POOL_URL_LIBPQ is the flavour Open WebUI's SQLAlchemy actually
@@ -222,6 +265,31 @@ def self_check() -> int:
         "plain http jwks": {"SUPABASE_JWKS_URL": "http://caddy-supabase/auth/v1/.well-known/jwks.json"},
         "jwks without a ca file": {"SUPABASE_JWKS_CA_FILE": ""},
         "issuer disagreement": {"SUPABASE_JWT_ISSUER": "http://supabase-auth:9999"},
+        # The trailing-slash bypass itself: same origin, one side slashed.
+        # Accepted by a comparison that stripped slashes, rejected by everything
+        # at runtime.
+        "issuer differing from the origin by one trailing slash": {
+            "SUPABASE_JWT_ISSUER": "http://caddy-supabase/auth/v1/",
+        },
+        "origin differing from the issuer by one trailing slash": {
+            "ENTERPRISE_AUTH_EXTERNAL_URL": "http://caddy-supabase/auth/v1/",
+        },
+        # A slash on BOTH sides, which the exact comparison alone cannot see:
+        # there it is the concatenation that breaks, not the comparison.
+        "trailing slash on both the issuer and the origin": {
+            "SUPABASE_JWT_ISSUER": "http://caddy-supabase/auth/v1/",
+            "ENTERPRISE_AUTH_EXTERNAL_URL": "http://caddy-supabase/auth/v1/",
+        },
+        "trailing slash on the identity url": {"SUPABASE_URL": "http://caddy-supabase/"},
+        "trailing slash on the browser-facing origin": {
+            "SUPABASE_PUBLIC_URL": "https://auth.example.test/"
+        },
+        "trailing slash on the jwks url": {
+            "SUPABASE_JWKS_URL": "https://caddy-supabase/auth/v1/.well-known/jwks.json/"
+        },
+        "trailing slash on the storage endpoint": {
+            "S3_ENDPOINT": "http://caddy-supabase/storage/v1/s3/"
+        },
         # The bypass: pin the issuer and leave the auth origin unset, so the
         # compose default is what GoTrue actually stamps.
         "issuer pinned against an unset auth origin": {
