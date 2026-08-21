@@ -261,8 +261,13 @@ def test_no_hosted_supabase_host_is_hardcoded_in_the_data_plane() -> None:
         bare = line.strip()
         if bare.startswith("#"):
             continue
-        assert "supabase.co" not in bare, line
-        assert "pooler.supabase.com" not in bare, line
+        # One pattern, not two asserts: `pooler.supabase.com` CONTAINS the
+        # substring `supabase.co`, so a plain-substring check for the project
+        # host fires first and the pooler check below it could never be reached.
+        # A word boundary on the domain also stops `supabase.community` and the
+        # like from reading as a hosted project.
+        found = re.search(r"\.supabase\.com?\b", bare)
+        assert not found, line
 
 
 def test_loading_the_enterprise_file_requires_activating_its_profile() -> None:
