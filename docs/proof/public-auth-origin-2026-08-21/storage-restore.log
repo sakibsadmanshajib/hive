@@ -1,0 +1,21 @@
+manifest: 2 buckets, 15 objects
+  bucket hive-files: present
+  bucket hive-images: present
+  hive-files/31aadd76-fba0-46e6-827d-e3cfef50324c/file-c831a95f-e2b0-4d07-9011-9754c3219cd1/testfile.txt: 22 bytes, sha256 38860c66b1fd verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-3051d2d5-3323-480c-9725-3bcfbfc9c015/hive-phase10.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-321a9f5c-8d88-4a4f-95ec-1acd93b3ddb5/test10-batch.NyQm.jsonl: 154 bytes, sha256 f8f2c0ca137e verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-43597a9d-1468-4e65-8d52-23a894a4e5c0/phase10-live-batch.jsonl: 185 bytes, sha256 32ebe96adec8 verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-4b420682-6632-48e7-a3bb-1ed9fa1b8cd3/test10-batch.pboo.jsonl: 154 bytes, sha256 f8f2c0ca137e verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-5e9fd8f9-1cbf-4bfc-86fe-88e35421e650/hive-phase10.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-6ffb7e19-328a-4cfc-9b6b-9efccf55782c/hive-phase10.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-9944dddf-1d05-4457-ba91-b996e6e48253/hive-phase10.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-9c4478bb-53e5-421a-9b5e-230c4cb11504/test10.fUHM.jsonl: 149 bytes, sha256 13d705049896 verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-b58dbe21-1faf-4a31-aa19-c78b24f6d94b/hive-phase10-uat.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-c2370f73-6faa-4c9d-8e75-7dc6b7dd836b/test10-batch.bmUY.jsonl: 154 bytes, sha256 f8f2c0ca137e verified by read-back
+  hive-files/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/file-ee7fd58e-c9b8-4a7f-bd10-06023b4a9485/hive-phase10-uat.jsonl: 145 bytes, sha256 87296bceee7b verified by read-back
+  hive-files/invoices/3104dbfc-2c29-4098-828b-6fa07b52c254/2026-07.pdf: 1895 bytes, sha256 3c5d54ae5f1a verified by read-back
+  hive-files/invoices/9bbaf7b5-5ba1-4820-a348-9c5ca5a842f0/2026-07.pdf: 1907 bytes, sha256 becf0ed098a5 verified by read-back
+  hive-files/invoices/e518472a-30df-4c27-bffb-9625be0c8513/2026-07.pdf: 1906 bytes, sha256 197736302b54 verified by read-back
+restore-storage-objects: ok (15 objects read back byte for byte)
+--- storage.objects on the self-hosted backend ---
+hive-files|15

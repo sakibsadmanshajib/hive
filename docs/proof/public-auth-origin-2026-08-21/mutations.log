@@ -1,0 +1,89 @@
+Mutations run against every check this change adds or touches, 2026-08-21.
+
+A check nobody has watched fail is not a check. Each mutation below was applied
+and the result recorded. Three of the mutation suites are permanent: they live
+inside the scripts' own --self-check, which asserts the real files pass and then
+that each named mutation fails, so `make test-scripts` re-runs all of them in
+CI on every change.
+
+scripts/test_caddy_console_auth_origin.py --self-check   15 mutations, all FAIL
+-----------------------------------------------------------------------------
+  the auth route deleted outright                                        FAIL
+  the matcher definition deleted, leaving the handle pointing at nothing FAIL
+  the prefix stripped before proxying                                    FAIL
+  proxied to the internal listener instead of the public one             FAIL
+  proxied straight to GoTrue, past every route refusal                   FAIL
+  the Host rewrite dropped                                               FAIL
+  the Host rewrite pinned to a literal that cannot follow the variable    FAIL
+  the matcher widened until it takes the app's own sign-in page           FAIL
+  the matcher narrowed to the bare form, dropping every real route        FAIL
+  the app fallback hoisted above the auth route                           FAIL
+  the app fallback no longer serving the app                              FAIL
+  PostgREST published on the browser-facing origin                        FAIL
+  caddy-console no longer handed the domain variable                      FAIL
+  the two default domains drifted apart                                   FAIL
+  the gateway's own public host expression changed without this following  FAIL
+
+scripts/check-env-supabase-target.py --self-check   36 cases
+-----------------------------------------------------------
+Ten new must-fail cases, all FAIL:
+  browser origin left on the hosted project after the auth origin moved
+  only the bundle's origin moved
+  the bundle's origin left unset
+  the discovery origin left unset
+  auth origin on a different host from the browser origin
+  auth origin missing its /auth/v1 prefix
+  site url left on loopback beside a public auth origin
+  site url unset beside a public auth origin
+  trailing slash on the site url
+  (plus the pre-existing 21, re-based on the new fixture, still FAIL)
+
+Two must-PASS cases, so the above cannot be satisfied by a check that simply
+refuses any change to these values:
+  the whole browser-facing origin moved together, coherently          PASS
+  auth origin moved with SUPABASE_JWT_ISSUER left unset to inherit it PASS
+
+One deliberate semantics change, called out rather than buried: the case
+asserting that a browser-facing origin still naming the hosted project is
+healthy is now a must-FAIL, and the assertion pins WHY it fails (the auth-origin
+disagreement) and that it is NOT the server-side mixed-state rule, which still
+ignores those two variables. A staged cutover that leaves the browser on the old
+project while the issuer has already moved cannot log anyone in.
+
+scripts/restore-storage-objects.py   parser and digest arms
+-----------------------------------------------------------
+--self-check, 9 cases, all as expected: a two-field manifest line, a five-field
+line and a non-numeric size are each refused rather than skipped, since a
+silently dropped line is an object nobody notices is missing.
+
+Two live mutations against the running backend, both exercising an arm the
+self-check cannot reach:
+  a byte appended to one backup file      exit 1, "the backup file does not
+                                          match its own manifest digest
+                                          (4a1e3458767f vs 3c5d54ae5f1a),
+                                          refusing to publish a corrupted
+                                          object"
+  the read-back URL pointed at a key
+  that does not exist                     exit 1, "uploaded, but reading it
+                                          back answered HTTP 400"
+  storage.objects after both mutations    still exactly 15 rows, no strays
+
+The second one matters most: without it, the read-back arm is untested and the
+script would be trusting the upload's own 200, which is the exact thing it was
+written not to do.
+
+The check that could NOT be made to fail, and why that is a real gap
+--------------------------------------------------------------------
+The first version of test_caddy_console_auth_origin.py reported OK on a
+Caddyfile that Caddy refuses to parse. `handle` takes exactly one matcher
+token, so `handle /auth/v1 /auth/v1/*` is a parse error, and caddy-console
+crash-looped on the box with "wrong argument count or unexpected line ending
+after '/auth/v1/*'" while every structural check in this repo passed. Those
+checks read the file as text; none of them can know what adapts.
+
+Fixed twice over. The route is now a named matcher, which is the only form that
+both parses and expresses a list, and the check reads it that way, so the
+invalid form no longer satisfies it. And CI now runs `caddy validate` over all
+five Caddyfiles with the same pinned image the services run, inside the
+required repo-policy-lints job rather than a new non-required one. All five
+adapt today.
