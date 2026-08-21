@@ -98,6 +98,55 @@ concurrency:
   group: deploy-demo-box
   cancel-in-progress: false
 
+# The compose invocation, defined ONCE for every step in this workflow.
+#
+# Four steps below run `docker compose` against the box, and before this block
+# existed each of them rebuilt the same flag list by hand. That is not a style
+# problem, it is the shape of a silent outage: a step that resolves a different
+# set of compose files resolves a different PROJECT, so it reads a stack that is
+# missing services and reports green over it. The one step that also passes
+# `--remove-orphans` makes it worse than a bad read, because a service the
+# invocation does not know about is deleted.
+#
+# Both `-f` files AND `--profile selfhost` are load bearing, together:
+#
+#   * Without `-f docker-compose.enterprise.yml`, the self-hosted Supabase data
+#     plane is not in the project at all. `--remove-orphans` then deletes
+#     supabase-db, supabase-auth, supabase-rest, supabase-storage and the
+#     gateway, and edge-api is recreated without the certificate authority mount
+#     and exits at boot on its first JWKS refresh.
+#   * Without `--profile selfhost`, passing that file is WORSE than omitting it:
+#     `edge-api` carries no profile of its own and depends on `supabase-init`
+#     and `supabase-ca-export`, so compose refuses every command outright with
+#     `service "edge-api" depends on undefined service "supabase-init": invalid
+#     compose project`. Confirmed on the box.
+#
+# `COMPOSE_FILE` and `COMPOSE_PROFILES` in the box's own .env are NOT an
+# alternative to spelling the profiles here. Measured on the box against a copy
+# of that file: with profile flags on the command line the resolved service list
+# contains supabase-db zero times, and with no flag at all it contains it once.
+# A command-line profile flag replaces the environment value rather than adding
+# to it.
+#
+# docker-compose.override.yml is listed explicitly because passing any `-f`
+# stops compose auto-loading it, and it is what the box has been resolving all
+# along. Its contents (`develop: watch` blocks) are inert for `up -d`, so this
+# is about keeping the project identity unchanged rather than about behaviour.
+#
+# scripts/test_selfhost_supabase_seam.py fails if this definition loses the
+# enterprise file or the profile, and fails if any step in this workflow goes
+# back to spelling its own flags.
+env:
+  HIVE_COMPOSE_FLAGS: >-
+    --env-file ../../.env
+    -f docker-compose.yml
+    -f docker-compose.override.yml
+    -f docker-compose.enterprise.yml
+    --profile local
+    --profile chat
+    --profile monitoring
+    --profile selfhost
+
 jobs:
   # ------------------------------------------------------------------
   # Schema before code. Migrations run here, and the deploy job below
@@ -514,8 +563,7 @@ jobs:
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
-          docker compose --env-file ../../.env --profile local --profile chat \
-            --profile monitoring up -d --build --remove-orphans
+          docker compose $HIVE_COMPOSE_FLAGS up -d --build --remove-orphans
 
       - name: Apply the bind-mounted Caddy configs
         # Every Caddyfile in this stack is bind-mounted into its container, so
@@ -585,10 +633,11 @@ jobs:
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
-          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat)
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
           for pair in caddy-owui:Caddyfile.owui \
                       caddy-artifacts:Caddyfile.artifacts \
-                      caddy-console:Caddyfile.console; do
+                      caddy-console:Caddyfile.console \
+                      caddy-supabase:Caddyfile.supabase; do
             svc=${pair%%:*}
             file=./${pair#*:}
             echo "::group::$svc ($file)"
@@ -725,7 +774,7 @@ jobs:
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
-          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat)
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
           # `python3 -` reads the program from stdin; `exec -T` forwards it
           # (the Caddy step above pipes a config in the same way).
           token=$("${COMPOSE[@]}" exec -T open-webui python3 - \
@@ -762,7 +811,7 @@ jobs:
         if: failure()
         working-directory: /home/sakib/hive/deploy/docker
         run: |
-          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat --profile monitoring)
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
           echo "::group::docker compose ps"
           "${COMPOSE[@]}" ps || true
           echo "::endgroup::"

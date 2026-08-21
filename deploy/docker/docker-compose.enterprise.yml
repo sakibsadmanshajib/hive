@@ -41,6 +41,7 @@ services:
     image: pgvector/pgvector:pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
     profiles:
       - enterprise
+      - selfhost
     environment:
       POSTGRES_USER: ${ENTERPRISE_DB_USER:-postgres}
       POSTGRES_PASSWORD: ${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env (openssl rand -base64 24)}
@@ -74,6 +75,7 @@ services:
     image: supabase/gotrue:v2.189.0@sha256:385184459f57569c54c25209f51f3b2be99ddd7c4ce9e3555b5d3eea8447b7cf
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -235,12 +237,20 @@ services:
     restart: unless-stopped
 
   # ── supabase-rest (PostgREST) ──────────────────────────────────────────────
-  # Auto REST API over local Postgres. control-plane uses this as SUPABASE_URL.
+  # Auto REST API over local Postgres, reached through the caddy-supabase
+  # gateway at /rest/v1, exactly as hosted Supabase serves it.
+  #
+  # This is NOT what control-plane's SUPABASE_URL points at, which is what this
+  # comment used to say. control-plane appends /auth/v1/user to that base, and
+  # PostgREST cannot serve an auth route, so pointing it here breaks every
+  # identity lookup. SUPABASE_URL is the gateway, and the gateway is what makes
+  # one base URL correct for the auth, rest and storage prefixes at once.
   supabase-rest:
     # Pinned to immutable digest. Refresh: docker pull postgrest/postgrest:v12.2.3 && docker inspect --format='{{index .RepoDigests 0}}' postgrest/postgrest:v12.2.3
     image: postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -272,12 +282,17 @@ services:
   # Supabase Storage API with local filesystem backend.
   # No MinIO: STORAGE_BACKEND=file writes object data to the supabase-storage-data
   # volume. No S3 call leaves the box.
-  # S3_ENDPOINT for edge-api and control-plane: http://supabase-storage:5000/object/s3
+  # S3_ENDPOINT for edge-api and control-plane is the GATEWAY form,
+  # http://caddy-supabase/storage/v1/s3, not this service directly: the
+  # gateway restores the hosted /storage/v1 prefix and Storage serves /s3
+  # at its own root, so the two together reproduce the hosted path exactly.
+  # The /object/s3 path this comment used to name answers on no listener.
   supabase-storage:
     # Pinned to immutable digest. Refresh: docker pull supabase/storage-api:v1.11.13 && docker inspect --format='{{index .RepoDigests 0}}' supabase/storage-api:v1.11.13
     image: supabase/storage-api:v1.11.13@sha256:1e85dad48e8b3e85890a555e5114dc7ee48c2e8be4cfd97dd4e3564b4f104fcd
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -333,6 +348,7 @@ services:
     image: curlimages/curl:8.7.1@sha256:25d29daeb9b14b89e2fa8cc17c70e4b188bca1466086907c2d9a4b56b59d8e21
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       supabase-storage:
         condition: service_healthy
@@ -393,6 +409,7 @@ services:
     image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       supabase-auth:
         condition: service_healthy
@@ -476,6 +493,7 @@ services:
     image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
     profiles:
       - enterprise
+      - selfhost
     depends_on:
       caddy-supabase:
         condition: service_healthy
