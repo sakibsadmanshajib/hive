@@ -89,6 +89,8 @@ values keep it. The cap still applies.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
@@ -570,7 +572,30 @@ def self_test() -> int:
     else:
         raise AssertionError("libpq_env emitted a value carrying a newline")
 
-    print("derive-pooler-dsn: self-test ok (64 assertions)")
+    # The CLI, not just the function. libpq_env mapping a parameter is useless
+    # if main() does not print it: that gap shipped once in this very branch,
+    # because every assertion above stopped at the function boundary.
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main(
+            [
+                "--dsn",
+                "postgresql://u:pw@h.pooler.supabase.com:5432/postgres?sslmode=require",
+                "--emit-libpq-env",
+            ]
+        )
+    assert rc == 0, rc
+    emitted = dict(
+        line.split("=", 1) for line in buf.getvalue().splitlines() if "=" in line
+    )
+    for name in LIBPQ_ENV_ORDER:
+        assert name in emitted, emitted
+    assert emitted["PGSSLMODE"] == "require", emitted
+    # A pooler DSN must come out on the transaction-mode port through the CLI
+    # too, not only through derive().
+    assert emitted["PGPORT"] == "6543", emitted
+
+    print("derive-pooler-dsn: self-test ok (69 assertions)")
     return 0
 
 
@@ -628,6 +653,14 @@ def main(argv: list[str]) -> int:
         except ValueError as err:
             ap.error(str(err))
         for name in LIBPQ_ENV_ORDER:
+            print(f"{name}={env[name]}")
+        # Whatever libpq_env mapped out of the query string, which is not in the
+        # fixed five above. A set difference rather than a second literal list:
+        # printing only LIBPQ_ENV_ORDER was a real bug caught in review, where
+        # the mapping existed and the printer did not know about it, so a DSN
+        # carrying sslmode=require connected without it. Derived this way, a
+        # mapping added to QUERY_PARAM_ENV cannot be forgotten here.
+        for name in sorted(set(env) - set(LIBPQ_ENV_ORDER)):
             print(f"{name}={env[name]}")
         # Host, port, user and database on stderr; never the password. Same
         # split as the DSN path below, and for the same reason: a caller
