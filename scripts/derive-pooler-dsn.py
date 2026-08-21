@@ -397,7 +397,11 @@ def self_test() -> int:
     # SQLAlchemy removed `postgres` from its dialect registry in 1.4, and Open
     # WebUI's pgvector store consumes the libpq flavour, so the short spelling
     # reached it as NoSuchModuleError and the container never went healthy.
-    short = "postgres://postgres:pw@supabase-db:5432/postgres"
+    # `${PASSWORD}` rather than a short literal on purpose: a secret scanner
+    # reads `postgres:pw@host` as PostgreSQL credentials and reports the diff,
+    # and a scanner that cries wolf on a fixture is a scanner people learn to
+    # ignore. Nothing here parses the password, only the scheme and the host.
+    short = "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"
     s_session, s_transaction, s_libpq = derive(short)
     for flavour in (s_session, s_transaction, s_libpq):
         assert flavour.startswith("postgresql://"), flavour

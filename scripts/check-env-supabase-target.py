@@ -153,6 +153,10 @@ def check(env: dict) -> tuple[int, list]:
     return (1 if failed else 0), report
 
 
+# Fixture credentials are written as `${PASSWORD}` rather than a short literal:
+# a secret scanner reads `postgres:pw@host` as PostgreSQL credentials and reports
+# the whole diff, and a scanner that cries wolf on a fixture is one people learn
+# to ignore. Nothing in this file parses a password.
 GOOD_SELF_HOSTED = """
 ENTERPRISE_DB_PASSWORD=x
 ENTERPRISE_JWT_SECRET=y
@@ -160,7 +164,7 @@ ENTERPRISE_AUTH_EXTERNAL_URL=http://caddy-supabase/auth/v1
 SUPABASE_URL=http://caddy-supabase
 SUPABASE_PUBLIC_URL=https://auth.example.test
 NEXT_PUBLIC_SUPABASE_URL=https://auth.example.test
-SUPABASE_DB_URL=postgresql://postgres:pw@supabase-db:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres:${PASSWORD}@supabase-db:5432/postgres
 SUPABASE_DB_POOL_URL=
 SUPABASE_DB_POOL_URL_LIBPQ=
 SUPABASE_JWT_ISSUER=http://caddy-supabase/auth/v1
@@ -173,7 +177,7 @@ S3_SECRET_KEY=bbb
 
 GOOD_HOSTED = """
 SUPABASE_URL=https://ref.supabase.co
-SUPABASE_DB_URL=postgresql://u:p@aws-1-x.pooler.supabase.com:5432/postgres
+SUPABASE_DB_URL=postgresql://user:${PASSWORD}@aws-1-x.pooler.supabase.com:5432/postgres
 SUPABASE_JWKS_URL=https://ref.supabase.co/auth/v1/.well-known/jwks.json
 S3_ENDPOINT=https://ref.supabase.co/storage/v1/s3
 """
@@ -198,20 +202,20 @@ def self_check() -> int:
     mutations = {
         "stale hosted jwks url": {"SUPABASE_JWKS_URL": "https://ref.supabase.co/auth/v1/.well-known/jwks.json"},
         "stale hosted identity url": {"SUPABASE_URL": "https://ref.supabase.co"},
-        "stale hosted db dsn": {"SUPABASE_DB_URL": "postgresql://u:p@aws-1-x.pooler.supabase.com:5432/postgres"},
+        "stale hosted db dsn": {"SUPABASE_DB_URL": "postgresql://user:${PASSWORD}@aws-1-x.pooler.supabase.com:5432/postgres"},
         "stale hosted s3 endpoint": {"S3_ENDPOINT": "https://ref.supabase.co/storage/v1/s3"},
         "stale hosted issuer": {"SUPABASE_JWT_ISSUER": "https://ref.supabase.co/auth/v1"},
         "plain http jwks": {"SUPABASE_JWKS_URL": "http://caddy-supabase/auth/v1/.well-known/jwks.json"},
         "jwks without a ca file": {"SUPABASE_JWKS_CA_FILE": ""},
         "issuer disagreement": {"SUPABASE_JWT_ISSUER": "http://supabase-auth:9999"},
-        "short dsn scheme": {"SUPABASE_DB_URL": "postgres://postgres:pw@supabase-db:5432/postgres"},
+        "short dsn scheme": {"SUPABASE_DB_URL": "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"},
         "short dsn scheme on the pgx pool url": {
-            "SUPABASE_DB_POOL_URL": "postgres://postgres:pw@supabase-db:5432/postgres"
+            "SUPABASE_DB_POOL_URL": "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"
         },
         "short dsn scheme on the libpq pool url": {
-            "SUPABASE_DB_POOL_URL_LIBPQ": "postgres://postgres:pw@supabase-db:5432/postgres"
+            "SUPABASE_DB_POOL_URL_LIBPQ": "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"
         },
-        "invented pooler port": {"SUPABASE_DB_POOL_URL": "postgresql://postgres:pw@supabase-db:6543/postgres"},
+        "invented pooler port": {"SUPABASE_DB_POOL_URL": "postgresql://postgres:${PASSWORD}@supabase-db:6543/postgres"},
         "s3 secret equals its own id": {"S3_SECRET_KEY": "aaa"},
     }
     for label, patch in mutations.items():
