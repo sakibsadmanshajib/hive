@@ -118,6 +118,25 @@ def profiles_of(block: str) -> set:
     return out
 
 
+def depends_on_of(block: str) -> set:
+    """The service names a service block's `depends_on:` mapping actually names.
+
+    Scanning every six-space key in the whole block was wrong twice over: an
+    unrelated nested key such as `healthcheck:` parsed as a dependency, and
+    deleting the `depends_on:` line while leaving its children in place still
+    satisfied the non-empty guard that was supposed to stop the check going
+    vacuous. So the mapping is sliced first, and an absent `depends_on:` returns
+    the empty set rather than the whole block's keys.
+    """
+    match = re.search(r"^    depends_on:\s*$", block, re.MULTILINE)
+    if not match:
+        return set()
+    rest = block[match.end():]
+    end = re.search(r"^    \S", rest, re.MULTILINE)
+    body = rest[: end.start()] if end else rest
+    return set(re.findall(r"^      ([A-Za-z0-9][A-Za-z0-9._-]*):\s*$", body, re.MULTILINE))
+
+
 def env_value(block: str, key: str) -> str:
     """The right-hand side of one `KEY: value` line in a service's environment."""
     match = re.search(
@@ -284,14 +303,10 @@ def test_loading_the_enterprise_file_requires_activating_its_profile() -> None:
     them. A new dependency outside that set would need its own profile flag and
     would break the documented invocation with no warning."""
     for svc in ("edge-api", "control-plane"):
-        block = ENT_SERVICES[svc]
-        depends = set(re.findall(r"^      ([A-Za-z0-9][A-Za-z0-9._-]*):\s*$", block, re.MULTILINE))
-        # The override blocks declare depends_on and environment; environment
-        # keys are upper case with no trailing colon-only line, so what this
-        # picks up is the dependency names.
-        outside = {d for d in depends if d not in DATA_PLANE}
+        depends = depends_on_of(ENT_SERVICES[svc])
+        assert depends, f"{svc} override declares no depends_on, so this check is vacuous"
+        outside = depends - DATA_PLANE
         assert not outside, f"{svc} depends on {sorted(outside)}, outside the profile set"
-        assert depends, f"{svc} override declares no dependency, so this check is vacuous"
 
 
 def test_open_webui_oidc_discovery_uses_the_browser_facing_origin() -> None:
@@ -346,9 +361,8 @@ def test_the_deploy_invocation_and_the_compose_project_agree() -> None:
     # profile, or the invocation is refused outright rather than merely
     # incomplete.
     for svc in ("edge-api", "control-plane"):
-        deps = set(
-            re.findall(r"^      ([A-Za-z0-9][A-Za-z0-9._-]*):\s*$", ENT_SERVICES[svc], re.MULTILINE)
-        )
+        deps = depends_on_of(ENT_SERVICES[svc])
+        assert deps, f"{svc} override declares no depends_on, so this check is vacuous"
         assert deps <= DATA_PLANE, f"{svc} depends on {sorted(deps - DATA_PLANE)}"
 
 
@@ -361,7 +375,14 @@ def test_no_deploy_step_spells_its_own_compose_flags() -> None:
 
     So the rule is not "the flags are right somewhere", it is that no step
     spells them at all."""
-    invocations = re.findall(r"docker compose[^\n)]*", DEPLOY_TEXT)
+    # Backslash continuations are folded FIRST. Without that, a step spelling
+    # its flags on the next line matches as a bare `docker compose \\`, which
+    # carries no --env-file, no --profile and no -f, so the offenders filter
+    # below drops it as harmless. That step would read a different project and
+    # report green over a box missing services, which is the exact recurrence
+    # this test claims to catch.
+    folded = re.sub(r"\\\n\s*", " ", DEPLOY_TEXT)
+    invocations = re.findall(r"docker compose[^\n)]*", folded)
     # Prose in comments mentions `docker compose exec` and `docker compose ps`;
     # only lines that are actually run matter, and those are the ones that pass
     # flags or subcommands rather than sitting inside a sentence.

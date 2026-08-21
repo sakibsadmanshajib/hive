@@ -405,12 +405,15 @@ def self_test() -> int:
     s_session, s_transaction, s_libpq = derive(short)
     for flavour in (s_session, s_transaction, s_libpq):
         assert flavour.startswith("postgresql://"), flavour
-        assert not flavour.startswith("postgres://"), flavour
     # Nothing else about the DSN moves: same host, port, credential, database.
     assert "@supabase-db:5432/postgres" in s_libpq, s_libpq
-    # And the long spelling is untouched, so this is a normalisation and not a
-    # rewrite that could mangle an already-correct DSN.
-    assert derive(direct) == (d_session, d_transaction, d_libpq)
+    # The long spelling is untouched, so this is a normalisation and not a
+    # rewrite that could mangle an already-correct DSN. Asserted against the
+    # INPUT, not against another call: comparing derive(direct) with values
+    # captured from derive(direct) proves only that derive is deterministic,
+    # which it would be whatever normalize_scheme did to a long-spelling DSN.
+    assert normalize_scheme(direct) == direct, normalize_scheme(direct)
+    assert normalize_scheme(pooler) == pooler, normalize_scheme(pooler)
     # A pooler host normalises too, port move and all.
     short_pooler = pooler.replace("postgresql://", "postgres://", 1)
     for flavour in derive(short_pooler):

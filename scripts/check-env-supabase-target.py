@@ -49,6 +49,12 @@ SERVER_SIDE = (
     "S3_ENDPOINT",
 )
 
+# What docker-compose.enterprise.yml defaults the auth origin to when neither
+# ENTERPRISE_AUTH_EXTERNAL_URL nor SUPABASE_JWT_ISSUER is set. Kept in step with
+# that file by scripts/test_selfhost_supabase_seam.py, which asserts both sides
+# of the compose default derive from the same variable.
+COMPOSE_DEFAULT_AUTH_ORIGIN = "http://caddy-supabase/auth/v1"
+
 # Set only by a deployment running its own data plane.
 SELF_HOSTED_MARKERS = ("ENTERPRISE_DB_PASSWORD", "ENTERPRISE_JWT_SECRET")
 
@@ -106,9 +112,17 @@ def check(env: dict) -> tuple[int, list]:
         )
         failed = True
 
-    issuer = env.get("SUPABASE_JWT_ISSUER", "")
-    external = env.get("ENTERPRISE_AUTH_EXTERNAL_URL", "")
-    if issuer and external and issuer.rstrip("/") != external.rstrip("/"):
+    # Both sides fall back to what docker-compose.enterprise.yml defaults them
+    # to, because an unset variable is not an absent value: compose hands GoTrue
+    # that default and edge-api compares against the same expression. Requiring
+    # BOTH to be set before comparing meant an env file that pinned
+    # SUPABASE_JWT_ISSUER to something else and left
+    # ENTERPRISE_AUTH_EXTERNAL_URL alone sailed through, which is the exact
+    # mismatch this check exists for: GoTrue stamps the default, edge-api expects
+    # the pin, and every token is rejected with nothing logged.
+    external = env.get("ENTERPRISE_AUTH_EXTERNAL_URL", "") or COMPOSE_DEFAULT_AUTH_ORIGIN
+    issuer = env.get("SUPABASE_JWT_ISSUER", "") or external
+    if issuer.rstrip("/") != external.rstrip("/"):
         report.append(
             "SUPABASE_JWT_ISSUER and ENTERPRISE_AUTH_EXTERNAL_URL disagree, so "
             "GoTrue stamps an issuer edge-api rejects and every token fails with "
@@ -208,6 +222,13 @@ def self_check() -> int:
         "plain http jwks": {"SUPABASE_JWKS_URL": "http://caddy-supabase/auth/v1/.well-known/jwks.json"},
         "jwks without a ca file": {"SUPABASE_JWKS_CA_FILE": ""},
         "issuer disagreement": {"SUPABASE_JWT_ISSUER": "http://supabase-auth:9999"},
+        # The bypass: pin the issuer and leave the auth origin unset, so the
+        # compose default is what GoTrue actually stamps.
+        "issuer pinned against an unset auth origin": {
+            "SUPABASE_JWT_ISSUER": "http://supabase-auth:9999",
+            "ENTERPRISE_AUTH_EXTERNAL_URL": "",
+        },
+
         "short dsn scheme": {"SUPABASE_DB_URL": "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"},
         "short dsn scheme on the pgx pool url": {
             "SUPABASE_DB_POOL_URL": "postgres://postgres:${PASSWORD}@supabase-db:5432/postgres"
@@ -223,6 +244,19 @@ def self_check() -> int:
         env.update(patch)
         code, report = check(env)
         assert code == 1, f"{label} did not fail: {report}"
+
+    # Moving the auth origin while leaving SUPABASE_JWT_ISSUER unset is
+    # COHERENT, not a mismatch, and this was written as a must-fail case first
+    # and corrected by the assertion below refusing to fail. The compose
+    # expression is ${SUPABASE_JWT_ISSUER:-${ENTERPRISE_AUTH_EXTERNAL_URL:-...}},
+    # so an unset issuer inherits the moved origin and the two genuinely agree at
+    # runtime. Only an issuer that is explicitly set to something else is the
+    # failure this check is for.
+    env = dict(good)
+    env["ENTERPRISE_AUTH_EXTERNAL_URL"] = "https://auth.example.test/auth/v1"
+    env["SUPABASE_JWT_ISSUER"] = ""
+    code, report = check(env)
+    assert code == 0, report
 
     # A browser-facing public origin is not evidence of a mixed state, even
     # while it still names the hosted project during a staged cutover.
