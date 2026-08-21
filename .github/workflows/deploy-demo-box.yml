@@ -82,6 +82,12 @@ on:
       # script would merge and never redeploy to pick the fix up.
       - 'scripts/check-retention-schedule.sh'
       - 'scripts/derive-pooler-dsn.py'
+      # The single answer to "how does a command on the box reach the stack's
+      # database". Both the migrate job and the deploy job's price assertion go
+      # through it, so a fix to it that never deployed would leave both of them
+      # running the broken version, which is the same blind spot every other
+      # script listed here exists for.
+      - 'scripts/stack-psql.sh'
       # Installs and restarts the host-side agent-engine launch daemon in the
       # deploy job below. Same blind spot as every other script listed here:
       # without an entry, a fix to it would merge and never deploy.
@@ -170,50 +176,187 @@ jobs:
   #     and self-contained. Nothing pending narrows a constraint or drops a
   #     column, so this window is safe.
   #
-  # Runs on a GitHub-hosted runner rather than the box: it needs psql, and the
-  # demo box has no passwordless sudo to install it (same limitation as the
-  # runner-as-a-service note below). It reaches Postgres over the same pooler
-  # secrets the PR cleanup job already uses, so no new secret is introduced and
-  # the box is not touched at all.
+  # Runs ON THE BOX, and the reason is the whole point of this job's shape.
+  #
+  # It used to run on ubuntu-latest and connect over the SUPABASE_DB_* secrets.
+  # That worked for exactly as long as the database was a hosted Supavisor
+  # pooler on a public hostname. After the self-hosted cutover (PR #986) the
+  # database the stack uses has no published port at all and exists only inside
+  # the compose network, which no GitHub-hosted runner can reach. This job did
+  # not go red for that. Those secrets still named a reachable Supabase Cloud
+  # project, so it applied every pending migration there, reported that nightly
+  # retention was scheduled, and finished green, while the database the
+  # application actually reads received no schema change whatsoever. There was
+  # no signal of any kind: success is what the job printed in both worlds.
+  #
+  # So the target is no longer a separate secret set. It is derived from
+  # SUPABASE_DB_URL in the box's own .env, which is the value control-plane
+  # itself connects with, and it is then asserted to BE that database by
+  # comparing pg_control_system().system_identifier against what the running
+  # supabase-db container reports over its own local socket. The two sides
+  # reach the server by unrelated routes and are named by unrelated inputs, so
+  # the comparison can genuinely fail, and when it fails it fails this job and
+  # stops the deploy.
+  #
+  # psql on the box: still not installed, and there is still no passwordless
+  # sudo to install it. That is not worked around by wishing, it is worked
+  # around by running psql in a throwaway container on the stack's own network
+  # (scripts/stack-psql.sh), which the deploy job's price assertion uses too.
+  # bash, python3 and sha256sum, the other things scripts/apply-migrations.sh
+  # needs, are all present on the host already.
   # ------------------------------------------------------------------
   migrate:
     name: Apply pending database migrations
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hive-demo]
     permissions:
       contents: read
-    timeout-minutes: 10
+    # 20, not 10. This job now checks the repository out on the box, and the
+    # very first run on a fresh runner workspace pays for that in full. A
+    # timeout here does not just fail this job, it stops the deploy.
+    timeout-minutes: 20
+    env:
+      # Every psql call in this job goes through the wrapper, so no step gets
+      # to invent its own docker invocation. A bare `psql` here would at least
+      # be loud (there is none on the host); a `docker run` that forgot
+      # --network would connect to nothing and read like a broken database,
+      # which is exactly how this broke the first time.
+      PSQL_BIN: ${{ github.workspace }}/scripts/stack-psql.sh
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Install psql
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
 
       - name: Validate the migration baseline file
         # Cheap, no database: catches a typo'd or stale baseline entry before
         # anything connects.
         run: scripts/apply-migrations.sh --check
 
-      - name: Pick the transaction-mode pooler port
-        # A migration run needs no session state, so it has no business holding
-        # one of the project's 15 session-mode client slots -- those are shared
-        # with the live demo stack, and exhausting them has taken chat down.
-        # Only a Supavisor pooler host gets the 6543 override; a direct
-        # Postgres serves every mode on its single port.
-        env:
-          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+      - name: Make sure the stack's database is up
+        # Schema before code needs a database to talk to, and this job is now
+        # the first thing in the run. Without this a box whose stack is down
+        # cannot deploy the fix for its stack being down: migrate would fail on
+        # an unreachable database and the `needs:` edge would stop the deploy.
+        #
+        # Deliberately NOT --remove-orphans, and deliberately only this one
+        # service. Recreating the whole stack is the deploy job's work, and a
+        # compose invocation carrying --remove-orphans is the one that deletes
+        # the data plane when it resolves a different project (see the
+        # HIVE_COMPOSE_FLAGS block at the top of this file).
+        working-directory: /home/sakib/hive/deploy/docker
+        run: docker compose $HIVE_COMPOSE_FLAGS up -d supabase-db
+
+      - name: Derive the migration connection from the box's own .env
+        # One source of truth for what to migrate: the same SUPABASE_DB_URL the
+        # stack's own services connect with. A separate secret set is what made
+        # the silent-success failure above possible, so there is no longer one.
+        #
+        # scripts/derive-pooler-dsn.py --emit-libpq-env hands back libpq
+        # variables rather than a DSN, because apply-migrations.sh and
+        # check-retention-schedule.sh take libpq variables and deliberately
+        # never parse a DSN (parameters are per-driver, and a pgx-only one in a
+        # libpq value is rejected outright, which has already crash-looped a
+        # container). It also lands a pooler host on the transaction-mode port,
+        # which is why the old port-picking step is gone rather than kept: a
+        # migration needs no session state and must not hold one of the
+        # project's 15 session slots.
         run: |
           set -euo pipefail
-          port="$PGPORT"
-          case "$PGHOST" in
-            *.pooler.supabase.com) port=6543 ;;
-          esac
-          echo "PG_POOL_PORT=$port" >> "$GITHUB_ENV"
-          echo "migrations will connect to $PGHOST:$port"
+          env_file=/home/sakib/hive/.env
+          # `|| true` matters: under `set -o pipefail` a grep that matches
+          # nothing fails the whole pipeline, so `set -e` would kill this step
+          # before the explanatory error below could ever print. The failure
+          # would still be loud, but it would name nothing.
+          raw=$(grep -E '^SUPABASE_DB_URL=' "$env_file" | head -1 | cut -d= -f2- || true)
+          # A hand-edited .env may quote the value; the DSN parser must not see
+          # the quotes.
+          raw="${raw%\"}"; raw="${raw#\"}"
+          raw="${raw%\'}"; raw="${raw#\'}"
+          if [ -z "$raw" ]; then
+            echo "::error::SUPABASE_DB_URL is missing or empty in $env_file, so there is no migration target"
+            exit 1
+          fi
+          # The DSN and the password it carries are not repository secrets, so
+          # nothing masks them automatically. Register both before anything
+          # else in this job can echo one.
+          echo "::add-mask::$raw"
+          python3 scripts/derive-pooler-dsn.py --self-test
+          creds=$(python3 scripts/derive-pooler-dsn.py --dsn "$raw" --emit-libpq-env)
+          while IFS= read -r line; do
+            case "$line" in
+              PGPASSWORD=*) echo "::add-mask::${line#PGPASSWORD=}" ;;
+            esac
+            printf '%s\n' "$line" >> "$GITHUB_ENV"
+          done <<< "$creds"
+
+      - name: Assert the migration target is the database this stack uses
+        # The identity assertion. Not a comment, not a hostname pattern match:
+        # pg_control_system().system_identifier is generated by initdb and is
+        # unique per cluster, so two connections agreeing on it agree on the
+        # server.
+        #
+        # The two sides are independent on purpose, which is what lets this
+        # fail. The target side is a libpq connection over the compose network,
+        # named entirely by SUPABASE_DB_URL from the box's .env. The stack side
+        # is a local socket inside the running supabase-db container, named
+        # entirely by compose project resolution, with the role and database
+        # read out of the container's own environment rather than out of that
+        # DSN. Point the DSN at any other database, hosted or otherwise, and
+        # the identifiers differ and this step fails.
+        #
+        # Both sides being empty is treated as failure too. A check whose only
+        # failure mode is "the strings differ" passes when neither side
+        # produced a string at all, which is the shape that has bitten this
+        # repository repeatedly.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          identity_sql='SELECT system_identifier FROM pg_control_system()'
+
+          # Each command's exit status is handled before its output is
+          # trimmed, and both are checked. Piping straight into `tr` would put
+          # a failing psql inside a pipeline, where `set -o pipefail` plus
+          # `set -e` kill the step before the explanatory error runs: the
+          # emptiness guards below would then be code that cannot execute,
+          # which is the shape this whole change exists to stop shipping.
+          if ! target=$("$PSQL_BIN" -tAXq -v ON_ERROR_STOP=1 -c "$identity_sql"); then
+            echo "::error::the migration connection could not be opened, so the target database could not be identified at all"
+            exit 1
+          fi
+          target=$(printf '%s' "$target" | tr -d '[:space:]')
+          if [ -z "$target" ]; then
+            echo "::error::the migration connection returned no system_identifier, so the target database could not be identified at all"
+            exit 1
+          fi
+
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container, so the stack's own database could not be identified"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
+          if [ -z "$db_user" ] || [ -z "$db_name" ]; then
+            echo "::error::the supabase-db container reported no POSTGRES_USER/POSTGRES_DB, so the stack's own database could not be identified"
+            exit 1
+          fi
+
+          if ! stack=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+            psql -U "$db_user" -d "$db_name" --no-psqlrc -tAXq -v ON_ERROR_STOP=1 \
+              -c "$identity_sql"); then
+            echo "::error::the supabase-db container refused the identity query, so the stack's own database could not be identified"
+            exit 1
+          fi
+          stack=$(printf '%s' "$stack" | tr -d '[:space:]')
+          if [ -z "$stack" ]; then
+            echo "::error::the running supabase-db container returned no system_identifier, so the stack's own database could not be identified"
+            exit 1
+          fi
+
+          if [ "$target" != "$stack" ]; then
+            echo "::error::migration target mismatch: the connection derived from SUPABASE_DB_URL is cluster $target, but the database this stack runs is cluster $stack. Refusing to migrate a database the application does not use. Fix SUPABASE_DB_URL in the box's .env, or the stack, so the two agree."
+            exit 1
+          fi
+          echo "migration target confirmed: cluster $target is the database this stack runs"
 
       - name: Apply pending migrations
         # No `|| true`, no continue-on-error, no swallowed exit code: the script
@@ -222,7 +365,8 @@ jobs:
         # edge below stops the deploy. Silent failure is the entire defect class
         # this job exists to remove.
         #
-        # Only libpq variables are exported. This path never builds a DSN
+        # Only libpq variables are used, and they come from the derive step
+        # above rather than from this step. This path never builds a DSN
         # string, because DSN parameters are per-driver and a pgx-only parameter
         # in a libpq value is rejected outright (that mistake has already
         # crash-looped a container and cost ~50 minutes of chat downtime).
@@ -234,12 +378,6 @@ jobs:
         # state that is neither aborts this step and prints what it needs. That
         # abort is the intended outcome, not a flake: the alternative is a green
         # deploy over schema that was never created.
-        env:
-          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ env.PG_POOL_PORT }}
-          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
-          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
-          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: scripts/apply-migrations.sh
 
       - name: Report whether nightly metering retention is scheduled
@@ -255,12 +393,6 @@ jobs:
         # mistake the guards already avoid. Absence surfaces as a ::warning::
         # annotation on the run summary. The migration step above is unchanged
         # and still fails the deploy on a real migration error.
-        env:
-          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ env.PG_POOL_PORT }}
-          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
-          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
-          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: scripts/check-retention-schedule.sh
 
   deploy:
@@ -512,7 +644,10 @@ jobs:
         working-directory: /home/sakib/hive
         run: |
           set -euo pipefail
-          existing=$(grep -E '^SUPABASE_DB_URL=' .env | head -1 | cut -d= -f2-)
+          # `|| true` for the same reason as the migrate job's copy of this:
+          # pipefail turns "no match" into a step that dies before the error
+          # message below can name what is missing.
+          existing=$(grep -E '^SUPABASE_DB_URL=' .env | head -1 | cut -d= -f2- || true)
           # A hand-edited .env may quote the value; the DSN parser must not see
           # the quotes.
           existing="${existing%\"}"; existing="${existing#\"}"
@@ -1057,8 +1192,15 @@ jobs:
             exit 1
           fi
 
-          rows=$(docker run --rm "postgres:16-alpine" \
-            psql "$SUPABASE_DB_POOL_URL_LIBPQ" -At -F'|' -v ON_ERROR_STOP=1 -c "
+          # ../../scripts/stack-psql.sh, not a bare `docker run`. This step
+          # already ran psql in a container, but on the default bridge
+          # network, where the self-hosted database's compose-network hostname
+          # does not resolve: the first deploy after PR #986 failed here with
+          # `could not translate host name "supabase-db" to address`. The
+          # wrapper attaches the container to the stack's network, and is the
+          # single place that answers this for the whole repository.
+          rows=$(../../scripts/stack-psql.sh \
+            "$SUPABASE_DB_POOL_URL_LIBPQ" -At -F'|' -v ON_ERROR_STOP=1 -c "
               SELECT pr.route_id, pr.litellm_model_name, pr.provider_model
                 FROM public.provider_routes pr
                 JOIN public.model_aliases ma ON ma.alias_id = pr.alias_id

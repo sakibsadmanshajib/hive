@@ -37,12 +37,19 @@
 # Connection settings come from libpq environment variables (PGHOST, PGPORT,
 # PGUSER, PGDATABASE, PGPASSWORD), same as apply-migrations.sh. No DSN is built
 # here, because DSN parameters are per driver and psql is a libpq client.
+#
+# PSQL_BIN names the client, same as apply-migrations.sh, and for the same
+# reason: on the demo box the database has no published port and only exists
+# inside the stack's compose network, so the caller points this at
+# scripts/stack-psql.sh.
 
 set -euo pipefail
 
 JOB_NAME='metering-shadow-verdicts-purge'
 
-psql_q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 "$@"; }
+PSQL_BIN="${PSQL_BIN:-psql}"
+
+psql_q() { "$PSQL_BIN" --no-psqlrc -qtAX -v ON_ERROR_STOP=1 "$@"; }
 
 # pg_extension has to be checked separately and first: when pg_cron is not
 # installed the cron schema does not exist either, and a single query

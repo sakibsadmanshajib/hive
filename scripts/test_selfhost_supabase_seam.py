@@ -28,6 +28,16 @@ when broken:
   * Open WebUI's pgvector DSN comes from the libpq flavour, never the pgx one.
     A pgx-only parameter in a libpq DSN fails the whole connection, which is
     what killed a container and took chat down for fifty minutes.
+  * migrations run somewhere that can actually reach the stack's database, and
+    prove they reached THAT database. The data plane publishes no host port, so
+    a GitHub-hosted runner cannot reach it at all, yet the migrate job reported
+    success anyway by connecting to the hosted project the old secrets still
+    named. Nothing went red; the database the application reads simply stopped
+    receiving schema changes.
+  * every psql in the deploy workflow goes through scripts/stack-psql.sh, whose
+    default network is the compose project's own. A second, hand-rolled
+    `docker run` lands on the default bridge network, where the data plane's
+    hostname does not resolve, and the failure reads as a broken database.
 
 Every one of those fails silently, or fails somewhere far from its cause, so
 each gets an assertion here. No framework, no docker daemon, no network: this
@@ -396,6 +406,179 @@ def test_no_deploy_step_spells_its_own_compose_flags() -> None:
     # workflow having no invocations at all.
     used = DEPLOY_TEXT.count("$HIVE_COMPOSE_FLAGS")
     assert used >= 4, f"only {used} steps use the shared definition"
+
+
+def _job_block(name: str) -> str:
+    """The text of one job in the deploy workflow.
+
+    Job keys sit at two-space indent and every line inside a job is deeper than
+    that, so the next two-space key is the end of this job.
+    """
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\s*$|\Z)",
+        DEPLOY_TEXT,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"deploy-demo-box.yml has no job named {name}"
+    return match.group(1)
+
+
+def _step_block(job_text: str, step_name: str) -> str:
+    """The text of one step, by its `name:`."""
+    match = re.search(
+        rf"^      - name: {re.escape(step_name)}\n(.*?)(?=^      - (?:name|uses):|\Z)",
+        job_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"no step named {step_name!r}"
+    return match.group(1)
+
+
+def test_migrations_run_where_the_stacks_database_is_reachable() -> None:
+    """The data plane binds no host port, so nothing outside the compose network
+    can reach it. A migrate job on a GitHub-hosted runner therefore cannot
+    apply anything to the database this deployment uses, and the failure is
+    invisible: the SUPABASE_DB_* secrets still named a reachable hosted project,
+    so the job applied every migration there and reported success while the
+    live database drifted.
+
+    Both halves are asserted. Running on the box is not enough on its own if the
+    old secret set is still what names the target, and dropping the secrets is
+    not enough if the job still runs where it cannot connect."""
+    block = _job_block("migrate")
+    assert "runs-on: [self-hosted, hive-demo]" in block, block[:200]
+    assert "ubuntu-latest" not in block, "the migrate job cannot reach the data plane from a hosted runner"
+    for name in (
+        "SUPABASE_DB_HOST",
+        "SUPABASE_DB_PORT",
+        "SUPABASE_DB_USER",
+        "SUPABASE_DB_NAME",
+        "SUPABASE_DB_PASSWORD",
+    ):
+        assert f"secrets.{name}" not in block, (
+            f"the migrate job reads secrets.{name}, which names a database "
+            "independently of the one the stack uses"
+        )
+    assert "SUPABASE_DB_URL" in block, (
+        "the migrate job must derive its target from the value the stack itself "
+        "connects with"
+    )
+
+
+def test_the_migration_target_is_asserted_to_be_the_stacks_database() -> None:
+    """An identity assertion, not a comment. system_identifier comes from initdb
+    and is unique per cluster, so two connections that agree on it are talking
+    to the same server.
+
+    What makes it able to fail is that the two sides are named by unrelated
+    inputs: the target by SUPABASE_DB_URL out of the box's .env, the stack by
+    compose project resolution of the running container. Assert both sides are
+    still independent, and that an empty answer from either fails rather than
+    comparing equal to the other empty answer."""
+    block = _job_block("migrate")
+    step = _step_block(block, "Assert the migration target is the database this stack uses")
+    assert "pg_control_system()" in step, step
+    assert '"$PSQL_BIN"' in step, "the target side must connect the way the migration does"
+    assert "exec -T supabase-db" in step, "the stack side must come from the running container"
+    assert 'if [ "$target" != "$stack" ]' in step, step
+    # Not a count of `exit 1`, which a later change that adds guards inflates
+    # until turning one guard advisory no longer trips it. That is exactly what
+    # happened here once: the threshold version of this assertion passed with
+    # the empty-target guard mutated to `exit 0`. The invariant is per message:
+    # every ::error:: in this step aborts.
+    messages = re.findall(r"::error::", step)
+    aborting = re.findall(r'echo "::error::[^\n]*"\n\s*exit 1\n', step)
+    assert messages, step
+    assert len(aborting) == len(messages), (
+        f"{len(messages) - len(aborting)} of the {len(messages)} error messages "
+        "in the identity step do not abort, so the step reports a mispointed "
+        "database and carries on"
+    )
+    # And both sides still have an emptiness guard of their own, so the step
+    # cannot be reduced to the mismatch comparison alone, where two empty
+    # answers compare equal.
+    assert len(re.findall(r"returned no system_identifier", step)) >= 2, step
+    live = [
+        line for line in block.splitlines() if not line.strip().startswith("#")
+    ]
+    assert not any("continue-on-error:" in line for line in live), (
+        "the assertion cannot be advisory"
+    )
+
+
+def test_no_deploy_step_reaches_the_database_without_the_wrapper() -> None:
+    """scripts/stack-psql.sh is the single answer to "how does a command on the
+    box reach the stack's database". The deploy job's price assertion already
+    ran psql in a container and still broke, because that container was on the
+    default bridge network where `supabase-db` does not resolve. A second
+    hand-rolled invocation is that failure again, and it reads as a broken
+    database rather than as a wiring mistake.
+
+    The one exemption is psql run INSIDE the database container itself, which
+    needs no network at all."""
+    folded = re.sub(r"\\\n\s*", " ", DEPLOY_TEXT)
+    offenders = []
+    for line in folded.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "psql" not in stripped:
+            continue
+        if "stack-psql.sh" in stripped or "PSQL_BIN" in stripped:
+            continue
+        if "docker compose" in stripped and "exec -T supabase-db" in stripped:
+            continue
+        offenders.append(stripped)
+    assert not offenders, offenders
+    # And the wrapper is genuinely EXECUTED, not merely mentioned. Counting
+    # occurrences in the whole file counts the comments explaining it, so that
+    # count stays high while both real invocations are deleted.
+    migrate = _job_block("migrate")
+    assert re.search(
+        r"^      PSQL_BIN: \$\{\{ github\.workspace \}\}/scripts/stack-psql\.sh\s*$",
+        migrate,
+        re.MULTILINE,
+    ), "the migrate job does not point PSQL_BIN at the wrapper"
+    price = _step_block(
+        _job_block("deploy"),
+        "Assert model catalog prices agree with the model LiteLLM will call",
+    )
+    assert re.search(
+        r"^\s*rows=\$\(\.\./\.\./scripts/stack-psql\.sh\b",
+        price,
+        re.MULTILINE,
+    ), "the price assertion does not run the wrapper"
+
+
+def test_the_wrapper_default_network_is_the_compose_project_network() -> None:
+    """The wrapper's default network is derived, not guessed: compose names a
+    project's implicit network `<project>_default`. Renaming the project without
+    following it here would put every psql on a network with no database on it,
+    and the error would name a hostname rather than a project."""
+    wrapper = (ROOT / "scripts" / "stack-psql.sh").read_text()
+    match = re.search(r"HIVE_STACK_NETWORK:-([A-Za-z0-9_.-]+)", wrapper)
+    assert match, "stack-psql.sh has no HIVE_STACK_NETWORK default"
+    project = project_name(ENT_TEXT)
+    assert project, "docker-compose.enterprise.yml declares no project name"
+    assert match.group(1) == f"{project}_default", (
+        f"wrapper defaults to {match.group(1)!r} but the compose project is "
+        f"{project!r}, whose default network is {project}_default"
+    )
+
+
+def test_the_wrapper_forwards_every_parameter_the_deriver_maps() -> None:
+    """derive-pooler-dsn.py turns a DSN query parameter into a PG* variable, and
+    scripts/stack-psql.sh is what carries PG* variables into the container. A
+    variable mapped by one and not forwarded by the other is dropped in
+    silence: the connection still opens, just without the sslmode or the
+    statement timeout the DSN asked for."""
+    deriver = (ROOT / "scripts" / "derive-pooler-dsn.py").read_text()
+    block = re.search(r"QUERY_PARAM_ENV = \{(.*?)\}", deriver, re.DOTALL)
+    assert block, "derive-pooler-dsn.py has no QUERY_PARAM_ENV mapping"
+    mapped = set(re.findall(r'"(PG[A-Z_]+)"', block.group(1)))
+    assert mapped, block.group(1)
+    wrapper = (ROOT / "scripts" / "stack-psql.sh").read_text()
+    forwarded = set(re.findall(r"-e (PG[A-Z_]+)", wrapper))
+    missing = mapped - forwarded
+    assert not missing, f"stack-psql.sh does not forward {sorted(missing)}"
 
 
 def main() -> int:

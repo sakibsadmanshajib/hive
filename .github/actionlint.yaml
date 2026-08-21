@@ -1,0 +1,14 @@
+# actionlint configuration.
+#
+# actionlint is not run by this repository's own CI. This file exists so that a
+# local run, a pre-commit hook, or a third-party reviewer that runs actionlint
+# does not report a false positive on the demo box's runner label and bury real
+# findings underneath it.
+#
+# `hive-demo` is the custom label on the self-hosted runner on the owner's demo
+# box, used by the `migrate` and `deploy` jobs in deploy-demo-box.yml. Its other
+# labels (self-hosted, Linux, X64) are all in actionlint's built-in list, so
+# only this one needs declaring.
+self-hosted-runner:
+  labels:
+    - hive-demo

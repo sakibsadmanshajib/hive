@@ -45,6 +45,13 @@
 # surface down for ~50 minutes). psql is a libpq client, so libpq variables are
 # the only thing passed here.
 #
+# PSQL_BIN names the client to run, defaulting to plain `psql` on PATH. It
+# exists because the self-hosted data plane publishes no host port and its
+# hostname is a compose-network name, so a host-side psql cannot resolve it at
+# all: the demo box sets PSQL_BIN=scripts/stack-psql.sh, which runs the same
+# client inside the stack's network. The libpq variables above are the only
+# interface either way, so nothing else here changes.
+#
 # Point PGPORT at the pooler's transaction-mode port (6543) rather than session
 # mode (5432). Session-mode clients are 1:1 with server connections and capped
 # at the project's pool_size of 15, shared with the live demo stack and every CI
@@ -236,7 +243,11 @@ fi
 # ---------------------------------------------------------------------------
 # Ledger
 # ---------------------------------------------------------------------------
-psql_q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 "$@"; }
+# Every psql invocation in this script goes through PSQL_BIN. See the
+# "Connection" note in the header for why it is indirect.
+PSQL_BIN="${PSQL_BIN:-psql}"
+
+psql_q() { "$PSQL_BIN" --no-psqlrc -qtAX -v ON_ERROR_STOP=1 "$@"; }
 
 # ---------------------------------------------------------------------------
 # Does the baseline describe THIS database?
@@ -411,7 +422,7 @@ fi
 
 for name in "${pending[@]}"; do
   echo "::group::applying $name"
-  psql --no-psqlrc -X -v ON_ERROR_STOP=1 -f "$migrations_dir/$name"
+  "$PSQL_BIN" --no-psqlrc -X -v ON_ERROR_STOP=1 -f "$migrations_dir/$name"
   sha="$(sha256sum "$migrations_dir/$name" | cut -d' ' -f1)"
   psql_q -c "INSERT INTO public.hive_schema_migrations (filename, sha256, source)
              VALUES ('$name', '$sha', 'applied')"
