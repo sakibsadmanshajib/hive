@@ -481,11 +481,23 @@ def test_the_migration_target_is_asserted_to_be_the_stacks_database() -> None:
     assert '"$PSQL_BIN"' in step, "the target side must connect the way the migration does"
     assert "exec -T supabase-db" in step, "the stack side must come from the running container"
     assert 'if [ "$target" != "$stack" ]' in step, step
-    # One exit for the mismatch and one for each way a side can come back empty.
-    assert step.count("exit 1") >= 4, (
-        "an empty result on either side must fail too, not compare equal to the "
-        "other empty result"
+    # Not a count of `exit 1`, which a later change that adds guards inflates
+    # until turning one guard advisory no longer trips it. That is exactly what
+    # happened here once: the threshold version of this assertion passed with
+    # the empty-target guard mutated to `exit 0`. The invariant is per message:
+    # every ::error:: in this step aborts.
+    messages = re.findall(r"::error::", step)
+    aborting = re.findall(r'echo "::error::[^\n]*"\n\s*exit 1\n', step)
+    assert messages, step
+    assert len(aborting) == len(messages), (
+        f"{len(messages) - len(aborting)} of the {len(messages)} error messages "
+        "in the identity step do not abort, so the step reports a mispointed "
+        "database and carries on"
     )
+    # And both sides still have an emptiness guard of their own, so the step
+    # cannot be reduced to the mismatch comparison alone, where two empty
+    # answers compare equal.
+    assert len(re.findall(r"returned no system_identifier", step)) >= 2, step
     live = [
         line for line in block.splitlines() if not line.strip().startswith("#")
     ]
@@ -516,9 +528,24 @@ def test_no_deploy_step_reaches_the_database_without_the_wrapper() -> None:
             continue
         offenders.append(stripped)
     assert not offenders, offenders
-    # And the wrapper is genuinely reached, so this cannot pass by the workflow
-    # having stopped talking to the database at all.
-    assert DEPLOY_TEXT.count("stack-psql.sh") >= 2, DEPLOY_TEXT.count("stack-psql.sh")
+    # And the wrapper is genuinely EXECUTED, not merely mentioned. Counting
+    # occurrences in the whole file counts the comments explaining it, so that
+    # count stays high while both real invocations are deleted.
+    migrate = _job_block("migrate")
+    assert re.search(
+        r"^      PSQL_BIN: \$\{\{ github\.workspace \}\}/scripts/stack-psql\.sh\s*$",
+        migrate,
+        re.MULTILINE,
+    ), "the migrate job does not point PSQL_BIN at the wrapper"
+    price = _step_block(
+        _job_block("deploy"),
+        "Assert model catalog prices agree with the model LiteLLM will call",
+    )
+    assert re.search(
+        r"^\s*rows=\$\(\.\./\.\./scripts/stack-psql\.sh\b",
+        price,
+        re.MULTILINE,
+    ), "the price assertion does not run the wrapper"
 
 
 def test_the_wrapper_default_network_is_the_compose_project_network() -> None:
@@ -535,6 +562,23 @@ def test_the_wrapper_default_network_is_the_compose_project_network() -> None:
         f"wrapper defaults to {match.group(1)!r} but the compose project is "
         f"{project!r}, whose default network is {project}_default"
     )
+
+
+def test_the_wrapper_forwards_every_parameter_the_deriver_maps() -> None:
+    """derive-pooler-dsn.py turns a DSN query parameter into a PG* variable, and
+    scripts/stack-psql.sh is what carries PG* variables into the container. A
+    variable mapped by one and not forwarded by the other is dropped in
+    silence: the connection still opens, just without the sslmode or the
+    statement timeout the DSN asked for."""
+    deriver = (ROOT / "scripts" / "derive-pooler-dsn.py").read_text()
+    block = re.search(r"QUERY_PARAM_ENV = \{(.*?)\}", deriver, re.DOTALL)
+    assert block, "derive-pooler-dsn.py has no QUERY_PARAM_ENV mapping"
+    mapped = set(re.findall(r'"(PG[A-Z_]+)"', block.group(1)))
+    assert mapped, block.group(1)
+    wrapper = (ROOT / "scripts" / "stack-psql.sh").read_text()
+    forwarded = set(re.findall(r"-e (PG[A-Z_]+)", wrapper))
+    missing = mapped - forwarded
+    assert not missing, f"stack-psql.sh does not forward {sorted(missing)}"
 
 
 def main() -> int:

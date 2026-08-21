@@ -311,6 +311,19 @@ def derive(
 # connection from these variables and deliberately never parse a DSN.
 LIBPQ_ENV_ORDER = ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD")
 
+# Query parameters libpq itself also reads from the environment, so they can be
+# carried across rather than refused. Refusing them would be loud but wrong: a
+# hosted DSN routinely carries sslmode=require, and failing the migration run
+# over a parameter that has a perfectly good environment equivalent trades one
+# quiet defect for a noisy one. scripts/stack-psql.sh forwards exactly these
+# four into the container, so anything added here has to be added there too.
+QUERY_PARAM_ENV = {
+    "sslmode": "PGSSLMODE",
+    "options": "PGOPTIONS",
+    "connect_timeout": "PGCONNECT_TIMEOUT",
+    "application_name": "PGAPPNAME",
+}
+
 
 def libpq_env(libpq_dsn: str) -> dict[str, str]:
     """Split a libpq-safe DSN into the libpq environment variables.
@@ -322,9 +335,10 @@ def libpq_env(libpq_dsn: str) -> dict[str, str]:
     separate set of secrets, which after the self-hosted cutover pointed at a
     different database than the stack, and reported success either way.
 
-    A query parameter with no libpq environment equivalent is refused rather
-    than dropped. Silently losing, say, sslmode from a migration connection is
-    the same class of quiet difference this function exists to remove.
+    A query parameter that libpq also reads from the environment is carried
+    across as that variable. One with no equivalent is refused rather than
+    dropped: silently losing a connection parameter is the same class of quiet
+    difference this function exists to remove.
     """
     parts = urlsplit(normalize_scheme(libpq_dsn))
     host = parts.hostname
@@ -333,11 +347,14 @@ def libpq_env(libpq_dsn: str) -> dict[str, str]:
     dbname = parts.path.lstrip("/")
     if not dbname:
         raise ValueError(f"DSN has no database name: {libpq_dsn!r}")
-    leftover = [name for name, _ in parse_qsl(parts.query)]
+    # keep_blank_values, because `options=` is a real (if odd) instruction to
+    # send no options and dropping it would change the connection.
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    leftover = sorted({name for name, _ in query if name not in QUERY_PARAM_ENV})
     if leftover:
         raise ValueError(
             f"DSN carries parameters with no libpq environment equivalent: "
-            f"{', '.join(sorted(leftover))}. Export the matching PG* variable "
+            f"{', '.join(leftover)}. Export the matching PG* variable "
             "explicitly instead of relying on this conversion, which would "
             "otherwise drop them silently"
         )
@@ -345,13 +362,27 @@ def libpq_env(libpq_dsn: str) -> dict[str, str]:
     # variables are raw values. Handing psql `p%40ss` as PGPASSWORD
     # authenticates as the literal string, which fails with a password error
     # that says nothing about encoding.
-    return {
+    env = {
         "PGHOST": host,
         "PGPORT": str(parts.port or SESSION_PORT),
         "PGUSER": unquote(parts.username or ""),
-        "PGDATABASE": dbname,
+        "PGDATABASE": unquote(dbname),
         "PGPASSWORD": unquote(parts.password or ""),
     }
+    # parse_qsl has already decoded these, so they are raw values like the rest.
+    for name, value in query:
+        env[QUERY_PARAM_ENV[name]] = value
+    # The caller appends these to $GITHUB_ENV, which is a line-oriented file, so
+    # a value carrying a newline would inject arbitrary variables into every
+    # later step of the job. A percent-encoded newline in a DSN decodes to a
+    # real one here, so this is reachable from the input rather than theoretical.
+    for name, value in sorted(env.items()):
+        if "\n" in value or "\r" in value:
+            raise ValueError(
+                f"{name} contains a newline, which cannot be exported safely "
+                "through a line-oriented environment file"
+            )
+    return env
 
 
 def build_dsn(host: str, port: str, user: str, dbname: str, password: str) -> str:
@@ -512,15 +543,34 @@ def self_test() -> int:
     # migrate job no longer needs a port-picking step of its own.
     assert libpq_env(derive(pooler)[2])["PGPORT"] == "6543", pooler
 
+    # A parameter libpq reads from the environment is carried across, not
+    # refused: a hosted DSN routinely carries sslmode, and failing the whole
+    # migration run over it would be loud and wrong.
+    ssl_env = libpq_env("postgresql://u:p@h:5432/postgres?sslmode=require")
+    assert ssl_env["PGSSLMODE"] == "require", ssl_env
+    opt_env = libpq_env(
+        "postgresql://u:p@h:5432/postgres?options=-c%20statement_timeout%3D3000"
+    )
+    assert opt_env["PGOPTIONS"] == "-c statement_timeout=3000", opt_env
+
     # A parameter with no libpq environment equivalent is refused, not dropped.
     try:
-        libpq_env("postgresql://u:p@h:5432/postgres?sslmode=require")
+        libpq_env("postgresql://u:p@h:5432/postgres?target_session_attrs=rw")
     except ValueError as err:
-        assert "sslmode" in str(err), err
+        assert "target_session_attrs" in str(err), err
     else:
         raise AssertionError("libpq_env silently dropped an unmapped parameter")
 
-    print("derive-pooler-dsn: self-test ok (59 assertions)")
+    # A newline anywhere in an emitted value is refused, because the caller
+    # appends these to a line-oriented environment file.
+    try:
+        libpq_env("postgresql://u:p%0aPGHOST%3Devil@h:5432/postgres")
+    except ValueError as err:
+        assert "newline" in str(err), err
+    else:
+        raise AssertionError("libpq_env emitted a value carrying a newline")
+
+    print("derive-pooler-dsn: self-test ok (64 assertions)")
     return 0
 
 

@@ -210,7 +210,10 @@ jobs:
     runs-on: [self-hosted, hive-demo]
     permissions:
       contents: read
-    timeout-minutes: 10
+    # 20, not 10. This job now checks the repository out on the box, and the
+    # very first run on a fresh runner workspace pays for that in full. A
+    # timeout here does not just fail this job, it stops the deploy.
+    timeout-minutes: 20
     env:
       # Every psql call in this job goes through the wrapper, so no step gets
       # to invent its own docker invocation. A bare `psql` here would at least
@@ -259,7 +262,11 @@ jobs:
         run: |
           set -euo pipefail
           env_file=/home/sakib/hive/.env
-          raw=$(grep -E '^SUPABASE_DB_URL=' "$env_file" | head -1 | cut -d= -f2-)
+          # `|| true` matters: under `set -o pipefail` a grep that matches
+          # nothing fails the whole pipeline, so `set -e` would kill this step
+          # before the explanatory error below could ever print. The failure
+          # would still be loud, but it would name nothing.
+          raw=$(grep -E '^SUPABASE_DB_URL=' "$env_file" | head -1 | cut -d= -f2- || true)
           # A hand-edited .env may quote the value; the DSN parser must not see
           # the quotes.
           raw="${raw%\"}"; raw="${raw#\"}"
@@ -305,22 +312,41 @@ jobs:
           set -euo pipefail
           identity_sql='SELECT system_identifier FROM pg_control_system()'
 
-          target=$("$PSQL_BIN" -tAXq -v ON_ERROR_STOP=1 -c "$identity_sql" | tr -d '[:space:]')
+          # Each command's exit status is handled before its output is
+          # trimmed, and both are checked. Piping straight into `tr` would put
+          # a failing psql inside a pipeline, where `set -o pipefail` plus
+          # `set -e` kill the step before the explanatory error runs: the
+          # emptiness guards below would then be code that cannot execute,
+          # which is the shape this whole change exists to stop shipping.
+          if ! target=$("$PSQL_BIN" -tAXq -v ON_ERROR_STOP=1 -c "$identity_sql"); then
+            echo "::error::the migration connection could not be opened, so the target database could not be identified at all"
+            exit 1
+          fi
+          target=$(printf '%s' "$target" | tr -d '[:space:]')
           if [ -z "$target" ]; then
             echo "::error::the migration connection returned no system_identifier, so the target database could not be identified at all"
             exit 1
           fi
 
-          db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER | tr -d '[:space:]')
-          db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB | tr -d '[:space:]')
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container, so the stack's own database could not be identified"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
           if [ -z "$db_user" ] || [ -z "$db_name" ]; then
-            echo "::error::could not read POSTGRES_USER/POSTGRES_DB out of the running supabase-db container, so the stack's own database could not be identified"
+            echo "::error::the supabase-db container reported no POSTGRES_USER/POSTGRES_DB, so the stack's own database could not be identified"
             exit 1
           fi
 
-          stack=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+          if ! stack=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
             psql -U "$db_user" -d "$db_name" --no-psqlrc -tAXq -v ON_ERROR_STOP=1 \
-              -c "$identity_sql" | tr -d '[:space:]')
+              -c "$identity_sql"); then
+            echo "::error::the supabase-db container refused the identity query, so the stack's own database could not be identified"
+            exit 1
+          fi
+          stack=$(printf '%s' "$stack" | tr -d '[:space:]')
           if [ -z "$stack" ]; then
             echo "::error::the running supabase-db container returned no system_identifier, so the stack's own database could not be identified"
             exit 1
@@ -618,7 +644,10 @@ jobs:
         working-directory: /home/sakib/hive
         run: |
           set -euo pipefail
-          existing=$(grep -E '^SUPABASE_DB_URL=' .env | head -1 | cut -d= -f2-)
+          # `|| true` for the same reason as the migrate job's copy of this:
+          # pipefail turns "no match" into a step that dies before the error
+          # message below can name what is missing.
+          existing=$(grep -E '^SUPABASE_DB_URL=' .env | head -1 | cut -d= -f2- || true)
           # A hand-edited .env may quote the value; the DSN parser must not see
           # the quotes.
           existing="${existing%\"}"; existing="${existing#\"}"
