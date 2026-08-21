@@ -90,7 +90,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 # Supavisor's fixed port pair. Session mode is 5432 only: Supabase deprecated
 # session mode on 6543 in February 2025, so 6543 is unambiguously transaction
@@ -306,6 +306,54 @@ def derive(
     return session, transaction, without_params(transaction, *PGX_ONLY_PARAMS)
 
 
+# libpq's own names for what a DSN carries. psql is a libpq client and so are
+# apply-migrations.sh and check-retention-schedule.sh, both of which take their
+# connection from these variables and deliberately never parse a DSN.
+LIBPQ_ENV_ORDER = ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD")
+
+
+def libpq_env(libpq_dsn: str) -> dict[str, str]:
+    """Split a libpq-safe DSN into the libpq environment variables.
+
+    This exists so a caller that must hand a script libpq variables, rather
+    than a DSN, still derives them from the one DSN the deployment actually
+    uses instead of assembling its own host and port from somewhere else. That
+    "somewhere else" is the whole defect: the migrate job used to read a
+    separate set of secrets, which after the self-hosted cutover pointed at a
+    different database than the stack, and reported success either way.
+
+    A query parameter with no libpq environment equivalent is refused rather
+    than dropped. Silently losing, say, sslmode from a migration connection is
+    the same class of quiet difference this function exists to remove.
+    """
+    parts = urlsplit(normalize_scheme(libpq_dsn))
+    host = parts.hostname
+    if not host:
+        raise ValueError(f"DSN has no host: {libpq_dsn!r}")
+    dbname = parts.path.lstrip("/")
+    if not dbname:
+        raise ValueError(f"DSN has no database name: {libpq_dsn!r}")
+    leftover = [name for name, _ in parse_qsl(parts.query)]
+    if leftover:
+        raise ValueError(
+            f"DSN carries parameters with no libpq environment equivalent: "
+            f"{', '.join(sorted(leftover))}. Export the matching PG* variable "
+            "explicitly instead of relying on this conversion, which would "
+            "otherwise drop them silently"
+        )
+    # urlsplit leaves the userinfo percent-encoded, and libpq environment
+    # variables are raw values. Handing psql `p%40ss` as PGPASSWORD
+    # authenticates as the literal string, which fails with a password error
+    # that says nothing about encoding.
+    return {
+        "PGHOST": host,
+        "PGPORT": str(parts.port or SESSION_PORT),
+        "PGUSER": unquote(parts.username or ""),
+        "PGDATABASE": dbname,
+        "PGPASSWORD": unquote(parts.password or ""),
+    }
+
+
 def build_dsn(host: str, port: str, user: str, dbname: str, password: str) -> str:
     return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}/{dbname}"
 
@@ -450,7 +498,29 @@ def self_test() -> int:
         assert "options=-c%20statement_timeout%3D3000" in flavour, flavour
         assert "+" not in urlsplit(flavour).query, flavour
 
-    print("derive-pooler-dsn: self-test ok (52 assertions)")
+    # --emit-libpq-env carries every component through, and decodes the
+    # password rather than handing psql a percent-encoded one.
+    _, _, direct_libpq = derive("postgres://postgres:p%40ss@supabase-db:5432/postgres")
+    env = libpq_env(direct_libpq)
+    assert env["PGHOST"] == "supabase-db", env
+    assert env["PGPORT"] == "5432", env
+    assert env["PGUSER"] == "postgres", env
+    assert env["PGDATABASE"] == "postgres", env
+    assert env["PGPASSWORD"] == "p@ss", env
+
+    # A pooler input lands on the transaction-mode port, which is why the
+    # migrate job no longer needs a port-picking step of its own.
+    assert libpq_env(derive(pooler)[2])["PGPORT"] == "6543", pooler
+
+    # A parameter with no libpq environment equivalent is refused, not dropped.
+    try:
+        libpq_env("postgresql://u:p@h:5432/postgres?sslmode=require")
+    except ValueError as err:
+        assert "sslmode" in str(err), err
+    else:
+        raise AssertionError("libpq_env silently dropped an unmapped parameter")
+
+    print("derive-pooler-dsn: self-test ok (59 assertions)")
     return 0
 
 
@@ -470,6 +540,15 @@ def main(argv: list[str]) -> int:
             "this consumer's share of the project's 15 session-mode slots "
             f"(default {DEFAULT_SESSION_MAX_CONNS}, the ephemeral budget; a "
             "long-lived deployment passes a larger one explicitly)"
+        ),
+    )
+    ap.add_argument(
+        "--emit-libpq-env",
+        action="store_true",
+        help=(
+            "print PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD for the "
+            "transaction-mode libpq DSN instead of the three DSN lines, for a "
+            "caller that has to hand libpq variables to psql"
         ),
     )
     ap.add_argument("--self-test", action="store_true")
@@ -493,6 +572,23 @@ def main(argv: list[str]) -> int:
         session, transaction, libpq = derive(dsn, session_max_conns=args.session_max_conns)
     except ValueError as err:
         ap.error(str(err))
+    if args.emit_libpq_env:
+        try:
+            env = libpq_env(libpq)
+        except ValueError as err:
+            ap.error(str(err))
+        for name in LIBPQ_ENV_ORDER:
+            print(f"{name}={env[name]}")
+        # Host, port, user and database on stderr; never the password. Same
+        # split as the DSN path below, and for the same reason: a caller
+        # redirects stdout into $GITHUB_ENV and still wants a readable log.
+        print(
+            f"libpq env: PGHOST={env['PGHOST']} PGPORT={env['PGPORT']} "
+            f"PGUSER={env['PGUSER']} PGDATABASE={env['PGDATABASE']}",
+            file=sys.stderr,
+        )
+        return 0
+
     print(f"SUPABASE_DB_URL={session}")
     print(f"SUPABASE_DB_POOL_URL={transaction}")
     print(f"SUPABASE_DB_POOL_URL_LIBPQ={libpq}")
