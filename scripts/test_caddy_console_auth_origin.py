@@ -125,20 +125,29 @@ def check(console_raw: str, supabase_raw: str, compose_raw: str) -> list[str]:
     console = strip_comments(console_raw)
     compose = strip_comments(compose_raw)
 
-    # The auth handle, found by its matcher rather than by position, so a
-    # reordering is caught by the ordering check below instead of making this
-    # one silently look at a different block.
-    auth_m = re.search(r"^\s*handle\s+((?:/auth/\S+\s*)+)\{", console, re.MULTILINE)
-    if not auth_m:
+    # A NAMED matcher, and reading it that way is not a style choice. `handle`
+    # takes exactly one matcher token, so `handle /auth/v1 /auth/v1/*` is a
+    # parse error Caddy refuses to adapt. The first version of this check
+    # accepted that form and reported OK on a Caddyfile that crash-looped the
+    # container on the box, which is why CI now adapts every Caddyfile as well:
+    # a structural check reads text and cannot know what parses.
+    #
+    # Anchored on the `handle @auth` DIRECTIVE for the ordering question below,
+    # because a named matcher's definition is position independent and
+    # anchoring on the definition would pass while the route was dead.
+    auth_m = re.search(r"^\s*handle\s+@auth\s*\{", console, re.MULTILINE)
+    matcher = re.search(r"^\s*@auth\s+path\s+([^\n]+)$", console, re.MULTILINE)
+    if not auth_m or not matcher:
         fail(
-            "Caddyfile.console has no `handle /auth/v1 ...` block, so this origin serves no "
-            "public auth surface: supabase-js in the console bundle and every endpoint in "
-            "GoTrue's discovery document point at a compose service name a browser cannot "
-            "resolve, and browser login is down with nothing in any log naming the cause"
+            "Caddyfile.console has no `@auth path ...` matcher paired with a `handle @auth` "
+            "block, so this origin serves no public auth surface: supabase-js in the console "
+            "bundle and every endpoint in GoTrue's discovery document point at a compose "
+            "service name a browser cannot resolve, and browser login is down with nothing in "
+            "any log naming the cause"
         )
         return failures
 
-    declared = auth_m.group(1).split()
+    declared = matcher.group(1).split()
     for want in REQUIRED_AUTH_PATHS:
         if want not in declared:
             fail("the auth handle's path matcher no longer covers " + want)
@@ -153,7 +162,7 @@ def check(console_raw: str, supabase_raw: str, compose_raw: str) -> list[str]:
                     "the console app serves itself: this routes the app's own pages to GoTrue"
                 )
 
-    if re.search(r"^\s*handle_path\s+/auth/v1", console, re.MULTILINE):
+    if re.search(r"^\s*handle_path\s+(@auth|/auth/v1)", console, re.MULTILINE):
         fail(
             "the auth route uses handle_path, which strips /auth/v1 before proxying. The "
             "public listener is what strips that prefix, so GoTrue is handed /token on a "
@@ -264,13 +273,18 @@ def check(console_raw: str, supabase_raw: str, compose_raw: str) -> list[str]:
 MUTATIONS: dict[str, tuple[str, str, str]] = {
     "the auth route deleted outright": (
         "console",
-        "  handle /auth/v1 /auth/v1/* {",
-        "  handle /nothing-at-all {",
+        "  handle @auth {",
+        "  handle @nothing {",
+    ),
+    "the matcher definition deleted, leaving the handle pointing at nothing": (
+        "console",
+        "  @auth path /auth/v1 /auth/v1/*\n",
+        "",
     ),
     "the prefix stripped before proxying": (
         "console",
-        "  handle /auth/v1 /auth/v1/* {",
-        "  handle_path /auth/v1/* {",
+        "  handle @auth {",
+        "  handle_path @auth {",
     ),
     "proxied to the internal listener instead of the public one": (
         "console",
@@ -294,13 +308,18 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     ),
     "the matcher widened until it takes the app's own sign-in page": (
         "console",
-        "  handle /auth/v1 /auth/v1/* {",
-        "  handle /auth/v1 /auth/* {",
+        "  @auth path /auth/v1 /auth/v1/*",
+        "  @auth path /auth/v1 /auth/*",
+    ),
+    "the matcher narrowed to the bare form, dropping every real route": (
+        "console",
+        "  @auth path /auth/v1 /auth/v1/*",
+        "  @auth path /auth/v1",
     ),
     "the app fallback hoisted above the auth route": (
         "console",
-        "  handle /auth/v1 /auth/v1/* {",
-        "  handle {\n    respond 204\n  }\n\n  handle /auth/v1 /auth/v1/* {",
+        "  handle @auth {",
+        "  handle {\n    respond 204\n  }\n\n  handle @auth {",
     ),
     "the app fallback no longer serving the app": (
         "console",
@@ -309,8 +328,8 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     ),
     "PostgREST published on the browser-facing origin": (
         "console",
-        "  handle /auth/v1 /auth/v1/* {",
-        "  handle /rest/v1/* {\n    reverse_proxy supabase-rest:3000\n  }\n\n  handle /auth/v1 /auth/v1/* {",
+        "  handle @auth {",
+        "  handle /rest/v1/* {\n    reverse_proxy supabase-rest:3000\n  }\n\n  handle @auth {",
     ),
     "caddy-console no longer handed the domain variable": (
         "compose",

@@ -73,7 +73,17 @@ http://{$CONSOLE_DOMAIN:console.localhost} {
   # to it: the public listener replaces the header outright with its own peer
   # address before GoTrue sees it, so the rate-limit bucket key still cannot
   # be chosen by the caller.
-  handle /auth/v1 /auth/v1/* {
+  # A NAMED matcher, because `handle` takes exactly one matcher token and
+  # `handle /auth/v1 /auth/v1/*` is a parse error, not a longer list. Caddy
+  # refuses to adapt the file and the container crash-loops, which is how this
+  # was found: every structural check in this repo reads the file as text, so
+  # all of them passed on a config Caddy would not load. CI now adapts every
+  # Caddyfile for that reason.
+  #
+  # The bare form is in the list on purpose, so a request to /auth/v1 reaches
+  # the gateway rather than falling through to a Next.js 404 naming nothing.
+  @auth path /auth/v1 /auth/v1/*
+  handle @auth {
     reverse_proxy caddy-supabase:8080 {
       header_up Host {$SUPABASE_DOMAIN:supabase.localhost}
       header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
