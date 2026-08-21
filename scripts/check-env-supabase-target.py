@@ -116,14 +116,19 @@ def check(env: dict) -> tuple[int, list]:
         )
         failed = True
 
-    dsn = env.get("SUPABASE_DB_URL", "")
-    if dsn.startswith("postgres://"):
-        report.append(
-            "SUPABASE_DB_URL uses the short postgres:// scheme. libpq and pgx "
-            "accept it, SQLAlchemy does not, so Open WebUI's pgvector store fails "
-            "with NoSuchModuleError. Use postgresql://"
-        )
-        failed = True
+    # All three DSN variables, not just the one a hand cutover usually edits.
+    # SUPABASE_DB_POOL_URL_LIBPQ is the flavour Open WebUI's SQLAlchemy actually
+    # consumes, so it is the one where the short scheme does the damage; the
+    # other two are checked because a deployment that sets them by hand will
+    # have written all three the same way.
+    for key in ("SUPABASE_DB_URL", "SUPABASE_DB_POOL_URL", "SUPABASE_DB_POOL_URL_LIBPQ"):
+        if env.get(key, "").startswith("postgres://"):
+            report.append(
+                f"{key} uses the short postgres:// scheme. libpq and pgx accept "
+                "it, SQLAlchemy does not, so Open WebUI's pgvector store fails "
+                "with NoSuchModuleError. Use postgresql://"
+            )
+            failed = True
 
     for key in ("SUPABASE_DB_POOL_URL", "SUPABASE_DB_POOL_URL_LIBPQ"):
         value = env.get(key, "")
@@ -200,6 +205,12 @@ def self_check() -> int:
         "jwks without a ca file": {"SUPABASE_JWKS_CA_FILE": ""},
         "issuer disagreement": {"SUPABASE_JWT_ISSUER": "http://supabase-auth:9999"},
         "short dsn scheme": {"SUPABASE_DB_URL": "postgres://postgres:pw@supabase-db:5432/postgres"},
+        "short dsn scheme on the pgx pool url": {
+            "SUPABASE_DB_POOL_URL": "postgres://postgres:pw@supabase-db:5432/postgres"
+        },
+        "short dsn scheme on the libpq pool url": {
+            "SUPABASE_DB_POOL_URL_LIBPQ": "postgres://postgres:pw@supabase-db:5432/postgres"
+        },
         "invented pooler port": {"SUPABASE_DB_POOL_URL": "postgresql://postgres:pw@supabase-db:6543/postgres"},
         "s3 secret equals its own id": {"S3_SECRET_KEY": "aaa"},
     }
