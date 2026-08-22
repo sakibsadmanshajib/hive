@@ -21,6 +21,14 @@ type Repository interface {
 	CreateAccount(ctx context.Context, acct Account) error
 	CreateMembership(ctx context.Context, m Membership) error
 	CreateProfile(ctx context.Context, p AccountProfile) error
+	// ProvisionDefaultWorkspace atomically provisions acct/membership/profile
+	// for a first-time viewer, serialized against every other concurrent call
+	// for the same viewer. See provisionDefaultWorkspace in service.go for why
+	// this must be atomic rather than three independent Create* calls.
+	// wonElsewhere is true when a concurrent call for this same viewer had
+	// already committed a workspace by the time this call took its lock: in
+	// that case nothing is inserted and existingAccountID is the winner's.
+	ProvisionDefaultWorkspace(ctx context.Context, acct Account, membership Membership, profile AccountProfile) (existingAccountID uuid.UUID, wonElsewhere bool, err error)
 	GetAccountByID(ctx context.Context, id uuid.UUID) (*Account, error)
 	CreateInvitation(ctx context.Context, inv Invitation) error
 	FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
@@ -115,11 +123,28 @@ func (r *pgxRepository) ActiveTenantID(ctx context.Context, userID uuid.UUID) (u
 	return tenantID, true, nil
 }
 
+// accountsSlugUniqueConstraint is the Postgres-assigned name for accounts'
+// column-level `slug ... unique` constraint (supabase/migrations/
+// 20260328_01_identity_foundation.sql), i.e. Postgres's default
+// <table>_<column>_key naming, never given an explicit name in the
+// migration. Matched by name, not just by SQLSTATE 23505, so a future
+// unique constraint added to this table is never misreported as
+// ErrSlugTaken.
+const accountsSlugUniqueConstraint = "accounts_slug_key"
+
+// CreateAccount inserts one account row. provisionDefaultWorkspace does not
+// call this directly — see ProvisionDefaultWorkspace below, which needs the
+// insert inside its own locked transaction. UNIQUE (slug) still surfaces
+// here as ErrSlugTaken for any other caller; see its doc comment in types.go.
 func (r *pgxRepository) CreateAccount(ctx context.Context, acct Account) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO public.accounts (id, slug, display_name, account_type, owner_user_id)
 		VALUES ($1, $2, $3, $4, $5)
 	`, acct.ID, acct.Slug, acct.DisplayName, acct.AccountType, acct.OwnerUserID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == accountsSlugUniqueConstraint {
+		return ErrSlugTaken
+	}
 	return err
 }
 
@@ -148,6 +173,77 @@ func (r *pgxRepository) CreateProfile(ctx context.Context, p AccountProfile) err
 		VALUES ($1, $2, $3, $4)
 	`, p.AccountID, p.OwnerName, p.LoginEmail, p.ProfileSetupComplete)
 	return err
+}
+
+// ProvisionDefaultWorkspace creates acct, membership, and profile inside one
+// transaction guarded by a pg_advisory_xact_lock keyed on membership.UserID.
+// Two concurrent calls for the same viewer serialize on that lock — the
+// second does not even start its re-check until the first has committed or
+// rolled back — so the TOCTOU window a bare "list memberships, then insert"
+// leaves open (a second Server Component request for a brand-new viewer
+// deciding independently that no workspace exists yet) cannot produce two
+// personal workspaces for one viewer. It can still return ErrSlugTaken: that
+// signals a *different* viewer's display name collapsed to the same slug
+// (buildSlug has no per-user uniqueifier), which this lock does not
+// serialize against (different key) and provisionDefaultWorkspace in
+// service.go handles by retrying with a de-duplicated slug.
+func (r *pgxRepository) ProvisionDefaultWorkspace(ctx context.Context, acct Account, membership Membership, profile AccountProfile) (existingAccountID uuid.UUID, wonElsewhere bool, err error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: begin provisioning tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::int8)`, membership.UserID.String()); err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: acquire provisioning lock: %w", err)
+	}
+
+	// Re-check now that the lock is held: a concurrent transaction for this
+	// same viewer may have committed and released the lock while this one was
+	// waiting to acquire it.
+	var winnerAccountID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT account_id FROM public.account_memberships
+		WHERE user_id = $1 AND status = $2
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, membership.UserID, StatusActive).Scan(&winnerAccountID)
+	if err == nil {
+		return winnerAccountID, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, fmt.Errorf("accounts: check active membership under lock: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.accounts (id, slug, display_name, account_type, owner_user_id)
+		VALUES ($1, $2, $3, $4, $5)
+	`, acct.ID, acct.Slug, acct.DisplayName, acct.AccountType, acct.OwnerUserID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == accountsSlugUniqueConstraint {
+			return uuid.Nil, false, ErrSlugTaken
+		}
+		return uuid.Nil, false, fmt.Errorf("accounts: create default account: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.account_memberships (id, account_id, user_id, role, status)
+		VALUES ($1, $2, $3, $4, $5)
+	`, membership.ID, membership.AccountID, membership.UserID, membership.Role, membership.Status); err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: create owner membership: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.account_profiles (account_id, owner_name, login_email, profile_setup_complete)
+		VALUES ($1, $2, $3, $4)
+	`, profile.AccountID, profile.OwnerName, profile.LoginEmail, profile.ProfileSetupComplete); err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: create account profile: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: commit provisioning tx: %w", err)
+	}
+	return acct.ID, false, nil
 }
 
 func (r *pgxRepository) GetAccountByID(ctx context.Context, id uuid.UUID) (*Account, error) {

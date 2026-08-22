@@ -20,6 +20,18 @@ type stubRepo struct {
 	emails        map[uuid.UUID]string    // user id -> auth.users email
 	activeTenants map[uuid.UUID]uuid.UUID // user id -> tenant id, for ActiveTenantID
 	acceptCalled  bool
+
+	// raceWinnerAccountID, when non-nil, makes ProvisionDefaultWorkspace
+	// behave as production does when a concurrent request for the same
+	// viewer already committed under the advisory lock: raceWinnerAccount
+	// and raceWinnerMembership become visible as part of that call (not
+	// before — the outer, unlocked membership check in EnsureViewerContext
+	// must still see nothing, exactly like the real TOCTOU window), and the
+	// call reports wonElsewhere instead of inserting its own rows. See
+	// TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers.
+	raceWinnerAccountID  uuid.UUID
+	raceWinnerAccount    *accounts.Account
+	raceWinnerMembership *accounts.Membership
 }
 
 func newStubRepo() *stubRepo {
@@ -50,6 +62,26 @@ func (s *stubRepo) ActiveTenantID(_ context.Context, userID uuid.UUID) (uuid.UUI
 func (s *stubRepo) CreateAccount(_ context.Context, acct accounts.Account) error {
 	s.accountsMap[acct.ID] = &acct
 	return nil
+}
+
+// ProvisionDefaultWorkspace mirrors pgxRepository's contract (see its doc
+// comment in repository.go): recover a concurrent winner if raceWinnerAccountID
+// is set, otherwise insert unless the slug collides with an existing account.
+func (s *stubRepo) ProvisionDefaultWorkspace(_ context.Context, acct accounts.Account, membership accounts.Membership, profile accounts.AccountProfile) (uuid.UUID, bool, error) {
+	if s.raceWinnerAccountID != uuid.Nil {
+		s.accountsMap[s.raceWinnerAccount.ID] = s.raceWinnerAccount
+		s.memberships = append(s.memberships, *s.raceWinnerMembership)
+		return s.raceWinnerAccountID, true, nil
+	}
+	for _, existing := range s.accountsMap {
+		if existing.Slug == acct.Slug {
+			return uuid.Nil, false, accounts.ErrSlugTaken
+		}
+	}
+	s.accountsMap[acct.ID] = &acct
+	s.memberships = append(s.memberships, membership)
+	s.profiles[profile.AccountID] = &profile
+	return acct.ID, false, nil
 }
 
 func (s *stubRepo) CreateMembership(_ context.Context, m accounts.Membership) error {
@@ -256,6 +288,110 @@ func TestEnsureDefaultAccount_VerifiedOwnerHasKeyPermissions(t *testing.T) {
 	}
 	if !contains(vc.Permissions, "api_keys.write") {
 		t.Error("expected api_keys.write in Permissions for verified owner")
+	}
+}
+
+// TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers reproduces
+// the CI flake behind "could not load your workspace": Next.js Server
+// Components call getViewer() unmemoized per component, so a brand-new
+// viewer's very first page load can fire two concurrent
+// provisionDefaultWorkspace attempts. repo.ProvisionDefaultWorkspace
+// serializes them on a per-viewer advisory lock in production; here the stub
+// models the second (losing) call's lock-scoped re-check finding the first's
+// committed row, which must be recovered rather than surfaced as a 500 or a
+// second, duplicate workspace.
+func TestEnsureDefaultAccount_SlugCollisionFromConcurrentSelf_Recovers(t *testing.T) {
+	repo := newStubRepo()
+	svc := accounts.NewService(repo)
+
+	viewer := auth.Viewer{
+		UserID:        uuid.New(),
+		Email:         "racer@example.com",
+		EmailVerified: true,
+		FullName:      "Racer User",
+	}
+
+	winningAccountID := uuid.New()
+	repo.raceWinnerAccountID = winningAccountID
+	repo.raceWinnerAccount = &accounts.Account{
+		ID:          winningAccountID,
+		Slug:        "racer-user-s-workspace",
+		DisplayName: "Racer User's Workspace",
+		AccountType: "personal",
+		OwnerUserID: viewer.UserID,
+	}
+	repo.raceWinnerMembership = &accounts.Membership{
+		ID:        uuid.New(),
+		AccountID: winningAccountID,
+		UserID:    viewer.UserID,
+		Role:      "owner",
+		Status:    "active",
+	}
+
+	vc, err := svc.EnsureViewerContext(context.Background(), viewer, uuid.Nil)
+	if err != nil {
+		t.Fatalf("EnsureViewerContext error: %v", err)
+	}
+	if vc.CurrentAccount.ID != winningAccountID {
+		t.Errorf("expected to recover the concurrent winner's account %v, got %v", winningAccountID, vc.CurrentAccount.ID)
+	}
+	if len(vc.Memberships) != 1 {
+		t.Fatalf("expected 1 membership recovered from the race, got %d", len(vc.Memberships))
+	}
+	// The bug this guards against: a second personal workspace silently
+	// created for the same viewer because the losing request didn't see the
+	// winner's row yet. Exactly one account must exist for this viewer.
+	if len(repo.accountsMap) != 1 {
+		t.Fatalf("expected exactly 1 account to exist after the race, got %d", len(repo.accountsMap))
+	}
+}
+
+// TestEnsureDefaultAccount_SlugCollisionFromDifferentViewer_RetriesWithSuffix
+// covers the other trigger for the same unique constraint: two different
+// viewers whose display names collapse to the same slug (buildSlug has no
+// per-user uniqueifier). Unlike the self-race case, this viewer holds no
+// membership after the collision, so provisioning must retry with a
+// de-duplicated slug rather than recover a workspace that is not theirs.
+func TestEnsureDefaultAccount_SlugCollisionFromDifferentViewer_RetriesWithSuffix(t *testing.T) {
+	repo := newStubRepo()
+	svc := accounts.NewService(repo)
+
+	otherUserID := uuid.New()
+	otherAccountID := uuid.New()
+	// buildSlug("Same Name's Workspace") == "same-name-s-workspace" — pinned
+	// here to force the collision without exporting the algorithm to this
+	// blackbox test package.
+	repo.accountsMap[otherAccountID] = &accounts.Account{
+		ID:          otherAccountID,
+		Slug:        "same-name-s-workspace",
+		DisplayName: "Same Name's Workspace",
+		AccountType: "personal",
+		OwnerUserID: otherUserID,
+	}
+	repo.memberships = append(repo.memberships, accounts.Membership{
+		ID:        uuid.New(),
+		AccountID: otherAccountID,
+		UserID:    otherUserID,
+		Role:      "owner",
+		Status:    "active",
+	})
+
+	viewer := auth.Viewer{
+		UserID:        uuid.New(),
+		Email:         "samename@example.com",
+		EmailVerified: true,
+		FullName:      "Same Name",
+	}
+
+	vc, err := svc.EnsureViewerContext(context.Background(), viewer, uuid.Nil)
+	if err != nil {
+		t.Fatalf("EnsureViewerContext error: %v", err)
+	}
+	if vc.CurrentAccount.ID == otherAccountID {
+		t.Fatal("expected a distinct account for the colliding different-viewer case, got the other viewer's account")
+	}
+	if len(vc.Memberships) != 1 {
+		t.Fatalf("expected 1 membership for the new viewer, got %d", len(vc.Memberships))
 	}
 }
 

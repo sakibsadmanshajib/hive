@@ -135,6 +135,17 @@ func (s *stubRepo) CreateProfile(_ context.Context, profile accounts.AccountProf
 	return nil
 }
 
+func (s *stubRepo) ProvisionDefaultWorkspace(_ context.Context, acct accounts.Account, membership accounts.Membership, profile accounts.AccountProfile) (uuid.UUID, bool, error) {
+	s.accountsMap[acct.ID] = &acct
+	s.memberships = append(s.memberships, membership)
+	s.profiles[profile.AccountID] = AccountProfile{
+		OwnerName:            profile.OwnerName,
+		LoginEmail:           profile.LoginEmail,
+		ProfileSetupComplete: profile.ProfileSetupComplete,
+	}
+	return acct.ID, false, nil
+}
+
 func (s *stubRepo) GetAccountByID(_ context.Context, id uuid.UUID) (*accounts.Account, error) {
 	acct, ok := s.accountsMap[id]
 	if !ok {

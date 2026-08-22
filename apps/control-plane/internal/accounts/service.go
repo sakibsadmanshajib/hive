@@ -166,47 +166,85 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 	}, nil
 }
 
-// provisionDefaultWorkspace creates a default personal account, owner membership,
-// and core profile row for the viewer.
+// maxSlugAttempts bounds the de-duplication retry in provisionDefaultWorkspace
+// below. One attempt recovers the self-race case (see the loop body); the
+// rest exist only for the rare different-viewer collision, which a second
+// de-duplicated slug resolves in practice.
+const maxSlugAttempts = 3
+
+// provisionDefaultWorkspace creates a default personal account, owner
+// membership, and core profile row for the viewer, or recovers a concurrent
+// request's workspace for the same viewer if one already won.
+//
+// Next.js Server Components call getViewer() unmemoized per component
+// (layout.tsx and each page.tsx independently), so a brand-new viewer's
+// first page load can fire two concurrent GET /api/v1/viewer requests that
+// both see zero active memberships. repo.ProvisionDefaultWorkspace
+// serializes those two on a per-viewer Postgres advisory lock and re-checks
+// under that lock, so only one of them ever inserts — see its doc comment
+// in repository.go for why a bare "list memberships, then insert" is not
+// enough on its own.
 func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Viewer) error {
 	displayName := buildDisplayName(viewer.FullName, viewer.Email)
-	slug := buildSlug(displayName)
-
+	baseSlug := buildSlug(displayName)
 	accountID := uuid.New()
-	acct := Account{
-		ID:          accountID,
-		Slug:        slug,
-		DisplayName: displayName,
-		AccountType: "personal",
-		OwnerUserID: viewer.UserID,
-	}
-	if err := s.repo.CreateAccount(ctx, acct); err != nil {
-		return fmt.Errorf("accounts: create default account: %w", err)
-	}
-
-	membership := Membership{
-		ID:        uuid.New(),
-		AccountID: accountID,
-		UserID:    viewer.UserID,
-		Role:      RoleOwner,
-		Status:    StatusActive,
-	}
-	if err := s.repo.CreateMembership(ctx, membership); err != nil {
-		return fmt.Errorf("accounts: create owner membership: %w", err)
-	}
 
 	ownerName := viewer.FullName
 	if ownerName == "" {
 		ownerName = emailLocalPart(viewer.Email)
 	}
-	profile := AccountProfile{
-		AccountID:            accountID,
-		OwnerName:            ownerName,
-		LoginEmail:           viewer.Email,
-		ProfileSetupComplete: false,
-	}
-	if err := s.repo.CreateProfile(ctx, profile); err != nil {
-		return fmt.Errorf("accounts: create account profile: %w", err)
+
+	for attempt := 0; ; attempt++ {
+		slug := baseSlug
+		if attempt > 0 {
+			slug = baseSlug + "-" + uuid.New().String()[:8]
+		}
+
+		acct := Account{
+			ID:          accountID,
+			Slug:        slug,
+			DisplayName: displayName,
+			AccountType: "personal",
+			OwnerUserID: viewer.UserID,
+		}
+		membership := Membership{
+			ID:        uuid.New(),
+			AccountID: accountID,
+			UserID:    viewer.UserID,
+			Role:      RoleOwner,
+			Status:    StatusActive,
+		}
+		profile := AccountProfile{
+			AccountID:            accountID,
+			OwnerName:            ownerName,
+			LoginEmail:           viewer.Email,
+			ProfileSetupComplete: false,
+		}
+
+		_, wonElsewhere, err := s.repo.ProvisionDefaultWorkspace(ctx, acct, membership, profile)
+		if err == nil {
+			if wonElsewhere {
+				// A concurrent request for this same viewer already committed
+				// a workspace under the lock. Nothing left to do: the caller
+				// re-lists memberships right after this returns and picks up
+				// the winner's row. Skip the billing best-effort block below
+				// too — the winning call already ran it for this viewer.
+				return nil
+			}
+			break
+		}
+		if !errors.Is(err, ErrSlugTaken) {
+			return fmt.Errorf("accounts: provision default workspace: %w", err)
+		}
+
+		// ErrSlugTaken here can only mean a genuinely different viewer's
+		// display name collapsed to the same slug (buildSlug has no per-user
+		// uniqueifier): the advisory lock above already ruled out this being
+		// the same viewer racing itself. Retry with a de-duplicated slug
+		// instead of failing this viewer's first-ever sign-in.
+		if attempt+1 >= maxSlugAttempts {
+			return fmt.Errorf("accounts: create default account: slug %q still taken after %d attempts", baseSlug, maxSlugAttempts)
+		}
 	}
 
 	// Best-effort and non-fatal, mirroring signup.Provisioner's own contract:
