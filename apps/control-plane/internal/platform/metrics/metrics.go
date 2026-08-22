@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"errors"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -82,4 +84,54 @@ func NewRegistry() (*Registry, *prometheus.Registry) {
 		r.SignupProvisioningSweepFailures,
 	)
 	return r, reg
+}
+
+// SignupProvisioningSource is the reconciler state RegisterSignupProvisioning
+// exports. Declared as an interface here so the metrics package does not import
+// the signup package, and satisfied by *signup.Reconciler.
+//
+// Both accessors must be cheap and non-blocking: they are read during a
+// Prometheus scrape, so neither may touch the database. The reconciler caches
+// the stranded count on its own sweep timer for exactly this reason.
+type SignupProvisioningSource interface {
+	Faults() int
+	StrandedIdentities() int
+}
+
+// RegisterSignupProvisioning adds the two metrics that make a permanently
+// failed provisioning visible. They are function-backed collectors rather than
+// fields on Registry because their values are owned by the reconciler, which
+// already holds them under its own lock; copying them across on a ticker would
+// add a second source of truth that can lag or stall.
+//
+// Why two metrics rather than one. hive_signup_provisioning_sweep_failures
+// answers "is provisioning failing right now" and resets on any clean sweep,
+// which is correct for that question and useless for the one that matters: a
+// sweep goes clean the moment the identity that kept faulting ages out of the
+// 24 hour lookback window, so an alert on that gauge alone resolves itself at
+// the exact instant the loss becomes permanent. A monotonic counter cannot be
+// walked back that way, and a gauge of identities already past the window
+// reports the standing consequence rather than the event. Neither substitutes
+// for the other: the counter says work was lost, the gauge says who is still
+// affected.
+func RegisterSignupProvisioning(reg *prometheus.Registry, src SignupProvisioningSource) error {
+	if reg == nil || src == nil {
+		return errors.New("metrics: signup provisioning collectors need a registry and a source")
+	}
+	collectors := []prometheus.Collector{
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name: "hive_signup_provisioning_faults_total",
+			Help: "Identities that could not be provisioned, monotonic since process start",
+		}, func() float64 { return float64(src.Faults()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "hive_signup_provisioning_stranded_identities",
+			Help: "Identities holding no tenant membership that are already older than the provisioning sweep's lookback window, so no sweep will retry them",
+		}, func() float64 { return float64(src.StrandedIdentities()) }),
+	}
+	for _, c := range collectors {
+		if err := reg.Register(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }

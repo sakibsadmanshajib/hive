@@ -18,7 +18,7 @@ OpenAI-compatible API gateway for the Bangladesh market. v1.0 is a full Go rewri
 | `supabase/migrations` | Postgres schema | SQL |
 | `deploy/docker` | Compose + Dockerfiles for the stack | — |
 | `deploy/litellm` | LiteLLM config (OpenRouter / Groq routing) | — |
-| `deploy/{prometheus,grafana,alertmanager}` | Monitoring stack | — |
+| `deploy/{prometheus,grafana}` | Monitoring stack. Alert routing is inline in `deploy/docker/docker-compose.yml`, because Alertmanager cannot read environment variables from a config file | — |
 
 ### Request flow (happy path)
 
@@ -295,7 +295,6 @@ deploy/
   litellm/                  LiteLLM config
   prometheus/               Prometheus + alert rules
   grafana/                  Dashboards + provisioning
-  alertmanager/             Alert routing
 scripts/                    One-off operational scripts
 docs/                       Hand-written docs + generated codemaps
 ```
