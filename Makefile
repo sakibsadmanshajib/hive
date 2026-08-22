@@ -36,3 +36,4 @@ test-scripts:
 	python3 scripts/derive-pooler-dsn.py --self-test
 	python3 scripts/test_caddy_console_auth_origin.py --self-check
 	python3 scripts/restore-storage-objects.py --self-check
+	python3 scripts/test_owui_oauth_client_auth.py
