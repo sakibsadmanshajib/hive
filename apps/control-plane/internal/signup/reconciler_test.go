@@ -333,3 +333,32 @@ func newTestAuditLogger(pool *pgxpool.Pool) *audit.Logger {
 	deps := audit.LoggerDeps{Sync: audit.NewSyncWriter(pool, cfg), WAL: &noopWAL{}}
 	return audit.NewLogger(deps)
 }
+
+// TestReconcilerSweepTakesTheOldestCandidatesFirst pins the ordering, which is
+// what stops a set of identities the sweep cannot clear from refilling every
+// batch while the identities behind them age out of the lookback window
+// unattempted (review finding, Greptile on PR 993). The batch limit is applied by
+// the database, so the ordering decides who a pass can act on at all.
+func TestReconcilerSweepTakesTheOldestCandidatesFirst(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	fx := newReconcileFixture(t, ctx, pool)
+	older := mustInsertSweepUser(t, ctx, pool, "older-"+uuid.NewString()+"@"+fx.domain,
+		time.Now().Add(-6*time.Hour), nil, nil)
+	newer := mustInsertSweepUser(t, ctx, pool, "newer-"+uuid.NewString()+"@"+fx.domain,
+		time.Now(), nil, nil)
+
+	// One candidate per pass, so the ordering is the only thing that decides
+	// which of the two is served.
+	cfg := signup.ReconcilerConfig{BatchLimit: 1}
+	report, err := signup.NewReconciler(pool, fx.prov, cfg).Sweep(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Candidates)
+
+	require.Equal(t, 1, countMemberships(t, ctx, pool, older),
+		"the identity closest to leaving the window must be the one a limited pass serves")
+	require.Equal(t, 0, countMemberships(t, ctx, pool, newer))
+}

@@ -322,6 +322,14 @@ func (r *Reconciler) cool(userID uuid.UUID) {
 // candidate is precisely an identity whose next token would carry no tenant
 // claim. Keep the three in step.
 //
+// Oldest first, and that ordering is load-bearing rather than arbitrary. The batch limit is applied by the database, so whichever identities the ordering
+// puts first are the only ones a pass can act on. Newest first lets any set of
+// identities the pass cannot clear, ones that keep faulting rather than reaching
+// a terminal determination, refill the batch forever while the identities behind
+// them age out of the window unattempted (review finding, Greptile on PR 993, twice). Oldest first inverts that: the identities closest to leaving the window
+// are always attempted, and a fresh signup that waits a pass or two still has the console route and, where it is configured, the webhook. This is a backstop,
+// so covering the ones about to be lost matters more than latency on the newest.
+//
 // The lifecycle filters are not decoration. A soft-deleted or banned identity
 // must never be provisioned. An identity whose created_at is NULL is excluded
 // by the window comparison itself, since a comparison against NULL is not
@@ -348,7 +356,7 @@ const candidateQuery = `
 	          AND t.archived_at IS NULL
 	   )
 	   AND NOT (u.id = ANY($3::uuid[]))
-	 ORDER BY u.created_at DESC
+	 ORDER BY u.created_at ASC
 	 LIMIT $2
 `
 
