@@ -78,9 +78,21 @@
 		window.location.href = `${WEBUI_BASE_URL}/oauth/${provider}/login`;
 	};
 
-	const hasExistingSession = () =>
-		Boolean(localStorage.token) ||
-		document.cookie.split('; ').some((cookie) => cookie.startsWith('token='));
+	// Reading localStorage throws outright when storage is blocked (a hardened
+	// browser profile, third-party-cookie style restrictions in an embedded
+	// context). This runs before `loaded = true`, so an unhandled throw here
+	// left the visitor with no sign in page and no manual provider button at
+	// all. The cookie half needs no guard and is read first so it still counts.
+	const hasExistingSession = () => {
+		const hasTokenCookie = document.cookie
+			.split('; ')
+			.some((cookie) => cookie.startsWith('token='));
+		try {
+			return Boolean(localStorage.token) || hasTokenCookie;
+		} catch {
+			return hasTokenCookie;
+		}
+	};
 
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {

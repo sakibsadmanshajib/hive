@@ -22,5 +22,16 @@ trap 'rm -rf "$WORK"' EXIT
 cp "$SRC"/*.ts "$WORK"/
 cd "$WORK"
 
-# Pinned major so a vitest release cannot change the meaning of a green run.
-npx --yes vitest@2 run
+# Runs in a pinned node image rather than on host node, per CLAUDE.md's
+# Docker-only testing contract: a contributor with no host node still gets this
+# check, and the node version cannot drift between a laptop and CI. Pinned
+# vitest major on top, so neither a node release nor a vitest release can change
+# the meaning of a green run. The scratch directory is the only mount, and the
+# container is given the caller's uid so the npx cache it writes there is not
+# left root owned on the host.
+docker run --rm \
+  -v "$WORK:/work" -w /work \
+  -u "$(id -u):$(id -g)" \
+  -e HOME=/work \
+  node:22-alpine3.20 \
+  npx --yes vitest@2 run

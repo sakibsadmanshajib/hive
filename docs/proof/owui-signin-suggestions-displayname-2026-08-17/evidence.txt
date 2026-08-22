@@ -144,7 +144,7 @@ cannot complete locally:
   And the refresh path that protects a user edited name is untouched:
   1919:  if new_name and new_name != user.name:
 
-  This had to be a build time patch. The image builds only the front end from
+  This had to be a build-time patch. The image builds only the front end from
   vendor/open-webui and takes its backend from the pinned upstream image, so the
   first version of this change, which edited the vendored backend, was inert. It
   was found by running the built image rather than by reading the diff.
