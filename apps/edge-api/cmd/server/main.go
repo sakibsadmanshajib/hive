@@ -665,7 +665,15 @@ func handleHealth(degraded func() bool) http.HandlerFunc {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"status": "degraded",
-				"reason": "control-plane resolve unavailable",
+				// Fixed string, and deliberately service-agnostic. This
+				// endpoint is unauthenticated on the public gateway, so the
+				// degraded body follows the same discipline control-plane's
+				// /health already enforces with a test: name the missing
+				// capability, never the internal component, the host or the
+				// upstream error. "authorization dependency unavailable" says
+				// what a caller can act on; the internal topology is not the
+				// caller's business.
+				"reason": "authorization dependency unavailable",
 			})
 			return
 		}

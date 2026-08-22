@@ -105,7 +105,18 @@ func TestNewRouterDegradedHealthDoesNotLeakConnectionDetail(t *testing.T) {
 // differently as the callback's underlying state changes, with no restart.
 func TestNewRouterHealthReactsToRuntimeChange(t *testing.T) {
 	healthy := true
-	h := NewRouter(RouterConfig{DBReady: func() bool { return healthy }})
+	// ProvisioningReady is supplied because #993 made a nil reporter degrade
+	// this endpoint on purpose (D-023). Without it every assertion below that
+	// expects 200 would be answered 503 for an unrelated reason, and this test
+	// would stop testing DBReady at all. The two signals are independent: this
+	// test holds provisioning ready and moves DBReady;
+	// router_health_provisioning_test.go holds DBReady ready and moves
+	// provisioning.
+	ready := func() (bool, string) {
+		var noReason string
+		return true, noReason
+	}
+	h := NewRouter(RouterConfig{DBReady: func() bool { return healthy }, ProvisioningReady: ready})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))

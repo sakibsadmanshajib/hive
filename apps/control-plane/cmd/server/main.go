@@ -1063,7 +1063,7 @@ func main() {
 		// absent (issue #816). resolveHealth.Degraded() adds the runtime
 		// half: a pool that opened fine at boot and later started failing
 		// checkouts under contention (issue #836).
-		DBReady:                  func() bool { return pool != nil && !resolveHealth.Degraded() },
+		DBReady: dbReadyFunc(pool, resolveHealth),
 		// Signup provisioning readiness (D-023). A nil reconciler answers false
 		// through this same method value, so a deployment that failed to wire
 		// provisioning reports degraded rather than serving traffic quietly.
@@ -1737,4 +1737,27 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 	})
 	real := agentengine.New(sandbox)
 	return real, real
+}
+
+// dbReadyFunc builds the callback platformhttp.RouterConfig.DBReady calls on
+// every /health request.
+//
+// pool != nil is the same condition that gates every DB-backed handler, so
+// /health cannot report ok while those routes are absent (issue #816).
+// resolveHealth.Degraded() is the runtime half: a pgxpool.Pool is never nil
+// again after a successful boot, even when every checkout is timing out, so
+// the boot-time condition alone answers 200 straight through the outage this
+// exists to catch (issue #836).
+//
+// Extracted from the RouterConfig literal so both halves are reachable from a
+// test. Inline, deleting the resolveHealth term left the whole suite green:
+// the tracker and the callback plumbing were each covered, and their
+// composition here was not.
+func dbReadyFunc(pool *pgxpool.Pool, resolveHealth *platformdb.ResolveHealth) func() bool {
+	return func() bool {
+		if pool == nil {
+			return false
+		}
+		return resolveHealth == nil || !resolveHealth.Degraded()
+	}
 }

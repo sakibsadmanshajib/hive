@@ -1267,3 +1267,28 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatalf("condition not met within 2s")
 }
+
+// TestDegradedHealthBodyNamesNoInternalComponent mirrors control-plane's
+// TestNewRouterDegradedHealthDoesNotLeakConnectionDetail. /health here is
+// unauthenticated on the public gateway, so its degraded body must name the
+// missing capability and nothing else. The first version of this response
+// said "control-plane resolve unavailable", which published an internal
+// service name and the internal call it makes to anyone who curled the
+// endpoint during an outage.
+func TestDegradedHealthBodyNamesNoInternalComponent(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "", func() bool { return true })
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health while degraded = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	body := strings.ToLower(rec.Body.String())
+	for _, leak := range []string{"control-plane", "controlplane", "resolve", "postgres", "pooler", "supabase", "redis", "5432", "8081"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("degraded /health body leaks %q: %s", leak, rec.Body.String())
+		}
+	}
+}

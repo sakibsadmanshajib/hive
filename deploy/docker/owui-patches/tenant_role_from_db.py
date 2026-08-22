@@ -44,32 +44,29 @@ try:
     if hive_email and hive_db_url:
         import psycopg2 as hive_psycopg2
 
-        # PGVECTOR_DB_URL is meant to carry Supavisor's transaction-mode
-        # DSN (SUPABASE_DB_POOL_URL_LIBPQ), not the session-mode one --
-        # docker-compose.yml already maps it that way -- because this
-        # lookup runs on every single login and must not hold a session
-        # slot against the 15-client ceiling every other consumer shares
-        # (control-plane, edge-api, CI). SUPABASE_DB_POOL_URL_LIBPQ being
-        # unset falls back to the session DSN, which still works but
-        # costs a session slot per login; that gap is deployment
-        # configuration, tracked separately, not something this fragment
-        # can fix. What this fragment fixes: whichever DSN arrives here,
-        # the timeout mechanism below must actually work under
-        # transaction mode once that gap closes.
+        # This lookup runs on every login, so the query must be bounded.
+        # It used to be bounded with a libpq `options=-c statement_timeout=...`
+        # startup string. That mechanism is applied by whichever backend the
+        # client is handed at connection time, so it is honoured on a direct
+        # Postgres and on a session-mode pooler, but a transaction-mode pooler
+        # multiplexes many client sessions over fewer backends and does not
+        # reliably carry it: the connection still succeeds, with no error and
+        # no warning, and the requested timeout is simply never in effect.
+        # `SET LOCAL` inside the implicit transaction this cursor block already
+        # runs in is honoured in every one of those three cases, and it is the
+        # same pattern every RLS `set_config(..., true)` call here relies on,
+        # so it is used unconditionally rather than depending on what
+        # PGVECTOR_DB_URL happens to point at.
         #
-        # Verified live against the actual pooler, not assumed from
-        # documentation: a `-c statement_timeout=... -c lock_timeout=...`
-        # startup `options` string, which is what this used to pass to
-        # connect(), is silently accepted and then silently ignored by
-        # Supavisor transaction mode -- the connection succeeds and SHOW
-        # reports the role's untouched default (measured 2 minutes / no
-        # lock_timeout) instead of the requested 3 seconds. No error, no
-        # warning, just a much longer possible stall on this login-path
-        # query than intended. `SET LOCAL` after connecting, inside the
-        # one implicit transaction this cursor block runs in, measured
-        # correctly on the same pooler (3s/3s), and is the exact pattern
-        # every RLS `set_config(..., true)` call in this codebase already
-        # relies on for the same reason.
+        # Measured, not assumed. On the current self-hosted deployment
+        # (PGVECTOR_DB_URL -> supabase-db:5432, a direct Postgres with no
+        # pooler in front of it) both mechanisms report the requested 3s, and
+        # the role default with neither is 0, meaning unbounded. On the
+        # previous hosted Supavisor pooler in transaction mode the `options=`
+        # form measured as the role's untouched default instead of the
+        # requested 3s. The change is therefore a no-op on today's deployment
+        # and a real fix on any deployment that puts a transaction-mode pooler
+        # back in this path.
         hive_conn = hive_psycopg2.connect(hive_db_url, connect_timeout=5)
         try:
             with hive_conn.cursor() as hive_cur:
