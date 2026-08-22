@@ -199,3 +199,50 @@ The temporary in-network tap used to reach GoTrue's admin API (a socat
 container publishing on 127.0.0.1 only, plus an ssh local forward) was removed
 afterwards, and its absence confirmed: the container is gone and the forwarded
 port answers nothing.
+
+
+7. Review-round mutations (CodeRabbit findings, second commit)
+--------------------------------------------------------------
+
+CodeRabbit's local review raised two blind spots, both real, both fixed:
+
+  major  the scope scanner read only Compose's mapping form
+         (`OAUTH_SCOPES: "..."`), not its list form
+         (`- OAUTH_SCOPES=...`). Compose accepts either, so a declaration
+         written the other way would not fail the check, it would be invisible
+         to it, and the check would report a clean run over a corpus of zero.
+         Both scripts/check-oauth-scopes.py and envDeclarations in
+         owui_oauth_scope_test.go now read both spellings.
+
+  minor  the wiring guard matched a bare filename, so a commented-out step, or
+         a comment explaining that the check had been removed, would satisfy
+         it. It now matches invocations and ignores comment lines
+         (containsUncommented), with its own table test.
+
+  Mutation, list form: `- OAUTH_SCOPES=openid email profile offline_access`
+
+    ok   list-form `- OAUTH_SCOPES=...` with a bad scope fails
+    ok   list-form with a good scope passes
+    ok   list form is seen as one declaration
+
+  Mutation, the Makefile invocation commented out rather than deleted:
+
+    $ go test ./apps/edge-api/internal/auth/... -run OWUIOAuthScopeGateIsWired
+    --- FAIL: TestOWUIOAuthScopeGateIsWired (0.00s)
+        Messages: Makefile no longer invokes
+                  "python3 scripts/test_check_oauth_scopes.py" outside a
+                  comment, so the comparator's own tests must run in a required
+                  check [...]
+    FAIL
+
+  Restored, green:
+
+    --- PASS: TestOWUIOAuthScopesRequestOpenID (0.00s)
+    --- PASS: TestOWUIOAuthScopeGateIsWired (0.00s)
+    --- PASS: TestContainsUncommentedRejectsCommentedInvocations (0.00s)
+    $ python3 scripts/test_check_oauth_scopes.py   -> 19 checks, all passed
+
+  Also confirmed in CI on the first commit: the new pull-request gate
+  ("Configured OAuth scopes are advertised by the auth server") passed in 8
+  seconds against the live discovery document from a GitHub-hosted runner, so
+  the gate genuinely reaches the deployed authorization server.

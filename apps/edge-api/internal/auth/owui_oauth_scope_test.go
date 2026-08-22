@@ -144,6 +144,10 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 			"requested OAuth scope against what the deployed authorization "+
 			"server actually advertises (#787). It must exist.")
 
+	// Each needle is an INVOCATION, not a filename. A bare filename match
+	// would be satisfied by the commented-out remains of a step, or by a
+	// sentence in a comment explaining why the check was removed, which is
+	// precisely the moment this guard has to fire.
 	for _, wiring := range []struct {
 		file   string
 		needle string
@@ -151,14 +155,14 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 	}{
 		{
 			file:   filepath.Join(".github", "workflows", "oauth-scope-gate.yml"),
-			needle: "scripts/check-oauth-scopes.py",
+			needle: "python3 scripts/check-oauth-scopes.py",
 			why: "the pull-request gate is what catches an unadvertised scope " +
 				"BEFORE it is merged and deployed, which is the whole gap #787 " +
 				"went through",
 		},
 		{
 			file:   filepath.Join(".github", "workflows", "deploy-demo-box.yml"),
-			needle: "scripts/check-oauth-scopes.py",
+			needle: "scripts/check-oauth-scopes.py --discovery",
 			why: "the post-deploy step is what catches the authorization server " +
 				"dropping a capability while this repository stands still, which " +
 				"is the direction the self-hosted cutover broke and which no " +
@@ -166,7 +170,7 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 		},
 		{
 			file:   "Makefile",
-			needle: "test_check_oauth_scopes.py",
+			needle: "python3 scripts/test_check_oauth_scopes.py",
 			why: "the comparator's own tests must run in a required check, or a " +
 				"subset check that can no longer go red is indistinguishable " +
 				"from one that passes unconditionally",
@@ -176,9 +180,54 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 		require.NoError(t, readErr, "%s must exist: %s", wiring.file, wiring.why)
 		// require.True rather than require.Contains: a failed Contains prints
 		// the entire file into the test log and buries the explanation.
-		require.True(t, strings.Contains(string(body), wiring.needle),
-			"%s no longer references %q, so %s", wiring.file, wiring.needle, wiring.why)
+		require.True(t, containsUncommented(string(body), wiring.needle),
+			"%s no longer invokes %q outside a comment, so %s",
+			wiring.file, wiring.needle, wiring.why)
 	}
+}
+
+// TestContainsUncommentedRejectsCommentedInvocations is the self-check for the
+// matcher above, and it exists because the matcher is the only thing standing
+// between "the gate is wired" and "the gate is mentioned". Without these cases
+// a regression to plain strings.Contains would keep every assertion above
+// green while the step it checks sat commented out.
+func TestContainsUncommentedRejectsCommentedInvocations(t *testing.T) {
+	const needle = "python3 scripts/check-oauth-scopes.py"
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"a real step", "      run: |\n        python3 scripts/check-oauth-scopes.py --discovery x\n", true},
+		{"commented out whole line", "      # python3 scripts/check-oauth-scopes.py --discovery x\n", false},
+		{"named in prose", "      # we removed python3 scripts/check-oauth-scopes.py because reasons\n", false},
+		{"trailing comment after a real call", "        python3 scripts/check-oauth-scopes.py # why\n", true},
+		{"absent entirely", "      run: echo nothing\n", false},
+	} {
+		require.Equal(t, tc.want, containsUncommented(tc.body, needle), tc.name)
+	}
+}
+
+// containsUncommented reports whether needle appears on a line that is not
+// commented out, in either YAML or make syntax (both use #).
+//
+// Plain strings.Contains would accept a step that had been commented out, or a
+// comment describing the invocation that used to be there. Those are the exact
+// states this guard exists to catch, so matching them would make it decorative.
+func containsUncommented(body, needle string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if index := strings.Index(line, needle); index >= 0 {
+			// The needle itself must not sit after a # on the same line.
+			if hash := strings.Index(line, "#"); hash == -1 || hash > index {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestOWUIImageAppliesOAuthRefreshClientAuthPatch asserts the Open WebUI image
@@ -266,8 +315,27 @@ func envDeclarations(t *testing.T, key string) []scopeDeclaration {
 			if strings.HasPrefix(trimmed, "#") {
 				continue
 			}
-			prefix, rawValue, ok := strings.Cut(trimmed, key+":")
-			if !ok || prefix != "" {
+			// Both Compose environment spellings, mapping and list:
+			//
+			//   environment:
+			//     OAUTH_SCOPES: "openid email profile"
+			//
+			//   environment:
+			//     - OAUTH_SCOPES=openid email profile
+			//
+			// Reading only the mapping form is the same defect in a new
+			// place. Compose accepts either, so a declaration written the
+			// other way would satisfy this guard by being invisible to it,
+			// and an invisible declaration reports a clean pass over a
+			// corpus of nothing. scripts/check-oauth-scopes.py reads both
+			// for the same reason.
+			var rawValue string
+			switch {
+			case strings.HasPrefix(trimmed, key+":"):
+				rawValue = strings.TrimPrefix(trimmed, key+":")
+			case strings.HasPrefix(trimmed, "- "+key+"="), strings.HasPrefix(trimmed, "-"+key+"="):
+				_, rawValue, _ = strings.Cut(trimmed, "=")
+			default:
 				continue
 			}
 			found = append(found, scopeDeclaration{

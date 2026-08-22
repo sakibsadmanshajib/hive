@@ -61,6 +61,19 @@ def declarations(deploy_dir: Path) -> list[tuple[Path, int, str]]:
     mirrors envDeclarations in apps/edge-api/internal/auth/owui_oauth_scope_test.go
     on purpose: same corpus, one side checked offline and one side checked
     against the live server.
+
+    Both Compose environment spellings are recognized, mapping and list:
+
+        environment:
+          OAUTH_SCOPES: "openid email profile"
+
+        environment:
+          - OAUTH_SCOPES=openid email profile
+
+    Reading only the first would be the same defect in a new place. Compose
+    accepts either, so a declaration written the other way would sail past a
+    check whose entire job is to have no blind spot, and it would do it
+    silently, reporting a clean run over a corpus of zero.
     """
     found: list[tuple[Path, int, str]] = []
     for path in sorted(deploy_dir.rglob("*")):
@@ -68,10 +81,15 @@ def declarations(deploy_dir: Path) -> list[tuple[Path, int, str]]:
             continue
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             stripped = line.strip()
-            if stripped.startswith("#") or not stripped.startswith(ENV_KEY + ":"):
+            if stripped.startswith("#"):
                 continue
-            value = stripped[len(ENV_KEY) + 1 :].strip().strip("\"'")
-            found.append((path, number, value))
+            if stripped.startswith(ENV_KEY + ":"):
+                raw = stripped[len(ENV_KEY) + 1 :]
+            elif stripped.startswith("- " + ENV_KEY + "=") or stripped.startswith("-" + ENV_KEY + "="):
+                raw = stripped.split("=", 1)[1]
+            else:
+                continue
+            found.append((path, number, raw.strip().strip("\"'")))
     return found
 
 

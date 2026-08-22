@@ -65,6 +65,25 @@ def corpus(tmp: Path, *scope_values: str) -> Path:
     return tmp / "deploy"
 
 
+def list_corpus(tmp: Path, value: str) -> Path:
+    """The same declaration in Compose's OTHER environment spelling.
+
+    Compose accepts a list of `NAME=value` strings as readily as a mapping. A
+    checker that reads only the mapping form reports a clean run over a corpus
+    of zero when someone writes the list form, which is the original defect
+    wearing a different hat.
+    """
+    deploy = tmp / "deploy" / "docker"
+    deploy.mkdir(parents=True, exist_ok=True)
+    (deploy / "docker-compose.list.yml").write_text(
+        "services:\n"
+        "  open-webui:\n"
+        "    environment:\n"
+        f"      - OAUTH_SCOPES={value}\n"
+    )
+    return tmp / "deploy"
+
+
 def verdict(deploy: Path, supported: list[str]) -> tuple[int, str]:
     """Exit code plus everything the check printed.
 
@@ -105,6 +124,16 @@ def main() -> int:
         # YAML rather than one known line.
         both = corpus(tmp / "both", "openid email profile", "openid offline_access")
         expect(verdict(both, SELF_HOSTED)[0] == 1, "a bad value in a second deploy file fails")
+
+        # Compose's list spelling is checked too, or it is a hole the size of
+        # the whole defect: not merely a missed failure but a silent pass over
+        # zero declarations.
+        list_red = list_corpus(tmp / "list-bad", "openid email profile offline_access")
+        expect(verdict(list_red, SELF_HOSTED)[0] == 1,
+               "list-form `- OAUTH_SCOPES=...` with a bad scope fails")
+        list_green = list_corpus(tmp / "list-ok", "openid email profile")
+        expect(verdict(list_green, SELF_HOSTED)[0] == 0, "list-form with a good scope passes")
+        expect(len(check.declarations(list_green)) == 1, "list form is seen as one declaration")
 
         # A commented-out declaration is not a declaration. Every fixture file
         # above carries one, so this asserts the scanner ignored it rather than
