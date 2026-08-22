@@ -63,6 +63,21 @@ def test_a_hostile_address_cannot_smuggle_control_or_bidi_characters() -> None:
     assert derived == "Evil"
 
 
+def test_a_local_part_that_sanitizes_away_still_cannot_smuggle_an_override() -> None:
+    """The fallback path, which the test above does not reach. A local part made
+    only of characters _sanitize drops leaves no words to join, and returning the
+    address unchanged there put the override straight into the stored name."""
+    derived = derive("\u202e@example.com")
+    assert "\u202e" not in derived, derived
+    assert derived == "@example.com", derived
+
+    # And when nothing legible survives, a neutral literal rather than a name
+    # made of punctuation. `_sanitize` leaves the "@" of any address that has
+    # one, so the guard is "no alphanumeric left" rather than "empty".
+    assert derive("\u202e@\u202e") == "User"
+    assert derive("\u202e") == "User"
+
+
 def test_a_very_long_local_part_is_capped() -> None:
     """A wall of text is not a name, and it reaches every surface that renders
     one."""

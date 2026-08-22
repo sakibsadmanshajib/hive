@@ -52,7 +52,14 @@ def display_name_from_email(email: str) -> str:
 
     words = [word for word in _SEPARATORS.split(_sanitize(local)) if word]
     if not words:
-        return email
+        # A local part made only of characters _sanitize drops leaves nothing to
+        # build a name from. Fall back to the address so the account stays
+        # identifiable, but sanitize it too: returning it raw here was the one
+        # path that put a bidirectional override into a stored display name,
+        # which is exactly what _sanitize exists to prevent. If the whole
+        # address sanitizes away, a neutral literal is all that is left.
+        fallback = _sanitize(email)[:_MAX_LENGTH].strip()
+        return fallback if any(character.isalnum() for character in fallback) else 'User'
 
     # Capitalize unconditionally. `handle_callback` lower cases the address
     # before it reaches here, so there is no deliberate casing left to preserve
