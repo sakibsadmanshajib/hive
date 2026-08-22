@@ -26,10 +26,34 @@
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import { redirect } from '@sveltejs/kit';
+	import {
+		clearSignedOut,
+		clearSsoAttempt,
+		markSsoAttempt,
+		readSignedOut,
+		readSsoAttemptAt,
+		safeRedirectPath,
+		ssoAutoRedirectDecision
+	} from '$lib/hive/sso-redirect';
 
 	const i18n = getContext('i18n');
 
 	let loaded = false;
+
+	// Why the visitor is looking at this page rather than being sent straight to
+	// the provider. Each one gets a message, because a sign in page that reappears
+	// with no explanation reads as a broken product.
+	let signInError: string | null = null;
+	let signInInterrupted = false;
+	let signedOut = false;
+	// Set when the browser refuses to remember that a round trip was started.
+	// Without that memory the automatic redirect has no bound, so it is withheld
+	// and the visitor signs in by hand instead.
+	let autoSignInUnavailable = false;
+	// Held from the moment the redirect starts until the browser leaves, so a
+	// slow provider shows the same "signing in" state as every other wait rather
+	// than an empty page.
+	let redirecting = false;
 
 	let mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
 
@@ -42,9 +66,40 @@
 
 	let ldapUsername = '';
 
+	// Every route into the provider goes through here, so the loop guard sees a
+	// button click exactly as it sees an automatic redirect. A manual sign in
+	// that comes back without a session then explains itself too, rather than
+	// being answered with an automatic redirect straight back out.
+	const startSsoLogin = (provider: string) => {
+		// An explicit click is a decision to sign in, so it clears the sticky
+		// signed out marker and proceeds even if the attempt cannot be recorded.
+		clearSignedOut();
+		markSsoAttempt();
+		window.location.href = `${WEBUI_BASE_URL}/oauth/${provider}/login`;
+	};
+
+	// Reading localStorage throws outright when storage is blocked (a hardened
+	// browser profile, third-party-cookie style restrictions in an embedded
+	// context). This runs before `loaded = true`, so an unhandled throw here
+	// left the visitor with no sign in page and no manual provider button at
+	// all. The cookie half needs no guard and is read first so it still counts.
+	const hasExistingSession = () => {
+		const hasTokenCookie = document.cookie
+			.split('; ')
+			.some((cookie) => cookie.startsWith('token='));
+		try {
+			return Boolean(localStorage.token) || hasTokenCookie;
+		} catch {
+			return hasTokenCookie;
+		}
+	};
+
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
-			console.log(sessionUser);
+			// The round trip produced a session, so neither the loop guard nor the
+			// signed out marker has anything left to hold.
+			clearSsoAttempt();
+			clearSignedOut();
 			toast.success($i18n.t(`You're now logged in.`));
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
@@ -60,7 +115,7 @@
 			}
 
 			if (!redirectPath) {
-				redirectPath = $page.url.searchParams.get('redirect') || '/';
+				redirectPath = safeRedirectPath($page.url.searchParams.get('redirect')) || '/';
 			}
 
 			goto(redirectPath);
@@ -137,7 +192,7 @@
 		}
 
 		localStorage.token = token;
-		await setSessionUser(sessionUser, localStorage.getItem('redirectPath') || null);
+		await setSessionUser(sessionUser, safeRedirectPath(localStorage.getItem('redirectPath')));
 	};
 
 	let onboarding = false;
@@ -166,7 +221,7 @@
 	}
 
 	onMount(async () => {
-		const redirectPath = $page.url.searchParams.get('redirect');
+		const redirectPath = safeRedirectPath($page.url.searchParams.get('redirect'));
 		if ($user !== undefined) {
 			goto(redirectPath || '/');
 		} else {
@@ -182,27 +237,38 @@
 
 		await oauthCallbackHandler();
 		form = $page.url.searchParams.get('form');
+		// The marker outlives its landing page: the provider session survives ours
+		// and there is no end session endpoint to close it, so a stored marker is
+		// what stops the next navigation signing the same person straight back in.
+		signedOut = $page.url.searchParams.get('signed_out') !== null || readSignedOut();
+		signInError = error;
 
-		// Auto-redirect to SSO when OAUTH_AUTO_REDIRECT is enabled and the
-		// deployment is unambiguously SSO-only (single provider, no login form,
-		// no LDAP). Suppressed by ?form=, ?error=, onboarding, trusted-header
-		// auth, or an existing session/token.
-		if ($config?.oauth?.auto_redirect && !form && !error) {
-			const providers = Object.keys($config?.oauth?.providers ?? {});
-			if (
-				providers.length === 1 &&
-				$config?.features?.auth !== false &&
-				$config?.features?.enable_login_form === false &&
-				!$config?.features?.enable_ldap &&
-				!$config?.features?.auth_trusted_header &&
-				!$config?.onboarding &&
-				!localStorage.token &&
-				!document.cookie.split('; ').some((c) => c.startsWith('token='))
-			) {
-				window.location.href = `${WEBUI_BASE_URL}/oauth/${providers[0]}/login`;
+		// With one provider and no password form, this page offers a choice that
+		// does not exist, so hand the visitor straight to the provider. Every
+		// reason not to, including a round trip that came back without a session,
+		// is decided in one tested place.
+		const decision = ssoAutoRedirectDecision($config, {
+			form,
+			error,
+			signedOut,
+			hasSession: hasExistingSession(),
+			lastAttemptAt: readSsoAttemptAt(),
+			now: Date.now()
+		});
+
+		if (decision.redirect) {
+			// Fail closed. If the attempt cannot be recorded, the guard that stops an
+			// endless bounce is blind, so the page renders and the visitor clicks.
+			if (markSsoAttempt()) {
+				redirecting = true;
+				loaded = true;
+				window.location.href = `${WEBUI_BASE_URL}/oauth/${decision.provider}/login`;
 				return;
 			}
+			autoSignInUnavailable = true;
 		}
+
+		signInInterrupted = decision.redirect === false && decision.reason === 'recent-attempt';
 
 		loaded = true;
 		setLogoImage();
@@ -240,7 +306,7 @@
 			id="auth-container"
 		>
 			<div class="w-full px-10 min-h-screen flex flex-col text-center">
-				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false}
+				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false || redirecting}
 					<div class=" my-auto pb-10 w-full sm:max-w-md">
 						<div
 							class="flex items-center justify-center gap-3 text-xl sm:text-2xl text-center font-medium dark:text-gray-200"
@@ -437,25 +503,66 @@
 								</div>
 							</form>
 
+							{#if signInInterrupted || signInError || signedOut || autoSignInUnavailable}
+								{@const isFailure = signInInterrupted || signInError || autoSignInUnavailable}
+								<div
+									class="mt-4 rounded-2xl px-4 py-3 text-left text-sm {isFailure
+										? 'bg-red-500/10 text-red-800 dark:text-red-300'
+										: 'bg-gray-700/5 dark:bg-gray-100/5 text-gray-700 dark:text-gray-300'}"
+									role={isFailure ? 'alert' : 'status'}
+								>
+									<div class="font-medium">
+										{#if autoSignInUnavailable}
+											{$i18n.t('Sign in needs one click in this browser.')}
+										{:else if isFailure}
+											{$i18n.t('Sign in did not complete.')}
+										{:else}
+											{$i18n.t(`You're now logged out.`)}
+										{/if}
+									</div>
+									<div class="mt-1">
+										<!-- Deliberately our own words. The provider's message arrives in a
+										     query parameter, so anyone can put text in it, and a banner on the
+										     page people type credentials into is not the place to reflect a
+										     stranger's sentence back at them. The provider's own wording still
+										     appears once, transiently, in the toast above. -->
+										{#if autoSignInUnavailable}
+											{$i18n.t(
+												'This browser will not let Hive remember a sign in attempt, so Hive cannot start one for you. Use the button below.'
+											)}
+										{:else if signInInterrupted}
+											{$i18n.t(
+												'Your sign in provider sent you back without a session. Try again below, and tell your administrator if it keeps happening.'
+											)}
+										{:else if signInError}
+											{$i18n.t(
+												'Your sign in provider reported a problem. Try again below, and tell your administrator if it keeps happening.'
+											)}
+										{:else}
+											{$i18n.t('Sign in again when you are ready.')}
+										{/if}
+									</div>
+								</div>
+							{/if}
+
 							{#if Object.keys($config?.oauth?.providers ?? {}).length > 0}
-								<div class="inline-flex items-center justify-center w-full">
-									<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
-									{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+								{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+									<div class="inline-flex items-center justify-center w-full">
+										<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
 										<span
 											class="px-3 text-sm font-medium text-gray-900 dark:text-white bg-transparent"
 											>{$i18n.t('or')}</span
 										>
-									{/if}
-
-									<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
-								</div>
+										<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
+									</div>
+								{:else}
+									<div class="mt-5"></div>
+								{/if}
 								<div class="flex flex-col space-y-2">
 									{#if $config?.oauth?.providers?.google}
 										<button
 											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-											on:click={() => {
-												window.location.href = `${WEBUI_BASE_URL}/oauth/google/login`;
-											}}
+											on:click={() => startSsoLogin('google')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -483,9 +590,7 @@
 									{#if $config?.oauth?.providers?.microsoft}
 										<button
 											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-											on:click={() => {
-												window.location.href = `${WEBUI_BASE_URL}/oauth/microsoft/login`;
-											}}
+											on:click={() => startSsoLogin('microsoft')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -514,9 +619,7 @@
 									{#if $config?.oauth?.providers?.github}
 										<button
 											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-											on:click={() => {
-												window.location.href = `${WEBUI_BASE_URL}/oauth/github/login`;
-											}}
+											on:click={() => startSsoLogin('github')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -535,9 +638,7 @@
 									{#if $config?.oauth?.providers?.oidc}
 										<button
 											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-											on:click={() => {
-												window.location.href = `${WEBUI_BASE_URL}/oauth/oidc/login`;
-											}}
+											on:click={() => startSsoLogin('oidc')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -565,9 +666,7 @@
 									{#if $config?.oauth?.providers?.feishu}
 										<button
 											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-											on:click={() => {
-												window.location.href = `${WEBUI_BASE_URL}/oauth/feishu/login`;
-											}}
+											on:click={() => startSsoLogin('feishu')}
 										>
 											<span>{$i18n.t('Continue with {{provider}}', { provider: 'Feishu' })}</span>
 										</button>

@@ -1,0 +1,15 @@
+local static server serving the branch bundle at http://127.0.0.1:35995
+bundle: /tmp/claude-1001/-home-sakib-hive/47b1dc44-1a51-42c2-8e34-41475aa46c9d/scratchpad/b952
+captured 01-signin-signed-out-does-not-bounce.png at http://127.0.0.1:35995/auth?signed_out=true :: signed_out blocks the automatic redirect so signing out is possible
+captured 02-signin-provider-error-explains-itself.png at http://127.0.0.1:35995/auth?error=access_denied :: a failed round trip explains rather than bouncing
+captured 03-signin-manual-escape-hatch.png at http://127.0.0.1:35995/auth?form=1 :: ?form= reaches the manual page deliberately
+
+console transcript:
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:35995/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200

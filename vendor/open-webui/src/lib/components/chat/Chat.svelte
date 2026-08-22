@@ -314,20 +314,6 @@
 		}
 	};
 
-	const onSelect = async (e) => {
-		const { type, data } = e;
-
-		if (type === 'prompt') {
-			// Handle prompt selection
-			messageInput?.setText(data, async () => {
-				if (!($settings?.insertSuggestionPrompt ?? false)) {
-					await tick();
-					submitHandler(prompt);
-				}
-			});
-		}
-	};
-
 	$: if (selectedModels && chatIdProp !== '') {
 		saveSessionSelectedModels();
 	}
@@ -3262,7 +3248,6 @@
 											messageInput?.setText(text);
 										}}
 										{selectedModels}
-										{atSelectedModel}
 										{sendMessage}
 										{showMessage}
 										{submitMessage}
@@ -3273,7 +3258,6 @@
 										{addMessages}
 										topPadding={true}
 										bottomPadding={files.length > 0}
-										{onSelect}
 									/>
 								</div>
 							</div>
@@ -3391,7 +3375,6 @@
 									toolServers={$toolServers}
 									{stopResponse}
 									{createMessagePair}
-									{onSelect}
 									{onUpload}
 									onWebSearchToggle={handleWebSearchToggle}
 									onChange={(data) => {

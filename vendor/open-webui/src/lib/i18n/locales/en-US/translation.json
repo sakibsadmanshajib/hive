@@ -2541,5 +2541,11 @@
 	"Your usage stats have been successfully synced.": "",
 	"YouTube": "",
 	"Youtube Language": "",
-	"Youtube Proxy URL": ""
+	"Youtube Proxy URL": "",
+	"Sign in did not complete.": "",
+	"Sign in needs one click in this browser.": "",
+	"Sign in again when you are ready.": "",
+	"This browser will not let Hive remember a sign in attempt, so Hive cannot start one for you. Use the button below.": "",
+	"Your sign in provider reported a problem. Try again below, and tell your administrator if it keeps happening.": "",
+	"Your sign in provider sent you back without a session. Try again below, and tell your administrator if it keeps happening.": ""
 }
