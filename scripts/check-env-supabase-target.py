@@ -210,11 +210,32 @@ def check(env: dict) -> tuple[int, list]:
             "bundle would authenticate against different issuers"
         )
         failed = True
-    if bool(public) != bool(next_public):
+    # BOTH must be set, not merely "the same one-ness". A first version of this
+    # compared `bool(public) != bool(next_public)`, which caught the half-moved
+    # pair and let the never-moved pair through: with both unset,
+    # SUPABASE_PUBLIC_URL falls back to the in-network gateway name for Open
+    # WebUI's discovery document and NEXT_PUBLIC_SUPABASE_URL reaches `next
+    # build` empty, so the console bundle ships with no auth origin at all.
+    # That is precisely the state this deployment was in, and calling it healthy
+    # is the failure this whole file exists to stop.
+    #
+    # It costs a genuinely headless self-hosted stack nothing real, because
+    # there is no such deployment here: every profile that runs the data plane
+    # also runs Open WebUI and the console. The `.env.example` note that used to
+    # say these may be left unset where no browser authenticates has been
+    # corrected in the same change, rather than left to contradict this check.
+    if not public or not next_public:
+        missing = " and ".join(
+            name for name, value in (
+                ("SUPABASE_PUBLIC_URL", public),
+                ("NEXT_PUBLIC_SUPABASE_URL", next_public),
+            ) if not value
+        )
         report.append(
-            "exactly one of SUPABASE_PUBLIC_URL and NEXT_PUBLIC_SUPABASE_URL is "
-            "set, which is a half-moved cutover: whichever is unset falls back "
-            "to an in-network gateway name no browser can resolve"
+            f"{missing} unset on a self-hosted data plane. Both name the one "
+            "browser-facing auth origin, and an unset value falls back to an "
+            "in-network gateway name no browser can resolve, or reaches the "
+            "console build empty"
         )
         failed = True
 
@@ -379,6 +400,12 @@ def self_check() -> int:
         },
         "the bundle's origin left unset": {"NEXT_PUBLIC_SUPABASE_URL": ""},
         "the discovery origin left unset": {"SUPABASE_PUBLIC_URL": ""},
+        # The never-moved pair, which the earlier one-of-two comparison let
+        # through: neither origin set, so nothing disagrees and nothing works.
+        "both browser origins left unset": {
+            "SUPABASE_PUBLIC_URL": "",
+            "NEXT_PUBLIC_SUPABASE_URL": "",
+        },
         "auth origin on a different host from the browser origin": {
             "ENTERPRISE_AUTH_EXTERNAL_URL": "https://auth.example.test/auth/v1",
             "SUPABASE_JWT_ISSUER": "https://auth.example.test/auth/v1",

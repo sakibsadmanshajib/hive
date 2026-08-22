@@ -51,6 +51,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 STORAGE_CONTAINER = "hive-supabase-storage-1"
 STORAGE_PORT = 5000
@@ -104,12 +105,39 @@ def parse_sha_file(text: str) -> dict[str, str]:
             continue
         digest, _, path = line.partition(" ")
         path = path.strip().lstrip("*").strip()
-        if path.startswith("./"):
-            path = path[2:]
+        path = path.removeprefix("./")
         if not digest or not path:
             raise Problem(f"unparsable sha256 line: {line!r}")
         out[path] = digest
     return out
+
+
+def unsafe_key(bucket: str, key: str) -> str | None:
+    """Why this line must not be trusted, or None if it is fine.
+
+    Structural, and deliberately stricter than "does it escape today": a key is
+    a relative path of ordinary segments, so anything else is refused rather
+    than normalised into something that looks safe. Normalising is what lets a
+    later reader believe the value was clean all along.
+    """
+    for label, value in (("bucket", bucket), ("key", key)):
+        if not value:
+            return f"empty {label}"
+        if value.startswith("/") or (len(value) > 1 and value[1] == ":"):
+            return f"{label} is an absolute path, which discards the backup root entirely"
+        if "\\" in value:
+            return f"{label} contains a backslash, which is a path separator on some hosts"
+        if "\x00" in value:
+            return f"{label} contains a null byte"
+    if "/" in bucket:
+        return "bucket contains a path separator, so it is not one bucket name"
+    segments = key.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        return (
+            "key contains an empty, `.` or `..` segment, which walks out of the "
+            "backup tree when the OS resolves it"
+        )
+    return None
 
 
 def resolve_base_url() -> str:
@@ -148,7 +176,20 @@ def request(url: str, key: str, method: str = "GET", body: bytes | None = None,
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
+        # An HTTP status IS an answer, so it is returned and judged by the
+        # caller, which is how a 404 on the read-back becomes a named failure.
         return exc.code, exc.read()
+    except OSError as exc:
+        # A refused connection, a DNS failure or a timeout raises URLError,
+        # which is an OSError and is NOT an HTTPError, so it escaped both this
+        # handler and main()'s `except Problem` and ended the run in a Python
+        # traceback instead of the operator-facing diagnostic this script exists
+        # to print. socket.timeout is an OSError too, so one clause covers all
+        # of them.
+        raise Problem(
+            f"{method} {url.split('?')[0]} could not be reached: {exc}. "
+            "Check the stack is up and --base-url points at it"
+        )
 
 
 def restore(backup_dir: Path, base_url: str, key: str) -> int:
@@ -167,7 +208,7 @@ def restore(backup_dir: Path, base_url: str, key: str) -> int:
     # their public flag, and creating one here would be a second definition of
     # the same thing that can disagree with it.
     for bucket in buckets:
-        status, body = request(f"{base_url}/bucket/{bucket}", key)
+        status, body = request(f"{base_url}/bucket/{quote(bucket, safe='')}", key)
         if status != 200:
             raise Problem(
                 f"bucket {bucket} does not exist on this backend (HTTP {status}). "
@@ -176,9 +217,45 @@ def restore(backup_dir: Path, base_url: str, key: str) -> int:
         print(f"  bucket {bucket}: present")
 
     failures: list[str] = []
+    declared = set(buckets)
+    root = files_root.resolve()
     for bucket, obj_key, size, mime in objects:
         rel = f"{bucket}/{obj_key}"
+
+        # The manifest is a FILE, so it is input, not a fact. Both fields below
+        # were used verbatim to build a local path and a request path, and both
+        # escape:
+        #
+        #   * an absolute obj_key discards everything to its left in a pathlib
+        #     join, so `files_root / bucket / "/etc/shadow"` IS Path("/etc/shadow").
+        #   * a relative `../../.env` is not collapsed by pathlib, but the OS
+        #     resolves it on open, so it escapes just the same.
+        #
+        # Either one reads a host file and then POSTs its bytes into whatever
+        # bucket the same line names, with the service-role key. That is
+        # exfiltration, not a restore, so this refuses the line the same way a
+        # malformed field count is refused.
+        if bucket not in declared:
+            failures.append(
+                f"{rel}: names bucket {bucket!r}, which the manifest never declared. "
+                "Only buckets listed in the manifest's own bucket rows may be written"
+            )
+            continue
+        problem = unsafe_key(bucket, obj_key)
+        if problem:
+            failures.append(f"{rel}: {problem}")
+            continue
         local = files_root / bucket / obj_key
+        try:
+            resolved = local.resolve()
+        except OSError as exc:
+            failures.append(f"{rel}: cannot resolve its path in the backup tree: {exc}")
+            continue
+        if not (resolved == root or root in resolved.parents):
+            failures.append(
+                f"{rel}: resolves outside the backup tree, refusing to read it"
+            )
+            continue
         if not local.exists():
             failures.append(f"{rel}: named in the manifest but absent from storage-files/")
             continue
@@ -198,14 +275,21 @@ def restore(backup_dir: Path, base_url: str, key: str) -> int:
             failures.append(f"{rel}: local size {len(data)} does not match the manifest's {size}")
             continue
 
-        status, body = request(f"{base_url}/object/{rel}", key, method="POST", body=data, mime=mime)
+        # Percent-encoded, because the raw key goes into a URL path. A space, a
+        # `#`, a `?` or a `%` in a filename otherwise truncates the path or
+        # addresses a different object, and the read-back below would then
+        # compare the wrong thing. `/` stays safe in the key: it is the object
+        # name's own separator, which is why the bucket and the key are quoted
+        # with different safe sets rather than together.
+        api_path = f"{quote(bucket, safe='')}/{quote(obj_key, safe='/')}"
+        status, body = request(f"{base_url}/object/{api_path}", key, method="POST", body=data, mime=mime)
         if status not in (200, 201):
             failures.append(f"{rel}: upload answered HTTP {status}: {body[:200]!r}")
             continue
 
         # The whole point: fetched back through the API, not asserted from the
         # upload's own status.
-        status, got = request(f"{base_url}/object/authenticated/{rel}", key)
+        status, got = request(f"{base_url}/object/authenticated/{api_path}", key)
         if status != 200:
             failures.append(f"{rel}: uploaded, but reading it back answered HTTP {status}")
             continue
@@ -267,7 +351,33 @@ def self_check() -> int:
     assert sha256_bytes(b"abc").startswith("ba7816bf"), sha256_bytes(b"abc")
     assert sha256_bytes(b"abd") != sha256_bytes(b"abc")
 
-    print("restore-storage-objects self-check: OK (9 cases)")
+    # Every one of these was a live read of a host file, or a write into a
+    # bucket the manifest never named, before unsafe_key existed.
+    assert unsafe_key("hive-files", "a/b/one.txt") is None
+    assert unsafe_key("hive-files", "invoices/2026-07.pdf") is None
+    # A space and a hash are legal in an object name and must NOT be refused;
+    # they are handled by quoting the URL, not by rejecting the line.
+    assert unsafe_key("hive-files", "my report #3.pdf") is None
+    for bucket, key, why in (
+        ("hive-files", "/etc/shadow", "an absolute key"),
+        ("hive-files", "../../../.env", "a relative traversal"),
+        ("hive-files", "a/../../b", "a traversal in the middle"),
+        ("hive-files", "a//b", "an empty segment"),
+        ("hive-files", "a/./b", "a dot segment"),
+        ("hive-files", "", "an empty key"),
+        ("", "a", "an empty bucket"),
+        ("../hive-files", "a", "a traversal in the bucket"),
+        ("hive-files", "C:/Windows/win.ini", "a drive-letter absolute path"),
+        ("hive-files", "a\\..\\b", "a backslash separator"),
+    ):
+        assert unsafe_key(bucket, key) is not None, f"{why} was accepted"
+
+    # The URL built for a key with URL-significant characters addresses that
+    # key and not a truncated one, and keeps `/` as the object separator.
+    encoded = f"{quote('hive-files', safe='')}/{quote('a b/c#d?e%f', safe='/')}"
+    assert encoded == "hive-files/a%20b/c%23d%3Fe%25f", encoded
+
+    print("restore-storage-objects self-check: OK (30 cases)")
     return 0
 
 

@@ -64,7 +64,9 @@ def strip_comments(text: str) -> str:
     look for, so reading it unstripped makes most of them vacuously true.
     """
     folded = re.sub(r"\\\n\s*", " ", text)
-    return "\n".join(l for l in folded.splitlines() if not l.strip().startswith("#"))
+    return "\n".join(
+        line for line in folded.splitlines() if not line.strip().startswith("#")
+    )
 
 
 def block_body(text: str, header_at: int) -> str | None:
@@ -155,7 +157,7 @@ def check(console_raw: str, supabase_raw: str, compose_raw: str) -> list[str]:
     # until it swallowed a page this app serves itself.
     for own in CONSOLE_OWN_PATHS:
         for pattern in declared:
-            prefix = pattern[:-1] if pattern.endswith("*") else pattern
+            prefix = pattern.removesuffix("*")
             if own == prefix or (pattern.endswith("*") and own.startswith(prefix)):
                 fail(
                     "the auth handle's matcher `" + pattern + "` also takes " + own + ", which "
