@@ -87,3 +87,91 @@ invalid form no longer satisfies it. And CI now runs `caddy validate` over all
 five Caddyfiles with the same pinned image the services run, inside the
 required repo-policy-lints job rather than a new non-required one. All five
 adapt today.
+
+
+================================================================================
+Second pass, 2026-08-22: the seven review threads, and the mutations for each fix
+================================================================================
+
+Three threads named the same two defects in the restore script from different
+angles, and a fourth found a genuine HIGH. All were real. Each fix below was
+made to fail on purpose against the RUNNING backend, not only in a unit
+self-check, because the self-check cannot reach the request path at all.
+
+M1  unreachable endpoint (--base-url http://127.0.0.1:1)
+    exit 1, zero Traceback lines, and the message names the request:
+    "GET http://127.0.0.1:1/bucket/hive-files could not be reached:
+     <urlopen error [Errno 111] Connection refused>. Check the stack is up and
+     --base-url points at it"
+    Before the fix this was a bare Python traceback: URLError is an OSError and
+    not an HTTPError, so it escaped both handlers.
+
+M2  hostile manifest, absolute key naming the box's own env file
+    exit 1, "key is an absolute path, which discards the backup root entirely".
+    Before the fix, pathlib's join silently discarded the backup root and the
+    host file's bytes were read and then POSTed into the bucket the same line
+    named.
+
+M3  hostile manifest, relative traversal (../../../hive/.env)
+    exit 1, "key contains an empty, `.` or `..` segment, which walks out of the
+    backup tree when the OS resolves it".
+
+M4  hostile manifest, a bucket the manifest never declared (hive-public)
+    exit 1, "names bucket 'hive-public', which the manifest never declared".
+    Existence on the backend was the only previous check, so any bucket that
+    happened to exist was writable from a manifest line.
+
+M5  a key with URL-significant characters
+    First attempt returned HTTP 400 InvalidKey from Storage itself, which is a
+    more interesting answer than a pass would have been, so the actual character
+    set was measured rather than assumed. Against
+    supabase/storage-api v1.11.13, uploading and reading back one object per
+    character:
+
+      plain      upload 200, read-back 200, bytes match True
+      space      upload 200, read-back 200, bytes match True
+      question   upload 200, read-back 200, bytes match True
+      plus       upload 200, read-back 200, bytes match True
+      ampersand  upload 200, read-back 200, bytes match True
+      hash       upload 400 InvalidKey
+      percent    upload 400 InvalidKey
+      unicode    upload 400 InvalidKey
+
+    So the encoding fix is LOAD BEARING for a space and a question mark, both of
+    which are legal object keys, and defensive for the three the backend refuses
+    outright and which therefore cannot appear in a backup taken from Storage.
+    The question mark is the dangerous one: raw in a URL path it begins a query
+    string, so the upload and the read-back would both address the truncated key,
+    agree with each other, and report success over an object stored under the
+    wrong name. Two self-check assertions now pin exactly those two characters.
+    All probe objects were deleted; storage.objects returned to 15 rows.
+
+M6  the real restore, re-run after every fix
+    ok, 15 objects read back byte for byte, storage.objects = hive-files|15.
+    This is what proves the encoding change did not break ordinary keys.
+
+check-env-supabase-target.py, one new must-fail case
+    "both browser origins left unset"  FAIL
+    The earlier rule compared "exactly one of the two is set", which caught the
+    half-moved pair and let the NEVER-moved pair through, and the never-moved
+    pair is the state this deployment was actually in. 37 cases now.
+
+Mutations that stayed green, stated rather than dropped
+------------------------------------------------------
+  * A space, a `+` and an `&` in an object key. These are accepted by the
+    backend and, once encoded, round-trip byte for byte, so there is nothing to
+    fail. Listing them matters because three of the eight probes DID fail, and a
+    reader could otherwise assume the encoding rejects awkward names rather than
+    carrying them correctly.
+  * EXE001 on scripts/check-env-supabase-target.py. That file was already mode
+    100644 in git before this change while its siblings are 100755. Left alone
+    deliberately: it is pre-existing and unrelated, and churning a file mode
+    inside an auth-boundary diff buys nothing. The two files this change adds
+    are 100755.
+
+Contracts re-verified after every fix above
+-------------------------------------------
+  preflight OPTIONS /auth/v1/token asking for `apikey`   204, apikey echoed
+  real POST /auth/v1/token, Access-Control-Allow-Origin  exactly 1
+  browser login on chat-hive.scubed.co                   passes, with a real
+                                                         completion rendered

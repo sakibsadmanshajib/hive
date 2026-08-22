@@ -275,12 +275,21 @@ def restore(backup_dir: Path, base_url: str, key: str) -> int:
             failures.append(f"{rel}: local size {len(data)} does not match the manifest's {size}")
             continue
 
-        # Percent-encoded, because the raw key goes into a URL path. A space, a
-        # `#`, a `?` or a `%` in a filename otherwise truncates the path or
-        # addresses a different object, and the read-back below would then
-        # compare the wrong thing. `/` stays safe in the key: it is the object
-        # name's own separator, which is why the bucket and the key are quoted
-        # with different safe sets rather than together.
+        # Percent-encoded, because the raw key goes into a URL path.
+        #
+        # Measured against this backend (supabase/storage-api v1.11.13) rather
+        # than assumed, since the interesting question is which characters can
+        # actually reach a manifest: a space, a `?`, a `+` and an `&` are all
+        # ACCEPTED as object keys, while `#`, `%` and non-ASCII are refused
+        # outright with `InvalidKey`. So the encoding is load bearing for two of
+        # them and defensive for the rest. The `?` is the dangerous one: raw, it
+        # starts a query string, so the upload and the read-back would both
+        # address the truncated key, agree with each other, and report success
+        # over an object stored under the wrong name.
+        #
+        # `/` stays safe in the key: it is the object name's own separator,
+        # which is why the bucket and the key are quoted with different safe
+        # sets rather than together.
         api_path = f"{quote(bucket, safe='')}/{quote(obj_key, safe='/')}"
         status, body = request(f"{base_url}/object/{api_path}", key, method="POST", body=data, mime=mime)
         if status not in (200, 201):
@@ -376,8 +385,13 @@ def self_check() -> int:
     # key and not a truncated one, and keeps `/` as the object separator.
     encoded = f"{quote('hive-files', safe='')}/{quote('a b/c#d?e%f', safe='/')}"
     assert encoded == "hive-files/a%20b/c%23d%3Fe%25f", encoded
+    # The two characters this backend actually accepts in a key AND that break a
+    # raw URL path, so these two assertions are the ones standing between a
+    # correct restore and one that silently stores under a truncated name.
+    assert quote("a b.txt", safe="/") == "a%20b.txt"
+    assert quote("a?b.txt", safe="/") == "a%3Fb.txt"
 
-    print("restore-storage-objects self-check: OK (30 cases)")
+    print("restore-storage-objects self-check: OK (32 cases)")
     return 0
 
 
