@@ -720,6 +720,17 @@ services:
       # asks for something the provider already offers. Guarded by
       # TestOWUIOAuthScopesRequestOfflineAccess in apps/edge-api/internal/auth.
       #
+      # This one is NOT shadowable by a persisted row, which is the question
+      # every Open WebUI setting in this file has to answer since #722. Traced
+      # rather than assumed: OAUTH_SCOPES is a plain os.getenv in config.py,
+      # consumed by oidc_oauth_register, which runs at import through
+      # load_oauth_providers(). The oauth.scopes row that Config.seed_defaults
+      # writes is read only by the admin config API in routers/auths.py and by
+      # nothing on the authorize or the refresh path. A container recreate
+      # therefore genuinely picks this up, and no hive_rag_env_config style
+      # reconciler is needed here, unlike OAUTH_AUTO_REDIRECT and the feature
+      # flags that do go through one.
+      #
       # The scope is only half of #782. A refresh token that exists is still
       # refused, because Open WebUI's refresh POST authenticates the client in
       # a different dialect than the authorization code exchange does. That
