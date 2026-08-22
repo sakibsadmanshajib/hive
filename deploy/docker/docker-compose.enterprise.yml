@@ -31,14 +31,43 @@ name: hive
 services:
 
   # ── supabase-db ────────────────────────────────────────────────────────────
-  # Postgres 16 with the pgvector extension pre-installed.
+  # Postgres 16 with the pgvector and pg_cron extensions pre-installed.
   # No host port binding: all access is via the internal compose network.
   # The init script at deploy/supabase/init/00-extensions.sql runs once on
   # first startup and creates the required extensions, schemas, and roles
   # (including hive_app which RLS policies reference).
   supabase-db:
-    # Pinned to immutable digest. Refresh: docker pull pgvector/pgvector:pg16 && docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:pg16
-    image: pgvector/pgvector:pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
+    # Built here rather than pulled, for one reason: pg_cron. See
+    # Dockerfile.supabase-db for why a derived image and not supabase/postgres,
+    # and for the digest-pinned base this adds a single package to.
+    #
+    # Without pg_cron on disk, 20260729_02's nightly metering retention job was
+    # never scheduled on this deployment and nothing said so. The extension is
+    # a property of the image now, so a container recreate, a fresh volume or a
+    # rebuilt box all still have it. A hand-run CREATE EXTENSION on the box
+    # would not survive any of the three.
+    image: hive-supabase-db:pg16-cron
+    build:
+      context: .
+      dockerfile: Dockerfile.supabase-db
+    # `command:` overrides the base image's CMD (`postgres`), which the official
+    # entrypoint execs after initialisation. This is how a
+    # shared_preload_libraries value reaches this server: pg_cron refuses
+    # CREATE EXTENSION outright unless its library is preloaded, and preloading
+    # is a startup-time setting, so it cannot be done from a migration or from
+    # the init script. Changing this line recreates the container, which is a
+    # short database restart for the whole stack.
+    #
+    # cron.database_name has to name the database the cron schema lives in,
+    # which is the one every migration runs against. It defaults to the literal
+    # `postgres`, so it is spelled from the same variable as POSTGRES_DB below
+    # rather than left to coincide with it.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=${ENTERPRISE_DB_NAME:-postgres}
     profiles:
       - enterprise
       - selfhost

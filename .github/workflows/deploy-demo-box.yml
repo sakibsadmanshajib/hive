@@ -242,8 +242,17 @@ jobs:
         # compose invocation carrying --remove-orphans is the one that deletes
         # the data plane when it resolves a different project (see the
         # HIVE_COMPOSE_FLAGS block at the top of this file).
+        #
+        # `--build`, scoped to this one service, because supabase-db is now a
+        # locally built image (deploy/docker/Dockerfile.supabase-db, which adds
+        # pg_cron to the pinned pgvector base). Without it, `up -d` builds the
+        # image only when it is absent entirely, so an edit to that Dockerfile
+        # would leave the migration running against yesterday's server while
+        # the repository says otherwise. That is the "merged is not deployed"
+        # class this box has already produced more than once. The build is a
+        # cache hit on every run that does not change the file.
         working-directory: /home/sakib/hive/deploy/docker
-        run: docker compose $HIVE_COMPOSE_FLAGS up -d supabase-db
+        run: docker compose $HIVE_COMPOSE_FLAGS up -d --build supabase-db
 
       - name: Derive the migration connection from the box's own .env
         # One source of truth for what to migrate: the same SUPABASE_DB_URL the
@@ -358,6 +367,17 @@ jobs:
           fi
           echo "migration target confirmed: cluster $target is the database this stack runs"
 
+          # Hand the CONTAINER-derived identifier to the retention check below,
+          # so that check cannot report a healthy schedule for a database the
+          # application does not use. That is not hypothetical: the report-only
+          # version of it printed "scheduled and active" for weeks about the
+          # hosted Supabase project while the stack's own database had neither
+          # pg_cron nor a job. $stack, not $target, deliberately: they are equal
+          # by the assertion above, and the one that comes from compose
+          # resolving the running container is the one that means "the database
+          # this stack runs".
+          echo "HIVE_EXPECTED_DB_CLUSTER=$stack" >> "$GITHUB_ENV"
+
       - name: Apply pending migrations
         # No `|| true`, no continue-on-error, no swallowed exit code: the script
         # runs psql with ON_ERROR_STOP=1 under `set -euo pipefail`, so the first
@@ -380,19 +400,32 @@ jobs:
         # deploy over schema that was never created.
         run: scripts/apply-migrations.sh
 
-      - name: Report whether nightly metering retention is scheduled
-        # Issue #645. 20260729_02 sets the purge job up behind two guards that
-        # each degrade to a RAISE NOTICE, correctly, since nothing else in that
-        # migration needs pg_cron. The cost is that a host where the extension
-        # cannot be created silently gets no retention at all, evidenced only by
-        # a notice in a log nobody rereads after the run goes green.
+      - name: Assert nightly metering retention is scheduled and running
+        # Issue #645, and the reason it was reopened. This step used to be a
+        # report that always exited 0, and for weeks it printed "Nightly
+        # metering retention is scheduled and active" while the database the
+        # stack uses had no pg_cron and no job at all. It was not reading a
+        # wrong row, it was reading the right row in the wrong database: the
+        # migrate job then connected through a separate secret set that still
+        # named the hosted Supabase project, where pg_cron is preloaded. The
+        # hosted project has since been deleted, which is the only reason the
+        # false green became visible.
         #
-        # This step reports that state instead of leaving it buried. It is NOT a
-        # gate and never fails the job: on a host without pg_cron the extension
-        # genuinely cannot be created, and blocking every deploy for that is the
-        # mistake the guards already avoid. Absence surfaces as a ::warning::
-        # annotation on the run summary. The migration step above is unchanged
-        # and still fails the deploy on a real migration error.
+        # So it is a gate now, and it is handed the cluster identifier the
+        # identity step read from the running supabase-db CONTAINER. It fails
+        # when that identifier does not match its own connection, when it is
+        # not set at all, when pg_cron is absent, when the job is missing,
+        # inactive, aimed at another procedure or another database, and when
+        # cron.job_run_details shows no successful run in the last 72 hours. A
+        # row in cron.job is not evidence of anything on its own: a job whose
+        # background worker never starts, or that errors every night, looks
+        # identical to a working one there.
+        #
+        # Failing this step fails the migrate job and so stops the deploy. That
+        # is deliberate rather than incidental. The alternative is a warning,
+        # and a warning on a green run is what let this sit unnoticed. The
+        # window is loose enough (72 hours against a daily schedule) that one
+        # skipped night from a box reboot does not block anything.
         run: scripts/check-retention-schedule.sh
 
   deploy:

@@ -1,0 +1,62 @@
+# Postgres for the self-hosted Supabase data plane: pgvector, plus pg_cron.
+#
+# Why this image exists
+# ---------------------
+# The stack used pgvector/pgvector:pg16 directly. That image carries the vector
+# extension and nothing else, so `pg_available_extensions` never listed pg_cron
+# and 20260729_02_metering_shadow_verdicts_retention.sql took its documented
+# skip branch on every boot of this deployment: config table created, purge
+# procedure created, and no nightly schedule at all. Nothing surfaced that,
+# because the deploy's retention report was reading the hosted Supabase project
+# (which does preload pg_cron) rather than the database the stack uses. The
+# hosted project is now deleted, so the real state is visible: retention has
+# never been scheduled here.
+#
+# Making the extension available is therefore a property of the image, not of a
+# hand-run CREATE EXTENSION on the box. A container recreate, a fresh volume, or
+# a rebuilt box all get pg_cron because it is baked in here and preloaded by the
+# `command:` in docker-compose.enterprise.yml.
+#
+# Why a derived image and not supabase/postgres
+# ---------------------------------------------
+# supabase/postgres bundles pgvector and pg_cron together and would be one line
+# of compose. It was rejected for this deployment on two counts, both already
+# recorded in this repository rather than guessed at:
+#
+#   * The live data directory was initdb'd by pgvector/pgvector:pg16, which is
+#     the official postgres image plus one extension. supabase/postgres ships a
+#     different configuration layout, its own roles, and its own init scripts,
+#     so pointing it at an existing data directory is a migration, not an image
+#     swap. This database holds the live billing ledger.
+#   * .github/ci/test-db-bootstrap.sql records what happened when that image was
+#     tried as CI's throwaway database: its `postgres` role is not a superuser,
+#     which forced a second connection as supabase_admin for pg_cron and for
+#     auth-schema writes.
+#
+# This image is the same base with one extra package, so the data directory, the
+# entrypoint, the roles and the superuser story are all unchanged.
+#
+# The base is pinned by digest, same value the compose file used to name.
+# Refresh: docker pull pgvector/pgvector:pg16 && docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:pg16
+FROM pgvector/pgvector:pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
+
+# postgresql-16-cron comes from the PGDG apt repository the official postgres
+# image already configures (bookworm-pgdg main 16), so this needs no new source
+# and no key handling. Deliberately unpinned: PGDG drops superseded versions
+# from the repository, so a pinned version turns into a build that cannot
+# resolve at all a few months from now, which is a worse failure than a minor
+# version drift in a scheduler.
+#
+# ponytail: one package, no build stage, no compile from source. pg_cron is
+# packaged for this exact base; building it would be strictly more to maintain.
+#
+# The two `test -f` lines fail the build, rather than the first CREATE
+# EXTENSION, if the package ever stops shipping the files that make the
+# extension available. A control file that is not on disk is exactly what made
+# 20260729_02 skip silently in the first place.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends postgresql-16-cron; \
+    rm -rf /var/lib/apt/lists/*; \
+    test -f /usr/share/postgresql/16/extension/pg_cron.control; \
+    test -f /usr/lib/postgresql/16/lib/pg_cron.so
