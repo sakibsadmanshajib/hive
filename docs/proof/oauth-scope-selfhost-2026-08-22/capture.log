@@ -246,3 +246,41 @@ CodeRabbit's local review raised two blind spots, both real, both fixed:
   ("Configured OAuth scopes are advertised by the auth server") passed in 8
   seconds against the live discovery document from a GitHub-hosted runner, so
   the gate genuinely reaches the deployed authorization server.
+
+
+8. The post-deploy step, rehearsed on the box before the merge
+-------------------------------------------------------------
+
+A step that only ever runs after a merge is a step nobody has run. So the exact
+command from deploy-demo-box.yml was executed by hand on the box, against the
+box's own still-unfixed checkout of main (851003b7b, OAUTH_SCOPES with
+offline_access at line 745), with the same HIVE_COMPOSE_FLAGS:
+
+  discovery URL read from the running container:
+    https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  authorization server: https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  scopes_supported:     openid profile email phone
+  ::error file=deploy/docker/docker-compose.yml,line=745::
+    deploy/docker/docker-compose.yml:745 requests offline_access, which [...]
+    does not advertise. [...] chat sign-in is dead for every user (#787).
+    Advertised scopes are openid profile email phone.
+
+So the step works mechanically on the box (compose exec resolves, printenv
+returns the concrete URL, python3 is present, the public discovery document is
+reachable from the box), and it goes RED on the exact commit that caused the
+outage, naming the exact line. After the merge it reads the fixed value and
+passes.
+
+One thing found by rehearsing rather than reasoning: the check resolves its
+corpus relative to its own path, so a copy of the script run from /tmp reported
+"no OAUTH_SCOPES declaration found under /deploy" and exited 1. That is correct
+behaviour and correctly loud, but the message did not name the likely cause, so
+it now does. The rehearsal was then redone with the script staged next to a
+deploy/ tree.
+
+The script was deliberately NOT copied into /home/sakib/hive/scripts/ for this
+rehearsal: an untracked file at a path the incoming merge also creates makes
+`git pull --ff-only` refuse, which would have broken the deploy this was
+rehearsing. Only /tmp paths and a symlink there were used, and both are removed.
+The box's checkout carries no tracked modification (`git status --porcelain`
+shows only pre-existing .env backups), so the deploy's fast-forward is clear.

@@ -136,9 +136,12 @@ def report(
 
     if not found:
         print(
-            f"::error::no {ENV_KEY} declaration found under {scanned}. If the "
-            "Open WebUI OIDC wiring moved, move this check with it rather than "
-            "letting it pass over an empty corpus.",
+            f"::error::no {ENV_KEY} declaration found under {scanned}. Two "
+            "causes, and neither is a reason to exit 0: the Open WebUI OIDC "
+            "wiring moved, in which case move this check with it; or this "
+            "script is being run from a copy outside the repository, since the "
+            "corpus is resolved relative to the script's own path and a copy "
+            "elsewhere sees an empty one.",
             file=sys.stderr,
         )
         return 1
