@@ -581,6 +581,177 @@ def test_the_wrapper_forwards_every_parameter_the_deriver_maps() -> None:
     assert not missing, f"stack-psql.sh does not forward {sorted(missing)}"
 
 
+RETENTION_CHECK = ROOT / "scripts" / "check-retention-schedule.sh"
+RETENTION_CHECK_TEXT = RETENTION_CHECK.read_text()
+RETENTION_JOB = "metering-shadow-verdicts-purge"
+
+
+def test_the_stacks_postgres_ships_and_preloads_pg_cron() -> None:
+    """pg_cron is what runs nightly metering retention, and for weeks this
+    deployment had neither the extension nor the job while a deploy step
+    reported both as healthy.
+
+    Two properties, and both have to hold together. The extension files must be
+    IN THE IMAGE, because a hand-run CREATE EXTENSION does not survive a
+    container recreate or a fresh volume. And the library must be preloaded at
+    startup, because pg_cron refuses CREATE EXTENSION outright otherwise, which
+    is the installed-but-unusable shape of issue #615.
+
+    Asserted here rather than left to the migration, since the migration cannot
+    fix either one from inside a session."""
+    # Comments stripped first. The block's prose names Dockerfile.supabase-db
+    # and shared_preload_libraries too, so an unstripped substring match passes
+    # on a service that only TALKS about pg_cron. Measured, not assumed: with
+    # `dockerfile:` repointed at a file that does not exist, the substring
+    # version of this assertion stayed green.
+    block = "\n".join(
+        line for line in ENT_SERVICES["supabase-db"].splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert re.search(r"^      dockerfile: Dockerfile\.supabase-db\s*$", block, re.MULTILINE), (
+        "supabase-db no longer builds the image that carries pg_cron; a stock "
+        "pgvector image has no pg_cron, so retention silently stops being "
+        "scheduled"
+    )
+    dockerfile = ROOT / "deploy" / "docker" / "Dockerfile.supabase-db"
+    assert dockerfile.is_file(), f"{dockerfile} is missing"
+    assert "postgresql-16-cron" in dockerfile.read_text(), (
+        "Dockerfile.supabase-db no longer installs pg_cron"
+    )
+    assert re.search(r"^      - shared_preload_libraries=pg_cron\s*$", block, re.MULTILINE), (
+        "supabase-db does not preload pg_cron, so CREATE EXTENSION pg_cron "
+        "fails and no retention job can exist"
+    )
+    # The cron schema lives in exactly one database, and it has to be the one
+    # migrations run against. pg_cron's default is the literal `postgres`, so a
+    # deployment that renames its database would otherwise schedule into a
+    # database nothing else touches.
+    assert re.search(
+        r"^      - cron\.database_name=\$\{ENTERPRISE_DB_NAME:-postgres\}\s*$",
+        block,
+        re.MULTILINE,
+    ), block
+
+
+def test_a_migration_actually_schedules_the_retention_job() -> None:
+    """20260729_02 creates the schedule behind a guard that degrades to a
+    NOTICE, and on this deployment that guard skipped every time. It is
+    recorded as applied, so editing it would change nothing: the ledger keys on
+    filename. Some LATER migration has to do the scheduling, and it has to fail
+    loudly where pg_cron is available but the job did not appear, which is the
+    half that was silent before."""
+    migrations = sorted((ROOT / "supabase" / "migrations").glob("*.sql"))
+    schedulers = [
+        p for p in migrations
+        if "cron.schedule" in p.read_text() and RETENTION_JOB in p.read_text()
+    ]
+    assert len(schedulers) >= 2, (
+        "no migration after 20260729_02 schedules the retention job, so a "
+        "database that skipped that file's guard never gets one: "
+        f"{[p.name for p in schedulers]}"
+    )
+    latest = schedulers[-1]
+    text = latest.read_text()
+    assert "RAISE EXCEPTION" in text, (
+        f"{latest.name} schedules the job but cannot fail: a host where "
+        "pg_cron is available and the job still does not appear gets a notice "
+        "nobody reads, which is the defect this file replaces"
+    )
+    # The assertion block has to key on availability, not on the extension
+    # being installed, or a failed CREATE EXTENSION returns early and the
+    # RAISE becomes unreachable.
+    assert "pg_available_extensions" in text, text[:400]
+
+
+def test_the_retention_check_fails_instead_of_reporting() -> None:
+    """It printed "scheduled and active" for weeks over a database with no
+    pg_cron at all. Half of why that was invisible is that absence was a
+    ::warning:: and the script always exited 0, and a warning on a green run is
+    indistinguishable from no warning to anyone reading conclusions."""
+    text = RETENTION_CHECK_TEXT
+    body = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "::warning::" not in body, (
+        "the retention check is warning again instead of failing"
+    )
+    # Every error message aborts. Not a count of `exit 1`, which a later change
+    # that adds guards inflates until turning one advisory no longer trips it.
+    messages = re.findall(r"::error::", body)
+    aborting = re.findall(r'echo "::error::[^\n]*"\n\s*exit 1\n', body)
+    assert messages, body
+    assert len(aborting) == len(messages), (
+        f"{len(messages) - len(aborting)} of the {len(messages)} error messages "
+        "in check-retention-schedule.sh do not abort, so it reports a broken "
+        "retention job and exits 0"
+    )
+    # Exactly one success exit, and it is the OK branch. Anything else means
+    # some negative verdict leaves by the same door as a healthy one.
+    zero_exits = re.findall(r"^\s*exit 0\s*$", body, re.MULTILINE)
+    assert len(zero_exits) == 1, f"{len(zero_exits)} success exits, expected 1"
+    ok_branch = re.search(r"\n  OK\)\n(.*?);;", body, re.DOTALL)
+    assert ok_branch and "exit 0" in ok_branch.group(1), body
+    # And the step that runs it cannot be made advisory in the workflow either.
+    step = _step_block(
+        _job_block("migrate"),
+        "Assert nightly metering retention is scheduled and running",
+    )
+    assert "check-retention-schedule.sh" in step, step
+    assert "continue-on-error" not in step, step
+
+
+def test_the_retention_check_cannot_report_on_another_database() -> None:
+    """The other half of the false green: the check was reading the hosted
+    Supabase project, where pg_cron IS preloaded, while the stack's own
+    database had no job. It was not a wrong row, it was the right row in the
+    wrong cluster.
+
+    So the check is handed the identifier of the database the stack runs, and
+    it compares that against its own connection. Unset must fail too: a check
+    that cannot name the database it read has checked nothing."""
+    text = RETENTION_CHECK_TEXT
+    assert "HIVE_EXPECTED_DB_CLUSTER" in text, text[:400]
+    assert "pg_control_system()" in text, (
+        "the check does not identify the cluster it is connected to, so it "
+        "cannot tell whether it is the right one"
+    )
+    assert re.search(
+        r'if \[ -z "\$\{HIVE_EXPECTED_DB_CLUSTER:-\}" \]', text
+    ), "an unset expected cluster must fail rather than skip the comparison"
+    assert re.search(
+        r'if \[ "\$actual_cluster" != "\$HIVE_EXPECTED_DB_CLUSTER" \]', text
+    ), text
+    # The value's provenance is what makes the comparison able to fail: it comes
+    # from what the running container reported, not from the same DSN this
+    # script connects with.
+    step = _step_block(
+        _job_block("migrate"),
+        "Assert the migration target is the database this stack uses",
+    )
+    assert 'HIVE_EXPECTED_DB_CLUSTER=$stack' in step, (
+        "the retention check's expected cluster must come from the stack side "
+        "of the identity assertion, not from the target side"
+    )
+
+
+def test_the_retention_check_demands_evidence_of_execution() -> None:
+    """A row in cron.job is not evidence of anything. A job whose background
+    worker never starts, or that errors every night, looks identical there to a
+    working one, which is the same false green in a new costume."""
+    text = RETENTION_CHECK_TEXT
+    assert "cron.job_run_details" in text, (
+        "the check reads only cron.job, so a scheduled job that never executes "
+        "passes it"
+    )
+    assert "'succeeded'" in text, text[:400]
+    # The staleness window is a literal on purpose. An environment override is a
+    # way to make this check pass without making retention work.
+    assert re.search(r"^MAX_SUCCESS_AGE='[^']+'$", text, re.MULTILINE), text[:400]
+    assert not re.search(r"MAX_SUCCESS_AGE=\"?\$\{", text), (
+        "the staleness window is overridable from the environment"
+    )
+
+
 def main() -> int:
     # The parser guard runs FIRST, deliberately. Alphabetical order put it last,
     # so a silent parse failure would have been reported by whichever assertion
