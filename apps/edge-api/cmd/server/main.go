@@ -148,7 +148,7 @@ func main() {
 
 	// Infrastructure routes (no unsupported middleware). /metrics is not among
 	// them; it is served on metricsListenAddr instead.
-	registerInfraRoutes(mux, specPath)
+	registerInfraRoutes(mux, specPath, authzClient.Degraded)
 
 	// Inference routes
 	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
@@ -637,15 +637,49 @@ const metricsListenAddr = ":9102"
 // registerInfraRoutes registers the unauthenticated infrastructure endpoints on
 // the public mux. /metrics is deliberately not registered here; see
 // metricsListenAddr.
-func registerInfraRoutes(mux *http.ServeMux, specPath string) {
-	mux.HandleFunc("/health", handleHealth)
+//
+// degraded is called on every /health request; it must not block or touch
+// the network, so /health cannot become another consumer of a pool it exists
+// to report on. It is typically authz.Client.Degraded itself, fed by real
+// traffic on the authorize/budget-gate hot paths rather than a synthetic
+// probe: /health used to be a hardcoded 200 regardless of whether edge-api
+// could actually reach control-plane to resolve a key, so a pool-contention
+// window that made every real request fail still reported this endpoint
+// healthy throughout.
+//
+// The parameter is named and read as "degraded", not "healthy", on purpose
+// (PR #975 CodeRabbit review): authz.Client.Degraded already returns true
+// when unhealthy, and a "healthy" name checked as !healthy() silently
+// inverted that polarity, so a fully healthy edge-api reported 503 and an
+// actual control-plane outage reported 200 -- a second lie in the exact fix
+// meant to stop this endpoint from lying.
+func registerInfraRoutes(mux *http.ServeMux, specPath string, degraded func() bool) {
+	mux.HandleFunc("/health", handleHealth(degraded))
 	mux.Handle("/docs/", docs.SwaggerHandler(specPath))
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func handleHealth(degraded func() bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if degraded != nil && degraded() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"status": "degraded",
+				// Fixed string, and deliberately service-agnostic. This
+				// endpoint is unauthenticated on the public gateway, so the
+				// degraded body follows the same discipline control-plane's
+				// /health already enforces with a test: name the missing
+				// capability, never the internal component, the host or the
+				// upstream error. "authorization dependency unavailable" says
+				// what a caller can act on; the internal topology is not the
+				// caller's business.
+				"reason": "authorization dependency unavailable",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 func loadStorageConfigFromEnv() (storageConfig, error) {

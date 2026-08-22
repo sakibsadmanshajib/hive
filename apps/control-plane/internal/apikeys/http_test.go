@@ -3,6 +3,7 @@ package apikeys
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
 )
 
 // newTestHandler builds a Handler backed by a stub repo and a test viewerContext override.
@@ -321,6 +323,44 @@ func TestAPIKeyRoutesRequireVerifiedOwner(t *testing.T) {
 	body := decodeBody(t, rr)
 	if body["code"] != "api_key_management_forbidden" {
 		t.Fatalf("expected code api_key_management_forbidden, got %s", body["code"])
+	}
+}
+
+// TestInternalResolveRecordsInfraFailureAsDegraded verifies that a resolve
+// call which fails for an infrastructural reason (pool checkout timeout,
+// connection error — anything that is not a real key verdict) marks the
+// wired ResolveHealth tracker degraded, so /health can react to runtime pool
+// contention rather than only a database outage at boot.
+func TestInternalResolveRecordsInfraFailureAsDegraded(t *testing.T) {
+	h, repo := newTestHandler(ownerVC())
+	rh := db.NewResolveHealth()
+	h = h.WithResolveHealth(rh)
+	repo.forceGetPolicyErr = errors.New("pool: unable to check out connection")
+
+	rr := doRequest(t, h, http.MethodPost, "/internal/apikeys/resolve", map[string]string{"token_hash": "any"})
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("resolve with infra error: expected 500, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !rh.Degraded() {
+		t.Fatalf("ResolveHealth.Degraded() = false after an infra-class resolve failure, want true")
+	}
+}
+
+// TestInternalResolveRecordsNotFoundAsHealthy verifies that a genuine key
+// verdict (not found, here) is NOT mistaken for a database problem: the
+// database answered, it just said the key does not exist.
+func TestInternalResolveRecordsNotFoundAsHealthy(t *testing.T) {
+	h, _ := newTestHandler(ownerVC())
+	rh := db.NewResolveHealth()
+	rh.RecordFailure() // start degraded, so a wrong classification would hide as "already false"
+	h = h.WithResolveHealth(rh)
+
+	rr := doRequest(t, h, http.MethodPost, "/internal/apikeys/resolve", map[string]string{"token_hash": "does-not-exist"})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("resolve of unknown key: expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rh.Degraded() {
+		t.Fatalf("ResolveHealth.Degraded() = true after a genuine not-found verdict, want false")
 	}
 }
 

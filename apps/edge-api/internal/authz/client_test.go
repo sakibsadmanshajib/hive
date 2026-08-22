@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -239,6 +240,105 @@ func TestResolveClassifiesControlPlane5xxAsUpstreamUnavailable(t *testing.T) {
 	if !errors.Is(err, ErrUpstreamUnavailable) {
 		t.Fatalf("expected ErrUpstreamUnavailable for a control-plane 5xx, got %v", err)
 	}
+	if !client.Degraded() {
+		t.Fatalf("Degraded() = false after an ErrUpstreamUnavailable resolve, want true")
+	}
+}
+
+// TestDegraded_DefaultsHealthy verifies a freshly constructed Client reports
+// healthy before Resolve has ever been called: no traffic yet must not read
+// as degraded.
+func TestDegraded_DefaultsHealthy(t *testing.T) {
+	client := &Client{}
+	if client.Degraded() {
+		t.Fatalf("Degraded() = true on a fresh Client, want false")
+	}
+}
+
+// TestDegraded_NilClientReportsHealthy verifies a nil *Client (e.g. a health
+// handler wired before the real authz client exists) reports healthy rather
+// than panicking.
+func TestDegraded_NilClientReportsHealthy(t *testing.T) {
+	var client *Client
+	if client.Degraded() {
+		t.Fatalf("Degraded() = true on a nil Client, want false")
+	}
+}
+
+// TestDegraded_ClearsAfterSubsequentSuccess verifies Degraded reflects only
+// the most recent outcome: a resolve that reaches a real verdict after a
+// prior failure clears the flag, so /health recovers without a restart once
+// the underlying contention clears.
+func TestDegraded_ClearsAfterSubsequentSuccess(t *testing.T) {
+	failing := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing {
+			http.Error(w, `{"error":"request could not be completed"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key_id":"` + uuid.NewString() + `","status":"active"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := &Client{
+		cache:      &fakeSnapshotStore{},
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	if _, err := client.Resolve(context.Background(), "Bearer hk_test"); !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("expected ErrUpstreamUnavailable while the server is failing, got %v", err)
+	}
+	if !client.Degraded() {
+		t.Fatal("expected Degraded() = true while the server is failing")
+	}
+
+	failing = false
+	if _, err := client.Resolve(context.Background(), "Bearer hk_test2"); err != nil {
+		t.Fatalf("expected a successful resolve once the server recovers, got %v", err)
+	}
+	if client.Degraded() {
+		t.Fatal("expected Degraded() = false after a successful resolve, want the flag cleared")
+	}
+}
+
+// TestDegraded_CacheHitDoesNotClearAPriorFailure is the regression guard for
+// PR #975 review finding 2: a Redis cache hit never contacts control-plane,
+// so it must not touch resolveDegraded either way. The original code ran the
+// degraded-tracking defer before the cache-hit early return, so any cache hit
+// reset the tracker to healthy without having checked anything -- during a
+// real outage the cache-hit ratio is exactly when that matters most, so the
+// health signal would have reported healthy while the outage was ongoing.
+func TestDegraded_CacheHitDoesNotClearAPriorFailure(t *testing.T) {
+	rawToken := "Bearer hk_cached"
+	tokenHash := HashBearerToken(rawToken)
+	snap := AuthSnapshot{KeyID: "key-1", Status: "active"}
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+
+	cache := &fakeSnapshotStore{values: map[string]string{
+		"auth:key:{" + tokenHash + "}": string(encoded),
+	}}
+
+	// No server at all: a cache hit must never dial out, so baseURL points at
+	// nothing reachable. If the code under test ever tries anyway, the
+	// request errors and the test's own assertions below catch it.
+	client := &Client{cache: cache, httpClient: http.DefaultClient, baseURL: "http://127.0.0.1:1"}
+	client.resolveDegraded.Store(true) // simulate an outage already in progress
+
+	got, err := client.Resolve(context.Background(), rawToken)
+	if err != nil {
+		t.Fatalf("expected the cache hit to resolve without error, got %v", err)
+	}
+	if got.KeyID != snap.KeyID {
+		t.Fatalf("expected cached snapshot %+v, got %+v", snap, got)
+	}
+	if !client.Degraded() {
+		t.Fatal("a cache hit cleared Degraded() without ever contacting control-plane; it must leave a prior failure in place")
+	}
 }
 
 // A 200 status only means the headers arrived; the client's own Timeout still
@@ -394,5 +494,30 @@ func TestResolveClassifiesInternalTokenRejectionAsUpstreamUnavailable(t *testing
 	}
 	if !errors.Is(err, ErrInternalTokenRejected) {
 		t.Fatalf("expected ErrInternalTokenRejected preserved for the operator-facing log, got %v", err)
+	}
+}
+
+// TestDegraded_RequestConstructionFailureDoesNotClearDegraded is the guard for
+// PR #975 CodeRabbit CLI finding 2. The deferred tracker in Resolve is
+// registered before the request is constructed, and it clears the degraded
+// flag for any error that is not ErrUpstreamUnavailable. A malformed base URL
+// fails at construction on every single call, so without this classification
+// it would have cleared the flag on every single call and left /health
+// reporting healthy through a total authorization outage.
+func TestDegraded_RequestConstructionFailureDoesNotClearDegraded(t *testing.T) {
+	c := &Client{
+		baseURL:    "http://\x7f-not-a-url",
+		httpClient: &http.Client{Timeout: time.Second},
+	}
+
+	_, err := c.Resolve(context.Background(), "hk_whatever")
+	if err == nil {
+		t.Fatal("Resolve with a malformed base URL returned no error")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("Resolve error = %v, want it to wrap ErrUpstreamUnavailable so the caller gets a retryable 503 rather than a 401 on a valid key", err)
+	}
+	if !c.Degraded() {
+		t.Fatal("Degraded() = false after a request that never reached control-plane, want true")
 	}
 }

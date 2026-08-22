@@ -34,7 +34,7 @@ func getHealth(t *testing.T, cfg RouterConfig) (int, healthResponse) {
 // provisioning in cmd/server and every unit test still passes. It must not read
 // as healthy.
 func TestHealthIsDegradedWhenProvisioningIsNotReported(t *testing.T) {
-	code, body := getHealth(t, RouterConfig{DBReady: true})
+	code, body := getHealth(t, RouterConfig{DBReady: func() bool { return true }})
 
 	require.Equal(t, http.StatusServiceUnavailable, code)
 	require.Equal(t, healthStatusDegraded, body.Status)
@@ -49,7 +49,7 @@ func TestHealthIsDegradedWhenProvisioningReportsFailure(t *testing.T) {
 	reporter := func() (bool, string) {
 		return false, sweepFailingReason
 	}
-	code, body := getHealth(t, RouterConfig{DBReady: true, ProvisioningReady: reporter})
+	code, body := getHealth(t, RouterConfig{DBReady: func() bool { return true }, ProvisioningReady: reporter})
 
 	require.Equal(t, http.StatusServiceUnavailable, code)
 	require.Equal(t, healthStatusDegraded, body.Status)
@@ -63,7 +63,7 @@ func TestHealthIsOkWhenProvisioningIsReady(t *testing.T) {
 	reporter := func() (bool, string) {
 		return true, noReason
 	}
-	code, body := getHealth(t, RouterConfig{DBReady: true, ProvisioningReady: reporter})
+	code, body := getHealth(t, RouterConfig{DBReady: func() bool { return true }, ProvisioningReady: reporter})
 
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, healthStatusOK, body.Status)

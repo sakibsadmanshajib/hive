@@ -44,13 +44,34 @@ try:
     if hive_email and hive_db_url:
         import psycopg2 as hive_psycopg2
 
-        hive_conn = hive_psycopg2.connect(
-            hive_db_url,
-            connect_timeout=5,
-            options="-c statement_timeout=3000 -c lock_timeout=3000",
-        )
+        # This lookup runs on every login, so the query must be bounded.
+        # It used to be bounded with a libpq `options=-c statement_timeout=...`
+        # startup string. That mechanism is applied by whichever backend the
+        # client is handed at connection time, so it is honoured on a direct
+        # Postgres and on a session-mode pooler, but a transaction-mode pooler
+        # multiplexes many client sessions over fewer backends and does not
+        # reliably carry it: the connection still succeeds, with no error and
+        # no warning, and the requested timeout is simply never in effect.
+        # `SET LOCAL` inside the implicit transaction this cursor block already
+        # runs in is honoured in every one of those three cases, and it is the
+        # same pattern every RLS `set_config(..., true)` call here relies on,
+        # so it is used unconditionally rather than depending on what
+        # PGVECTOR_DB_URL happens to point at.
+        #
+        # Measured, not assumed. On the current self-hosted deployment
+        # (PGVECTOR_DB_URL -> supabase-db:5432, a direct Postgres with no
+        # pooler in front of it) both mechanisms report the requested 3s, and
+        # the role default with neither is 0, meaning unbounded. On the
+        # previous hosted Supavisor pooler in transaction mode the `options=`
+        # form measured as the role's untouched default instead of the
+        # requested 3s. The change is therefore a no-op on today's deployment
+        # and a real fix on any deployment that puts a transaction-mode pooler
+        # back in this path.
+        hive_conn = hive_psycopg2.connect(hive_db_url, connect_timeout=5)
         try:
             with hive_conn.cursor() as hive_cur:
+                hive_cur.execute("SET LOCAL statement_timeout = 3000")
+                hive_cur.execute("SET LOCAL lock_timeout = 3000")
                 hive_cur.execute(
                     "SELECT tu.role FROM public.tenant_users tu "
                     "JOIN auth.users u ON u.id = tu.user_id "

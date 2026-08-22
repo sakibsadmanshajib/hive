@@ -357,7 +357,7 @@ func identityMiddleware(h http.Handler) http.Handler { return h }
 // be registered alongside the other unauthenticated infrastructure routes.
 func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
 	mux := http.NewServeMux()
-	registerInfraRoutes(mux, "testdata/openapi.yaml")
+	registerInfraRoutes(mux, "testdata/openapi.yaml", func() bool { return false })
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -370,6 +370,76 @@ func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHealthReactsToRuntimeAuthzDegradation is the regression guard for the
+// gap this closes: /health used to be a hardcoded 200 with no dependency on
+// anything, so a control-plane pool-contention window that made every real
+// /v1/chat/completions and /v1/models call fail (retryable 503
+// upstream_unavailable, per authz.Client.Resolve's own classification) still
+// reported this endpoint healthy throughout the outage. The degraded
+// callback must be consulted per request, not baked in once at router
+// construction.
+func TestHealthReactsToRuntimeAuthzDegradation(t *testing.T) {
+	degraded := false
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml", func() bool { return degraded })
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health while healthy = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	degraded = true
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health while degraded = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+
+	degraded = false
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health after recovery = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHealthTreatsNilDegradedCallbackAsHealthy verifies a nil callback (e.g.
+// a caller that has not wired the authz client's Degraded method) does not
+// panic and defaults to healthy, matching the previous unconditional-200
+// behavior for any caller that has not opted in yet.
+func TestHealthTreatsNilDegradedCallbackAsHealthy(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml", nil)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health with nil degraded callback = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHealthPolarityMatchesRealAuthzClientDegraded is the regression guard
+// for PR #975 CodeRabbit review: the previous handleHealth checked
+// !healthy(), but main.go wired it directly to authz.Client.Degraded, which
+// returns true when UNHEALTHY -- the opposite polarity. A fully healthy
+// edge-api reported 503 and an actual control-plane outage reported 200,
+// silently, the exact "health endpoint lies" failure this PR exists to fix.
+// Exercises the real *authz.Client (not a hand-rolled bool) the way main.go
+// actually wires it, so a future re-introduction of the inversion fails this
+// test rather than only a unit test of handleHealth in isolation.
+func TestHealthPolarityMatchesRealAuthzClientDegraded(t *testing.T) {
+	client := &authz.Client{}
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml", client.Degraded)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health with a fresh, undegraded authz.Client = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
@@ -1196,4 +1266,29 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("condition not met within 2s")
+}
+
+// TestDegradedHealthBodyNamesNoInternalComponent mirrors control-plane's
+// TestNewRouterDegradedHealthDoesNotLeakConnectionDetail. /health here is
+// unauthenticated on the public gateway, so its degraded body must name the
+// missing capability and nothing else. The first version of this response
+// said "control-plane resolve unavailable", which published an internal
+// service name and the internal call it makes to anyone who curled the
+// endpoint during an outage.
+func TestDegradedHealthBodyNamesNoInternalComponent(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "", func() bool { return true })
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health while degraded = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	body := strings.ToLower(rec.Body.String())
+	for _, leak := range []string{"control-plane", "controlplane", "resolve", "postgres", "pooler", "supabase", "redis", "5432", "8081"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("degraded /health body leaks %q: %s", leak, rec.Body.String())
+		}
+	}
 }

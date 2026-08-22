@@ -19,6 +19,11 @@ type stubRepo struct {
 	keyLimits         map[uuid.UUID]KeyLimits
 	tenantByAccount   map[uuid.UUID]uuid.UUID
 	events            []KeyEvent
+
+	// forceGetPolicyErr, when non-nil, is returned by GetPolicyByTokenHash
+	// instead of the normal lookup, simulating an infrastructural failure
+	// (pool checkout timeout, connection error) rather than a key verdict.
+	forceGetPolicyErr error
 }
 
 func newStubRepo() *stubRepo {
@@ -206,6 +211,9 @@ func (r *stubRepo) GetByTokenHash(_ context.Context, tokenHash string) (APIKey, 
 }
 
 func (r *stubRepo) GetPolicyByTokenHash(_ context.Context, tokenHash string) (APIKey, KeyPolicy, error) {
+	if r.forceGetPolicyErr != nil {
+		return APIKey{}, KeyPolicy{}, r.forceGetPolicyErr
+	}
 	var key APIKey
 	found := false
 	for _, k := range r.keys {
