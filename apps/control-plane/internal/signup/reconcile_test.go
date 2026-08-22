@@ -370,7 +370,15 @@ func newReconcileFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 			return uuid.Nil, signup.ErrNoMatch
 		},
 		DomainLookup: func(ctx context.Context, domain string) (uuid.UUID, error) {
-			fx.resolveCalls.Add(1)
+			// Counted per fixture domain rather than per call. The sweep suite runs
+			// this resolver over every membership-less identity in its lookback
+			// window, so a global counter would make an exact assertion depend on
+			// unrelated rows in a shared database (review finding, CodeRabbit on PR
+			// 993). Every test that reconciles fx.userID directly is unaffected,
+			// since its domain is always this one.
+			if domain == fx.domain {
+				fx.resolveCalls.Add(1)
+			}
 			var id uuid.UUID
 			err := pool.QueryRow(ctx,
 				`SELECT tenant_id FROM public.tenant_email_domains WHERE domain=$1`,

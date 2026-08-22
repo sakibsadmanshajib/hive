@@ -11,9 +11,12 @@ package signup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ErrNoMatch indicates neither the invite token nor the email domain
@@ -78,4 +81,60 @@ func (r *Resolver) Resolve(ctx context.Context, in Input) (uuid.UUID, error) {
 		}
 	}
 	return uuid.Nil, ErrNoMatch
+}
+
+// Message formats for the pgx-backed lookups below. Kept as constants next to
+// their only call sites so the wrapped error text is auditable in one place.
+const (
+	errInviteLookup = "signup invite lookup: %w"
+	errDomainLookup = "signup domain lookup: %w"
+)
+
+// inviteLookupQuery resolves an unconsumed, unexpired invite token to its
+// tenant. Expiry and consumption are part of the predicate rather than checked
+// afterwards, so a stale token resolves to nothing at all.
+const inviteLookupQuery = `
+	SELECT tenant_id
+	  FROM public.tenant_invites
+	 WHERE token = $1
+	   AND consumed_at IS NULL
+	   AND expires_at > now()
+`
+
+// domainLookupQuery maps a verified email domain to its tenant.
+const domainLookupQuery = `
+	SELECT tenant_id
+	  FROM public.tenant_email_domains
+	 WHERE domain = $1
+`
+
+// NewPgxResolver builds the production Resolver over a pgx pool.
+//
+// It lives here rather than in cmd/server so that every caller resolves a
+// tenant with the same SQL. There are three provisioning entry points now (the
+// legacy Supabase webhook, the console route and the reconciler sweep), and a
+// test or a second binary that hand-rolled these two queries would be free to
+// drift from the predicate the running server actually applies.
+//
+// Only "no eligible row" collapses to ErrNoMatch. A transient database failure
+// surfaces, so the webhook answers 500 and Supabase retries, and the sweep
+// counts a fault rather than recording a terminal no-tenant determination.
+func NewPgxResolver(pool *pgxpool.Pool) *Resolver {
+	return NewResolver(ResolverDeps{
+		InviteLookup: pgxLookup(pool, inviteLookupQuery, errInviteLookup),
+		DomainLookup: pgxLookup(pool, domainLookupQuery, errDomainLookup),
+	})
+}
+
+func pgxLookup(pool *pgxpool.Pool, query, wrap string) LookupFunc {
+	return func(ctx context.Context, key string) (uuid.UUID, error) {
+		var id uuid.UUID
+		if err := pool.QueryRow(ctx, query, key).Scan(&id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, ErrNoMatch
+			}
+			return uuid.Nil, fmt.Errorf(wrap, err)
+		}
+		return id, nil
+	}
 }

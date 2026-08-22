@@ -32,6 +32,21 @@ type healthResponse struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+const (
+	// healthStatusDegraded is the status string a not-ready control-plane
+	// reports. Fixed strings only on this endpoint: it is public on the
+	// ingress tunnel.
+	healthStatusDegraded = "degraded"
+	// dbUnavailableReason names the missing dependency without naming the
+	// host, the pooler or the database user.
+	dbUnavailableReason = "database unavailable"
+	// healthStatusOK is the ready answer.
+	healthStatusOK = "ok"
+	// provisioningUnreported is what a nil ProvisioningReady means. Nothing
+	// told this endpoint whether provisioning is wired, so it is not ready.
+	provisioningUnreported = "signup provisioning not reported"
+)
+
 // RouterConfig holds dependencies for building the HTTP router.
 type RouterConfig struct {
 	AuthMiddleware           *auth.Middleware
@@ -66,6 +81,12 @@ type RouterConfig struct {
 	// otherwise the container healthcheck passes and traffic is routed to a
 	// process that cannot authenticate a single request. See issue #816.
 	DBReady bool
+
+	// ProvisioningReady reports whether signup tenant provisioning is wired
+	// and working (D-023). A nil func means nothing reported it, which is
+	// treated as unwired rather than as fine: see healthHandler for why an
+	// absence has to read as broken on this endpoint.
+	ProvisioningReady func() (bool, string)
 
 	// Mux is an optional pre-created *http.ServeMux. When provided, routes are
 	// registered on it (enabling callers to add routes after NewRouter returns).
@@ -161,7 +182,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux = http.NewServeMux()
 	}
 
-	mux.HandleFunc("/health", healthHandler(cfg.DBReady))
+	mux.HandleFunc("/health", healthHandler(cfg.DBReady, cfg.ProvisioningReady))
 
 	// internal wraps a service-to-service handler with the shared-secret guard.
 	internal := func(h http.Handler) http.Handler {
@@ -387,18 +408,40 @@ func NewRouter(cfg RouterConfig) http.Handler {
 // reporting 200 here is what turns a transient database outage at boot into a
 // silent, permanent one: the compose healthcheck goes green, dependent services
 // start, and every caller gets a misleading credential error instead.
-func healthHandler(dbReady bool) http.HandlerFunc {
+func healthHandler(dbReady bool, provisioningReady func() (bool, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if !dbReady {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(healthResponse{
-				Status: "degraded",
-				Reason: "database unavailable",
+				Status: healthStatusDegraded,
+				Reason: dbUnavailableReason,
 			})
 			return
 		}
+		// Signup tenant provisioning (D-023). It used to hang off a Supabase
+		// dashboard webhook, so deleting the hosted project removed it with no
+		// diff and no failing test, and the control-plane wiring that replaced
+		// it sat behind an env-var check that logged a warning and started
+		// healthy anyway. Both absences were invisible. Reporting them here is
+		// what turns the next one into a red container healthcheck and a
+		// blocked deploy instead of a log line nobody reads, which is why a nil
+		// reporter counts as unwired.
+		provisioningOK := false
+		reason := provisioningUnreported
+		if provisioningReady != nil {
+			provisioningOK, reason = provisioningReady()
+		}
+		if !provisioningOK {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(healthResponse{
+				Status: healthStatusDegraded,
+				Reason: reason,
+			})
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+		_ = json.NewEncoder(w).Encode(healthResponse{Status: healthStatusOK})
 	}
 }
