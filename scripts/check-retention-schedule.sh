@@ -140,10 +140,23 @@ WITH j AS (
   FROM cron.job
   WHERE jobname = '$JOB_NAME'
 ),
+-- cron.job is cluster-wide, not per database: one entry in it can belong to
+-- any database in the cluster, and jobname is not unique across them. Every
+-- verdict below except SCHEDULE_MISSING is about THIS database's job, so it
+-- reads mine and never j (review finding, Greptile on PR 994). Without the
+-- split, a same-named job in another database contributes its run history
+-- here through the jobid join, and both directions are wrong: its successes
+-- would report OK for a local job that has never run, and its failures would
+-- deny the bootstrap allowance to a genuinely new local schedule by making it
+-- look like NEVER_SUCCEEDED. j survives for exactly one purpose: telling a job
+-- registered against another database apart from no such job existing at all.
+mine AS (
+  SELECT * FROM j WHERE database = current_database()
+),
 terminal AS (
   SELECT d.status, coalesce(d.end_time, d.start_time) AS at
   FROM cron.job_run_details d
-  JOIN j ON j.jobid = d.jobid
+  JOIN mine ON mine.jobid = d.jobid
   WHERE d.status IN ('succeeded', 'failed')
   ORDER BY d.start_time DESC
   LIMIT 1
@@ -151,7 +164,7 @@ terminal AS (
 ok_run AS (
   SELECT max(coalesce(d.end_time, d.start_time)) AS at
   FROM cron.job_run_details d
-  JOIN j ON j.jobid = d.jobid
+  JOIN mine ON mine.jobid = d.jobid
   WHERE d.status = 'succeeded'
 ),
 -- Any run at all, whatever its status. This is what separates a job that has
@@ -160,18 +173,20 @@ ok_run AS (
 any_run AS (
   SELECT 1 AS one
   FROM cron.job_run_details d
-  JOIN j ON j.jobid = d.jobid
+  JOIN mine ON mine.jobid = d.jobid
   LIMIT 1
 )
 SELECT CASE
   WHEN NOT EXISTS (SELECT 1 FROM j)
     THEN 'SCHEDULE_MISSING|no job named $JOB_NAME exists'
-  WHEN NOT EXISTS (SELECT 1 FROM j WHERE active)
-    THEN 'SCHEDULE_INACTIVE|the job exists but active is false'
-  WHEN NOT EXISTS (SELECT 1 FROM j WHERE command LIKE '%purge_metering_shadow_verdicts%')
-    THEN 'SCHEDULE_HOLLOW|its command does not call the purge procedure: ' || (SELECT command FROM j LIMIT 1)
-  WHEN NOT EXISTS (SELECT 1 FROM j WHERE database = current_database())
+  -- Ahead of the inactive and hollow verdicts rather than after them, because
+  -- those now read mine, which is empty in exactly this case.
+  WHEN NOT EXISTS (SELECT 1 FROM mine)
     THEN 'SCHEDULE_WRONG_DB|it is registered against database ' || (SELECT database FROM j LIMIT 1) || ', not ' || current_database()
+  WHEN NOT EXISTS (SELECT 1 FROM mine WHERE active)
+    THEN 'SCHEDULE_INACTIVE|the job exists but active is false'
+  WHEN NOT EXISTS (SELECT 1 FROM mine WHERE command LIKE '%purge_metering_shadow_verdicts%')
+    THEN 'SCHEDULE_HOLLOW|its command does not call the purge procedure: ' || (SELECT command FROM mine LIMIT 1)
   WHEN (SELECT at FROM ok_run) IS NULL AND NOT EXISTS (SELECT 1 FROM any_run)
     THEN 'NEVER_RAN|no run has ever been recorded (cron.log_run=' || coalesce(current_setting('cron.log_run', true), 'unset') || ')'
   WHEN (SELECT at FROM ok_run) IS NULL
@@ -180,7 +195,7 @@ SELECT CASE
     THEN 'STALE|last succeeded at ' || (SELECT at FROM ok_run)
   WHEN (SELECT status FROM terminal) <> 'succeeded'
     THEN 'LAST_RUN_FAILED|the most recent finished run ' || (SELECT status || ' at ' || at FROM terminal)
-  ELSE 'OK|schedule ' || (SELECT schedule FROM j LIMIT 1) || ', last succeeded at ' || (SELECT at FROM ok_run)
+  ELSE 'OK|schedule ' || (SELECT schedule FROM mine LIMIT 1) || ', last succeeded at ' || (SELECT at FROM ok_run)
 END"
 
 if ! verdict="$(psql_q -c "$verdict_sql")"; then

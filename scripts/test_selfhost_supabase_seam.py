@@ -740,6 +740,55 @@ def test_the_retention_check_fails_instead_of_reporting() -> None:
     assert "continue-on-error" not in step, step
 
 
+def test_the_retention_verdict_reads_only_this_databases_job() -> None:
+    """cron.job is cluster-wide and jobname is not unique across databases, so a
+    same-named job in another database of the same cluster lands in the same
+    table. Joining run history on the unfiltered job set lets that stranger's
+    history answer for ours, in both directions. Measured against a real
+    Postgres carrying a synthetic cron schema: with a foreign job holding one
+    SUCCEEDED run and the local job holding none, the unfiltered query returned
+    OK, a green verdict for a database whose retention has never once run.
+    With the foreign run FAILED instead, it returned NEVER_SUCCEEDED and denied
+    a brand new local schedule its bootstrap allowance. A locally inactive job
+    beside an active foreign one returned NEVER_RAN, which the allowance then
+    covers, instead of SCHEDULE_INACTIVE."""
+    body = "\n".join(
+        line
+        for line in RETENTION_CHECK_TEXT.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert re.search(
+        r"^mine AS \(\n\s*SELECT \* FROM j WHERE database = current_database\(\)$",
+        body,
+        re.MULTILINE,
+    ), "the verdict has no per-database job set, so cron.job is read cluster-wide"
+    # The three run-history CTEs. Asserted as the absence of the cluster-wide
+    # join rather than the presence of the scoped one, because adding a fourth
+    # CTE that joins j would not disturb a count of the scoped ones.
+    assert not re.search(r"JOIN j ON j\.jobid = d\.jobid", body), (
+        "a run-history CTE still joins the cluster-wide job set, so another "
+        "database's runs answer for this one"
+    )
+    assert body.count("JOIN mine ON mine.jobid = d.jobid") == 3, body
+    # Every per-job verdict reads mine. j is allowed in exactly two places: the
+    # SCHEDULE_MISSING test and the WRONG_DB message that names the database it
+    # did find, both of which are about a job that is NOT ours.
+    assert re.search(r"FROM j\)\n\s*THEN 'SCHEDULE_MISSING", body), body
+    for verdict in ("SCHEDULE_INACTIVE", "SCHEDULE_HOLLOW"):
+        clause = re.search(r"WHEN ([^\n]*)\n\s*THEN '" + verdict, body)
+        assert clause and " j " not in clause.group(1), (
+            f"{verdict} is decided over the cluster-wide job set, so another "
+            "database's job can mask this one"
+        )
+    # WRONG_DB is decided by mine being empty, so it has to be tested before the
+    # verdicts that read mine, otherwise they fire first with a wrong message.
+    order = [
+        m.group(1)
+        for m in re.finditer(r"THEN '([A-Z_]+)\|", body)
+    ]
+    assert order.index("SCHEDULE_WRONG_DB") < order.index("SCHEDULE_INACTIVE"), order
+
+
 def test_the_retention_check_cannot_report_on_another_database() -> None:
     """The other half of the false green: the check was reading the hosted
     Supabase project, where pg_cron IS preloaded, while the stack's own
