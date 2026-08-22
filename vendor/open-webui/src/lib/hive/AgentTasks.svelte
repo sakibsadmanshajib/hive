@@ -241,7 +241,13 @@
 			// message goes with the failure count rather than outliving both.
 			blocked = null;
 			mutations = mutations + 1;
-			tasks = [task, ...tasks];
+			// Deduplicated on id, which the mutation counter above cannot cover: it
+			// catches a refresh that lands AFTER the create, while this catches one
+			// that landed BEFORE the create response reached the browser but after
+			// the server had already committed the row. In that window the counter
+			// has not moved yet, so the refresh is applied, and prepending blindly
+			// would put the same id in a keyed list twice.
+			tasks = [task, ...tasks.filter((existing) => existing.id !== task.id)];
 			instructions = '';
 			resize();
 			announcement = `Task submitted. Status: ${describeTask(task, Date.now()).label}.`;
