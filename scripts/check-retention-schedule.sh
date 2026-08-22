@@ -153,6 +153,15 @@ ok_run AS (
   FROM cron.job_run_details d
   JOIN j ON j.jobid = d.jobid
   WHERE d.status = 'succeeded'
+),
+-- Any run at all, whatever its status. This is what separates a job that has
+-- never been due from a job that has been trying and failing, and only the
+-- first of those is eligible for the bootstrap allowance below.
+any_run AS (
+  SELECT 1 AS one
+  FROM cron.job_run_details d
+  JOIN j ON j.jobid = d.jobid
+  LIMIT 1
 )
 SELECT CASE
   WHEN NOT EXISTS (SELECT 1 FROM j)
@@ -163,8 +172,10 @@ SELECT CASE
     THEN 'SCHEDULE_HOLLOW|its command does not call the purge procedure: ' || (SELECT command FROM j LIMIT 1)
   WHEN NOT EXISTS (SELECT 1 FROM j WHERE database = current_database())
     THEN 'SCHEDULE_WRONG_DB|it is registered against database ' || (SELECT database FROM j LIMIT 1) || ', not ' || current_database()
+  WHEN (SELECT at FROM ok_run) IS NULL AND NOT EXISTS (SELECT 1 FROM any_run)
+    THEN 'NEVER_RAN|no run has ever been recorded (cron.log_run=' || coalesce(current_setting('cron.log_run', true), 'unset') || ')'
   WHEN (SELECT at FROM ok_run) IS NULL
-    THEN 'NEVER_SUCCEEDED|' || coalesce((SELECT 'the most recent finished run ' || status || ' at ' || at FROM terminal), 'no run has ever been recorded') || ' (cron.log_run=' || coalesce(current_setting('cron.log_run', true), 'unset') || ')'
+    THEN 'NEVER_SUCCEEDED|' || coalesce((SELECT 'the most recent finished run ' || status || ' at ' || at FROM terminal), 'runs exist but none finished') || ' (cron.log_run=' || coalesce(current_setting('cron.log_run', true), 'unset') || ')'
   WHEN (SELECT at FROM ok_run) < now() - interval '$MAX_SUCCESS_AGE'
     THEN 'STALE|last succeeded at ' || (SELECT at FROM ok_run)
   WHEN (SELECT status FROM terminal) <> 'succeeded'
@@ -186,22 +197,27 @@ detail="${verdict#*|}"
 # The migration that creates this job runs in the same deploy job as this
 # check, one step earlier. On a fresh volume, a rebuilt box, or the first deploy
 # after this change lands, cron.job_run_details is therefore empty at this
-# moment and the verdict is NEVER_SUCCEEDED, which would fail the migrate job
-# and stop the deploy until the schedule first fires at 21:00 UTC. Those are
-# exactly the recovery paths this whole change exists to protect, so blocking
-# them would be self-defeating.
+# moment, and failing on that would stop the deploy until the schedule first
+# fires at 21:00 UTC. Those are exactly the recovery paths this whole change
+# exists to protect, so blocking them would be self-defeating.
 #
-# The allowance is bounded by the same window and by real evidence, not by a
-# flag: cron.job carries no creation timestamp, so the age comes from the
-# applied_at of the scheduling migration in public.hive_schema_migrations. Under
-# MAX_SUCCESS_AGE old means "this was just installed, no run is due yet".
-# Anything older is a job that has had its chance and is still dead, which
-# stays a hard failure. The allowance therefore expires on its own, with no
-# second action needed from anyone.
+# The allowance is bounded three ways, all by evidence rather than by a flag:
 #
-# A missing ledger row (the migration applied by hand, or a database with no
-# ledger at all) grants nothing. Absence of evidence is not evidence here.
-if [ "$code" = "NEVER_SUCCEEDED" ]; then
+#   * NEVER_RAN only, never NEVER_SUCCEEDED. A job with run rows and no
+#     successful one among them is a job that has been trying and failing, and
+#     the migration upserting it with cron.schedule does not make it new. That
+#     distinction is the whole reason the verdict separates the two: without it,
+#     applying this migration to a database whose job errors every night would
+#     buy that job 72 hours of green. Review caught exactly that.
+#   * A scheduling migration younger than MAX_SUCCESS_AGE, read from applied_at
+#     in public.hive_schema_migrations, because cron.job carries no creation
+#     timestamp of its own. Anything older is a job that has had its chance.
+#   * A missing ledger row (the migration applied by hand, or a database with no
+#     ledger at all) grants nothing. Absence of evidence is not evidence.
+#
+# So the allowance expires on its own, with no second action needed from anyone,
+# and it cannot cover a job that has already demonstrated failure.
+if [ "$code" = "NEVER_RAN" ]; then
   bootstrap="f"
   if ledger_present="$(psql_q -c "SELECT to_regclass('public.hive_schema_migrations') IS NOT NULL")" \
     && [ "$ledger_present" = "t" ]; then
@@ -230,8 +246,12 @@ case "$code" in
     echo "::error::Nightly metering retention is NOT scheduled on cluster $actual_cluster: $detail. public.metering_shadow_verdicts will grow without bound. supabase/migrations/20260822_01_metering_retention_pg_cron_schedule.sql is what creates this job."
     exit 1
     ;;
+  NEVER_RAN)
+    echo "::error::Nightly metering retention is scheduled on cluster $actual_cluster but has never run at all: $detail. A job row that never executes is the same as no retention. If pg_cron is installed without being in shared_preload_libraries its background worker never starts and every run is invisible (issue #615); check the supabase-db command in docker-compose.enterprise.yml. A schedule installed within the last $MAX_SUCCESS_AGE by $SCHEDULER_MIGRATION is allowed to have no run yet, so reaching this message means either that migration is not recorded in public.hive_schema_migrations or it is older than that."
+    exit 1
+    ;;
   NEVER_SUCCEEDED)
-    echo "::error::Nightly metering retention is scheduled on cluster $actual_cluster but has never completed successfully: $detail. A job row that never executes is the same as no retention at all. If pg_cron is installed without being in shared_preload_libraries its background worker never starts and every run is invisible (issue #615); check the supabase-db command in docker-compose.enterprise.yml."
+    echo "::error::Nightly metering retention is scheduled on cluster $actual_cluster and has run, but has never completed successfully: $detail. Read the return_message column of cron.job_run_details for that jobid. This verdict is never covered by the bootstrap allowance: a job that has already failed is not a new job, whatever cron.schedule did to its row."
     exit 1
     ;;
   STALE)

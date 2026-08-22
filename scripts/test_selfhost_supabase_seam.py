@@ -698,7 +698,24 @@ def test_the_retention_check_fails_instead_of_reporting() -> None:
     # scheduling migration whose ledger timestamp is younger than the SAME
     # window, and nothing else. No flag, no environment variable, and no
     # unconditional allowance.
-    assert re.search(r'if \[ "\$code" = "NEVER_SUCCEEDED" \]', body), body
+    assert re.search(r'if \[ "\$code" = "NEVER_RAN" \]', body), body
+    # NEVER_RAN and not NEVER_SUCCEEDED, and the difference is load bearing: a
+    # job with run rows and no successful one among them has been trying and
+    # failing, and cron.schedule upserting its row does not make it new. Review
+    # caught the version that granted such a job 72 hours of green.
+    assert "NEVER_SUCCEEDED" in body, "the two verdicts must stay distinguishable"
+    assert not re.search(r'if \[ "\$code" = "NEVER_SUCCEEDED" \]', body), (
+        "a job that has already failed is eligible for the bootstrap allowance"
+    )
+    # Both the definition and the use, anchored. A bare `"any_run" in body`
+    # substring match survives renaming the CTE, because the reference to it
+    # still spells the old name: measured, that mutation stayed green while the
+    # query it produces is broken.
+    assert re.search(r"^any_run AS \($", body, re.MULTILINE), body
+    assert "NOT EXISTS (SELECT 1 FROM any_run)" in body, (
+        "nothing tells a never-due job apart from a failing one, so the "
+        "allowance cannot be restricted to the first"
+    )
     assert "hive_schema_migrations" in body, (
         "the bootstrap allowance is not tied to when the schedule was actually "
         "created, so it cannot expire"
