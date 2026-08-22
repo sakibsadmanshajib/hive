@@ -167,6 +167,26 @@
     }
   }
 
+  # `/api/v1/hive/*` is deliberately left to the catch-all below, and the
+  # reason is written here so a future reviewer does not have to re-derive it
+  # from three regexes.
+  #
+  # That prefix is Hive's own FastAPI router inside the chat container
+  # (deploy/docker/owui-patches/hive_agent_proxy.py), and it has to stay
+  # browser-reachable: the native agent surface calls it from the page. It
+  # matches none of the blocks above, which is correct rather than accidental.
+  # `@blocked` lists literal segments after `api/v1/` and `hive` is not one;
+  # `@removedSurfaces` matches page routes only; `@adminMutation` globs
+  # `configs*`, `users/*`, `groups*`, `functions*` and `models*`, none of which
+  # match `hive/agent/tasks`, so the create and cancel POSTs stay reachable.
+  #
+  # It is not the shape #770 and #771 blocked. Those are stock Open WebUI
+  # routers that proxy to a caller-supplied destination with a stored
+  # credential, and this deployment offers no such feature. This router is four
+  # named operations, every one behind Open WebUI's own `get_verified_user`,
+  # with the task id validated as a UUID and the outbound body rebuilt from two
+  # named fields. Blocking it here would break the feature and secure nothing.
+
   # Agent-task API on the chat origin. The task console runs in the browser
   # and calls edge-api directly, but edge-api serves no CORS headers at all,
   # so a cross-origin base URL (api-hive.scubed.co while the page is served

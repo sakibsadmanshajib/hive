@@ -1,0 +1,15 @@
+local static server serving the branch bundle at http://127.0.0.1:36019
+bundle: /tmp/claude-1001/-home-sakib-hive/47b1dc44-1a51-42c2-8e34-41475aa46c9d/scratchpad/b951
+password inputs on /agents: 0
+iframes on /agents: 0
+"Sign in" appears in body text: false
+captured 01-agents-native-no-credential-prompt.png at http://127.0.0.1:36019/agents :: password inputs=0, iframes=0
+captured 02-agents-composer-accepts-a-brief.png at http://127.0.0.1:36019/agents :: native composer, no second application
+
+console transcript:
+  [error] WebSocket connection to 'ws://127.0.0.1:36019/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [pageerror] fe.sort is not a function
+  [pageerror] fe.sort is not a function
+  [pageerror] a.map is not a function
+  [error] WebSocket connection to 'ws://127.0.0.1:36019/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36019/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200

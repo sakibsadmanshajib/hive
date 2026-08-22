@@ -234,41 +234,17 @@ samp,
 	background-color: var(--hv-canvas);
 }
 
-.hv-panel-region {
-	position: relative;
-	flex: 1 1 auto;
-	display: flex;
-	min-height: 0;
-}
-
-.hv-panel-frame {
-	flex: 1 1 auto;
-	width: 100%;
-	border: 0;
-	display: block;
-	background-color: transparent;
-	/* Colour scheme is inherited by the embedded document through its own
-	 * copy of these tokens; nothing here paints over it. */
-	color-scheme: inherit;
-}
-
 /*
- * The line sits behind the frame rather than the frame being hidden until it
- * loads. An unpainted frame is transparent, so the line shows through and the
- * panel's own ground covers it the moment it paints. Deliberate: hiding the
- * frame until a `load` event would leave a permanent "Opening the agent
- * workspace" on any request where that event never arrives, which is the
- * failure that looks like a hang.
+ * The destination's scrolling region.
+ *
+ * It used to host an <iframe> and carried the positioning that needed: a flex
+ * row for the frame to fill, and a loading line stacked behind it. Both are
+ * gone with the frame. The agent surface renders natively into this region now
+ * (src/lib/hive/AgentTasks.svelte), and there is nothing to wait for, so there
+ * is no loading state to draw and nothing to stack.
  */
-.hv-panel-loading {
-	position: absolute;
-	inset: 0;
-	z-index: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	margin: 0;
-	color: var(--hv-ink-muted);
-	font-size: var(--hv-text-sm);
-	line-height: var(--hv-leading-sm);
+.hv-panel-region {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
 }
