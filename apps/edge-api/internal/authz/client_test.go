@@ -496,3 +496,28 @@ func TestResolveClassifiesInternalTokenRejectionAsUpstreamUnavailable(t *testing
 		t.Fatalf("expected ErrInternalTokenRejected preserved for the operator-facing log, got %v", err)
 	}
 }
+
+// TestDegraded_RequestConstructionFailureDoesNotClearDegraded is the guard for
+// PR #975 CodeRabbit CLI finding 2. The deferred tracker in Resolve is
+// registered before the request is constructed, and it clears the degraded
+// flag for any error that is not ErrUpstreamUnavailable. A malformed base URL
+// fails at construction on every single call, so without this classification
+// it would have cleared the flag on every single call and left /health
+// reporting healthy through a total authorization outage.
+func TestDegraded_RequestConstructionFailureDoesNotClearDegraded(t *testing.T) {
+	c := &Client{
+		baseURL:    "http://\x7f-not-a-url",
+		httpClient: &http.Client{Timeout: time.Second},
+	}
+
+	_, err := c.Resolve(context.Background(), "hk_whatever")
+	if err == nil {
+		t.Fatal("Resolve with a malformed base URL returned no error")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Fatalf("Resolve error = %v, want it to wrap ErrUpstreamUnavailable so the caller gets a retryable 503 rather than a 401 on a valid key", err)
+	}
+	if !c.Degraded() {
+		t.Fatal("Degraded() = false after a request that never reached control-plane, want true")
+	}
+}

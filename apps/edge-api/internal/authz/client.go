@@ -275,7 +275,20 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (snap AuthSnapsho
 		strings.NewReader(body),
 	)
 	if err != nil {
-		return AuthSnapshot{}, fmt.Errorf("authz: build request: %w", err)
+		// Never reached a control-plane verdict: the request was not even
+		// constructed, which on this path means a malformed base URL rather
+		// than anything about the caller's key. Classified as
+		// ErrUpstreamUnavailable for two reasons. The caller-facing one:
+		// authorizer.go answers an unclassified error with a permanent 401
+		// "Incorrect API key provided", which would tell every caller to
+		// rotate a perfectly good credential because CONTROL_PLANE_BASE_URL
+		// is wrong. The health one: the deferred tracker above clears the
+		// degraded flag for any error that is not ErrUpstreamUnavailable, so
+		// a base URL that fails on every single request would have cleared
+		// it on every single request and left /health reporting 200 straight
+		// through a total authorization outage -- the exact lie this change
+		// exists to remove (PR #975 CodeRabbit CLI finding 2).
+		return AuthSnapshot{}, fmt.Errorf("authz: build request: %w: %w", ErrUpstreamUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	cpauth.SetHeader(req)
