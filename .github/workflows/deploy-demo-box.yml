@@ -994,11 +994,26 @@ jobs:
           # redacts webhook URLs to the literal "<secret>" in
           # /api/v2/status, so the dead URL is invisible to any assertion on the
           # served config. Deleted rather than left in as decoration.
-          if 'email_configs' not in cfg:
-              failures.append('Alertmanager has no email delivery configured, so every alert '
-                              'it receives is discarded. The owner-supplied destination is an '
-                              'address, so an email_configs block on the routed receiver is '
-                              'what makes this deployment able to deliver at all.')
+          #
+          # Scoped to the ROUTED receiver's own block rather than searched for
+          # anywhere in the document (review finding, CodeRabbit on PR 998). A
+          # substring test over the whole config passes the moment any receiver
+          # declares email delivery, including one nothing routes to, so a
+          # deployment whose routed receiver has no integration at all would
+          # satisfy it while Alertmanager discards every alert it receives.
+          # That is the same shape as the dead webhook above wearing a
+          # different hat, so it gets the same treatment.
+          receiver_block = None
+          if route_receiver:
+              receiver_block = re.search(
+                  r'(?ms)^\s*-\s*name:\s*[\'"]?%s[\'"]?\s*$(.*?)(?=^\s*-\s*name:|\Z)'
+                  % re.escape(route_receiver), cfg)
+          if not receiver_block or 'email_configs:' not in receiver_block.group(1):
+              failures.append('The Alertmanager receiver the route selects (%r) has no email '
+                              'delivery configured, so every alert it receives is discarded. '
+                              'The owner-supplied destination is an address, so an '
+                              'email_configs block on the routed receiver is what makes this '
+                              'deployment able to deliver at all.' % route_receiver)
 
           # Not a failure, but it must be impossible to miss.
           smarthost = re.search(r'^\s*smtp_smarthost:\s*(\S+)\s*$', cfg, re.M)

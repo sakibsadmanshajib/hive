@@ -88,6 +88,18 @@ const (
 	// which is the exact silent shape this type exists to remove. Shorter
 	// than the default interval so a stuck pass cannot overlap the next one.
 	sweepDeadline = 2 * time.Minute
+
+	// strandedMeasureBudget caps the share of sweepDeadline the stranded count
+	// may consume. Running the measurement first gives it the full deadline,
+	// which is what it needed, but the same arrangement lets a slow count
+	// starve the provisioning it is only reporting on (review finding, Greptile
+	// on PR 998). The two are not symmetric: candidateQuery stops at
+	// BatchLimit rows, while strandedQuery is an unbounded count over the whole
+	// seven-day window, so it can be slow on a database where the sweep itself
+	// is fine. Telemetry yields to the work. Exceeding this fails the
+	// measurement, which is still recorded as a failed pass, so the condition
+	// stays loud rather than being swallowed.
+	strandedMeasureBudget = 15 * time.Second
 )
 
 // ReconcilerConfig tunes the sweep. Every field is optional.
@@ -98,7 +110,8 @@ type ReconcilerConfig struct {
 	// swept. Defaults to 24 hours. See the package comment for why this is
 	// bounded at all.
 	Lookback time.Duration
-	// BatchLimit caps candidates per sweep. Defaults to 200.
+	// BatchLimit caps candidates per sweep. Defaults to defaultSweepBatch,
+	// which is 50; see the constant for why that number and not a rounder one.
 	BatchLimit int
 }
 
@@ -297,11 +310,14 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 	// slot and, on a deployment where hundreds of identities are permanently
 	// unclaimable, would starve the ones behind it until they aged out of the
 	// window (review finding, Greptile on PR 993).
-	// Measured BEFORE the candidate loop, so it always has the pass's full
-	// deadline rather than whatever is left after provisioning (review finding,
-	// Greptile on PR 998). A loop that used most of sweepDeadline would otherwise
-	// leave the count too little time, and a timed-out measurement would be
-	// recorded as a failed sweep after a pass that actually worked.
+	// Measured BEFORE the candidate loop, so it gets a predictable budget rather
+	// than whatever is left after provisioning (review finding, Greptile on PR
+	// 993). A loop that used most of sweepDeadline would otherwise leave the
+	// count too little time, and a timed-out measurement would be recorded as a
+	// failed sweep after a pass that actually worked. Going first is bounded by
+	// strandedMeasureBudget so the reverse cannot happen either: the count
+	// cannot spend the pass's whole deadline and starve the provisioning it
+	// only reports on (second review finding, Greptile on PR 998).
 	//
 	// Ordering costs nothing here, which is worth stating because an earlier
 	// comment claimed the opposite: strandedQuery only looks at identities ALREADY
@@ -419,6 +435,10 @@ func (r *Reconciler) measureStranded(ctx context.Context) error {
 	if window <= r.cfg.Lookback {
 		window = 2 * r.cfg.Lookback
 	}
+	// Its own budget, carved from the pass's context rather than sharing all of
+	// it. See strandedMeasureBudget.
+	ctx, cancel := context.WithTimeout(ctx, strandedMeasureBudget)
+	defer cancel()
 	var n int
 	err := r.pool.QueryRow(ctx, strandedQuery,
 		r.cfg.Lookback.Seconds(), window.Seconds()).Scan(&n)
