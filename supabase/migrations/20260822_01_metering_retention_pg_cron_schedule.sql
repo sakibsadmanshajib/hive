@@ -36,12 +36,25 @@
 -- does not degrade gracefully (it raises and aborts the whole script), so the
 -- availability guard stays.
 --
--- What does NOT stay is the silent part. The final block below turns the
--- "available but unusable" case into a hard failure: on a host where the
--- extension files are on disk, this migration now demands a live, active,
--- correctly-pointed job and raises if it does not have one. That is the
--- installed-but-not-preloaded shape from issue #615, and it used to leave
--- nothing behind but a notice.
+-- What does NOT stay is the silent part, for the role that could actually have
+-- done the work. Where the extension files are on disk AND the migration runs
+-- as a superuser, the final block demands a live, active, correctly-pointed job
+-- and raises if it does not have one. That is the installed-but-not-preloaded
+-- shape from issue #615, and it used to leave nothing behind but a notice.
+--
+-- The superuser condition is not decoration. CI's migration-applier workflow
+-- runs against supabase/postgres, where pg_cron is available but the `postgres`
+-- role is not a superuser, so CREATE EXTENSION and cron.schedule both fail on
+-- privilege alone. A role with no right to create an extension cannot be held
+-- responsible for an unscheduled job, and failing the whole chain over it would
+-- block every deployment whose migration role is not a superuser. Those roles
+-- get a notice naming the role and the error instead. The demo box migrates as
+-- a superuser, so it gets the hard failure.
+--
+-- This matters most where there is no deploy-time check at all: an Enterprise
+-- self-hosted install (scripts/install.sh) never runs
+-- scripts/check-retention-schedule.sh, so these RAISEs are the only signal that
+-- path has.
 --
 -- What the job deletes
 -- --------------------
@@ -58,18 +71,38 @@ BEGIN;
 DO $pg_cron_extension$
 DECLARE
   pg_cron_available boolean;
+  is_super          boolean;
 BEGIN
   SELECT EXISTS (
     SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron'
   ) INTO pg_cron_available;
+  SELECT rolsuper INTO is_super FROM pg_roles WHERE rolname = current_user;
 
   IF pg_cron_available THEN
-    -- No exception handler here, unlike 20260729_02. There, swallowing the
-    -- failure was right because the config table and the purge procedure below
-    -- it had no pg_cron dependency and still had to be created. This file has
-    -- no such payload: scheduling the job IS the whole content, so a failure
-    -- here has nothing left to protect and must be loud.
-    EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+    -- The handler is back, unlike the first revision of this file, but it now
+    -- re-raises for the role that could have succeeded. Both halves were
+    -- learned the hard way rather than reasoned about.
+    --
+    -- Removing it entirely broke CI: the migration-applier workflow runs
+    -- against supabase/postgres, where pg_cron IS available but the `postgres`
+    -- role is NOT a superuser (already recorded in
+    -- .github/ci/test-db-bootstrap.sql), so CREATE EXTENSION raised and took
+    -- the whole chain down. A role with no rights to create extensions cannot
+    -- be held responsible for an unscheduled retention job.
+    --
+    -- Keeping it unconditional was the original defect: on the demo box, where
+    -- the migration runs as a superuser and the image now ships the extension,
+    -- a failure here means the deployment is misconfigured (pg_cron missing
+    -- from shared_preload_libraries, issue #615) and must stop the deploy
+    -- rather than leave a notice nobody rereads.
+    BEGIN
+      EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+    EXCEPTION WHEN OTHERS THEN
+      IF is_super THEN
+        RAISE; -- superuser: nothing else can fix this, so fail loudly
+      END IF;
+      RAISE NOTICE 'pg_cron is available but CREATE EXTENSION failed as non-superuser % (%): no nightly retention job is scheduled by this migration. Schedule it as a role that can create the extension, or invoke CALL public.purge_metering_shadow_verdicts() from an external scheduler.', current_user, SQLERRM;
+    END;
   ELSE
     RAISE NOTICE 'pg_cron is not available on this Postgres install, so no nightly retention job is scheduled here. Invoke CALL public.purge_metering_shadow_verdicts() from an external scheduler instead. Expected on CI throwaway databases; NOT expected on the demo box, where scripts/check-retention-schedule.sh fails the deploy over it.';
   END IF;
@@ -77,7 +110,11 @@ END;
 $pg_cron_extension$;
 
 DO $pg_cron_schedule$
+DECLARE
+  is_super boolean;
 BEGIN
+  SELECT rolsuper INTO is_super FROM pg_roles WHERE rolname = current_user;
+
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
     -- Same name, schedule and command as 20260729_02. cron.schedule upserts on
     -- (jobname, username), so re-running this against a database that already
@@ -85,11 +122,22 @@ BEGIN
     --
     -- 21:00 UTC = 03:00 Asia/Dhaka, the lowest-traffic point for a BD-first
     -- product, unchanged from 20260729_02's reasoning.
-    PERFORM cron.schedule(
-      'metering-shadow-verdicts-purge',
-      '0 21 * * *',
-      $sched$CALL public.purge_metering_shadow_verdicts();$sched$
-    );
+    --
+    -- Same asymmetry as the block above, for the same reason: cron.schedule is
+    -- superuser-only by default, so a non-superuser role gets a notice rather
+    -- than an aborted migration chain, and a superuser gets the failure.
+    BEGIN
+      PERFORM cron.schedule(
+        'metering-shadow-verdicts-purge',
+        '0 21 * * *',
+        $sched$CALL public.purge_metering_shadow_verdicts();$sched$
+      );
+    EXCEPTION WHEN OTHERS THEN
+      IF is_super THEN
+        RAISE;
+      END IF;
+      RAISE NOTICE 'cron.schedule failed as non-superuser % (%): no nightly retention job is scheduled by this migration.', current_user, SQLERRM;
+    END;
   END IF;
 END;
 $pg_cron_schedule$;
@@ -100,6 +148,14 @@ DECLARE
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') THEN
     RETURN; -- Nothing to assert: the skip branch above is the documented outcome.
+  END IF;
+
+  -- Asserted only for a role that could have done the work. A non-superuser
+  -- role has already said so in a notice above, and failing the migration for
+  -- a privilege it was never granted would block every deployment whose
+  -- migration role is not a superuser, CI's supabase/postgres included.
+  IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+    RETURN;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
