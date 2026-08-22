@@ -101,7 +101,21 @@ const inviteLookupQuery = `
 	   AND expires_at > now()
 `
 
-// domainLookupQuery maps a verified email domain to its tenant.
+// domainLookupQuery maps a registered email domain to its tenant.
+//
+// REGISTERED, not verified. Nothing proves the tenant that claimed a domain
+// controls its DNS zone or any mailbox in it, and this query is the whole of the
+// check. That is safe only because writing to public.tenant_email_domains is an
+// administrator operation: migration 20260822_01 revoked INSERT and DELETE from
+// `authenticated`, after PR #993 made the sweep attach identities to a claimed
+// domain automatically. Before that revocation any signed-in user could claim
+// `gmail.com` on their own personal tenant, since `domain` is the primary key and
+// claims were first come first served, and thereafter every gmail.com signup
+// would have been given a membership in a stranger's tenant.
+//
+// If self-service domain registration is ever wanted, it needs a real ownership
+// proof (a DNS TXT record or a challenge to postmaster@) in front of the insert.
+// Do not reintroduce the grant without one.
 const domainLookupQuery = `
 	SELECT tenant_id
 	  FROM public.tenant_email_domains

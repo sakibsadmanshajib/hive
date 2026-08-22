@@ -15,6 +15,41 @@ groups:
         annotations:
           summary: "Signup tenant provisioning sweeps are failing"
           description: "{{ $value }} consecutive failed sweeps. New identities are not being given a tenant, so they hold a token with no tenant claim and every tenant-scoped request they make is refused."
+
+      # The gauge above resets to zero the moment a sweep completes with no
+      # failures, and a sweep completes with no failures once the identity that
+      # kept faulting ages out of the reconciler's 24 hour lookback window. So
+      # the alert above resolves itself at the exact moment provisioning has
+      # permanently failed for a real person (review finding on PR 993). These
+      # two cover that; the gauge stays because "currently failing" is still
+      # worth knowing, it was just never enough on its own.
+      #
+      # A counter cannot be walked back by the work disappearing, which is the
+      # whole point of using one here.
+      - alert: SignupProvisioningFaulting
+        expr: increase(hive_signup_provisioning_faults_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Signup tenant provisioning is faulting on individual identities"
+          description: "{{ $value }} provisioning attempts have faulted in the last hour. Unlike the consecutive-sweep gauge, this cannot be cleared by the affected identity ageing out of the sweep's window, so it stays visible while somebody is actually losing access."
+
+      # And the standing state, not just the event: identities whose created_at
+      # is already outside the lookback window hold no membership and no future
+      # sweep will ever look at them again, so their loss is permanent until an
+      # administrator acts. Keyed on the RISE rather than an absolute threshold
+      # on purpose: a deployment with legitimately unclaimed historical
+      # identities would sit permanently above any fixed threshold, and an alert
+      # that is always firing is an alert nobody reads.
+      - alert: SignupProvisioningStrandedIdentity
+        expr: hive_signup_provisioning_stranded_identities - (hive_signup_provisioning_stranded_identities offset 1h) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "An identity aged out of the provisioning window with no tenant"
+          description: "{{ $value }} more identities than an hour ago now sit outside the sweep's lookback window holding no tenant membership. Nothing automatic will pick them up again: they need an invitation, a registered email domain, or cmd/backfill-tenants."
       - alert: HighAPIErrorRate
         expr: |
           sum(rate(hive_http_requests_total{status_class=~"4xx|5xx"}[5m]))

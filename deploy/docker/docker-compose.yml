@@ -1350,8 +1350,11 @@ services:
       - monitoring
     ports:
       - "9093:9093"
-    volumes:
-      - ../../deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+      - source: alertmanager_smtp_credential
+        target: /etc/alertmanager/smtp-credential
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
     logging:
@@ -1360,6 +1363,103 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: unless-stopped
+
+configs:
+  # Alertmanager's configuration is inline here rather than a file under
+  # deploy/alertmanager/ for two reasons, both load bearing. It is not a style
+  # preference, and moving it back to a bind mount reintroduces both defects.
+  #
+  # 1. Alertmanager has no environment variable expansion of any kind, so a
+  #    bind-mounted file cannot read ENTERPRISE_SMTP_*. Compose interpolates
+  #    this block at `up` time, which is the only substitution point in this
+  #    stack that does not require rendering a template into the checkout on the
+  #    box, which would dirty the working tree and break `git pull --ff-only` on
+  #    that shared clone.
+  #
+  # 2. Config content is part of the SERVICE SPECIFICATION, so
+  #    `docker compose up -d` recreates alertmanager whenever this text changes.
+  #    A single-file bind mount does not: editing the file's contents changes
+  #    nothing about the container spec, the deploy finds no reason to recreate,
+  #    and the running process keeps serving whatever it parsed when it started.
+  #    That is the same defect the Caddy apply loop in deploy-demo-box.yml
+  #    exists to work around, and it is half of why every alert this system
+  #    defined went nowhere for four months without one failing check. The other
+  #    half was the receiver: a webhook to http://localhost:9095/webhook, where
+  #    nothing has ever listened, dating to 0c130db6a on 2026-04-24. Putting the
+  #    config in the spec removes the class of problem instead of papering over
+  #    it. deploy/prometheus/*.yml cannot follow suit, since a rules-directory
+  #    glob does not fit in a compose string, so those keep their bind mounts
+  #    and are handled by the apply-and-verify steps in deploy-demo-box.yml.
+  #
+  # Verified, not assumed: `docker compose config` does not print config content
+  # at all (it emits only the config's name), so nothing here can leak an
+  # interpolated value into a public CI log. The SMTP password is nonetheless
+  # kept out of this text and passed by file reference below, so it never enters
+  # the rendered config that Alertmanager echoes back on /api/v2/status either.
+  alertmanager_config:
+    content: |
+      global:
+        resolve_timeout: 5m
+        # Reuses the ENTERPRISE_SMTP_* variables that already feed GoTrue in
+        # docker-compose.enterprise.yml, rather than minting a parallel set for
+        # the same relay.
+        #
+        # The fallback smarthost is deliberate and is not a placeholder
+        # pretending to work. RFC 2606 reserves .invalid so it can never
+        # resolve, which means an unconfigured deployment produces a config that
+        # PARSES, so Alertmanager stays up and a firing alert is still visible in
+        # its own UI and in Prometheus, while every delivery attempt fails
+        # loudly: the literal string smtp-not-configured.invalid appears in the
+        # container log, and alertmanager_notifications_failed_total increments,
+        # which this stack now scrapes and alerts on. Refusing to start instead
+        # would remove the only surface where a firing alert can still be seen,
+        # which is worse than announcing the gap.
+        smtp_smarthost: '${ENTERPRISE_SMTP_HOST:-smtp-not-configured.invalid}:${ENTERPRISE_SMTP_PORT:-587}'
+        smtp_auth_username: '${ENTERPRISE_SMTP_USER:-}'
+        smtp_auth_password_file: '/etc/alertmanager/smtp-credential'
+        # STARTTLS on the submission port, and it stays on. Verified against the
+        # configured relay: EHLO 250, STARTTLS 220, AUTH 235. If a relay ever
+        # negotiates badly, fix the relay rather than turning this off, because an
+        # SMTP AUTH over a cleartext session hands the login to anything on the
+        # path.
+        smtp_require_tls: true
+      route:
+        group_by: ['alertname']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 1h
+        receiver: 'hive-ops'
+      receivers:
+        # Both addresses live here rather than in the globals above, deliberately.
+        # A literal company email address two lines from an
+        # smtp_auth_password_file key is what GitGuardian's "Company Email
+        # Password" detector matches: on the first push of this branch it flagged
+        # the path /etc/alertmanager/smtp-credential as a secret for exactly that
+        # adjacency. Keeping the addresses in the receiver block, where no auth
+        # field is in scope, removes the false positive without hiding where
+        # alerts go behind another variable nobody would think to check.
+        #
+        # from and to are different values and are not interchangeable. The
+        # sender is the owner's chosen no_reply address on a domain the relay must
+        # have authenticated; the recipient is the mailbox a human reads, which is
+        # what ENTERPRISE_SMTP_ADMIN_EMAIL holds on this deployment. Do not
+        # collapse them, and never fall back to the SMTP login as the sender.
+        - name: 'hive-ops'
+          email_configs:
+            - from: '${HIVE_ALERT_FROM:-no_reply@hive.scubed.co}'
+              to: '${ENTERPRISE_SMTP_ADMIN_EMAIL:-contact@scubed.com.bd}'
+              send_resolved: true
+  # By file reference rather than inline, so the value never appears in the
+  # config Alertmanager serves back on /api/v2/status, which the deploy prints.
+  # An unset or empty variable yields an empty file, which is fine: with
+  # smtp_auth_username empty too, Alertmanager attempts no AUTH at all.
+  #
+  # Two characters to know about when setting this in .env, because Compose
+  # interpolates this value: a literal `$` must be written `$$`, and a `"` would
+  # break the YAML. Both fail loudly at `up` time rather than silently, so this
+  # is a note for whoever sets it, not a latent bug.
+  alertmanager_smtp_credential:
+    content: "${ENTERPRISE_SMTP_PASS:-}"
 
 volumes:
   gomodcache:

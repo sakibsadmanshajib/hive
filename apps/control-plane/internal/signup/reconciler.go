@@ -54,7 +54,24 @@ import (
 const (
 	defaultSweepInterval = 5 * time.Minute
 	defaultSweepLookback = 24 * time.Hour
-	defaultSweepBatch    = 200
+
+	// defaultSweepBatch is sized against sweepDeadline rather than picked for
+	// roundness. Each candidate costs a resolver query, a membership insert, a
+	// billing-account lookup and, where Open WebUI is wired, two upstream HTTP
+	// calls, so a full batch of 200 had to average under 600ms per identity to
+	// finish inside the two minute deadline. Past that the pass is cancelled
+	// mid-batch and recorded as a failed sweep even though it provisioned
+	// people, which is a false alert (review finding on PR 993). Fifty is
+	// comfortably inside the deadline, and oldest-first ordering means a
+	// backlog still drains, just across more passes.
+	defaultSweepBatch = 50
+
+	// strandedWindow bounds the stranded-identity count below. Unbounded, the
+	// count would include every historical membership-less row, which on an
+	// administered deployment is a permanent non-zero constant, and an alert
+	// that never clears is an alert nobody reads. It also keeps the query cheap
+	// on a timer.
+	strandedWindow = 7 * 24 * time.Hour
 
 	// noTenantCooldown is how long a terminal no_tenant determination is
 	// trusted before it is attempted again. Reconcile documents that outcome
@@ -71,6 +88,18 @@ const (
 	// which is the exact silent shape this type exists to remove. Shorter
 	// than the default interval so a stuck pass cannot overlap the next one.
 	sweepDeadline = 2 * time.Minute
+
+	// strandedMeasureBudget caps the share of sweepDeadline the stranded count
+	// may consume. Running the measurement first gives it the full deadline,
+	// which is what it needed, but the same arrangement lets a slow count
+	// starve the provisioning it is only reporting on (review finding, Greptile
+	// on PR 998). The two are not symmetric: candidateQuery stops at
+	// BatchLimit rows, while strandedQuery is an unbounded count over the whole
+	// seven-day window, so it can be slow on a database where the sweep itself
+	// is fine. Telemetry yields to the work. Exceeding this fails the
+	// measurement, which is still recorded as a failed pass, so the condition
+	// stays loud rather than being swallowed.
+	strandedMeasureBudget = 15 * time.Second
 )
 
 // ReconcilerConfig tunes the sweep. Every field is optional.
@@ -81,7 +110,8 @@ type ReconcilerConfig struct {
 	// swept. Defaults to 24 hours. See the package comment for why this is
 	// bounded at all.
 	Lookback time.Duration
-	// BatchLimit caps candidates per sweep. Defaults to 200.
+	// BatchLimit caps candidates per sweep. Defaults to defaultSweepBatch,
+	// which is 50; see the constant for why that number and not a rounder one.
 	BatchLimit int
 }
 
@@ -123,6 +153,8 @@ type Reconciler struct {
 
 	mu           sync.Mutex
 	failures     int
+	faults       int
+	stranded     int
 	lastNoTenant map[uuid.UUID]time.Time
 }
 
@@ -147,6 +179,7 @@ const (
 	errListCandidates = "signup: list provisioning candidates: %w"
 	errScanCandidate  = "signup: scan provisioning candidate: %w"
 	errReadCandidates = "signup: read provisioning candidates: %w"
+	errCountStranded  = "signup: count stranded identities: %w"
 	reasonUnwired     = "signup provisioning unwired"
 )
 
@@ -211,6 +244,13 @@ func (r *Reconciler) Ready() (ok bool, reason string) {
 
 // ConsecutiveFailures is how many sweeps in a row have failed, for the metric on
 // the telemetry listener. Zero means the last sweep completed its candidates.
+//
+// This value resets on any clean sweep, which is correct for what it measures
+// and is also why it cannot be the only signal: a sweep goes clean the moment
+// the identity that kept faulting ages out of the lookback window, so an alert
+// keyed on this alone resolves itself exactly when provisioning has permanently
+// failed for somebody. Faults and StrandedIdentities below are what stay
+// visible through that.
 func (r *Reconciler) ConsecutiveFailures() int {
 	if r == nil {
 		return 0
@@ -218,6 +258,37 @@ func (r *Reconciler) ConsecutiveFailures() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.failures
+}
+
+// Faults is how many individual identities have faulted since this process
+// started, monotonically. Nothing decrements it, so the record of an identity
+// that could not be provisioned survives that identity leaving the sweep's
+// window, which is the case ConsecutiveFailures cannot represent.
+func (r *Reconciler) Faults() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.faults
+}
+
+// StrandedIdentities is how many identities the last sweep found holding no
+// membership while already outside the lookback window, so no future sweep will
+// consider them again. It is measured on the sweep timer and cached, never
+// computed during a scrape: a Prometheus scrape must not block on a database
+// query.
+//
+// Unlike ConsecutiveFailures this rises at the moment of permanent loss and only
+// falls once an identity actually gets a tenant, so it reports the standing
+// state rather than an event that can scroll past.
+func (r *Reconciler) StrandedIdentities() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stranded
 }
 
 type sweepCandidate struct {
@@ -239,6 +310,25 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 	// slot and, on a deployment where hundreds of identities are permanently
 	// unclaimable, would starve the ones behind it until they aged out of the
 	// window (review finding, Greptile on PR 993).
+	// Measured BEFORE the candidate loop, so it gets a predictable budget rather
+	// than whatever is left after provisioning (review finding, Greptile on PR
+	// 993). A loop that used most of sweepDeadline would otherwise leave the
+	// count too little time, and a timed-out measurement would be recorded as a
+	// failed sweep after a pass that actually worked. Going first is bounded by
+	// strandedMeasureBudget so the reverse cannot happen either: the count
+	// cannot spend the pass's whole deadline and starve the provisioning it
+	// only reports on (second review finding, Greptile on PR 998).
+	//
+	// Ordering costs nothing here, which is worth stating because an earlier
+	// comment claimed the opposite: strandedQuery only looks at identities ALREADY
+	// older than the lookback window, and candidateQuery only at ones inside it,
+	// so the two sets are disjoint by construction. An identity this pass
+	// provisions cannot appear in the count either way.
+	//
+	// The error is carried rather than returned, so a measurement failure never
+	// skips the provisioning work, which matters more.
+	strandErr := r.measureStranded(ctx)
+
 	cooled := r.cooledIdentities()
 	report.Cooled = len(cooled)
 	candidates, err := r.candidates(ctx, cooled)
@@ -261,6 +351,7 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 			// Reconcile has already audited the classification and logged the
 			// raw error, so this stays a count.
 			report.Failed++
+			r.recordFault()
 		case outcome == OutcomeProvisioned:
 			report.Provisioned++
 		default:
@@ -273,7 +364,18 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 	// not a quiet afternoon: it counts against the failure gauge exactly like a
 	// failed listing does. See Ready for why that is a metric and an alert
 	// rather than an unhealthy readiness probe.
-	r.recordSweep(report.Failed == 0)
+	// A pass that cannot measure its own permanent-loss state is still a failed
+	// pass: leaving the cached gauge silently frozen at its last value is the
+	// same silent shape this whole type exists to remove.
+	//
+	// Folded into ONE recordSweep call rather than a second one on the error
+	// path. Two calls would count a single pass twice whenever it both faulted on
+	// an identity and failed to measure, so the gauge would climb two per pass
+	// and the ">= 3" alert would trip a pass early.
+	r.recordSweep(report.Failed == 0 && strandErr == nil)
+	if strandErr != nil {
+		return report, strandErr
+	}
 	return report, nil
 }
 
@@ -285,6 +387,68 @@ func (r *Reconciler) recordSweep(ok bool) {
 		return
 	}
 	r.failures++
+}
+
+// recordFault counts one identity that could not be provisioned. Monotonic on
+// purpose: see Faults.
+func (r *Reconciler) recordFault() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.faults++
+}
+
+// strandedQuery counts identities that are permanently past the sweep's reach:
+// eligible in every respect, holding no membership the token hook would accept,
+// and already older than the lookback window, so candidateQuery will never
+// return them again. The lifecycle filters and the NOT EXISTS predicate are
+// deliberately identical to candidateQuery's, because a difference between the
+// two would mean this gauge counts identities the sweep never actually tried.
+//
+// The upper bound of the range is what the sweep can still act on; the lower
+// bound keeps the count about the present. See strandedWindow.
+const strandedQuery = `
+	SELECT count(*)
+	  FROM auth.users u
+	 WHERE u.email IS NOT NULL
+	   AND u.email <> ''
+	   AND u.deleted_at IS NULL
+	   AND (u.banned_until IS NULL OR u.banned_until <= now())
+	   AND u.created_at <= now() - make_interval(secs => $1)
+	   AND u.created_at >  now() - make_interval(secs => $2)
+	   AND NOT EXISTS (
+	       SELECT 1
+	         FROM public.tenant_users tu
+	         JOIN public.tenants t ON t.id = tu.tenant_id
+	        WHERE tu.user_id     = u.id
+	          AND tu.status      = 'ACTIVE'
+	          AND t.archived_at IS NULL
+	   )
+`
+
+func (r *Reconciler) measureStranded(ctx context.Context) error {
+	// A Lookback at or past strandedWindow would make the range in
+	// strandedQuery empty, and the gauge would read zero forever no matter how
+	// many identities were being lost. That is a metric that cannot move, which
+	// is the failure mode this whole change is about, so the window is widened
+	// rather than allowed to collapse.
+	window := strandedWindow
+	if window <= r.cfg.Lookback {
+		window = 2 * r.cfg.Lookback
+	}
+	// Its own budget, carved from the pass's context rather than sharing all of
+	// it. See strandedMeasureBudget.
+	ctx, cancel := context.WithTimeout(ctx, strandedMeasureBudget)
+	defer cancel()
+	var n int
+	err := r.pool.QueryRow(ctx, strandedQuery,
+		r.cfg.Lookback.Seconds(), window.Seconds()).Scan(&n)
+	if err != nil {
+		return fmt.Errorf(errCountStranded, err)
+	}
+	r.mu.Lock()
+	r.stranded = n
+	r.mu.Unlock()
+	return nil
 }
 
 // cooledIdentities returns the identities whose terminal no-tenant determination

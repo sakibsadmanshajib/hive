@@ -8,6 +8,7 @@ package signup_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -361,4 +362,117 @@ func TestReconcilerSweepTakesTheOldestCandidatesFirst(t *testing.T) {
 	require.Equal(t, 1, countMemberships(t, ctx, pool, older),
 		"the identity closest to leaving the window must be the one a limited pass serves")
 	require.Equal(t, 0, countMemberships(t, ctx, pool, newer))
+}
+
+// TestReconcilerFaultRecordSurvivesIdentityAgingOut is the regression guard for
+// the review finding that the failure gauge clears itself exactly when work is
+// permanently lost.
+//
+// The mechanism: recordSweep(report.Failed == 0) resets the consecutive-failure
+// count on any pass with no faults, and a pass has no faults once the identity
+// that kept faulting is older than the lookback window, because candidateQuery
+// stops returning it. So the gauge, and the alert on it, go quiet at the moment
+// provisioning has permanently failed for that person. This test asserts that
+// reset still happens, since it is correct for what that gauge measures, AND
+// that the two metrics added alongside it do not follow it down.
+func TestReconcilerFaultRecordSurvivesIdentityAgingOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	// A resolver that faults rather than reaching any determination. This is the
+	// transient shape Reconcile deliberately does not treat as terminal: it
+	// returns an error, the sweep counts it in report.Failed, and the identity
+	// stays a candidate until it ages out. SelfServeTenants is left false so no
+	// personal tenant rescues it.
+	failing := signup.NewProvisioner(signup.WebhookDeps{
+		Pool: pool,
+		Resolver: signup.NewResolver(signup.ResolverDeps{
+			DomainLookup: func(context.Context, string) (uuid.UUID, error) {
+				return uuid.Nil, errors.New("resolver unavailable")
+			},
+		}),
+		Audit: audit.NewLogger(audit.LoggerDeps{
+			Sync: audit.NewSyncWriter(pool, audit.WriterConfig{DeploySHA: "s", Env: "test"}),
+			WAL:  &noopWAL{},
+		}),
+	})
+
+	domain := "faulting-" + uuid.NewString()[:8] + ".example"
+	userID := mustInsertSweepUser(t, ctx, pool,
+		"faulting-"+uuid.NewString()+"@"+domain, time.Now(), nil, nil)
+
+	// BatchLimit 1 with oldest-first ordering keeps this pass on a single
+	// identity, so unrelated rows in the shared test database cannot inflate the
+	// fault count this test asserts on.
+	rec := signup.NewReconciler(pool, failing, signup.ReconcilerConfig{BatchLimit: 1})
+
+	report, err := rec.Sweep(ctx)
+	require.NoError(t, err, "one identity faulting is not a failed sweep")
+	require.Equal(t, 1, report.Failed, "the faulting identity must be counted")
+	require.Equal(t, 1, rec.ConsecutiveFailures())
+	require.Equal(t, 1, rec.Faults())
+	strandedBefore := rec.StrandedIdentities()
+	require.Equal(t, 0, countMemberships(t, ctx, pool, userID),
+		"a faulting resolver must not have produced a membership")
+
+	// Age the identity past the lookback window, which is what really happens
+	// after 24 hours of a resolver that stays broken. Nothing else changes.
+	_, err = pool.Exec(ctx,
+		`UPDATE auth.users SET created_at = now() - interval '25 hours' WHERE id = $1`, userID)
+	require.NoError(t, err)
+
+	report, err = rec.Sweep(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, report.Failed)
+
+	// The defect, asserted rather than fixed: the identity is permanently
+	// unprovisioned and the consecutive-failure gauge reads zero.
+	require.Equal(t, 0, rec.ConsecutiveFailures(),
+		"documenting the reset this test exists because of, not endorsing it as the only signal")
+	require.Equal(t, 0, countMemberships(t, ctx, pool, userID),
+		"the identity is still without a tenant, which is what makes the reset misleading")
+
+	// The fix. A monotonic counter cannot be walked back by the candidate
+	// disappearing, and the stranded gauge rises at that exact moment.
+	require.Equal(t, 1, rec.Faults(),
+		"the record of a provisioning fault must survive the identity leaving the sweep's window")
+	require.Equal(t, strandedBefore+1, rec.StrandedIdentities(),
+		"an identity that aged out unprovisioned must show up as stranded")
+}
+
+// TestReconcilerStrandedCountIgnoresProvisionedIdentities keeps the stranded
+// gauge from becoming a count of everything old. A gauge that rose on healthy
+// identities would be permanently non-zero, and an alert that never clears is an
+// alert nobody reads.
+func TestReconcilerStrandedCountIgnoresProvisionedIdentities(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	fx := newReconcileFixture(t, ctx, pool)
+	rec := signup.NewReconciler(pool, fx.prov, signup.ReconcilerConfig{})
+
+	_, err := rec.Sweep(ctx)
+	require.NoError(t, err)
+	before := rec.StrandedIdentities()
+
+	// Provisioned, then aged past the window. It left the sweep's reach holding a
+	// tenant, so nothing was lost and nothing should be reported.
+	settled := mustInsertSweepUser(t, ctx, pool,
+		"settled-"+uuid.NewString()+"@"+fx.domain, time.Now(), nil, nil)
+	_, err = rec.Sweep(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, countMemberships(t, ctx, pool, settled))
+
+	_, err = pool.Exec(ctx,
+		`UPDATE auth.users SET created_at = now() - interval '25 hours' WHERE id = $1`, settled)
+	require.NoError(t, err)
+
+	_, err = rec.Sweep(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before, rec.StrandedIdentities(),
+		"an identity that aged out holding a membership is not stranded")
 }

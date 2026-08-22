@@ -1,0 +1,48 @@
+groups:
+  - name: hive_monitoring_selfcheck
+    rules:
+      # The alerting chain watching itself. Before this file existed, an alert
+      # that reached nobody produced no signal of any kind: Alertmanager's only
+      # receiver was a webhook to a port nothing has ever listened on, and that
+      # went unnoticed from 2026-04-24 to 2026-08-22.
+      #
+      # This alert cannot be delivered while delivery is what is broken. That is
+      # not a reason to leave it out. It is visible in the Prometheus UI, in
+      # Alertmanager's own UI and in Grafana, which is where an operator looks
+      # when asking whether alerting works, and it starts firing the moment a
+      # relay that used to work stops working, which is the case that matters
+      # once SMTP is actually configured.
+      - alert: AlertDeliveryFailing
+        expr: increase(alertmanager_notifications_failed_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager is failing to deliver notifications"
+          description: "{{ $labels.integration }} notifications have failed in the last 15 minutes, so alerts are firing and reaching nobody. If the log names smtp-not-configured.invalid then no relay is configured at all and ENTERPRISE_SMTP_HOST, _PORT, _USER and _PASS need to be set on the box. This alert cannot reach you by mail for the same reason it is firing; it is here to be visible in the Prometheus, Alertmanager and Grafana UIs."
+
+      # A rule file that fails to parse leaves Prometheus running on its LAST
+      # good config, serving a rule set that no longer matches the repository,
+      # and says so nowhere an operator would see. The deploy asserts the loaded
+      # rule names too, so this covers the case where the config is broken later
+      # by something other than a deploy (a reload against an edited file, a
+      # partially written mount).
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus rejected its configuration and is running on a stale one"
+          description: "The last configuration or rule-file load failed, so the rules Prometheus is evaluating are not the rules in the repository. Check the prometheus container log for the parse error."
+
+      # Alertmanager unreachable means every rule below is evaluated and thrown
+      # away. Prometheus alone cannot notify anybody.
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager is not being scraped"
+          description: "Prometheus cannot reach Alertmanager, so no alert it evaluates can be routed anywhere."
