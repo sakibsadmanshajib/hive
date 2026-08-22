@@ -97,6 +97,10 @@ on:
       # the same blind spot the supabase/migrations entry above exists for.
       - 'scripts/install-owui-jwt-forward.py'
       - 'scripts/owui-mint-admin-token.py'
+      # Invoked by the deploy job's OAuth scope verification step below. Same
+      # blind spot as every other script listed here: without an entry, a fix
+      # to the check itself would merge and never reach the box.
+      - 'scripts/check-oauth-scopes.py'
       - '.github/workflows/deploy-demo-box.yml'
   workflow_dispatch:
 
@@ -862,6 +866,43 @@ jobs:
           echo "::error::/v1/featuregate on caddy-owui is not answering as edge-api JSON. The running Caddy config does not match deploy/docker/Caddyfile.owui (issue #619). Last status $code, content-type ${ctype:-none}."
           head -c 400 "$body" || true
           exit 1
+
+      - name: Verify the OAuth scopes the chat container asks for are supported
+        # Issue #787. The scope list Open WebUI sends on its authorize request
+        # has to be a subset of what the deployed authorization server
+        # advertises, and nothing in this repository can know that on its own.
+        # #787 added `offline_access` after validating against hosted Supabase,
+        # which advertised it. The self-hosted GoTrue does not, and GoTrue
+        # rejects an unknown scope outright instead of ignoring it, so the
+        # authorize request 302'd back to the callback with
+        # error=invalid_request and chat sign-in was dead for every user, with
+        # a fully green deploy sitting on top of it.
+        #
+        # .github/workflows/oauth-scope-gate.yml runs the same check on pull
+        # requests, and catches a scope this repository adds. This one catches
+        # the other direction, which is the one that actually happened: the
+        # server dropping a capability while the repository stands still. No
+        # pull request exists at that moment for a pull-request gate to fire
+        # on, so only a post-deploy check can see it.
+        #
+        # The discovery URL is read out of the running container rather than
+        # written here, so the check interrogates exactly the document Open
+        # WebUI itself resolves. A second URL spelled by hand would be a second
+        # thing that can drift, and drift is the whole defect.
+        #
+        # Placed after the recreate above, so the container being asked is the
+        # one this deploy just shipped, and before the Function install below,
+        # which is a slower step whose failure would otherwise mask this one.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          url=$(docker compose $HIVE_COMPOSE_FLAGS exec -T open-webui \
+            printenv OPENID_PROVIDER_URL </dev/null | tr -d '\r')
+          if [ -z "$url" ]; then
+            echo "::error::open-webui has no OPENID_PROVIDER_URL, so its OIDC login is not configured at all. That is a deploy failure, not a reason to skip this check." >&2
+            exit 1
+          fi
+          python3 /home/sakib/hive/scripts/check-oauth-scopes.py --discovery "$url"
 
       - name: Install the hive_jwt_forward Open WebUI Function
         # Issue #556. Per-user chat attribution depends on an Open WebUI

@@ -703,22 +703,40 @@ services:
       OPENID_PROVIDER_URL: "${SUPABASE_PUBLIC_URL:-${SUPABASE_URL}}/auth/v1/.well-known/openid-configuration"
       OAUTH_CLIENT_ID: ${SUPABASE_OAUTH_CLIENT_ID:-}
       OAUTH_CLIENT_SECRET: ${SUPABASE_OAUTH_CLIENT_SECRET:-}
-      # offline_access is load-bearing, not decoration (#782). Supabase issues
-      # access tokens with a 3600 second lifetime, and Open WebUI refreshes at
-      # 5 minutes before expiry (OAuthManager.get_oauth_token). When that
-      # refresh runs, _perform_token_refresh returns None on its very first
-      # guard if the stored session has no refresh_token, and the caller then
-      # DELETES the OAuth session outright. From that moment __oauth_token__ is
-      # empty forever, hive_jwt_forward injects no upstream_auth, and every
-      # chat completion 401s with missingUserTokenMessage until the user signs
-      # in again through SSO. Without offline_access on the authorize request
-      # Supabase returns no refresh token at all, so that destruction was
-      # guaranteed roughly 55 minutes into every signed-in session.
+      # Every scope here has to be one the deployed authorization server
+      # advertises. An unknown scope is fatal rather than ignored: GoTrue
+      # answers the authorize request with a 302 straight back to the callback
+      # carrying error=invalid_request and "unsupported scope: <name>", so
+      # there is no consent screen, no authorization code and no session at
+      # all. Sign-in is simply dead for every user.
       #
-      # Supabase's own discovery document advertises offline_access in
-      # scopes_supported and refresh_token in grant_types_supported, so this
-      # asks for something the provider already offers. Guarded by
-      # TestOWUIOAuthScopesRequestOfflineAccess in apps/edge-api/internal/auth.
+      # That is exactly what #787 shipped on 2026-08-20. It added
+      # offline_access after validating against hosted Supabase, whose
+      # discovery document advertised it. The self-hosted GoTrue this stack cut
+      # over to does not: its scopes_supported is openid, profile, email,
+      # phone, and SupportedOAuthScopes in internal/models/oauth_scope.go at
+      # the pinned v2.189.0 is that same four value list. Chat sign-in stayed
+      # dead until the scope came back out.
+      #
+      # offline_access buys nothing here even where it is accepted, which is
+      # the part #787 got wrong on both sides. GoTrue's authorization code
+      # grant calls tokenService.IssueRefreshToken unconditionally and always
+      # puts refresh_token in the token response (internal/api/oauthserver/
+      # handlers.go at v2.189.0), so the refresh token #782 needs is issued
+      # whether or not the scope is requested. Read from the pinned source and
+      # then confirmed live against the box rather than inferred, since
+      # inferring a capability is what caused this in the first place:
+      # docs/proof/oauth-scope-selfhost-2026-08-22/.
+      #
+      # Guarded on both sides, because the two halves of this mismatch drift
+      # independently. scripts/check-oauth-scopes.py reads the live
+      # scopes_supported and fails when this value is not a subset of it. It
+      # runs on every pull request that touches deploy YAML
+      # (.github/workflows/oauth-scope-gate.yml) and again after every deploy
+      # (deploy-demo-box.yml). The first catches a scope added here that the
+      # backend does not know; the second catches a capability the backend
+      # stops advertising while this file stands still, which is the direction
+      # the self-hosted cutover actually broke.
       #
       # This one is NOT shadowable by a persisted row, which is the question
       # every Open WebUI setting in this file has to answer since #722. Traced
@@ -731,10 +749,11 @@ services:
       # reconciler is needed here, unlike OAUTH_AUTO_REDIRECT and the feature
       # flags that do go through one.
       #
-      # The scope is only half of #782. A refresh token that exists is still
-      # refused, because Open WebUI's refresh POST authenticates the client in
-      # a different dialect than the authorization code exchange does. That
-      # half is fixed inside the image by Dockerfile.open-webui's
+      # The surviving half of #787, and the only half #782 ever needed. A
+      # refresh token that exists is still refused, because Open WebUI's
+      # refresh POST authenticates the client in a different dialect than the
+      # authorization code exchange does. That half is fixed inside the image
+      # by Dockerfile.open-webui's
       # apply_oauth_client_auth_patch.py, deliberately NOT by setting
       # OAUTH_TOKEN_ENDPOINT_AUTH_METHOD here: pinning that to
       # client_secret_post would also force every Supabase OAuth client to be
@@ -742,7 +761,7 @@ services:
       # manual ops with no script behind it. Every client this project has
       # registered so far is client_secret_basic, so that value would break
       # sign-in outright on each of them.
-      OAUTH_SCOPES: "openid email profile offline_access"
+      OAUTH_SCOPES: "openid email profile"
       # Supabase's OAuth 2.1 authorization server requires PKCE on every
       # authorize request. authlib (OWUI's OAuth client) only sends
       # code_challenge/code_challenge_method when this is set, so without it

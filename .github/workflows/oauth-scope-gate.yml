@@ -1,0 +1,80 @@
+name: OAuth scope gate
+
+# Asks the deployed authorization server what it supports, and fails when the
+# scopes this repository configures are not a subset of that.
+#
+# Why this workflow exists, in one incident: PR #787 added `offline_access` to
+# OAUTH_SCOPES in deploy/docker/docker-compose.yml. It was validated against
+# hosted Supabase, whose discovery document advertised that scope. The
+# self-hosted GoTrue this stack had already cut over to does not advertise it,
+# and GoTrue rejects an unknown scope outright rather than ignoring it, so the
+# authorize request 302'd straight back to the callback with
+# error=invalid_request. No consent screen, no code, no session. Chat sign-in
+# was dead for every user, and every check in this repository was green,
+# because no check in this repository had ever asked the server anything.
+#
+# Deliberately its own workflow rather than a step in ci.yml's required
+# repo-policy-lints job. That job runs on every pull request, and putting a
+# call to a live host inside it would make an unrelated documentation change
+# unmergeable whenever the demo box is down. Here the paths filter below means
+# only a pull request that actually touches deploy YAML or this check waits on
+# the box, and refusing to merge a deploy configuration change while its target
+# is unreachable is the correct answer anyway.
+#
+# Not a required status check, for the same reason. The repository's merge
+# policy is all checks green plus zero unresolved threads, so a red run here
+# still blocks a merge in practice, without wedging every unrelated pull
+# request behind a home lab machine's uptime.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/**.yml'
+      - 'deploy/**.yaml'
+      - 'scripts/check-oauth-scopes.py'
+      - '.github/workflows/oauth-scope-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**.yml'
+      - 'deploy/**.yaml'
+      - 'scripts/check-oauth-scopes.py'
+      - '.github/workflows/oauth-scope-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: oauth-scope-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scopes-are-supported:
+    name: Configured OAuth scopes are advertised by the auth server
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The comparator's own tests first. A subset check that can no longer go
+      # red is indistinguishable from one that returns 0 unconditionally, and
+      # running it against a corpus it agrees with proves nothing. These cases
+      # replay #787's exact scope string against the deployed server's exact
+      # capability list and require exit 1.
+      - name: The check can still fail
+        run: python3 scripts/test_check_oauth_scopes.py
+
+      # CONSOLE_URL is the public auth origin (Caddy fronts GoTrue at
+      # /auth/v1 there), the same variable and default chat-coverage.yml
+      # already uses. No secret is involved: a discovery document is public by
+      # specification, and this request carries no credential.
+      - name: Configured scopes are a subset of scopes_supported
+        env:
+          CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check-oauth-scopes.py \
+            --discovery "${CONSOLE_URL}/auth/v1/.well-known/openid-configuration"
