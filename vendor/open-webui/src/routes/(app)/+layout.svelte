@@ -15,7 +15,7 @@
 	import { getTerminalServers } from '$lib/apis/terminal';
 	import { getUserSettings } from '$lib/apis/users';
 	import { setTextScale } from '$lib/utils/text-scale';
-	import { consumeModelPrefetch } from '$lib/utils/model-prefetch';
+	import { consumeModelPrefetch } from '$lib/hive/model-prefetch';
 
 	import { WEBUI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';

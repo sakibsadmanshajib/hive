@@ -57,7 +57,7 @@
 
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
-	import { prefetchModels } from '$lib/utils/model-prefetch';
+	import { isAuthenticatedConfig, prefetchModels } from '$lib/hive/model-prefetch';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 	import {
@@ -1110,7 +1110,7 @@
 					return null;
 				})
 			: null;
-		prefetchModels(startupToken);
+		prefetchModels(startupToken, () => getModels(startupToken, null));
 
 		let backendConfig = null;
 		try {
@@ -1160,17 +1160,35 @@
 					if (sessionUser) {
 						await user.set(sessionUser);
 
-						// The second GET /api/config that used to sit here has
-						// been removed rather than deferred. It was not a
-						// refresh of anything: getBackendConfig sends no
-						// per-user header and relies on the session cookie the
-						// browser already attached to the first call, so the
-						// two requests were byte-identical by construction and
-						// the reply could only differ if the session lookup
-						// itself had changed server state, which it does not.
-						// It cost a whole round trip in the middle of the
-						// startup chain, blocking everything the app layout
-						// does afterwards.
+						// The second GET /api/config that used to sit here is
+						// now conditional rather than unconditional. In the
+						// normal case it was byte-identical to the first and
+						// cost a whole round trip in the middle of the startup
+						// chain, blocking everything the app layout does
+						// afterwards: getBackendConfig sends no per-user header
+						// and relies on the `token` cookie the browser already
+						// attached to the first call.
+						//
+						// There is one case where it is not identical, and
+						// dropping it outright was wrong. `GET /api/v1/auths/`
+						// is what refreshes that cookie, and it now runs
+						// concurrently with the first config call instead of
+						// before it. A startup whose cookie was missing or
+						// expired while its localStorage token was still valid
+						// therefore gets the anonymous config shape on the
+						// first call: no authenticated feature flags, no
+						// permissions, no default models. Keeping that for the
+						// page lifetime silently ignores configured direct
+						// connections among other things. The session call has
+						// since set the cookie, so asking once more is what
+						// turns the anonymous reply into the authenticated one.
+						if (!isAuthenticatedConfig(backendConfig)) {
+							try {
+								await config.set(await getBackendConfig());
+							} catch (error) {
+								console.error('Error refreshing backend config:', error);
+							}
+						}
 
 						// Keep user timezone in sync on every app load/refresh
 						const timezone = getUserTimezone();
