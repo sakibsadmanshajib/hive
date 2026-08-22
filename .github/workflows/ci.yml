@@ -692,6 +692,36 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: make test-scripts
 
+      # Every Caddyfile has to ADAPT, not merely read correctly.
+      #
+      # This repo pins several load-bearing properties of these files with
+      # structural checks (test_caddy_owui_blocklist.py,
+      # test_caddy_supabase_routes.py, test_caddy_console_auth_origin.py), and
+      # all of them parse the file as text. None of them can know what Caddy
+      # will accept. `handle` takes exactly one matcher token, so
+      # `handle /auth/v1 /auth/v1/*` is a parse error, and it passed every one
+      # of those checks before crash-looping the container on the box with
+      # "wrong argument count or unexpected line ending".
+      #
+      # The deploy workflow already validates before it reloads, so that
+      # failure was loud. It was loud AFTER merge, which is the gap this closes.
+      # It lives in this job rather than a new one on purpose: this job is a
+      # required check, and a new non-required job's failure is invisible.
+      #
+      # Same pinned image the four Caddy services run, so what is validated
+      # here is what will parse it there. `--config -` on stdin, so the
+      # container needs no mount.
+      - if: needs.changes.outputs.run != 'false'
+        name: Every Caddyfile adapts
+        run: |
+          set -euo pipefail
+          image='caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794'
+          for f in deploy/docker/Caddyfile.*; do
+            echo "validating $f"
+            docker run --rm -i --entrypoint caddy "$image" \
+              validate --config - --adapter caddyfile < "$f"
+          done
+
   agent-console-unit:
     name: Agent console (type + unit + build)
     runs-on: ubuntu-latest

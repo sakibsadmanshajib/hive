@@ -1,0 +1,23 @@
+--- dot-segment walks out of /auth/v1 ---
+404  /auth/v1/../rest/v1/tenants
+404  /auth/v1/../../rest/v1/tenants
+404  /auth/v1/../storage/v1/object/hive-files/x
+--- dot-segment walks INTO the admin API ---
+404  /rest/v1/../auth/v1/admin/users
+404  /auth/v1/foo/../admin/users
+--- percent-encoded dot segments ---
+404  /auth/v1/%2e%2e/rest/v1/tenants
+404  /auth/v1/..%2fadmin/users
+404  /auth/v1/%2e%2e%2fadmin%2fusers
+--- double slashes ---
+404  //auth/v1/admin/users
+404  /auth/v1//admin/users
+404  /auth//v1/admin/users
+--- case ---
+404  /AUTH/V1/ADMIN/USERS
+404  /Auth/V1/Health
+404  /AUTH/V1/SIGNUP
+--- semicolon and trailing dot tricks ---
+404  /auth/v1/admin/users;
+404  /auth/v1/admin/users/.
+404  /auth/v1/admin;/users

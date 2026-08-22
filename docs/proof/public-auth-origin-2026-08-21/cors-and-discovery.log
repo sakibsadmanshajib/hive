@@ -1,0 +1,19 @@
+=== discovery document (issuer and endpoints) ===
+  issuer: https://console-hive.scubed.co/auth/v1
+  authorization_endpoint: https://console-hive.scubed.co/auth/v1/oauth/authorize
+  token_endpoint: https://console-hive.scubed.co/auth/v1/oauth/token
+  jwks_uri: https://console-hive.scubed.co/auth/v1/.well-known/jwks.json
+  userinfo_endpoint: https://console-hive.scubed.co/auth/v1/oauth/userinfo
+=== preflight OPTIONS /auth/v1/token, asking for apikey ===
+  HTTP/2 204 
+  access-control-allow-headers: apikey, authorization, content-type, x-client-info
+  access-control-allow-methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+  access-control-allow-origin: *
+  access-control-max-age: 86400
+=== real response: how many Access-Control-Allow-Origin headers ===
+  HTTP/2 400 
+  access-control-allow-credentials: true
+  access-control-allow-origin: *
+  access-control-expose-headers: X-Total-Count, Link, X-Supabase-Api-Version
+  Access-Control-Allow-Origin count: 1
+  VERDICT: exactly one, as required

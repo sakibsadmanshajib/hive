@@ -593,6 +593,21 @@ services:
     environment:
       CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:-console.localhost}
       CONSOLE_EXTERNAL_SCHEME: ${CONSOLE_EXTERNAL_SCHEME:-http}
+      # Caddyfile.console serves the public /auth/v1 origin from this same
+      # hostname and proxies it to caddy-supabase's public listener, which is
+      # host matched on this variable. The default here MUST stay identical to
+      # the one caddy-supabase uses (docker-compose.enterprise.yml), or an
+      # unset variable makes the two sides disagree and the public listener
+      # answers 404 to every auth request while both containers look healthy.
+      # scripts/test_caddy_console_auth_origin.py pins that agreement.
+      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN:-supabase.localhost}
+    # No depends_on for caddy-supabase, deliberately: it lives in the
+    # enterprise/selfhost profile set while this service is in chat/enterprise,
+    # and compose refuses the whole project when a depends_on names a service
+    # whose profile is inactive. Caddy resolves the upstream name per dial, so
+    # a hosted deployment running --profile chat alone simply 502s /auth/v1,
+    # which is correct there: its browser-facing Supabase URL is the hosted
+    # project, so nothing ever asks this origin for auth.
     depends_on:
       - web-console-prod
     volumes:
