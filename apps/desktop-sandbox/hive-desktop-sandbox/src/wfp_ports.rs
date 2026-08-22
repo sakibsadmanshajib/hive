@@ -148,6 +148,9 @@ mod tests {
 
     #[test]
     fn complement_of_no_ports_blocks_the_whole_range() {
+        // Blocker b / teardown regression: the task-end
+        // `teardown_offline_proxy_allowlist` calls this with an empty allowlist,
+        // and it must block the WHOLE loopback range (never leave a port open).
         // Empty / all-zero allowlist => block everything (fail-closed).
         assert_eq!(
             blocked_loopback_tcp_remote_ports(&[]),

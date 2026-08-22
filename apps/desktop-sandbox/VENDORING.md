@@ -651,6 +651,15 @@ with the reason a blind fix would risk invalidating that lab run.
   on a bad value fully closes the risk without solving general `cmd.exe`
   quoting. The existing lab-validated paths (no whitespace/metacharacters, per
   that file's own comment) pass the guard unchanged.
+  F1: the harness now exercises assertion (a) (child token user == sandbox SID)
+  for BOTH token derivations, one per network run, because the egress fence
+  rests on the sandbox account staying the token USER (never demoted to
+  deny-only) in each. The DenyAll run uses empty `writable_roots` (the read-only
+  derivation, `permission_profile.read_only = true`), so an inside-workspace
+  write must be DENIED; the AllowHosts run grants the workspace (the
+  workspace-write derivation), so the inside write must SUCCEED. The (c) verdict
+  flips with the derivation while (a) and (d) (secret read denied) are asserted
+  identically in both. Compile-only under `cfg(windows)` (D-004); lab-run later.
 
 **Deferred this round (tracked, not silently ignored):**
 
@@ -855,6 +864,94 @@ and should be diffed by hand, not overwritten.
   here. The Win32 FFI paths (real WFP install, firewall COM) are lab-deferred
   to `spike307-win` (D-004) and do not run in CI.
 
+### Integration B2 activation (this PR)
+
+This PR activates the fence that #408 shipped inert. Changes:
+
+- WFP core filters ADDED (they were missing: #408 shipped only the Codex
+  per-protocol blocks). `codex-windows-sandbox/src/wfp/filter_specs.rs` gains
+  the srt-shape core, a loopback PERMIT (v4/v6, no user condition, high weight)
+  above a sandbox-SID BLOCK-all (v4/v6), plus a `FilterAction` enum and a
+  `weight: Option<u64>` on `FilterSpec` (const-asserted `W_LOOPBACK > W_BLOCK`).
+  `src/wfp.rs` gained the `FWP_ACTION_PERMIT` / `FWP_V4_ADDR_AND_MASK` /
+  `FWP_V6_ADDR_AND_MASK` / `FWP_RANGE0` / port-range / manual-weight FFI to
+  emit them. Result: WFP is now a complete standalone fence (loopback permit
+  above SID block) AND the firewall COM layer stays, so the two-layer model
+  (D-011) is whole.
+- `hive-desktop-sandbox/src/egress_proxy.rs` gained a Windows loopback-TCP
+  transport: the request parsing / allowlist / pinned-DNS / no-private-IP logic
+  is single-sourced across both transports via a `ProxyClientStream` trait; the
+  Linux Unix-socket `AllowlistProxy` is unchanged in behaviour. `lib.rs` gates
+  the module `any(target_os = "linux", windows)`.
+- `provision_sandbox_account` now installs the persistent fence (WFP filters
+  via `wfp_setup::install_wfp_filters` + firewall block-all via
+  `ensure_offline_outbound_block`), SID-keyed, fail-closed, before the marker.
+- `windows::launch` is wired to the SID-fenced compose
+  (`windows_elevated::run_windows_sandbox_capture`): the refusal guard is gone,
+  `LaunchDecision` flipped `Refuse*` -> `Spawn*`, and the compose installs the
+  per-task firewall loopback allow (plus the loopback proxy + `HTTP(S)_PROXY`
+  env for AllowHosts) and re-blocks loopback via an RAII teardown on every
+  return path. `SandboxChild` now carries `Option<HANDLE>` + `exit_code` (the
+  capture-based launch returns a completed run).
+- `windows_firewall` is wired LIVE (`#[allow(dead_code)]` removed). The base
+  `windows.rs` restricted-token / Job-Object launch seam is superseded and
+  retained `#[allow(dead_code)]` (documented base primitive + CI shape cover).
+
+Deviation from the plan: the base backend (caller-token) could never carry the
+sandbox-SID fence, so routing `launch` to the elevated compose is the only
+D-005-safe live path; because that compose is capture-based (blocking), the
+returned `SandboxChild` represents a completed confined run rather than a live
+handle. `apps/desktop`'s `RealLauncher` only checks Ok/Err, so it is unaffected
+functionally (noted for a follow-up; not edited here).
+
+### Integration B2 activation: `WinSta0\Default` desktop-grant fix (lab-surfaced, security boundary)
+
+A live `spike307-win` lab run of the activated compose found the confined
+`hive-command-runner.exe` crashed under the dedicated low-privilege
+`hive_sandbox` account with `0xC06D007E` (user32 delay-load failure) BEFORE the
+IPC `spawn_ready` handshake. This closes a latent gap that #400/#401 had only
+band-aided with the build.rs user32 delay-load (the delay-load turned an
+uncatchable pre-`main` `0xC0000142` into a catchable first-call `0xC06D007E`,
+but did not make the desktop attach itself succeed).
+
+Root cause (`desktop.rs::grant_winsta_desktop_access`): the function granted the
+sandbox account access to `WinSta0` correctly (KB165194 dual ACE), but granted
+the DESKTOP ACE on `GetThreadDesktop(GetCurrentThreadId())` of the ELEVATED
+PARENT, not on the `WinSta0\Default` desktop the `CreateProcessWithLogonW`-spawned
+runner actually attaches to. The runner's own process never got a desktop ACE, so
+user32/CSRSS desktop-connect at first user32 call failed. The prior comment bet
+on seclogon auto-granting the runner's fresh logon SID on that desktop; that
+does not happen.
+
+Fix (deviation from upstream `desktop.rs`, edits a file vendored in Integration
+A1): open the real `WinSta0\Default` desktop BY NAME with
+`OpenDesktopW("Default", 0, FALSE, READ_CONTROL | WRITE_DAC)` in the parent's
+`WinSta0` context, add the `DESKTOP_ALL_ACCESS` allow ACE for the sandbox
+account SID (the same SID and mask the old code used, just on the correct
+object), then `CloseDesktop`. The `WinSta0` dual-ACE grant is unchanged. This is
+correct per Win32 access-check semantics: a desktop access check evaluates every
+enabled SID in the runner's primary token, and the token's USER SID is the
+sandbox account, so an allow ACE for that account SID on the object the runner
+attaches to is sufficient and does not depend on the fresh logon SID. Chosen
+over the "parent pre-creates a private desktop and passes
+`STARTUPINFO.lpDesktop`" variant because the runner is DESIGNED to stay on
+`WinSta0\Default` (it creates its child's private desktop itself, RUNNER-side
+via `PrivateDesktop`), so that variant would be a large flow rewrite for no
+isolation gain; the child's private-desktop isolation (B1) is unchanged.
+
+`GetThreadDesktop` / `GetCurrentThreadId` imports were dropped and `OpenDesktopW`
+added. The build.rs doc comment was corrected (it said the runner calls
+`CreateWindowStationW`; it calls `CreateDesktopW`) and reframed to present the
+delay-load as retained defense-in-depth, not the fix. Re-vendoring note: re-copy
+`desktop.rs` verbatim from upstream on a future pass, then re-apply this
+desktop-object fix (check first whether upstream corrected the same
+GetThreadDesktop target). Only lab-provable on `spike307-win` (D-004); the
+CI cross-compile legs type-check it.
+
+The lab matrix (`plan-b2-wfp-egress-2026-07-20.md` §5, rows 1-11) still gates
+un-drafting this PR (D-004): the Win32 fence is compile-checked here but not
+executed, so it must pass `spike307-win` live before this leaves draft.
+
 ### Integration B / D-004 activation blockers (must pass spike307-win lab before removing the network refusal)
 
 These are real correctness concerns raised in the PR #408 review that are
@@ -871,6 +968,10 @@ step): all tasks run under one sandbox account SID, and the firewall / WFP
 rules use fixed names keyed on that one SID, so concurrent tasks share one rule
 set.
 
+The B2-activation PR (this PR) resolves all four below in code; each still
+requires the `spike307-win` lab matrix (plan §5) to sign off before this PR
+leaves draft (D-004).
+
 1. Concurrent-task rule clobber and loopback-fence loss. Under the shared
    account SID plus fixed rule names (`hive_sandbox_offline_*`), two concurrent
    tasks last-writer-wins on the loopback allowlist / proxy port complement,
@@ -880,21 +981,382 @@ set.
    sublayer), refcounting of the shared rules, or an enforced single-active-task
    invariant. Until then, activation must guarantee at most one active
    sandboxed task.
+   FIXED (B2 activation): the single-active-task invariant is enforced via an
+   `ActiveTaskGuard` (an `AtomicBool` CAS in `windows_elevated`); a second
+   concurrent fenced launch is rejected fail-closed rather than clobbering the
+   shared loopback rule.
 2. `INetFwRule` `RemotePorts = "*"` cleanup semantics (CodeRabbit,
    `windows_firewall.rs` :427 region). Verify that reverting or removing the
    narrowed TCP loopback block does not silently fall back to
    `RemotePorts = "*"` in a way that opens all loopback ports on teardown.
    Confirm the teardown order keeps the fence closed, never momentarily open.
+   FIXED (B2 activation): every firewall rule is a BLOCK; teardown removes the
+   per-task loopback allow and re-blocks loopback via
+   `ensure_offline_proxy_allowlist(&[], false)`; a `None` on a block rule widens
+   the block to all ports and addresses (fail-closed), never opens egress, and
+   `RemotePorts = "*"` is never serialized as an ALLOW.
 3. Firewall-COM rule ownership and cleanup guarantees (CodeRabbit,
    `VENDORING.md` :783 region). Proxy-process teardown alone does not remove
    the persisted firewall rules: a stale permitted proxy port can outlive the
    proxy. Activation must define who owns rule cleanup (provision vs task end)
    and prove no stale permitted port survives a task, a crash, or a reboot.
+   FIXED (B2 activation): the ownership matrix is explicit. PROVISION owns the
+   persistent block-all plus WFP; TASK-END owns the per-task loopback allow,
+   torn down by an RAII guard on every return path (normal or error). F4a: that
+   teardown guard is ARMED before any firewall rule is touched (before the
+   `ensure_offline_proxy_allowlist` narrowing on the AllowHosts path), so a
+   failure mid-narrowing still triggers Drop, which re-blocks loopback (the
+   fail-closed direction) and releases the single-active flag plus the
+   cross-process mutex, and the confined child is never spawned on that failure.
+   F3: the
+   per-task allow rule is added via INetFwRules::Add and IS persistent (it
+   survives a reboot; the firewall COM API has no transient-rule flag), so
+   safety does NOT depend on reboot clearing it. After a crash the leaked proxy
+   process is gone, so a stale open proxy port reaches nothing, the persistent
+   block-all plus WFP still deny non-loopback, and the next task re-narrows the
+   rule back to a single allowed port.
 4. Non-atomic `configure_rule` re-narrow (security-review LOW #1). When
    re-narrowing an existing rule, `configure_rule` re-applies fields on a live
    rule rather than swapping atomically, so a failure mid-update can leave the
    rule broader than intended. Activation needs an atomic replace (or a
    verified fail-closed intermediate) so a partial update never widens egress.
+   FIXED (B2 activation): `configure_rule` sets `SetEnabled` LAST, after the
+   network scope, the SID scope, and the read-back all succeed, so a
+   partially-scoped rule is never enabled; and `ensure_offline_proxy_allowlist`
+   installs the broad loopback block before narrowing it, so a failed narrow
+   leaves the broader (more restrictive) block in force (fail toward
+   restrictive).
+
+### spike307-win activation lab results (2026-07-21, PR #409 draft `feat/desktop-sandbox-b2-activate`, HEAD `5b9fbd0b`, NOT merged)
+
+Live interactive-console lab run against the four blockers above. Full
+row-by-row matrix and root-cause detail: vault
+`lab-results-b2-wfp-egress-2026-07-21.md`. Summary:
+
+- **F1 hard gate PASS in both derivations.** 9 of 10 exercised matrix rows
+  PASS live: confinement (token SID, outside/inside-workspace write,
+  canary-secret read-deny), fence provisioning (16 WFP filters, Hive
+  GUIDs, firewall rules, fail-closed readiness marker), proxy-endpoint
+  reachability, non-allowlisted-host 403, DenyAll all-probes-blocked
+  (added this pass), SID-keying (non-sandbox account unaffected),
+  grandchild block, mid-run kill (no orphan, loopback rule reverts to
+  full block, no leaked proxy port), and provision fail-closed abort.
+  Rows 1/2/4 (direct-connect/DNS/env-stripped blocked) registered partly
+  via a curl `getaddrinfo()` thread-start error rather than a clean
+  TCP-layer drop — corroborated, not sole, evidence; rows 3/6 (proxy
+  socket I/O works, non-allowlisted host gets a clean 403) are the
+  stronger proof the fence is actually gating egress rather than
+  breaking networking wholesale.
+- **Row 5 (open, functional gap, not a security hole): allowlisted-host
+  TLS fails inside the sandbox.** `curl: (35) schannel:
+  AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030E)`.
+  Proven to be downstream of the proxy (the allowlisted host gets PAST
+  the proxy CONNECT tunnel and dies in local TLS credential
+  acquisition, while a non-allowlisted host in the same run gets a
+  clean 403 from the proxy). Root cause: the RESTRICTED TOKEN blocks
+  the confined child from initializing CryptoAPI/schannel credentials
+  (H2, confirmed). Uninitialized per-user crypto profile (H1) was
+  tested and ruled out (pre-created `Roaming\Microsoft\Crypto`,
+  `Roaming\Microsoft\SystemCertificates`, `Local\Microsoft\Crypto` for
+  the sandbox account changed nothing); `LOGON_WITH_PROFILE` is already
+  passed at `codex-windows-sandbox/src/elevated/runner_client.rs:394`,
+  ruling out "profile not loaded" independently. Implication: any
+  schannel-based HTTPS client (curl, WinHTTP, .NET default TLS) cannot
+  complete TLS in the sandbox today, so `AllowHosts` is not usable end
+  to end for real workloads until this is fixed. It fails closed (no
+  data ever leaves), so it does not weaken DenyAll or the egress-block
+  guarantee itself.
+- Fix A applied this session, commit `7601f5ce`: `grant_winsta_desktop_access`
+  in `codex-windows-sandbox/src/desktop.rs` now grants the sandbox
+  account SID on the real `WinSta0\Default` opened by name via
+  `OpenDesktopW`, instead of the elevated parent's
+  `GetThreadDesktop(GetCurrentThreadId())`. Genuine latent wrong-object
+  bug fix, kept, but it was NOT the cause of two lab boots' worth of
+  spawn crashes — see the window-station lesson below.
+- Commit `5b9fbd0b` (harness only, this session): gave the validator a
+  schannel-intended child env and added a DenyAll `NET_*` probe (row 7
+  above). The DenyAll probe addition is real signal; the env-var change
+  targeted the wrong layer and did not fix row 5.
+- **Lab-method lesson (cost two full lab boots):** processes spawned
+  through Windows OpenSSH land on a NON-INTERACTIVE per-logon service
+  window station (`Service-0x0-<luid>$`), not `WinSta0`. The sandbox
+  grants desktop access based on `GetProcessWindowStation()` of the
+  parent and spawns the runner with `STARTUPINFO.lpDesktop = NULL`, so
+  driving it over SSH puts parent and runner on different stations and
+  the runner's user32 desktop attach is denied (`0xC0000142` before
+  `main`, later `0xC06D007E` VC++ delay-load MODULE_NOT_FOUND on
+  `user32.dll` after the #403 delay-load change) — not a sandbox bug.
+  **Any future Windows sandbox behavioral lab run must drive validation
+  from the guest's INTERACTIVE console session via an elevated
+  interactive scheduled task, never directly over SSH.** Also build
+  with `cargo build --bins`, not plain `cargo build`: the validator
+  needs sibling `hive-command-runner.exe` and `hive-egress-shim.exe`
+  present at spawn time. See `reference_hive_lab_windows.md` (memory)
+  for the full recipe.
+
+Net: blockers 1-4 above are still open (this pass exercised the
+security-relevant confinement/egress-block matrix, not the
+concurrent-task rule-clobber scenarios), plus the new row 5 schannel
+gap. The network refusal in `launch()` stays in place; PR #409 is
+draft, not merged.
+
+### TRIED AND REVERTED: interactive group SIDs in the restricting set (attempted row 5 schannel fix)
+
+This experiment is recorded because it failed in an instructive way. It did NOT
+fix row 5 and it DID break write confinement. The change was reverted; the
+restricting set in `codex-windows-sandbox/src/token.rs`
+(`create_token_with_caps_from`) is back to upstream shape: the synthetic random
+capability SIDs, the token user SID (elevated backend only), the logon SID, and
+Everyone, with `CreateRestrictedToken` flags
+`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED`.
+
+What was tried: adding four well known group SIDs to the restricting set,
+together Chromium's `USER_INTERACTIVE` restriction level.
+
+- `S-1-5-32-545` BUILTIN\Users
+- `S-1-5-4` INTERACTIVE
+- `S-1-5-11` Authenticated Users
+- `S-1-5-12` RESTRICTED
+
+Why it was tried: the token is created `WRITE_RESTRICTED`, so every write-type
+access check must also pass against the restricting set. schannel and CryptoAPI
+credential acquisition performs write-type opens (the LSA and SspiCli ALPC
+shared section, the cryptsvc and KeyIso LRPC endpoints, `CertOpenSystemStore`
+which opens the store read-write by default, and `\Device\KsecDD`). Those
+objects grant access through the groups above rather than through the token user
+SID or the logon SID, so the hypothesis was that an absent group was denying the
+credential path.
+
+Result 1, it did NOT fix row 5. The allowlisted host still fails with the
+identical error:
+
+```
+curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)
+```
+
+The two diagnostic probes added in the same pass show the relaxation actually
+took effect and still did not help. `certutil -user -store My` began succeeding
+(the user certificate store opens), and `whoami /groups` inside the sandbox
+confirmed all four SIDs present on the child token. The restricting-SID set is
+therefore disproved as a sufficient cause of the row 5 failure. Remaining
+suspects, none yet tested: the LSA and SspiCli ALPC endpoints, the cryptsvc and
+KeyIso LRPC endpoints, and restricted-token-specific checks those endpoints
+apply independent of the SID set (a restricted token can be rejected on the
+endpoint's own policy rather than on an access check against the restricting
+set).
+
+Result 2, it CAUSED a containment regression. In the same lab run the validator
+reported `VALIDATION: ONE OR MORE ASSERTIONS FAILED`: the outside-workspace
+write SUCCEEDED in both derivations, and the inside-workspace write was allowed
+even under the DenyAll read-only derivation. The mechanism was confirmed on the
+box: `C:\hivesbx` carries an inherited
+`NT AUTHORITY\Authenticated Users:(I)(M)` grant, and `WRITE_RESTRICTED` was the
+only thing suppressing it. Admitting Authenticated Users to the restricting set
+let that inherited Modify grant become effective. `C:\hivesbx\secrets` survived
+only because it carries an explicit `(DENY)(R)` ACE.
+
+**Structural finding, more important than the experiment itself: write
+confinement currently rests ENTIRELY on `WRITE_RESTRICTED`.** The sandbox home
+`C:\hivesbx` has an inherited `NT AUTHORITY\Authenticated Users:(I)(M)` grant,
+and the only per-path deny ACE anywhere in the tree is the one on the `secrets`
+directory. The per-path ACL layer therefore provides essentially no write
+defense today. Two consequences follow. First, any future change that admits a
+group SID to the restricting set removes the single remaining write control, as
+this experiment demonstrated. Second, any path not covered by an explicit deny
+ACE is exposed the moment that single control is weakened or bypassed.
+Recommended tracked hardening item: give the sandbox home explicit restrictive
+ACLs, removing or overriding the inherited Authenticated Users Modify grant and
+denying the sandbox account by default outside the workspace, so confinement is
+layered rather than single-point.
+
+Kept from this experiment: the `===CERTSTORE===` (`certutil -user -store My`)
+and `===WHOAMI===` (`whoami /groups`) probes in the validator script. They are
+what proved the relaxation was applied and still insufficient, and they will
+serve the same role for the next row 5 hypothesis.
+
+### DELIBERATE DEVIATION: srt-shaped restricted token plus a protected sandbox-home DACL (decision D-013)
+
+This is the follow-on to the reverted experiment above, and it is the first
+place where the token shape deliberately leaves the vendored Codex source and
+follows Anthropic's Sandbox Runtime (srt) instead. Both halves landed in ONE
+commit because either half alone leaves the sandbox in a known-broken state.
+
+Sources:
+
+- Anthropic Sandbox Runtime, `src/token.rs`, which states outright
+  "No RestrictingSids array, that breaks Schannel/LSA RPC" and passes
+  `RestrictingSids` as `None`:
+  https://github.com/anthropic-experimental/sandbox-runtime
+- OpenAI Codex, `codex-rs/windows-sandbox-rs`, the source this tree vendored,
+  which carries the same defect and the same open bug:
+  https://github.com/openai/codex/issues/17459
+
+Why the vendored shape had to go. Schannel client credentials are LSA-held
+objects acquired over SSPI RPC into `lsass`. ANY `RestrictingSids` array on the
+token breaks that acquisition, and there is no ACL that fixes it, because
+`lsass`'s internal client context is not an object anyone can grant access to.
+That is row 5 above (`SEC_E_NO_CREDENTIALS`). Widening the restricting set was
+already tried and reverted (previous section): it did not help and it broke
+containment. Emptying the set is the only shape that can work, and it is the
+shape srt independently arrived at.
+
+Part B, `codex-windows-sandbox/src/token.rs`. The six cap-taking token builders
+and `create_token_with_caps_from` collapse into one
+`create_sandbox_restricted_token_from`, which calls `CreateRestrictedToken`
+with:
+
+- flags `LUA_TOKEN` only (`WRITE_RESTRICTED` and `DISABLE_MAX_PRIVILEGE` are
+  gone), so the token stays at Medium integrity;
+- `SidsToDisable` = `BUILTIN\Administrators` (`S-1-5-32-544`) plus every group
+  SID on the token carrying `SE_GROUP_LOGON_ID`;
+- `PrivilegesToDelete` = every privilege the base token holds EXCEPT
+  `SeChangeNotifyPrivilege`, enumerated by name rather than swept by
+  `DISABLE_MAX_PRIVILEGE`;
+- `RestrictingSids` = NULL.
+
+Everything else is unchanged: the kill-on-close job object with no breakaway,
+the private desktop, the WFP plus firewall egress fence, the deny-read ACEs, and
+the permissive token default DACL (now addressed to the token user and Everyone,
+since the logon SID it previously named is disabled).
+
+Capability SIDs are REMOVED, not merely unused. `cap.rs` is deleted, `pub mod
+cap` is gone from `lib.rs`, and `SpawnRequest::cap_sids` is gone from
+`ipc_framed.rs` (`IPC_PROTOCOL_VERSION` bumped 4 -> 5 so a stale runner binary
+is rejected at the version check). Those synthetic random SIDs were only ever
+supplied as restricting SIDs; with a NULL restricting array they would not
+appear on the child token at all, so every ACL grant addressed to one would have
+become silently dead. The per-task workspace grant in
+`windows_elevated.rs::run_windows_sandbox_capture` now targets the dedicated
+sandbox account SID and nothing else, which is srt's model: a dedicated account
+plus per-task ACEs, no capability SIDs. This also removes the intra-process
+`CAP_SID_LOCK` and the cross-process cap-SID mutex documented as open risk 8
+below, since there is no longer a `cap_sid` file to race on.
+`ResolvedWindowsSandboxPermissions::uses_write_capabilities` is renamed
+`grants_write` for the same reason.
+
+Part A, the enabling prerequisite, `hive-desktop-sandbox`. Dropping
+`WRITE_RESTRICTED` removes the blanket second write check, so NTFS ACLs become
+the ENTIRE write defense, and the previous section established that they
+provided almost none: `C:\hivesbx` carried an inherited
+`NT AUTHORITY\Authenticated Users:(I)(M)` grant and the only per-path deny in the
+tree was on `secrets`. Shipping Part B without Part A would reproduce exactly the
+containment regression that was just reverted. So provisioning now applies an
+explicit, PROTECTED DACL to the sandbox home before the readiness marker:
+
+- `sandbox_home_dacl_entries` (pure, cross-platform, unit-tested on the Linux CI
+  job) builds the trustee list and fails closed on a broad group SID
+  (`S-1-5-11`, `S-1-5-32-545`, `S-1-1-0`, `S-1-5-4`), on an empty SID, and on a
+  sandbox account SID equal to the provisioning user's.
+- `apply_sandbox_home_acl` passes `PROTECTED_DACL_SECURITY_INFORMATION` (breaks
+  inheritance) together with a NULL old-ACL to `SetEntriesInAclW` (so inherited
+  ACEs are not copied forward), then re-reads the DACL and fails closed unless
+  the sandbox account has read but no write and none of the four broad group
+  SIDs has write.
+- Trustees: SYSTEM and `BUILTIN\Administrators` full control; the provisioning
+  user (the desktop app runs NON-elevated as this user and owns the tree) full
+  control; the sandbox account read plus execute only, with no `DELETE` and no
+  `FILE_DELETE_CHILD`, so it can load the materialized runner image out of
+  `.sandbox-bin` but cannot modify anything or unlink a sibling such as
+  `secrets`. The existing `secrets` deny-read ACE is applied AFTER this DACL and
+  is preserved.
+
+Honest limits, for the security reviewer. Part A hardens the sandbox HOME only.
+Any world-writable or user-group-writable location outside it (`C:\Windows\Temp`,
+`%TEMP%`, the sandbox account's own profile, a share granting
+`Authenticated Users` Modify) is now writable by the sandbox account, where
+`WRITE_RESTRICTED` previously blocked it. Related: the read-only permission
+profile is no longer a token-level property at all. Both profiles get the same
+token; read-only means only that the parent adds no allow-write ACE on the
+workspace root, so a task workspace that already grants a broad group Modify is
+writable under the read-only profile too. Neither property is exercised by CI;
+both need the lab.
+
+One more behavioural consequence, already handled in code but lab-unproven:
+because the child token now DISABLES every logon SID, `desktop.rs`'s
+`PrivateDesktop::grant_access` was changed to grant the token USER SID (the
+sandbox account) alongside the logon SID. A logon-SID-only grant would have
+denied the child its desktop attach and failed the spawn with `0xC0000142`
+before `main`.
+
+What `spike307-win` must re-prove before this leaves draft (a green CI run
+proves NOTHING about any of it):
+
+1. Row 5 itself: an allowlisted host completes a real TLS handshake inside the
+   sandbox, no `SEC_E_NO_CREDENTIALS`.
+2. Every confinement assertion in the validator, re-run from scratch, not just
+   the ones row 5 touches: outside-workspace write DENIED in both derivations,
+   inside-workspace write allowed ONLY under the write derivation and denied
+   under read-only, canary-secret read denied, token SID is the sandbox account.
+3. The new sandbox-home DACL: `icacls C:\hivesbx` shows no `(I)` inherited ACEs
+   and no `Authenticated Users` entry at all; the sandbox account can still
+   launch (it must be able to load `.sandbox-bin\hive-command-runner.exe`) but
+   cannot write anywhere under the sandbox home; `secrets` still denies read.
+4. Provisioning is still idempotent and still fail-closed: a second run
+   succeeds, and an induced ACL failure aborts before the readiness marker.
+5. The private desktop still attaches (this is the `0xC0000142` regression
+   surface), and grandchild processes are still confined by the job object.
+6. The egress fence is unchanged and still holds: DenyAll blocks all probes,
+   non-allowlisted hosts still get a clean 403, SID-keying still spares a
+   non-sandbox account.
+7. That `CreateRestrictedToken` itself succeeds. The `SidsToDisable` array names
+   `BUILTIN\Administrators` unconditionally, and the least-privilege sandbox
+   account almost certainly does NOT carry that group. Windows is expected to
+   add an absent disable-SID as a deny-only entry rather than reject the call,
+   but that is an expectation, not something this tree can verify off a real
+   host. If the lab sees `ERROR_INVALID_PARAMETER` here, the fix is to filter
+   the disable list against the token's actual groups (which are already
+   enumerated in the same function for the logon SIDs).
+
+### Lab session 2026-07-21: known limitation, LSA name lookups under the D-013 token
+
+Live `spike307-win` session re-validating D-013 (PR #409). The validator's
+first probe, `whoami /user`, blocked indefinitely (10-20+ min, never
+returned) inside the confined child under the new restricted token, with the
+child sitting at ~0% CPU (blocked in a syscall, not crashed or looping).
+Because the whole probe script is one `&`-chained `cmd.exe` invocation, this
+blocked every subsequent probe too, including the row 5 TLS check.
+
+One-variable differential to isolate cause: same `hive_sandbox` account, same
+provisioned fence, plain `CreateProcessWithLogonW` with NO
+`CreateRestrictedToken` narrowing. `whoami /user` returned in 403.7ms. The
+restricted token is the cause, not the WFP fence.
+
+Verified against upstream, not assumption: fetched
+`anthropic-experimental/sandbox-runtime`, `vendor/srt-win-src/src/token.rs`
+directly (`gh api`). Its `SidsToDisable` is `[BUILTIN\Administrators, every
+SE_GROUP_LOGON_ID SID in the base token]`, `RestrictingSids = None`, with the
+module doc stating the logon-SID disable is "load-bearing": it stops the
+child reading same-session real-user process memory via
+`OpenProcess(VM_READ)` against the broker's logon-session ACE. Our
+`create_sandbox_restricted_token_from` matches this exactly. D-013 does not
+over-reach past srt, and the logon-SID disable is not something to drop: it
+closes a real hole srt's own authors documented.
+
+Root cause: `whoami /user` resolves its SID to a name via `LookupAccountSid`,
+an LSA RPC call. Under `SidsToDisable = [Administrators, every logon SID]`,
+that RPC call blocks rather than failing fast. Exact mechanism (why it blocks
+instead of erroring) not chased further; treat as a standing product
+limitation, not a bug: **any sandboxed code that resolves a SID to a name via
+`LookupAccountSid` (or anything that calls it internally) will block the same
+way under this token.** This is a real, reportable constraint for anything
+that ships inside the sandbox, independent of the harness.
+
+Fix applied (`codex-windows-sandbox/src/token.rs`,
+`create_sandbox_restricted_token_from`; `hive-desktop-sandbox/src/windows_elevated.rs`,
+`spawn_and_stream`): the function already computed the child's SID bytes via
+`GetTokenInformation(TokenUser)` for the default-DACL step -- a local token
+read, not an RPC call, so it cannot hit the same hang. It now also returns
+that SID (string form), and the runner reports it as an `Output` frame on the
+existing stdout-capture IPC channel BEFORE spawning the confined child, no new
+message type or protocol version bump. `hive-sandbox-validate.rs`'s SID
+assertion already did a substring search over captured stdout, so it needed no
+change; `whoami /user` and the later `whoami /groups` diagnostic were removed
+from the probe script (both do the same LSA lookup, both would hang).
+
+Divergence noted, not acted on this session: srt keys its WFP `ALE_USER_ID`
+ACE on a deny-only group SID; we key on the sandbox account SID directly.
+Both are workable; flagging so the D-013 text's "follows srt's shape" claim
+is scoped to the token construction, not every fence detail.
 
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 

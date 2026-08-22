@@ -6,9 +6,10 @@
 //! enabled (so `CreateProcessWithLogonW` can use the hidden account, blueprint
 //! A.Q1), DPAPI-seals a CSPRNG password into a secrets directory whose ACL
 //! excludes the sandbox account, hides the account and its profile directory,
-//! and writes the readiness marker. It installs NO network egress control (WFP
-//! and the COM firewall block are Integration B; the upstream setup binary's
-//! `install_wfp_filters` / `ensure_offline_*` call sites are OMITTED here).
+//! installs the persistent SID-keyed egress fence (WFP per-protocol + core
+//! filters plus the firewall block-all-outbound, Integration B2), and writes
+//! the readiness marker last (so a partial provisioning is never reported
+//! complete).
 //!
 //! See [`hive_desktop_sandbox::windows_elevated::provision_sandbox_account`].
 //!

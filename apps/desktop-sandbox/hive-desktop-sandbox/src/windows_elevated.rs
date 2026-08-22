@@ -26,28 +26,34 @@
 //! `runner_client::spawn_runner_transport`), passing the sandbox account, `.`
 //! domain, and the DPAPI-unsealed password with `LOGON_WITH_PROFILE`. The
 //! command-runner, now running as the low-privilege sandbox account, derives a
-//! capability-restricted primary token FROM ITS OWN token
+//! restricted primary token FROM ITS OWN token
 //! (`get_current_token_for_restriction` +
-//! `create_*_token_with_caps_and_user_from`) and spawns the inner child with
+//! `create_sandbox_restricted_token_from`) and spawns the inner child with
 //! `CreateProcessAsUserW` (via `spawn_process_with_pipes`). A token derived
 //! from the caller's own token is assignable, so that call needs no privilege.
 //! UAC prompts exactly once, at provisioning, when the setup binary runs
 //! elevated to create the OS account.
 //!
-//! ## Network semantics (blueprint Q2 / D-005, locked)
+//! ## Network semantics (blueprint Q2 / D-005, Integration B2 LIVE)
 //!
-//! Step 3 does NOT enforce network egress (WFP is Integration B). The public
-//! [`crate::launch`] therefore keeps REFUSING both `NetworkPolicy::DenyAll`
-//! (`NetworkConfinementNotImplemented`) and `NetworkPolicy::AllowHosts`
-//! (`AllowHostsNotYetImplemented`); see [`LaunchDecision`]. There is no
-//! `launch()` code path that reports success while a child has unrestricted
-//! network. The elevated compose ([`run_windows_sandbox_capture`]) is reachable
-//! ONLY through the explicit, lab-only
-//! [`spawn_confined_for_validation`] entry point, which is documented as NOT a
-//! network-confined launch and exists solely so the `spike307-win` lab can
-//! prove the filesystem / user / token / Job isolation matrix (exactly as #395
-//! proved its primitives by lab replica, ahead of the composed success path
-//! that lands with Integration B).
+//! Integration B2 makes egress enforcement LIVE and two-layer (D-011), all
+//! keyed on the sandbox account SID (D-010):
+//!   * PROVISION installs the persistent fence: the WFP per-protocol + core
+//!     filters (loopback permit above SID block-all) and the firewall
+//!     block-all-outbound rule.
+//!   * PER TASK the compose ([`run_windows_sandbox_capture`]) installs the
+//!     firewall loopback allow; `DenyAll` blocks all egress, `AllowHosts`
+//!     routes through the loopback [`crate::egress_proxy::AllowlistProxy`]
+//!     (injecting `HTTP(S)_PROXY` / `NO_PROXY` into the child env). A task-end
+//!     RAII guard re-blocks loopback on every return path.
+//!
+//! The public [`crate::launch`] dispatches to this compose (it no longer
+//! refuses either policy). Because the child runs UNDER the sandbox SID, the
+//! SID-keyed fence applies to it (the whole point versus the base backend).
+//! Fail-closed (D-005): a crash leaves the persistent block-all in force, and a
+//! failed fence step aborts the launch rather than opening egress. Only one
+//! fenced task runs at a time (single shared SID / loopback rule, D-003),
+//! enforced by an [`ActiveTaskGuard`] CAS.
 //!
 //! ## Verification status (read before trusting this file)
 //!
@@ -80,46 +86,61 @@ pub struct CaptureResult {
     pub timed_out: bool,
 }
 
-/// The decision [`crate::launch`] reaches for a policy BEFORE any spawn.
+/// The spawn shape [`crate::launch`] reaches for a policy BEFORE any spawn.
 ///
-/// Step 3 has no `Spawn` variant on purpose: [`NetworkPolicy`] has exactly two
-/// variants and Step 3 refuses BOTH (WFP is Integration B; Q2/D-005). A future
-/// `Spawn` variant lands with Integration B, when the refusal guards are
-/// removed and the composed success path runs for the first time. Keeping this
-/// as an explicit enum (rather than two inline `if` guards) makes the
-/// refuse-vs-spawn decision independently unit-testable, and gives Integration
-/// B one obvious place to add the success branch.
+/// Integration B2 activation flipped the two former `Refuse*` variants to
+/// `Spawn*`: `launch` no longer refuses either network policy. It dispatches to
+/// the SID-fenced elevated compose ([`run_windows_sandbox_capture`]), which, on
+/// top of the persistent WFP + firewall block-all installed at provision,
+/// installs the per-task loopback firewall allow and (for `AllowHosts`) starts
+/// the loopback egress proxy and injects `HTTP(S)_PROXY`. Keeping this as an
+/// explicit enum (rather than two inline `if`s) keeps the policy -> spawn-shape
+/// mapping independently unit-testable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchDecision {
-    /// `NetworkPolicy::AllowHosts`: refuse with
-    /// [`LaunchError::AllowHostsNotYetImplemented`] (needs the egress proxy +
-    /// WFP, Integration B).
-    RefuseAllowHosts,
-    /// `NetworkPolicy::DenyAll`: refuse with
-    /// [`LaunchError::NetworkConfinementNotImplemented`]. A `DenyAll` child
-    /// under a standard sandbox user CAN still open sockets, so spawning it
-    /// without WFP would be a SILENT fail-open (D-005, FORBIDDEN). Refuse until
-    /// Integration B installs the WFP block.
-    RefuseDenyAll,
+    /// `NetworkPolicy::DenyAll`: spawn with all egress blocked, no proxy.
+    SpawnDenyAll,
+    /// `NetworkPolicy::AllowHosts`: spawn with the loopback egress proxy
+    /// fronting exactly `hosts`.
+    SpawnAllowHosts { hosts: Vec<String> },
 }
 
 impl LaunchDecision {
-    /// Pure mapping from a policy's network posture to the Step 3 launch
-    /// decision. Both variants refuse; see the type doc.
+    /// Pure mapping from a policy's network posture to the launch spawn shape.
     pub fn for_policy(policy: &SandboxPolicy) -> Self {
         match policy.network() {
-            NetworkPolicy::AllowHosts(_) => LaunchDecision::RefuseAllowHosts,
-            NetworkPolicy::DenyAll => LaunchDecision::RefuseDenyAll,
+            NetworkPolicy::AllowHosts(hosts) => LaunchDecision::SpawnAllowHosts {
+                hosts: hosts.clone(),
+            },
+            NetworkPolicy::DenyAll => LaunchDecision::SpawnDenyAll,
         }
     }
+}
 
-    /// The [`LaunchError`] this decision produces from the public launch path.
-    pub fn into_refusal(self) -> LaunchError {
-        match self {
-            LaunchDecision::RefuseAllowHosts => LaunchError::AllowHostsNotYetImplemented,
-            LaunchDecision::RefuseDenyAll => LaunchError::NetworkConfinementNotImplemented,
-        }
-    }
+// -------- Single-active-task guard (pure helper; RAII lives in the compose) --
+
+/// Attempts to acquire a single-active-task flag by CAS `false -> true`.
+/// Returns `true` iff the flag was free (this caller now owns it). Its only
+/// non-test caller is the Windows compose, and its only Linux use is the unit
+/// test below, so it is gated `cfg(any(windows, test))`: present (and used) on
+/// Windows and under test, absent on the plain native build where nothing
+/// would call it (so it is never dead code).
+///
+/// Only one fenced sandbox task may run at a time because every task shares one
+/// firewall loopback rule keyed on the single sandbox account SID (D-003); a
+/// second concurrent launch would clobber the first task's per-task loopback
+/// allow, so it is rejected instead (blocker a, fail-closed). This in-process
+/// CAS is layered under a cross-process named mutex (see the compose) so two
+/// separate processes cannot both enter the fence-config critical section.
+#[cfg(any(windows, test))]
+fn acquire_single_task_flag(flag: &std::sync::atomic::AtomicBool) -> bool {
+    flag.compare_exchange(
+        false,
+        true,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    )
+    .is_ok()
 }
 
 /// The filesystem paths a per-task ACL grant should allow (writable) and deny
@@ -227,6 +248,118 @@ struct SetupMarker {
     username: String,
 }
 
+// ---- Sandbox-home DACL (decision D-013, Part A) ---------------------------
+
+/// `NT AUTHORITY\SYSTEM`.
+const LOCAL_SYSTEM_SID: &str = "S-1-5-18";
+/// `BUILTIN\Administrators`.
+const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+/// Broad group SIDs that must never be granted anything in the sandbox-home
+/// DACL. The lab found `C:\hivesbx` carrying an INHERITED
+/// `NT AUTHORITY\Authenticated Users:(I)(M)` grant, which is exactly why the
+/// DACL is now protected (inheritance broken) rather than merely appended to.
+/// Any of these as a trustee would re-open the hole the protection closes.
+pub const FORBIDDEN_SANDBOX_HOME_TRUSTEES: [&str; 4] = [
+    "S-1-5-11",     // Authenticated Users
+    "S-1-5-32-545", // BUILTIN\Users
+    "S-1-1-0",      // Everyone
+    "S-1-5-4",      // INTERACTIVE
+];
+
+/// Access one trustee gets on the sandbox home. Both variants are inheritable
+/// so the tree below the root (notably `.sandbox-bin`, which holds the
+/// materialized command-runner image the sandbox account must be able to load)
+/// is covered without a second pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxHomeAccess {
+    /// Full control. Provisioning, helper materialization, log writing, repair
+    /// and uninstall all need it.
+    FullControl,
+    /// Read plus traverse/execute only. No write, no `DELETE`, and in
+    /// particular no `FILE_DELETE_CHILD` on the root, so the holder cannot
+    /// remove sibling entries such as the `secrets` directory.
+    ReadExecute,
+}
+
+/// One ACE of the explicit sandbox-home DACL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxHomeAce {
+    pub sid: String,
+    pub access: SandboxHomeAccess,
+}
+
+/// Builds the explicit, protected DACL for the sandbox home (decision D-013,
+/// Part A).
+///
+/// Removing the restricting-SID set from the child token (see
+/// `codex_windows_sandbox::token::create_sandbox_restricted_token_from`) removes
+/// the blanket second write check that was the only thing suppressing the
+/// inherited `Authenticated Users` Modify grant on this tree. NTFS ACEs are now
+/// the entire write defense here, so the root's DACL is replaced wholesale and
+/// marked protected (inheritance broken, inherited ACEs NOT copied in) rather
+/// than being appended to.
+///
+/// The sandbox account gets read plus execute only: it must be able to load the
+/// materialized runner image out of `.sandbox-bin`, and nothing more. It gets no
+/// write anywhere under the sandbox home; the sealed-credential `secrets`
+/// directory additionally keeps its explicit deny-read ACE, which provisioning
+/// applies after this DACL and which beats the inherited allow-read from here.
+///
+/// Fails closed on a caller that would widen the DACL: a broad group trustee,
+/// an empty SID, or a sandbox account SID equal to the provisioning user's (the
+/// latter would silently promote the sandbox account to full control).
+pub fn sandbox_home_dacl_entries(
+    provisioning_user_sid: &str,
+    sandbox_account_sid: &str,
+) -> Result<Vec<SandboxHomeAce>, String> {
+    if provisioning_user_sid.is_empty() || sandbox_account_sid.is_empty() {
+        return Err(
+            "sandbox-home DACL needs a non-empty provisioning user and sandbox account SID"
+                .to_string(),
+        );
+    }
+    if provisioning_user_sid.eq_ignore_ascii_case(sandbox_account_sid) {
+        return Err(format!(
+            "sandbox account SID {sandbox_account_sid} is also the provisioning user SID; \
+             that would grant the sandbox account full control of its own home"
+        ));
+    }
+    for sid in [provisioning_user_sid, sandbox_account_sid] {
+        if FORBIDDEN_SANDBOX_HOME_TRUSTEES
+            .iter()
+            .any(|forbidden| forbidden.eq_ignore_ascii_case(sid))
+        {
+            return Err(format!(
+                "{sid} is a broad group SID and must never be a sandbox-home DACL trustee"
+            ));
+        }
+    }
+
+    Ok(vec![
+        SandboxHomeAce {
+            sid: LOCAL_SYSTEM_SID.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        SandboxHomeAce {
+            sid: BUILTIN_ADMINISTRATORS_SID.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        // The desktop app itself runs NON-elevated as this user and owns the
+        // tree: it materializes the runner helper, seals and reads the
+        // credential, and writes the egress-fence log. Without it, protecting
+        // the DACL would lock the product out of its own sandbox home.
+        SandboxHomeAce {
+            sid: provisioning_user_sid.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        SandboxHomeAce {
+            sid: sandbox_account_sid.to_string(),
+            access: SandboxHomeAccess::ReadExecute,
+        },
+    ])
+}
+
 // ===========================================================================
 // Windows-only Win32 compose (cross-compiled for windows-gnu; lab-gated)
 // ===========================================================================
@@ -240,6 +373,7 @@ pub use windows_impl::{
 #[cfg(windows)]
 mod windows_impl {
     use super::*;
+    use crate::windows_firewall;
     use codex_windows_sandbox::absolute_path::AbsolutePathBuf;
     use codex_windows_sandbox::identity::SandboxCreds;
     use codex_windows_sandbox::ipc_framed::{
@@ -252,20 +386,35 @@ mod windows_impl {
     };
     use codex_windows_sandbox::runner_client::{retry_runner_spawn_once, spawn_runner_transport};
     use codex_windows_sandbox::token::{
-        LocalSid, create_readonly_token_with_caps_and_user_from,
-        create_workspace_write_token_with_caps_and_user_from, get_current_token_for_restriction,
+        LocalSid, create_sandbox_restricted_token_from, get_current_token_for_restriction,
+        get_user_sid_bytes,
     };
-    use codex_windows_sandbox::{acl, cap, dpapi, hide_users, sandbox_users};
+    use codex_windows_sandbox::{acl, dpapi, hide_users, sandbox_users};
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, LocalFree};
     use windows_sys::Win32::Security::Authentication::Identity::{
         LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
         LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID,
+        TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -277,13 +426,152 @@ mod windows_impl {
         SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, StartServiceW,
     };
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, INFINITE, TerminateProcess, WaitForSingleObject,
+        CreateMutexW, GetExitCodeProcess, INFINITE, ReleaseMutex, TerminateProcess,
+        WaitForSingleObject,
     };
 
     // The runner-spawn transport wants a "codex_home"-shaped base directory for
     // its runner-exe resolution and log dir; Hive passes the sandbox home. The
     // name is kept as `codex_home` at the vendored call boundary only.
     type Result<T> = anyhow::Result<T>;
+
+    // -------------------------------------------------------------------
+    // Per-task egress fence guards (Integration B2 activation)
+    // -------------------------------------------------------------------
+
+    /// Process-wide single-active-task flag. Only one fenced sandbox task may
+    /// run at a time because all tasks share one firewall loopback rule keyed
+    /// on the single sandbox account SID (D-003).
+    static SANDBOX_TASK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+    /// RAII holder of the [`SANDBOX_TASK_ACTIVE`] flag; releases on drop.
+    struct ActiveTaskGuard;
+
+    impl ActiveTaskGuard {
+        /// Acquires the single-active-task flag, or `None` if another fenced
+        /// task is already active (blocker a: reject rather than clobber the
+        /// shared loopback rule).
+        fn acquire() -> Option<Self> {
+            if acquire_single_task_flag(&SANDBOX_TASK_ACTIVE) {
+                Some(ActiveTaskGuard)
+            } else {
+                None
+            }
+        }
+    }
+
+    impl Drop for ActiveTaskGuard {
+        fn drop(&mut self) {
+            SANDBOX_TASK_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Machine-global cross-process lock for the egress-fence critical section
+    /// (F2). The in-process [`SANDBOX_TASK_ACTIVE`] CAS only guards one process;
+    /// this named mutex additionally rejects a SECOND PROCESS (the validate bin,
+    /// or a second app instance) that would otherwise reconfigure the single
+    /// OS-global firewall loopback rule concurrently. Held for the task duration
+    /// by [`EgressFenceGuard`], layered UNDER the CAS.
+    struct CrossProcessFenceLock(HANDLE);
+
+    impl CrossProcessFenceLock {
+        /// Acquires the machine-global egress-fence mutex without blocking.
+        /// `Ok(Some)` = acquired. `Ok(None)` = another process holds it, so the
+        /// caller rejects the launch fail-closed. `WAIT_ABANDONED` (a crashed
+        /// prior holder) counts as acquired, since Windows auto-releases an
+        /// abandoned mutex.
+        fn acquire() -> Result<Option<Self>> {
+            // ponytail: the Global\ namespace needs SeCreateGlobalPrivilege; the
+            // elevated provisioner has it. If a non-elevated launcher cannot
+            // create it, CreateMutexW fails and we reject fail-closed. Upgrade
+            // path: fall back to a Local\ (per-session) name if same-session
+            // isolation is ever sufficient.
+            let name: Vec<u16> = "Global\\HiveSandboxEgressFence\0".encode_utf16().collect();
+            // SAFETY: CreateMutexW with a null security-attributes pointer, a
+            // non-owning initial flag, and a NUL-terminated UTF-16 name we own
+            // for the call; it returns a handle this value takes ownership of.
+            let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+            if handle == 0 {
+                anyhow::bail!(
+                    "CreateMutexW(Global\\HiveSandboxEgressFence) failed: {} (needs SeCreateGlobalPrivilege)",
+                    unsafe { GetLastError() }
+                );
+            }
+            // SAFETY: `handle` is the mutex just created; wait with a zero
+            // timeout so a contended lock returns WAIT_TIMEOUT immediately.
+            let wait = unsafe { WaitForSingleObject(handle, 0) };
+            match wait {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Some(Self(handle))),
+                WAIT_TIMEOUT => {
+                    // SAFETY: `handle` is owned; close it since we did not acquire.
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    Ok(None)
+                }
+                other => {
+                    // SAFETY: `handle` is owned; close it before erroring.
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    anyhow::bail!(
+                        "WaitForSingleObject on the egress-fence mutex failed: 0x{other:08x}"
+                    )
+                }
+            }
+        }
+    }
+
+    impl Drop for CrossProcessFenceLock {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the mutex handle this value acquired; release
+            // ownership then close the handle. Both are safe on an owned handle.
+            unsafe {
+                let _ = ReleaseMutex(self.0);
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// Per-task egress-fence teardown guard. On drop it re-blocks loopback for
+    /// the sandbox SID (removing the per-task proxy allow) and releases the
+    /// single-active-task flag, so EVERY return path from the compose (normal
+    /// return or early error) restores the fail-closed baseline: proxy gone,
+    /// loopback re-blocked, persistent block-all still up (blocker c: PROVISION
+    /// owns the persistent fence, TASK-END owns this per-task teardown).
+    /// Best-effort: a teardown error is logged but cannot re-open egress, since
+    /// the persistent provision-time block-all stays in force regardless.
+    struct EgressFenceGuard {
+        sid: String,
+        fence_log_path: PathBuf,
+        // Dropped after the teardown below (which runs in Drop::drop, before any
+        // field drops): releases the single-active flag, then the cross-process
+        // mutex, so the loopback re-block happens while this process still owns
+        // the fence.
+        _active: ActiveTaskGuard,
+        _xproc: CrossProcessFenceLock,
+    }
+
+    impl Drop for EgressFenceGuard {
+        fn drop(&mut self) {
+            let mut log: Box<dyn Write> = match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.fence_log_path)
+            {
+                Ok(file) => Box::new(file),
+                Err(_) => Box::new(std::io::sink()),
+            };
+            if let Err(err) =
+                windows_firewall::teardown_offline_proxy_allowlist(&self.sid, &mut *log)
+            {
+                let _ = writeln!(
+                    log,
+                    "egress fence teardown FAILED (persistent block-all still enforced, egress stays closed): {err}"
+                );
+            }
+        }
+    }
 
     // -------------------------------------------------------------------
     // Credential seal / load (identity.rs port; DPAPI at rest)
@@ -336,14 +624,15 @@ mod windows_impl {
     }
 
     // -------------------------------------------------------------------
-    // Provisioning (identity.rs / setup.rs port; WFP + firewall OMITTED)
+    // Provisioning (identity.rs / setup.rs port; WFP + firewall INSTALLED)
     // -------------------------------------------------------------------
 
     /// One-time, ELEVATED provisioning of the shared low-privilege sandbox
     /// account. Port of the provisioning half of `identity.rs` /`setup.rs`
-    /// (`run_elevated_provisioning_setup`), retargeted to the Hive sandbox home
-    /// and with the WFP/firewall call sites OMITTED (Integration B): this
-    /// authors NO network egress control.
+    /// (`run_elevated_provisioning_setup`), retargeted to the Hive sandbox home.
+    /// Integration B2: it now INSTALLS the persistent, SID-keyed egress fence
+    /// (WFP per-protocol + core filters and the firewall block-all-outbound)
+    /// before the readiness marker, so the fence is up before the first task.
     ///
     /// Steps (each fail-closed; a failure aborts and does NOT leave a
     /// half-created account usable):
@@ -354,6 +643,8 @@ mod windows_impl {
     /// 3. DPAPI-seal the CSPRNG password into a secrets dir whose ACL excludes
     ///    the sandbox account (lab item L5);
     /// 4. hide the account and its profile dir from the login screen (L4);
+    ///    then install the persistent egress fence (WFP + firewall block-all),
+    ///    SID-keyed, fail-closed (Integration B2);
     /// 5. write the readiness marker so subsequent launches do not re-elevate.
     ///
     /// MUST be run elevated (Administrator). Callers reach it through the setup
@@ -378,6 +669,13 @@ mod windows_impl {
         sandbox_users::ensure_local_user(SANDBOX_USERNAME, &password, log)?;
         sandbox_users::ensure_local_group_member(SANDBOX_GROUP, SANDBOX_USERNAME)?;
 
+        // 1b. Explicit protected DACL on the sandbox home (decision D-013,
+        //     Part A). Applied as soon as the account exists (its SID is a
+        //     trustee) and BEFORE the secrets deny-read below, so that deny is
+        //     layered on top of this DACL rather than wiped by it. Fail-closed:
+        //     `?` aborts long before the readiness marker is written.
+        apply_sandbox_home_acl(sandbox_home, log)?;
+
         // 2. Logon prerequisites for CreateProcessWithLogonW (A.Q1 invariant).
         grant_interactive_logon_right(SANDBOX_USERNAME)?;
         ensure_seclogon_enabled()?;
@@ -393,6 +691,23 @@ mod windows_impl {
         // 4. Hide the account + its profile dir from the login screen.
         hide_users::hide_newly_created_users(&[SANDBOX_USERNAME.to_string()], sandbox_home);
 
+        // 4b. Persistent egress fence (WFP + firewall block-all), SID-keyed,
+        //     fail-closed. Installed here so the fence is up before the first
+        //     task ever launches; `?` aborts provisioning (and the marker below
+        //     is never written) if either half fails, so a partially-fenced
+        //     account is never reported provisioned (D-005).
+        // WFP per-protocol + core filters (persistent, keyed on the account
+        // name -> SID).
+        codex_windows_sandbox::wfp_setup::install_wfp_filters(SANDBOX_USERNAME, |line| {
+            let _ = writeln!(log, "{line}");
+        })?;
+        // Firewall block-all outbound (non-loopback), SID-keyed.
+        let fence_sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+        crate::windows_firewall::ensure_offline_outbound_block(&fence_sid, log)?;
+
         // 5. Readiness marker (last, so a partial provisioning is never
         //    reported complete).
         let marker = SetupMarker {
@@ -404,6 +719,168 @@ mod windows_impl {
         std::fs::write(setup_marker_path(sandbox_home), bytes)
             .map_err(|e| anyhow::anyhow!("write setup marker: {e}"))?;
         let _ = writeln!(log, "provisioning complete for {SANDBOX_USERNAME}");
+        Ok(())
+    }
+
+    /// Win32 access mask for one [`SandboxHomeAccess`].
+    fn sandbox_home_access_mask(access: SandboxHomeAccess) -> u32 {
+        match access {
+            SandboxHomeAccess::FullControl => FILE_ALL_ACCESS,
+            // Deliberately NOT FILE_ALL_ACCESS and deliberately without DELETE
+            // or FILE_DELETE_CHILD: the sandbox account may read and traverse
+            // the tree (it must load the runner image out of `.sandbox-bin`)
+            // but may neither modify an entry nor unlink a sibling.
+            SandboxHomeAccess::ReadExecute => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        }
+    }
+
+    /// Inherit to both child containers and child objects, so one ACE on the
+    /// root covers the whole sandbox-home tree.
+    const CONTAINER_AND_OBJECT_INHERIT: u32 = 0x2 | 0x1;
+
+    /// Write-implying access bits ONLY. `FILE_GENERIC_WRITE` cannot be used for
+    /// a "does this trustee have write" probe because it shares `SYNCHRONIZE`
+    /// and `READ_CONTROL` with `FILE_GENERIC_READ`, so an any-bit match against
+    /// it reports true for a pure read grant.
+    const WRITE_IMPLYING_BITS: u32 = FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | FILE_WRITE_EA
+        | FILE_WRITE_ATTRIBUTES
+        | DELETE
+        | FILE_DELETE_CHILD;
+
+    /// Replaces the sandbox home's DACL with the explicit, PROTECTED DACL from
+    /// [`sandbox_home_dacl_entries`] (decision D-013, Part A), then verifies
+    /// fail-closed that the result actually denies write to the sandbox account
+    /// and to every broad group trustee.
+    ///
+    /// Protecting the DACL is the whole point: passing
+    /// `PROTECTED_DACL_SECURITY_INFORMATION` breaks inheritance from the parent
+    /// directory, and passing a NULL old-ACL to `SetEntriesInAclW` builds the
+    /// new DACL from these entries alone, so the inherited
+    /// `Authenticated Users:(I)(M)` grant the lab found on `C:\hivesbx` is not
+    /// copied forward.
+    fn apply_sandbox_home_acl(sandbox_home: &Path, log: &mut dyn Write) -> Result<()> {
+        let sandbox_sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        // The provisioning process runs elevated AS the desktop app's own user;
+        // that user owns this tree and must keep full control (see
+        // `sandbox_home_dacl_entries`).
+        // SAFETY: `get_current_token_for_restriction` returns a token handle
+        // opened with TOKEN_QUERY; `get_user_sid_bytes` copies its user SID out
+        // and the handle is closed on both paths.
+        let user_sid_bytes = unsafe {
+            let token = get_current_token_for_restriction()?;
+            let bytes = get_user_sid_bytes(token);
+            CloseHandle(token);
+            bytes?
+        };
+        let provisioning_user_sid =
+            codex_windows_sandbox::winutil::string_from_sid_bytes(&user_sid_bytes)
+                .map_err(anyhow::Error::msg)?;
+
+        let aces = sandbox_home_dacl_entries(&provisioning_user_sid, &sandbox_sid)
+            .map_err(|e| anyhow::anyhow!("build sandbox-home DACL: {e}"))?;
+        let trustee_sids: Vec<LocalSid> = aces
+            .iter()
+            .map(|ace| LocalSid::from_string(&ace.sid))
+            .collect::<Result<Vec<_>>>()?;
+        let explicit: Vec<EXPLICIT_ACCESS_W> = aces
+            .iter()
+            .zip(trustee_sids.iter())
+            .map(|(ace, sid)| EXPLICIT_ACCESS_W {
+                grfAccessPermissions: sandbox_home_access_mask(ace.access),
+                grfAccessMode: 2, // SET_ACCESS
+                grfInheritance: CONTAINER_AND_OBJECT_INHERIT,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_UNKNOWN,
+                    ptstrName: sid.as_ptr() as *mut u16,
+                },
+            })
+            .collect();
+
+        // SAFETY: `explicit` borrows SID pointers owned by `trustee_sids`,
+        // which outlives this block. A NULL old-ACL makes `SetEntriesInAclW`
+        // build a fresh DACL from these entries alone; the resulting ACL is
+        // freed on every path.
+        unsafe {
+            let mut new_dacl: *mut ACL = std::ptr::null_mut();
+            let code = SetEntriesInAclW(
+                explicit.len() as u32,
+                explicit.as_ptr(),
+                std::ptr::null_mut(),
+                &mut new_dacl,
+            );
+            if code != ERROR_SUCCESS {
+                anyhow::bail!("SetEntriesInAclW for sandbox-home DACL failed: {code}");
+            }
+            let mut wide = codex_windows_sandbox::winutil::to_wide(sandbox_home);
+            let code = SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                1, // SE_FILE_OBJECT
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null_mut(),
+            );
+            if !new_dacl.is_null() {
+                LocalFree(new_dacl as HLOCAL);
+            }
+            if code != ERROR_SUCCESS {
+                anyhow::bail!("SetNamedSecurityInfoW for sandbox-home DACL failed: {code}");
+            }
+        }
+
+        // Fail-closed verification (D-005): re-read the DACL and prove the
+        // properties this whole change depends on, rather than trusting the
+        // Win32 return code. A silent no-op here would leave the sandbox with
+        // NEITHER the restricting-SID write check NOR an ACL write check.
+        let sandbox_local = LocalSid::from_string(&sandbox_sid)?;
+        if acl::path_mask_allows(
+            sandbox_home,
+            &[sandbox_local.as_ptr()],
+            WRITE_IMPLYING_BITS,
+            false,
+        )? {
+            anyhow::bail!(
+                "sandbox account still has write access to {} after applying the protected DACL",
+                sandbox_home.display()
+            );
+        }
+        if !acl::path_mask_allows(
+            sandbox_home,
+            &[sandbox_local.as_ptr()],
+            FILE_GENERIC_READ,
+            false,
+        )? {
+            anyhow::bail!(
+                "sandbox account lost read access to {}; it could not load the runner helper",
+                sandbox_home.display()
+            );
+        }
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            let sid = LocalSid::from_string(forbidden)?;
+            if acl::path_mask_allows(sandbox_home, &[sid.as_ptr()], WRITE_IMPLYING_BITS, false)? {
+                anyhow::bail!(
+                    "{forbidden} still has write access to {} after protecting the DACL",
+                    sandbox_home.display()
+                );
+            }
+        }
+
+        let _ = writeln!(
+            log,
+            "sandbox-home DACL protected on {} ({} explicit ACEs, sandbox account read+execute only)",
+            sandbox_home.display(),
+            aces.len()
+        );
         Ok(())
     }
 
@@ -526,30 +1003,6 @@ mod windows_impl {
     // Parent-side capture compose (elevated_impl.rs port; tty = false only)
     // -------------------------------------------------------------------
 
-    /// Builds the capability-SID list for the ACL grants and the `SpawnRequest`
-    /// permission profile from the Hive resolver. Port of the cap-selection
-    /// block of `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`.
-    fn cap_sids_for(
-        sandbox_home: &Path,
-        cwd: &Path,
-        permissions: &ResolvedWindowsSandboxPermissions,
-    ) -> Result<Vec<String>> {
-        let caps = cap::load_or_create_cap_sids(sandbox_home)?;
-        if permissions.uses_write_capabilities() {
-            let cap_sids = permissions
-                .writable_roots()
-                .iter()
-                .map(|root| cap::workspace_write_cap_sid_for_root(sandbox_home, cwd, &root.root))
-                .collect::<Result<Vec<_>>>()?;
-            if cap_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable-root capability SIDs");
-            }
-            Ok(cap_sids)
-        } else {
-            Ok(vec![caps.readonly])
-        }
-    }
-
     /// Port of the `tty = false` CAPTURE half of
     /// `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`,
     /// retargeted to the Hive resolver and sandbox home. Spawns the Hive
@@ -557,8 +1010,14 @@ mod windows_impl {
     /// uses `CreateProcessWithLogonW`), sends a `tty = false` `SpawnRequest`,
     /// and drives the frame loop to capture stdout/stderr/exit.
     ///
-    /// This is the confinement mechanism; it is NOT a network-confined launch.
-    /// It is invoked only through [`spawn_confined_for_validation`].
+    /// Integration B2: this is now the LIVE network-fenced path. Before
+    /// building the `SpawnRequest` it installs the per-task egress fence (the
+    /// firewall loopback allow, plus the loopback proxy + `HTTP(S)_PROXY` env
+    /// for `AllowHosts`) on top of the persistent WFP + block-all fence from
+    /// provision, all keyed on the sandbox SID, and arms an RAII teardown that
+    /// re-blocks loopback on every return path. It is reached both through the
+    /// public [`crate::launch`] and the lab-only
+    /// [`spawn_confined_for_validation`].
     pub fn run_windows_sandbox_capture(
         sandbox_home: &Path,
         policy: &SandboxPolicy,
@@ -566,10 +1025,91 @@ mod windows_impl {
         cwd: &Path,
         env: &HashMap<String, String>,
     ) -> Result<CaptureResult> {
+        // ---- Per-task egress fence (Integration B2 activation) ----
+        // Single active task (D-003): reject a concurrent fenced launch rather
+        // than clobber the shared SID-keyed loopback rule (blocker a).
+        let active = ActiveTaskGuard::acquire().ok_or_else(|| {
+            anyhow::anyhow!(
+                "another sandboxed task is already active; concurrent fenced tasks are not supported (single shared sandbox account, D-003)"
+            )
+        })?;
+
+        // Cross-process gate (F2): the in-process CAS above only guards this
+        // process. Two separate processes (the app plus the validate bin, or two
+        // app instances) would each pass their own CAS and then clobber the one
+        // OS-global named firewall rule. A machine-global named mutex, layered
+        // UNDER the CAS, rejects the second PROCESS fail-closed.
+        let xproc = match CrossProcessFenceLock::acquire()? {
+            Some(lock) => lock,
+            None => anyhow::bail!(
+                "another process already holds the egress-fence mutex; concurrent fenced tasks across processes are not supported (blocker a / F2, fail-closed)"
+            ),
+        };
+
+        // Sandbox account SID: the firewall fence + loopback allow are keyed on
+        // it (D-010), the same SID the WFP filters are keyed on at provision.
+        let sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        let logs_base_dir = sandbox_home.join(".sandbox");
+        std::fs::create_dir_all(&logs_base_dir)
+            .map_err(|e| anyhow::anyhow!("create sandbox log dir: {e}"))?;
+        let fence_log_path = logs_base_dir.join("egress-fence.log");
+        let mut fence_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&fence_log_path)
+            .map_err(|e| anyhow::anyhow!("open egress fence log: {e}"))?;
+
+        // Mutable child env; AllowHosts injects the proxy vars into this clone.
+        let mut env = env.clone();
+
+        // Arm the teardown guard BEFORE touching any firewall rule (F4a). If a
+        // fence call below fails partway (a mid-narrowing error) or any later
+        // step returns early, the guard's Drop still re-blocks loopback (the
+        // fail-closed direction) and releases the single-active flag plus the
+        // cross-process mutex, on every return path (blocker c).
+        let _fence_guard = EgressFenceGuard {
+            sid: sid.clone(),
+            fence_log_path: fence_log_path.clone(),
+            _active: active,
+            _xproc: xproc,
+        };
+
+        match policy.network() {
+            NetworkPolicy::DenyAll => {
+                // Block all loopback (no proxy exception). The persistent WFP +
+                // firewall block-all (provision) already denies non-loopback.
+                windows_firewall::ensure_offline_proxy_allowlist(&sid, &[], false, &mut fence_log)?;
+            }
+            NetworkPolicy::AllowHosts(hosts) => {
+                let proxy = crate::egress_proxy::AllowlistProxy::spawn(hosts.clone())
+                    .map_err(|e| anyhow::anyhow!("start loopback egress proxy: {e}"))?;
+                let port = proxy.port();
+                // Allow loopback ONLY to the bound proxy port; block the rest.
+                windows_firewall::ensure_offline_proxy_allowlist(
+                    &sid,
+                    &[port],
+                    false,
+                    &mut fence_log,
+                )?;
+                env.insert("HTTP_PROXY".to_string(), format!("http://127.0.0.1:{port}"));
+                env.insert(
+                    "HTTPS_PROXY".to_string(),
+                    format!("http://127.0.0.1:{port}"),
+                );
+                env.insert("NO_PROXY".to_string(), "127.0.0.1,localhost".to_string());
+                // Task-lifetime: the RAII teardown below re-blocks loopback at
+                // task end, after which the leaked proxy reaches nothing.
+                proxy.leak_for_process_lifetime();
+            }
+        }
+
         let permissions = ResolvedWindowsSandboxPermissions::from_policy(policy, cwd)
             .map_err(|e| anyhow::anyhow!("resolve policy: {e}"))?;
 
-        let cap_sids = cap_sids_for(sandbox_home, cwd, &permissions)?;
         let workspace_roots: Vec<AbsolutePathBuf> = permissions
             .writable_roots()
             .iter()
@@ -582,46 +1122,38 @@ mod windows_impl {
         // sandbox account, which does not own the workspace root and has no
         // WRITE_DAC on it, so its SetNamedSecurityInfoW was denied and no ACE
         // landed -- the (c) "write inside the writable root" failure. This
-        // parent owns the root (it created it) and can rewrite its DACL. On each
-        // writable root we grant:
-        //   * the sandbox-account SID -- the identity present in BOTH the
-        //     WRITE_RESTRICTED token's normal groups AND its restricting-SID set
-        //     (the token adds the sandbox user as an extra restricting SID), so
-        //     a write passes both of the token's access checks. A capability SID
-        //     alone is only in the restricting set, so the normal-groups check
-        //     still denied the write; and
-        //   * each per-workspace capability SID -- the restricting-side gate the
-        //     token carries, kept so the isolation design stays populated.
-        // Fail-closed (D-005): add_allow_ace now returns Err (and verifies the
-        // ACE persisted) so a grant that cannot be applied aborts the launch
-        // rather than proceeding with a workspace the confined child cannot
-        // write.
-        if permissions.uses_write_capabilities() {
+        // parent owns the root (it created it) and can rewrite its DACL.
+        //
+        // Decision D-013: the grant targets the dedicated sandbox account SID
+        // and nothing else. The per-workspace capability SIDs that used to be
+        // granted alongside it are gone: they only ever had effect as
+        // restricting SIDs on the child token, and that array is now NULL (see
+        // `codex_windows_sandbox::token::create_sandbox_restricted_token_from`),
+        // so an ACE addressed to one would match no SID on the token and be
+        // silently dead. This ACE is therefore the ONLY thing separating a
+        // workspace-write task from a read-only one: a read-only task adds no
+        // grant here, and the token itself no longer distinguishes the two.
+        //
+        // Fail-closed (D-005): add_allow_ace returns Err (and verifies the ACE
+        // persisted) so a grant that cannot be applied aborts the launch rather
+        // than proceeding with a workspace the confined child cannot write.
+        if permissions.grants_write() {
             let sandbox_sid_str = codex_windows_sandbox::winutil::string_from_sid_bytes(
                 &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
             )
             .map_err(anyhow::Error::msg)?;
             let sandbox_local = LocalSid::from_string(&sandbox_sid_str)?;
-            let cap_local_sids: Vec<LocalSid> = cap_sids
-                .iter()
-                .map(|s| LocalSid::from_string(s))
-                .collect::<Result<Vec<_>>>()?;
             for root in &workspace_roots {
                 let root_path = root.as_path();
-                // SAFETY: sandbox_local / cap_local_sids own live SID pointers
-                // that outlive this loop; add_allow_ace reads them and rewrites
-                // the DACL of the validated absolute root path.
+                // SAFETY: `sandbox_local` owns a live SID pointer that outlives
+                // this loop; add_allow_ace reads it and rewrites the DACL of the
+                // validated absolute root path.
                 unsafe { acl::add_allow_ace(root_path, sandbox_local.as_ptr()) }.map_err(|e| {
                     anyhow::anyhow!(
                         "grant sandbox-account write on {}: {e}",
                         root_path.display()
                     )
                 })?;
-                for cap in &cap_local_sids {
-                    unsafe { acl::add_allow_ace(root_path, cap.as_ptr()) }.map_err(|e| {
-                        anyhow::anyhow!("grant capability write on {}: {e}", root_path.display())
-                    })?;
-                }
             }
         }
 
@@ -630,12 +1162,11 @@ mod windows_impl {
             cwd: cwd.to_path_buf(),
             env: env.clone(),
             permission_profile: PermissionProfile {
-                read_only: !permissions.uses_write_capabilities(),
+                read_only: !permissions.grants_write(),
             },
             workspace_roots,
             codex_home: sandbox_home.to_path_buf(),
             real_codex_home: sandbox_home.to_path_buf(),
-            cap_sids,
             timeout_ms: None,
             tty: false,
             stdin_open: false,
@@ -651,8 +1182,7 @@ mod windows_impl {
         };
 
         let sandbox_creds = load_logon_sandbox_creds(sandbox_home)?;
-        let logs_base_dir = sandbox_home.join(".sandbox");
-        let _ = std::fs::create_dir_all(&logs_base_dir);
+        // `logs_base_dir` was created above (it also holds the egress-fence log).
 
         let transport = retry_runner_spawn_once(
             sandbox_creds,
@@ -709,12 +1239,12 @@ mod windows_impl {
         })
     }
 
-    /// Lab-only confinement-validation entry point. NOT a network-confined
-    /// launch (Q2/D-005): it runs the elevated compose so the `spike307-win`
-    /// lab can prove the filesystem / user / token / Job isolation matrix
-    /// directly, exactly as #395 proved its primitives by lab replica ahead of
-    /// the composed success path. The public [`crate::launch`] never calls this;
-    /// it keeps refusing both network policies until Integration B.
+    /// Lab-only confinement-validation entry point. Integration B2: it now runs
+    /// the LIVE network-fenced compose ([`run_windows_sandbox_capture`]), so the
+    /// `spike307-win` lab drives the full matrix, filesystem / user / token /
+    /// Job isolation AND the SID-keyed egress fence, for whatever policy it is
+    /// given (the validate bin exercises both `DenyAll` and `AllowHosts`). The
+    /// public [`crate::launch`] runs the same compose directly.
     pub fn spawn_confined_for_validation(
         sandbox_home: &Path,
         policy: &SandboxPolicy,
@@ -781,7 +1311,7 @@ mod windows_impl {
 
     /// Runs the Hive command-runner protocol on the two named pipes. This is
     /// the process that `CreateProcessWithLogonW` starts AS the sandbox account;
-    /// it derives a capability-restricted primary token FROM ITS OWN token and
+    /// it derives a restricted primary token FROM ITS OWN token and
     /// spawns the inner child under it (A.Q1). Port of the `tty = false` branch
     /// of `bin/command_runner/win.rs` (upstream lines 339-360) plus the
     /// token/ACL assembly of `spawn_prep.rs`.
@@ -839,7 +1369,7 @@ mod windows_impl {
 
         // Non-sensitive shape only: NO env values, NO command args, NO creds.
         runner_debug_log(&format!(
-            "spawn request received: program={:?} argc={} tty={} read_only={} cap_sids={} workspace_roots={} env_keys={}",
+            "spawn request received: program={:?} argc={} tty={} read_only={} workspace_roots={} env_keys={}",
             request
                 .command
                 .first()
@@ -848,7 +1378,6 @@ mod windows_impl {
             request.command.len(),
             request.tty,
             request.permission_profile.read_only,
-            request.cap_sids.len(),
             request.workspace_roots.len(),
             request.env.len(),
         ));
@@ -889,50 +1418,41 @@ mod windows_impl {
         );
     }
 
-    /// Derives the capability-restricted token from the runner's own token,
+    /// Derives the restricted sandbox token from the runner's own token,
     /// applies the per-task ACL grants, spawns the child via
     /// `spawn_process_with_pipes`, and streams Output/Exit frames.
     fn spawn_and_stream(request: &SpawnRequest, writer: &mut File) -> Result<()> {
-        // Convert the capability SID strings into LocalSid pointers.
-        let cap_sids: Vec<LocalSid> = request
-            .cap_sids
-            .iter()
-            .map(|s| LocalSid::from_string(s))
-            .collect::<Result<Vec<_>>>()?;
-        let cap_ptrs: Vec<*mut c_void> = cap_sids.iter().map(|s| s.as_ptr()).collect();
-
         // The per-task allow-write ACEs are applied by the ELEVATED parent
         // (run_windows_sandbox_capture) BEFORE this runner is launched, because
         // this runner runs as the low-privilege sandbox account and has no
         // WRITE_DAC on the workspace root (a runner-side SetNamedSecurityInfoW
         // was denied, so the ACE never landed -- the (c) write-inside failure).
-        // The cap SIDs below are still what the restricted token carries.
+        //
+        // Decision D-013: the token is now the same in both permission
+        // profiles. `read_only` no longer selects a token shape, because the
+        // restricting-SID array (the only thing that ever differed) is gone;
+        // read-only is expressed by the parent simply not adding the workspace
+        // allow-write ACE. It is logged here purely as launch context.
         runner_debug_log(&format!(
-            "per-task allow ACEs applied parent-side; deriving token with {} cap sid(s)",
-            cap_ptrs.len()
+            "per-task allow ACEs applied parent-side; deriving restricted token (read_only={})",
+            request.permission_profile.read_only
         ));
 
         // SAFETY: get_current_token_for_restriction returns the runner's own
-        // primary token; the *_and_user_from builders derive a capability-
-        // restricted token whose token user is this (sandbox) account. Both
-        // handles are closed below. Because the derived token comes from the
-        // caller's OWN token it is assignable, so the CreateProcessAsUserW
-        // inside spawn_process_with_pipes needs no privilege (A.Q1).
-        runner_debug_log(&format!(
-            "deriving capability-restricted token from own token (read_only={})",
-            request.permission_profile.read_only
-        ));
-        let token = unsafe {
+        // primary token; create_sandbox_restricted_token_from derives the
+        // sandbox token from it. Both handles are closed below. Because the
+        // derived token comes from the caller's OWN token it is assignable, so
+        // the CreateProcessAsUserW inside spawn_process_with_pipes needs no
+        // privilege (A.Q1).
+        let (token, child_sid) = unsafe {
             let base = get_current_token_for_restriction()?;
-            let derived = if request.permission_profile.read_only {
-                create_readonly_token_with_caps_and_user_from(base, &cap_ptrs)
-            } else {
-                create_workspace_write_token_with_caps_and_user_from(base, &cap_ptrs)
-            };
+            let derived = create_sandbox_restricted_token_from(base);
             CloseHandle(base);
             derived?
         };
-        runner_debug_log("token derived; spawning inner child via CreateProcessAsUserW");
+        runner_debug_log(&format!(
+            "token derived (child SID {child_sid}); spawning inner child via CreateProcessAsUserW"
+        ));
 
         let spawn_result = spawn_process_with_pipes(
             token,
@@ -983,7 +1503,7 @@ mod windows_impl {
             handles.process.dwProcessId
         ));
 
-        let result = stream_child(handles, writer);
+        let result = stream_child(handles, writer, &child_sid);
         // By the time `stream_child` returns `Ok`, the child has already
         // exited (it waits on the process handle before returning), so
         // dropping the job here is a no-op in that case; on `Err` it
@@ -1058,7 +1578,7 @@ mod windows_impl {
 
     /// Streams the child's stdout/stderr as Output frames and its exit as an
     /// Exit frame, after acking with SpawnReady.
-    fn stream_child(handles: PipeSpawnHandles, writer: &mut File) -> Result<()> {
+    fn stream_child(handles: PipeSpawnHandles, writer: &mut File, child_sid: &str) -> Result<()> {
         let process = handles.process.hProcess;
         let pid = handles.process.dwProcessId;
 
@@ -1068,6 +1588,34 @@ mod windows_impl {
                 version: ipc_framed::IPC_PROTOCOL_VERSION,
                 message: Message::SpawnReady {
                     payload: SpawnReady { process_id: pid },
+                },
+            },
+        )?;
+
+        // Report the derived SID as an Output frame right after SpawnReady
+        // (must come after it: the client's handshake expects SpawnReady to be
+        // literally the first frame off the pipe), reusing the existing
+        // stdout-capture path rather than adding a new IPC message type. This
+        // is decision D-013's option 1: the validator's SID assertion no
+        // longer needs the confined child to run `whoami /user` itself, which
+        // was found (2026-07-21 lab session) to block indefinitely under this
+        // token -- `LookupAccountSid` is an LSA RPC call, and
+        // `GetTokenInformation(TokenUser)` (used to derive `child_sid` before
+        // this function was called) is not, so it cannot hit the same hang.
+        // See VENDORING.md for the differential evidence and the standing
+        // limitation this leaves for any sandboxed code that resolves a SID to
+        // a name the same way `whoami` does.
+        ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::Output {
+                    payload: OutputPayload {
+                        data_b64: ipc_framed::encode_bytes(
+                            format!("HIVE_SANDBOX_CHILD_SID={child_sid}\n").as_bytes(),
+                        ),
+                        stream: OutputStream::Stdout,
+                    },
                 },
             },
         )?;
@@ -1220,24 +1768,41 @@ mod tests {
     }
 
     #[test]
-    fn deny_all_refuses_with_network_confinement_error() {
+    fn deny_all_maps_to_spawn_deny_all() {
         let decision = LaunchDecision::for_policy(&policy(NetworkPolicy::DenyAll));
-        assert_eq!(decision, LaunchDecision::RefuseDenyAll);
-        assert!(matches!(
-            decision.into_refusal(),
-            LaunchError::NetworkConfinementNotImplemented
-        ));
+        assert_eq!(decision, LaunchDecision::SpawnDenyAll);
     }
 
     #[test]
-    fn allow_hosts_refuses_with_allow_hosts_error() {
+    fn allow_hosts_maps_to_spawn_allow_hosts_preserving_hosts() {
         let decision =
             LaunchDecision::for_policy(&policy(NetworkPolicy::AllowHosts(vec!["h".into()])));
-        assert_eq!(decision, LaunchDecision::RefuseAllowHosts);
-        assert!(matches!(
-            decision.into_refusal(),
-            LaunchError::AllowHostsNotYetImplemented
-        ));
+        assert_eq!(
+            decision,
+            LaunchDecision::SpawnAllowHosts {
+                hosts: vec!["h".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn single_task_flag_admits_one_then_rejects_until_released() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // Blocker a: the CAS admits exactly one holder at a time.
+        let flag = AtomicBool::new(false);
+        assert!(
+            acquire_single_task_flag(&flag),
+            "first acquire must succeed"
+        );
+        assert!(
+            !acquire_single_task_flag(&flag),
+            "second acquire must be rejected while the first is held"
+        );
+        flag.store(false, Ordering::SeqCst);
+        assert!(
+            acquire_single_task_flag(&flag),
+            "after release a fresh acquire must succeed again"
+        );
     }
 
     #[test]
@@ -1295,5 +1860,75 @@ mod tests {
     fn setup_is_incomplete_without_marker() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(!sandbox_setup_is_complete(tmp.path()));
+    }
+
+    // ---- Sandbox-home DACL (decision D-013, Part A) -----------------------
+
+    const USER_SID: &str = "S-1-5-21-111-222-333-1001";
+    const SANDBOX_SID: &str = "S-1-5-21-111-222-333-1002";
+
+    #[test]
+    fn sandbox_home_dacl_grants_the_sandbox_account_read_but_never_write() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        let sandbox: Vec<&SandboxHomeAce> =
+            aces.iter().filter(|ace| ace.sid == SANDBOX_SID).collect();
+        assert_eq!(sandbox.len(), 1, "sandbox account must appear exactly once");
+        assert_eq!(sandbox[0].access, SandboxHomeAccess::ReadExecute);
+    }
+
+    #[test]
+    fn sandbox_home_dacl_grants_full_control_only_to_system_admins_and_the_owner() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        let full: Vec<&str> = aces
+            .iter()
+            .filter(|ace| ace.access == SandboxHomeAccess::FullControl)
+            .map(|ace| ace.sid.as_str())
+            .collect();
+        assert_eq!(full, vec!["S-1-5-18", "S-1-5-32-544", USER_SID]);
+    }
+
+    #[test]
+    fn sandbox_home_dacl_never_names_a_broad_group_trustee() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            assert!(
+                !aces.iter().any(|ace| ace.sid == forbidden),
+                "{forbidden} must never be a sandbox-home trustee"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_a_broad_group_sid_as_input() {
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            assert!(
+                sandbox_home_dacl_entries(USER_SID, forbidden).is_err(),
+                "{forbidden} must be rejected as the sandbox account SID"
+            );
+            assert!(
+                sandbox_home_dacl_entries(forbidden, SANDBOX_SID).is_err(),
+                "{forbidden} must be rejected as the provisioning user SID"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_a_sandbox_account_equal_to_the_provisioning_user() {
+        // Otherwise the sandbox account inherits the owner's full-control ACE
+        // and the whole protection is silently void.
+        assert!(sandbox_home_dacl_entries(USER_SID, USER_SID).is_err());
+        assert!(
+            sandbox_home_dacl_entries(USER_SID, &USER_SID.to_ascii_lowercase()).is_err(),
+            "SID comparison must be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_empty_sids() {
+        assert!(sandbox_home_dacl_entries("", SANDBOX_SID).is_err());
+        assert!(sandbox_home_dacl_entries(USER_SID, "").is_err());
     }
 }
