@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from 'svelte';
 
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
+
 	import ComposerShell from './ComposerShell.svelte';
 	import ComposerSendButton from './ComposerSendButton.svelte';
 	import {
@@ -89,6 +91,18 @@
 	let pollTimer: ReturnType<typeof setTimeout> | null = null;
 	let clockTimer: ReturnType<typeof setInterval> | null = null;
 	let destroyed = false;
+	/*
+	 * Bumped by every local change to `tasks` that did not come from a list
+	 * response: a create, a cancel. A refresh captures it before its request
+	 * goes out and drops its own answer if it changed while the request was in
+	 * flight, because `tasks = await listTasks(...)` replaces the array whole
+	 * and a poll that started before a create knows nothing about the new row.
+	 * Without this, a poll overlapping a create loses the row the user just
+	 * submitted, or reverts a row they just cancelled, and if that stale list
+	 * happens to hold no in-flight task then schedulePoll stops too and the
+	 * screen never recovers on its own.
+	 */
+	let mutations = 0;
 
 	$: selectedPack = PACKS.find((option) => option.value === pack) ?? PACKS[0];
 	$: givenUp = failures >= MAX_POLL_FAILURES;
@@ -119,6 +133,12 @@
 	$: canSubmit = canStartTask({ instructions, submitting, blocked });
 
 	const sessionToken = (): string => localStorage.token ?? '';
+
+	// The one SvelteKit-resolved value the API module deliberately does not
+	// import for itself, so its unit tests can load at all. See the note at the
+	// top of agentTasks.ts. Passing it from here keeps `npm run dev` against the
+	// chat front end pointed at the backend's own port.
+	const apiBase = `${WEBUI_API_BASE_URL}/hive/agent`;
 
 	const schedulePoll = () => {
 		if (pollTimer) {
@@ -161,8 +181,17 @@
 	};
 
 	const refresh = async () => {
+		const startedAt = mutations;
 		try {
-			tasks = await listTasks(sessionToken());
+			const fetched = await listTasks(sessionToken(), apiBase);
+			// A create or a cancel landed while this request was open, so its
+			// answer predates a change the user made and must not overwrite it.
+			// Nothing else is rolled back: the request did reach the endpoint, so
+			// the failure count and any refusal are genuinely cleared, and the
+			// next poll fetches a list that includes the change.
+			if (startedAt === mutations) {
+				tasks = fetched;
+			}
 			error = null;
 			blocked = null;
 			failures = 0;
@@ -202,7 +231,7 @@
 		announcement = 'Starting task.';
 
 		try {
-			const task = await createTask(sessionToken(), pack, trimmed);
+			const task = await createTask(sessionToken(), pack, trimmed, apiBase);
 			// A create that round-trips is direct evidence the endpoint is back, so
 			// the failure count is stale. Without this the poll stays given up and
 			// the row the user just created sits under an alert telling them to
@@ -211,6 +240,7 @@
 			// A create that round-trips also disproves a refusal, so the refusal
 			// message goes with the failure count rather than outliving both.
 			blocked = null;
+			mutations = mutations + 1;
 			tasks = [task, ...tasks];
 			instructions = '';
 			resize();
@@ -233,7 +263,8 @@
 		// transition between the two identical sentences.
 		announcement = '';
 		try {
-			const updated = await cancelTask(sessionToken(), id);
+			const updated = await cancelTask(sessionToken(), id, apiBase);
+			mutations = mutations + 1;
 			tasks = tasks.map((task) => (task.id === updated.id ? updated : task));
 			announcement = 'Task cancelled.';
 			// Cancelling the last in-flight task should stop the loop now rather
