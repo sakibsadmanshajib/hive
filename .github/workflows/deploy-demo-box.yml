@@ -909,15 +909,37 @@ jobs:
           # Greptile on PR 998). Bounded retry, and it still fails the step if the
           # service never comes up, which is the outcome that matters. The Caddy
           # verify step below has the same loop for the same reason.
-          def api(url, attempts=30, delay=2):
+          #
+          # `until` retries a SUCCESSFUL answer that does not yet reflect what
+          # the step above applied (second review finding, Greptile on PR 998).
+          # A 200 is not evidence of freshness on either arm of that step:
+          # reloading on SIGHUP is asynchronous and Prometheus goes on serving
+          # the previous config and rules for the whole of it, and a rejected
+          # reload leaves the old ones being served indefinitely while the API
+          # answers 200 throughout. Without this, a correct deploy can lose a
+          # race with its own reload and fail the comparison below.
+          #
+          # Exhausting `until` returns the last answer instead of exiting, on
+          # purpose: a deploy that is genuinely stale must produce the caller's
+          # specific diagnostic naming the jobs, rule paths or rules that
+          # differ, not a generic timeout saying only that something did not
+          # settle.
+          def api(url, attempts=30, delay=2, until=None):
               last = None
+              seen = None
               for _ in range(attempts):
                   try:
                       with urllib.request.urlopen(url, timeout=15) as r:
-                          return json.load(r)
+                          seen = json.load(r)
                   except Exception as e:  # connection refused, 503 while loading, partial read
                       last = e
                       time.sleep(delay)
+                      continue
+                  if until is None or until(seen):
+                      return seen
+                  time.sleep(delay)
+              if seen is not None:
+                  return seen
               print('::error::%s never answered: %s' % (url, last))
               sys.exit(1)
 
@@ -941,17 +963,21 @@ jobs:
           jobs = lambda text: {m.strip('\'"')
                                for m in re.findall(r'^\s*-?\s*job_name:\s*(\S+)\s*$', text, re.M)}
           host = pathlib.Path('../prometheus/prometheus.yml').read_text()
-          served = api('http://localhost:9090/api/v1/status/config')['data']['yaml']
+          # Anchored on the /etc/prometheus prefix rather than matching any
+          # quoted list item, so a future quoted entry elsewhere in the file
+          # cannot turn this into a confusing failure about a path that was never
+          # a rule file. Hoisted above the fetch because the retry predicate
+          # needs it too.
+          rule_paths = re.findall(r'^\s*-\s*"(/etc/prometheus/[^"]+)"\s*$', host, re.M)
+          fresh = lambda d: (jobs(d['data']['yaml']) == jobs(host)
+                             and all(p in d['data']['yaml'] for p in rule_paths))
+          served = api('http://localhost:9090/api/v1/status/config', until=fresh)['data']['yaml']
           if jobs(host) != jobs(served):
               failures.append(
                   'Prometheus is scraping %s but deploy/prometheus/prometheus.yml declares '
                   '%s. The mount is stale or the reload did not take.'
                   % (sorted(jobs(served)), sorted(jobs(host))))
-          # Anchored on the /etc/prometheus prefix rather than matching any
-          # quoted list item, so a future quoted entry elsewhere in the file
-          # cannot turn this into a confusing failure about a path that was never
-          # a rule file.
-          for rule_path in re.findall(r'^\s*-\s*"(/etc/prometheus/[^"]+)"\s*$', host, re.M):
+          for rule_path in rule_paths:
               if rule_path not in served:
                   failures.append(
                       'Prometheus is not loading rule files from %s, which '
@@ -963,9 +989,11 @@ jobs:
           files += sorted(pathlib.Path('../prometheus/alerts').glob('*.yml'))
           for f in files:
               want |= set(re.findall(r'^\s*-\s*alert:\s*(\S+)\s*$', f.read_text(), re.M))
-          have = {r['name']
-                  for g in api('http://localhost:9090/api/v1/rules')['data']['groups']
-                  for r in g['rules'] if r.get('type') == 'alerting'}
+          loaded = lambda d: {r['name']
+                              for g in d['data']['groups']
+                              for r in g['rules'] if r.get('type') == 'alerting'}
+          have = loaded(api('http://localhost:9090/api/v1/rules',
+                            until=lambda d: not (want - loaded(d))))
           missing = sorted(want - have)
           if missing:
               failures.append(
