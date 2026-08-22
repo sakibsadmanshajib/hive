@@ -170,6 +170,18 @@ def main() -> int:
         except RuntimeError:
             expect(True, "an unreachable discovery URL raises")
 
+        # A non-http scheme is refused rather than fetched. Without this, a
+        # local file could decide whether the gate passes, and the URL comes
+        # out of a deployment's own configuration.
+        local = tmp / "local-discovery.json"
+        local.write_text(json.dumps({"scopes_supported": ["openid", "offline_access"]}))
+        for hostile in (f"file://{local}", "ftp://example.invalid/d.json", "gopher://x/"):
+            try:
+                check.fetch_supported(hostile)
+                expect(False, f"{hostile.split(':')[0]}:// is refused")
+            except RuntimeError:
+                expect(True, f"{hostile.split(':')[0]}:// is refused")
+
         # End to end through main(), against a discovery document on disk, so
         # the argument plumbing is exercised and not just the internals.
         document = tmp / "discovery.json"

@@ -51,6 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_DIR = REPO_ROOT / "deploy"
 ENV_KEY = "OAUTH_SCOPES"
 TIMEOUT_SECONDS = 30
+MAX_DOCUMENT_BYTES = 256 * 1024
 
 
 def declarations(deploy_dir: Path) -> list[tuple[Path, int, str]]:
@@ -99,11 +100,41 @@ def fetch_supported(url: str) -> list[str]:
     Raises RuntimeError with a legible cause. Never returns a default: a
     default here would let an unreachable server read as a pass, which is the
     silent absence this check exists to replace with a loud failure.
+
+    Three deliberate narrowings, none of them theoretical for a helper that
+    fetches a URL read out of a deployment's own configuration:
+
+      * http and https only. The stdlib opener also speaks file:// and ftp://,
+        so `--discovery file:///tmp/anything.json` would otherwise let a local
+        file decide whether the gate passes. Same check and same reason as
+        scripts/install-owui-jwt-forward.py.
+      * the body is read with a cap rather than streamed into the JSON parser.
+        A slow drip or an endless body would otherwise stall until the
+        enclosing job's timeout, which on the deploy job is thirty minutes
+        while it holds the deploy-demo-box concurrency group.
+      * the redirect target is checked too, because a redirect can move the
+        answer to a host the configuration never named.
     """
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"refusing to read a discovery document from {url!r}: only http and "
+            "https are accepted, so a local file or an ftp target cannot decide "
+            "whether this gate passes"
+        )
     request = urllib.request.Request(url, headers={"User-Agent": "hive-oauth-scope-check"})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            document = json.load(response)
+            if urllib.parse.urlsplit(response.geturl()).scheme not in ("http", "https"):
+                raise RuntimeError(
+                    f"{url} redirected to {response.geturl()!r}, which is not http or https"
+                )
+            body = response.read(MAX_DOCUMENT_BYTES + 1)
+        if len(body) > MAX_DOCUMENT_BYTES:
+            raise RuntimeError(
+                f"{url} returned more than {MAX_DOCUMENT_BYTES} bytes; a discovery "
+                "document is a small JSON object, so this is not one"
+            )
+        document = json.loads(body)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RuntimeError(f"could not fetch {url}: {exc}") from exc
     except json.JSONDecodeError as exc:

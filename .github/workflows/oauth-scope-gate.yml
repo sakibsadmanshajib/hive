@@ -44,7 +44,11 @@ on:
 
 concurrency:
   group: oauth-scope-gate-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded pull-request pushes are worth cancelling. Commits on main are
+  # not: two landing close together would cancel the earlier one's run, and
+  # that commit then has no verdict at all. An absent check reads exactly like
+  # a passing one, which is the failure mode this repository keeps paying for.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

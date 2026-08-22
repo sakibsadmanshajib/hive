@@ -718,15 +718,26 @@ services:
       # the pinned v2.189.0 is that same four value list. Chat sign-in stayed
       # dead until the scope came back out.
       #
-      # offline_access buys nothing here even where it is accepted, which is
-      # the part #787 got wrong on both sides. GoTrue's authorization code
-      # grant calls tokenService.IssueRefreshToken unconditionally and always
-      # puts refresh_token in the token response (internal/api/oauthserver/
+      # Against GoTrue specifically, offline_access also buys nothing even
+      # where it is accepted, which is the part #787 got wrong on both sides.
+      # GoTrue's authorization code grant calls
+      # tokenService.IssueRefreshToken unconditionally and always puts
+      # refresh_token in the token response (internal/api/oauthserver/
       # handlers.go at v2.189.0), so the refresh token #782 needs is issued
       # whether or not the scope is requested. Read from the pinned source and
       # then confirmed live against the box rather than inferred, since
       # inferring a capability is what caused this in the first place:
       # docs/proof/oauth-scope-selfhost-2026-08-22/.
+      #
+      # Scoped to GoTrue on purpose, and not a general claim about OAuth. On
+      # most authorization servers offline_access is exactly the switch that
+      # gates a durable refresh credential, and OPENID_PROVIDER_URL above is
+      # built from SUPABASE_PUBLIC_URL, so a deployment pointed at a different
+      # server would need this value revisited or #782 returns as a silent
+      # 55 minute lockout. TestOWUIOAuthScopesRequestAnIdentity guards the
+      # scopes whose absence breaks sign-in outright (openid and email); it
+      # cannot guard this one, because whether it is needed is a property of
+      # the server rather than of this file.
       #
       # Guarded on both sides, because the two halves of this mismatch drift
       # independently. scripts/check-oauth-scopes.py reads the live

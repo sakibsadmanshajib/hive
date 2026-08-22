@@ -237,10 +237,10 @@ CodeRabbit's local review raised two blind spots, both real, both fixed:
 
   Restored, green:
 
-    --- PASS: TestOWUIOAuthScopesRequestOpenID (0.00s)
+    --- PASS: TestOWUIOAuthScopesRequestAnIdentity (0.00s)
     --- PASS: TestOWUIOAuthScopeGateIsWired (0.00s)
     --- PASS: TestContainsUncommentedRejectsCommentedInvocations (0.00s)
-    $ python3 scripts/test_check_oauth_scopes.py   -> 19 checks, all passed
+    $ python3 scripts/test_check_oauth_scopes.py   -> all checks passed
 
   Also confirmed in CI on the first commit: the new pull-request gate
   ("Configured OAuth scopes are advertised by the auth server") passed in 8
@@ -313,3 +313,48 @@ asserted offline instead, from the pinned source rather than from convention:
     FAIL
 
   Restored to "openid email profile", green.
+
+
+10. Security review round, and the box left clean
+-------------------------------------------------
+
+An independent security pass on the pull request returned no blocker (nothing
+critical, high or medium) and four low findings, all applied:
+
+  * the discovery fetch now refuses any scheme but http and https, so a local
+    file cannot decide whether the gate passes, and it reads the body with a
+    256 KiB cap so a slow drip cannot stall the deploy job while it holds the
+    deploy-demo-box concurrency group. Redirect targets are re-checked. Fixture
+    cases cover file://, ftp:// and gopher://.
+  * oauth-scope-gate no longer cancels in-progress runs on main, only on pull
+    requests. Two commits landing close together would otherwise cancel the
+    earlier one's run, leaving that commit with no verdict, which reads exactly
+    like a pass.
+  * the deploy step's `printenv` now tolerates a missing variable, because
+    under `set -e` its exit 1 aborted the step before the branch that explains
+    what is wrong could print.
+  * the compose comment's claim about offline_access is scoped to GoTrue rather
+    than stated of OAuth in general, since on most authorization servers that
+    scope IS the switch gating a durable refresh credential.
+
+Nothing in this capture was found to be a real credential: every
+credential-bearing parameter is a placeholder and every token is reported as
+presence and length. The reviewer's one housekeeping note is closed too: the
+temporary /tmp/hive-owui-scope-hotfix.yml on the box has been deleted, and the
+running container still carries the fixed value independently of it:
+
+  $ docker inspect hive-open-webui-1 --format '{{range .Config.Env}}...'
+    OAUTH_SCOPES=openid email profile
+
+  $ (sign-in chain, re-run after the cleanup)
+    [3] GET https://console-hive.scubed.co/oauth/consent?authorization_id=<REDACTED>
+        -> 200 text/html
+        VERDICT: reached a rendered page (consent screen)
+
+Also recorded from that review, for whoever next opens an admin surface: the
+socat tap used here published GoTrue's admin API on the box's loopback for the
+tap's lifetime, which put it in reach of every local process, outside the
+boundary Caddy defines for /auth/v1. The better pattern was already used in
+section 5 of this capture and needs no published port at all: run the admin
+calls from a throwaway container attached to the stack's own network
+(`docker run --rm --network hive_default ...`). Do that next time instead.
