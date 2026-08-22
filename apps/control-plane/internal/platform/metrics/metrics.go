@@ -16,6 +16,13 @@ type Registry struct {
 	LedgerPostingsTotal     *prometheus.CounterVec
 	RateLimitHitsTotal      *prometheus.CounterVec
 	AuthFailuresTotal       *prometheus.CounterVec
+
+	// SignupProvisioningSweepFailures is how many provisioning sweeps have failed
+	// in a row. Provisioning can be broken while every other route still works,
+	// so this is reported here rather than on the readiness endpoint the container
+	// healthcheck reads: an alert can fire without taking the process out of
+	// service and leaving inference and billing without a control-plane.
+	SignupProvisioningSweepFailures prometheus.Gauge
 }
 
 // NewRegistry creates and registers all Prometheus metrics.
@@ -58,6 +65,10 @@ func NewRegistry() (*Registry, *prometheus.Registry) {
 			Name: "hive_auth_failures_total",
 			Help: "Total auth failures by reason",
 		}, []string{"reason"}),
+		SignupProvisioningSweepFailures: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "hive_signup_provisioning_sweep_failures",
+			Help: "Consecutive failed signup provisioning sweeps, 0 when the last sweep completed",
+		}),
 	}
 	reg.MustRegister(
 		r.HTTPRequestsTotal,
@@ -68,6 +79,7 @@ func NewRegistry() (*Registry, *prometheus.Registry) {
 		r.LedgerPostingsTotal,
 		r.RateLimitHitsTotal,
 		r.AuthFailuresTotal,
+		r.SignupProvisioningSweepFailures,
 	)
 	return r, reg
 }

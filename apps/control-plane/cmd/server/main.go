@@ -77,6 +77,11 @@ import (
 // /metrics, kept off the public listener so the Prometheus series stay internal.
 const metricsListenAddr = ":9101"
 
+// provisioningGaugeInterval is how often the signup provisioning failure gauge is
+// refreshed from the reconciler. Shorter than the sweep interval so a scrape
+// never reads a value a whole pass out of date.
+const provisioningGaugeInterval = time.Minute
+
 // How long startup waits for the database before giving up, and how often it
 // retries inside that window. The session-mode pooler is shared and capped at
 // 15 clients across CI, developer stacks and the live deployment, so a boot can
@@ -899,6 +904,28 @@ func main() {
 	// Build Prometheus metrics registry before the router so the instrumentation
 	// middleware and the telemetry listener share one registry.
 	metricsRegistry, promRegistry := metrics.NewRegistry()
+	// A failing sweep is reported on the telemetry listener, not on the
+	// readiness endpoint. Provisioning can be broken while API-key
+	// resolution, routing, accounting and payment webhooks still work, so
+	// degrading the container healthcheck for it would turn a signup outage
+	// into a billing one, and a restart would reset the counter and repeat
+	// (review finding, CodeRabbit on PR 993). The absence of the wiring
+	// itself still degrades readiness, because that one cannot be transient.
+	if signupReconciler != nil {
+		go func() {
+			ticker := time.NewTicker(provisioningGaugeInterval)
+			defer ticker.Stop()
+			for {
+				failures := signupReconciler.ConsecutiveFailures()
+				metricsRegistry.SignupProvisioningSweepFailures.Set(float64(failures))
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	}
 
 	// Create the mux upfront so filestore.RegisterRoutes (which requires *http.ServeMux)
 	// can register routes on it before the instrumentation wrapper is applied.

@@ -1,6 +1,20 @@
 groups:
   - name: hive-critical
     rules:
+      # Signup tenant provisioning (D-023). Deliberately an alert rather than a
+      # readiness failure: provisioning can be broken while API-key resolution,
+      # routing and payments still work, so degrading the container healthcheck
+      # for it would turn a signup outage into a billing one. The absence of the
+      # wiring itself is still a failed healthcheck, since that cannot be
+      # transient.
+      - alert: SignupProvisioningSweepFailing
+        expr: hive_signup_provisioning_sweep_failures >= 3
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Signup tenant provisioning sweeps are failing"
+          description: "{{ $value }} consecutive failed sweeps. New identities are not being given a tenant, so they hold a token with no tenant claim and every tenant-scoped request they make is refused."
       - alert: HighAPIErrorRate
         expr: |
           sum(rate(hive_http_requests_total{status_class=~"4xx|5xx"}[5m]))

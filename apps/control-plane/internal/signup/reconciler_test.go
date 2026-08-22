@@ -189,10 +189,13 @@ func TestReconcilerReadyIsFalseWhenUnwired(t *testing.T) {
 	require.NotEmpty(t, reason)
 }
 
-// TestReconcilerReadyGoesFalseAfterRepeatedSweepFailures covers wired but
-// broken, which a nil check alone cannot catch: the sweep is mounted and the
-// database refuses it.
-func TestReconcilerReadyGoesFalseAfterRepeatedSweepFailures(t *testing.T) {
+// TestReconcilerCountsRepeatedSweepFailures covers wired but broken, which the
+// nil check alone cannot catch: the sweep is mounted and the database refuses
+// it. This state is exported for the telemetry gauge rather than folded into
+// readiness, because taking the container out of service over a provisioning
+// fault would convert a signup outage into a billing one (review finding,
+// CodeRabbit on PR 993).
+func TestReconcilerCountsRepeatedSweepFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -206,19 +209,21 @@ func TestReconcilerReadyGoesFalseAfterRepeatedSweepFailures(t *testing.T) {
 	rec := signup.NewReconciler(dead, signup.NewProvisioner(signup.WebhookDeps{Pool: dead}),
 		signup.ReconcilerConfig{})
 
-	ready, _ := rec.Ready()
-	require.True(t, ready, "one bad sweep must not flap a healthcheck red")
+	require.Equal(t, 0, rec.ConsecutiveFailures())
 
 	for i := 0; i < 3; i++ {
 		_, err := rec.Sweep(ctx)
 		require.Error(t, err)
 	}
 
+	require.Equal(t, 3, rec.ConsecutiveFailures(),
+		"a sweep failing every time has to be countable by something")
+
+	// Wiring is unaffected, which is the whole point of the split: the process
+	// keeps serving every other route while this is reported elsewhere.
 	ready, reason := rec.Ready()
-	require.False(t, ready, "a sweep failing every time is a provisioning outage")
-	require.NotEmpty(t, reason)
-	require.NotContains(t, reason, "127.0.0.1",
-		"the reason reaches a public health endpoint and must not carry connection detail")
+	require.True(t, ready)
+	require.Empty(t, reason)
 }
 
 // TestReconcilerSweepProvisionsSelfServeIdentityWithProductionResolver is the
@@ -318,9 +323,8 @@ func TestReconcilerCountsAnUnfinishedSweepAsFailure(t *testing.T) {
 		stop()
 	}
 
-	ready, reason := rec.Ready()
-	require.False(t, ready, "three unfinished sweeps are a provisioning outage")
-	require.NotEmpty(t, reason)
+	require.Equal(t, 3, rec.ConsecutiveFailures(),
+		"an unfinished pass must count against the sweep, not pass as a quiet one")
 }
 
 // newTestAuditLogger builds the audit logger these suites share.

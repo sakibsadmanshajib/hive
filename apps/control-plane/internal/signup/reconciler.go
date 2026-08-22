@@ -56,12 +56,6 @@ const (
 	defaultSweepLookback = 24 * time.Hour
 	defaultSweepBatch    = 200
 
-	// unhealthySweepFailures is how many consecutive failed sweeps make
-	// Ready report false. More than one, so a single transient database blip
-	// cannot flap a container healthcheck red; small enough that a real
-	// provisioning outage is visible within the quarter hour.
-	unhealthySweepFailures = 3
-
 	// noTenantCooldown is how long a terminal no_tenant determination is
 	// trusted before it is attempted again. Reconcile documents that outcome
 	// as terminal until an administrator invites the identity or registers
@@ -147,14 +141,13 @@ func NewReconciler(pool *pgxpool.Pool, prov *Provisioner, cfg ReconcilerConfig) 
 // has one place to audit for anything an operator or an audit reader should not
 // see. None of them carries an address, a tenant id or a driver error string.
 const (
-	logSweepFailed     = "signup: provisioning sweep failed: %v"
-	logSweepReport     = "signup: provisioning sweep candidates=%d provisioned=%d no_tenant=%d cooled=%d failed=%d"
-	errSweepNotWired   = "signup: provisioning sweep not wired"
-	errListCandidates  = "signup: list provisioning candidates: %w"
-	errScanCandidate   = "signup: scan provisioning candidate: %w"
-	errReadCandidates  = "signup: read provisioning candidates: %w"
-	reasonUnwired      = "signup provisioning unwired"
-	reasonSweepFailing = "signup provisioning sweep failing"
+	logSweepFailed    = "signup: provisioning sweep failed: %v"
+	logSweepReport    = "signup: provisioning sweep candidates=%d provisioned=%d no_tenant=%d cooled=%d failed=%d"
+	errSweepNotWired  = "signup: provisioning sweep not wired"
+	errListCandidates = "signup: list provisioning candidates: %w"
+	errScanCandidate  = "signup: scan provisioning candidate: %w"
+	errReadCandidates = "signup: read provisioning candidates: %w"
+	reasonUnwired     = "signup provisioning unwired"
 )
 
 // Start sweeps once immediately and then on the configured interval until ctx
@@ -191,24 +184,40 @@ func (r *Reconciler) Start(ctx context.Context) {
 	}()
 }
 
-// Ready reports whether provisioning is wired and working. The health endpoint
-// asks it, so its answer cannot be missed the way a startup log line was.
+// Ready reports whether provisioning is WIRED, and nothing else. The health
+// endpoint asks it, so its answer cannot be missed the way a startup log line
+// was.
 //
-// A nil receiver reports false on purpose. The failure this whole type exists
-// to prevent was an absence nobody noticed, so nothing-wired must read as
-// broken rather than as silence.
+// A nil receiver reports false on purpose. The failure this whole type exists to
+// prevent was an absence nobody noticed, so nothing-wired must read as broken
+// rather than as silence. That condition is a programming error rather than a
+// runtime one: it cannot appear or clear by itself, so answering an unhealthy
+// readiness probe on it costs nothing that was working a moment ago.
+//
+// A failing sweep is deliberately NOT reported here. Provisioning can be broken
+// while API-key resolution, routing, accounting and payment webhooks all still
+// work, and this endpoint is the container healthcheck: degrading it on a
+// runtime provisioning fault would convert a signup outage into an inference and
+// billing outage, and a restart would reset the counter and repeat. That state is
+// exported through ConsecutiveFailures for the telemetry listener instead, where
+// an alert can fire without taking the process out of service.
 func (r *Reconciler) Ready() (ok bool, reason string) {
 	if r == nil || r.pool == nil || r.prov == nil {
 		return false, reasonUnwired
 	}
-	r.mu.Lock()
-	failures := r.failures
-	r.mu.Unlock()
-	if failures >= unhealthySweepFailures {
-		return false, reasonSweepFailing
-	}
 	// reason stays at its zero value: there is nothing to report.
 	return true, reason
+}
+
+// ConsecutiveFailures is how many sweeps in a row have failed, for the metric on
+// the telemetry listener. Zero means the last sweep completed its candidates.
+func (r *Reconciler) ConsecutiveFailures() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failures
 }
 
 type sweepCandidate struct {
@@ -225,7 +234,14 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 		return report, errors.New(errSweepNotWired)
 	}
 
-	candidates, err := r.candidates(ctx)
+	// Excluded in SQL rather than skipped in Go: the batch limit is applied by
+	// the database, so an identity filtered afterwards would still consume a
+	// slot and, on a deployment where hundreds of identities are permanently
+	// unclaimable, would starve the ones behind it until they aged out of the
+	// window (review finding, Greptile on PR 993).
+	cooled := r.cooledIdentities()
+	report.Cooled = len(cooled)
+	candidates, err := r.candidates(ctx, cooled)
 	if err != nil {
 		r.recordSweep(false)
 		return report, err
@@ -238,10 +254,6 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 			// work, so it is a failed sweep rather than a quiet one.
 			r.recordSweep(false)
 			return report, ctx.Err()
-		}
-		if r.cooling(c.userID) {
-			report.Cooled++
-			continue
 		}
 		outcome, err := r.prov.Reconcile(ctx, ReconcileInput{UserID: c.userID, Email: c.email})
 		switch {
@@ -274,26 +286,32 @@ func (r *Reconciler) recordSweep(ok bool) {
 	r.failures++
 }
 
-func (r *Reconciler) cooling(userID uuid.UUID) bool {
+// cooledIdentities returns the identities whose terminal no-tenant determination
+// is still trusted, and prunes the ones whose cooldown has expired. Bounded by
+// the lookback window: an identity that ages out of the window stops being
+// listed, and its entry is dropped on the next pass.
+func (r *Reconciler) cooledIdentities() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	at, ok := r.lastNoTenant[userID]
-	return ok && time.Since(at) < noTenantCooldown
+	ids := make([]string, 0, len(r.lastNoTenant))
+	for id, at := range r.lastNoTenant {
+		if time.Since(at) >= noTenantCooldown {
+			delete(r.lastNoTenant, id)
+			continue
+		}
+		ids = append(ids, id.String())
+	}
+	return ids
 }
 
 func (r *Reconciler) cool(userID uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// ponytail: in-memory, per process, so a restart re-attempts every
-	// determination once. Bounded by the pruning below plus the lookback
-	// window, which is what keeps the map from growing with the user table.
-	// Move it onto the identity row only if a deployment ever needs the
-	// back-off to survive a restart.
-	for id, at := range r.lastNoTenant {
-		if time.Since(at) >= noTenantCooldown {
-			delete(r.lastNoTenant, id)
-		}
-	}
+	// determination once. Pruning happens in cooledIdentities, which runs on
+	// every pass, and the lookback window bounds the map regardless. Move it
+	// onto the identity row only if a deployment ever needs the back-off to
+	// survive a restart.
 	r.lastNoTenant[userID] = time.Now()
 }
 
@@ -328,12 +346,13 @@ const candidateQuery = `
 	          AND tu.status      = 'ACTIVE'
 	          AND t.archived_at IS NULL
 	   )
+	   AND NOT (u.id = ANY($3::uuid[]))
 	 ORDER BY u.created_at DESC
 	 LIMIT $2
 `
 
-func (r *Reconciler) candidates(ctx context.Context) ([]sweepCandidate, error) {
-	rows, err := r.pool.Query(ctx, candidateQuery, r.cfg.Lookback.Seconds(), r.cfg.BatchLimit)
+func (r *Reconciler) candidates(ctx context.Context, cooled []string) ([]sweepCandidate, error) {
+	rows, err := r.pool.Query(ctx, candidateQuery, r.cfg.Lookback.Seconds(), r.cfg.BatchLimit, cooled)
 	if err != nil {
 		return nil, fmt.Errorf(errListCandidates, err)
 	}
