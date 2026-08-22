@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	goredis "github.com/redis/go-redis/v9"
@@ -317,6 +315,10 @@ func main() {
 	var auditWAL *audit.FileWALWriter
 	var signupWebhook *signup.Webhook
 	var signupViewerHandler *signup.ViewerHandler
+	// signupReconciler is the sweep that provisions identities nothing else
+	// reached. It also answers the health endpoint, so a build that stops
+	// wiring it reports degraded instead of starting quietly (D-023).
+	var signupReconciler *signup.Reconciler
 	var tenantsHandler *tenants.Handler
 	// Signup abuse-prevention (issue #116). The disposable-domain blocklist is
 	// parsed once from an embedded file (no network), so it is available even
@@ -596,94 +598,101 @@ func main() {
 		})
 		log.Println("signupguard precheck ready (issue #116)")
 
-		missingPhase19 := make([]string, 0, 4)
-		if owuiBaseURL == "" {
-			missingPhase19 = append(missingPhase19, "OWUI_BASE_URL")
+		// Signup tenant provisioning (D-023). Deliberately NOT gated on the
+		// optional identity variables read above. This is the path that turns a
+		// new identity into a usable tenant member. Its original driver was a
+		// Supabase Database Webhook configured in a dashboard, whose deletion
+		// leaves no diff, no error and no failing test, and the env gate that
+		// used to wrap this block took the repository-side replacement down
+		// with it on any deployment that had not set OWUI_ADMIN_TOKEN and
+		// SUPABASE_WEBHOOK_SECRET. The live demo box was in exactly that state,
+		// a WARNING at boot, a healthy process, and no reachable provisioning
+		// path at all. Provisioning needs the pool, the resolver and the audit
+		// logger, and all three exist here unconditionally, so it is wired
+		// unconditionally and reports its own readiness on the health endpoint.
+		signupDeps := signup.WebhookDeps{
+			Pool:     pool,
+			Resolver: signup.NewPgxResolver(pool),
+			Audit:    auditLogger,
+			// Disposable-domain backstop (issue #116) for scripted signups
+			// that hit Supabase directly and bypass the web-console precheck.
+			DisposableCheck: disposableBlocklist.IsDisposableEmail,
+			// Personal-tenant provisioning for a signup no tenant claims
+			// (issue #625). Hive Cloud only. config.IsEnterprisePosture
+			// is the single source of truth for this branch (issue
+			// #653). It also gates the operator backfill command and the
+			// licensing.FileSource vs licensing.CloudSource switch below.
+			SelfServeTenants: !config.IsEnterprisePosture(cfg.LicenseFilePath),
+			SharedSecret:     signupSecret,
 		}
-		if owuiAdminToken == "" {
-			missingPhase19 = append(missingPhase19, "OWUI_ADMIN_TOKEN")
+		// Open WebUI group wiring is a chat-side convenience, so a missing
+		// admin token now costs exactly that and nothing else. Provisioner logs
+		// the skip and still writes the tenant membership. Fataling here instead
+		// would take billing, API-key resolution and the whole control-plane
+		// down for a chat group.
+		owuiConfigured := owuiBaseURL != "" && owuiAdminToken != ""
+		if !owuiConfigured {
+			log.Println("WARNING: Open WebUI group wiring disabled, OWUI_BASE_URL or OWUI_ADMIN_TOKEN unset. Tenant memberships are still provisioned.")
 		}
-		if signupSecret == "" {
-			missingPhase19 = append(missingPhase19, "SUPABASE_WEBHOOK_SECRET")
-		}
-		if supabaseServiceRoleKey == "" {
-			missingPhase19 = append(missingPhase19, "SUPABASE_SERVICE_ROLE_KEY")
-		}
-		if len(missingPhase19) > 0 {
-			// Phase 19 identity (signup webhook + tenant switch) is opt-in.
-			// When env vars are absent — typical for CI smoke runs that do
-			// not exercise the Supabase signup path — log and skip the
-			// wiring rather than fatal, so other unrelated startup paths
-			// (health, billing, catalog) still come up healthy. Production
-			// deployments are expected to set every variable in this list;
-			// the resulting warning is loud enough for operators to catch.
-			log.Printf("WARNING: phase-19 identity wiring skipped (missing env: %s)", strings.Join(missingPhase19, ", "))
-		} else {
-			// SUPABASE_SERVICE_ROLE_KEY is read at startup so production
-			// deployments surface misconfiguration early, but the tenant
-			// switch handler uses the already-authenticated pool
-			// connection (which carries service-role privilege) to update
-			// auth.users metadata, so the key is not threaded into the
-			// handler today. Underscore the var to keep the contract
-			// explicit until later tasks consume it.
-			_ = supabaseServiceRoleKey
-
+		if owuiConfigured {
 			owuiClient = owui.New(owui.Config{
 				BaseURL:    owuiBaseURL,
 				AdminToken: owuiAdminToken,
 			})
-
-			signupResolver := signup.NewResolver(signup.ResolverDeps{
-				InviteLookup: signupLookupInvite(pool),
-				DomainLookup: signupLookupDomain(pool),
-			})
-
-			signupDeps := signup.WebhookDeps{
-				Pool:        pool,
-				Resolver:    signupResolver,
-				EnsureGroup: owuiClient.EnsureGroup,
-				AddUser:     owuiClient.AddUserToGroup,
-				Audit:       auditLogger,
-				// Disposable-domain backstop (issue #116) for scripted signups
-				// that hit Supabase directly and bypass the web-console precheck.
-				DisposableCheck: disposableBlocklist.IsDisposableEmail,
-				// Personal-tenant provisioning for a signup no tenant claims
-				// (issue #625). Hive Cloud only. config.IsEnterprisePosture
-				// is the single source of truth for this branch (issue
-				// #653); it also gates cmd/backfill-tenants and the
-				// licensing.FileSource vs licensing.CloudSource switch below.
-				SelfServeTenants: !config.IsEnterprisePosture(cfg.LicenseFilePath),
-				SharedSecret:     signupSecret,
-			}
-			signupWebhook = signup.NewWebhook(signupDeps)
-			// Second entry point into the same provisioning implementation, for
-			// the console. The Supabase Database Webhook that drives
-			// signupWebhook is dashboard state rather than repository state, so
-			// a deployment that never created it provisions nobody; this route
-			// makes provisioning reachable from code that ships with the repo.
-			// Per-user throttle on the console-driven provisioning route. Keyed
-			// on the authenticated user id, in its own Redis namespace so it
-			// cannot share a counter with the per-IP signup limiter. A nil
-			// Redis client disables it, the same way it disables the signup
-			// limiter, rather than blocking provisioning outright.
-			provisionLimiter := signupguard.NewRateLimiter(
-				signupguard.NewRedisIncrementer(redisClient),
-				signupguard.RateLimitConfig{
-					Limit:     cfg.TenantProvisionRateLimitPerWindow,
-					Window:    cfg.TenantProvisionRateLimitWindow,
-					FailOpen:  cfg.SignupRateLimitFailOpen,
-					Namespace: "provision",
-					Subject:   "user",
-				},
-			)
-			signupViewerHandler = signup.NewViewerHandler(
-				signup.NewProvisioner(signupDeps),
-				provisionLimiter.Allow,
-			)
-
-			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
-			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
+			signupDeps.EnsureGroup = owuiClient.EnsureGroup
+			signupDeps.AddUser = owuiClient.AddUserToGroup
 		}
+		if supabaseServiceRoleKey == "" {
+			log.Println("WARNING: SUPABASE_SERVICE_ROLE_KEY unset. The tenant switch handler updates auth.users through the pool, which already carries service-role privilege.")
+		}
+		// Read at startup so a production deployment surfaces the omission
+		// early, but not threaded into a handler today.
+		_ = supabaseServiceRoleKey
+
+		signupProvisioner := signup.NewProvisioner(signupDeps)
+
+		// Per-user throttle on the console-driven provisioning route. Keyed
+		// on the authenticated user id, in its own Redis namespace so it
+		// cannot share a counter with the per-IP signup limiter. A nil
+		// Redis client disables it, the same way it disables the signup
+		// limiter, rather than blocking provisioning outright.
+		provisionLimiter := signupguard.NewRateLimiter(
+			signupguard.NewRedisIncrementer(redisClient),
+			signupguard.RateLimitConfig{
+				Limit:     cfg.TenantProvisionRateLimitPerWindow,
+				Window:    cfg.TenantProvisionRateLimitWindow,
+				FailOpen:  cfg.SignupRateLimitFailOpen,
+				Namespace: "provision",
+				Subject:   "user",
+			},
+		)
+		// Second entry point into the same provisioning implementation, for the
+		// console. A token carrying no tenant claim calls it on its first
+		// authenticated request.
+		signupViewerHandler = signup.NewViewerHandler(signupProvisioner, provisionLimiter.Allow)
+
+		// Third entry point, and the only one that depends on nobody having
+		// configured anything, the sweep. It asks the database which identities
+		// hold no membership and runs the same Provisioner for each, so an
+		// administrator creating a user through the Supabase admin API gets
+		// that user provisioned without a dashboard webhook, without the
+		// console being visited, and without a shared secret existing.
+		signupReconciler = signup.NewReconciler(pool, signupProvisioner, signup.ReconcilerConfig{})
+		signupReconciler.Start(runCtx)
+		log.Println("signup provisioning ready (console route plus reconciler sweep)")
+
+		// The legacy Supabase Database Webhook target. Kept wired so a
+		// deployment that does still have that webhook configured behaves
+		// exactly as before, and mounted only when the shared secret exists,
+		// since the handler answers 500 to every request without one.
+		if signupSecret == "" {
+			log.Println("signup webhook route not mounted, SUPABASE_WEBHOOK_SECRET unset. Provisioning does not depend on it.")
+		}
+		if signupSecret != "" {
+			signupWebhook = signup.NewWebhook(signupDeps)
+		}
+
+		tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 
 		// Tenant model visibility admin routes. The handler type shipped with
 		// Phase 20 Plan 04 but was never constructed here, so
@@ -1017,7 +1026,11 @@ func main() {
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		// Same condition that gates every DB-backed handler above, so /health
 		// cannot report ok while those routes are absent (issue #816).
-		DBReady:                  pool != nil,
+		DBReady: pool != nil,
+		// Signup provisioning readiness (D-023). A nil reconciler answers false
+		// through this same method value, so a deployment that failed to wire
+		// provisioning reports degraded rather than serving traffic quietly.
+		ProvisioningReady:        signupReconciler.Ready,
 		AuthMiddleware:           authMiddleware,
 		AccountsHandler:          accountsHandler,
 		IdentityHandler:          identityHandler,
@@ -1397,10 +1410,6 @@ type storageRuntimeConfig struct {
 	FilesBucket string
 }
 
-// signupLookupInvite returns a signup.LookupFunc that resolves an invite
-// token to its target tenant. tenant_invites is provisioned by Plan 03;
-// until then the query simply returns ErrNoMatch, gating the resolver to
-// its domain-mapping fallback.
 // signupGuardAudit adapts the audit Logger to the signupguard.AuditFunc seam.
 // Detail maps carry classification strings only (never the raw email/domain or
 // any provider value), satisfying the BD provider-blind + audit-leak rules.
@@ -1441,46 +1450,6 @@ func tenantMembershipCheck(pool *pgxpool.Pool) auth.MembershipCheckFunc {
 			return false, fmt.Errorf("auth tenant membership check: %w", err)
 		}
 		return exists, nil
-	}
-}
-
-func signupLookupInvite(pool *pgxpool.Pool) signup.LookupFunc {
-	return func(ctx context.Context, token string) (uuid.UUID, error) {
-		var id uuid.UUID
-		err := pool.QueryRow(ctx,
-			`SELECT tenant_id FROM public.tenant_invites
-			  WHERE token=$1 AND consumed_at IS NULL AND expires_at > now()`,
-			token).Scan(&id)
-		if err != nil {
-			// Only "no eligible row" collapses to ErrNoMatch; transient
-			// DB failures (connection reset, deadline exceeded) must
-			// surface so the webhook returns 500 and Supabase retries.
-			if errors.Is(err, pgx.ErrNoRows) {
-				return uuid.Nil, signup.ErrNoMatch
-			}
-			return uuid.Nil, fmt.Errorf("signup invite lookup: %w", err)
-		}
-		return id, nil
-	}
-}
-
-// signupLookupDomain returns a signup.LookupFunc that maps an email
-// domain to its tenant via tenant_email_domains. As with the invite
-// table, the schema lands in Plan 03; the function is safe to call now
-// because a missing relation collapses to ErrNoMatch.
-func signupLookupDomain(pool *pgxpool.Pool) signup.LookupFunc {
-	return func(ctx context.Context, domain string) (uuid.UUID, error) {
-		var id uuid.UUID
-		err := pool.QueryRow(ctx,
-			`SELECT tenant_id FROM public.tenant_email_domains WHERE domain=$1`,
-			domain).Scan(&id)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return uuid.Nil, signup.ErrNoMatch
-			}
-			return uuid.Nil, fmt.Errorf("signup domain lookup: %w", err)
-		}
-		return id, nil
 	}
 }
 

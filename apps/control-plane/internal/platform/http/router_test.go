@@ -27,7 +27,13 @@ func TestNewRouterDoesNotServeMetrics(t *testing.T) {
 // Guards the test above against passing vacuously: an unwired router would 404
 // on everything.
 func TestNewRouterServesHealth(t *testing.T) {
-	h := NewRouter(RouterConfig{DBReady: true})
+	// ProvisioningReady is supplied because a nil reporter now degrades this
+	// endpoint on purpose (D-023). See router_health_provisioning_test.go.
+	ready := func() (bool, string) {
+		var noReason string
+		return true, noReason
+	}
+	h := NewRouter(RouterConfig{DBReady: true, ProvisioningReady: ready})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))

@@ -67,7 +67,16 @@ CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email              TEXT,
-    raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb
+    raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Lifecycle columns real GoTrue carries. The signup reconciler sweep
+    -- filters on all three: created_at bounds its lookback window, and a
+    -- soft-deleted or banned identity must never be provisioned. They are
+    -- nullable with no default here because that is how GoTrue declares
+    -- created_at, which is exactly why the sweep refuses a NULL age
+    -- instead of guessing one.
+    created_at         TIMESTAMPTZ,
+    deleted_at         TIMESTAMPTZ,
+    banned_until       TIMESTAMPTZ
 );
 
 -- Minimal stand-ins for Supabase's GoTrue-provided functions. Our own RLS
