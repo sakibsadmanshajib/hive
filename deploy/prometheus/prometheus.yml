@@ -32,3 +32,24 @@ scrape_configs:
       - targets: ['edge-api:9102']
     metrics_path: /metrics
     scrape_interval: 10s
+
+  # The alerting chain scrapes itself, because until now nothing measured it.
+  # alertmanager_notifications_failed_total is the only signal that says a
+  # receiver is not delivering, and prometheus_config_last_reload_successful is
+  # the only signal that says a rule file was rejected. Neither was being read,
+  # which is how a receiver pointing at a webhook nobody listened on survived
+  # four months. Both feed the rules in alerts/monitoring.yml.
+  #
+  # Self-scraping is not circular reasoning, it is just limited: an alert about
+  # undeliverable alerts cannot be delivered either. It is still visible in the
+  # Prometheus and Alertmanager UIs and in Grafana, which is exactly where an
+  # operator looks when asking whether alerting works at all.
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    metrics_path: /metrics
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: /metrics

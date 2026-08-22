@@ -802,6 +802,233 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Apply the bind-mounted Prometheus configs
+        # Same defect as the Caddy configs above, on the monitoring stack, and it
+        # is why every alert rule this repository has ever added took effect only
+        # by accident. Measured on the box on 2026-08-22, read only, before this
+        # step was written:
+        #
+        #   host  deploy/prometheus/alerts.yml       inode 134312, first alert SignupProvisioningSweepFailing
+        #   guest /etc/prometheus/alerts.yml         inode 132251, first alert HighAPIErrorRate
+        #
+        # and `curl localhost:9090/api/v1/rules` listed five rules, none of them
+        # the one merged that morning in PR #993. So both halves of the defect
+        # were live at once: the single-file bind mount was pinned to an inode
+        # `git pull` had already replaced, and Prometheus had never been told to
+        # reload anyway.
+        #
+        # SIGHUP rather than `--web.enable-lifecycle` and an HTTP POST: both
+        # binaries reload their configuration and all rule files on SIGHUP, so no
+        # extra flag, no admin endpoint and no HTTP client inside the image are
+        # needed. `docker compose kill -s HUP` signals the process without
+        # stopping the container.
+        #
+        # Reload versus recreate is decided by whether the container's mounted
+        # copy still matches the host file, exactly as for Caddy: when they
+        # differ, the mount is inode-stale and no in-container reload can ever
+        # see the new file, so the service is recreated to re-bind the mount.
+        # Recreating Prometheus is cheap because its TSDB is a named volume.
+        #
+        # Alertmanager is deliberately absent from this loop. Its configuration
+        # is now a compose `configs` block rather than a bind mount, so its
+        # content is part of the service specification and the `up -d` above
+        # already recreates it whenever the config changes. See the comment on
+        # that block in docker-compose.yml.
+        #
+        # Checked, not assumed, about the other monitoring mounts:
+        # deploy/prometheus/alerts/ and both Grafana mounts are DIRECTORY mounts,
+        # which carry no inode pinning, so their contents are always current
+        # inside the container. The rules directory still needed the reload, which
+        # the SIGHUP below covers. Grafana's dashboard provider rescans its
+        # directory on its own schedule, so dashboard JSON applies without help.
+        # Grafana DATASOURCE provisioning is applied at startup only and would
+        # need a recreate; nothing here changes it, and it is called out so the
+        # next person to edit deploy/grafana/provisioning/datasources knows.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+          stale=0
+          for pair in prometheus.yml:/etc/prometheus/prometheus.yml \
+                      alerts.yml:/etc/prometheus/alerts.yml; do
+            host=../prometheus/${pair%%:*}
+            guest=${pair#*:}
+            # `set -e` is suspended inside an `if` condition, so a transient
+            # failure of the exec pipeline lands in the else branch and forces
+            # the recreate path, which still applies the config, rather than
+            # risking a false "already current" claim.
+            if "${COMPOSE[@]}" exec -T prometheus cat "$guest" </dev/null | cmp -s - "$host"; then
+              echo "$guest: mounted copy already matches $host"
+            else
+              echo "$guest: mounted copy differs from $host, so the bind mount is" \
+                   "pinned to a replaced inode; prometheus must be recreated"
+              stale=1
+            fi
+          done
+          if [ "$stale" = 1 ]; then
+            "${COMPOSE[@]}" up -d --force-recreate --no-deps prometheus
+          else
+            echo "reloading prometheus in place (SIGHUP), which also re-reads alerts/*.yml"
+            "${COMPOSE[@]}" kill -s HUP prometheus
+          fi
+
+      - name: Verify the Prometheus rules and the alert receiver are actually live
+        # A zero exit from the step above is not proof of anything: a reload of a
+        # stale mounted copy exits 0 having changed nothing, which is how this
+        # hid for four months. So assert the outcome from the running processes'
+        # own APIs.
+        #
+        # Three assertions, each of which has to be able to fail:
+        #
+        #   1. The config Prometheus serves on /api/v1/status/config must equal
+        #      the host file byte for byte. This is the strongest available check
+        #      and it fails outright on a stale mount.
+        #   2. Every `- alert:` name in deploy/prometheus/alerts.yml and
+        #      deploy/prometheus/alerts/*.yml must appear in /api/v1/rules. A rule
+        #      file that failed to parse, or a glob that never matched, fails here
+        #      rather than being discovered months later.
+        #   3. Alertmanager's live config must name a receiver with a real
+        #      delivery mechanism, and the route must resolve to it.
+        #
+        # The SMTP relay itself is NOT asserted, because it cannot be from here:
+        # with ENTERPRISE_SMTP_HOST unset the smarthost is the RFC 2606 reserved
+        # smtp-not-configured.invalid, which never resolves. That state is
+        # reported as a loud warning naming the exact variables to set, rather
+        # than failing the deploy: a check that is red on every single run until
+        # somebody supplies a relay is a check people learn to ignore, and this
+        # step's job is to keep the two things it CAN prove trustworthy.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, re, sys, time, urllib.request
+
+          # `up -d --force-recreate` returns as soon as the container is started,
+          # not when Prometheus is serving, so the first call here can land on a
+          # refused connection and fail a deploy that was fine (review finding,
+          # Greptile on PR 998). Bounded retry, and it still fails the step if the
+          # service never comes up, which is the outcome that matters. The Caddy
+          # verify step below has the same loop for the same reason.
+          def api(url, attempts=30, delay=2):
+              last = None
+              for _ in range(attempts):
+                  try:
+                      with urllib.request.urlopen(url, timeout=15) as r:
+                          return json.load(r)
+                  except Exception as e:  # connection refused, 503 while loading, partial read
+                      last = e
+                      time.sleep(delay)
+              print('::error::%s never answered: %s' % (url, last))
+              sys.exit(1)
+
+          failures = []
+
+          # 1. What Prometheus is serving must match the file on disk.
+          #
+          # NOT a byte-for-byte comparison, and that was measured rather than
+          # assumed: /api/v1/status/config returns the config with every default
+          # filled in, 3309 bytes against the repository file's 2198, so an
+          # equality check here could never pass. Comparing the parts the
+          # repository actually declares (the scrape job names and the rule-file
+          # paths) is the strongest assertion that can both pass on a correct
+          # deploy and fail on a stale mount.
+          # The `-?` is load bearing. Without it this matched nothing on either
+          # side, both sets came back empty, and the comparison could never fail:
+          # the repository file writes `- job_name: 'edge-api'` as a list item and
+          # the served config writes `- job_name: edge-api`. Caught by trying to
+          # make the assertion fail on purpose, with a throwaway extra scrape job,
+          # rather than by trusting a green run.
+          jobs = lambda text: {m.strip('\'"')
+                               for m in re.findall(r'^\s*-?\s*job_name:\s*(\S+)\s*$', text, re.M)}
+          host = pathlib.Path('../prometheus/prometheus.yml').read_text()
+          served = api('http://localhost:9090/api/v1/status/config')['data']['yaml']
+          if jobs(host) != jobs(served):
+              failures.append(
+                  'Prometheus is scraping %s but deploy/prometheus/prometheus.yml declares '
+                  '%s. The mount is stale or the reload did not take.'
+                  % (sorted(jobs(served)), sorted(jobs(host))))
+          # Anchored on the /etc/prometheus prefix rather than matching any
+          # quoted list item, so a future quoted entry elsewhere in the file
+          # cannot turn this into a confusing failure about a path that was never
+          # a rule file.
+          for rule_path in re.findall(r'^\s*-\s*"(/etc/prometheus/[^"]+)"\s*$', host, re.M):
+              if rule_path not in served:
+                  failures.append(
+                      'Prometheus is not loading rule files from %s, which '
+                      'deploy/prometheus/prometheus.yml declares.' % rule_path)
+
+          # 2. Every alert defined in the repo must be loaded.
+          want = set()
+          files = [pathlib.Path('../prometheus/alerts.yml')]
+          files += sorted(pathlib.Path('../prometheus/alerts').glob('*.yml'))
+          for f in files:
+              want |= set(re.findall(r'^\s*-\s*alert:\s*(\S+)\s*$', f.read_text(), re.M))
+          have = {r['name']
+                  for g in api('http://localhost:9090/api/v1/rules')['data']['groups']
+                  for r in g['rules'] if r.get('type') == 'alerting'}
+          missing = sorted(want - have)
+          if missing:
+              failures.append(
+                  'Prometheus has not loaded these alert rules that exist in the '
+                  'repository: %s. Loaded: %s' % (', '.join(missing), ', '.join(sorted(have))))
+
+          # 3. Alertmanager must have a receiver that can deliver, and the route
+          #    must select it.
+          status = api('http://localhost:9093/api/v2/status')
+          cfg = status['config']['original']
+          route_receiver = re.search(r'^\s*receiver:\s*(\S+)\s*$', cfg, re.M)
+          route_receiver = route_receiver.group(1).strip("'\"") if route_receiver else None
+          named = set(re.findall(r'^\s*-\s*name:\s*(\S+)\s*$', cfg, re.M))
+          named = {n.strip("'\"") for n in named}
+          if route_receiver not in named:
+              failures.append('Alertmanager route names receiver %r, which is not defined. '
+                              'Receivers: %s' % (route_receiver, sorted(named)))
+          # Asserting the MECHANISM, not just that some receiver exists. The
+          # configuration this replaced had a perfectly valid receiver whose only
+          # integration was a webhook to a port nothing listened on, and it
+          # satisfied every weaker form of this check for four months.
+          #
+          # An earlier version of this step asserted the absence of the string
+          # localhost:9095 instead. That check could never fail, which was
+          # measured against the live box before this shipped: Alertmanager
+          # redacts webhook URLs to the literal "<secret>" in
+          # /api/v2/status, so the dead URL is invisible to any assertion on the
+          # served config. Deleted rather than left in as decoration.
+          if 'email_configs' not in cfg:
+              failures.append('Alertmanager has no email delivery configured, so every alert '
+                              'it receives is discarded. The owner-supplied destination is an '
+                              'address, so an email_configs block on the routed receiver is '
+                              'what makes this deployment able to deliver at all.')
+
+          # Not a failure, but it must be impossible to miss.
+          smarthost = re.search(r'^\s*smtp_smarthost:\s*(\S+)\s*$', cfg, re.M)
+          smarthost = smarthost.group(1).strip("'\"") if smarthost else ''
+          unconfigured = smarthost.startswith('smtp-not-configured.invalid') or not smarthost
+          summary = pathlib.Path(os.environ.get('GITHUB_STEP_SUMMARY', '/dev/null'))
+          if unconfigured:
+              msg = ('Alerts are routed and grouped correctly but CANNOT BE DELIVERED: no SMTP '
+                     'relay is configured, so Alertmanager is pointed at the reserved address '
+                     'smtp-not-configured.invalid and every send fails. Firing alerts are visible '
+                     'only in the Alertmanager UI on port 9093 and the Prometheus UI on port 9090. '
+                     'To make mail arrive, set ENTERPRISE_SMTP_HOST, ENTERPRISE_SMTP_PORT, '
+                     'ENTERPRISE_SMTP_USER, ENTERPRISE_SMTP_PASS and ENTERPRISE_SMTP_ADMIN_EMAIL '
+                     'in /home/sakib/hive/.env on the box and redeploy.')
+              print('::warning::' + msg)
+              with summary.open('a') as fh:
+                  fh.write('\n### Alert delivery\n\n' + msg + '\n')
+          else:
+              print('SMTP relay %s is configured; delivery to the receiver address is '
+                    'possible.' % smarthost)
+
+          if failures:
+              for f in failures:
+                  print('::error::' + f)
+              sys.exit(1)
+          print('Prometheus is serving the repository configuration, all %d repository alert '
+                'rules are loaded, and Alertmanager routes to receiver %r.'
+                % (len(want), route_receiver))
+          PY
+
       - name: Verify the chat-origin Caddy config is actually live
         # A zero exit from validate and reload is not proof that the intended
         # routing is live: a reload of a stale mounted copy exits 0 having

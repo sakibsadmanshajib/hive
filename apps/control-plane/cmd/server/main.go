@@ -925,6 +925,18 @@ func main() {
 				}
 			}
 		}()
+		// The gauge above resets on any clean sweep, and a sweep goes clean the
+		// moment the identity that kept faulting ages out of the reconciler's
+		// lookback window, so an alert on it alone resolves itself exactly when
+		// provisioning has permanently failed for somebody (review finding on
+		// PR 993). These two do not: a monotonic fault counter, and a count of
+		// identities already past the window holding no membership. Both read
+		// cached reconciler state, so a scrape never waits on the database.
+		if err := metrics.RegisterSignupProvisioning(promRegistry, signupReconciler); err != nil {
+			// Loud rather than ignored: without these collectors a permanent
+			// provisioning failure is invisible again, which is the defect.
+			log.Printf("metrics: signup provisioning collectors not registered: %v", err)
+		}
 	}
 
 	// Create the mux upfront so filestore.RegisterRoutes (which requires *http.ServeMux)
