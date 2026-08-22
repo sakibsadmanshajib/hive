@@ -70,6 +70,13 @@ const (
 	// keeps an administered (Hive Enterprise) deployment quiet while still
 	// picking the identity up once an administrator does act.
 	noTenantCooldown = time.Hour
+
+	// sweepDeadline bounds one pass. Without it a sweep that hangs on the
+	// database never returns, never records a failure, and the health
+	// endpoint keeps reporting ready while nobody is being provisioned,
+	// which is the exact silent shape this type exists to remove. Shorter
+	// than the default interval so a stuck pass cannot overlap the next one.
+	sweepDeadline = 2 * time.Minute
 )
 
 // ReconcilerConfig tunes the sweep. Every field is optional.
@@ -122,7 +129,6 @@ type Reconciler struct {
 
 	mu           sync.Mutex
 	failures     int
-	sweeps       int
 	lastNoTenant map[uuid.UUID]time.Time
 }
 
@@ -161,10 +167,15 @@ func (r *Reconciler) Start(ctx context.Context) {
 		ticker := time.NewTicker(r.cfg.Interval)
 		defer ticker.Stop()
 		for {
-			report, err := r.Sweep(ctx)
-			switch {
-			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// The deadline is per pass, so a hung pass is reported as a failed
+			// sweep and counted. Only the parent context ending means shutdown.
+			sweepCtx, cancelSweep := context.WithTimeout(ctx, sweepDeadline)
+			report, err := r.Sweep(sweepCtx)
+			cancelSweep()
+			if ctx.Err() != nil {
 				return
+			}
+			switch {
 			case err != nil:
 				log.Printf(logSweepFailed, err)
 			case report.Candidates > 0:
@@ -223,6 +234,9 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 
 	for _, c := range candidates {
 		if ctx.Err() != nil {
+			// A pass that ran out of time or was cancelled did not finish its
+			// work, so it is a failed sweep rather than a quiet one.
+			r.recordSweep(false)
 			return report, ctx.Err()
 		}
 		if r.cooling(c.userID) {
@@ -253,7 +267,6 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 func (r *Reconciler) recordSweep(ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sweeps++
 	if ok {
 		r.failures = 0
 		return

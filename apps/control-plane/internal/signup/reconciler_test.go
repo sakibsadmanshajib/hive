@@ -280,3 +280,52 @@ func personalMembershipStatus(t *testing.T, ctx context.Context, pool *pgxpool.P
 	`, userID).Scan(&status))
 	return status
 }
+
+// TestReconcilerCountsAnUnfinishedSweepAsFailure closes the hole that a bounded
+// sweep would otherwise open. A pass that runs out of time has not done its
+// work, so if it returned quietly the health endpoint would keep reporting ready
+// while nobody was being provisioned, which is the same invisible failure the
+// sweep exists to remove.
+func TestReconcilerCountsAnUnfinishedSweepAsFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	// The cancellation is driven from inside the provisioning attempt, through
+	// the disposable-domain hook Reconcile already calls per identity, so the
+	// second loop iteration is the one that observes the dead context. Two
+	// candidates are seeded precisely so there is a second iteration.
+	var abandon context.CancelFunc
+	stopOnFirstIdentity := func(string) (bool, error) {
+		abandon()
+		return false, nil
+	}
+	prov := signup.NewProvisioner(signup.WebhookDeps{
+		Pool:            pool,
+		Resolver:        signup.NewPgxResolver(pool),
+		Audit:           newTestAuditLogger(pool),
+		DisposableCheck: stopOnFirstIdentity,
+	})
+	domain := uuid.NewString()[:8] + "-abandoned.example"
+	mustInsertSweepUser(t, ctx, pool, "one-"+uuid.NewString()+"@"+domain, time.Now(), nil, nil)
+	mustInsertSweepUser(t, ctx, pool, "two-"+uuid.NewString()+"@"+domain, time.Now(), nil, nil)
+	rec := signup.NewReconciler(pool, prov, signup.ReconcilerConfig{})
+	for i := 0; i < 3; i++ {
+		sweepCtx, stop := context.WithCancel(ctx)
+		abandon = stop
+		_, err := rec.Sweep(sweepCtx)
+		require.Error(t, err)
+		stop()
+	}
+
+	ready, reason := rec.Ready()
+	require.False(t, ready, "three unfinished sweeps are a provisioning outage")
+	require.NotEmpty(t, reason)
+}
+
+// newTestAuditLogger builds the audit logger these suites share.
+func newTestAuditLogger(pool *pgxpool.Pool) *audit.Logger {
+	cfg := audit.WriterConfig{DeploySHA: "s", Env: "test"}
+	deps := audit.LoggerDeps{Sync: audit.NewSyncWriter(pool, cfg), WAL: &noopWAL{}}
+	return audit.NewLogger(deps)
+}
