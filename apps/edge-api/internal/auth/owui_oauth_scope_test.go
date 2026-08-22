@@ -86,20 +86,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOWUIOAuthScopesRequestOpenID asserts that every Open WebUI OIDC scope
-// declaration under deploy/ still asks for an identity.
+// TestOWUIOAuthScopesRequestAnIdentity asserts that every Open WebUI OIDC
+// scope declaration under deploy/ still asks for enough to identify a user.
 //
-// This is the only thing about the scope value that is knowable offline.
-// `openid` is what makes the exchange OIDC rather than a bare OAuth grant, and
-// without it the server issues no id_token at all (GoTrue gates GenerateIDToken
-// on exactly this scope), so the unwrap middleware has nobody to attribute a
-// request to. Whether every OTHER scope in the list is one the deployed server
-// will accept is checked against the live discovery document, not from here.
+// This guards the direction the live gate cannot: the live gate fails when the
+// list gains a scope the server rejects, and would be perfectly happy with a
+// list trimmed down to nothing but `openid`, since a smaller set is still a
+// subset. Losing a scope this deployment needs is a different outage with the
+// same shape, so it is asserted here, where it can be checked offline.
+//
+// Both entries are read from the pinned supabase/gotrue v2.189.0 rather than
+// from OAuth convention, which is what caused #787:
+//
+//   - openid. handleAuthorizationCodeGrant generates an id_token only under
+//     `if models.HasScope(scopeList, models.ScopeOpenID)`, so without it the
+//     exchange is a bare OAuth grant and the unwrap middleware has no identity
+//     to attribute a request to.
+//   - email. The email and email_verified claims are gated on
+//     `hasEmailScope` (internal/api/oauthserver/handlers.go). Open WebUI
+//     provisions and matches its account from the email claim, so a token
+//     without it signs nobody in.
+//
+// `profile` is deliberately not required. It only carries name and picture,
+// and their absence degrades an avatar rather than breaking sign-in.
 //
 // It scans all deploy YAML rather than one known line so a second compose
 // file, override, or profile cannot reintroduce a defect by copying a value
 // into a new place.
-func TestOWUIOAuthScopesRequestOpenID(t *testing.T) {
+func TestOWUIOAuthScopesRequestAnIdentity(t *testing.T) {
 	declarations := envDeclarations(t, "OAUTH_SCOPES")
 	require.NotEmpty(t, declarations,
 		"expected at least one OAUTH_SCOPES declaration under deploy/; if Open "+
@@ -111,6 +125,12 @@ func TestOWUIOAuthScopesRequestOpenID(t *testing.T) {
 		require.Contains(t, scopes, "openid",
 			"%s:%d declares OAUTH_SCOPES %q without openid; the unwrap middleware "+
 				"needs an OIDC identity token exchange, not a bare OAuth grant",
+			d.path, d.line, d.value)
+		require.Contains(t, scopes, "email",
+			"%s:%d declares OAUTH_SCOPES %q without email. GoTrue gates the email "+
+				"and email_verified claims on that scope, and Open WebUI matches "+
+				"its account on the email claim, so every sign-in fails with an "+
+				"id_token that has no email in it",
 			d.path, d.line, d.value)
 	}
 }

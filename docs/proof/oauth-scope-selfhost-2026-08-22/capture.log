@@ -284,3 +284,32 @@ rehearsal: an untracked file at a path the incoming merge also creates makes
 rehearsing. Only /tmp paths and a symlink there were used, and both are removed.
 The box's checkout carries no tracked modification (`git status --porcelain`
 shows only pre-existing .env backups), so the deploy's fast-forward is clear.
+
+
+9. The other direction: losing a scope this deployment needs
+------------------------------------------------------------
+
+The live gate fails when the list GAINS a scope the server rejects. It is
+perfectly happy with a list trimmed to nothing but `openid`, because a smaller
+set is still a subset. That is a different outage with the same shape, so it is
+asserted offline instead, from the pinned source rather than from convention:
+
+  openid  handleAuthorizationCodeGrant generates an id_token only under
+          `if models.HasScope(scopeList, models.ScopeOpenID)`.
+  email   the email and email_verified claims are gated on `hasEmailScope`
+          (internal/api/oauthserver/handlers.go), and Open WebUI matches its
+          account on the email claim.
+
+  profile is deliberately not required: it carries only name and picture, whose
+  absence degrades an avatar rather than breaking sign-in.
+
+  Mutation: OAUTH_SCOPES set to "openid profile".
+
+    --- FAIL: TestOWUIOAuthScopesRequestAnIdentity (0.00s)
+        Error: []string{"openid", "profile"} does not contain "email"
+        Messages: deploy/docker/docker-compose.yml:764 declares OAUTH_SCOPES
+                  "openid profile" without email. GoTrue gates the email and
+                  email_verified claims on that scope [...]
+    FAIL
+
+  Restored to "openid email profile", green.
