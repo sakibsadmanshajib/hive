@@ -18,7 +18,8 @@ func TestClient_Create_PostsExpectedPathAndBody(t *testing.T) {
 	tenantID, userID := uuid.New(), uuid.New()
 	var gotPath, gotMethod, gotToken string
 	var gotBody struct {
-		Pack string `json:"pack"`
+		Pack      string `json:"pack"`
+		BearerJWT string `json:"bearer_jwt"`
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +34,7 @@ func TestClient_Create_PostsExpectedPathAndBody(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	task, err := client.Create(context.Background(), tenantID, userID, "coding-pack", "")
+	task, err := client.Create(context.Background(), tenantID, userID, "coding-pack", "", "test-user-jwt")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -54,6 +55,9 @@ func TestClient_Create_PostsExpectedPathAndBody(t *testing.T) {
 	if task.Status != "queued" {
 		t.Errorf("response status = %q, want queued", task.Status)
 	}
+	if gotBody.BearerJWT != "test-user-jwt" {
+		t.Errorf("request body bearer_jwt = %q, want test-user-jwt", gotBody.BearerJWT)
+	}
 }
 
 func TestClient_Create_BadRequestMapsToErrInvalidPack(t *testing.T) {
@@ -64,7 +68,7 @@ func TestClient_Create_BadRequestMapsToErrInvalidPack(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	_, err := client.Create(context.Background(), uuid.New(), uuid.New(), "not-a-pack", "")
+	_, err := client.Create(context.Background(), uuid.New(), uuid.New(), "not-a-pack", "", "")
 	if err != ErrInvalidPack {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
 	}

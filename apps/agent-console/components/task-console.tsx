@@ -5,6 +5,7 @@ import * as React from "react";
 import { createClient } from "@/lib/supabase/browser";
 import { buttonClass, TEXTAREA_CLASS } from "@/components/ui";
 import {
+  artifactUrl,
   cancelTask,
   createTask,
   IN_FLIGHT_STATUSES,
@@ -618,7 +619,19 @@ function TaskRow({
 
       {task.result_summary_ref ? (
         <p className="font-mono text-xs break-all text-[var(--color-ink-2)]">
-          Result: {task.result_summary_ref}
+          Result:{" "}
+          {artifactUrl(task.result_summary_ref) ? (
+            <a
+              href={artifactUrl(task.result_summary_ref)!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-[var(--color-ink)]"
+            >
+              {task.result_summary_ref}
+            </a>
+          ) : (
+            task.result_summary_ref
+          )}
         </p>
       ) : null}
 

@@ -44,7 +44,8 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
-// Task is one row of public.agent_tasks.
+// Task is one row of public.agent_tasks, plus one transient field that is
+// never a column.
 type Task struct {
 	ID               uuid.UUID
 	TenantID         uuid.UUID
@@ -59,6 +60,19 @@ type Task struct {
 	UpdatedAt        time.Time
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
+
+	// BearerJWT is the task's own user's bearer JWT, set by
+	// Service.CreateTask on the in-memory Task it hands to Engine.Launch and
+	// never touched by Repository: it is not a column on public.agent_tasks
+	// and Repository.Create/Get/List/Transition never read or write it, so a
+	// Task loaded back from the database always has it empty. It exists
+	// purely to reach Engine.Launch, which forwards it to the agent-engine
+	// host process for a knowledge-work-pack session to later publish its
+	// output as an artifact under this same tenant/user (see
+	// apps/agent-engine/internal/artifactsclient's package doc for why that
+	// requires the real user JWT rather than the internal service token this
+	// package's own HTTP surface is otherwise guarded by).
+	BearerJWT string
 }
 
 var (

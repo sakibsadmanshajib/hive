@@ -227,6 +227,7 @@ describe("TaskConsole states", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("empty: explains that tasks will appear and persist", async () => {
@@ -275,6 +276,29 @@ describe("TaskConsole states", () => {
     expect(await screen.findByText("Done")).toBeTruthy();
     expect(screen.getByText("Result: ref-1")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  // Issue #312/#300 wiring: a published deck's result_summary_ref is a real
+  // artifact path, and the console must render an openable link, not the
+  // inert text the plain-summary case above gets.
+  it("succeeded with a published artifact: renders an openable link", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
+    stubFetch({
+      tasks: [
+        {
+          ...QUEUED_TASK,
+          status: "succeeded",
+          result_summary_ref: "/artifacts/abc-123",
+        },
+      ],
+    });
+    render(<TaskConsole />);
+
+    expect(await screen.findByText("Done")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "/artifacts/abc-123" });
+    expect(link.getAttribute("href")).toBe("https://artifacts.example.com/artifacts/abc-123");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
   });
 
   it("failed: surfaces a genuine server error message", async () => {
