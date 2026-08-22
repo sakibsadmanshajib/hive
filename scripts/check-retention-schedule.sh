@@ -83,6 +83,9 @@ JOB_NAME='metering-shadow-verdicts-purge'
 # check pass without making retention work, which is the failure this file is a
 # response to.
 MAX_SUCCESS_AGE='72 hours'
+# The migration that creates the job. Used for one thing only: telling a
+# just-created schedule apart from a dead one. See the bootstrap block below.
+SCHEDULER_MIGRATION='20260822_01_metering_retention_pg_cron_schedule.sql'
 
 PSQL_BIN="${PSQL_BIN:-psql}"
 
@@ -177,9 +180,50 @@ fi
 code="${verdict%%|*}"
 detail="${verdict#*|}"
 
+# ---------------------------------------------------------------------------
+# Bootstrap: a job created minutes ago has not run yet, and that is not a fault
+# ---------------------------------------------------------------------------
+# The migration that creates this job runs in the same deploy job as this
+# check, one step earlier. On a fresh volume, a rebuilt box, or the first deploy
+# after this change lands, cron.job_run_details is therefore empty at this
+# moment and the verdict is NEVER_SUCCEEDED, which would fail the migrate job
+# and stop the deploy until the schedule first fires at 21:00 UTC. Those are
+# exactly the recovery paths this whole change exists to protect, so blocking
+# them would be self-defeating.
+#
+# The allowance is bounded by the same window and by real evidence, not by a
+# flag: cron.job carries no creation timestamp, so the age comes from the
+# applied_at of the scheduling migration in public.hive_schema_migrations. Under
+# MAX_SUCCESS_AGE old means "this was just installed, no run is due yet".
+# Anything older is a job that has had its chance and is still dead, which
+# stays a hard failure. The allowance therefore expires on its own, with no
+# second action needed from anyone.
+#
+# A missing ledger row (the migration applied by hand, or a database with no
+# ledger at all) grants nothing. Absence of evidence is not evidence here.
+if [ "$code" = "NEVER_SUCCEEDED" ]; then
+  bootstrap="f"
+  if ledger_present="$(psql_q -c "SELECT to_regclass('public.hive_schema_migrations') IS NOT NULL")" \
+    && [ "$ledger_present" = "t" ]; then
+    bootstrap="$(psql_q -c "
+      SELECT EXISTS (
+        SELECT 1 FROM public.hive_schema_migrations
+        WHERE filename = '$SCHEDULER_MIGRATION'
+          AND applied_at > now() - interval '$MAX_SUCCESS_AGE'
+      )")" || bootstrap="f"
+  fi
+  if [ "$bootstrap" = "t" ]; then
+    code="OK_BOOTSTRAP"
+  fi
+fi
+
 case "$code" in
   OK)
     echo "::notice::Nightly metering retention is scheduled, active and executing on cluster $actual_cluster ('$JOB_NAME', $detail)."
+    exit 0
+    ;;
+  OK_BOOTSTRAP)
+    echo "::notice::Nightly metering retention was scheduled on cluster $actual_cluster within the last $MAX_SUCCESS_AGE by $SCHEDULER_MIGRATION and has not been due yet ($detail). This allowance expires with that timestamp: once the migration is older than $MAX_SUCCESS_AGE, a job with no successful run fails this check."
     exit 0
     ;;
   SCHEDULE_MISSING|SCHEDULE_INACTIVE|SCHEDULE_HOLLOW|SCHEDULE_WRONG_DB)

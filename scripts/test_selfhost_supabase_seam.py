@@ -685,12 +685,35 @@ def test_the_retention_check_fails_instead_of_reporting() -> None:
         "in check-retention-schedule.sh do not abort, so it reports a broken "
         "retention job and exits 0"
     )
-    # Exactly one success exit, and it is the OK branch. Anything else means
-    # some negative verdict leaves by the same door as a healthy one.
+    # Two success exits, and both are OK branches. Anything else means some
+    # negative verdict leaves by the same door as a healthy one.
     zero_exits = re.findall(r"^\s*exit 0\s*$", body, re.MULTILINE)
-    assert len(zero_exits) == 1, f"{len(zero_exits)} success exits, expected 1"
+    assert len(zero_exits) == 2, f"{len(zero_exits)} success exits, expected 2"
     ok_branch = re.search(r"\n  OK\)\n(.*?);;", body, re.DOTALL)
     assert ok_branch and "exit 0" in ok_branch.group(1), body
+    boot_branch = re.search(r"\n  OK_BOOTSTRAP\)\n(.*?);;", body, re.DOTALL)
+    assert boot_branch and "exit 0" in boot_branch.group(1), body
+    # The second door is the one that could quietly become a permanent pass, so
+    # what opens it is asserted too: a NEVER_SUCCEEDED verdict, plus a
+    # scheduling migration whose ledger timestamp is younger than the SAME
+    # window, and nothing else. No flag, no environment variable, and no
+    # unconditional allowance.
+    assert re.search(r'if \[ "\$code" = "NEVER_SUCCEEDED" \]', body), body
+    assert "hive_schema_migrations" in body, (
+        "the bootstrap allowance is not tied to when the schedule was actually "
+        "created, so it cannot expire"
+    )
+    assert re.search(
+        r"applied_at > now\(\) - interval '\$MAX_SUCCESS_AGE'", body
+    ), "the bootstrap allowance does not expire with the same window"
+    # Anchored, because the same assignment appears again inline as the query's
+    # own fallback. Measured: the substring version of this assertion stayed
+    # green with the initialiser flipped to "t", which is an allowance that
+    # opens for every database with no ledger row at all.
+    assert re.search(r'^  bootstrap="f"$', body, re.MULTILINE), (
+        "the bootstrap allowance must default to closed, so a missing ledger "
+        "row grants nothing"
+    )
     # And the step that runs it cannot be made advisory in the workflow either.
     step = _step_block(
         _job_block("migrate"),
