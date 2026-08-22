@@ -42,7 +42,8 @@ WHAT THE RUNNING BUILD REPORTS ABOUT ITSELF
   default_prompt_suggestions  0
 
 00-before-live-signin-page.png
-  The live demo box today, https://chat-hive.scubed.co/auth, unauthenticated.
+  The live demo box on 2026-08-17, https://chat-hive.scubed.co/auth,
+  unauthenticated.
   The state the owner described: a "Sign in to Hive" heading, a horizontal rule
   with nothing above it, and one "Continue with Hive" button. A choice between
   one option.
@@ -152,7 +153,7 @@ cannot complete locally:
 WHAT IS NOT PROVEN HERE
 -----------------------
 The inbound half of a successful provider round trip, and therefore a real
-provisioning run. The first genuine sign in after this deploys is that
+provisioning run. The first genuine sign in after this deploy will provide that
 confirmation. Existing accounts are unchanged by design: the five accounts that
 already store an email address as their display name keep it until their owner
 edits it, which 08 shows working, or until the owner approves a separate
