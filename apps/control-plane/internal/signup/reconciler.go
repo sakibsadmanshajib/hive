@@ -107,8 +107,8 @@ type SweepReport struct {
 	Provisioned int
 	// NoTenant is how many no tenant claims, a terminal determination.
 	NoTenant int
-	// Cooled is how many were skipped because a recent sweep already reached
-	// that terminal determination for them.
+	// Cooled is how many identities the listing excluded because a recent sweep
+	// already reached a terminal no-tenant determination for them.
 	Cooled int
 	// Failed is how many hit a transient or unexpected fault.
 	Failed int
@@ -270,8 +270,9 @@ func (r *Reconciler) Sweep(ctx context.Context) (SweepReport, error) {
 	}
 
 	// A sweep that faulted on an identity is a provisioning outage in progress,
-	// not a quiet afternoon: it counts against readiness exactly like a failed
-	// listing does.
+	// not a quiet afternoon: it counts against the failure gauge exactly like a
+	// failed listing does. See Ready for why that is a metric and an alert
+	// rather than an unhealthy readiness probe.
 	r.recordSweep(report.Failed == 0)
 	return report, nil
 }
