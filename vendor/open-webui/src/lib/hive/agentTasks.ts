@@ -19,9 +19,21 @@
  * are not: the `unknown` status and the two engine sentinels.
  */
 
-import { WEBUI_API_BASE_URL } from '$lib/constants';
-
-const AGENT_API_BASE_URL = `${WEBUI_API_BASE_URL}/hive/agent`;
+// The base is a parameter with a production default rather than an import of
+// `$lib/constants`, and that is load-bearing rather than stylistic.
+// `$lib/constants` reaches `$app/environment` for `browser` and `dev`, which
+// only SvelteKit's resolver can satisfy. scripts/test-owui-hive-frontend.sh,
+// the one runner that covers this front end, copies lib/hive/*.ts into a
+// scratch directory and runs plain vitest there with no alias resolution at
+// all, so while this module imported that path its own 203 line test file
+// could not be loaded: it reported no failures because it never ran, and it
+// would have turned that required check red the moment the runner reached it.
+//
+// The default is what `${WEBUI_API_BASE_URL}/hive/agent` evaluates to in every
+// built bundle, since `WEBUI_BASE_URL` is the empty string outside dev. The
+// caller passes the dev-aware value, so `npm run dev` against the chat front
+// end still reaches the backend on port 8080 exactly as before.
+export const DEFAULT_AGENT_API_BASE_URL = '/api/v1/hive/agent';
 
 export type TaskPack = 'coding-pack' | 'knowledge-work-pack';
 
@@ -224,8 +236,11 @@ export const canStartTask = (state: {
 }): boolean =>
 	state.instructions.trim().length > 0 && !state.submitting && state.blocked === null;
 
-export const listTasks = async (token: string): Promise<AgentTask[]> => {
-	const response = await fetch(`${AGENT_API_BASE_URL}/tasks`, {
+export const listTasks = async (
+	token: string,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
+): Promise<AgentTask[]> => {
+	const response = await fetch(`${apiBase}/tasks`, {
 		method: 'GET',
 		headers: headers(token)
 	});
@@ -267,9 +282,10 @@ export const listTasks = async (token: string): Promise<AgentTask[]> => {
 export const createTask = async (
 	token: string,
 	pack: TaskPack,
-	instructions: string
+	instructions: string,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
 ): Promise<AgentTask> => {
-	const response = await fetch(`${AGENT_API_BASE_URL}/tasks`, {
+	const response = await fetch(`${apiBase}/tasks`, {
 		method: 'POST',
 		headers: headers(token),
 		body: JSON.stringify({ pack, instructions })
@@ -284,9 +300,13 @@ export const createTask = async (
 	return decoded;
 };
 
-export const cancelTask = async (token: string, id: string): Promise<AgentTask> => {
+export const cancelTask = async (
+	token: string,
+	id: string,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
+): Promise<AgentTask> => {
 	const response = await fetch(
-		`${AGENT_API_BASE_URL}/tasks/${encodeURIComponent(id)}/cancel`,
+		`${apiBase}/tasks/${encodeURIComponent(id)}/cancel`,
 		{
 			method: 'POST',
 			headers: headers(token)

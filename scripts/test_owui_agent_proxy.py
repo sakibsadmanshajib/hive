@@ -404,12 +404,29 @@ def check_every_route_is_behind_the_session_dependency() -> None:
             f'{definition} must resolve its principal from the session, not the request',
         )
     # The inverse of the same rule: no route may read an identity off the wire.
-    for smell in ('user_id', 'tenant_id', "headers.get('Authorization')"):
+    #
+    # Two smells, not three. A third entry, "headers.get('Authorization')", used
+    # to sit in this tuple, where the accessor templates expanded it to
+    # `request.query_params.get('headers.get('Authorization')')`. No such string
+    # can occur in any Python source, so that iteration asserted nothing and
+    # reported a pass over the header read it was named after. Reading a
+    # credential off the incoming request needs its own direct test, below.
+    for smell in ('user_id', 'tenant_id'):
         check(
             f"request.query_params.get('{smell}')" not in source
             and f"submitted.get('{smell}')" not in source,
             f'the proxy must never read {smell} from the caller',
         )
+
+    # The proxy builds its outbound Authorization from the shim key and the
+    # session token the dependency resolved, never from anything the browser
+    # sent. `request.headers` is the accessor that would break that, in any of
+    # its forms (`.get`, subscript, iteration), so the whole attribute is the
+    # thing to refuse rather than one spelling of one lookup.
+    check(
+        'request.headers' not in source,
+        'the proxy must never read a credential off the incoming request headers',
+    )
 
 
 for check_fn in (
