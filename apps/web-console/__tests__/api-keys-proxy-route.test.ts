@@ -21,6 +21,7 @@
  * the body is dropped.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 
 const mockGetUser = vi.fn();
 const mockRevokeApiKey = vi.fn();
@@ -80,8 +81,10 @@ function rawRequest(body: string): Request {
   });
 }
 
-function getRequest(): Request {
-  return new Request("http://console.test/api/v1/accounts/current/checkout/rails");
+// The route handler reads query params from request.nextUrl, so the test
+// request must be a NextRequest rather than a bare Request.
+function getRequest(): NextRequest {
+  return new NextRequest("http://console.test/api/v1/accounts/current/checkout/rails");
 }
 
 describe("console proxy for the control-plane account surface", () => {
