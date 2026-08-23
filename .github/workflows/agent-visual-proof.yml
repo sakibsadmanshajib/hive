@@ -123,6 +123,9 @@ jobs:
       contents: write
       actions: read
       pull-requests: write
+      # For the failure notifier at the end of this job, which is the only
+      # thing here that touches an issue.
+      issues: write
     env:
       COMPOSE_PROFILES: local
       # Every compose call in this job has to resolve the SAME project, and
@@ -845,6 +848,62 @@ jobs:
             /tmp/compose.log
           if-no-files-found: ignore
           retention-days: 5
+
+      - name: Announce a red run on the tracking issue
+        # WHY THIS EXISTS, and why this job is still not a required check.
+        #
+        # This job failed on every branch for four days and nothing said so,
+        # which is how the deleted Supabase project went unnoticed while
+        # orchestrator rule 8 still depended on the proof it produces. The
+        # property actually needed is that a red run ANNOUNCES itself, not
+        # that it gates: this is a path-gated job that boots a real sandbox,
+        # so making it required would block unrelated pull requests and turn
+        # a flaky sandbox into a merge stopper. Announcing is the cheap half
+        # of the value; gating is the expensive half nobody asked for.
+        #
+        # Excluded on a sabotage dispatch on purpose. That arm is the job's
+        # own negative control and is SUPPOSED to go red, so paging on it
+        # would train everyone to ignore this issue, which is the same
+        # failure as the silence it replaces.
+        if: failure() && github.event.inputs.sabotage != 'true'
+        # Never let the notifier change the job's verdict. `if: failure()`
+        # already means it cannot turn a green run red, and this plus the
+        # `|| true` below mean a GitHub API hiccup cannot turn a red run into
+        # a differently-red run that hides the real failing step.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: agent visual proof is failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          body=$(printf '%s\n' \
+            "Run [\`${GITHUB_RUN_ID}\`](${RUN_URL}) failed on \`${GITHUB_REF_NAME}\` at commit \`${GITHUB_SHA}\`." \
+            "" \
+            "This job is deliberately not a required check, so nothing else will" \
+            "surface this. Read the run log and the uploaded failure artifacts" \
+            "before assuming it is the branch under test: when this job breaks" \
+            "repo-wide it is usually its own environment, not the change." \
+            "" \
+            "Close this by hand once a green run confirms the fix. It is not" \
+            "closed automatically, because a green run on one branch does not" \
+            "prove the job is healthy on main.")
+          # ONE issue, reused, or a bad week produces fifty and the signal
+          # drowns exactly the way the silence did.
+          #
+          # The list API rather than the search API on purpose: search is
+          # eventually consistent, and two failures minutes apart could both
+          # miss the issue the other just opened and file a duplicate.
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
+                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          if [ -n "${num:-}" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$body" || true
+            echo "commented on existing tracking issue #$num"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+            echo "opened the tracking issue"
+          fi
 
       - name: Tear down
         if: always()
