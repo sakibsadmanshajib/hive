@@ -2,11 +2,14 @@ package rag
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +21,16 @@ import (
 )
 
 const maxTopK = 100
+
+// DefaultMaxUploadBytes caps the raw byte size of a document accepted on the
+// binary ingest path. Matches the sidecar's own default cap: markitdown loads
+// whole files into memory, so the ceiling exists on both hops.
+const DefaultMaxUploadBytes = 25 * 1024 * 1024
+
+// maxRawTextBytes preserves the historical 10MB ceiling on the raw-text JSON
+// upload path so raising the reader limit for base64 payloads does not also
+// loosen the legacy text constraint.
+const maxRawTextBytes = 10 * 1024 * 1024
 
 // AuditFunc emits a durable audit event. main.go wires the real
 // chat.InsertAuditEvent; tests inject a recorder.
@@ -58,6 +71,10 @@ type Handler struct {
 	wg          sync.WaitGroup   // tracks in-flight ingest goroutines
 	selectRoute RouteSelectFunc  // nil until WithChat is called; POST /v1/rag/chat returns 503
 	dispatch    ChatDispatchFunc // nil until WithChat is called; POST /v1/rag/chat returns 503
+	converter   Converter        // nil until WithConverter is called; binary uploads return 503
+
+	// maxUploadBytes caps the binary/base64 upload path; see WithConverter.
+	maxUploadBytes int64
 
 	// guardEnabled/guardModel/guardDim back the embedding-consistency guard;
 	// see WithEmbeddingGuard. Disabled by default so existing NewHandler
@@ -80,6 +97,22 @@ func (h *Handler) WithEmbeddingGuard(model string, dim int) *Handler {
 	h.guardModel = model
 	h.guardDim = dim
 	h.guardEnabled = true
+	return h
+}
+
+// WithConverter wires the binary-document conversion path (pinned markitdown
+// sidecar) onto this Handler and returns it for chaining. Once wired, POST
+// /v1/rag/documents accepts a raw file body with a non-JSON Content-Type, or
+// a JSON body with content_base64, converts the bytes to markdown through the
+// sidecar, and feeds the result into the existing chunk + embed pipeline
+// untouched. maxUploadBytes <= 0 falls back to DefaultMaxUploadBytes.
+// Unwired (default) Handlers reject binary uploads with a loud 503.
+func (h *Handler) WithConverter(c Converter, maxUploadBytes int64) *Handler {
+	h.converter = c
+	if maxUploadBytes <= 0 {
+		maxUploadBytes = DefaultMaxUploadBytes
+	}
+	h.maxUploadBytes = maxUploadBytes
 	return h
 }
 
@@ -110,7 +143,11 @@ func NewHandler(s store, embed Embedder, audit AuditFunc, ingest IngestFunc, ser
 	if serverCtx == nil {
 		serverCtx = context.Background()
 	}
-	return &Handler{store: s, embed: embed, audit: audit, ingest: ingest, serverCtx: serverCtx}
+	h := &Handler{store: s, embed: embed, audit: audit, ingest: ingest, serverCtx: serverCtx}
+	// The upload cap applies even before WithConverter runs so an unwired
+	// handler still bounds payloads instead of treating 0 as unlimited.
+	h.maxUploadBytes = DefaultMaxUploadBytes
+	return h
 }
 
 // Register mounts all /v1/rag/* routes on mux.
@@ -147,6 +184,14 @@ func (h *Handler) routeDocumentByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// uploadPayload is the normalized result of any accepted upload shape.
+type uploadPayload struct {
+	name      string
+	mimeType  string
+	content   string // text fed to ingest: raw text as-is, or converted markdown
+	sizeBytes int64  // size of the source document (raw bytes when binary)
+}
+
 func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -154,35 +199,26 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req UploadRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 10*1024*1024)).Decode(&req); err != nil {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid request body")
+	payload, err := h.parseUpload(r)
+	if err != nil {
+		writeUploadError(w, err)
 		return
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "name required")
-		return
-	}
-	if strings.TrimSpace(req.Content) == "" {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "content required")
-		return
-	}
-	if req.MimeType == "" {
-		req.MimeType = "text/plain"
 	}
 
-	docID, err := h.store.InsertDocument(r.Context(), user.TenantID, req.Name, req.MimeType, int64(len(req.Content)))
-	if err != nil {
-		log.Printf("rag: insert document: %v", err)
+	docID, insertErr := h.store.InsertDocument(r.Context(), user.TenantID,
+		payload.name, payload.mimeType, payload.sizeBytes)
+	if insertErr != nil {
+		log.Printf("rag: insert document: %v", insertErr)
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "document registration failed")
 		return
 	}
 
 	h.audit(r.Context(), "RAG_DOCUMENT_UPLOAD", "rag_document", docID.String(), "INFO",
-		user.TenantID, user.ID, r.UserAgent(), map[string]any{"name": req.Name, "mime_type": req.MimeType})
+		user.TenantID, user.ID, r.UserAgent(),
+		map[string]any{"name": payload.name, "mime_type": payload.mimeType})
 
 	if h.ingest != nil {
-		content := req.Content // capture before request goes away
+		content := payload.content // capture before request goes away
 		h.wg.Add(1)
 		go func() {
 			defer h.wg.Done()
@@ -199,12 +235,332 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(DocumentResponse{
 		ID:        docID.String(),
-		Name:      req.Name,
-		MimeType:  req.MimeType,
-		SizeBytes: int64(len(req.Content)),
+		Name:      payload.name,
+		MimeType:  payload.mimeType,
+		SizeBytes: payload.sizeBytes,
 		Status:    StatusPending,
 		CreatedAt: time.Now().UTC(),
 	})
+}
+
+// parseUpload normalizes all accepted upload shapes into one payload:
+//
+//  1. JSON with "content" (raw text): unchanged legacy path, no conversion.
+//  2. JSON with "content_base64": base64-encoded binary; bytes go through
+//     the markitdown sidecar and only the markdown reaches ingest.
+//  3. Raw request body with any non-JSON Content-Type: binary upload; name
+//     comes from the "name" query param or X-File-Name header.
+//
+// Every rejection here happens BEFORE InsertDocument, so a failed upload
+// leaves no document row behind.
+func (h *Handler) parseUpload(r *http.Request) (*uploadPayload, *uploadError) {
+	mediaType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
+	if mediaType != "" && mediaType != "application/json" {
+		return h.parseBinaryUpload(r)
+	}
+
+	var req UploadRequest
+	// Reader limit accommodates base64 of the full binary cap (4/3 inflation
+	// plus padding slack); the per-shape ceilings below enforce the real caps.
+	readerLimit := h.maxUploadBytes/3*4 + 65536
+	if err := json.NewDecoder(io.LimitReader(r.Body, readerLimit)).Decode(&req); err != nil {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "invalid request body"}
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "name required"}
+	}
+	if req.ContentBase64 == "" {
+		if strings.TrimSpace(req.Content) == "" {
+			return nil, &uploadError{status: http.StatusBadRequest, msg: "content required"}
+		}
+		return h.textPayload(req)
+	}
+	if strings.TrimSpace(req.Content) != "" {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "provide either content or content_base64, not both"}
+	}
+	return h.base64Payload(r, req)
+}
+
+// textPayload is the untouched raw-text passthrough, still capped at the
+// historical 10MB JSON ceiling.
+func (h *Handler) textPayload(req UploadRequest) (*uploadPayload, *uploadError) {
+	if int64(len(req.Content)) > maxRawTextBytes {
+		return nil, &uploadError{status: http.StatusRequestEntityTooLarge,
+			msg: fmt.Sprintf("text content exceeds %d byte limit", maxRawTextBytes)}
+	}
+	if req.MimeType == "" {
+		req.MimeType = "text/plain"
+	}
+	return &uploadPayload{
+		name:      req.Name,
+		mimeType:  req.MimeType,
+		content:   req.Content,
+		sizeBytes: int64(len(req.Content)),
+	}, nil
+}
+
+// base64Payload decodes content_base64 and converts the bytes to markdown.
+// Order matters: name presence, then size cap, then format allowlist.
+func (h *Handler) base64Payload(r *http.Request, req UploadRequest) (*uploadPayload, *uploadError) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "name required"}
+	}
+	data, err := decodeUploadBase64(req.ContentBase64, h.maxUploadBytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBinaryMeta(req.Name, req.MimeType); err != nil {
+		return nil, err
+	}
+	mimeType := req.MimeType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	content, uerr := h.convertForIngest(r.Context(), data, req.Name, mimeType)
+	if uerr != nil {
+		return nil, uerr
+	}
+	return &uploadPayload{
+		name:      req.Name,
+		mimeType:  mimeType,
+		content:   content,
+		sizeBytes: int64(len(data)),
+	}, nil
+}
+
+// parseBinaryUpload reads a non-JSON request body as raw file bytes.
+func (h *Handler) parseBinaryUpload(r *http.Request) (*uploadPayload, *uploadError) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = strings.TrimSpace(r.Header.Get("X-File-Name"))
+	}
+	if name == "" {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "name required (query param or X-File-Name header)"}
+	}
+	contentType := mediaTypeOf(r.Header.Get("Content-Type"))
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = ""
+	}
+	mimeType := contentType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	data, over, err := readBodyCapped(r.Body, h.maxUploadBytes)
+	if err != nil {
+		log.Printf("rag: binary body read: %v", err)
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "failed reading upload body"}
+	}
+	if over {
+		return nil, &uploadError{status: http.StatusRequestEntityTooLarge,
+			msg: fmt.Sprintf("upload exceeds %d byte limit", h.maxUploadBytes)}
+	}
+	if len(data) == 0 {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "empty request body"}
+	}
+	if err := validateBinaryMeta(name, mimeType); err != nil {
+		return nil, err
+	}
+
+	content, uerr := h.convertForIngest(r.Context(), data, name, mimeType)
+	if uerr != nil {
+		return nil, uerr
+	}
+	return &uploadPayload{
+		name:      name,
+		mimeType:  mimeType,
+		content:   content,
+		sizeBytes: int64(len(data)),
+	}, nil
+}
+
+// convertForIngest calls the wired Converter and enforces the loud-failure
+// contract on this side as well. A nil converter is a loud 503: the sidecar
+// is part of the deployment contract for binary uploads.
+func (h *Handler) convertForIngest(ctx context.Context, data []byte, filename, mimeType string) (string, *uploadError) {
+	if h.converter == nil {
+		log.Printf("rag: binary upload %q rejected: converter not wired", filename)
+		return "", &uploadError{
+			status: http.StatusServiceUnavailable,
+			msg:    "binary uploads require the document conversion service",
+		}
+	}
+	if !ExtensionAllowed(filename) && !allowedContentTypes[mimeType] {
+		return "", &uploadError{
+			status: http.StatusUnprocessableEntity,
+			code:   apierrors.CodeInvalidRequest,
+			msg:    "unsupported document format",
+			class:  "unsupported_format",
+		}
+	}
+	markdown, err := h.converter.Convert(ctx, filename, mimeType, data)
+	if err != nil {
+		var convErr *ConversionError
+		if errors.As(err, &convErr) && convErr.Rejected {
+			log.Printf("rag: conversion rejected file=%s class=%s", filename, convErr.Class)
+			status := http.StatusUnprocessableEntity
+			if convErr.Class == "payload_too_large" {
+				status = http.StatusRequestEntityTooLarge
+			}
+			return "", &uploadError{
+				status: status,
+				code:   apierrors.CodeInvalidRequest,
+				msg: fmt.Sprintf("document conversion failed (%s): %s",
+					truncate(convErr.Class, 64), truncate(convErr.Detail, 300)),
+				class: convErr.Class,
+			}
+		}
+		log.Printf("rag: conversion unavailable file=%s: %v", filename, err)
+		return "", &uploadError{
+			status: http.StatusServiceUnavailable,
+			msg:    "document conversion service unavailable",
+		}
+	}
+	if strings.TrimSpace(markdown) == "" {
+		return "", &uploadError{
+			status: http.StatusUnprocessableEntity,
+			code:   apierrors.CodeInvalidRequest,
+			msg:    "document conversion produced no text",
+			class:  "empty_result",
+		}
+	}
+	return markdown, nil
+}
+
+// validateBinaryMeta enforces name + format rules shared by both binary
+// shapes. Format acceptance requires BOTH signals to agree when both are
+// present: a filename whose extension is allowed AND (when a specific mime
+// type is supplied) a mime consistent with that extension. An OR would admit
+// mismatched pairs like name=notes.txt with Content-Type application/pdf.
+func validateBinaryMeta(name, mimeType string) *uploadError {
+	if strings.TrimSpace(name) == "" {
+		return &uploadError{status: http.StatusBadRequest, msg: "name required"}
+	}
+	for _, rr := range name {
+		if rr < 0x20 || rr == 0x7f {
+			return &uploadError{status: http.StatusBadRequest,
+				msg: "name contains control characters"}
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	mimeAllowed := allowedContentTypes[mimeType]
+	switch {
+	case ext == "" && !mimeAllowed:
+		return &uploadError{status: http.StatusUnprocessableEntity,
+			msg: "unsupported document format", class: "unsupported_format"}
+	case ext != "":
+		if !ExtensionAllowed(name) {
+			return &uploadError{status: http.StatusUnprocessableEntity,
+				msg: "unsupported document format", class: "unsupported_format"}
+		}
+		if mimeAllowed && !mimeConsistent(ext, mimeType) {
+			return &uploadError{status: http.StatusBadRequest,
+				msg: "mime_type does not match the filename extension"}
+		}
+	}
+	return nil
+}
+
+// extCanonicalType maps each allowed extension to its canonical mime type so
+// consistency checks never depend on the host's mime database (Go's
+// mime.TypeByExtension falls back to an OS table that is missing on Alpine).
+var extCanonicalType = map[string]string{
+	".pdf":  "application/pdf",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".doc":  "application/msword",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".ppt":  "application/vnd.ms-powerpoint",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".xls":  "application/vnd.ms-excel",
+	".csv":  "text/csv",
+	".json": "application/json",
+	".rtf":  "application/rtf",
+	".epub": "application/epub+zip",
+	".html": "text/html",
+	".htm":  "text/html",
+	// Multi-alias formats: any of these count as consistent.
+	".xml": "application/xml,text/xml",
+	".md":  "text/markdown,text/plain",
+	".txt": "text/plain",
+}
+
+// mimeConsistent reports whether the supplied mime type plausibly matches the
+// filename extension. Unknown extension mappings pass (the allowlist already
+// gated them); known mismatches fail closed.
+func mimeConsistent(ext, mimeType string) bool {
+	candidates, ok := extCanonicalType[ext]
+	if !ok {
+		return true
+	}
+	base := strings.TrimSpace(strings.Split(strings.ToLower(mimeType), ";")[0])
+	for _, candidate := range strings.Split(candidates, ",") {
+		if base == strings.TrimSpace(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeUploadBase64 decodes standard base64, tolerating embedded whitespace.
+func decodeUploadBase64(encoded string, maxBytes int64) ([]byte, *uploadError) {
+	cleaned := strings.Map(func(rr rune) rune {
+		if rr == ' ' || rr == '\n' || rr == '\r' || rr == '\t' {
+			return -1
+		}
+		return rr
+	}, encoded)
+	// 4 base64 chars -> 3 bytes, plus padding slack.
+	if int64(len(cleaned))/4*3+3 > maxBytes {
+		return nil, &uploadError{
+			status: http.StatusRequestEntityTooLarge,
+			msg:    fmt.Sprintf("decoded upload exceeds %d byte limit", maxBytes),
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(cleaned)
+	if err != nil {
+		return nil, &uploadError{status: http.StatusBadRequest, msg: "invalid base64 content"}
+	}
+	return data, nil
+}
+
+// readBodyCapped reads at most max+1 bytes; over reports whether the body
+// exceeded the cap (so callers reject without buffering an unbounded body).
+func readBodyCapped(body io.Reader, max int64) ([]byte, bool, error) {
+	data, err := io.ReadAll(io.LimitReader(body, max+1))
+	if err != nil {
+		return nil, false, err
+	}
+	return data, int64(len(data)) > max, nil
+}
+
+// uploadError is parseUpload's typed failure; writeUploadError renders it.
+type uploadError struct {
+	status int
+	code   apierrors.Code // zero value falls back to CodeInvalidRequest
+	msg    string
+	class  string // sidecar error class surfaced in the message when set
+}
+
+func writeUploadError(w http.ResponseWriter, ue *uploadError) {
+	apierrors.Write(w, ue.status, orDefaultCode(ue.code), ue.msg)
+}
+
+func orDefaultCode(c apierrors.Code) apierrors.Code {
+	if c == "" {
+		return apierrors.CodeInvalidRequest
+	}
+	return c
+}
+
+func mediaTypeOf(header string) string {
+	return strings.TrimSpace(strings.Split(header, ";")[0])
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {

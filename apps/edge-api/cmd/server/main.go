@@ -416,7 +416,14 @@ func main() {
 		}
 
 		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
-			WithChat(ragSelectRoute, litellmClient.ChatCompletion)
+			WithChat(ragSelectRoute, litellmClient.ChatCompletion).
+			// Binary document ingest: convert PDF/DOCX/etc to markdown via the
+			// pinned markitdown sidecar before chunk + embed. MARKITDOWN_URL
+			// defaults to the compose service DNS name; without the sidecar
+			// reachable, binary uploads fail loud (503/422) while raw-text
+			// uploads are unaffected.
+			WithConverter(edgerag.NewMarkitdownClient(resolveMarkitdownURL()),
+				resolveRAGMaxUploadBytes())
 		if ragRepo != nil {
 			// Fail RAG search closed for a tenant whose stored documents were
 			// embedded under a different model/dim than this process is
@@ -916,6 +923,32 @@ func resolveControlPlaneBaseURL() string {
 	}
 
 	return "http://control-plane:8081"
+}
+
+// resolveMarkitdownURL returns the markitdown sidecar base URL. Defaults to
+// the compose service DNS name; the sidecar runs on the default profile
+// wherever edge-api runs.
+func resolveMarkitdownURL() string {
+	if u := strings.TrimSpace(os.Getenv("MARKITDOWN_URL")); u != "" {
+		return u
+	}
+	return "http://markitdown:8700"
+}
+
+// resolveRAGMaxUploadBytes caps the binary/base64 RAG upload path. Must stay
+// in sync with the sidecar's own MAX_UPLOAD_BYTES (compose passes the same
+// value to both). 0 or invalid falls back to the package default (25MB).
+func resolveRAGMaxUploadBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("RAG_MAX_UPLOAD_BYTES"))
+	if raw == "" {
+		return edgerag.DefaultMaxUploadBytes
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		log.Printf("WARNING: RAG_MAX_UPLOAD_BYTES=%q is not a positive integer; using default %d", raw, edgerag.DefaultMaxUploadBytes)
+		return edgerag.DefaultMaxUploadBytes
+	}
+	return n
 }
 
 func resolveRedisURL() string {
