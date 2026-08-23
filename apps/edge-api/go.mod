@@ -1,8 +1,8 @@
 module github.com/sakibsadmanshajib/hive/apps/edge-api
 
-go 1.24.0
+go 1.26.0
 
-toolchain go1.24.13
+toolchain go1.26.7
 
 require (
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6

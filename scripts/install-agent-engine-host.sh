@@ -88,7 +88,7 @@ docker run --rm \
   -v hive_gomodcache:/go/pkg/mod \
   -w /workspace \
   -e CGO_ENABLED=0 \
-  golang:1.24-alpine \
+  golang:1.26-alpine \
   go build -o /out/agent-engine ./apps/agent-engine/cmd/agent-engine
 # `go build` already emits 0755, so this is belt and braces for an odd umask.
 # It is allowed to fail: under rootful Docker (every GitHub-hosted runner) the
