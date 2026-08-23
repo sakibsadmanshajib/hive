@@ -307,4 +307,9 @@ function main() {
   );
 }
 
-main();
+// Same guard as tools/lint-no-token-in-proof-captures.mjs: `findOffenders` is
+// exported, so importing this module to reuse it must not run the whole scan
+// and call process.exit as a side effect.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
