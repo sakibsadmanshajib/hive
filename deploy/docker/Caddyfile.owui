@@ -12,6 +12,11 @@
 # on purpose: this listener is published on a host port, so an incoming
 # X-Forwarded-Proto is attacker-controlled and must not be believed.
 :80 {
+  # Compress compressible responses for every route in this block (directives
+  # are sorted, so encode wraps the matchers, respond and reverse_proxy below).
+  # Already-compressed content types (images, video, archives) are excluded by
+  # Caddy's default compression filter.
+  encode zstd gzip
   # Defence-in-depth admin block. Open WebUI's env flags can regress across
   # releases (admin panel re-enabled by a misconfigured chart), so the proxy
   # answers 404 on every variant of the admin and signup paths regardless of
