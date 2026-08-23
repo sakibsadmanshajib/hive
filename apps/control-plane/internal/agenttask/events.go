@@ -5,6 +5,8 @@ package agenttask
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
@@ -45,6 +47,25 @@ const maxEventPayloadBytes = 64 << 10
 // ErrCursor is returned when an events cursor is not a non-negative integer.
 // Never silently treated as zero: acceptance requires the 400.
 var ErrCursor = errors.New("agenttask: cursor must be a non-negative integer")
+
+// maxSourceEventIDLen mirrors the migration's CHECK on
+// agent_task_events.source_event_id: longer ids are folded to a content hash
+// by normalizeSourceID so a batch never dies on the constraint, and empty ids
+// (which the partial dedup index exempts, i.e. would re-insert forever) get a
+// deterministic derived id instead.
+const maxSourceEventIDLen = 512
+
+// normalizeSourceID guarantees one stable, bounded dedup key per event: the
+// sandbox id when present and short enough, otherwise sha256 of the seed
+// material (kind plus preview plus raw dump). Deterministic on purpose: the
+// same event re-pulled on a later pass derives the same id and dedups out.
+func normalizeSourceID(id, seed string) string {
+	if id != "" && len(id) <= maxSourceEventIDLen {
+		return id
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])[:40]
+}
 
 // TaskEvent is one row of public.agent_task_events as the read path returns
 // it. Payload is whatever JSONB the writer stored; readers never parse its

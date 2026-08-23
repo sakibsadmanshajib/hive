@@ -241,14 +241,15 @@ func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
 // that inserts, then writes each row with ON CONFLICT DO NOTHING against the
 // dedup partial unique index. Two deliberate properties:
 //
-//   - seq is computed from COALESCE(MAX(seq), 0) + i inside the tx. The
-//     syncer is the only writer per task (one goroutine, tasks processed
-//     sequentially), so the computed values are collision-free in the normal
-//     path; if a second writer ever races one (a future second replica), the
-//     UNIQUE(task_id, seq) constraint fails the whole batch, which the syncer
-//     treats like any other pass failure and retries — never a duplicate or
-//     a gap silently swallowed.
-//   - ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> ”
+//   - seq is computed from COALESCE(MAX(seq), 0) + i inside the tx. The tx
+//     first takes pg_advisory_xact_lock(hashtextextended(task_id)) so two
+//     concurrent writers for the same task (a future second replica) cannot
+//     compute the same base and race UNIQUE(task_id, seq) -- a constraint the
+//     ON CONFLICT clause does not cover, whose loser would abort its whole
+//     batch on every retry while both writers stayed live. The lock is
+//     per-task, transaction-scoped, released at commit, so it serializes only
+//     same-task appends and nothing else waits.
+//   - ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> ''
 //     targets the partial unique index exactly, so a re-pulled event is a
 //     no-op while genuinely new events in the same batch still land.
 func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []TaskEvent) error {
@@ -256,6 +257,13 @@ func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []Ta
 		return nil
 	}
 	return r.withTenantTx(ctx, task.TenantID, func(tx pgx.Tx) error {
+		// Serialize per-task seq allocation before the base read; see the doc
+		// comment above.
+		if _, err := tx.Exec(ctx,
+			"SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+			task.ID.String()); err != nil {
+			return fmt.Errorf("agenttask: append events lock: %w", err)
+		}
 		var base int64
 		if err := tx.QueryRow(ctx,
 			`SELECT COALESCE(MAX(seq), 0) FROM public.agent_task_events WHERE task_id = $1`,

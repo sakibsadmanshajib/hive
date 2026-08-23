@@ -23,8 +23,11 @@ const statusEventPrefix = "status:"
 // name + size + mtime. An unchanged file produces the same id every pass and
 // dedups out; a rewritten file gets a fresh id and is recorded.
 func fileEventID(f WorkspaceFile) string {
-	return "file:" + f.Name + ":" +
+	id := "file:" + f.Name + ":" +
 		strconv.FormatInt(f.Size, 10) + ":" + strconv.FormatInt(f.ModTime.Unix(), 10)
+	// A deep path can blow the source id bound; normalizeSourceID folds it to
+	// a content hash, keeping dedup deterministic.
+	return normalizeSourceID(id, id)
 }
 
 // EventSyncer pulls each active task's sandbox events and workspace listing
@@ -272,7 +275,12 @@ func (s *EventSyncer) pullSandboxEvents(ctx context.Context, sessionRef string) 
 // messages would be exactly the silent drop the plan forbids, and the role
 // rides in the payload so consumers can tell them apart.
 func mapSandboxEvent(e SandboxEvent) (TaskEvent, bool) {
-	base := TaskEvent{SourceEventID: e.ID}
+	base := TaskEvent{
+		// Empty sandbox ids would be exempt from the dedup index and
+		// re-inserted on every pass; overlong ones would fail the migration's
+		// CHECK. Both fold to a deterministic hash of the event content.
+		SourceEventID: normalizeSourceID(e.ID, e.Kind+"|"+e.TextPreview+"|"+string(e.Raw)),
+	}
 	switch e.Kind {
 	case "ActionEvent":
 		base.Kind = EventToolCall

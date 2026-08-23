@@ -13,24 +13,34 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 )
 
-// Events pulls one session's sandbox events through the launcher daemon.
-// Deliberately NOT mapped onto agenttask.ErrEngineSessionGone on 404: that
-// sentinel's semantics (fail the task now) belong to the status poller, while
-// a missed events pull is retried next pass with no task-state consequence,
-// so Remote.post's scoped /status|/cancel check stays untouched and this path
+// Events pulls one session's sandbox events through the launcher daemon,
+// following the launcher's next_offset pagination to exhaustion. Deliberately
+// NOT mapped onto agenttask.ErrEngineSessionGone on 404: that sentinel's
+// semantics (fail the task now) belong to the status poller, while a missed
+// events pull is retried next pass with no task-state consequence, so
+// Remote.post's scoped /status|/cancel check stays untouched and this path
 // answers an ordinary transient error instead.
 func (r *Remote) Events(ctx context.Context, sessionRef string) ([]agenttask.SandboxEvent, error) {
-	var out struct {
-		Events []engineapi.Event `json:"events"`
+	var all []agenttask.SandboxEvent
+	for offset := 0; ; {
+		var out struct {
+			Events     []engineapi.Event `json:"events"`
+			NextOffset int               `json:"next_offset"`
+		}
+		if err := r.postLarge(ctx, "/events", map[string]any{
+			"session_ref": sessionRef,
+			"offset":      offset,
+		}, &out); err != nil {
+			return nil, err
+		}
+		for _, e := range out.Events {
+			all = append(all, convertEvent(e))
+		}
+		if out.NextOffset < 0 {
+			return all, nil
+		}
+		offset = out.NextOffset
 	}
-	if err := r.post(ctx, "/events", map[string]any{"session_ref": sessionRef}, &out); err != nil {
-		return nil, err
-	}
-	events := make([]agenttask.SandboxEvent, 0, len(out.Events))
-	for _, e := range out.Events {
-		events = append(events, convertEvent(e))
-	}
-	return events, nil
 }
 
 // Files lists one session's workspace through the launcher daemon.

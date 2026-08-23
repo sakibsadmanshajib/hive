@@ -242,3 +242,17 @@ func mustNil(t *testing.T, err error) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNormalizeSourceID(t *testing.T) {
+	seed := strings.Repeat("x", 600)
+	got := normalizeSourceID(seed, seed)
+	if len(got) > 52 || !strings.HasPrefix(got, "sha256:") {
+		t.Errorf("overlong id not folded: %q", got)
+	}
+	if got != normalizeSourceID("", seed) {
+		t.Error("empty and overlong ids must fold to the same derived key for identical seeds")
+	}
+	if normalizeSourceID("abc", "ignored") != "abc" {
+		t.Error("a short present id must pass through unchanged")
+	}
+}
