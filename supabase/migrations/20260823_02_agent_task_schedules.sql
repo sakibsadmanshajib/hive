@@ -1,4 +1,4 @@
--- supabase/migrations/20260823_01_agent_task_schedules.sql
+-- supabase/migrations/20260823_02_agent_task_schedules.sql
 --
 -- Scheduled agent tasks (routines): a user-defined recurring prompt that the
 -- control-plane scheduler turns into a real agent_tasks row on its cadence,

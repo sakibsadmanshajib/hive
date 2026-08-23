@@ -103,7 +103,7 @@ func parseIntervalHours(s string) (int, bool) {
 
 // cadence returns the fixed duration of one schedule period. The claim
 // function advances next_run_at with the same arithmetic in SQL; keep the two
-// in sync (see 20260823_01_agent_task_schedules.sql).
+// in sync (see 20260823_02_agent_task_schedules.sql).
 func cadence(schedule string) (time.Duration, error) {
 	switch schedule {
 	case "daily":

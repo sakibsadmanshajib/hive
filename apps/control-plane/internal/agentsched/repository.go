@@ -15,7 +15,7 @@ import (
 // public.agent_task_schedules. CRUD and the run-outcome writes are
 // (tenant, user)-scoped; ClaimDue is the scheduler's one cross-tenant
 // statement and goes through the SECURITY DEFINER function
-// public.agent_task_schedules_claim_due (20260823_01_agent_task_schedules.sql),
+// public.agent_task_schedules_claim_due (20260823_02_agent_task_schedules.sql),
 // never a table policy.
 type Repository interface {
 	Create(ctx context.Context, s Schedule) (Schedule, error)
@@ -262,7 +262,7 @@ func (r *pgxRepository) RecordRunFailure(ctx context.Context, tenantID, id uuid.
 
 // ClaimDue calls public.agent_task_schedules_claim_due(p_now, p_batch) — the
 // SECURITY DEFINER function that is this package's ONLY cross-tenant path
-// (20260823_01_agent_task_schedules.sql), for the same reason
+// (20260823_02_agent_task_schedules.sql), for the same reason
 // agent_tasks_list_active() exists for the poller. Called outside
 // withTenantTx: no single app.current_tenant_id value could see every
 // tenant's rows, which is exactly why the function exists.
