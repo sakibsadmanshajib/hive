@@ -140,7 +140,10 @@ func (c *Client) Events(ctx context.Context, tenantID, userID, taskID uuid.UUID,
 	var listResp struct {
 		Events []Event `json:"events"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&listResp); err != nil {
+	// 40 MiB: the theoretical maximum one cursor page can carry (limit 500 x
+	// 64 KiB payload cap plus JSON overhead). A smaller reader here turned a
+	// legal maximal page into a decode error the customer saw as 500.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 40<<20)).Decode(&listResp); err != nil {
 		return nil, fmt.Errorf("agenttask.client: decode events response: %w", err)
 	}
 	return listResp.Events, nil
