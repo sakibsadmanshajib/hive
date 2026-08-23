@@ -318,7 +318,7 @@ jobs:
           - module: agent-engine
             path: ./apps/agent-engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-go@v5
@@ -474,7 +474,7 @@ jobs:
       run:
         working-directory: apps/desktop-sandbox
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install libcap headers
         # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.
@@ -533,7 +533,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install GTK/WebKit headers
         run: |
@@ -602,7 +602,7 @@ jobs:
     needs: changes
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-node@v4
@@ -732,7 +732,7 @@ jobs:
       run:
         working-directory: apps/agent-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -767,7 +767,7 @@ jobs:
       run:
         working-directory: apps/web-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-node@v4
@@ -863,7 +863,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Build all service images (cached)
         uses: docker/bake-action@v6
@@ -968,7 +968,7 @@ jobs:
       # writes to $GITHUB_ENV and silently point the SDK suites back at the
       # shared account.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v3
 
@@ -1393,7 +1393,7 @@ jobs:
       # and was already skipping here because this job has never set
       # EDGE_BASE_URL. Removing it changes no spec's outcome.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v3
 
@@ -1840,7 +1840,7 @@ jobs:
       run:
         working-directory: apps/desktop-sandbox
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install libcap headers + build deps
         # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.

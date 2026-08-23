@@ -187,7 +187,7 @@ jobs:
           gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json number,title,headRefOid \
             --jq '"proving PR #\(.number): \(.title) at head \(.headRefOid)"'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.target.outputs.ref }}
 

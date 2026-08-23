@@ -226,7 +226,7 @@ jobs:
       # which is exactly how this broke the first time.
       PSQL_BIN: ${{ github.workspace }}/scripts/stack-psql.sh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -1749,7 +1749,7 @@ jobs:
       HIVE_TEST_MODEL: hive-default
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -1864,7 +1864,7 @@ jobs:
       run:
         working-directory: apps/web-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
