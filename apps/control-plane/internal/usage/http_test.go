@@ -510,6 +510,7 @@ func TestUsageEventsRejectMalformedFilters(t *testing.T) {
 		{name: "bad from", query: "from=yesterday", expect: "from must be ISO8601 (RFC3339)"},
 		{name: "bad to", query: "to=123", expect: "to must be ISO8601 (RFC3339)"},
 		{name: "bad cursor", query: "cursor=nope", expect: "cursor must be a valid UUID"},
+		{name: "window plus explicit bound", query: "window=24h&from=2026-08-01T00%3A00%3A00Z", expect: "window cannot be combined with from/to"},
 	}
 
 	for _, tc := range cases {

@@ -87,10 +87,14 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
   }
 
   // First-run guidance shows only when the account genuinely has nothing to
-  // show yet: no rows and no filters narrowing the view.
+  // show yet: no rows, no filters narrowing the view, and no pagination
+  // cursor. An exhausted trailing page (cursor set, zero rows) is a filtered
+  // view, not an empty account, and must keep its Reset link instead of the
+  // create-key pitch.
   const hasActiveFilters =
     Boolean(state.window || state.model || state.status || state.key || state.errors);
-  const firstRun = events.length === 0 && !hasActiveFilters && !fetchError;
+  const firstRun =
+    events.length === 0 && !hasActiveFilters && !cursor && !fetchError;
 
   function buildPageUrl(nextCursorValue: string | null): string {
     const qs = new URLSearchParams();

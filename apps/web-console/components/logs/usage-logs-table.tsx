@@ -3,10 +3,11 @@
 import * as React from "react";
 
 import type { LedgerEntry, UsageEventRow } from "@/lib/control-plane/client";
+import { parseLedgerEntriesText } from "@/lib/control-plane/ledger-decode";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { cn } from "@/lib/cn";
-import { formatCredits } from "@/lib/format/credits";
+import { formatCredits, formatTokens } from "@/lib/format/credits";
 import { formatDateTime } from "@/lib/format/datetime";
 
 interface UsageLogsTableProps {
@@ -73,12 +74,14 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
       `/api/v1/accounts/current/credits/ledger?request_id=${encodeURIComponent(requestId)}&limit=50`
     )
       .then(async (res) => {
-        const body: unknown = await res.json().catch(() => null);
-        if (!res.ok || body === null || typeof body !== "object") {
+        const text = await res.text().catch(() => "");
+        if (!res.ok) {
           throw new Error("lifecycle unavailable");
         }
-        const entries = (body as { entries?: unknown }).entries;
-        return Array.isArray(entries) ? (entries as LedgerEntry[]) : [];
+        // Typed decoder, same parse boundary and validation path
+        // getLedgerEntries uses; no unvalidated payload reaches the
+        // rendered lifecycle list.
+        return parseLedgerEntriesText(text);
       })
       .then((entries) => {
         setLifecycle((prev) => ({
@@ -118,14 +121,14 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
       header: "Tokens in",
       numeric: true,
       align: "right",
-      cell: (row) => formatCredits(row.input_tokens),
+      cell: (row) => formatTokens(row.input_tokens),
     },
     {
       key: "tokens_out",
       header: "Tokens out",
       numeric: true,
       align: "right",
-      cell: (row) => formatCredits(row.output_tokens),
+      cell: (row) => formatTokens(row.output_tokens),
     },
     {
       key: "credits",

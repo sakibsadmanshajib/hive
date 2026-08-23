@@ -216,9 +216,15 @@ func parseListEventsFilter(w http.ResponseWriter, r *http.Request, accountID uui
 		}
 		filter.To = parsed
 	}
-	// The window preset only applies when no explicit from/to pair was given,
-	// mirroring the analytics endpoints.
-	if filter.From.IsZero() || filter.To.IsZero() {
+	// A window preset and an explicit from/to are competing time bounds;
+	// silently dropping one would answer a different question than the
+	// caller asked, so the combination is rejected instead.
+	if q.Get("window") != "" && (!filter.From.IsZero() || !filter.To.IsZero()) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "window cannot be combined with from/to"})
+		return ListEventsFilter{}, false
+	}
+	// The window preset applies when no explicit bound was given.
+	if filter.From.IsZero() && filter.To.IsZero() {
 		if !applyWindowPreset(&filter, q.Get("window"), now) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "window must be one of: 1h, 24h, 7d, 30d"})
 			return ListEventsFilter{}, false

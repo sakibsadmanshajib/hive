@@ -340,4 +340,42 @@ describe("app/console/logs/page.tsx wiring", () => {
 
     expect(screen.getByText("No requests yet")).toBeTruthy();
   });
+
+  // An exhausted trailing page carries a cursor but zero rows: that is a
+  // paginated empty result, not an account with no traffic, so it must keep
+  // the table's filtered-empty message and its Reset link instead of the
+  // create-key pitch.
+  it("keeps pagination chrome on an exhausted trailing page instead of first-run guidance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/v1/viewer")) {
+          return jsonResponse(200, VIEWER_PAYLOAD);
+        }
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.endsWith("/api/v1/accounts/current/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        if (url.endsWith("/api/v1/catalog/models")) {
+          return jsonResponse(200, { models: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: "" });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const mod = await import("../app/console/logs/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ cursor: "11111111-1111-4111-8111-111111111111" }),
+    });
+    render(page);
+
+    expect(screen.queryByText("No requests yet")).toBeNull();
+    expect(screen.getByText("No requests match these filters.")).toBeTruthy();
+    expect(screen.getByText("Reset")).toBeTruthy();
+  });
 });
