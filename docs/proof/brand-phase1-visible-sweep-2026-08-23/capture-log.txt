@@ -90,6 +90,40 @@ Ran a full-tree grep for "Open WebUI" excluding openwebui.com/github.com URLs.
 No missed English, user-visible, unconditional "Open WebUI" string was found
 outside the diff.
 
+Expanded to the full token set this repo's own scripts/test_owui_ui_surfaces.py
+already checks (openwebui.com, open-webui, tjbck, Timothy), per review
+feedback, rather than "Open WebUI" alone:
+  - tjbck / Timothy: zero hits anywhere in vendor/open-webui/src (already
+    handled by a prior PR; not this diff's concern).
+  - open-webui as a MIME type string (`application/x-open-webui-drag`, four
+    call sites) is an internal HTML5 drag-and-drop protocol identifier the
+    app sets and reads on itself; never rendered, so out of scope for a
+    "user-visible surfaces" sweep.
+  - open-webui in AddTerminalServerModal.svelte's placeholder
+    (`ghcr.io/open-webui/open-terminal:latest`) is a real, correct container
+    registry path for the actual upstream companion tool; changing it would
+    make the placeholder point at an image that does not exist.
+  - open-webui as example metadata in admin/Functions/FunctionEditor.svelte's
+    starter code boilerplate (`author: open-webui`, twice) is genuine
+    admin-visible text (shown when creating a new Function), of materially
+    lower severity than a direct product-name claim (it reads as attribution
+    for the example template, the common `author:` manifest convention).
+    Left as-is in this pass: renaming it is a defensible follow-up, not a
+    completeness gap in the same class as the fixed strings.
+  - openwebui.com as href targets (Help link in admin/Settings/General.svelte,
+    translation CONTRIBUTING.md link in chat/Settings/General.svelte): both
+    point at real, working upstream documentation this fork does not
+    maintain a replacement for. The visible link text was already correct
+    ("Help us translate Hive Chat!"); only the destination names Open WebUI.
+    Left as a reasoned exception (PR body), not fixed: repointing a
+    documentation link to a URL that does not exist would trade a real
+    reference for a broken one.
+
+Follow-up fix from this same review pass: SyncStatsModal.svelte's usage-stats
+download built its filename as `open-webui-stats-<version>-<timestamp>.json`,
+a literal string a signed-in user sees in their own Downloads folder. Renamed
+to `hive-chat-stats-<version>-<timestamp>.json`.
+
 Reachability audit (import-graph grep, not just route list)
 ----------------------------------------------------------------
 workspace/Models.svelte, workspace/Prompts.svelte and workspace/Tools.svelte

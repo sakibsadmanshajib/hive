@@ -2,9 +2,12 @@
 
 Captured 2026-08-23 against a local stack built from `fix/brand-phase1-visible-sweep`
 (HEAD `0a5b2b4c533c5fdd5111e95a38fcdf1ab62d82c8`), not against the demo box.
-Nothing was deployed and no running service was touched. Full setup, curl
+Nothing was deployed and no running service was touched. Setup summary, curl
 output, DOM text checks, and the completeness/reachability audit are in
-`capture-log.txt`.
+`capture-log.txt`. The setup section is a prose summary of the stack and
+overrides, not a literal command transcript: the exact `docker compose`
+invocations carried a per-session private image tag and locally generated
+throwaway secrets, neither of which are meaningful to commit verbatim.
 
 ## Stack under test
 
@@ -19,7 +22,7 @@ output, DOM text checks, and the completeness/reachability audit are in
 
 | File | What it shows |
 | --- | --- |
-| `capture-log.txt` | Full setup, curl output for `<title>` and `opensearch.xml`, DOM text checks, and the completeness/reachability audit beyond the diff. |
+| `capture-log.txt` | Setup summary, curl output for `<title>` and `opensearch.xml`, DOM text checks, and the completeness/reachability audit beyond the diff. |
 | `01-onboarding-get-started-with-hive.png` | Pre-auth onboarding screen: "Get started with Hive" (was "Get started with Open WebUI"). |
 | `02-logged-in-home-hive-sidebar.png` | Logged-in chat home; sidebar reads "Hive". |
 | `03-admin-settings-general-help-text.png` | Admin Settings > General: "Discover how to use Hive and seek support from the community." (was "...use Open WebUI..."). |
