@@ -1,0 +1,59 @@
+PR #952 live capture: sign in without an intermediate page
+=========================================================
+
+BEFORE: https://chat-hive.scubed.co, the deployed demo box running
+        main. Loaded signed out; nothing else on that box was touched.
+AFTER:  a full local stack -- self-hosted GoTrue v2.189.0, PostgREST,
+        storage, Caddy gateway, control-plane, edge-api and Open WebUI
+        built from main merged with this branch. Real OAuth 2.1
+        authorization-code round trip; no session injected, nothing
+        stubbed.
+
+Credential-bearing query parameters are redacted in this log and in
+the screenshot URL banners: code, state, nonce, code_challenge,
+client_id, authorization_id and any token parameter.
+
+1. BEFORE, on the deployed box today.
+   deployed /api/config oauth.auto_redirect = false
+   deployed /api/config oauth.providers     = {"oidc":"Hive"}
+   "Continue with Hive" buttons rendered: 1
+   This is the page the owner objected to: a sign-in page whose only
+   action is one button leading to another sign-in page.
+  [shot] 01-before-deployed-intermediate-page.png  deployed demo box, signed out: the intermediate page with one button
+         url: https://chat-hive.scubed.co/auth
+
+2. AFTER, local stack running this branch.
+   local /api/config oauth.auto_redirect = true
+   local /api/config providers           = {"oidc":"Hive"}
+   local /api/config enable_login_form   = false
+   local /api/config onboarding          = undefined
+
+   2a. Setup hop: first ever sign-in on a brand new instance.
+       The branch refuses to auto-redirect while onboarding is true,
+       so this hop is a click by design. Not the claim under test.
+       setup hop landed on: http://localhost:3003
+       onboarding now: undefined
+
+   2b. THE CLAIM: chat root, no Open WebUI session, zero clicks.
+       clicks performed on this hop:            0
+       final origin:                            http://localhost:3003
+       password inputs on the landed page:      0
+       iframes on the landed page:              0
+       "Continue with Hive" buttons:            0
+       "Suggested" stock prompt blocks:         0
+  [shot] 02-after-signed-in-zero-clicks.png  local branch stack: chat root to signed-in chat, no intermediate page, no clicks
+         url: http://localhost:3003/
+
+   Main-frame navigation chain for hop 2b, in order:
+     [1] http://localhost:3003/
+     [2] http://localhost:3003/auth?redirect=%2F
+     [3] http://console.hive.test/oauth/consent?authorization_id=REDACTED
+     [4] http://localhost:3003/auth
+     [5] http://localhost:3003/
+
+   /auth appears 2 time(s) in the chain above. It is
+   traversed, not rested on: the hop completed with zero clicks, so
+   nothing on any /auth page was ever actioned. What that page would
+   have offered is measured directly on the deployed box in shot 01
+   (one 'Continue with Hive' button) and on the landed page here
+   (0 such buttons).
