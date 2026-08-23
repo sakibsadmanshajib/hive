@@ -284,8 +284,13 @@ export function isEngineLaunchFailure(task: AgentTask): boolean {
  * published a real artifact (apps/agent-engine/internal/engine's
  * publishDeckArtifact); every other task's result_summary_ref is the agent's
  * own free-text final response, which this must not mistake for a link.
+ *
+ * The id is bounded to the characters a UUID actually contains (a superset of
+ * them): `[^/]+` would accept `.` and `..`, which survive encodeURIComponent
+ * and let a single-segment ref normalize into an upstream request against
+ * edge-api's root rather than failing validation.
  */
-const ARTIFACT_REF_PATTERN = /^\/artifacts\/([^/]+)(?:\/v\/(\d+))?$/;
+const ARTIFACT_REF_PATTERN = /^\/artifacts\/([A-Za-z0-9_-]+)(?:\/v\/(\d+))?$/;
 
 export interface ArtifactRef {
   id: string;

@@ -127,6 +127,9 @@ export async function GET(
     upstream = await fetch(`${baseUrl}${path}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
+      // A stalled edge-api must not hold the browser navigation open
+      // forever; the abort lands in the catch below as a 502.
+      signal: AbortSignal.timeout(30_000),
     });
   } catch {
     // Never log the error: the request URL is in it on some runtimes, and the

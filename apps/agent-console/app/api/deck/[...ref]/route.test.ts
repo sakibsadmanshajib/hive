@@ -135,6 +135,8 @@ describe("GET /agent-workspace/api/deck/[...ref]", () => {
     { name: "a non-v two-part suffix", segments: ["abc-123", "x", "2"] },
     { name: "an empty id", segments: [""] },
     { name: "no id at all", segments: [] },
+    { name: "a dot segment", segments: ["."] },
+    { name: "a dot-dot segment that would normalize away upstream", segments: [".."] },
   ])("returns 400 for $name, and never calls upstream", async ({ segments }) => {
     const calls = stubFetch(servesDeck);
 
@@ -144,12 +146,13 @@ describe("GET /agent-workspace/api/deck/[...ref]", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("percent-encodes an id that would otherwise open a query string upstream", async () => {
+  it("rejects an id carrying a query-string smuggle rather than encoding it upstream", async () => {
     const calls = stubFetch(servesDeck);
 
-    await call(["abc?injected=1"]);
+    const response = await call(["abc?injected=1"]);
 
-    expect(calls[0].url).toBe("http://edge-api.test/artifacts/abc%3Finjected%3D1");
+    expect(response.status).toBe(400);
+    expect(calls).toHaveLength(0);
   });
 
   // GUARD 3: the response is origin-isolated.

@@ -220,10 +220,8 @@ describe("edge-api tasks client", () => {
       );
     });
 
-    it("percent-encodes the id rather than splicing it into the path", () => {
-      expect(artifactUrl("/artifacts/abc?x=1")).toBe(
-        "/agent-workspace/api/deck/abc%3Fx%3D1",
-      );
+    it("rejects an id that would otherwise open a query string upstream", () => {
+      expect(artifactUrl("/artifacts/abc?x=1")).toBeNull();
     });
 
     it("returns null for the plain-text final-response fallback shape", () => {
@@ -260,6 +258,11 @@ describe("edge-api tasks client", () => {
 
     it("rejects a traversal segment", () => {
       expect(parseArtifactRef("/artifacts/../../etc/passwd")).toBeNull();
+    });
+
+    it("rejects dot segments that would normalize away upstream", () => {
+      expect(parseArtifactRef("/artifacts/.")).toBeNull();
+      expect(parseArtifactRef("/artifacts/..")).toBeNull();
     });
   });
 });
