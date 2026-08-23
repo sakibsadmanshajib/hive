@@ -40,8 +40,8 @@ func TestFetchSnapshotDecodesModelsAndCatalog(t *testing.T) {
 	if len(snapshot.Catalog) != 1 {
 		t.Fatalf("expected 1 catalog entry, got %d", len(snapshot.Catalog))
 	}
-	if snapshot.Catalog[0].Pricing.OutputPriceCredits != 36 {
-		t.Fatalf("expected output price 36, got %d", snapshot.Catalog[0].Pricing.OutputPriceCredits)
+	if got := snapshot.Catalog[0].Pricing.OutputPriceCredits; got == nil || *got != 36 {
+		t.Fatalf("expected output price 36, got %v", got)
 	}
 }
 

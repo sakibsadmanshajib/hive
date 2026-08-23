@@ -170,7 +170,20 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	// RouteInfo.HasCostBasis uses, so an alias that legitimately prices only
 	// one side (embeddings are input-only, voice is output-only) stays
 	// selectable.
-	if pricing.InputPriceCredits <= 0 && pricing.OutputPriceCredits <= 0 {
+	//
+	// A PricingModeUpstreamActual alias has no fixed price BY DESIGN: the
+	// charge is derived from the cost the upstream reports for that specific
+	// generation. It is still refused unless it carries a positive
+	// reservation estimate, because that hold is the only thing standing
+	// between a variable-cost request and an account with no credits. An
+	// upstream_actual row with no hold size is a misconfiguration, and the
+	// fail-closed answer to a misconfigured money path is to refuse it, not
+	// to reserve nothing and hope the settlement lands.
+	if pricing.IsUpstreamActual() {
+		if pricing.ReservationEstimateCredits == nil || *pricing.ReservationEstimateCredits <= 0 {
+			return SelectionResult{}, fmt.Errorf("%w: %s (upstream_actual with no reservation estimate)", ErrAliasNotPriced, aliasID)
+		}
+	} else if !pricing.HasFixedPrice() {
 		return SelectionResult{}, fmt.Errorf("%w: %s", ErrAliasNotPriced, aliasID)
 	}
 

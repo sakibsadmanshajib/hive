@@ -26,8 +26,8 @@ func TestSnapshotHandlerReturnsModelsAndCatalog(t *testing.T) {
 				Visibility:             "public",
 				Lifecycle:              "stable",
 				CapabilityBadges:       []string{"stable", "chat", "responses"},
-				InputPriceCredits:      12,
-				OutputPriceCredits:     36,
+				InputPriceCredits:      int64Ptr(12),
+				OutputPriceCredits:     int64Ptr(36),
 				CacheReadPriceCredits:  int64Ptr(2),
 				CacheWritePriceCredits: int64Ptr(6),
 				CreatedAt:              time.Unix(1_716_935_002, 0).UTC(),
@@ -59,8 +59,8 @@ func TestSnapshotHandlerReturnsModelsAndCatalog(t *testing.T) {
 	if snapshot.Models[0].ID != "hive-default" {
 		t.Fatalf("expected hive-default in models, got %q", snapshot.Models[0].ID)
 	}
-	if snapshot.Catalog[0].Pricing.OutputPriceCredits != 36 {
-		t.Fatalf("expected output price 36, got %d", snapshot.Catalog[0].Pricing.OutputPriceCredits)
+	if got := snapshot.Catalog[0].Pricing.OutputPriceCredits; got == nil || *got != 36 {
+		t.Fatalf("expected output price 36, got %v", got)
 	}
 }
 

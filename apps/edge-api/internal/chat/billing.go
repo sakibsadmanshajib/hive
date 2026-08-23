@@ -68,6 +68,19 @@ type settlement struct {
 	accountID     string
 	reservationID string
 	requestID     string
+	// heldCredits is the size of the hold actually taken. Recorded because a
+	// variable-price alias settles at the hold when it cannot read an upstream
+	// cost, and it can no longer assume that figure is sessionHoldCredits.
+	heldCredits int64
+}
+
+// held returns the hold size, or zero when there is no settlement at all (the
+// Enterprise posture, which charges nothing).
+func (s *settlement) held() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.heldCredits
 }
 
 // startSettlement takes the hold for a session turn, or writes the customer's
@@ -138,13 +151,17 @@ func (h *Handler) startSettlement(
 		slog.Warn("session chat start attempt failed", "err", err, "request_id", requestID)
 	}
 
+	// A variable-price alias raises the flat session hold from its catalog
+	// row: a router can resolve to a model far dearer than the flat figure
+	// assumes, and the hold is the only solvency gate in front of it.
+	held := inference.ReservationCredits(route, sessionHoldCredits)
 	reservation, err := h.deps.Accounting.CreateReservation(ctx, inference.CreateReservationInput{
 		AccountID:        accountID,
 		RequestID:        requestID.String(),
 		AttemptNumber:    1,
 		Endpoint:         inference.EndpointChatCompletions,
 		ModelAlias:       alias,
-		EstimatedCredits: sessionHoldCredits,
+		EstimatedCredits: held,
 		PolicyMode:       "strict",
 	})
 	if err != nil {
@@ -180,6 +197,7 @@ func (h *Handler) startSettlement(
 		accountID:     accountID,
 		reservationID: reservation.ID,
 		requestID:     requestID.String(),
+		heldCredits:   held,
 	}, false
 }
 

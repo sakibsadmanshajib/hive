@@ -36,7 +36,7 @@ type stubRepository struct {
 // a stub left at its zero value would make every fixture that does not care
 // about price fail closed for the wrong reason. Tests that do care set
 // pricing explicitly, or set unpriced.
-var defaultStubPricing = catalog.CatalogPricing{InputPriceCredits: 7_000, OutputPriceCredits: 11_200}
+var defaultStubPricing = catalog.FixedPricing(7_000, 11_200)
 
 func (s *stubRepository) LoadAliasPolicy(_ context.Context, _ string) (catalog.AliasPolicySnapshot, error) {
 	s.loadPolicyCalls++
@@ -71,7 +71,7 @@ func (s *stubRepository) LoadAliasPricing(_ context.Context, aliasID string) (ca
 	}
 	// A fixture that set neither pricing nor unpriced does not care about
 	// price; give it a priced alias rather than the refusal path.
-	if s.pricing.InputPriceCredits == 0 && s.pricing.OutputPriceCredits == 0 {
+	if s.pricing.InputPriceCredits == nil && s.pricing.OutputPriceCredits == nil && s.pricing.PricingMode == "" {
 		return defaultStubPricing, priceUnit, nil
 	}
 
@@ -764,11 +764,14 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 	repo := entitlementTestRepo()
 	cacheRead := int64(1)
 	cacheWrite := int64(5)
+	input := int64(12)
+	output := int64(36)
 	repo.pricing = catalog.CatalogPricing{
-		InputPriceCredits:      12,
-		OutputPriceCredits:     36,
+		InputPriceCredits:      &input,
+		OutputPriceCredits:     &output,
 		CacheReadPriceCredits:  &cacheRead,
 		CacheWritePriceCredits: &cacheWrite,
+		PricingMode:            catalog.PricingModeFixed,
 	}
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
@@ -781,11 +784,11 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectRoute returned error: %v", err)
 	}
-	if result.Pricing.InputPriceCredits != 12 {
-		t.Fatalf("expected input price 12, got %d", result.Pricing.InputPriceCredits)
+	if got := result.Pricing.InputPriceCredits; got == nil || *got != 12 {
+		t.Fatalf("expected input price 12, got %v", got)
 	}
-	if result.Pricing.OutputPriceCredits != 36 {
-		t.Fatalf("expected output price 36, got %d", result.Pricing.OutputPriceCredits)
+	if got := result.Pricing.OutputPriceCredits; got == nil || *got != 36 {
+		t.Fatalf("expected output price 36, got %v", got)
 	}
 	if result.Pricing.CacheReadPriceCredits == nil || *result.Pricing.CacheReadPriceCredits != 1 {
 		t.Fatalf("expected cache read price 1, got %v", result.Pricing.CacheReadPriceCredits)
@@ -808,7 +811,7 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 // wrong misprices by orders of magnitude (issue #627).
 func TestSelectRouteCarriesPriceUnit(t *testing.T) {
 	repo := entitlementTestRepo()
-	repo.pricing = catalog.CatalogPricing{InputPriceCredits: 0, OutputPriceCredits: 4_316_667}
+	repo.pricing = catalog.FixedPricing(0, 4_316_667)
 	repo.priceUnit = "seconds"
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
@@ -824,8 +827,8 @@ func TestSelectRouteCarriesPriceUnit(t *testing.T) {
 	if result.PriceUnit != "seconds" {
 		t.Fatalf("expected price unit %q, got %q", "seconds", result.PriceUnit)
 	}
-	if result.Pricing.OutputPriceCredits != 4_316_667 {
-		t.Fatalf("expected the unit price carried through, got %d", result.Pricing.OutputPriceCredits)
+	if got := result.Pricing.OutputPriceCredits; got == nil || *got != 4_316_667 {
+		t.Fatalf("expected the unit price carried through, got %v", got)
 	}
 }
 
@@ -875,8 +878,8 @@ func TestSelectRouteAllowsSingleSidedPricing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := entitlementTestRepo()
 			repo.pricing = catalog.CatalogPricing{
-				InputPriceCredits:  tc.input,
-				OutputPriceCredits: tc.output,
+				InputPriceCredits:  &tc.input,
+				OutputPriceCredits: &tc.output,
 			}
 
 			svc := NewService(repo, &stubEntitlements{visible: true})
@@ -888,7 +891,7 @@ func TestSelectRouteAllowsSingleSidedPricing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SelectRoute refused a single-sided price: %v", err)
 			}
-			if result.Pricing.InputPriceCredits != tc.input || result.Pricing.OutputPriceCredits != tc.output {
+			if gotIn, gotOut := result.Pricing.InputPriceCredits, result.Pricing.OutputPriceCredits; gotIn == nil || gotOut == nil || *gotIn != tc.input || *gotOut != tc.output {
 				t.Fatalf("expected pricing %d/%d, got %+v", tc.input, tc.output, result.Pricing)
 			}
 		})
@@ -930,7 +933,7 @@ func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
 				SupportsChatCompletions: true,
 			},
 		},
-		pricing: catalog.CatalogPricing{InputPriceCredits: 8, OutputPriceCredits: 24},
+		pricing: catalog.FixedPricing(8, 24),
 	}
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
@@ -948,7 +951,7 @@ func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
 	if len(result.FallbackRouteIDs) != 1 || result.FallbackRouteIDs[0] != "route-openrouter-fast-fallback" {
 		t.Fatalf("expected one fallback route-openrouter-fast-fallback, got %v", result.FallbackRouteIDs)
 	}
-	if result.Pricing.InputPriceCredits != 8 || result.Pricing.OutputPriceCredits != 24 {
+	if gotIn, gotOut := result.Pricing.InputPriceCredits, result.Pricing.OutputPriceCredits; gotIn == nil || gotOut == nil || *gotIn != 8 || *gotOut != 24 {
 		t.Fatalf("expected alias-level pricing 8/24 regardless of which route was primary, got %+v", result.Pricing)
 	}
 }
@@ -1042,7 +1045,7 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 			},
 		},
 		// 0.05 in / 0.08 out USD per million * 1.4 * CreditsPerUSD (100_000).
-		pricing: catalog.CatalogPricing{InputPriceCredits: 7_000, OutputPriceCredits: 11_200},
+		pricing: catalog.FixedPricing(7_000, 11_200),
 	}
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
@@ -1065,10 +1068,10 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 	if len(result.FallbackRouteIDs) != 0 {
 		t.Fatalf("expected no fallback routes, got %v", result.FallbackRouteIDs)
 	}
-	if result.Pricing.InputPriceCredits != 7_000 {
-		t.Fatalf("expected input price 7000, got %d", result.Pricing.InputPriceCredits)
+	if got := result.Pricing.InputPriceCredits; got == nil || *got != 7_000 {
+		t.Fatalf("expected input price 7000, got %v", got)
 	}
-	if result.Pricing.OutputPriceCredits != 11_200 {
-		t.Fatalf("expected output price 11200, got %d", result.Pricing.OutputPriceCredits)
+	if got := result.Pricing.OutputPriceCredits; got == nil || *got != 11_200 {
+		t.Fatalf("expected output price 11200, got %v", got)
 	}
 }

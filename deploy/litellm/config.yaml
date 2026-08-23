@@ -237,6 +237,54 @@ model_list:
     model_info:
       mode: audio_speech
 
+  # ── 8. Task-aware router (paid; billed at ACTUAL per-request cost) ──────────
+  # Backs the `openrouter-auto` alias. openrouter/auto-beta is a ROUTER: it
+  # picks a different upstream model per request, so OpenRouter reports
+  # `prompt: -1, completion: -1` for it and there is no catalog price to charge
+  # against. The alias is therefore priced `upstream_actual` in model_aliases,
+  # and settlement reads the cost OpenRouter reports for each generation.
+  #
+  # Three things here are load-bearing, not decoration.
+  #
+  # 1. `usage.include` is what makes OpenRouter report the cost at all. Without
+  #    it every request settles through the fail-closed path and gets charged
+  #    the full hold. It is set here rather than left to the client so the
+  #    charge does not depend on what a caller happened to send. Verified
+  #    2026-08-22 that `drop_params: true` does NOT strip it.
+  #
+  # 2. `provider.max_price` bounds what one request can cost us, in USD per
+  #    MILLION tokens. OpenRouter's auto-router documentation confirms it still
+  #    applies to the router, enforced after it resolves a model, and that a
+  #    breach fails the request rather than routing to a pricier endpoint. That
+  #    bound is what makes the credit hold defensible instead of a guess; the
+  #    hold in the migration is derived from these exact numbers.
+  #
+  # 3. The model is a LITERAL, not `os.environ/..._MODEL` like every other
+  #    OpenRouter route here. Issue #689 is what an env var costs on a priced
+  #    route: the catalog priced one model while the deployment quietly called
+  #    another. For an alias billed at actual cost the slug IS the product
+  #    decision, and it must not be repointable without a code review.
+  #
+  # Deliberately absent from `fallbacks:` below. A fallback to a fixed-price
+  # route would settle this alias against a provider that never reports a
+  # per-request cost, which is the free-serve shape it exists to avoid.
+  # The doubled prefix is correct and matches every other OpenRouter entry
+  # here: LiteLLM strips the leading `openrouter/` as its provider selector and
+  # forwards the rest, so this sends the slug `openrouter/auto-beta` upstream.
+  # Compare `openrouter/openai/gpt-4o-mini` above, which reaches OpenRouter as
+  # `openai/gpt-4o-mini`. Verified against a live LiteLLM on 2026-08-22.
+  - model_name: route-openrouter-auto-beta
+    litellm_params:
+      model: openrouter/openrouter/auto-beta
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        usage:
+          include: true
+        provider:
+          max_price:
+            prompt: 3
+            completion: 15
+
 
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries

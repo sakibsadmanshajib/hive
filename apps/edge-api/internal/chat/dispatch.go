@@ -213,6 +213,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var inTokens, outTokens int
 	var hasUsage bool
 	var servedModel string
+	// Verbatim bytes of the terminal usage frame, populated only for a
+	// variable-price alias. See the capture site below.
+	var rawUsagePayload []byte
 	var finishReason string
 	var completion strings.Builder
 
@@ -225,15 +228,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			flush(flusher)
 			continue
 		}
-		_, _ = w.Write(line)
-		_, _ = w.Write([]byte("\n"))
-		flush(flusher)
+		// This relay is verbatim by design, which is fine while the upstream
+		// frame carries nothing we must not publish. Enabling usage accounting
+		// for a variable-price alias changes that: the frame then carries our
+		// cost, its breakdown and the model the router actually chose. So that
+		// one route is sanitized before the write, and an unparseable frame is
+		// dropped rather than forwarded, because an unparseable frame is
+		// precisely the one whose contents are unknown.
+		isData := bytes.HasPrefix(line, []byte("data: "))
+		payload := bytes.TrimPrefix(line, []byte("data: "))
+		isDone := isData && bytes.Equal(payload, []byte("[DONE]"))
 
-		if !bytes.HasPrefix(line, []byte("data: ")) {
+		if isData && !isDone && route.Pricing.IsUpstreamActual() {
+			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel)
+			if !sanOK {
+				slog.Warn("session chat: dropping an unparseable upstream frame on a variable-price alias",
+					"request_id", requestID, "alias", clientModel)
+				continue
+			}
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(sanitized)
+			_, _ = w.Write([]byte("\n"))
+			flush(flusher)
+		} else {
+			_, _ = w.Write(line)
+			_, _ = w.Write([]byte("\n"))
+			flush(flusher)
+		}
+
+		if !isData {
 			continue
 		}
-		payload := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(payload, []byte("[DONE]")) {
+		if isDone {
 			break
 		}
 		var envelope sseEnvelope
@@ -258,6 +284,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			hasUsage = true
 			inTokens = envelope.Usage.PromptTokens
 			outTokens = envelope.Usage.CompletionTokens
+			// For a variable-price alias the charge comes from the cost the
+			// upstream reports, and sseEnvelope does not declare that field, so
+			// unmarshalling has already dropped it. Keep the untouched payload
+			// so settlement can read it; nothing else looks at these bytes and
+			// they never reach the client from here.
+			if route.Pricing.IsUpstreamActual() {
+				rawUsagePayload = append(rawUsagePayload[:0], payload...)
+			}
 		}
 	}
 
@@ -285,8 +319,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// unconfirmed, which is what tells control-plane to clamp the figure to the
 	// hold and open a reconciliation job. It never settles a delivered response
 	// at zero, and never bills a token count as though it were a credit amount.
-	costCredits, confirmed, delivered := inference.ChatSettlementCredits(
-		route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+	var costCredits int64
+	var confirmed, delivered bool
+	if route.Pricing.IsUpstreamActual() {
+		// This alias has no catalog price. Its charge is the cost the upstream
+		// reported for this generation, times the standard margin. A cost that
+		// is missing, unreadable or a confident zero settles at the hold rather
+		// than at nothing, which is the whole point: this is the streaming path
+		// Open WebUI uses, so it is where a silent free-serve would do the most
+		// damage.
+		settled := inference.UpstreamActualSettlement(
+			rawUsagePayload, settle.held(), hasUsage,
+			int64(inTokens), int64(outTokens), completion.String())
+		costCredits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
+		if delivered {
+			// generation_id is the audit handle for this charge. Operator log
+			// only: an upstream identifier can carry a provider name and
+			// audit_log fans out to third-party sinks.
+			slog.Info("session chat: variable-price settlement",
+				"request_id", requestID, "alias", clientModel, "reason", settled.Reason,
+				"credits", settled.Credits, "confirmed", settled.Confirmed,
+				"generation_id", settled.GenerationID, "held_credits", settle.held())
+		}
+	} else {
+		costCredits, confirmed, delivered = inference.ChatSettlementCredits(
+			route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
 		// and would be priced at another's rate (#743). The charge below still

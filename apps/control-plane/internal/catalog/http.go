@@ -113,6 +113,11 @@ func buildPublicCatalogModels(aliases []ModelAlias) []PublicCatalogModel {
 				OutputPriceCredits:     a.OutputPriceCredits,
 				CacheReadPriceCredits:  a.CacheReadPriceCredits,
 				CacheWritePriceCredits: a.CacheWritePriceCredits,
+				// Without these two the wire always said pricing_mode "", which
+				// is not a value the database CHECK can ever produce, and every
+				// consumer would have read a variable-price alias as fixed.
+				PricingMode:                a.PricingMode,
+				ReservationEstimateCredits: a.ReservationEstimateCredits,
 			},
 			Lifecycle: a.Lifecycle,
 		})

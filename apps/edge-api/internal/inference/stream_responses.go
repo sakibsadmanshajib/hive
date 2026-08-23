@@ -102,6 +102,16 @@ func (o *Orchestrator) executeResponsesStreaming(
 		return
 	}
 
+	// 3c. Bound the request for a variable-price alias, before dispatch. Its
+	// hold is only provably sufficient below a known request size and a known
+	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
+	// every fixed-price alias.
+	boundedBody, withinBounds := EnforceVariablePriceBounds(w, route, EndpointResponses, model, body)
+	if !withinBounds {
+		return
+	}
+	body = boundedBody
+
 	// 4. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
@@ -119,13 +129,15 @@ func (o *Orchestrator) executeResponsesStreaming(
 
 	// 5. Create reservation
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
-		AccountID:        snapshot.AccountID,
-		RequestID:        requestID,
-		AttemptNumber:    1,
-		APIKeyID:         snapshot.KeyID,
-		Endpoint:         EndpointResponses,
-		ModelAlias:       model,
-		EstimatedCredits: estimatedCredits,
+		AccountID:     snapshot.AccountID,
+		RequestID:     requestID,
+		AttemptNumber: 1,
+		APIKeyID:      snapshot.KeyID,
+		Endpoint:      EndpointResponses,
+		ModelAlias:    model,
+		// A variable-price alias raises this from its catalog row; a fixed
+		// one keeps the flat endpoint default. See ReservationCredits.
+		EstimatedCredits: ReservationCredits(route, estimatedCredits),
 		PolicyMode:       "strict",
 	})
 	if err != nil && refuseOnReservationFailure(w, EndpointResponses, model, err) {
@@ -234,6 +246,13 @@ func (o *Orchestrator) executeResponsesStreaming(
 		// translator.currentContent already holds the full response body.
 		if chunk.Usage != nil {
 			clampZeroCompletionUsage(chunk.Usage, []string{translator.currentContent.String()}, chunk.ID, model, EndpointResponses)
+			// Same capture as executeStreaming. Without it this path can only
+			// ever fail closed for a variable-price alias, because settleStream
+			// reads these bytes and ChatCompletionChunk has already discarded
+			// the cost field on the way in.
+			if route.Pricing.IsUpstreamActual() {
+				acc.RawUsageChunk = append(acc.RawUsageChunk[:0], jsonData...)
+			}
 		}
 
 		// Accumulate usage if present.

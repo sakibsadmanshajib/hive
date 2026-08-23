@@ -20,11 +20,29 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// CatalogPricing mirrors control-plane's catalog.CatalogPricing across the
+// HTTP boundary.
+//
+// The input and output prices are POINTERS because a variable-price alias
+// genuinely has none and control-plane sends JSON null for both.
+//
+// This is load-bearing, and for the opposite reason to the database side.
+// Scanning a SQL NULL into a non-pointer int64 is a hard pgx error, so that
+// boundary fails loudly on its own. encoding/json does NOT behave that way:
+// unmarshalling JSON null into a non-pointer int64 is a documented no-op that
+// leaves the field at its zero value and returns no error. Verified against
+// Go's own decoder on 2026-08-22 rather than assumed.
+//
+// So with a plain int64 here, a variable-price alias would have arrived
+// silently priced at 0 credits, which is indistinguishable from free and is
+// exactly the shape that billed nothing for three days in July. The pointer is
+// what makes the absence visible.
 type CatalogPricing struct {
-	InputPriceCredits      int64  `json:"input_price_credits"`
-	OutputPriceCredits     int64  `json:"output_price_credits"`
+	InputPriceCredits      *int64 `json:"input_price_credits"`
+	OutputPriceCredits     *int64 `json:"output_price_credits"`
 	CacheReadPriceCredits  *int64 `json:"cache_read_price_credits,omitempty"`
 	CacheWritePriceCredits *int64 `json:"cache_write_price_credits,omitempty"`
+	PricingMode            string `json:"pricing_mode"`
 }
 
 type CatalogModel struct {

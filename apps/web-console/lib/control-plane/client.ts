@@ -1252,10 +1252,15 @@ export interface CatalogModel {
   summary: string;
   capability_badges: string[];
   pricing: {
-    input_price_credits: number;
-    output_price_credits: number;
+    // Null, not zero, when the alias is priced from actual upstream cost:
+    // there genuinely is no per-million price to show. Zero would render as
+    // "free", which is both wrong and the most expensive kind of wrong on a
+    // billing surface.
+    input_price_credits: number | null;
+    output_price_credits: number | null;
     cache_read_price_credits: number | null;
     cache_write_price_credits: number | null;
+    pricing_mode: string;
   };
   lifecycle: string;
 }
@@ -1469,8 +1474,11 @@ function decodeCatalogModel(value: JsonValue): CatalogModel | null {
   }
 
   const rawPricing = readObjectField(value, "pricing");
-  const inputPrice = rawPricing ? readNumberField(rawPricing, "input_price_credits") ?? 0 : 0;
-  const outputPrice = rawPricing ? readNumberField(rawPricing, "output_price_credits") ?? 0 : 0;
+  // No `?? 0` here. A variable-price alias sends null for both, and coercing
+  // that to zero told the admin catalog the model was free.
+  const inputPrice = rawPricing ? readNumberField(rawPricing, "input_price_credits") : null;
+  const outputPrice = rawPricing ? readNumberField(rawPricing, "output_price_credits") : null;
+  const pricingMode = rawPricing ? readStringField(rawPricing, "pricing_mode") ?? "fixed" : "fixed";
   const cacheReadPrice = rawPricing ? readNumberField(rawPricing, "cache_read_price_credits") : null;
   const cacheWritePrice = rawPricing ? readNumberField(rawPricing, "cache_write_price_credits") : null;
 
@@ -1484,6 +1492,7 @@ function decodeCatalogModel(value: JsonValue): CatalogModel | null {
       output_price_credits: outputPrice,
       cache_read_price_credits: cacheReadPrice,
       cache_write_price_credits: cacheWritePrice,
+      pricing_mode: pricingMode,
     },
     lifecycle,
   };

@@ -57,13 +57,22 @@ func (a *RoutingAdapter) SelectRoute(ctx context.Context, input RouteInput) (Rou
 	if err != nil {
 		return RouteResult{}, fmt.Errorf("audio: select route: %w", err)
 	}
+	// A variable-price alias has no catalog price at all: its charge is derived
+	// from the cost the upstream reports per generation, which is a
+	// token-endpoint mechanism this package does not implement. Refusing here
+	// is the same fail-closed shape #627 established for a price whose unit
+	// does not match what the handler meters, and it keeps a nil price from
+	// being flattened into a zero that would meter audio for free.
+	if result.Pricing.IsUpstreamActual() {
+		return RouteResult{}, fmt.Errorf("audio: alias %s is priced from actual upstream cost, which this endpoint cannot meter", result.AliasID)
+	}
 	return RouteResult{
 		AliasID:          result.AliasID,
 		LiteLLMModelName: result.LiteLLMModelName,
 		// Non-token modalities meter a single quantity, priced in
 		// output_price_credits with input_price_credits constrained to zero at
 		// the database level, so there is exactly one price to carry (#627).
-		UnitPriceCredits: result.Pricing.OutputPriceCredits,
+		UnitPriceCredits: result.Pricing.OutputCredits(),
 		PriceUnit:        result.PriceUnit,
 	}, nil
 }

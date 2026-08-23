@@ -68,11 +68,31 @@ type CreateReservationInput struct {
 }
 
 // ReservationResult is the response from reservation endpoints.
+//
+// EstimatedCredits is a field the control plane does NOT send. Its response
+// body is accounting.Reservation, which publishes the hold as `reserved_credits`
+// (apps/control-plane/internal/accounting/types.go). Nothing read
+// EstimatedCredits before variable pricing did, so the mismatch was invisible;
+// the first reader of it got a silent 0. Both keys are decoded here rather than
+// renaming the old one, so a caller that still reads EstimatedCredits keeps its
+// existing (zero) behaviour instead of changing meaning underneath it, and Held
+// is the accessor anything sizing a charge must use.
 type ReservationResult struct {
 	ID               string `json:"id"`
 	AccountID        string `json:"account_id"`
 	Status           string `json:"status"`
 	EstimatedCredits int64  `json:"estimated_credits"`
+	ReservedCredits  int64  `json:"reserved_credits"`
+}
+
+// Held is the size of the hold the control plane actually recorded. Prefer the
+// key it really sends; fall back to the legacy one so a stubbed or older
+// responder still works.
+func (r ReservationResult) Held() int64 {
+	if r.ReservedCredits > 0 {
+		return r.ReservedCredits
+	}
+	return r.EstimatedCredits
 }
 
 // FinalizeReservationInput is the request body for finalizing a reservation.

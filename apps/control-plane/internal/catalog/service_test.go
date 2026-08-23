@@ -161,8 +161,8 @@ func TestGetSnapshotReturnsHiveOwnedModels(t *testing.T) {
 				Visibility:             "public",
 				Lifecycle:              "stable",
 				CapabilityBadges:       []string{"stable", "chat", "responses"},
-				InputPriceCredits:      12,
-				OutputPriceCredits:     36,
+				InputPriceCredits:      int64Ptr(12),
+				OutputPriceCredits:     int64Ptr(36),
 				CacheReadPriceCredits:  int64Ptr(2),
 				CacheWritePriceCredits: int64Ptr(6),
 				CreatedAt:              time.Unix(1_716_935_002, 0).UTC(),
@@ -175,8 +175,8 @@ func TestGetSnapshotReturnsHiveOwnedModels(t *testing.T) {
 				Visibility:             "preview",
 				Lifecycle:              "preview",
 				CapabilityBadges:       []string{"auto", "fallback", "preview"},
-				InputPriceCredits:      10,
-				OutputPriceCredits:     30,
+				InputPriceCredits:      int64Ptr(10),
+				OutputPriceCredits:     int64Ptr(30),
 				CacheReadPriceCredits:  int64Ptr(1),
 				CacheWritePriceCredits: int64Ptr(4),
 				CreatedAt:              time.Unix(1_716_935_102, 0).UTC(),
@@ -222,8 +222,8 @@ func TestGetSnapshotReturnsHiveOwnedModels(t *testing.T) {
 	if firstCatalog.Lifecycle != "stable" {
 		t.Fatalf("expected stable lifecycle, got %q", firstCatalog.Lifecycle)
 	}
-	if firstCatalog.Pricing.InputPriceCredits != 12 {
-		t.Fatalf("expected input price 12, got %d", firstCatalog.Pricing.InputPriceCredits)
+	if got := firstCatalog.Pricing.InputPriceCredits; got == nil || *got != 12 {
+		t.Fatalf("expected input price 12, got %v", got)
 	}
 	if firstCatalog.Pricing.CacheReadPriceCredits == nil || *firstCatalog.Pricing.CacheReadPriceCredits != 2 {
 		t.Fatalf("expected cache read price 2, got %#v", firstCatalog.Pricing.CacheReadPriceCredits)
@@ -241,8 +241,8 @@ func TestGetSnapshotOmitsInternalAliases(t *testing.T) {
 				Visibility:         "public",
 				Lifecycle:          "stable",
 				CapabilityBadges:   []string{"stable", "chat", "responses"},
-				InputPriceCredits:  12,
-				OutputPriceCredits: 36,
+				InputPriceCredits:  int64Ptr(12),
+				OutputPriceCredits: int64Ptr(36),
 				CreatedAt:          time.Unix(1_716_935_002, 0).UTC(),
 			},
 			{
@@ -253,8 +253,8 @@ func TestGetSnapshotOmitsInternalAliases(t *testing.T) {
 				Visibility:         "internal",
 				Lifecycle:          "hidden",
 				CapabilityBadges:   []string{"internal"},
-				InputPriceCredits:  1,
-				OutputPriceCredits: 1,
+				InputPriceCredits:  int64Ptr(1),
+				OutputPriceCredits: int64Ptr(1),
 				CreatedAt:          time.Unix(1_716_935_202, 0).UTC(),
 			},
 		},

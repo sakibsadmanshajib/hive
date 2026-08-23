@@ -39,16 +39,16 @@ import (
 // catalogHiveFast is the hive-fast row as of migration _01: 0.075 / 0.300 USD
 // per million upstream, times a 1.4 margin, times 100000 credits per USD. See
 // the note above on why this pinned historical row is not refreshed.
-var catalogHiveFast = SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}
+var catalogHiveFast = FixedPricing(10_500, 42_000)
 
 // catalogHiveAuto is the hive-auto row: 0.400 / 1.600 USD per million upstream.
-var catalogHiveAuto = SelectRoutePricing{InputPriceCredits: 56_000, OutputPriceCredits: 224_000}
+var catalogHiveAuto = FixedPricing(56_000, 224_000)
 
 // catalogHiveSTT is hive-stt, priced per SECOND of audio rather than per token
 // (supabase/migrations/20260801_13_alias_price_unit.sql). No token-metered
 // endpoint can charge against it without inventing a conversion, so it stands
 // in for the fail-closed case.
-var catalogHiveSTT = SelectRoutePricing{OutputPriceCredits: 4_316_667}
+var catalogHiveSTT = FixedPricing(0, 4_316_667)
 
 // newRoutingMockPriced stands in for the control-plane's route-selection
 // endpoint, answering with an explicit catalog price and price unit -- what the
@@ -128,7 +128,7 @@ func usageJSONServer(promptTokens, completionTokens int64) *httptest.Server {
 // (input * input_price + output * output_price) / 1_000_000, rounded half up.
 func catalogCredits(t *testing.T, pricing SelectRoutePricing, inputTokens, outputTokens int64) int64 {
 	t.Helper()
-	numerator := inputTokens*pricing.InputPriceCredits + outputTokens*pricing.OutputPriceCredits
+	numerator := inputTokens*pricing.InputCredits() + outputTokens*pricing.OutputCredits()
 	credits := numerator / 1_000_000
 	if numerator%1_000_000*2 >= 1_000_000 {
 		credits++

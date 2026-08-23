@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 type Repository interface {
@@ -136,7 +136,9 @@ func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (c
 			output_price_credits,
 			cache_read_price_credits,
 			cache_write_price_credits,
-			price_unit
+			price_unit,
+			pricing_mode,
+			reservation_estimate_credits
 		FROM public.model_aliases
 		WHERE alias_id = $1
 	`, aliasID)
@@ -151,6 +153,8 @@ func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (c
 		&pricing.CacheReadPriceCredits,
 		&pricing.CacheWritePriceCredits,
 		&priceUnit,
+		&pricing.PricingMode,
+		&pricing.ReservationEstimateCredits,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			// No model_aliases row for an alias the routing tables already

@@ -161,6 +161,16 @@ func (o *Orchestrator) executeSync(
 		return
 	}
 
+	// 2c. Bound the request for a variable-price alias, before dispatch. Its
+	// hold is only provably sufficient below a known request size and a known
+	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
+	// every fixed-price alias.
+	boundedBody, withinBounds := EnforceVariablePriceBounds(w, route, endpoint, model, body)
+	if !withinBounds {
+		return
+	}
+	body = boundedBody
+
 	// 3. Start attempt
 	requestID := uuid.New().String()
 	endStartAttempt := o.stage(endpoint, StageStartAttempt)
@@ -181,13 +191,15 @@ func (o *Orchestrator) executeSync(
 	// 4. Create reservation
 	endCreateReservation := o.stage(endpoint, StageCreateReservation)
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
-		AccountID:        snapshot.AccountID,
-		RequestID:        requestID,
-		AttemptNumber:    1,
-		APIKeyID:         snapshot.KeyID,
-		Endpoint:         endpoint,
-		ModelAlias:       model,
-		EstimatedCredits: estimatedCredits,
+		AccountID:     snapshot.AccountID,
+		RequestID:     requestID,
+		AttemptNumber: 1,
+		APIKeyID:      snapshot.KeyID,
+		Endpoint:      endpoint,
+		ModelAlias:    model,
+		// A variable-price alias raises this from its catalog row; a fixed
+		// one keeps the flat endpoint default. See ReservationCredits.
+		EstimatedCredits: ReservationCredits(route, estimatedCredits),
 		PolicyMode:       "strict",
 	})
 	endCreateReservation()
@@ -285,7 +297,27 @@ func (o *Orchestrator) executeSync(
 		if inputTokens+outputTokens <= 0 {
 			prompt, content = promptText(endpoint, body), responseText(endpoint, normalized)
 		}
-		actualCredits, confirmed, billable := settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
+		var actualCredits int64
+		var confirmed, billable bool
+		if route.Pricing.IsUpstreamActual() {
+			// respBody, not `normalized`: normalize re-marshals a typed struct
+			// and drops every field it does not declare, the upstream's
+			// reported cost among them. The raw bytes are the only place that
+			// figure still exists.
+			settled := UpstreamActualSettlement(
+				respBody, reservation.Held(),
+				hasUsage, inputTokens, outputTokens, responseText(endpoint, normalized))
+			actualCredits, confirmed, billable = settled.Credits, settled.Confirmed, settled.Delivered
+			if billable {
+				// generation_id is the audit handle for this charge; see the
+				// same line on the streaming path.
+				log.Printf("inference: variable-price settlement request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s credits=%d confirmed=%v generation_id=%s held_credits=%d",
+					requestID, reservation.ID, endpoint, model, settled.Reason,
+					settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
+			}
+		} else {
+			actualCredits, confirmed, billable = settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
+		}
 		if !billable {
 			// Nothing measured and nothing produced: there is no quantity to
 			// charge, so leave finalized false and let the deferred release

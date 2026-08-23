@@ -101,11 +101,87 @@ type SelectRouteResult struct {
 	PriceUnit string             `json:"price_unit"`
 }
 
+// Pricing modes, mirroring control-plane's catalog.PricingMode* constants and
+// public.model_aliases.pricing_mode. Duplicated rather than imported because
+// control-plane and edge-api are separate modules and this crosses an HTTP
+// boundary, the same reason SelectRoutePricing itself is a local type.
+const (
+	PricingModeFixed          = "fixed"
+	PricingModeUpstreamActual = "upstream_actual"
+)
+
 // SelectRoutePricing is the subset of the control-plane's catalog pricing
 // payload edge-api charges against: credits per MILLION metered units.
+//
+// The two price fields are POINTERS, and the reason is the opposite of the one
+// that applies on the database side. Scanning a SQL NULL into a non-pointer
+// int64 is a hard pgx error, so that boundary fails loudly by itself.
+// encoding/json does NOT: unmarshalling JSON null into a non-pointer numeric
+// field is a documented no-op that leaves the field at zero and returns no
+// error, verified against Go's own decoder rather than assumed. So a plain
+// int64 here would have priced a variable-price route at 0 credits, silently,
+// which is indistinguishable from free. nil is the honest representation and
+// forces every caller to branch.
+//
+// This is a runtime boundary, not a compile-time one. control-plane's own
+// catalog.CatalogPricing changed to pointers in the same change, but nothing in
+// the type system ties the two structs together, so a mismatch here does not
+// break the build and does not fail at dispatch either. It shows up as a wrong
+// price, which is why the shapes have to be kept in step by hand.
 type SelectRoutePricing struct {
-	InputPriceCredits  int64 `json:"input_price_credits"`
-	OutputPriceCredits int64 `json:"output_price_credits"`
+	InputPriceCredits  *int64 `json:"input_price_credits"`
+	OutputPriceCredits *int64 `json:"output_price_credits"`
+	// PricingMode distinguishes "variable by design" from "the lookup came
+	// back empty". An empty string is treated as fixed, so a control-plane
+	// that predates this field keeps its old meaning rather than silently
+	// becoming a variable-price alias.
+	PricingMode string `json:"pricing_mode"`
+	// ReservationEstimateCredits sizes the up-front hold for a variable-price
+	// alias, which has no catalog price to derive one from.
+	ReservationEstimateCredits *int64 `json:"reservation_estimate_credits,omitempty"`
+}
+
+// IsUpstreamActual reports whether a charge against this route must come from
+// the upstream's own reported cost rather than from the price columns.
+func (p SelectRoutePricing) IsUpstreamActual() bool {
+	return p.PricingMode == PricingModeUpstreamActual
+}
+
+// FixedPricing builds an ordinary fixed-price row, in credits per million
+// metered units. It exists so a caller states the two prices as plain numbers
+// instead of taking addresses of locals, which is both noisier and easy to get
+// subtly wrong when the values come from a loop variable.
+func FixedPricing(inputCredits, outputCredits int64) SelectRoutePricing {
+	return SelectRoutePricing{
+		InputPriceCredits:  &inputCredits,
+		OutputPriceCredits: &outputCredits,
+		PricingMode:        PricingModeFixed,
+	}
+}
+
+// UpstreamActualPricing builds a variable-price row: no prices, a hold size,
+// and the mode that tells settlement to charge the upstream's reported cost.
+func UpstreamActualPricing(reservationEstimateCredits int64) SelectRoutePricing {
+	return SelectRoutePricing{
+		PricingMode:                PricingModeUpstreamActual,
+		ReservationEstimateCredits: &reservationEstimateCredits,
+	}
+}
+
+// InputCredits and OutputCredits give the fixed per-million price, treating an
+// absent price as zero. Safe ONLY because both callers (CanPriceTokens'
+// positivity test and CreditsForTokens, which is never reached in
+// upstream_actual mode) are asking "is there a positive price", never "what
+// should I charge". Anything that charges must branch on IsUpstreamActual
+// first.
+func (p SelectRoutePricing) InputCredits() int64  { return derefPrice(p.InputPriceCredits) }
+func (p SelectRoutePricing) OutputCredits() int64 { return derefPrice(p.OutputPriceCredits) }
+
+func derefPrice(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // RoutingClient calls the control-plane routing endpoint.
