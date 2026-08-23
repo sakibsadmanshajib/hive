@@ -123,8 +123,10 @@ RETRY_DELAY = float(os.environ.get("HIVE_VERIFY_RETRY_DELAY", "20"))
 RUN_LABEL = os.environ.get("HIVE_VERIFY_RUN_LABEL", "").strip() or "local"
 
 # The flat credit hold every chat completion takes before dispatch (see the
-# preflight in check_ledger for why this number lives here).
-LEDGER_CHAT_HOLD_CREDITS = 10_000
+# preflight in check_ledger for why this number lives here). Optional
+# override for a deployment where that endpoint default has moved.
+LEDGER_CHAT_HOLD_CREDITS = int(
+    os.environ.get("HIVE_VERIFY_CHAT_HOLD_CREDITS", "10000"))
 
 
 class CheckFailed(Exception):
@@ -439,8 +441,19 @@ def check_ledger(auth: dict, negative: bool) -> None:
         else:
             try:
                 summary = json.loads(raw)
+            except json.JSONDecodeError:
+                raise CheckFailed(
+                    "the balance endpoint answered 200 with a body that is not JSON, "
+                    f"so the headroom preflight cannot run: {snippet(raw)}"
+                ) from None
+            if not isinstance(summary, dict):
+                raise CheckFailed(
+                    "the balance endpoint answered 200 with JSON that is not an object "
+                    f"({type(summary).__name__})"
+                )
+            try:
                 available = int(summary.get("available_credits"))
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 raise CheckFailed(
                     "the balance endpoint answered 200 with a body this script cannot "
                     f"read: {snippet(raw)}"
