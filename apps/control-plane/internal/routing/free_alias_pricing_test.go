@@ -30,6 +30,12 @@ import (
 // pass with the two aliases' figures swapped.
 const freePricingMigrationRelPath = "supabase/migrations/20260823_20_free_route_aliases_half_price.sql"
 
+// The second half of the same owner directive: the remaining Groq TEXT routes
+// move to the same free model, and their prices do NOT change. Kept as its own
+// file, and guarded separately, precisely so that "no price moves here" is a
+// structural property of the file rather than a claim in its header.
+const groqFreeMigrationRelPath = "supabase/migrations/20260823_21_groq_text_routes_to_openrouter_free.sql"
+
 // oldRates are the prices in force before this migration, read out of
 // supabase/migrations/20260822_02_catalog_alias_restructure.sql step 7, which is
 // the statement that set them. Pinned here rather than parsed from that file so
@@ -437,6 +443,217 @@ func TestFreeRouteAutoCarriesTheSoleCapabilityFlagsForward(t *testing.T) {
 		}
 		if !granted {
 			t.Errorf("this migration disables route-groq-auto, the only route in the catalog carrying %s, and grants that flag to no replacement route. Every endpoint gated on it would find zero eligible routes for every alias.", flag)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Second half of the directive: the remaining Groq TEXT routes move to the same
+// free model, at UNCHANGED prices.
+// ---------------------------------------------------------------------------
+
+// groqTextRepoints are the aliases the second migration moves, and the route
+// each must end up on. Audio is deliberately absent: hive-stt and hive-tts stay
+// on Groq, and TestGroqFreeRepointLeavesAudioOnGroq holds that.
+var groqTextRepoints = map[string]string{
+	"hive-small":  "route-free-small",
+	"hive-medium": "route-free-medium",
+	"hive-fast":   "route-free-fast",
+}
+
+// retiredGroqTextRoutes are the routes that migration must disable.
+var retiredGroqTextRoutes = []string{"route-groq-small", "route-groq-medium", "route-groq-fast"}
+
+// audioRoutes must survive untouched. OpenRouter offers no OpenAI-compatible
+// speech endpoint at all and no model advertising selectable voices, and the
+// only free models that take audio at all take it as chat input rather than
+// through a transcription endpoint, so moving these would remove voice from the
+// product rather than migrate it.
+var audioRoutes = []string{"route-groq-stt", "route-groq-tts"}
+
+func groqFreeMigrationSQL(t *testing.T) string {
+	t.Helper()
+	return stripSQLComments(readRepoFile(t, groqFreeMigrationRelPath))
+}
+
+// TestGroqFreeRepointTouchesNoPrice is the guard that makes "prices unchanged"
+// checkable rather than a promise in a comment. The owner's 50 percent
+// instruction covers hive-default and hive-auto only; serving hive-small,
+// hive-medium and hive-fast from a free upstream at their existing prices widens
+// margin, which is the intended outcome. A price column written here would be
+// an unrequested price change on three customer-facing aliases.
+func TestGroqFreeRepointTouchesNoPrice(t *testing.T) {
+	sql := groqFreeMigrationSQL(t)
+
+	// Two independent checks, because they fail differently. First: no UPDATE of
+	// model_aliases at all, which is the strongest form and the one the
+	// migration is written to satisfy.
+	if updates := updateAssignments(sql, "public.model_aliases", "alias_id"); len(updates) != 0 {
+		for alias, assigns := range updates {
+			t.Errorf("%s updates model_aliases for %s (%v); this migration must not write that table", groqFreeMigrationRelPath, alias, assigns)
+		}
+	}
+
+	// Second: no price column name appears in any statement, which also catches
+	// an INSERT ... ON CONFLICT DO UPDATE or a shape updateAssignments does not
+	// model.
+	for _, col := range append(append([]string{}, moneyColumns...), "pricing_mode", "price_unit") {
+		if strings.Contains(strings.ToLower(sql), col) {
+			t.Errorf("%s mentions %s in an executable statement; the Groq repoint must not move a price", groqFreeMigrationRelPath, col)
+		}
+	}
+}
+
+// TestGroqTextRoutesRepointToTheFreeModel is the routing half: each moved alias
+// gets one new OpenRouter route on the free variant, and its policy follows.
+func TestGroqTextRoutesRepointToTheFreeModel(t *testing.T) {
+	sql := groqFreeMigrationSQL(t)
+
+	byRoute := map[string]map[string]string{}
+	for _, row := range insertRows(sql, "public.provider_routes") {
+		byRoute[row["route_id"]] = row
+	}
+
+	for alias, routeID := range groqTextRepoints {
+		row, ok := byRoute[routeID]
+		if !ok {
+			t.Errorf("%s inserts no route %s for alias %s", groqFreeMigrationRelPath, routeID, alias)
+			continue
+		}
+		if row["alias_id"] != alias {
+			t.Errorf("route %s is attached to alias %q, want %q", routeID, row["alias_id"], alias)
+		}
+		if row["provider"] != "openrouter" {
+			t.Errorf("route %s provider = %q, want openrouter", routeID, row["provider"])
+		}
+		model := row["provider_model"]
+		if !strings.HasPrefix(model, "openrouter/") {
+			t.Errorf("route %s provider_model = %q; the openrouter/ prefix must be doubled because LiteLLM strips the leading one", routeID, model)
+		}
+		if !strings.HasSuffix(model, ":free") {
+			t.Errorf("route %s provider_model = %q; without the :free variant suffix this selects a PAID endpoint, reintroducing the out-of-pocket spend this migration exists to remove", routeID, model)
+		}
+		if row["litellm_model_name"] != routeID {
+			t.Errorf("route %s litellm_model_name = %q, want the route id", routeID, row["litellm_model_name"])
+		}
+	}
+
+	policies := updateAssignments(sql, "public.alias_route_policies", "alias_id")
+	for alias, routeID := range groqTextRepoints {
+		assigns, ok := policies[alias]
+		if !ok {
+			t.Errorf("alias %s: fallback_order is not repointed, so its policy still names a route this migration disabled", alias)
+			continue
+		}
+		order := assigns["fallback_order"]
+		if !strings.Contains(order, routeID) {
+			t.Errorf("alias %s: fallback_order = %q, want it to name %s", alias, order, routeID)
+		}
+		for _, retired := range retiredGroqTextRoutes {
+			if strings.Contains(order, retired) {
+				t.Errorf("alias %s: fallback_order still names the disabled route %s", alias, retired)
+			}
+		}
+		// policy_mode must not move. hive-fast is 'latency' from its original
+		// seed and hive-small and hive-medium are 'pinned'; a repoint has no
+		// business changing selection strategy.
+		if _, ok := assigns["policy_mode"]; ok {
+			t.Errorf("alias %s: this migration assigns policy_mode; a route repoint must not change the selection strategy", alias)
+		}
+	}
+}
+
+// TestGroqTextRoutesAreDisabled holds the other side: the old route is out of
+// service, so no alias is left with two enabled routes and an ambiguous price.
+func TestGroqTextRoutesAreDisabled(t *testing.T) {
+	sql := groqFreeMigrationSQL(t)
+
+	for _, routeID := range retiredGroqTextRoutes {
+		disabled := false
+		for _, stmt := range splitStatements(sql) {
+			if disableRe.MatchString(strings.TrimSpace(stmt)) && strings.Contains(stmt, "'"+routeID+"'") {
+				disabled = true
+				break
+			}
+		}
+		if !disabled {
+			t.Errorf("%s does not disable %s; its alias would then have two enabled routes", groqFreeMigrationRelPath, routeID)
+		}
+	}
+}
+
+// TestGroqFreeRepointLeavesAudioOnGroq is the out-of-scope guard, and it is the
+// one with a live product behind it. Groq STT and TTS serve Bengali voice
+// dictation, wired to the gateway in PR #1079. OpenRouter has no
+// OpenAI-compatible speech endpoint and no model advertising selectable voices,
+// so there is nothing to move these to; disabling them would delete voice from
+// the product.
+func TestGroqFreeRepointLeavesAudioOnGroq(t *testing.T) {
+	sql := groqFreeMigrationSQL(t)
+
+	for _, routeID := range audioRoutes {
+		if strings.Contains(sql, routeID) {
+			t.Errorf("%s names %s in an executable statement; Groq audio is explicitly out of scope and must not be repointed or disabled", groqFreeMigrationRelPath, routeID)
+		}
+	}
+}
+
+// TestRepointedGroqTextRoutesKeepTheirCapabilities carries the parity check onto
+// the three moved routes. Two of them keep supports_reasoning true; hive-fast's
+// stays false, which is status-quo preservation of a pre-existing under-claim on
+// a deprecated alias that 20260822_02 examined and deliberately left alone.
+//
+// The free model's own parameter list omits reasoning_effort, stop, seed and the
+// penalties, so parity was probed live rather than inferred: twelve request
+// shapes including all of those, plus json_schema structured output, all
+// returned 200. There is no request shape that works today and fails after the
+// repoint.
+func TestRepointedGroqTextRoutesKeepTheirCapabilities(t *testing.T) {
+	// route_id to the flags it must declare, mirroring the rows being replaced.
+	want := map[string]map[string]bool{
+		"route-free-small": {
+			"supports_responses": true, "supports_chat_completions": true,
+			"supports_completions": true, "supports_streaming": true,
+			"supports_reasoning": true, "tools_supported": true,
+			"supports_embeddings": false,
+		},
+		"route-free-medium": {
+			"supports_responses": true, "supports_chat_completions": true,
+			"supports_completions": true, "supports_streaming": true,
+			"supports_reasoning": true, "tools_supported": true,
+			"supports_embeddings": false,
+		},
+		"route-free-fast": {
+			"supports_responses": true, "supports_chat_completions": true,
+			"supports_completions": true, "supports_streaming": true,
+			"supports_reasoning": false, "tools_supported": true,
+			"supports_embeddings": false,
+		},
+	}
+
+	caps := map[string]map[string]string{}
+	for _, row := range insertRows(groqFreeMigrationSQL(t), "public.provider_capabilities") {
+		caps[row["route_id"]] = row
+	}
+
+	for routeID, flags := range want {
+		row, ok := caps[routeID]
+		if !ok {
+			t.Errorf("%s inserts no provider_capabilities row for %s; every column defaults to false, so every endpoint would 422", groqFreeMigrationRelPath, routeID)
+			continue
+		}
+		for flag, expected := range flags {
+			got := strings.EqualFold(row[flag], "true")
+			if got != expected {
+				t.Errorf("route %s: %s = %v, want %v", routeID, flag, got, expected)
+			}
+		}
+		// None of these three is a sole carrier of a media flag, so none of them
+		// may claim one. route-free-auto is where those live.
+		for _, flag := range soleCarrierFlags {
+			if strings.EqualFold(row[flag], "true") {
+				t.Errorf("route %s claims %s; the routes it replaces did not, and only route-free-auto carries the media flags", routeID, flag)
+			}
 		}
 	}
 }

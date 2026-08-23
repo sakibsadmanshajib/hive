@@ -123,19 +123,32 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 	}
 }
 
-// TestHiveFastIsPinnedToGroqAtCorrectedPrice is requirement (c) at the data
-// level. The expected credit figures are derived by hand from Groq's
-// published rate for openai/gpt-oss-20b
-// (20260818_01_revert_hive_fast_groq_model_decommissioned.sql). Groq
-// decommissioned the previously-pinned llama-3.1-8b-instant sometime after
-// 2026-08-03, so hive-fast was reverted to gpt-oss-20b, the model this route
-// used before that cost migration, and its (unchanged) published rate. A
-// later price or route change has to fail this test and be re-derived rather
-// than drift silently:
+// TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice is requirement (c) at the
+// data level: hive-fast has exactly one enabled route, and its price is the
+// figure the catalog derived for it.
+//
+// The price figures are unchanged from when this test was written, and that is
+// now the load-bearing half. They were derived from Groq's published rate for
+// openai/gpt-oss-20b
+// (20260818_01_revert_hive_fast_groq_model_decommissioned.sql):
 //
 //	input:  0.075 USD/M * 1.4 = 0.105 USD/M * 100_000 credits/USD = 10_500
 //	output: 0.300 USD/M * 1.4 = 0.420 USD/M * 100_000 credits/USD = 42_000
-func TestHiveFastIsPinnedToGroqAtCorrectedPrice(t *testing.T) {
+//
+// The ROUTE moved on 2026-08-23
+// (20260823_21_groq_text_routes_to_openrouter_free.sql): hive-fast, hive-small
+// and hive-medium left Groq for an OpenRouter free model on an owner directive,
+// to stop the Groq allowance being consumed. The price deliberately did NOT
+// move with it. Only hive-default and hive-auto were repriced, by the companion
+// migration 20260823_20, and this alias was not in that instruction's scope.
+//
+// So these two figures are no longer derivable from the upstream's cost, which
+// is zero, and they must not be "corrected" to match it: a zero price makes an
+// alias unselectable (RouteInfo.HasCostBasis) rather than free. They are held
+// here as the DB-level guard that the repoint did not quietly reprice three
+// customer-facing aliases. Any later price change has to fail this test and be
+// re-derived rather than drift silently, exactly as before.
+func TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice(t *testing.T) {
 	pool := connectCatalogDB(t)
 
 	var routeID, provider, providerModel, healthState string
@@ -147,11 +160,14 @@ func TestHiveFastIsPinnedToGroqAtCorrectedPrice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hive-fast must have exactly one enabled route: %v", err)
 	}
-	if provider != "groq" {
-		t.Errorf("hive-fast provider = %q, want groq", provider)
+	if provider != "openrouter" {
+		t.Errorf("hive-fast provider = %q, want openrouter", provider)
 	}
-	if providerModel != "groq/openai/gpt-oss-20b" {
-		t.Errorf("hive-fast provider_model = %q, want groq/openai/gpt-oss-20b", providerModel)
+	// The `:free` suffix is the whole point of the repoint: without it the same
+	// slug resolves to a PAID endpoint, so the alias would charge an unchanged
+	// price against a real out-of-pocket cost.
+	if providerModel != "openrouter/dots-studio/dots-3-note-preview:free" {
+		t.Errorf("hive-fast provider_model = %q, want openrouter/dots-studio/dots-3-note-preview:free", providerModel)
 	}
 
 	var input, output int64

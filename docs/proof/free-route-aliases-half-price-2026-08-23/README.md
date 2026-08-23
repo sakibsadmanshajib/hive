@@ -1,6 +1,16 @@
-# hive-default and hive-auto: free OpenRouter upstream at half price
+# Every chat alias moves to a free OpenRouter upstream
 
 Captured 2026-08-23 on the branch `feat/free-route-aliases-half-price`.
+
+Two owner directives, same day, one branch because they touch the same catalog
+rows and the same `deploy/litellm/config.yaml`.
+
+- **Part one, sections 1 to 5:** `hive-default` and `hive-auto` move to a free
+  OpenRouter model and their prices halve.
+- **Part two, sections 6 to 10:** the remaining Groq TEXT routes (`hive-small`,
+  `hive-medium`, `hive-fast`) move to the same free model at prices
+  **unchanged**, to stop the Groq allowance being consumed. Groq speech to text
+  and text to speech are explicitly out of scope and untouched.
 
 Every credential is a placeholder in this log. The project's real
 `OPENROUTER_API_KEY` was read from the shared `.env` at runtime and never
@@ -311,3 +321,240 @@ curl -s -H "Authorization: Bearer <OPENROUTER_API_KEY>" \
   -d '{"model":"dots-studio/dots-3-note-preview:free","messages":[...]}' \
   https://openrouter.ai/api/v1/chat/completions
 ```
+
+---
+
+# Part two: the remaining Groq text routes, at unchanged prices
+
+Owner directive, same day, second half: move the Groq TEXT and chat-completion
+models to OpenRouter free as well, to stop the Groq free-tier allowance being
+consumed. Prices for those aliases stay exactly as they are. Groq speech to text
+and text to speech are explicitly out of scope.
+
+## 6. Full migration chain applied to a real Postgres
+
+Not a file-parsing claim. A throwaway `pgvector/pgvector:pg17` container on its
+own port, seeded with `.github/ci/test-db-bootstrap.sql` and then every file in
+`supabase/migrations/` in order, exactly as `.github/workflows/ci.yml` does it.
+Container removed afterwards.
+
+`all migrations applied`, no error.
+
+Enabled routes and prices, read back from that database:
+
+```
+        alias_id        | in_credits | out_credits |  pricing_mode   | price_unit |              route_id               |  provider  |                     provider_model
+------------------------+------------+-------------+-----------------+------------+-------------------------------------+------------+---------------------------------------------------------
+ deepseek-v4-flash      |       8946 |       17892 | fixed           | tokens     | route-deepseek-v4-flash             | openrouter | openrouter/~deepseek/deepseek-v4-flash-latest
+ deepseek-v4-pro        |     157080 |      471240 | fixed           | tokens     | route-deepseek-v4-pro               | openrouter | openrouter/deepseek/deepseek-v4-pro-0813
+ hive-auto              |      10500 |       42000 | fixed           | tokens     | route-free-auto                     | openrouter | openrouter/dots-studio/dots-3-note-preview:free
+ hive-default           |       5250 |       21000 | fixed           | tokens     | route-free-default                  | openrouter | openrouter/dots-studio/dots-3-note-preview:free
+ hive-embedding-default |          1 |           0 | fixed           | tokens     | route-openrouter-embedding-fallback | openrouter | openrouter/qwen/qwen3-embedding-8b
+ hive-embedding-default |          1 |           0 | fixed           | tokens     | route-openrouter-embedding          | openrouter | openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free
+ hive-embedding-default |          1 |           0 | fixed           | tokens     | route-nvidia-embedding              | nvidia_nim | nvidia_nim/nvidia/llama-3.2-nemoretriever-300m-embed-v1
+ hive-fast              |      10500 |       42000 | fixed           | tokens     | route-free-fast                     | openrouter | openrouter/dots-studio/dots-3-note-preview:free
+ hive-medium            |      21000 |       84000 | fixed           | tokens     | route-free-medium                   | openrouter | openrouter/dots-studio/dots-3-note-preview:free
+ hive-small             |      10500 |       42000 | fixed           | tokens     | route-free-small                    | openrouter | openrouter/dots-studio/dots-3-note-preview:free
+ hive-stt               |          0 |     4316667 | fixed           | seconds    | route-groq-stt                      | groq       | groq/whisper-large-v3
+ hive-tts               |          0 |     3080000 | fixed           | characters | route-groq-tts                      | groq       | groq/canopylabs/orpheus-v1-english
+ openrouter-auto        |            |             | upstream_actual | tokens     | route-openrouter-auto-beta          | openrouter | openrouter/openrouter/auto-beta
+```
+
+Read that against the directive:
+
+- `hive-default` 5250 / 21000 and `hive-auto` 10500 / 42000: halved, as part one.
+- `hive-small` 10500 / 42000, `hive-fast` 10500 / 42000, `hive-medium` 21000 / 84000: **byte for byte what they were before this branch.** Repointed, not repriced.
+- `hive-stt` and `hive-tts`: still `groq`, still healthy, still `seconds` and `characters` as their price units. Voice untouched.
+- Every alias still `pricing_mode = fixed` and `price_unit = tokens` except the audio pair and `openrouter-auto`, none of which this branch touches.
+
+Enabled-route count per alias, where the query lists only violations of "exactly one":
+
+```
+        alias_id        | enabled
+------------------------+---------
+ hive-embedding-default |       3
+```
+
+One row, and it is the pre-existing exception the integration suite already
+records in `pendingMultiRouteAliases`. Every alias this branch touches has
+exactly one enabled route.
+
+Capability carriers for the flags that gate whole endpoints:
+
+```
+       route_id        | supports_batch | supports_image_generation | supports_image_edit | supports_stt | supports_tts | health_state
+-----------------------+----------------+---------------------------+---------------------+--------------+--------------+--------------
+ route-free-auto       | t              | t                         | t                   | f            | f            | healthy
+ route-groq-auto       | t              | t                         | t                   | f            | f            | disabled
+ route-groq-stt        | f              | f                         | f                   | t            | f            | healthy
+ route-groq-tts        | f              | f                         | f                   | f            | t            | healthy
+ route-openrouter-auto | t              | t                         | t                   | f            | f            | disabled
+```
+
+The three batch and image flags have a **healthy** carrier (`route-free-auto`),
+so `/v1/batches`, `/v1/images/generations` and `/v1/images/edits` still find an
+eligible route. `supports_stt` and `supports_tts` are still on the two healthy
+Groq audio routes.
+
+Capability flags on the five free routes:
+
+```
+      route_id      | responses | chat | completions | streaming | reasoning | tools | embeddings
+--------------------+-----------+------+-------------+-----------+-----------+-------+------------
+ route-free-auto    | t         | t    | t           | t         | t         | t     | f
+ route-free-default | t         | t    | t           | t         | t         | t     | f
+ route-free-fast    | t         | t    | t           | t         | f         | t     | f
+ route-free-medium  | t         | t    | t           | t         | t         | t     | f
+ route-free-small   | t         | t    | t           | t         | t         | t     | f
+```
+
+`route-free-fast`'s `reasoning: f` is deliberate status-quo preservation:
+`route-groq-fast` has carried that under-claim since its original 20260331_02
+seed, and 20260822_02 examined it and left it alone on the same reasoning.
+
+Alias policies, showing `policy_mode` unchanged on every row and only the route
+name inside `fallback_order` moving:
+
+```
+ hive-auto              | weighted    | ["route-free-auto"]
+ hive-default           | stability   | ["route-free-default"]
+ hive-fast              | latency     | ["route-free-fast"]
+ hive-medium            | pinned      | ["route-free-medium"]
+ hive-small             | pinned      | ["route-free-small"]
+ hive-stt               | pinned      | ["route-groq-stt"]
+ hive-tts               | pinned      | ["route-groq-tts"]
+```
+
+Idempotence, checked rather than claimed: both new migrations were re-applied to
+the same database a second time. Both succeeded, and the prices afterwards were
+identical.
+
+```
+   alias_id   | input_price_credits | output_price_credits | cache_read | cache_write
+--------------+---------------------+----------------------+------------+-------------
+ hive-auto    |               10500 |                42000 |          0 |           0
+ hive-default |                5250 |                21000 |          0 |           0
+ hive-fast    |               10500 |                42000 |          1 |           4
+ hive-medium  |               21000 |                84000 |          0 |           0
+ hive-small   |               10500 |                42000 |          0 |           0
+```
+
+`hive-fast`'s cache columns read 1 and 4 rather than 0 and 0. Those are the
+stale OpenRouter-era values from the original 20260331_01 seed, which
+20260822_02 examined and deliberately left alone so a deprecated alias would not
+be repriced on any axis. This branch does not touch them either, for the same
+reason.
+
+## 7. Integration suite against that same database
+
+```
+--- PASS: TestSeededAliasHasExactlyOneEnabledRoute
+--- PASS: TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice
+--- PASS: TestNoRouteIsSelectableButUnservable
+--- PASS: TestSelectRouteRefusesUnpricedAlias
+--- PASS: TestOneEnabledRoutePerAliasInSQL
+--- PASS: TestHiveFastStaysInvocableAfterDeprecation
+--- PASS: TestSelectRouteHiveFastResolvesToGroqAtGroqPrice
+ok  github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing
+```
+
+`internal/catalog` and `internal/litellmconfig` also pass with the integration
+tag against this database.
+
+Two honest notes on that run. `TestHiveFastIsPinnedToGroqAtCorrectedPrice` was
+renamed to `TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice` and its provider
+expectation updated, because the route legitimately moved; its two price
+assertions (10500 and 42000) are unchanged and are now the DB-level guard that
+this repoint did not quietly reprice three aliases. And
+`TestSelectRouteHiveFastResolvesToGroqAtGroqPrice` in `service_test.go` keeps a
+name that no longer describes the catalog: it is a stub-driven test of the
+`SelectRoute` algorithm with synthetic route fixtures, it reads neither the
+database nor any migration, and it is left alone rather than renamed in an
+unrelated file.
+
+Running the whole `./apps/control-plane/...` integration suite at once also
+produced failures in `auditworker`, `marketplace` and `tenants`. Those are
+package-parallelism collisions on one shared database, not this change: each
+passes on its own against the same database, and none of them reads
+`model_aliases`, `provider_routes`, `provider_capabilities` or
+`alias_route_policies`.
+
+## 8. Capability parity for the moved Groq aliases, probed live
+
+The concern is real rather than theoretical: `dots-3-note-preview` lists
+`tools`, `tool_choice`, `response_format`, `structured_outputs`, `reasoning`,
+`include_reasoning`, `max_tokens`, `temperature` and `top_p`, and does **not**
+list `reasoning_effort`, `stop`, `frequency_penalty`, `presence_penalty`,
+`seed`, `top_k` or `logprobs`. The Groq gpt-oss models it replaces accept
+several of those. So the question is whether an unlisted parameter fails or is
+ignored.
+
+Twelve request shapes, live, 2026-08-23:
+
+```
+baseline                               200  reasoning_tok=29  text='{"ok": true}'
+reasoning_effort=low                   200  reasoning_tok=100 text='{"ok": true}'
+reasoning_effort=high                  200  reasoning_tok=43  text='{"ok": true}'
+stop                                   200  reasoning_tok=27  text='{"ok": true}'
+frequency_penalty                      200  reasoning_tok=29  text='{"ok": true}'
+presence_penalty                       200  reasoning_tok=28  text='{"ok": true}'
+seed                                   200  reasoning_tok=27  text='{"ok": true}'
+top_k                                  200  reasoning_tok=157 text='{"ok": true}'
+logprobs + top_logprobs                200  reasoning_tok=52  text='{"ok": true}'
+n=2                                    200  choices=1         text='{"ok": true}'
+response_format json_schema strict     200  reasoning_tok=116 text='{"ok": true}'
+reasoning_effort + require_parameters  200  reasoning_tok=72  text='{"ok": true}'
+```
+
+All twelve returned 200 with a correct answer. **There is no request shape that
+works today and fails after the repoint**, which is the regression this section
+exists to rule out. Note in particular that `provider.require_parameters: true`
+together with `reasoning_effort` also succeeded, meaning OpenRouter considers
+that parameter satisfied by this endpoint.
+
+Two behavioural differences that are not failures, recorded so nobody files them
+as new bugs:
+
+- `reasoning_effort` is accepted and never rejected, but does not reliably
+  modulate effort on this model: `low` produced more reasoning tokens than
+  `high` in the same run. Requests keep working; the knob stops being
+  meaningful.
+- `n=2` returns one choice. That is OpenRouter's existing behaviour for a
+  provider that does not implement `n`, identical on the routes being replaced.
+
+## 9. Audio: what OpenRouter actually offers, surveyed rather than assumed
+
+"No audio on OpenRouter" would have been an overstatement, so here is the whole
+picture across all 422 models:
+
+- **Text to speech: nothing usable.** Not one model, free or paid, advertises
+  `supported_voices`. The only entries with audio in their output modality are
+  `google/lyria-3-pro-preview` and `google/lyria-3-clip-preview` (free, MUSIC
+  generation, no voice selection) and `openai/gpt-audio` and
+  `openai/gpt-audio-mini` (PAID, speech-to-speech chat). None is an
+  OpenAI-compatible `/v1/audio/speech` endpoint, which is what `internal/audio`
+  speaks. There is no replacement for Groq Orpheus at any price.
+- **Speech to text: three free models take audio as chat input**
+  (`thinkingmachines/inkling:free`, `thinkingmachines/inkling-small:free`,
+  `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`). They are not a
+  transcription endpoint: they are chat-completions models, while
+  `route-groq-stt` is a LiteLLM `mode: audio_transcription` route that edge-api's
+  audio handler forwards multipart audio to. Using one would be a new
+  integration, not a repoint. All three are served by providers whose published
+  policy is training on prompts, which is a poor destination for dictated speech
+  in particular.
+
+Reported, not acted on. Groq keeps serving voice, and `GROQ_API_KEY` stays
+required.
+
+## 10. What part two does NOT prove
+
+- Same as part one: that the running gateway serves the new routes. Five config
+  entries changed and the config is volume-seeded, so the on-box confirmation
+  belongs to the deploy run and its "Assert model catalog prices agree with the
+  model LiteLLM will call" step.
+- That the free endpoint can carry the whole chat surface. It now carries every
+  chat alias except the two paid DeepSeek ones, at a documented 20 requests per
+  minute, and the workaround that existed an hour earlier (switch to hive-small
+  on Groq) no longer exists. That is a load question a migration cannot answer
+  and is the accepted risk recorded in the pull request.
