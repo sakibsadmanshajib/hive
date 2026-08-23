@@ -253,7 +253,13 @@ func readReservationEstimate(t *testing.T) int64 {
 	if err != nil || factor <= 0 {
 		t.Fatalf("rescale factor %q is not a positive number", f[1])
 	}
-	held *= factor
+	// Multiply exactly and refuse overflow rather than wrapping: a wrapped
+	// hold here would silently pass the coverage proof it feeds.
+	product := new(big.Int).Mul(big.NewInt(held), big.NewInt(factor))
+	if !product.IsInt64() {
+		t.Fatalf("seed hold %d times rescale factor %d does not fit in int64", held, factor)
+	}
+	held = product.Int64()
 
 	if held <= 0 {
 		t.Fatalf("hold must be positive, got %d", held)

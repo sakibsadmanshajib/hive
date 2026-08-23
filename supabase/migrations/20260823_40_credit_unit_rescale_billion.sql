@@ -46,6 +46,9 @@
 --   public.api_key_policies.budget_limit_credits
 --   public.api_key_usage_rollups.consumed_credits
 --   public.api_key_budget_windows.consumed_credits / reserved_credits
+--   public.payment_invoices.credits
+--     absolute credit quantity on each issued invoice; scaled so historical
+--     invoices keep stating the same real-money purchase after the cutover.
 --   public.batches.estimated_credits / actual_credits
 --   public.batch_lines.consumed_credits (numeric(20,6); x10000 is exact)
 --   public.llm_traces.cost_credits
@@ -62,49 +65,63 @@
 --   credits. Token counts everywhere are untouched, obviously.
 --
 -- AUDIT MARKING: HOW TO TELL AN OLD-UNIT ROW FROM A NEW-UNIT ONE
---   Three mechanisms, in increasing order of convenience:
+--   Three mechanisms:
 --   1. Every rescaled nonzero ledger entry and reservation event gains a
---      metadata key: {"credit_unit": "legacy-1usd-100k-credits"}. New rows
---      written by the new binary simply do not carry it. This is the
---      per-row flag an auditor can filter on. Zero-delta rows carry no flag
---      because zero means the same thing in both units.
---   2. public.credit_unit_rescale holds one row with the transaction's
---      applied_at timestamp: any credit-denominated row created BEFORE that
---      instant was written by the old binary in old units (and has been
---      rescaled here); anything after is native new-unit. This is the
---      boundary for tables without a metadata column.
---   3. This file itself, recorded in the migration history, is the durable
+--      metadata key: {"credit_unit": "legacy-1usd-100k-credits"}.
+--   2. The NEW binary stamps every ledger entry it writes and every payment
+--      intent it creates with {"credit_unit": "v2-1usd-1e9"} (ledger
+--      repository PostEntry and payments.InitiateCheckout, same pull
+--      request). Together with 1 this makes every writer identifiable PER
+--      ROW on both sides of the deploy, which closes the detection gap: an
+--      OLD-unit row written between this migration's COMMIT and the
+--      container recreate carries NO credit_unit key at all, because the old
+--      binaries predate stamping. Zero-delta rows carry no flag because zero
+--      means the same thing in both units.
+--   3. public.credit_unit_rescale holds exactly one row whose applied_at is
+--      clock_timestamp() taken at the END of the work (now() would be
+--      transaction START): the wall-clock upper bound of everything this
+--      file could have rescaled. Boundary for tables without a metadata
+--      column. This file itself, in the migration history, is the durable
 --      declaration of when the unit changed.
 --
 -- IDEMPOTENCY / REPLAY PROOF
 --   The whole body is guarded by the marker table: if
 --   public.credit_unit_rescale already holds a row, the DO block returns
 --   before touching data, so applying this file twice multiplies nothing.
---   Proof sketch for the reviewer: run the file twice against any database;
---   the second run reports 'already applied' and changes zero rows (the
---   UPDATE statements never execute). Corollary: NEVER delete or truncate
+--   Single-rowness is enforced STRUCTURALLY (PRIMARY KEY pinned to id = 1),
+--   so even two concurrent first applications serialize: the loser's INSERT
+--   violates the PK and its ENTIRE transaction rolls back, undoing every
+--   UPDATE it made inside that transaction. Proof sketch for the reviewer:
+--   run the file twice against any database; the second run reports 'already
+--   applied' and changes zero rows. Corollary: NEVER delete or truncate
 --   public.credit_unit_rescale. With the marker gone, a replay would double
---   every balance, which is the one way this migration can corrupt data.
+--   every balance, the one way this migration can corrupt data; the RLS
+--   lockdown below removes the anon/authenticated paths to exactly that.
 --
 -- RESIDUAL RACE, STATED RATHER THAN HIDDEN
 --   The deploy pipeline applies migrations while the PREVIOUS control-plane
---   and edge-api binaries are still serving. A request that commits an
---   OLD-unit ledger row between this transaction's snapshot and its COMMIT
---   would miss the scan and stay unscaled. The window is the duration of this
---   transaction (all tables together are a few tens of thousands of small
---   rows), and the post-deploy verification below detects it. On a quiet box
---   the expected count of stragglers is zero.
+--   and edge-api binaries are still serving. A request committing an
+--   OLD-unit ledger row after this transaction's COMMIT lands UNSCALED and
+--   UNFLAGGED (old binaries do not stamp), until the containers are
+--   recreated seconds to minutes later. That is why detection keys on the
+--   metadata marker rather than created_at: see STRAGGLER DETECTOR below.
+--   On a quiet box the expected count is zero.
 --
 -- POST-DEPLOY VERIFICATION (orchestrator runs these against the box; they are
 -- checks, not writes):
 --   -- owner account balance should read ~99,997,990,000 (was 9,999,799):
 --   SELECT sum(credits_delta) FROM public.credit_ledger_entries
 --    WHERE account_id = '<owner-account-uuid>';
---   -- no unflagged nonzero row may predate the marker (straggler detector):
---   SELECT count(*) FROM public.credit_ledger_entries e
---    WHERE e.credits_delta <> 0
---      AND e.created_at < (SELECT applied_at FROM public.credit_unit_rescale)
---      AND NOT (e.metadata ? 'credit_unit');
+--   -- STRAGGLER DETECTOR, covers BOTH window halves (rows the scan missed
+--   -- pre-boundary AND old-binary rows written during the recreate window):
+--   -- every writer stamps its rows EXCEPT the unscaled ones, so ANY hit is
+--   -- an unscaled row needing one flagged UPDATE x10000. Expected: 0 rows.
+--   SELECT account_id, count(*), sum(credits_delta)
+--     FROM public.credit_ledger_entries
+--    WHERE credits_delta <> 0 AND NOT (metadata ? 'credit_unit')
+--    GROUP BY account_id;
+--   SELECT id, status, credits FROM public.payment_intents
+--    WHERE credits <> 0 AND NOT (metadata ? 'credit_unit');
 --   -- catalog spot check (hive-default was 5250 / 21000):
 --   SELECT input_price_credits, output_price_credits FROM public.model_aliases
 --    WHERE alias_id = 'hive-default';   -- expect 52500000 / 210000000
@@ -115,11 +132,21 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS public.credit_unit_rescale (
-    applied_at timestamptz NOT NULL
+    id          integer     PRIMARY KEY CHECK (id = 1),
+    applied_at  timestamptz NOT NULL
 );
 
 COMMENT ON TABLE public.credit_unit_rescale IS
-    'One-row marker for migration 20260823_40 (credit unit rescale, factor 10000). applied_at is the old-unit/new-unit boundary instant for every credit-denominated column. Never truncate: the rescale DO block skips when this table is non-empty, so emptying it makes a replay double every balance.';
+    'One-row marker for migration 20260823_40 (credit unit rescale, factor 10000). applied_at is the clock_timestamp() upper bound of the work this file did; the id=1 PRIMARY KEY makes a concurrent replay fail loudly instead of double-scaling. NEVER delete or truncate: emptying this table lets a replay multiply every balance again.';
+
+-- Lockdown, same shape as the 20260529_01 ledger-family RLS: force RLS with
+-- NO policies (nothing reads or writes this table through PostgREST) plus
+-- explicit REVOKEs from anon and authenticated. DELETE here is the named
+-- path to doubling every balance on replay; it must not be reachable by any
+-- published-key role under any circumstance.
+ALTER TABLE public.credit_unit_rescale ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.credit_unit_rescale FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON public.credit_unit_rescale FROM anon, authenticated;
 
 DO $rescale$
 DECLARE
@@ -205,9 +232,17 @@ BEGIN
        SET cost_credits = cost_credits * factor
      WHERE cost_credits <> 0;
 
-    -- 11. Arm the guard LAST, so the boundary instant postdates every write
-    --     this transaction could possibly have rescaled.
-    INSERT INTO public.credit_unit_rescale (applied_at) VALUES (now());
+    -- 10b. Issued invoices state purchased credit quantities.
+    UPDATE public.payment_invoices
+       SET credits = credits * factor
+     WHERE credits <> 0;
+
+    -- 11. Arm the guard LAST. clock_timestamp(), not now(): now() is this
+    --     transaction's start, and a straggler row written by another
+    --     transaction DURING our window carries a created_at between those
+    --     two instants, so the post-deploy detector below must compare
+    --     against the LATEST possible wall-clock boundary to catch it.
+    INSERT INTO public.credit_unit_rescale (id, applied_at) VALUES (1, clock_timestamp());
 END
 $rescale$;
 

@@ -26,12 +26,12 @@ const (
 )
 
 // imageReservationCredits is the flat pre-dispatch hold both image endpoints
-// take: $0.50 equivalent at the current credit unit (1 USD = 1e9 credits
+// take: $0.05 equivalent at the current credit unit (1 USD = 1e9 credits
 // since migration 20260823_40_credit_unit_rescale_billion.sql; previously
-// 5,000 old-unit credits at 100k per USD, the same real money). It is an
+// 5,000 credits at 100k per USD, the same real money). It is an
 // authorization floor, never a charge: settlement replaces it with the
 // catalog-priced cost.
-const imageReservationCredits int64 = 500_000_000
+const imageReservationCredits int64 = 50_000_000
 
 // Authorizer validates incoming API keys and returns account context.
 type Authorizer interface {

@@ -158,7 +158,10 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		TaxRate:        taxResult.TaxRate,
 		TaxAmountLocal: taxAmountLocal,
 		IdempotencyKey: idempotencyKey,
-		Metadata:       map[string]any{},
+		// Credit-unit stamp (see ledger.CreditUnitV2): lets the post-deploy
+		// straggler detector tell a pre-rescale intent that missed the
+		// migration from a native new-unit one.
+		Metadata:       map[string]any{"credit_unit": "v2-1usd-1e9"},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

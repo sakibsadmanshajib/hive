@@ -110,6 +110,7 @@ var everyRescaledColumn = []rescaleStmt{
 	{"credit_reservations", []string{"reserved_credits", "consumed_credits", "released_credits"}},
 	{"credit_reservation_events", []string{"credits_delta"}},
 	{"payment_intents", []string{"credits"}},
+	{"payment_invoices", []string{"credits"}},
 	{"api_key_policies", []string{"budget_limit_credits"}},
 	{"account_budget_thresholds", []string{"threshold_credits"}},
 	{"api_key_usage_rollups", []string{"consumed_credits"}},
@@ -174,8 +175,12 @@ func TestRescaleMigrationGuardAndMarker(t *testing.T) {
 
 	for _, fragment := range []struct{ what, needle string }{
 		{"marker table", "CREATE TABLE IF NOT EXISTS public.credit_unit_rescale"},
+		{"marker single-row PK", "PRIMARY KEY CHECK (id = 1)"},
+		{"RLS enabled", "ALTER TABLE public.credit_unit_rescale ENABLE ROW LEVEL SECURITY"},
+		{"RLS forced", "ALTER TABLE public.credit_unit_rescale FORCE ROW LEVEL SECURITY"},
+		{"anon/authenticated revoked", "REVOKE ALL ON public.credit_unit_rescale FROM anon, authenticated"},
 		{"replay guard", "IF EXISTS (SELECT 1 FROM public.credit_unit_rescale)"},
-		{"boundary row insert", "INSERT INTO public.credit_unit_rescale (applied_at)"},
+		{"boundary row insert with clock_timestamp", "INSERT INTO public.credit_unit_rescale (id, applied_at) VALUES (1, clock_timestamp())"},
 		{"ledger audit flag", `'credit_unit', 'legacy-1usd-100k-credits'`},
 		{"event audit flag", `'credit_unit', 'legacy-1usd-100k-credits'`},
 	} {
@@ -247,6 +252,9 @@ func TestRescaledChargeKeepsRealUSDParity(t *testing.T) {
 	// the rescaled charge must land inside that same band, i.e. the customer
 	// pays the same real money before and after the cutover.
 	diff := new(big.Rat).Sub(usd(oldCharge, oldCreditsPerUSD), usd(newCharge, CreditsPerUSD))
+	if diff.Sign() < 0 {
+		diff.Neg(diff)
+	}
 	if diff.Cmp(big.NewRat(1, oldCreditsPerUSD)) > 0 {
 		t.Fatalf("implied USD diverged by more than one pre-rescale credit: %s", diff.FloatString(12))
 	}

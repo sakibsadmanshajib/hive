@@ -97,12 +97,11 @@ export function CheckoutModal({
   //
   // Magnitude safety at the new unit: the raw product
   // `5e12 credits * 15000 paisa = 7.5e16` EXCEEDS Number.MAX_SAFE_INTEGER,
-  // so the multiplication is split around the block: whole blocks are priced
-  // exactly (block quotient and price are both small), and the remainder is
-  // priced on its own, where `remainder * price` stays below 2^53 because a
-  // remainder is < credit_block_size (1e9) and price per block is bounded by
-  // real-world paisa rates (~1e6). Both terms are exact integers; their sum
-  // is the floor of the true total.
+  // so the computation never forms that product. Whole blocks are priced as
+  // an exact Number product (block quotient x price stays far below 2^53 for
+  // every real currency rate); the sub-block remainder goes through BigInt,
+  // whose floor division is exact for any inputs. The sum is the floor of
+  // the true total with no magnitude assumption left to drift.
   function computeAmountMinor(): number {
     // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
     // block size. NaN comparisons return false for `<= 0`, so a pathological
@@ -115,12 +114,13 @@ export function CheckoutModal({
     ) {
       return 0;
     }
-    const wholeBlocks = Math.trunc(creditAmount / options.credit_block_size);
-    const remainderCredits = creditAmount - wholeBlocks * options.credit_block_size;
-    return (
-      wholeBlocks * options.price_per_block_minor +
-      Math.floor((remainderCredits * options.price_per_block_minor) / options.credit_block_size)
-    );
+    const blockSize = options.credit_block_size;
+    const pricePerBlock = options.price_per_block_minor;
+    const wholeBlocks = Math.trunc(creditAmount / blockSize);
+    const remainderMinor =
+      (BigInt(creditAmount - wholeBlocks * blockSize) * BigInt(pricePerBlock)) /
+      BigInt(blockSize);
+    return wholeBlocks * pricePerBlock + Number(remainderMinor);
   }
 
   async function handleCheckout() {

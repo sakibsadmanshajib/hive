@@ -62,7 +62,7 @@ func (r *pgxRepository) PostEntry(ctx context.Context, accountID uuid.UUID, inpu
 // Same body as PostEntry, deliberately not duplicated: two implementations of a
 // ledger write is how the two books drift apart.
 func PostEntryTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, input PostEntryInput) (LedgerEntry, error) {
-	metadataBytes, err := json.Marshal(normalizeMetadata(input.Metadata))
+	metadataBytes, err := json.Marshal(stampCreditUnit(input.Metadata))
 	if err != nil {
 		return LedgerEntry{}, fmt.Errorf("ledger: marshal metadata: %w", err)
 	}
@@ -404,6 +404,33 @@ func normalizeMetadata(metadata map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return metadata
+}
+
+// CreditUnitV2 stamps every ledger entry the CURRENT binary writes with the
+// credit unit it speaks: 1 USD = 1e9 credits, effective with migration
+// 20260823_40_credit_unit_rescale_billion.sql. Rows carrying the LEGACY key
+// value ("legacy-1usd-100k-credits") were rescaled by that migration; rows
+// stamped v2 are native new-unit; a nonzero entry carrying NEITHER was
+// written by a pre-stamp binary after the rescale and is an unscaled
+// straggler (the post-deploy detector in the migration header queries
+// exactly that). Callers that pass their own credit_unit value win.
+const CreditUnitV2 = "v2-1usd-1e9"
+
+// stampCreditUnit returns a copy of metadata carrying CreditUnitV2 unless the
+// caller already named a unit. It never mutates the caller's map.
+func stampCreditUnit(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return map[string]any{"credit_unit": CreditUnitV2}
+	}
+	if _, ok := metadata["credit_unit"]; ok {
+		return metadata
+	}
+	stamped := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		stamped[k] = v
+	}
+	stamped["credit_unit"] = CreditUnitV2
+	return stamped
 }
 
 func isUniqueViolation(err error) bool {

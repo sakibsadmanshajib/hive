@@ -165,7 +165,8 @@ func NewStubService(ledger LedgerGranter, countries AccountCountryReader) *StubS
 // credits) pair is safe — the ledger's ON CONFLICT idempotency guard prevents
 // double-crediting.
 //
-// credits validation mirrors production rules (must be positive, multiple of 1000).
+// credits validation mirrors production rules (must be positive, a whole
+// one-cent step at the current credit unit).
 func (s *StubService) InitiateCheckout(
 	ctx context.Context,
 	accountID uuid.UUID,
