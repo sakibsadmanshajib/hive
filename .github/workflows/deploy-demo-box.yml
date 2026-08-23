@@ -1981,7 +1981,7 @@ jobs:
       issues: write
     timeout-minutes: 5
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         env:
           MIGRATE_RESULT: ${{ needs.migrate.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
