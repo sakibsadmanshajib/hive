@@ -265,7 +265,7 @@ func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []Ta
 		for i, ev := range events {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO public.agent_task_events (task_id, seq, source_event_id, kind, payload)
-				VALUES ($1, $2, $3, $4, $5)
+				VALUES ($1, $2, $3, $4, COALESCE($5, '{}'::jsonb))
 				ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> '' DO NOTHING
 			`, task.ID, base+int64(i)+1, ev.SourceEventID, string(ev.Kind), []byte(ev.Payload)); err != nil {
 				return fmt.Errorf("agenttask: append event %d: %w", i, err)
