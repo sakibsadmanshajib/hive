@@ -58,6 +58,14 @@
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
 	import { isAuthenticatedConfig, prefetchModels } from '$lib/hive/model-prefetch';
+	import {
+		clearSignedOut,
+		clearSsoAttempt,
+		markSsoAttempt,
+		readSsoAttemptAt,
+		readSignedOut,
+		ssoAutoRedirectDecision
+	} from '$lib/hive/sso-redirect';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 	import {
@@ -1103,7 +1111,29 @@
 		// the deployment, so the depth of the chain, rather than any single
 		// slow call, is what kept the composer off screen. Start all three
 		// here and await each result at the point it is first needed.
-		const startupToken = localStorage.token;
+		let startupToken = localStorage.token;
+		// An OAuth round trip lands directly on this application now: the
+		// callback's success redirect targets `/` rather than `/auth` (see the
+		// apply_oauth_callback_landing_patch.py splice in Dockerfile.open-webui).
+		// The round trip's only artifact is the `token` cookie, so recover the
+		// session here instead of bouncing through /auth to do it. The cookie is
+		// only trusted after the server validates it; an invalid or stale cookie
+		// falls through to the anonymous path below unchanged.
+		if (!startupToken) {
+			const rawCookie = document.cookie
+				.split('; ')
+				.find((cookie) => cookie.startsWith('token='));
+			if (rawCookie) {
+				const cookieToken = decodeURIComponent(rawCookie.split('=')[1] ?? '');
+				const cookieSession = await getSessionUser(cookieToken).catch(() => null);
+				if (cookieSession) {
+					clearSsoAttempt();
+					clearSignedOut();
+					localStorage.token = cookieToken;
+					startupToken = cookieToken;
+				}
+			}
+		}
 		const sessionUserRequest = startupToken
 			? getSessionUser(startupToken).catch((error) => {
 					toast.error(`${error}`);
@@ -1214,6 +1244,28 @@
 					// Don't redirect if we're already on the auth page
 					// Needed because we pass in tokens from OAuth logins via URL fragments
 					if ($page.url.pathname !== '/auth') {
+						// On an SSO-only deployment the /auth intermediate state is a
+						// wasted full-page hop: the sign-in page would immediately hand
+						// this visitor to the single configured provider anyway. Decide
+						// that here with the same tested decision function the sign-in
+						// page uses, so every guard (auto_redirect off, an error landing,
+						// the signed-out marker, a recent failed attempt, any second
+						// auth mode, onboarding) keeps the old route. The attempt stamp
+						// is written before leaving for the same reason it is there:
+						// an unrecorded attempt is how an endless bounce starts.
+						const decision = ssoAutoRedirectDecision($config, {
+							lastAttemptAt: readSsoAttemptAt(),
+							now: Date.now(),
+							signedOut: readSignedOut(),
+							hasSession: false
+						});
+						if (decision.redirect && markSsoAttempt()) {
+							if (currentUrl !== '/') {
+								localStorage.setItem('redirectPath', currentUrl);
+							}
+							window.location.href = `${WEBUI_BASE_URL}/oauth/${decision.provider}/login`;
+							return;
+						}
 						await goto(`/auth?redirect=${encodedUrl}`);
 					}
 				}
