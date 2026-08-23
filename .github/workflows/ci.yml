@@ -1708,14 +1708,31 @@ jobs:
         # as justified debt in tests/dark-spec-allowlist.json.
         run: npx playwright test --project=chromium
 
-      - name: Dump compose logs on failure
-        if: failure()
+      # The four diagnostic steps below run on `always()`, not `failure()`.
+      # This job carries `timeout-minutes: 35`, and GitHub reports a job killed
+      # by its own cap as cancelled rather than failed, so a plain `failure()`
+      # step is skipped in exactly the case that most needs explaining. That is
+      # observed here, not theoretical: runs that walked into the cap in August
+      # 2026 uploaded no compose log and no Next.js log, and the only artifact
+      # that survived was the Playwright report, which survived because its
+      # upload step already carried `always()`.
+      #
+      # Measured, not assumed, on a throwaway one minute job that slept past
+      # its own cap (run 32628384742, branch deleted after): the job concluded
+      # `cancelled`, its `if: failure()` step was skipped, and its `always()`,
+      # `cancelled()` and `failure() || cancelled()` steps all ran. So either
+      # condition would work. `always()` is the one used here because it is
+      # what the three sibling steps at the end of this job already carry and
+      # it does not depend on which flavour of cancellation arrives. The cost
+      # is a few seconds and one small log artifact on a green run.
+      - name: Dump compose logs
+        if: always()
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
       - name: Upload compose logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: compose-logs-web-e2e-api
@@ -1723,8 +1740,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
-      - name: Redact the Next.js server log on failure
-        if: failure()
+      - name: Redact the Next.js server log
+        if: always()
         # The console renders an error boundary ("Something went wrong on this
         # page", plus a digest) when a server component throws, and the cause is
         # only ever in this log. On 2026-08-16 an invitation-acceptance spec
@@ -1742,7 +1759,7 @@ jobs:
           fi
 
       - name: Upload the redacted Next.js server log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-log-web-e2e

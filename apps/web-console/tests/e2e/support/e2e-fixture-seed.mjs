@@ -220,7 +220,61 @@ export function createAdminClient() {
   }
   return createClient(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: timedFetch },
   });
+}
+
+// Ceiling for one admin API call. Node's fetch has no request deadline of its
+// own (only a 300s headers timeout), so a stalled call sits there until
+// fixture-reset.ts kills the whole seeder child at 120s with a bare signal,
+// which says nothing about which call was stuck. A full seed is roughly 40
+// calls at tens of milliseconds each, so 25s is far outside anything healthy
+// while still landing inside that outer kill. What it buys is one line naming
+// the endpoint that stalled.
+const ADMIN_CALL_TIMEOUT_MS = 25_000;
+
+function callTimeoutMs() {
+  // Overridable so the unit test can prove the message without waiting 25s,
+  // and so a run against a deliberately slow environment can be given room
+  // without editing this file.
+  const raw = Number(process.env.E2E_FIXTURE_CALL_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : ADMIN_CALL_TIMEOUT_MS;
+}
+
+export async function timedFetch(input, init = {}) {
+  // supabase-js passes a string today, but fetch takes a string, a URL or a
+  // Request, and the label must not be the thing that throws. A Request keeps
+  // its own method when init does not override it; a URL stringifies (reading
+  // `.url` off one yields undefined, which `new URL` rejects).
+  const request =
+    typeof Request !== "undefined" && input instanceof Request
+      ? input
+      : undefined;
+  const url = new URL(request?.url ?? String(input));
+  const method = init.method ?? request?.method ?? "GET";
+  // Path only. PostgREST puts filter values in the query string and some of
+  // them are fixture email addresses, so the query is deliberately dropped
+  // rather than redacted: this repository is public and CI logs are with it.
+  const label = `${method} ${url.pathname}`;
+  const startedAt = Date.now();
+  const timeoutMs = callTimeoutMs();
+  // gotrue-js passes its own signal on some admin calls, so compose rather
+  // than replace: dropping theirs would leave those calls unabortable.
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, deadline])
+    : deadline;
+  try {
+    return await fetch(input, { ...init, signal });
+  } catch (err) {
+    if (deadline.aborted) {
+      throw new Error(
+        `[e2e-fixture-seed] admin API call stalled: ${label} did not answer ` +
+          `within ${timeoutMs}ms (waited ${Date.now() - startedAt}ms)`
+      );
+    }
+    throw err;
+  }
 }
 
 async function ensureUser(admin, opts) {
