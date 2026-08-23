@@ -59,17 +59,21 @@
 --   route-doc-vlm, which has no provider_routes row at all and survives as an
 --   operator-managed LiteLLM entry still reading OPENROUTER_AUTO_MODEL.
 --
---   One loose end this migration cannot tidy from the database: the
---   gateway-level litellm_settings.fallbacks block in
---   deploy/litellm/config.yaml still names route-openrouter-default and
---   route-openrouter-auto as fallback sources. The config sync preserves
---   litellm_settings verbatim, so those two lines survive on the live box
---   after their model_list entries are dropped. A fallback naming a model that
---   is not in model_list is inert, not fatal, and both fallbacks pointed at
---   route-groq-fast, which now serves the same upstream model as the new
---   route-groq-default anyway. The seed file is corrected here for fresh
---   boots; the live volume keeps the stale lines until someone rewrites
---   litellm_settings, which is deliberately out of scope for a catalog change.
+--   One loose end this migration cannot tidy from the database. The two
+--   gateway-level chat fallbacks that named route-openrouter-default and
+--   route-openrouter-auto have been REMOVED from deploy/litellm/config.yaml in
+--   this same change, so a fresh boot is correct. They were not re-pointed at
+--   the replacement routes on purpose: a fallback answers from a different
+--   upstream model than the alias was priced against, which breaks the
+--   one-alias-one-price rule one layer below the catalog, where the price
+--   cannot see it. Do not reintroduce them.
+--
+--   What the seed file cannot reach is a box that is already running. The
+--   config sync preserves litellm_settings verbatim, so a live volume keeps
+--   whatever fallback lines it already has until someone rewrites that block
+--   by hand. Those stale entries will name models no longer in model_list,
+--   which is inert rather than fatal, so cleaning them up is deliberately out
+--   of scope for a catalog change.
 --
 -- BACK-COMPAT (non-negotiable)
 --   hive-fast is the model id persisted per-conversation in existing Open

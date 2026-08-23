@@ -75,11 +75,21 @@ model_list:
       model: groq/openai/gpt-oss-20b
       api_key: os.environ/GROQ_API_KEY
 
-  # ── 2. Fast / cheap chat (Groq free tier) ───────────────────────────────────
-  # Groq free tier: moonshotai/kimi-k2-instruct — fast inference, free quota,
-  # ideal for lightweight everyday prompts and cost-sensitive paths.
-  # Falls back to the flagship route automatically via litellm_settings.fallbacks
-  # if Groq's free quota is exhausted or the service is unavailable.
+  # ── 2. Deprecated fast chat (hive-fast) ─────────────────────────────────────
+  # Serves Groq openai/gpt-oss-20b, via GROQ_FAST_MODEL, whose default is
+  # pinned to exactly that in .env.example (reverted there by issue #965 after
+  # Groq decommissioned llama-3.1-8b-instant). The older comment here named
+  # moonshotai/kimi-k2-instruct, which this route has not served for some time.
+  #
+  # hive-fast is DEPRECATED as of the 2026-08-22 catalog restructure. It is
+  # kept, priced and routed identically to hive-small, because the model id is
+  # persisted per-conversation in existing Open WebUI chats and in live API
+  # clients. Do not retire this route without a migration path for those.
+  #
+  # It no longer falls back to anything. The previous comment claimed an
+  # automatic cascade to the flagship route via litellm_settings.fallbacks;
+  # those chat fallbacks are gone, deliberately, because a fallback answers
+  # from a model the alias was not priced against. See litellm_settings below.
   - model_name: route-groq-fast
     litellm_params:
       model: os.environ/GROQ_FAST_MODEL
