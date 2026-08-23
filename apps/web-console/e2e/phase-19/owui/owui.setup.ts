@@ -159,7 +159,22 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
   }
 
   const owuiOrigin = new URL(OWUI_URL).origin;
-  const newChatButton = page.getByRole("button", { name: /new chat/i });
+  /*
+   * Either role, because the control is an <a>.
+   *
+   * Open WebUI renders both New Chat controls (the collapsed rail's icon and
+   * the expanded sidebar's row) as anchors with an aria-label, so their
+   * implicit role is `link` and a `button` query can never match. This
+   * readiness signal has therefore been failing since the control changed
+   * shape, taking every OWUI end-to-end run with it: the sign-in it guards
+   * actually succeeds, and the run fails 60 seconds later looking for an
+   * element that cannot exist. e2e/chat-coverage/surfaces.ts already matches
+   * both roles for exactly this reason; these two call sites were missed.
+   */
+  const newChatButton = page
+    .getByRole("button", { name: /new chat/i })
+    .or(page.getByRole("link", { name: /new chat/i }))
+    .first();
 
   // Bootstrap login: Open WebUI auto-promotes the very first user it ever
   // sees to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM entirely.
@@ -184,7 +199,10 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
   await bootstrapPage.goto(OWUI_URL);
   await signInWithHive(bootstrapPage, bootstrapEmail, bootstrapPassword, owuiOrigin);
   await expect(
-    bootstrapPage.getByRole("button", { name: /new chat/i }),
+    bootstrapPage
+      .getByRole("button", { name: /new chat/i })
+      .or(bootstrapPage.getByRole("link", { name: /new chat/i }))
+      .first(),
   ).toBeVisible({ timeout: 60_000 });
   await bootstrapContext.close();
 

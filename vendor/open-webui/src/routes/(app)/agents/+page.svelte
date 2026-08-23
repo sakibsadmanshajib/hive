@@ -1,63 +1,33 @@
 <script lang="ts">
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext } from 'svelte';
 
-	import { WEBUI_NAME, showSidebar, mobile, theme } from '$lib/stores';
+	import { WEBUI_NAME, showSidebar, mobile } from '$lib/stores';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import SidebarIcon from '$lib/components/icons/Sidebar.svelte';
+	import AgentTasks from '$lib/hive/AgentTasks.svelte';
 
 	const i18n: any = getContext('i18n');
 
 	/*
-	 * The agent workspace as a destination inside the shell.
+	 * The agent workspace as a destination inside the shell, rendered natively.
 	 *
-	 * Until the task console is ported to Svelte it stays the Next.js
-	 * application that already owns it, served by the same Caddy listener at
-	 * /agent-workspace on this origin (deploy/docker/Caddyfile.owui). Rendering
-	 * it here keeps the sidebar, the identity and the origin: the agent stops
-	 * being a link out of the product and becomes a room inside it.
+	 * This route used to hold a single <iframe> pointed at /agent-workspace/tasks,
+	 * which booted apps/agent-console, a second whole application, inside the
+	 * page. That frame is gone. The composer and the task list are Svelte
+	 * components in this application now (src/lib/hive/AgentTasks.svelte), and the
+	 * composer is built from the chat composer's own container and send button, so
+	 * the agent surface reads as the same product rather than a panel embedded in
+	 * it.
 	 *
-	 * ponytail: same origin frame, not a port. The port is real work and it is
-	 * blocked on a token bridge, because this frontend holds Open WebUI's own
-	 * session token in localStorage while /v1/agent/* authenticates the
-	 * Supabase bearer that only the embedded application carries. When that
-	 * bridge exists the frame is replaced by native rows and this file becomes
-	 * the transcript.
-	 *
-	 * Known ceiling, deliberately not papered over: if the embedded
-	 * application has no session of its own it renders its own sign in inside
-	 * this frame. The fix is the single sign on work, not a spinner here.
+	 * What made the port possible was never a layout problem, it was a credential
+	 * one: this frontend holds Open WebUI's session token, while /v1/agent/*
+	 * wants a Supabase token carrying a tenant claim, and the one the OAuth login
+	 * produces carries none and is not in the browser anyway. It is resolved
+	 * server side now, by the agent proxy in the chat container
+	 * (deploy/docker/owui-patches/hive_agent_proxy.py), on the same mechanism this
+	 * deployment already runs for chat completions.
 	 */
-	const AGENT_PANEL_PATH = '/agent-workspace/tasks';
-
-	let systemPrefersDark = false;
-	let media: MediaQueryList | null = null;
-
-	const onSystemThemeChange = (event: MediaQueryListEvent) => {
-		systemPrefersDark = event.matches;
-	};
-
-	onMount(() => {
-		media = window.matchMedia('(prefers-color-scheme: dark)');
-		systemPrefersDark = media.matches;
-		media.addEventListener('change', onSystemThemeChange);
-	});
-
-	onDestroy(() => {
-		media?.removeEventListener('change', onSystemThemeChange);
-	});
-
-	// Same resolution the layout applies to the document class, so the panel
-	// and the shell are never in two different themes.
-	$: resolvedTheme = $theme.includes('dark')
-		? 'dark'
-		: $theme === 'system' && systemPrefersDark
-			? 'dark'
-			: 'light';
-
-	$: panelSrc = `${AGENT_PANEL_PATH}?embed=1&theme=${resolvedTheme}`;
-
-	let panelReady = false;
 </script>
 
 <svelte:head>
@@ -97,31 +67,7 @@
 		</nav>
 	{/if}
 
-	<!--
-		Keyed on the resolved theme so a theme change reloads the panel with the
-		matching palette. Rebuilding the frame is acceptable here because a theme
-		change is a rare, deliberate act; nothing else remounts it.
-	-->
-	{#key resolvedTheme}
-		<div class="hv-panel-region">
-			{#if !panelReady}
-				<!--
-					Never a blank region: the panel is same origin and resolves fast, but
-					"fast" is not "instant" on a cold container, and an empty rectangle is
-					the state that reads as broken. One line, no spinner, and it sits
-					behind the frame rather than in front of it (see hive.css).
-				-->
-				<p class="hv-panel-loading">{$i18n.t('Opening the agent workspace')}</p>
-			{/if}
-			<iframe
-				class="hv-panel-frame"
-				src={panelSrc}
-				title={$i18n.t('Agent workspace')}
-				loading="eager"
-				on:load={() => {
-					panelReady = true;
-				}}
-			></iframe>
-		</div>
-	{/key}
+	<div class="hv-panel-region">
+		<AgentTasks />
+	</div>
 </div>
