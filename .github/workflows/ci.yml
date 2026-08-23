@@ -1127,7 +1127,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL \
+          # SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are
+          # deliberately not in this list any more. This step exists to catch a
+          # secret that did not reach the runner, and those three are now
+          # literals in this job's env block (see the comment there), so an
+          # assertion that they are non-empty is one that cannot fail. A check
+          # that cannot go red is worse than no check: it reads as coverage.
+          # SUPABASE_DB_URL stays, because the throwaway-database step writes it
+          # to $GITHUB_ENV and a silent failure there is exactly this step's job.
+          for v in SUPABASE_DB_URL \
                    OPENROUTER_API_KEY HIVE_API_KEY S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY; do
             val="${!v:-}"
             if [ -z "$val" ]; then

@@ -69,12 +69,55 @@ const DEAD_SECRETS = [
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
 ];
 
-// Workflows still to be moved, each pinned to the issue that owns the move.
-// This list must only ever shrink. An entry with no issue behind it is a
-// permanent exemption wearing a temporary hat.
+// Workflows still to be moved, each pinned to the issue that owns the move and
+// to the exact references it carries today. This list must only ever shrink. An
+// entry with no issue behind it is a permanent exemption wearing a temporary
+// hat.
+//
+// `counts` is the load-bearing half, and it is not decoration. A file-level
+// exemption would accept every reference in that file, so a freshly copied
+// `secrets.SUPABASE_*` line would pass the lint for as long as the exemption
+// lived, which is the copy-paste spread this guard exists to stop. Pinning the
+// per-secret counts means the exemption covers exactly the references that were
+// audited and nothing else: one more, one fewer, or one swapped for another all
+// fail. Fewer fails on purpose too, because a partial cleanup should update the
+// entry rather than quietly widen it.
 const PENDING = new Map([
-  ["owui-nightly.yml", "#1055"],
+  [
+    "owui-nightly.yml",
+    {
+      issue: "#1055",
+      counts: {
+        SUPABASE_URL: 3,
+        SUPABASE_ANON_KEY: 1,
+        SUPABASE_SERVICE_ROLE_KEY: 2,
+        SUPABASE_DB_HOST: 1,
+        SUPABASE_DB_PORT: 1,
+        SUPABASE_DB_USER: 1,
+        SUPABASE_DB_NAME: 1,
+        SUPABASE_DB_PASSWORD: 1,
+        NEXT_PUBLIC_SUPABASE_URL: 1,
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: 1,
+      },
+    },
+  ],
 ]);
+
+// Canonical, order-independent rendering of a per-secret count map, so two
+// pinnings compare as strings and a diff can be printed verbatim.
+function renderCounts(counts) {
+  return Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([name, n]) => `${name}=${n}`)
+    .join(" ");
+}
+
+function countBySecret(offenders) {
+  const counts = {};
+  for (const o of offenders) counts[o.secret] = (counts[o.secret] ?? 0) + 1;
+  return counts;
+}
 
 // `secrets.NAME`, `secrets['NAME']`, `secrets["NAME"]`. GitHub accepts all
 // three inside an expression, and only matching the dotted form would let the
@@ -200,12 +243,27 @@ function main() {
     const offenders = findOffenders(readFileSync(join(WORKFLOW_DIR, file), "utf8"));
     if (offenders.length === 0) continue;
 
-    const issue = PENDING.get(file);
-    if (issue) {
+    const pending = PENDING.get(file);
+    if (pending) {
       pendingSeen += 1;
-      console.log(
-        `pending  ${file}: ${offenders.length} reference(s) to the retired project's secrets, tracked in ${issue}`,
+      const actual = renderCounts(countBySecret(offenders));
+      const expected = renderCounts(pending.counts);
+      if (actual === expected) {
+        console.log(
+          `pending  ${file}: ${offenders.length} audited reference(s) to the retired project's secrets, tracked in ${pending.issue}`,
+        );
+        continue;
+      }
+      console.error(
+        `FAIL .github/workflows/${file} is on the pending list (${pending.issue}), but its ` +
+          `references no longer match the audited set.\n` +
+          `      expected: ${expected}\n` +
+          `      actual:   ${actual}\n` +
+          `      A pending entry exempts exactly the references that were audited. If this file ` +
+          `gained one, do not add it: move the job off the retired secrets. If it lost one, ` +
+          `update the entry.`,
       );
+      failures += 1;
       continue;
     }
 
@@ -220,10 +278,10 @@ function main() {
 
   // A pending entry whose workflow no longer offends is a stale exemption, and
   // a stale exemption is how the next one gets added without argument.
-  for (const [file, issue] of PENDING) {
+  for (const [file, pending] of PENDING) {
     if (!files.includes(file)) {
       console.error(
-        `FAIL PENDING names .github/workflows/${file} (${issue}), which does not exist. Remove the entry.`,
+        `FAIL PENDING names .github/workflows/${file} (${pending.issue}), which does not exist. Remove the entry.`,
       );
       failures += 1;
     }
