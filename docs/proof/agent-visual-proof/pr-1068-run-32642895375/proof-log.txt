@@ -1,0 +1,11 @@
+scenarios: launch-liveness
+launcher runtime dir: /mnt/agent-runtime, live sessions at start: 0
+signed in as user e4483d16-7f9e-4302-a563-64c8cd024514
+token claims: aal,amr,app_metadata,aud,email,exp,iat,is_anonymous,iss,owui_role,phone,role,session_id,sub,tenant_id,tenants,user_metadata
+token tenant claim: 549462d0-0865-9277-e03a-2fc5d6b195fe · role=OWNER · aal=aal1
+--- scenario: launch-liveness ---
+wrote /home/runner/work/hive/hive/docs/proof/agent-visual-proof/run-32642895375/launch-liveness-01-empty-console.png
+create answered HTTP 201 in 62ms, status=queued
+wrote /home/runner/work/hive/hive/docs/proof/agent-visual-proof/run-32642895375/launch-liveness-02-sandbox-launched.png
+row "proof-32642895375 liveness: list the fil…" reached Cancelled
+scenario launch-liveness: ok
