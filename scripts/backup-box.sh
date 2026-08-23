@@ -84,7 +84,8 @@ die()  { log "ERROR: $*"; exit 1; }
 post_alert() {
   local alertname="$1" description="$2" startsAt body
   startsAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  body=$(printf '{"labels":{"alertname":"%s","severity":"critical","job":"box-backup","instance":"hive-demo"},"annotations":{"description":"%s"}}' \
+  # Alertmanager v2 expects an ARRAY of alerts; a bare object is a 400.
+  body=$(printf '[{"labels":{"alertname":"%s","severity":"critical","job":"box-backup","instance":"hive-demo"},"annotations":{"description":"%s"}}]' \
     "$alertname" "$description")
   # Delivery failure must not fail the backup itself on the success path, and
   # must not mask the underlying failure on the failure path. Log it either way.
