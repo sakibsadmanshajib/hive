@@ -324,7 +324,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: needs.changes.outputs.run != 'false'
         with:
-          go-version: '1.24'
+          go-version: '1.26'
           cache-dependency-path: |
             apps/edge-api/go.sum
             apps/control-plane/go.sum

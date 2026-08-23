@@ -368,10 +368,8 @@
 				);
 
 				models.set(
-					await getModels(
-						localStorage.token,
-						$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-					)
+					// Direct connections are removed from user surfaces; never send them.
+					await getModels(localStorage.token)
 				);
 			} else {
 				toast.error($i18n.t('Download canceled'));
@@ -428,10 +426,8 @@
 		if (res) {
 			toast.success($i18n.t('Model unloaded successfully'));
 			models.set(
-				await getModels(
-					localStorage.token,
-					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-				)
+				// Direct connections are removed from user surfaces; never send them.
+				await getModels(localStorage.token)
 			);
 		}
 	};
@@ -464,10 +460,8 @@
 			}
 
 			models.set(
-				await getModels(
-					localStorage.token,
-					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-				)
+				// Direct connections are removed from user surfaces; never send them.
+				await getModels(localStorage.token)
 			);
 		}
 
@@ -526,10 +520,8 @@
 				: 'placeholder-gray-400'}"
 			on:mouseenter={async () => {
 				models.set(
-					await getModels(
-						localStorage.token,
-						$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-					)
+					// Direct connections are removed from user surfaces; never send them.
+					await getModels(localStorage.token)
 				);
 			}}
 		>
