@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
+From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
 # linux/amd64 only (owner decision 2026-07-16, task #5): Debian (bookworm)
 # base, never Alpine, since the vendored OpenHands packages
 # (vendor/openhands) need glibc-linked native wheels and a real apt package

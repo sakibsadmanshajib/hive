@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /tests
 COPY packages/sdk-tests/js/package.json packages/sdk-tests/js/package-lock.json* ./
 RUN npm install
