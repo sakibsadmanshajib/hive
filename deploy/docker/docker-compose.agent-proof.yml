@@ -1,0 +1,39 @@
+# CI-only overlay for the Cowork visual proof job
+# (.github/workflows/agent-visual-proof.yml). Never deployed, and named in
+# COMPOSE_FILE by that workflow alone.
+#
+# It exists for one reason: that job now stands up its own Supabase rather than
+# borrowing a hosted project, and edge-api is the one service that needs more
+# than a URL to accept a token from it. edge-api validates every browser JWT
+# against SUPABASE_JWKS_URL and refuses a plain http one, deliberately, so the
+# throwaway stack serves its JWKS through a TLS front holding a certificate
+# from Caddy's own local authority. Trusting that authority means mounting one
+# file, and reaching the front means resolving one name, and neither can be
+# expressed as an environment variable alone.
+#
+# This lives in its own file rather than in docker-compose.yml because it is
+# meaningless anywhere else: the paths below are runner paths, created by
+# scripts/ci-supabase-stack.sh minutes earlier and destroyed with the runner.
+# Same reasoning, and the same scope, as Caddyfile.agent-proof next to it.
+#
+# The three variables are all `:?`. A missing one would otherwise mount an
+# empty path or write a hosts entry pointing nowhere, and edge-api would fail
+# its first JWKS refresh with a connection error naming none of this.
+services:
+  edge-api:
+    # The TLS front runs on the runner and is reached on a published port, so
+    # the hostname its certificate carries has to resolve to the docker bridge
+    # gateway from inside this container. A container name would not do it:
+    # the front is not part of this compose project.
+    extra_hosts:
+      - "${PROOF_JWKS_HOST:?set by the agent visual proof workflow}:${PROOF_JWKS_HOST_IP:?set by the agent visual proof workflow}"
+    environment:
+      # Narrows which authority is acceptable for the JWKS fetch, replacing the
+      # system roots for that one request rather than extending them. Chain and
+      # hostname verification still happen; this never turns them off.
+      SUPABASE_JWKS_CA_FILE: /etc/hive/supabase-ca/root.crt
+    volumes:
+      # Read only, and one directory holding one public certificate. Caddy's
+      # data directory is deliberately NOT mounted: it holds the authority's
+      # private key.
+      - ${PROOF_SUPABASE_CA_DIR:?set by the agent visual proof workflow}:/etc/hive/supabase-ca:ro
