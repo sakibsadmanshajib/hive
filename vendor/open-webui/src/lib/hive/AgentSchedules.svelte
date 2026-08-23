@@ -115,6 +115,14 @@
 	}
 </script>
 
+<!--
+	Escape dismisses the delete confirmation (#866). `<svelte:window>` is a
+	compiler level element and has to sit at the top level of the markup, so the
+	"is a dialog open" test moves into the handler rather than wrapping the tag
+	in the `{#if}` that renders the dialog.
+-->
+<svelte:window on:keydown={(e) => pendingDelete && e.key === 'Escape' && (pendingDelete = null)} />
+
 <div class="hv-panel flex flex-col w-full h-screen max-h-[100dvh] max-w-full">
 	<div class="px-6 py-4 border-b border-gray-100 dark:border-gray-850">
 		<h2 class="text-lg font-medium">Scheduled tasks</h2>
@@ -172,7 +180,6 @@
 
 		<!-- Delete confirmation (#866) -->
 		{#if pendingDelete}
-			<svelte:window on:keydown={(e) => e.key === 'Escape' && (pendingDelete = null)} />
 			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
 				<div role="dialog" aria-modal="true" class="bg-white dark:bg-gray-900 rounded-xl p-5 max-w-sm space-y-3 mx-4">
 					<p class="font-medium">Delete "{pendingDelete.name}"?</p>
