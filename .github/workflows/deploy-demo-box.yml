@@ -211,7 +211,6 @@ jobs:
   # ------------------------------------------------------------------
   migrate:
     name: Apply pending database migrations
-    environment: demo-box
     runs-on: [self-hosted, hive-demo]
     permissions:
       contents: read
@@ -618,7 +617,6 @@ jobs:
   deploy:
     name: Pull + recreate stack on the demo box
     needs: migrate
-    environment: demo-box
     runs-on: [self-hosted, hive-demo]
     # This job never checks out the repo, and it no longer pulls either. The
     # box's clone at /home/sakib/hive is advanced by the migrate job above,
