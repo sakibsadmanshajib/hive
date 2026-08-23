@@ -1844,9 +1844,18 @@ jobs:
       # Minting a session needs all three. live-auth.mjs uses the admin
       # one-time-token flow, which touches no password, and there is no
       # credential-rotating fallback in it (docs/live-test-auth.md).
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      #
+      # The origin is the deployment's own public auth origin, which is the
+      # console origin (Caddy fronts GoTrue at /auth/v1 there, PR #992), taken
+      # from the same CONSOLE_URL expression the OIDC discovery check in this
+      # file already uses. The two keys are named for the deployment rather
+      # than read from secrets.SUPABASE_*, which name the hosted project
+      # deleted in the self-hosted cutover (issue #1059). Absent, this
+      # dispatch-only job fails at session minting instead of authenticating
+      # against a project that is not there.
+      SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
       # Optional. The spec defaults to the demo account, which is named in
       # docs/proof/live-auth-helper-2026-08-08/README.md and is not a
       # credential. Set this secret to point the run at a different identity.
@@ -1867,6 +1876,26 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Before `npm ci` and before a browser is installed, because an absent
+      # value here is a configuration fault and should read as one. Without
+      # this the job installs everything, launches Chromium, and then fails
+      # inside live-auth.mjs's session mint, three minutes and one stack trace
+      # away from the actual cause. The sibling jobs that mint a live session
+      # (chat-coverage's live sweep, demo-chat-settings-check) already have the
+      # same check; this one did not, which CodeRabbit caught on PR #1086.
+      - name: Check the inputs this job cannot run without
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::this job mints a live session and needs:$missing. The two keys are the self-hosted deployment's own, provisioned as DEMO_SUPABASE_ANON_KEY and DEMO_SUPABASE_SERVICE_ROLE_KEY from the box's .env (issue #1059)."
+            exit 1
+          fi
 
       - uses: actions/setup-node@v7
         with:
@@ -1996,6 +2025,34 @@ jobs:
             const results = `migrate=${process.env.MIGRATE_RESULT}, `
               + `deploy=${process.env.DEPLOY_RESULT}, `
               + `sdk-replay=${process.env.REPLAY_RESULT}`;
+            // The guidance has to match the job that actually failed. The
+            // previous text explained a migrate failure unconditionally, so
+            // issue #1084 was filed reading "A migrate failure means main is
+            // running against a stale schema ... Fix the migration" over a
+            // body whose own next line said `migrate=success`. That is a
+            // tracking issue actively misdirecting whoever picks it up, and it
+            // did: the actual causes were an exhausted provider token budget
+            // and then a Svelte compile error, neither of them a migration.
+            function guidance() {
+              if (process.env.MIGRATE_RESULT === 'failure') {
+                return 'The MIGRATION failed, so main is running against a stale schema and the deploy '
+                  + 'was deliberately stopped. Fix the migration, then re-run this workflow.';
+              }
+              if (process.env.DEPLOY_RESULT === 'failure') {
+                return 'The DEPLOY failed, after migrations applied successfully. The box is therefore '
+                  + 'still serving the previous image against the new schema. Read the "Rebuild + '
+                  + 'recreate changed services" step first: an image build failure stops here before '
+                  + 'anything is recreated, so nothing is half-deployed.';
+              }
+              if (process.env.REPLAY_RESULT === 'failure') {
+                return 'The deploy succeeded and the POST-DEPLOY SDK REPLAY failed, so the box is '
+                  + 'running the new code and something it serves does not work. Check the provider '
+                  + 'side before the code: a rate limit or an exhausted token budget fails this job '
+                  + 'without any commit having caused it.';
+              }
+              return 'No individual job reported failure, so the run failed somewhere outside the three '
+                + 'tracked jobs. Read the run itself.';
+            }
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -2016,8 +2073,7 @@ jobs:
                 title,
                 labels: [label],
                 body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
-                  'A migrate failure means main is running against a stale schema and the deploy was ' +
-                  'deliberately stopped. Fix the migration, then re-run this workflow.\n\n' +
+                  guidance() + '\n\n' +
                   'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
               });
             }

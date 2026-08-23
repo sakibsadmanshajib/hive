@@ -50,9 +50,17 @@ jobs:
       CHAT_URL: ${{ vars.CHAT_URL || 'https://chat-hive.scubed.co' }}
       CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
       DEMO_ACCOUNT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL || secrets.HIVE_QA_TESTER_EMAIL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # The deployment's public auth origin is the console origin (Caddy fronts
+      # GoTrue at /auth/v1 there, PR #992), so this reuses CONSOLE_URL rather
+      # than carrying a second copy of the same hostname. secrets.SUPABASE_URL
+      # named the hosted project deleted in the self-hosted cutover (#1059).
+      SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      # Renamed rather than repointed: the old secrets still hold the deleted
+      # project's keys. Absent under the new names, the "Check the inputs this
+      # job cannot run without" step below fails by name, which is better than
+      # running against a project that no longer exists.
+      SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
     outputs:
       kind: ${{ steps.check.outputs.kind }}
     steps:
