@@ -32,6 +32,9 @@ const (
 	MaxContentLen = 500
 	// MaxMemoriesPerUser evicts oldest-beyond-this on create.
 	MaxMemoriesPerUser = 100
+	// MaxSourceChatIDLen caps the optional source chat reference; it is
+	// metadata, never prompt content.
+	MaxSourceChatIDLen = 200
 )
 
 var (

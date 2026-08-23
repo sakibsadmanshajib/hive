@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -54,6 +55,12 @@ func (s *pgxMemorySource) withTenantTx(ctx context.Context, tenantID uuid.UUID, 
 }
 
 func (s *pgxMemorySource) Recent(ctx context.Context, tenantID, userID uuid.UUID, limit int) ([]string, error) {
+	// Postgres reads a negative LIMIT as "no limit"; refuse the ambiguity so
+	// a future caller bug can never concatenate unbounded memories into one
+	// system prompt.
+	if limit <= 0 {
+		return nil, nil
+	}
 	var out []string
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
@@ -86,17 +93,24 @@ func (s *pgxMemorySource) Recent(ctx context.Context, tenantID, userID uuid.UUID
 	return out, nil
 }
 
-// sanitizeRecallLine strips control characters (including newlines) and
-// trims, so one stored memory renders as exactly one block line. Defense in
-// depth: content was already sanitized at the write boundary; this
-// re-asserts it on read so a row written by any other path cannot break
-// the block's line framing.
+// sanitizeRecallLine mirrors the write-side SanitizeContent fold exactly:
+// whitespace and line separators collapse to spaces, every other control
+// character is dropped, so one stored memory renders as exactly one block
+// line. Defense in depth: content was already sanitized at the write
+// boundary; this re-asserts it on read so a row written by any other path
+// (manual SQL, the future extraction wave) cannot break the block's line
+// framing or forge extra lines inside it.
 func sanitizeRecallLine(content string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r' ||
+			r == ' ' || r == ' ':
+			return ' '
+		case unicode.IsControl(r) || r == unicode.ReplacementChar:
 			return -1
+		default:
+			return r
 		}
-		return r
 	}, content))
 }
 
@@ -122,8 +136,9 @@ func buildMemoryBlock(contents []string) string {
 
 // injectMemoryBlock returns the caller's body with a recall system message
 // prepended to the messages array. It rewrites only "messages" and keeps
-// every other field byte-for-byte, the same RawMessage-map discipline
-// rewriteDispatchBody uses. Empty block returns the input unchanged.
+// every other field value-preserving (key order is not guaranteed), the
+// same RawMessage-map discipline rewriteDispatchBody uses. Empty block
+// returns the input unchanged.
 func injectMemoryBlock(raw []byte, block string) ([]byte, error) {
 	if block == "" {
 		return raw, nil

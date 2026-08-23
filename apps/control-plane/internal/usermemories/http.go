@@ -15,10 +15,10 @@ import (
 // InternalMux shape: tenant_id and user_id travel as URL path segments, not
 // query string, header, or JSON body field, and are never echoed back.
 //
-//	POST   /internal/user-memories/{tenant_id}/{user_id}           — create {content, source_chat_id?}
-//	GET    /internal/user-memories/{tenant_id}/{user_id}           — list (newest first)
-//	PATCH  /internal/user-memories/{tenant_id}/{user_id}/{id}      — update content
-//	DELETE /internal/user-memories/{tenant_id}/{user_id}/{id}      — delete one
+//	POST   /internal/user-memories/{tenant_id}/{user_id}        creates {content, source_chat_id?}
+//	GET    /internal/user-memories/{tenant_id}/{user_id}         lists (newest first)
+//	PATCH  /internal/user-memories/{tenant_id}/{user_id}/{id}     updates content
+//	DELETE /internal/user-memories/{tenant_id}/{user_id}/{id}     deletes one
 type Handler struct {
 	svc *Service
 }

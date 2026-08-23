@@ -29,7 +29,7 @@ func (s *Service) Create(ctx context.Context, tenantID, userID uuid.UUID, raw st
 	if err != nil {
 		return Memory{}, err
 	}
-	m, err := s.repo.Create(ctx, tenantID, userID, content, sourceChatID)
+	m, err := s.repo.Create(ctx, tenantID, userID, content, SanitizeSourceChatID(sourceChatID))
 	if err != nil {
 		return Memory{}, err
 	}
@@ -63,11 +63,6 @@ func (s *Service) Delete(ctx context.Context, tenantID, userID, id uuid.UUID) er
 	return s.repo.Delete(ctx, tenantID, userID, id)
 }
 
-// Get returns one memory within scope.
-func (s *Service) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Memory, error) {
-	return s.repo.Get(ctx, tenantID, userID, id)
-}
-
 // SanitizeContent folds every whitespace/control character to a plain
 // space, drops all other control characters (so each stored fact renders as
 // a single prompt line and cannot smuggle newline framing into the recall
@@ -77,7 +72,8 @@ func (s *Service) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Memo
 func SanitizeContent(raw string) (string, error) {
 	clean := strings.Map(func(r rune) rune {
 		switch {
-		case r == '\t' || r == '\n' || r == '\r':
+		case r == '\t' || r == '\n' || r == '\r' ||
+			r == ' ' || r == ' ':
 			return ' '
 		case unicode.IsControl(r) || r == unicode.ReplacementChar:
 			return -1
@@ -85,7 +81,6 @@ func SanitizeContent(raw string) (string, error) {
 			return r
 		}
 	}, raw)
-
 	fields := strings.Fields(clean)
 	if len(fields) == 0 {
 		return "", ErrEmptyContent
@@ -96,4 +91,34 @@ func SanitizeContent(raw string) (string, error) {
 		content = string(runes[:MaxContentLen])
 	}
 	return content, nil
+}
+
+// SanitizeSourceChatID applies the same control-character fold to the
+// optional source chat reference and rejects anything beyond
+// MaxSourceChatIDLen characters. It never enters prompts (recall selects
+// content only), but it is echoed back on list/get, so it gets the same
+// boundary discipline. Empty or oversized input collapses to nil.
+func SanitizeSourceChatID(sourceChatID *string) *string {
+	if sourceChatID == nil {
+		return nil
+	}
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r' ||
+			r == '\u2028' || r == '\u2029':
+			return ' '
+		case unicode.IsControl(r) || r == unicode.ReplacementChar:
+			return -1
+		default:
+			return r
+		}
+	}, *sourceChatID)
+	clean = strings.TrimSpace(clean)
+	if clean == "" {
+		return nil
+	}
+	if len([]rune(clean)) > MaxSourceChatIDLen {
+		return nil
+	}
+	return &clean
 }

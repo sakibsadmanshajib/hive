@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -119,6 +120,48 @@ func TestDispatchNoMemoriesMeansNoBlock(t *testing.T) {
 		Routing:    inference.NewRoutingClient(routing.URL),
 		Accounting: accounting,
 		Billing:    billing,
+		LiteLLMURL: srv.URL,
+		DeploySHA:  "test",
+		Env:        "test",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"hive-fast","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID: uuid.New(), TenantID: uuid.New(), Role: "member",
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body struct {
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(*captured, &body))
+	require.Len(t, body.Messages, 1)
+	require.Equal(t, "user", body.Messages[0].Role)
+}
+
+func TestDispatchRecallFailureServesWithoutBlock(t *testing.T) {
+	srv, captured := captureUpstream(t)
+	routing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(inference.SelectRouteResult{
+			AliasID: "hive-fast", LiteLLMModelName: "route-groq-fast",
+			Provider: "groq", Pricing: inference.FixedPricing(10_500, 42_000),
+			PriceUnit: inference.PriceUnitTokens,
+		})
+	}))
+	t.Cleanup(routing.Close)
+
+	accounting, billing := billedDeps(t)
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    inference.NewRoutingClient(routing.URL),
+		Accounting: accounting,
+		Billing:    billing,
+		Memories:   &fakeMemories{err: errors.New("recall down")},
 		LiteLLMURL: srv.URL,
 		DeploySHA:  "test",
 		Env:        "test",
