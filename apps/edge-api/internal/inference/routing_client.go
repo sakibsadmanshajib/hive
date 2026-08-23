@@ -113,16 +113,21 @@ const (
 // SelectRoutePricing is the subset of the control-plane's catalog pricing
 // payload edge-api charges against: credits per MILLION metered units.
 //
-// The two price fields are POINTERS. A PricingModeUpstreamActual alias has no
-// fixed price at all and control-plane sends JSON null for both; decoding that
-// into a plain int64 would either fail or, worse under a future tolerant
-// decoder, read as 0, and a price that silently reads 0 bills nothing. nil is
-// the honest representation and forces every caller to branch.
+// The two price fields are POINTERS, and the reason is the opposite of the one
+// that applies on the database side. Scanning a SQL NULL into a non-pointer
+// int64 is a hard pgx error, so that boundary fails loudly by itself.
+// encoding/json does NOT: unmarshalling JSON null into a non-pointer numeric
+// field is a documented no-op that leaves the field at zero and returns no
+// error, verified against Go's own decoder rather than assumed. So a plain
+// int64 here would have priced a variable-price route at 0 credits, silently,
+// which is indistinguishable from free. nil is the honest representation and
+// forces every caller to branch.
 //
-// Note this is a runtime boundary, not a compile-time one: control-plane's own
+// This is a runtime boundary, not a compile-time one. control-plane's own
 // catalog.CatalogPricing changed to pointers in the same change, but nothing in
-// the type system ties the two structs together, so a mismatch here surfaces as
-// a decode failure at dispatch rather than a build error.
+// the type system ties the two structs together, so a mismatch here does not
+// break the build and does not fail at dispatch either. It shows up as a wrong
+// price, which is why the shapes have to be kept in step by hand.
 type SelectRoutePricing struct {
 	InputPriceCredits  *int64 `json:"input_price_credits"`
 	OutputPriceCredits *int64 `json:"output_price_credits"`
