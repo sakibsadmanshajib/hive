@@ -20,6 +20,10 @@ process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
+    // Cursor stamps hook stdin with hook_event_name; Claude Code never does.
+    // Cursor consumes a single {permission} JSON object on stdout and ignores
+    // plain text output and nonzero exit codes.
+    const isCursor = typeof data.hook_event_name === 'string' && data.hook_event_name.length > 0;
     const filePath = (data.tool_input || {}).file_path || '';
     const content = (data.tool_input || {}).content || (data.tool_input || {}).new_string || '';
 
@@ -54,7 +58,12 @@ process.stdin.on('end', () => {
 
     for (const { pattern, label } of blockPatterns) {
       if (pattern.test(content)) {
-        console.log(`BLOCKED: Detected ${label} in ${basename}. Never commit secrets to the repository. Use environment variables or a secret manager.`);
+        const msg = `BLOCKED: Detected ${label} in ${basename}. Never commit secrets to the repository. Use environment variables or a secret manager.`;
+        if (isCursor) {
+          process.stdout.write(JSON.stringify({ permission: 'deny', agent_message: msg }));
+          process.exit(0);
+        }
+        console.log(msg);
         process.exit(2);
       }
     }
@@ -74,7 +83,12 @@ process.stdin.on('end', () => {
     }
 
     if (warns.length > 0) {
-      console.log(`SECRET WARNING in ${basename}: ${warns.join(', ')}. Verify these are not real credentials. Use environment variables for sensitive values.`);
+      const msg = `SECRET WARNING in ${basename}: ${warns.join(', ')}. Verify these are not real credentials. Use environment variables for sensitive values.`;
+      if (isCursor) {
+        process.stdout.write(JSON.stringify({ permission: 'allow', agent_message: msg }));
+        return;
+      }
+      console.log(msg);
     }
 
   } catch (e) {

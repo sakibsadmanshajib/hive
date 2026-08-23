@@ -12,6 +12,10 @@ process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
+    // Cursor stamps hook stdin with hook_event_name; Claude Code never does.
+    // Cursor consumes a single {permission} JSON object on stdout and ignores
+    // plain text output and nonzero exit codes.
+    const isCursor = typeof data.hook_event_name === 'string' && data.hook_event_name.length > 0;
     const cmd = (data.tool_input || {}).command || '';
 
     // Only care about git commit commands
@@ -32,7 +36,13 @@ process.stdin.on('end', () => {
       }
     }
 
-    if (warnings.length > 0) {
+    if (isCursor) {
+      process.stdout.write(JSON.stringify(
+        warnings.length
+          ? { permission: 'allow', agent_message: warnings.join('\n') }
+          : { permission: 'allow' },
+      ));
+    } else if (warnings.length > 0) {
       console.log(warnings.join('\n'));
     }
 
