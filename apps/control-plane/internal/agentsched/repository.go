@@ -24,7 +24,11 @@ type Repository interface {
 	Update(ctx context.Context, s Schedule) (Schedule, error)
 	SetEnabled(ctx context.Context, tenantID, userID, id uuid.UUID, enabled bool, nextRunAt *time.Time) (Schedule, error)
 	Delete(ctx context.Context, tenantID, userID, id uuid.UUID) error
-	// RecordRunSuccess records the task a claimed schedule produced. Scoped
+	// RecordRunSuccess records the task a claimed schedule produced.
+	// last_run_at is stamped by ClaimDue itself (claim time = attempt start),
+	// so these writes only fill in the outcome fields afterwards; a failure
+	// between claim and create therefore still shows an honest attempt time.
+	// Scoped
 	// to the claimed row's tenant: the scheduler holds tenantID straight off
 	// the row ClaimDue returned. next_run_at was already advanced at claim
 	// time; this only fills in the outcome.

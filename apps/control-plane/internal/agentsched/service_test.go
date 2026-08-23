@@ -120,6 +120,33 @@ func TestService_Update_RecomputesNextRunOnlyOnCadenceChange(t *testing.T) {
 	}
 }
 
+// The UI toggle goes through PUT (UpdateInput.Enabled), not a dedicated
+// enable endpoint, so this transition is where the stale-next_run_at rule
+// actually matters: a schedule disabled for weeks carries an overdue
+// next_run_at, and re-enabling it must fire one cadence out, never instantly.
+func TestService_Update_ReEnableViaPUTResetsStaleNextRun(t *testing.T) {
+	now := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+	stale := now.Add(-48 * time.Hour)
+	repo := newFakeRepo(Schedule{
+		ID: idA, TenantID: tenantA, UserID: userA,
+		Name: "n", Instructions: "i", Schedule: "daily",
+		Enabled:   false,
+		NextRunAt: &stale,
+	})
+	svc := NewService(repo, fixedClock(now))
+
+	out, err := svc.Update(context.Background(), tenantA, userA, idA, UpdateInput{
+		Name: "n", Instructions: "i", Schedule: "daily", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("PUT re-enable: %v", err)
+	}
+	want := now.Add(24 * time.Hour)
+	if out.NextRunAt == nil || !out.NextRunAt.Equal(want) {
+		t.Fatalf("re-enable via PUT next_run_at = %v, want %v (not the stale %v)", out.NextRunAt, want, stale)
+	}
+}
+
 func TestService_SetEnabled_ResetsNextRunWhenEnabling(t *testing.T) {
 	now := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
 	stale := now.Add(-48 * time.Hour)

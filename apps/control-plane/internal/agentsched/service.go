@@ -193,7 +193,20 @@ func (s *Service) Update(ctx context.Context, tenantID, userID, id uuid.UUID, in
 		return Schedule{}, err
 	}
 	next := current.NextRunAt
-	if in.Schedule != current.Schedule {
+	switch {
+	case in.Schedule != current.Schedule:
+		cad, err := cadence(in.Schedule)
+		if err != nil {
+			return Schedule{}, err
+		}
+		t := s.now().Add(cad)
+		next = &t
+	case in.Enabled && !current.Enabled:
+		// PUT is the path the UI toggle actually uses, so this transition
+		// carries the same rule as SetEnabled: next_run_at froze while the
+		// schedule sat disabled, and re-enabling must push it one full
+		// cadence out rather than firing immediately on a stale overdue
+		// timestamp (an unrequested run that burns credits).
 		cad, err := cadence(in.Schedule)
 		if err != nil {
 			return Schedule{}, err
