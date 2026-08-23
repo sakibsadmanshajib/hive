@@ -4,44 +4,58 @@ import (
 	"encoding/json"
 	"math/big"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
 
-// The catalog restructure migration prices four new aliases against upstream
-// provider list rates. Nothing in the running system re-derives those credit
-// figures, so a typo in one of them is a silent mispricing that ships: the
-// number looks plausible, every test stays green, and the first signal is a
-// margin that does not add up weeks later. Issue #689 and issue #965 were both
-// that shape.
+// Offline guards over the catalog restructure migration.
 //
-// These tests close the gap that can be closed without a network call. CI holds
-// no provider API keys, and a test that needs one is a test that skips, so the
-// rates are pinned in a committed snapshot (testdata/provider_rates_2026-08-22.json)
-// taken at the moment the migration was written. The snapshot's own header
-// spells out what it cannot see: a rate the provider changes afterwards.
+// Why these exist: nothing in the running system re-derives a credit figure, so
+// a wrong one is a silent mispricing that ships. Issues #689 and #965 were both
+// that shape. CI holds no provider API keys, so the rates are pinned in a
+// committed snapshot taken when the migration was written.
+//
+// Why they parse rather than grep: the first version of this file asserted that
+// a credit figure appeared SOMEWHERE in the migration text. Review proved three
+// mispricings that passed it. Every one of them is now a positional assertion
+// against a named column of a named row:
+//
+//   * hive-default's reprice changed to hive-medium's figures. Both numbers were
+//     already elsewhere in the file, so a 100 percent overcharge on the
+//     no-model-specified default alias stayed green.
+//   * input and output swapped inside one alias tuple. Both numbers present, green.
+//   * a route repointed at a different upstream model with the price untouched,
+//     a 2x undercharge, green, because provider_model was checked against the
+//     rate snapshot but never against the SQL.
+//
+// Presence of digits in a file is not the assertion. A value in a column of a
+// row is.
 const (
 	pricingMigrationRelPath = "supabase/migrations/20260822_02_catalog_alias_restructure.sql"
 	providerRatesRelPath    = "testdata/provider_rates_2026-08-22.json"
 
-	// creditsPerUSD mirrors apps/control-plane/internal/payments/types.go, and
-	// marginNum/marginDen express the 1.4 margin exactly. Both are integers fed
-	// to math/big so no float64 ever touches a money figure, per the repo rule.
+	// creditsPerUSD mirrors apps/control-plane/internal/payments/types.go.
+	// marginNum/marginDen express 1.4 exactly. Integers only, fed to math/big,
+	// so no float64 touches a money figure.
 	creditsPerUSD = 100000
 	marginNum     = 14
 	marginDen     = 10
 )
 
-// deriveRow is one "-- DERIVE|" line in the migration header. The migration
-// documents its own arithmetic in a machine-readable form precisely so this
-// test can check it rather than a reader having to.
+// deriveField maps the DERIVE table's field name to the model_aliases column
+// the figure must actually land in.
+var deriveField = map[string]string{
+	"in":         "input_price_credits",
+	"out":        "output_price_credits",
+	"cache_read": "cache_read_price_credits",
+}
+
 type deriveRow struct {
 	Alias         string
 	RouteID       string
 	ProviderModel string
-	Field         string // "in", "out" or "cache_read"
+	Field         string
 	USD           string
 	Credits       string
 }
@@ -58,21 +72,34 @@ type providerRatesFixture struct {
 	Models     []providerRate `json:"models"`
 }
 
+// decimalRe constrains a DERIVE rate to a plain decimal. big.Rat.SetString also
+// accepts ratio, exponent and hex-float forms, so "1/0.5" or "0x1p-3" would
+// otherwise parse as a valid provider rate.
+var decimalRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+
 // expectedCredits computes ceil(usd * MARGIN * CREDITS_PER_USD) in exact
 // rational arithmetic. big.Rat parses a decimal string without loss, so
-// "0.01278" is 1278/100000 and not the nearest float64 to it, which matters:
-// that particular rate is the one row in this migration whose product is not a
-// whole number, so it is the row a float would round differently.
+// "0.01278" is 1278/100000 and not the nearest float64 to it. That is the one
+// rate in this migration whose product is fractional, so it is the row a float
+// would round differently.
 func expectedCredits(t *testing.T, usd string) *big.Int {
 	t.Helper()
 
+	if !decimalRe.MatchString(usd) {
+		t.Fatalf("provider rate %q is not a plain decimal; big.Rat would also accept ratio, exponent and hex-float forms, which are not prices", usd)
+	}
 	rate, ok := new(big.Rat).SetString(usd)
 	if !ok {
 		t.Fatalf("provider rate %q is not a valid decimal", usd)
 	}
+	// A zero or negative rate is a mispricing, not a derivation. Without this,
+	// a DERIVE row claiming 0 USD and 0 credits satisfies every assertion here
+	// as a correctly derived free model.
+	if rate.Sign() <= 0 {
+		t.Fatalf("provider rate %q is zero or negative; that is a mispricing, not a rate", usd)
+	}
 
 	product := new(big.Rat).Mul(rate, big.NewRat(marginNum*creditsPerUSD, marginDen))
-
 	quotient, remainder := new(big.Int).QuoRem(product.Num(), product.Denom(), new(big.Int))
 	if remainder.Sign() != 0 {
 		quotient.Add(quotient, big.NewInt(1))
@@ -85,10 +112,21 @@ func readPricingMigration(t *testing.T) string {
 	return readRepoFile(t, pricingMigrationRelPath)
 }
 
+// migrationSQL is the migration with all commentary removed. Every structural
+// assertion runs on this, never on the raw text: the migration's header
+// discusses `lifecycle = 'deprecated'` and `delete from public.model_aliases`
+// at length, and a guard matching raw text is satisfied or tripped by prose.
+func migrationSQL(t *testing.T) string {
+	t.Helper()
+	return stripSQLComments(readPricingMigration(t))
+}
+
 func loadProviderRates(t *testing.T) map[string]providerRate {
 	t.Helper()
 
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash("apps/control-plane/internal/routing"), filepath.FromSlash(providerRatesRelPath)))
+	// Go runs tests with the working directory set to the package directory, so
+	// the testdata path is relative and the package stays movable.
+	body, err := os.ReadFile(providerRatesRelPath)
 	if err != nil {
 		t.Fatalf("read provider rate snapshot: %v", err)
 	}
@@ -101,8 +139,23 @@ func loadProviderRates(t *testing.T) map[string]providerRate {
 		t.Fatal("provider rate snapshot is empty; it is the only offline record of what these prices were derived from")
 	}
 
+	// The snapshot date must match the migration it backs. Repricing against a
+	// stale snapshot is the failure this catches, deterministically and with no
+	// wall-clock comparison.
+	if !strings.Contains(providerRatesRelPath, fixture.FetchedUTC) {
+		t.Errorf("snapshot fetched_utc %q does not match its own filename %q; the rates and the file have drifted apart", fixture.FetchedUTC, providerRatesRelPath)
+	}
+	if !strings.Contains(pricingMigrationRelPath, strings.ReplaceAll(fixture.FetchedUTC, "-", "")) {
+		t.Errorf("snapshot fetched_utc %q does not match the migration date in %q; these prices were derived from rates fetched for a different migration", fixture.FetchedUTC, pricingMigrationRelPath)
+	}
+
 	byModel := make(map[string]providerRate, len(fixture.Models))
 	for _, m := range fixture.Models {
+		// A duplicate carrying two different rates is exactly the drift this
+		// fixture exists to detect, and a map would silently last-wins it.
+		if _, dup := byModel[m.ProviderModel]; dup {
+			t.Fatalf("provider rate snapshot lists %q twice; one of the two rates is wrong and a map would silently pick one", m.ProviderModel)
+		}
 		byModel[m.ProviderModel] = m
 	}
 	return byModel
@@ -124,12 +177,14 @@ func parseDeriveRows(t *testing.T, migration string) []deriveRow {
 		for i := range fields {
 			fields[i] = strings.TrimSpace(fields[i])
 		}
-		// The header row labels the columns; skip it rather than parse it.
 		if len(fields) > 0 && strings.EqualFold(fields[0], "alias_id") {
-			continue
+			continue // column header
 		}
 		if len(fields) != 6 {
 			t.Fatalf("malformed DERIVE row %q: want 6 pipe-separated fields (alias|route|provider_model|field|usd|credits), got %d", m[1], len(fields))
+		}
+		if _, ok := deriveField[fields[3]]; !ok {
+			t.Fatalf("DERIVE row %q has unknown field %q; want in, out or cache_read", m[1], fields[3])
 		}
 		rows = append(rows, deriveRow{
 			Alias:         fields[0],
@@ -146,14 +201,43 @@ func parseDeriveRows(t *testing.T, migration string) []deriveRow {
 	return rows
 }
 
-// TestCatalogAliasPricesMatchProviderRates is the core guard: every credit
-// figure the migration writes must equal ceil(rate * 1.4 * 100000) for the rate
-// the snapshot records for that exact provider_model.
+// pricedAliases returns every alias whose input or output price this migration
+// WRITES, whether by INSERT or by UPDATE, mapped to the column values written.
 //
-// It fails if a credit number is edited without its rate, if a rate is edited
-// without its credit number, if the arithmetic is simply wrong, or if the
-// migration names a provider_model that was never verified against a live
-// provider catalog.
+// Covering the UPDATE side is load bearing. hive-default and hive-auto are
+// repriced rather than inserted, which put them outside every guard keyed on
+// the INSERT block, and they are the two highest-value rows in the file.
+func pricedAliases(t *testing.T, sql string) map[string]map[string]string {
+	t.Helper()
+
+	out := map[string]map[string]string{}
+	for _, row := range insertRows(sql, "public.model_aliases") {
+		alias := row["alias_id"]
+		if alias == "" {
+			t.Fatalf("a model_aliases INSERT tuple has no alias_id: %#v", row)
+		}
+		out[alias] = row
+	}
+	for alias, assigns := range updateAssignments(sql, "public.model_aliases", "alias_id") {
+		if _, writesPrice := assigns["input_price_credits"]; !writesPrice {
+			continue // e.g. the hive-fast lifecycle marker, which touches no price
+		}
+		if existing, ok := out[alias]; ok {
+			for k, v := range assigns {
+				existing[k] = v
+			}
+			continue
+		}
+		out[alias] = assigns
+	}
+	if len(out) == 0 {
+		t.Fatal("parsed no priced aliases out of the migration; the parser and the file have diverged and every guard below is checking nothing")
+	}
+	return out
+}
+
+// TestCatalogAliasPricesMatchProviderRates checks the DERIVE table's own
+// arithmetic against the committed rate snapshot.
 func TestCatalogAliasPricesMatchProviderRates(t *testing.T) {
 	migration := readPricingMigration(t)
 	rates := loadProviderRates(t)
@@ -174,14 +258,10 @@ func TestCatalogAliasPricesMatchProviderRates(t *testing.T) {
 			snapshotUSD = rate.Out
 		case "cache_read":
 			if rate.CacheRead == nil {
-				t.Errorf("alias %s documents a cache_read price for %q, but the provider publishes no cache-read rate for that model",
-					row.Alias, row.ProviderModel)
+				t.Errorf("alias %s documents a cache_read price for %q, but the provider publishes no cache-read rate for that model", row.Alias, row.ProviderModel)
 				continue
 			}
 			snapshotUSD = *rate.CacheRead
-		default:
-			t.Errorf("alias %s has unknown DERIVE field %q; want in, out or cache_read", row.Alias, row.Field)
-			continue
 		}
 
 		if row.USD != snapshotUSD {
@@ -198,63 +278,160 @@ func TestCatalogAliasPricesMatchProviderRates(t *testing.T) {
 	}
 }
 
-// aliasInsertRe pulls the alias_ids out of the model_aliases INSERT so the test
-// can prove the DERIVE table covers all of them. Without this, adding a fifth
-// alias and forgetting to document its price would leave every other assertion
-// green: the guard would silently stop guarding the new row.
-var (
-	aliasInsertBlockRe = regexp.MustCompile(`(?is)insert\s+into\s+public\.model_aliases\s*\((.*?)\)\s*values(.*?)on\s+conflict`)
-	aliasIDRe          = regexp.MustCompile(`(?m)^\s*\(\s*'([a-z0-9][a-z0-9._-]*)'`)
-)
+// TestDeclaredCreditsLandOnTheirOwnAliasRow is THE money-path guard. It binds
+// each DERIVE figure to the specific column of the specific alias row, so a
+// figure that is right in the comment and wrong in the SQL, or right for one
+// alias and applied to another, fails.
+func TestDeclaredCreditsLandOnTheirOwnAliasRow(t *testing.T) {
+	migration := readPricingMigration(t)
+	sql := stripSQLComments(migration)
+	priced := pricedAliases(t, sql)
 
-// insertedAliases returns the alias_ids this migration INSERTS into
-// model_aliases, as distinct from the ones it merely repoints or reprices with
-// an UPDATE. Several guards below apply only to brand-new aliases: an existing
-// alias already carries its policy row and its policy-group membership from an
-// earlier migration, so demanding those here would be demanding a no-op.
-func insertedAliases(t *testing.T, migration string) map[string]bool {
-	t.Helper()
-
-	block := aliasInsertBlockRe.FindStringSubmatch(migration)
-	if block == nil {
-		t.Fatalf("%s has no recognisable INSERT INTO public.model_aliases ... VALUES ... ON CONFLICT block", pricingMigrationRelPath)
+	for _, row := range parseDeriveRows(t, migration) {
+		aliasRow, ok := priced[row.Alias]
+		if !ok {
+			t.Errorf("DERIVE documents a price for alias %s, but the migration writes no price for it at all", row.Alias)
+			continue
+		}
+		column := deriveField[row.Field]
+		got, present := aliasRow[column]
+		if !present {
+			t.Errorf("alias %s: DERIVE declares %s = %s credits, but the migration never writes column %s for that alias",
+				row.Alias, row.Field, row.Credits, column)
+			continue
+		}
+		if got != row.Credits {
+			t.Errorf("alias %s: DERIVE declares %s = %s credits, but the migration writes %s = %s. The comment and the SQL disagree, and the SQL is what customers are charged.",
+				row.Alias, row.Field, row.Credits, column, got)
+		}
 	}
-
-	matches := aliasIDRe.FindAllStringSubmatch(block[2], -1)
-	if len(matches) == 0 {
-		t.Fatal("parsed the model_aliases INSERT block but found no alias_id literals in it; the regex and the migration's formatting have diverged, so this guard is not actually reading the rows it claims to check")
-	}
-
-	out := make(map[string]bool, len(matches))
-	for _, m := range matches {
-		out[m[1]] = true
-	}
-
-	// A PARTIAL parse is the dangerous case, and the zero-match check above
-	// does not catch it. aliasIDRe anchors each alias on its own line, so
-	// reformatting one VALUES row onto a single line would drop that alias
-	// from the set silently, and every guard built on this helper would then
-	// check fewer rows than it claims while still reporting green. Counting
-	// the INSERT's own opening parens gives an independent expectation to
-	// compare against, so a partial parse fails as loudly as a total one.
-	wantRows := strings.Count(block[2], "(\n")
-	if wantRows > 0 && len(out) != wantRows {
-		t.Fatalf("parsed %d alias ids from the model_aliases INSERT but the block opens %d value rows; the regex and the migration's formatting have diverged and this guard is silently checking a subset", len(out), wantRows)
-	}
-	return out
 }
 
-func TestEveryInsertedAliasDocumentsItsDerivation(t *testing.T) {
+// TestEveryPricedAliasHasCompleteDerivation is the floor under parseDeriveRows.
+// Without it the checked set can silently shrink: deleting the two hive-default
+// DERIVE lines left every other assertion green, and hive-default is the alias
+// every request naming no model lands on.
+func TestEveryPricedAliasHasCompleteDerivation(t *testing.T) {
 	migration := readPricingMigration(t)
+	sql := stripSQLComments(migration)
 
-	documented := make(map[string]bool)
+	documented := map[string]map[string]bool{}
 	for _, row := range parseDeriveRows(t, migration) {
-		documented[row.Alias] = true
+		if documented[row.Alias] == nil {
+			documented[row.Alias] = map[string]bool{}
+		}
+		documented[row.Alias][row.Field] = true
 	}
 
-	for alias := range insertedAliases(t, migration) {
-		if !documented[alias] {
-			t.Errorf("alias %s is inserted into model_aliases but has no '-- DERIVE|' row documenting where its price came from", alias)
+	for alias, row := range pricedAliases(t, sql) {
+		for _, field := range []string{"in", "out"} {
+			if !documented[alias][field] {
+				t.Errorf("alias %s has its %s price written by this migration (%s) but no '-- DERIVE|' row documenting where that figure came from",
+					alias, field, row[deriveField[field]])
+			}
+		}
+	}
+}
+
+// TestDerivedRouteMatchesProviderRoutes binds the DERIVE table's route and
+// upstream model to the provider_routes SQL. Without it, repointing a route at
+// a different model while leaving its price alone passes everything: the
+// provider_model was checked against the rate snapshot but never against the
+// migration, which is issue #689 and #965 in miniature.
+func TestDerivedRouteMatchesProviderRoutes(t *testing.T) {
+	migration := readPricingMigration(t)
+	sql := stripSQLComments(migration)
+
+	routes := map[string]map[string]string{}
+	for _, r := range insertRows(sql, "public.provider_routes") {
+		routes[r["route_id"]] = r
+	}
+	if len(routes) == 0 {
+		t.Fatal("parsed no provider_routes rows; the parser and the migration have diverged")
+	}
+
+	for _, row := range parseDeriveRows(t, migration) {
+		route, ok := routes[row.RouteID]
+		if !ok {
+			t.Errorf("alias %s is priced against route %s, which this migration never inserts", row.Alias, row.RouteID)
+			continue
+		}
+		if route["alias_id"] != row.Alias {
+			t.Errorf("route %s is priced under alias %s but provider_routes attaches it to %s", row.RouteID, row.Alias, route["alias_id"])
+		}
+		if route["provider_model"] != row.ProviderModel {
+			t.Errorf("alias %s is priced against upstream model %q, but route %s actually calls %q. The price and the model have drifted apart, which is a silent over or undercharge.",
+				row.Alias, row.ProviderModel, row.RouteID, route["provider_model"])
+		}
+		// provider must agree with the model's own prefix, or the config sync
+		// picks the wrong api_base and API key for it.
+		if wantProvider := strings.SplitN(row.ProviderModel, "/", 2)[0]; route["provider"] != wantProvider {
+			t.Errorf("route %s calls %q but declares provider %q; the sync would send this model, and that provider's key, to the wrong endpoint",
+				row.RouteID, row.ProviderModel, route["provider"])
+		}
+	}
+}
+
+// TestOneEnabledRoutePerAliasInSQL enforces the owner's one-alias-one-price rule
+// against provider_routes itself rather than against the comment table. A second
+// enabled route makes an alias's cost depend on which route won, which is not
+// priceable at the alias level.
+//
+// This reads only this migration, so it cannot see routes added elsewhere. The
+// database-level invariant across the whole catalog is
+// TestSeededAliasHasExactlyOneEnabledRoute in catalog_pricing_integration_test.go,
+// which needs ROUTING_TEST_DB_URL. Do not read this offline guard as that one.
+func TestOneEnabledRoutePerAliasInSQL(t *testing.T) {
+	sql := migrationSQL(t)
+
+	enabledByAlias := map[string][]string{}
+	for _, r := range insertRows(sql, "public.provider_routes") {
+		if strings.EqualFold(r["health_state"], "disabled") || strings.EqualFold(r["health_state"], "eol") {
+			continue
+		}
+		enabledByAlias[r["alias_id"]] = append(enabledByAlias[r["alias_id"]], r["route_id"])
+	}
+	if len(enabledByAlias) == 0 {
+		t.Fatal("parsed no enabled provider_routes rows; this guard is checking nothing")
+	}
+
+	for alias, routes := range enabledByAlias {
+		if len(routes) != 1 {
+			t.Errorf("alias %s is given %d enabled routes by this migration (%s); the one-alias-one-price rule allows exactly one",
+				alias, len(routes), strings.Join(routes, ", "))
+		}
+	}
+}
+
+// TestInsertedAliasesArePinnedToTheirRoute checks the policy row for aliases
+// this migration creates. A repointed alias keeps the policy an earlier
+// migration gave it, so it is covered by TestRetiredRoutesAreDisabledAndRepointed
+// instead.
+func TestInsertedAliasesArePinnedToTheirRoute(t *testing.T) {
+	sql := migrationSQL(t)
+
+	routeOf := map[string]string{}
+	for _, r := range insertRows(sql, "public.provider_routes") {
+		if !strings.EqualFold(r["health_state"], "disabled") {
+			routeOf[r["alias_id"]] = r["route_id"]
+		}
+	}
+
+	policies := map[string]string{}
+	for _, p := range insertRows(sql, "public.alias_route_policies") {
+		policies[p["alias_id"]] = p["fallback_order"]
+	}
+
+	for _, row := range insertRows(sql, "public.model_aliases") {
+		alias := row["alias_id"]
+		order, ok := policies[alias]
+		if !ok {
+			t.Errorf("alias %s is inserted with no alias_route_policies row", alias)
+			continue
+		}
+		want := `["` + routeOf[alias] + `"]`
+		if strings.ReplaceAll(order, " ", "") != want {
+			t.Errorf("alias %s has fallback_order %s; the one-alias-one-price rule requires exactly %s", alias, order, want)
 		}
 	}
 }
@@ -266,227 +443,114 @@ var retiredRoutes = map[string]struct{ alias, replacement string }{
 	"route-openrouter-auto":    {"hive-auto", "route-groq-auto"},
 }
 
-// TestRetiredRoutesAreDisabledAndRepointed guards the three-part move that has
-// to happen together for hive-default and hive-auto.
+// TestRetiredRoutesAreDisabledAndRepointed guards the move that has to happen
+// as a whole for hive-default and hive-auto.
 //
-// The old route must be DISABLED rather than repointed in place. Repointing was
-// the tempting one-line version and it is unsafe: litellmconfig's mergeParams
-// deliberately preserves every litellm_params key the database does not own, so
-// the OpenRouter-specific extra_body block those two entries carry in
-// deploy/litellm/config.yaml would stay attached to a route now pointing at
-// Groq, and would be sent to Groq on every request to the default model, with
-// no sync able to remove it. Disabling the route id makes the merge drop the
-// whole stale entry instead.
-//
-// The old route must also stop being named by its alias's policy, or the policy
-// points at something SelectRoute filters out.
+// The old route must be DISABLED rather than repointed in place, because
+// litellmconfig's mergeParams deliberately preserves every litellm_params key
+// the database does not own. The OpenRouter-specific extra_body block those two
+// entries carry would otherwise stay attached to a route now pointing at Groq
+// and be sent to Groq on every request to the default model, with no sync able
+// to remove it. Disabling the route id makes the merge drop the stale entry.
 func TestRetiredRoutesAreDisabledAndRepointed(t *testing.T) {
-	migration := readPricingMigration(t)
+	sql := migrationSQL(t)
 
-	disable := regexp.MustCompile(`(?is)update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'[^;]*?;`)
-	disableStmts := strings.Join(disable.FindAllString(migration, -1), "\n")
-	if disableStmts == "" {
-		t.Fatal("no UPDATE public.provider_routes ... SET health_state = 'disabled' statement found; the two OpenRouter routes must be retired, not left enabled alongside their replacements")
+	// Per statement, not over a concatenation of all of them: a file disabling
+	// route A in one statement and merely mentioning route B in another must
+	// not satisfy the guard for B.
+	disableRe := regexp.MustCompile(`(?is)^update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'`)
+	var disablers []string
+	for _, stmt := range splitStatements(sql) {
+		if disableRe.MatchString(strings.TrimSpace(stmt)) {
+			disablers = append(disablers, stmt)
+		}
+	}
+	if len(disablers) == 0 {
+		t.Fatal("no statement disables any provider_route; the two OpenRouter routes must be retired, not left enabled alongside their replacements")
 	}
 
+	policyUpdates := updateAssignments(sql, "public.alias_route_policies", "alias_id")
+
 	for old, move := range retiredRoutes {
-		if !strings.Contains(disableStmts, "'"+old+"'") {
-			t.Errorf("route %s is still enabled: it must be disabled when %s moves to %s, or the alias would have two enabled routes and stop being priceable",
+		disabled := false
+		for _, stmt := range disablers {
+			if strings.Contains(stmt, "'"+old+"'") {
+				disabled = true
+				break
+			}
+		}
+		if !disabled {
+			t.Errorf("route %s is still enabled: it must be disabled when %s moves to %s, or the alias has two enabled routes and stops being priceable",
 				old, move.alias, move.replacement)
 		}
 
-		if !regexp.MustCompile(`(?is)update\s+public\.alias_route_policies\s+set\s+fallback_order\s*=\s*'\["`+
-			regexp.QuoteMeta(move.replacement)+`"\]'::jsonb[^;]*?alias_id\s*=\s*'`+
-			regexp.QuoteMeta(move.alias)+`'[^;]*?;`).MatchString(migration) {
-			t.Errorf("%s still has no alias_route_policies update pointing fallback_order at [\"%s\"]; its policy would keep naming the retired route %s",
-				move.alias, move.replacement, old)
+		order := strings.ReplaceAll(policyUpdates[move.alias]["fallback_order"], " ", "")
+		if want := `["` + move.replacement + `"]`; order != want {
+			t.Errorf("%s needs its alias_route_policies fallback_order updated to %s, found %q; otherwise the policy keeps naming the retired route %s",
+				move.alias, want, order, old)
 		}
 
 		// The stale entry must not be resurrected by an in-place repoint.
-		if regexp.MustCompile(`(?is)update\s+public\.provider_routes\s+set\s+[^;]*?provider_model\s*=[^;]*?route_id\s*=\s*'` + regexp.QuoteMeta(old) + `'`).MatchString(migration) {
-			t.Errorf("route %s is repointed in place; it must be disabled instead, or its OpenRouter extra_body block survives the config sync and is sent to Groq", old)
-		}
-	}
-}
-
-// TestDerivedCreditsAppearInTheMigrationBody catches the comment drifting away
-// from the SQL. The DERIVE table could be internally perfect and still describe
-// a price the INSERT does not actually write.
-func TestDerivedCreditsAppearInTheMigrationBody(t *testing.T) {
-	migration := readPricingMigration(t)
-
-	// Strip the comment lines so the credit figures are searched for in real
-	// SQL only. Otherwise the DERIVE table would satisfy this test by itself,
-	// which is the classic assertion that cannot fail.
-	var sqlOnly strings.Builder
-	for _, line := range strings.Split(migration, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "--") {
-			continue
-		}
-		sqlOnly.WriteString(line)
-		sqlOnly.WriteString("\n")
-	}
-	body := sqlOnly.String()
-
-	for _, row := range parseDeriveRows(t, migration) {
-		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(row.Credits) + `\b`).MatchString(body) {
-			t.Errorf("alias %s %s: DERIVE table declares %s credits, but that figure appears nowhere in the migration's SQL",
-				row.Alias, row.Field, row.Credits)
-		}
-	}
-}
-
-// TestHiveFastStaysInvocableAfterDeprecation guards the back-compat promise.
-// hive-fast is the model id stored in the owner's existing Open WebUI
-// conversations and in live API clients, so the restructure must not remove it,
-// must not stop it resolving, and must not reprice it. Marking it deprecated is
-// the only permitted change.
-//
-// visibility is the field that actually gates invocation: catalog.AliasVisibleToTenant
-// entitles 'public' and 'preview' and fails closed on everything else, and the
-// same predicate serves both the model listing and the inference-time check. So
-// a migration that set hive-fast's visibility to 'internal' would silently break
-// every saved chat, which is exactly what this asserts against.
-func TestHiveFastStaysInvocableAfterDeprecation(t *testing.T) {
-	migration := readPricingMigration(t)
-
-	lower := strings.ToLower(migration)
-
-	if strings.Contains(lower, "delete from public.model_aliases") {
-		t.Error("the restructure must not DELETE from model_aliases: hive-fast is stored per-chat in existing Open WebUI conversations and would 404 for every one of them")
-	}
-	if strings.Contains(lower, "'hive-fast'") && regexp.MustCompile(`(?is)update\s+public\.model_aliases.*?set.*?visibility\s*=\s*'(internal|restricted)'.*?'hive-fast'`).MatchString(migration) {
-		t.Error("hive-fast must keep visibility 'public': AliasVisibleToTenant fails closed on 'internal', which would block invocation, not merely hide the alias from the picker")
-	}
-
-	// The deprecation marker itself must be present and must be a value the
-	// CHECK constraint allows. model_aliases_lifecycle_check permits only
-	// 'stable', 'preview' and 'hidden' (20260331_01_model_catalog.sql), so a
-	// literal 'deprecated' would abort the migration at apply time.
-	if !regexp.MustCompile(`(?is)update\s+public\.model_aliases.*?lifecycle\s*=\s*'hidden'.*?'hive-fast'`).MatchString(migration) {
-		t.Error("hive-fast must be marked with lifecycle = 'hidden'; that is the deprecation marker this restructure promised")
-	}
-	if regexp.MustCompile(`lifecycle\s*=\s*'deprecated'`).MatchString(migration) {
-		t.Error("lifecycle = 'deprecated' violates model_aliases' CHECK constraint (allowed: stable, preview, hidden) and would abort the migration on apply")
-	}
-}
-
-// TestOneAliasOneEnabledRoute enforces the owner's one-model-one-price rule at
-// the level this migration can be checked offline: each new alias declares
-// exactly one route, and its alias_route_policies fallback_order names that one
-// route and nothing else. A second enabled route makes the alias's cost depend
-// on which route won, which is not priceable at the alias level.
-func TestOneAliasOneEnabledRoute(t *testing.T) {
-	migration := readPricingMigration(t)
-	inserted := insertedAliases(t, migration)
-
-	routesByAlias := map[string]map[string]bool{}
-	for _, row := range parseDeriveRows(t, migration) {
-		if routesByAlias[row.Alias] == nil {
-			routesByAlias[row.Alias] = map[string]bool{}
-		}
-		routesByAlias[row.Alias][row.RouteID] = true
-	}
-
-	for alias, routes := range routesByAlias {
-		// The one-route invariant applies to every alias this migration
-		// touches, repointed ones included: an alias whose cost depends on
-		// which of two routes won is not priceable at the alias level.
-		if len(routes) != 1 {
-			t.Errorf("alias %s declares %d routes; the one-model-one-price rule allows exactly one enabled route per alias", alias, len(routes))
-			continue
-		}
-
-		// The pinned-policy row is only demanded of aliases this migration
-		// actually creates. A repointed alias keeps the alias_route_policies
-		// row an earlier migration already gave it, and since the repoint does
-		// not change its route_id, that row stays correct untouched.
-		if !inserted[alias] {
-			continue
-		}
-
-		var routeID string
-		for r := range routes {
-			routeID = r
-		}
-
-		wantPolicy := regexp.MustCompile(`\('` + regexp.QuoteMeta(alias) + `'\s*,\s*'[a-z]+'\s*,\s*false\s*,\s*'\["` + regexp.QuoteMeta(routeID) + `"\]'::jsonb\)`)
-		if !wantPolicy.MatchString(migration) {
-			t.Errorf("alias %s needs an alias_route_policies row whose fallback_order is exactly [\"%s\"]; found none", alias, routeID)
+		// Accept both the `= 'x'` and the `IN ('x', ...)` forms, since this
+		// migration's own retirement statement uses IN and a repoint written
+		// that way would otherwise walk past the check.
+		for _, stmt := range splitStatements(sql) {
+			lower := strings.ToLower(strings.TrimSpace(stmt))
+			if !strings.HasPrefix(lower, "update public.provider_routes") {
+				continue
+			}
+			if !strings.Contains(lower, "provider_model") {
+				continue
+			}
+			if strings.Contains(stmt, "'"+old+"'") {
+				t.Errorf("route %s is repointed in place; it must be disabled instead, or its OpenRouter extra_body block survives the config sync and is sent to Groq", old)
+			}
 		}
 	}
 }
 
 // soleCarrierFlags are capability flags held by exactly ONE route in the whole
 // catalog before this migration, route-openrouter-auto, granted by
-// 20260414_01_provider_capabilities_media_columns.sql and never granted to any
-// other row since. supports_tts and supports_stt were on that list too until
-// 20260717_02 correctly moved them to the voice routes.
+// 20260414_01_provider_capabilities_media_columns.sql and never granted since.
 var soleCarrierFlags = []string{
 	"supports_batch",
 	"supports_image_generation",
 	"supports_image_edit",
 }
 
-// TestDisablingASoleCapabilityCarrierHandsItsFlagsOn is a regression guard for
-// a real defect this migration shipped in an earlier revision and that no other
-// test could see.
+// TestDisablingASoleCapabilityCarrierHandsItsFlagsOn is a regression guard for a
+// real defect an earlier revision of this migration shipped.
 //
 // Disabling route-openrouter-auto removes the only route carrying these three
 // flags. SelectRoute skips disabled candidates and then hard filters on each
-// flag, and both batchstore/submitter.go and batchstore/local_executor_adapters.go
-// send NeedBatch = true for EVERY batch, so the effect is not scoped to
-// hive-auto: /v1/batches, /v1/images/generations and /v1/images/edits each find
-// zero eligible routes for every alias in the system. It fails closed, so it is
-// silent, and the other guards here cannot see it because they only read this
-// migration's own text for pricing.
-//
-// The rule this encodes: if you disable the sole carrier of a capability, some
-// route in the same migration has to pick it up, or you have deleted a product
-// surface as a side effect of a repricing.
+// flag, and both batchstore/submitter.go and local_executor_adapters.go send
+// NeedBatch for EVERY batch, so /v1/batches, /v1/images/generations and
+// /v1/images/edits each find zero eligible routes for every alias in the system.
+// It fails closed, so nothing reports it.
 func TestDisablingASoleCapabilityCarrierHandsItsFlagsOn(t *testing.T) {
-	migration := readPricingMigration(t)
+	sql := migrationSQL(t)
 
-	disable := regexp.MustCompile(`(?is)update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'[^;]*?;`)
-	disabled := strings.Join(disable.FindAllString(migration, -1), "\n")
-	if !strings.Contains(disabled, "'route-openrouter-auto'") {
+	stillDisabled := false
+	for _, stmt := range splitStatements(sql) {
+		if strings.Contains(strings.ToLower(stmt), "health_state = 'disabled'") && strings.Contains(stmt, "'route-openrouter-auto'") {
+			stillDisabled = true
+			break
+		}
+	}
+	if !stillDisabled {
 		t.Skip("route-openrouter-auto is not disabled by this migration, so its capabilities are not at risk")
 	}
 
-	// FindAll, not Find. This migration contains MORE THAN ONE
-	// provider_capabilities INSERT: one for the four brand-new routes, which
-	// has no business carrying media flags, and a later one for the two
-	// replacement routes, which must. An earlier version of this guard read
-	// only the first block and so failed against a correct migration.
-	blocks := regexp.MustCompile(`(?is)insert\s+into\s+public\.provider_capabilities\s*\((.*?)\)\s*values(.*?)on\s+conflict`).FindAllStringSubmatch(migration, -1)
-	if len(blocks) == 0 {
-		t.Fatal("route-openrouter-auto is disabled but this migration has no provider_capabilities INSERT to hand its flags to")
+	caps := insertRows(sql, "public.provider_capabilities")
+	if len(caps) == 0 {
+		t.Fatal("route-openrouter-auto is disabled but this migration inserts no provider_capabilities rows to hand its flags to")
 	}
 
 	for _, flag := range soleCarrierFlags {
 		granted := false
-		for _, block := range blocks {
-			columnIndex := -1
-			for i, col := range strings.Split(block[1], ",") {
-				if strings.TrimSpace(col) == flag {
-					columnIndex = i
-					break
-				}
-			}
-			if columnIndex < 0 {
-				continue
-			}
-			// Naming the column is not enough. Find a VALUES row that actually
-			// puts true in that column's position, so a row of all-false
-			// cannot satisfy this guard.
-			for _, row := range regexp.MustCompile(`\(([^()]*)\)`).FindAllStringSubmatch(block[2], -1) {
-				fields := strings.Split(row[1], ",")
-				if columnIndex < len(fields) && strings.TrimSpace(fields[columnIndex]) == "true" {
-					granted = true
-					break
-				}
-			}
-			if granted {
+		for _, row := range caps {
+			if strings.EqualFold(row[flag], "true") {
+				granted = true
 				break
 			}
 		}
@@ -496,21 +560,89 @@ func TestDisablingASoleCapabilityCarrierHandsItsFlagsOn(t *testing.T) {
 	}
 }
 
+// TestRepointedAliasesKeepTheirCapabilities is the sibling of the guard above
+// for the per-alias flags. hive-default and hive-auto both had
+// supports_reasoning true on their OpenRouter routes. Because every alias here
+// is pinned to exactly ONE route, a narrower replacement does not quietly
+// withhold a feature: matchesRequestedCapabilities drops the only candidate and
+// SelectRoute returns ErrRouteNotEligible, which writeRoutingError maps to 422.
+// So a chat completion carrying reasoning_effort would start failing outright.
+func TestRepointedAliasesKeepTheirCapabilities(t *testing.T) {
+	sql := migrationSQL(t)
+
+	caps := map[string]map[string]string{}
+	for _, row := range insertRows(sql, "public.provider_capabilities") {
+		caps[row["route_id"]] = row
+	}
+
+	for _, move := range retiredRoutes {
+		row, ok := caps[move.replacement]
+		if !ok {
+			t.Errorf("replacement route %s has no provider_capabilities row, so it takes the column defaults of false for everything", move.replacement)
+			continue
+		}
+		if !strings.EqualFold(row["supports_reasoning"], "true") {
+			t.Errorf("route %s must keep supports_reasoning = true: %s is pinned to this single route, its previous OpenRouter route had the flag, and gpt-oss does expose reasoning effort. With one candidate an under-claim is not a withheld feature, it is a 422 on every request carrying reasoning_effort.",
+				move.replacement, move.alias)
+		}
+	}
+}
+
+// TestHiveFastStaysInvocableAfterDeprecation guards the back-compat promise.
+// hive-fast is the model id stored in existing Open WebUI conversations and in
+// live API clients, so the restructure must not remove it, must not stop it
+// resolving, and must not reprice it.
+//
+// Every check here is statement scoped. An earlier version used `.*?` under
+// `(?s)`, which let the pieces come from three different statements: it could
+// report hive-fast marked hidden when a DIFFERENT alias had been hidden, which
+// is a false green on a back-compat guard.
+func TestHiveFastStaysInvocableAfterDeprecation(t *testing.T) {
+	sql := migrationSQL(t)
+
+	for _, stmt := range splitStatements(sql) {
+		lower := strings.ToLower(strings.TrimSpace(stmt))
+		if strings.HasPrefix(lower, "delete from public.model_aliases") || strings.HasPrefix(lower, "delete from model_aliases") {
+			t.Error("the restructure must not DELETE from model_aliases: hive-fast is stored per-chat in existing Open WebUI conversations and would 404 for every one of them")
+		}
+	}
+
+	updates := updateAssignments(sql, "public.model_aliases", "alias_id")
+	hiveFast, ok := updates["hive-fast"]
+	if !ok {
+		t.Fatal("hive-fast must be marked with lifecycle = 'hidden'; that is the deprecation marker this restructure promised, and no UPDATE targets it")
+	}
+
+	if hiveFast["lifecycle"] != "hidden" {
+		t.Errorf("hive-fast's lifecycle is set to %q; the deprecation marker must be 'hidden'. model_aliases' CHECK constraint permits only stable, preview and hidden, so a literal 'deprecated' would abort the migration on apply.", hiveFast["lifecycle"])
+	}
+	if v, set := hiveFast["visibility"]; set && (v == "internal" || v == "restricted") {
+		t.Errorf("hive-fast must keep visibility 'public', found %q: AliasVisibleToTenant fails closed on anything but public and preview, which would block invocation, not merely hide the alias from the picker", v)
+	}
+	for _, priceCol := range []string{"input_price_credits", "output_price_credits"} {
+		if v, set := hiveFast[priceCol]; set {
+			t.Errorf("hive-fast must not be repriced by this migration, but %s is set to %s; it has to keep charging exactly what it charged before", priceCol, v)
+		}
+	}
+}
+
 // TestNewAliasesReachDefaultTierKeys is the inert-change guard. An alias can be
 // inserted, priced, routed and wired into LiteLLM and still be invisible to
 // every customer, because api_key_policies.allowed_group_names defaults to
 // ["default"] and a key never sees an alias outside its groups. That gap has
-// already been patched twice by hand (20260717_01 for hive-auto and 20260717_02
-// for the voice aliases), which is twice too many to leave unguarded.
+// been patched by hand twice already, by 20260717_01 and 20260717_02.
 func TestNewAliasesReachDefaultTierKeys(t *testing.T) {
-	migration := readPricingMigration(t)
+	sql := migrationSQL(t)
 
-	// Scoped to newly inserted aliases. hive-default and hive-auto are already
-	// members from 20260331_03 and 20260717_01 respectively, so requiring a
-	// membership row for them here would be requiring a no-op.
-	for alias := range insertedAliases(t, migration) {
-		want := regexp.MustCompile(`\(\s*'default'\s*,\s*'` + regexp.QuoteMeta(alias) + `'\s*\)`)
-		if !want.MatchString(migration) {
+	inDefault := map[string]bool{}
+	for _, row := range insertRows(sql, "public.model_policy_group_members") {
+		if row["group_name"] == "default" {
+			inDefault[row["alias_id"]] = true
+		}
+	}
+
+	for _, row := range insertRows(sql, "public.model_aliases") {
+		if alias := row["alias_id"]; !inDefault[alias] {
 			t.Errorf("alias %s is never added to the 'default' model policy group, so no default-tier API key can call it; the alias would ship inert", alias)
 		}
 	}

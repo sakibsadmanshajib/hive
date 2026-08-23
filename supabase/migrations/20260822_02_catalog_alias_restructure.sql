@@ -2,10 +2,23 @@
 -- Customer-facing catalog restructure (owner directive, 2026-08-22).
 --
 -- WHAT CHANGES
---   * hive-small        NEW. Same upstream model and same price as hive-fast.
---                       This is the rename half of "hive-fast becomes
---                       hive-small", done as an add rather than an in-place
---                       rename; see BACK-COMPAT below.
+--   * hive-small        NEW. Same upstream model as hive-fast, and the same
+--                       INPUT and OUTPUT price. This is the rename half of
+--                       "hive-fast becomes hive-small", done as an add rather
+--                       than an in-place rename; see BACK-COMPAT below.
+--                       "Same price" is stated for input and output only, on
+--                       purpose. hive-fast still carries cache_read 1 and
+--                       cache_write 4 from the original 20260331_01 seed,
+--                       while hive-small is inserted with 0 and 0. Those
+--                       columns are display-only, precedence.go never reads
+--                       them, but they ARE published through
+--                       catalog.CatalogPricing, so the difference is visible.
+--                       Zero is the correct value for a Groq gpt-oss route,
+--                       which declares no cache support and has no published
+--                       cache rate; hive-fast's non-zero pair is the stale
+--                       one, and it is left alone rather than corrected here
+--                       so that the deprecated alias is not repriced on any
+--                       axis by this change.
 --   * hive-medium       NEW. Groq openai/gpt-oss-120b, the larger sibling of
 --                       the model hive-small serves.
 --   * deepseek-v4-flash NEW. OpenRouter ~deepseek/deepseek-v4-flash-latest.
@@ -86,10 +99,16 @@
 --   because model_aliases' CHECK constraint
 --   (20260331_01_model_catalog.sql) permits only 'stable', 'preview' and
 --   'hidden'; a literal 'deprecated' would abort this migration on apply.
---   Being honest about its reach: no Go code and no front-end reads lifecycle
---   today (it is selected and returned by catalog/repository.go as a display
---   field and filtered on by nothing), so hive-fast still appears in the model
---   list after this migration. That is the safe direction. The alternative,
+--   Being honest about its reach. No Go code filters on lifecycle: it is
+--   selected and returned by catalog/repository.go as a display field and
+--   nothing gates on it, so hive-fast still appears in /v1/models and stays
+--   invocable, which is the point. The front end DOES read it, though:
+--   apps/web-console/components/catalog/model-catalog-table.tsx maps lifecycle
+--   to a status badge and has an explicit 'hidden' entry rendering as
+--   "Hidden". So the visible effect in the console catalog is that hive-fast
+--   is listed, priced and fully callable while its status column reads
+--   Hidden. That is a fair rendering of a deprecated alias, but it is not
+--   nothing, and a reader should not have to discover it. The alternative,
 --   moving its visibility to 'internal', would make catalog.AliasVisibleToTenant
 --   fail closed and break every saved chat, because that one predicate governs
 --   both the listing and the inference-time entitlement check.
@@ -211,10 +230,16 @@
 -- RE-RUNNABILITY
 --   Every INSERT carries ON CONFLICT DO NOTHING and every UPDATE carries a
 --   WHERE guard that excludes rows already at the target value, so a second
---   run of this file affects zero rows and errors on nothing. DO NOTHING
---   rather than DO UPDATE for the same reason 20260717_02 gives: a row already
---   present may have been retuned since, and this migration has no business
---   reverting that.
+--   run of this file affects zero rows and errors on nothing.
+--
+--   DO NOTHING rather than DO UPDATE on the INSERTS, for the reason 20260717_02
+--   gives: a row already present may have been retuned since, and this
+--   migration has no business reverting that. Scoped deliberately to the
+--   INSERTs, because the UPDATEs below do exactly that reverting. Replaying
+--   this file after someone corrects hive-default's or hive-auto's price, or
+--   un-hides hive-fast, puts those rows back to the 2026-08-22 values. That is
+--   what a repricing migration is for and 20260818_01 set the same precedent,
+--   but it means this file is NOT safe to replay over hand-tuned state.
 -- =============================================================================
 
 -- One transaction, for the reason 20260818_01 introduced it: these statements
@@ -296,9 +321,14 @@ on conflict (alias_id) do nothing;
 --    route-groq-small deliberately points at the same upstream model as the
 --    existing route-groq-fast rather than reusing that route: provider_routes
 --    is keyed one route to one alias, so hive-small needs its own row for
---    hive-fast to keep working. Two routes naming one upstream model is
---    already the established shape here (route-openrouter-auto and
---    route-doc-vlm share one model, see deploy/litellm/config.yaml).
+--    hive-fast to keep working. Two routes naming one upstream model is a
+--    shape this migration itself establishes three times over:
+--    route-groq-fast, route-groq-small and route-groq-default all call
+--    groq/openai/gpt-oss-20b, and route-groq-medium and route-groq-auto both
+--    call groq/openai/gpt-oss-120b. (An earlier draft cited
+--    route-openrouter-auto and route-doc-vlm sharing a model in
+--    deploy/litellm/config.yaml; this change deletes the first of those, so
+--    the citation would have sent a reader looking for something gone.)
 insert into public.provider_routes (
     route_id,
     alias_id,
@@ -353,14 +383,28 @@ on conflict (route_id) do nothing;
 
 -- 3. Capabilities per route.
 --
---    The two Groq rows mirror route-groq-fast's existing capability row
---    exactly, including supports_reasoning = false. That is a deliberate
---    under-claim, not an oversight: the gpt-oss family does expose reasoning
---    effort, but route-groq-fast has carried false since it was seeded and
---    hive-small is defined as a behaviour-preserving clone of hive-fast. An
---    over-claim breaks requests; an under-claim only withholds a feature.
---    Correcting the flag for the whole gpt-oss family, hive-fast included, is
---    a separate change and is called out in the pull request.
+--    supports_reasoning is TRUE on both Groq rows, and this is worth stating
+--    because an earlier revision had it false on the reasoning that an
+--    over-claim breaks requests while an under-claim merely withholds a
+--    feature. That reasoning is wrong for every alias in this migration.
+--    It holds only for a multi-route alias, where a narrower route just loses
+--    the ordering contest. Every alias here is pinned to exactly ONE route by
+--    step 4, so with a single candidate matchesRequestedCapabilities
+--    (routing/service.go) drops it, SelectRoute returns ErrRouteNotEligible
+--    and writeRoutingError maps that to 422. An under-claim on a pinned alias
+--    is not a withheld feature, it is a failed request.
+--    The flag is also simply true: the gpt-oss family exposes reasoning
+--    effort, and apps/edge-api/internal/inference/chat_completions.go sets
+--    NeedReasoning whenever a request carries reasoning_effort.
+--    route-groq-fast still carries false from its original seed. That is a
+--    pre-existing under-claim on the deprecated alias, left alone here rather
+--    than widened in a pricing migration.
+--
+--    supports_cache_read and supports_cache_write stay false. Groq publishes
+--    no cache rate for the gpt-oss family, and unlike reasoning this costs
+--    nothing at dispatch: no request path in edge-api ever sets NeedCacheRead
+--    or NeedCacheWrite, they are plumbed through the routing API and never
+--    populated, so a false flag here cannot turn into a 422.
 --
 --    tools_supported is true for all four. 20260612_01 already sets it true
 --    for every openrouter and groq route by provider, but that migration ran
@@ -388,10 +432,10 @@ insert into public.provider_capabilities (
     supports_cache_write,
     tools_supported
 ) values
-    ('route-groq-small',        true, true, true, false, true, false, false, false, true),
-    ('route-groq-medium',       true, true, true, false, true, false, false, false, true),
-    ('route-deepseek-v4-flash', true, true, true, false, true, true,  true,  false, true),
-    ('route-deepseek-v4-pro',   true, true, true, false, true, true,  true,  false, true)
+    ('route-groq-small',        true, true, true, false, true, true, false, false, true),
+    ('route-groq-medium',       true, true, true, false, true, true, false, false, true),
+    ('route-deepseek-v4-flash', true, true, true, false, true, true, true,  false, true),
+    ('route-deepseek-v4-pro',   true, true, true, false, true, true, true,  false, true)
 on conflict (route_id) do nothing;
 
 -- 4. Pin each alias to its single route. 'pinned' with a one-entry
@@ -535,8 +579,8 @@ insert into public.provider_capabilities (
     supports_image_generation,
     supports_image_edit
 ) values
-    ('route-groq-default', true, true, true, false, true, false, false, false, true, false, false, false),
-    ('route-groq-auto',    true, true, true, false, true, false, false, false, true, true,  true,  true)
+    ('route-groq-default', true, true, true, false, true, true, false, false, true, false, false, false),
+    ('route-groq-auto',    true, true, true, false, true, true, false, false, true, true,  true,  true)
 on conflict (route_id) do nothing;
 
 -- 6b. Retire the two OpenRouter routes these aliases used to take. Disabled,
@@ -562,21 +606,36 @@ UPDATE public.alias_route_policies
 -- 7. Reprice the two moved aliases to the rate of the model they now call,
 --    and rewrite their summaries so the names do not imply behaviour the
 --    aliases no longer have. Both prices go DOWN; see the header table.
+--    The cache columns are zeroed on the same pass. They still carry the
+--    values the original seed gave them against OpenRouter models
+--    (20260331_01: hive-default 2 and 6, hive-auto 1 and 5), and both aliases
+--    now sit on Groq routes declaring supports_cache_read = false and
+--    supports_cache_write = false. These columns are not internal:
+--    catalog.CatalogPricing marshals them into the public catalog response, so
+--    leaving them would advertise a cache-read price for two models that do no
+--    caching. Zero here means "no rate published", exactly as it does for the
+--    four aliases inserted above.
 UPDATE public.model_aliases
-   SET input_price_credits  = 10500,
-       output_price_credits = 42000,
-       summary              = 'Default alias for requests that name no model. Now resolves to the same fast, low-cost model as Hive Small; kept as a distinct alias for back-compat.',
-       updated_at           = now()
+   SET input_price_credits       = 10500,
+       output_price_credits      = 42000,
+       cache_read_price_credits  = 0,
+       cache_write_price_credits = 0,
+       summary                   = 'Default alias for requests that name no model. Now resolves to the same fast, low-cost model as Hive Small; kept as a distinct alias for back-compat.',
+       updated_at                = now()
  WHERE alias_id = 'hive-default'
-   AND (input_price_credits <> 10500 OR output_price_credits <> 42000);
+   AND (input_price_credits <> 10500 OR output_price_credits <> 42000
+        OR cache_read_price_credits <> 0 OR cache_write_price_credits <> 0);
 
 UPDATE public.model_aliases
-   SET input_price_credits  = 21000,
-       output_price_credits = 84000,
-       summary              = 'Larger-capacity alias. Performs no automatic routing or model selection; it resolves to the same model as Hive Medium and is kept as a distinct alias for back-compat.',
-       updated_at           = now()
+   SET input_price_credits       = 21000,
+       output_price_credits      = 84000,
+       cache_read_price_credits  = 0,
+       cache_write_price_credits = 0,
+       summary                   = 'Larger-capacity alias. Performs no automatic routing or model selection; it resolves to the same model as Hive Medium and is kept as a distinct alias for back-compat.',
+       updated_at                = now()
  WHERE alias_id = 'hive-auto'
-   AND (input_price_credits <> 21000 OR output_price_credits <> 84000);
+   AND (input_price_credits <> 21000 OR output_price_credits <> 84000
+        OR cache_read_price_credits <> 0 OR cache_write_price_credits <> 0);
 
 -- 8. Deprecate hive-fast. Route, price, visibility and group membership are all
 --    left exactly as they are, so every existing conversation and API client

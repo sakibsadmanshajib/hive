@@ -90,10 +90,10 @@ throwaway database ready: 91 of 91 migrations executed
 -------------------------+-----------------+--------------------+---------------------
  route-deepseek-v4-flash | t               | t                  | t
  route-deepseek-v4-pro   | t               | t                  | t
- route-groq-auto         | t               | f                  | f
- route-groq-default      | t               | f                  | f
- route-groq-medium       | t               | f                  | f
- route-groq-small        | t               | f                  | f
+ route-groq-auto         | t               | t                  | f
+ route-groq-default      | t               | t                  | f
+ route-groq-medium       | t               | t                  | f
+ route-groq-small        | t               | t                  | f
 (6 rows)
 
 

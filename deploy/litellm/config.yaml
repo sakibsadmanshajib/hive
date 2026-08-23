@@ -100,10 +100,21 @@ model_list:
   # reason and in the same way as route-openrouter-default above.
   #
   # NOTE this route is no longer vision-capable. gpt-oss-120b is text-only,
-  # where gpt-4.1-mini was multimodal. Image-analysis traffic belongs on
-  # route-doc-vlm (section 4), which is unchanged, still OpenRouter, and still
-  # reads OPENROUTER_AUTO_MODEL. hive-auto also no longer performs any
-  # automatic model selection; the name is kept for back-compat only.
+  # where gpt-4.1-mini was multimodal, so state the consequence plainly rather
+  # than pointing somewhere reassuring: after this change there is NO
+  # customer-reachable vision path through the gateway. hive-auto was the last
+  # one.
+  #
+  # route-doc-vlm (section 4) is not a migration path for that traffic. It has
+  # no provider_routes row, which is why the config sync leaves it alone, and
+  # SelectRoute only ever returns routes joined to an alias, so nothing a
+  # customer sends in the OpenAI-compatible `model` field can select it. Its
+  # only consumer is apps/agent-engine/internal/docvlm, which addresses this
+  # LiteLLM model name directly and never goes through the catalog. Do not
+  # point a customer at it.
+  #
+  # hive-auto also no longer performs any automatic model selection; the name
+  # is kept for back-compat only.
   - model_name: route-groq-auto
     litellm_params:
       model: groq/openai/gpt-oss-120b
@@ -136,14 +147,24 @@ model_list:
       model: openrouter/deepseek/deepseek-v4-pro-0813
       api_key: os.environ/OPENROUTER_API_KEY
 
-  # ── 4. Doc-layout vision (paid, same model + env var as route-openrouter-auto) ─
+  # ── 4. Doc-layout vision (paid, OpenRouter, the last multimodal route) ──────
   # Blueprint Wave 3, Step 3.2 (issue #300): the doc-layout knowledge-work-pack
   # skill (apps/agent-engine/internal/docvlm) sends contract/PDF page images
-  # here for structured layout extraction. Named as its own route (rather than
-  # reusing route-openrouter-auto directly) so the doc-layout skill's model
-  # choice can be tuned or swapped independently of the general vision route
-  # edge-api's capability selector uses; today both share OPENROUTER_AUTO_MODEL
-  # and so both point at the same paid vision model.
+  # here for structured layout extraction.
+  #
+  # UPDATED 2026-08-22. This section used to describe the route as sharing a
+  # model and an env var with route-openrouter-auto, and as being separable
+  # from "the general vision route edge-api's capability selector uses".
+  # Neither that route nor that selector path exists any more: the catalog
+  # restructure retired route-openrouter-auto and moved hive-auto to a
+  # text-only Groq model.
+  #
+  # What is left is this: route-doc-vlm is the ONLY multimodal route in the
+  # file, it is reachable only by agent-engine calling this LiteLLM model name
+  # directly, and it is NOT selectable by any customer request, because it has
+  # no provider_routes row and therefore no alias. OPENROUTER_AUTO_MODEL now
+  # exists for this route alone, so it must stay pointed at a vision-capable
+  # slug even though no alias is priced against it any more.
   - model_name: route-doc-vlm
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
