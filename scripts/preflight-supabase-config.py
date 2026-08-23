@@ -129,7 +129,13 @@ def hosted_ref(host: str) -> str | None:
 def check_key(name: str, token: str, want_role: str, url_ref: str | None) -> None:
     """Claim-check one key against the URL. Offline; sends nothing."""
     print(f"\n== {name} ==")
-    print(f"  present, {len(token)} characters")
+    # Presence only for the service-role value: this log is public, and even a
+    # character count is secret metadata. Anon/publishable keys are public by
+    # design (they ship in browser clients), so their length stays legible.
+    if "SERVICE_ROLE" in name:
+        print("  present")
+    else:
+        print(f"  present, {len(token)} characters")
     claims = jwt_claims(token)
     if claims is None:
         # A `sb_publishable_*` / `sb_secret_*` key carries no readable claims,
