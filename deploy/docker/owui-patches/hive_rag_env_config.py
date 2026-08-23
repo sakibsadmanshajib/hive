@@ -17,10 +17,12 @@ This module is spliced into that startup path by
 apply_rag_env_config_patch.py. The environment wins for the four keys that
 point Open WebUI's embedder at the Hive gateway, the four that point its
 speech-to-text at the same gateway (the Bengali dictation fix, see their entry
-below), plus `ui.enable_login_form` (same mechanism, different symptom) and the
-three product-surface feature flags below (#772), and for nothing else: an
-administrator's other Open WebUI settings still persist normally, which is
-why this is a per-key reconcile rather than `ENABLE_PERSISTENT_CONFIG=false`.
+below), the five that point its text-to-speech there too (#997, see their
+entry below), plus `ui.enable_login_form` (same mechanism, different symptom)
+and the three product-surface feature flags below (#772), and for nothing
+else: an administrator's other Open WebUI settings still persist normally,
+which is why this is a per-key reconcile rather than
+`ENABLE_PERSISTENT_CONFIG=false`.
 
 The embedding model itself is never hardcoded here. It comes from
 `RAG_EMBEDDING_MODEL` (compose derives it from `OWUI_RAG_EMBEDDING_ALIAS`), so
