@@ -22,6 +22,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentengine"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentsched"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
@@ -1046,8 +1047,11 @@ func main() {
 	// apps/control-plane/internal/agenttask/SYNC_CONTRACT.md's Engine seam
 	// section for why the real Engine is still conditional on deployment
 	// env vars rather than unconditionally wired.
-	var agentTaskHandler *agenttask.Handler
-	var userMemoriesHandler *usermemories.Handler
+	var (
+		agentTaskHandler     *agenttask.Handler
+		agentScheduleHandler *agentsched.Handler
+		userMemoriesHandler  *usermemories.Handler
+	)
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
 		agentEngine, agentEngineStatus := buildAgentEngine(egressSvc)
@@ -1075,6 +1079,28 @@ func main() {
 			poller.Start(runCtx)
 			defer poller.Stop()
 			log.Println("agent task status poller started")
+		}
+
+		// Scheduled agent tasks ("routines"): the CRUD surface plus the
+		// minute tick that turns due schedules into real tasks through
+		// agentTaskSvc.CreateTask — the SAME service path a manual creation
+		// uses, so metering, quota and engine gating apply to scheduled runs
+		// identically. The scheduler only starts when the engine itself is
+		// configured (same gate as the poller above): without an engine every
+		// scheduled run would fail into last_error and burn a cadence per
+		// deployment restart for nothing.
+		scheduleRepo := agentsched.NewPgxRepository(pool)
+		scheduleSvc := agentsched.NewService(scheduleRepo, nil)
+		agentScheduleHandler = agentsched.NewHandler(scheduleSvc)
+
+		if agentEngineStatus != nil {
+			scheduler := agentsched.NewScheduler(scheduleRepo, agentTaskSvc, agentsched.SchedulerConfig{
+				Interval: parseDurationEnv("HIVE_AGENT_SCHEDULER_INTERVAL", time.Minute),
+				Logger:   slog.Default(),
+			})
+			scheduler.Start(runCtx)
+			defer scheduler.Stop()
+			log.Println("agent task scheduler started")
 		}
 	}
 
@@ -1107,6 +1133,7 @@ func main() {
 		EgressPolicyHandler:      egressPolicyHandler,
 		MarketplaceHandler:       marketplaceHandler,
 		AgentTaskHandler:         agentTaskHandler,
+		AgentScheduleHandler:     agentScheduleHandler,
 		UserMemoriesHandler:      userMemoriesHandler,
 		RoutingHandler:           routingHandler,
 		UsageHandler:             usageHandler,

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
+	edgeagentsched "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agentsched"
 	edgeagenttask "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/artifacts"
@@ -448,6 +449,19 @@ func main() {
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
 		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)
+	}
+
+	// Scheduled agent tasks ("routines"): customer-facing CRUD for the rows
+	// control-plane's scheduler turns into real tasks. Same trust shape as
+	// the block above: persistence lives in control-plane
+	// (apps/control-plane/internal/agentsched), this is only the auth
+	// boundary, registered behind FeatureCowork like /v1/agent/tasks.
+	{
+		agentSchedClient := edgeagentsched.NewClient(resolveControlPlaneBaseURL())
+		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient)
+		agentSchedMux := http.NewServeMux()
+		agentSchedHandler.Register(agentSchedMux)
+		registerAgentScheduleRoutes(mux, featureGate, agentSchedMux)
 	}
 
 	// API routes

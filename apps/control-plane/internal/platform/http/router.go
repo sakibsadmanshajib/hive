@@ -6,6 +6,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentsched"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
@@ -178,6 +179,13 @@ type RouterConfig struct {
 	// D-020): the shared-secret-guarded four-verb surface at
 	// /internal/user-memories/. When nil the route is not registered.
 	UserMemoriesHandler *usermemories.Handler
+
+	// AgentScheduleHandler serves scheduled-agent-task ("routines") CRUD:
+	// the shared-secret-guarded service-to-service surface at
+	// /internal/agent-schedules/ that edge-api's customer-facing
+	// /v1/agent/schedules routes call into. When nil the route is not
+	// registered.
+	AgentScheduleHandler *agentsched.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -413,6 +421,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// is a follow-up if the pattern earns one.
 	if cfg.UserMemoriesHandler != nil {
 		mux.Handle("/internal/user-memories/", internal(cfg.UserMemoriesHandler.InternalMux()))
+	}
+
+	// Scheduled agent tasks ("routines") — service-to-service only: edge-api's
+	// /v1/agent/schedules are the customer-facing surface, this is the
+	// internal store they call into.
+	if cfg.AgentScheduleHandler != nil {
+		mux.Handle("/internal/agent-schedules/", internal(cfg.AgentScheduleHandler.InternalMux()))
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.
