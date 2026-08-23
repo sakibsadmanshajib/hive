@@ -1231,7 +1231,7 @@ jobs:
 
       - name: Upload compose logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs
           path: /tmp/compose.log
@@ -1751,7 +1751,7 @@ jobs:
 
       - name: Upload compose logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs-web-e2e-api
           path: /tmp/compose-web-e2e-api.log
@@ -1778,7 +1778,7 @@ jobs:
 
       - name: Upload the redacted Next.js server log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextjs-log-web-e2e
           path: /tmp/nextjs-redacted.log
@@ -1787,7 +1787,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
           # Traces (.zip), videos (.webm) and index.html are excluded. This

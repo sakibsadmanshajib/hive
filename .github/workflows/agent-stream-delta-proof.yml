@@ -177,7 +177,7 @@ jobs:
 
       - name: Upload the captured log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stream-delta-proof-${{ github.run_id }}
           path: /tmp/proof-redacted.log

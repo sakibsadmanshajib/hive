@@ -1952,7 +1952,7 @@ jobs:
         # token today, so that was a posture gap rather than a live leak, but
         # naming the files means a future log line cannot widen the artifact.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-workspace-coverage
           path: |

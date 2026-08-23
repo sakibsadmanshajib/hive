@@ -764,7 +764,7 @@ jobs:
         # not a silent absence either, because the lint step itself is red
         # and names the file it found.
         if: always() && steps.capture.conclusion != 'skipped' && steps.lint.conclusion != 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-visual-proof-${{ github.run_id }}
           path: ${{ env.CAPTURE_DIR }}
@@ -840,7 +840,7 @@ jobs:
 
       - name: Upload the failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-visual-proof-logs-${{ github.run_id }}
           path: |

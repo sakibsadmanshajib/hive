@@ -114,7 +114,7 @@ jobs:
         run: |
           mkdir -p /tmp/proof
           node ../../docs/proof/issue-855-enter-key/capture.mjs manual-repair /tmp/proof "$DEMO_ACCOUNT_EMAIL"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
         with:
           name: enter-key-proof
