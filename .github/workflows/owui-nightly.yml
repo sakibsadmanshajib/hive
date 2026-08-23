@@ -29,10 +29,10 @@ jobs:
       LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Reconstruct SUPABASE_DB_URL
         # HIVE_TEST_DB_URL secret does not exist (phantom -- 2026-07-04 run
         # 28643196239 failed on it). Reconstruct from the same DB part
@@ -330,7 +330,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -447,7 +447,7 @@ jobs:
         run: |
           npm i --no-save yaml pg
           node tools/soc2-coverage-report.mjs || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: owui-playwright-report
@@ -469,7 +469,7 @@ jobs:
             !apps/web-console/playwright-report-owui/**/*.webm
             !apps/web-console/playwright-report-owui/index.html
           retention-days: 5
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           # Proof captures, kept out of the HTML report's own folder because
@@ -481,7 +481,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 5
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: owui-compose-logs

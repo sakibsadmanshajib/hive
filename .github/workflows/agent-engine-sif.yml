@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Apptainer ${{ env.APPTAINER_VERSION }}
         run: |
@@ -90,7 +90,7 @@ jobs:
           apptainer inspect agent-engine.sif
 
       - name: Upload agent-engine.sif artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-engine-sif
           path: deploy/apptainer/agent-engine.sif

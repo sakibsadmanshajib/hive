@@ -44,13 +44,13 @@ jobs:
       run:
         working-directory: apps/web-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
         # No npm cache here: apps/web-console/package-lock.json is also
         # cached by pull_request workflows that run on fork PRs (e.g.
         # license-gate), so restoring that cache in this trusted deploy job

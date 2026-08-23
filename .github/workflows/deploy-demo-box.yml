@@ -226,7 +226,7 @@ jobs:
       # which is exactly how this broke the first time.
       PSQL_BIN: ${{ github.workspace }}/scripts/stack-psql.sh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -1749,15 +1749,15 @@ jobs:
       HIVE_TEST_MODEL: hive-default
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -1864,13 +1864,13 @@ jobs:
       run:
         working-directory: apps/web-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
@@ -1885,7 +1885,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -1952,7 +1952,7 @@ jobs:
         # token today, so that was a posture gap rather than a live leak, but
         # naming the files means a future log line cannot widen the artifact.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-workspace-coverage
           path: |
@@ -1981,7 +1981,7 @@ jobs:
       issues: write
     timeout-minutes: 5
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         env:
           MIGRATE_RESULT: ${{ needs.migrate.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
