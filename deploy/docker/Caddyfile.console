@@ -19,6 +19,11 @@
 # upstream that derives an absolute URL from request scheme sees the scheme
 # users actually arrive on, same pattern as Caddyfile.owui.
 http://{$CONSOLE_DOMAIN:console.localhost} {
+  # Compress compressible responses for every route in this block (directives
+  # are sorted, so encode wraps the handle and reverse_proxy blocks below).
+  # Already-compressed content types (images, video, archives) are excluded by
+  # Caddy's default compression filter.
+  encode zstd gzip
   # The public auth origin, served from this app's OWN origin rather than a
   # second public hostname.
   #
