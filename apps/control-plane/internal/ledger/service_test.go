@@ -11,14 +11,15 @@ import (
 )
 
 type stubRepo struct {
-	accountsMap   map[uuid.UUID]*accounts.Account
-	memberships   []accounts.Membership
-	invitations   map[string]*accounts.Invitation
-	entries       map[uuid.UUID][]LedgerEntry
-	lastListLimit int
-	postErr       error
-	balanceErr    error
-	listErr       error
+	accountsMap       map[uuid.UUID]*accounts.Account
+	memberships       []accounts.Membership
+	invitations       map[string]*accounts.Invitation
+	entries           map[uuid.UUID][]LedgerEntry
+	lastListLimit     int
+	lastListRequestID string
+	postErr           error
+	balanceErr        error
+	listErr           error
 }
 
 func newStubRepo() *stubRepo {
@@ -104,8 +105,16 @@ func (s *stubRepo) ListEntriesWithCursor(_ context.Context, filter ListEntriesFi
 		return nil, s.listErr
 	}
 	s.lastListLimit = filter.Limit
+	s.lastListRequestID = filter.RequestID
 
-	entries := s.entries[filter.AccountID]
+	var entries []LedgerEntry
+	for _, entry := range s.entries[filter.AccountID] {
+		if filter.RequestID != "" && entry.RequestID != filter.RequestID {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
 	if filter.Limit <= 0 || len(entries) <= filter.Limit {
 		return append([]LedgerEntry(nil), entries...), nil
 	}

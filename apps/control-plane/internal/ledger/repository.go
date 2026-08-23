@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -220,38 +221,32 @@ func (r *pgxRepository) ListEntriesWithCursor(ctx context.Context, filter ListEn
 		limit = 20
 	}
 
-	var rows pgx.Rows
-	var err error
+	// One parameterized query built from the optional filters replaces the
+	// former per-combination branch tree (request_id doubled the cases).
+	// Placeholder numbers derive from the running arg count; no value is
+	// interpolated into the SQL text.
+	const selectCols = `SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at FROM public.credit_ledger_entries`
+	query := selectCols + ` WHERE account_id = $1`
+	args := []any{filter.AccountID}
+	next := func() int { return len(args) + 1 }
 
-	if filter.EntryType != nil && filter.Cursor != nil {
-		rows, err = r.pool.Query(ctx, `
-			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
-			FROM public.credit_ledger_entries
-			WHERE account_id = $1 AND id < $2 AND entry_type = $3
-			ORDER BY id DESC LIMIT $4
-		`, filter.AccountID, filter.Cursor, string(*filter.EntryType), limit)
-	} else if filter.EntryType != nil {
-		rows, err = r.pool.Query(ctx, `
-			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
-			FROM public.credit_ledger_entries
-			WHERE account_id = $1 AND entry_type = $2
-			ORDER BY id DESC LIMIT $3
-		`, filter.AccountID, string(*filter.EntryType), limit)
-	} else if filter.Cursor != nil {
-		rows, err = r.pool.Query(ctx, `
-			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
-			FROM public.credit_ledger_entries
-			WHERE account_id = $1 AND id < $2
-			ORDER BY id DESC LIMIT $3
-		`, filter.AccountID, filter.Cursor, limit)
-	} else {
-		rows, err = r.pool.Query(ctx, `
-			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
-			FROM public.credit_ledger_entries
-			WHERE account_id = $1
-			ORDER BY id DESC LIMIT $2
-		`, filter.AccountID, limit)
+	if filter.Cursor != nil {
+		query += fmt.Sprintf(` AND id < $%d`, next())
+		args = append(args, *filter.Cursor)
 	}
+	if filter.EntryType != nil {
+		query += fmt.Sprintf(` AND entry_type = $%d`, next())
+		args = append(args, string(*filter.EntryType))
+	}
+	if v := strings.TrimSpace(filter.RequestID); v != "" {
+		query += fmt.Sprintf(` AND request_id = $%d`, next())
+		args = append(args, v)
+	}
+
+	query += fmt.Sprintf(` ORDER BY id DESC LIMIT $%d`, next())
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ledger: list entries with cursor: %w", err)
 	}

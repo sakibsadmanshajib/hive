@@ -107,10 +107,22 @@ type RecordEventInput struct {
 	ErrorType         string
 }
 
+// ListEventsFilter selects one page of the account's usage events for the
+// console request log browser. Every field except AccountID is an optional
+// filter; CursorID is the id of the last event on the previous page (keyset
+// pagination over created_at DESC, id DESC), and Limit is capped at 100 by
+// the handler.
 type ListEventsFilter struct {
-	AccountID uuid.UUID
-	RequestID string
-	Limit     int
+	AccountID  uuid.UUID
+	RequestID  string
+	ModelAlias string
+	APIKeyID   *uuid.UUID
+	Status     string
+	ErrorsOnly bool
+	From       time.Time
+	To         time.Time
+	CursorID   *uuid.UUID
+	Limit      int
 }
 
 // UsageSummaryRow holds aggregated usage data grouped by a dimension.
@@ -124,9 +136,9 @@ type UsageSummaryRow struct {
 
 // SpendSummaryRow holds aggregated spend data grouped by a dimension.
 type SpendSummaryRow struct {
-	GroupKey    string `json:"group_key"`
+	GroupKey     string `json:"group_key"`
 	TotalCredits int64  `json:"total_credits"`
-	EntryCount  int64  `json:"entry_count"`
+	EntryCount   int64  `json:"entry_count"`
 }
 
 // ErrorSummaryRow holds aggregated error rate data grouped by a dimension.

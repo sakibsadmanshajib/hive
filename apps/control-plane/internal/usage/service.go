@@ -130,10 +130,9 @@ func (s *Service) ListAttempts(ctx context.Context, accountID uuid.UUID, request
 }
 
 func (s *Service) ListEvents(ctx context.Context, filter ListEventsFilter) ([]UsageEvent, error) {
-	if filter.Limit <= 0 {
-		filter.Limit = 20
+	if err := validateListEventsFilter(&filter); err != nil {
+		return nil, err
 	}
-	filter.RequestID = strings.TrimSpace(filter.RequestID)
 
 	events, err := s.repo.ListEvents(ctx, filter)
 	if err != nil {
@@ -141,6 +140,26 @@ func (s *Service) ListEvents(ctx context.Context, filter ListEventsFilter) ([]Us
 	}
 
 	return events, nil
+}
+
+// validateListEventsFilter normalizes and checks the optional filters in
+// place. The handler parses its own query-string types; this is the second,
+// service-level gate so any other caller of the service inherits the same
+// bounds (page size capped at 100, from before to).
+func validateListEventsFilter(filter *ListEventsFilter) error {
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+	filter.RequestID = strings.TrimSpace(filter.RequestID)
+	filter.ModelAlias = strings.TrimSpace(filter.ModelAlias)
+	filter.Status = strings.TrimSpace(filter.Status)
+	if !filter.From.IsZero() && !filter.To.IsZero() && !filter.From.Before(filter.To) {
+		return &ValidationError{Field: "from", Message: "from must be before to"}
+	}
+	return nil
 }
 
 func (s *Service) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) ([]UsageSummaryRow, error) {

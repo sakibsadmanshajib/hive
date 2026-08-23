@@ -84,16 +84,17 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, ok := parseLimit(w, r)
+	limit, ok := parseLimitWithCap(w, r, 20, maxEventsPageLimit)
 	if !ok {
 		return
 	}
 
-	events, err := h.svc.ListEvents(r.Context(), ListEventsFilter{
-		AccountID: accountID,
-		RequestID: r.URL.Query().Get("request_id"),
-		Limit:     limit,
-	})
+	filter, ok := parseListEventsFilter(w, r, accountID, limit)
+	if !ok {
+		return
+	}
+
+	events, err := h.svc.ListEvents(r.Context(), filter)
 	if err != nil {
 		writeUsageError(w, err)
 		return
@@ -102,18 +103,20 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	response := make([]map[string]any, 0, len(events))
 	for _, event := range events {
 		item := map[string]any{
-			"request_id":        event.RequestID,
-			"event_type":        event.EventType,
-			"endpoint":          event.Endpoint,
-			"model_alias":       event.ModelAlias,
-			"status":            event.Status,
-			"input_tokens":      event.InputTokens,
-			"output_tokens":     event.OutputTokens,
-			"hive_credit_delta": event.HiveCreditDelta,
-			"customer_tags":     event.CustomerTags,
-			"error_code":        event.ErrorCode,
-			"error_type":        event.ErrorType,
-			"created_at":        event.CreatedAt,
+			"id":                 event.ID,
+			"request_id":         event.RequestID,
+			"request_attempt_id": event.RequestAttemptID,
+			"event_type":         event.EventType,
+			"endpoint":           event.Endpoint,
+			"model_alias":        event.ModelAlias,
+			"status":             event.Status,
+			"input_tokens":       event.InputTokens,
+			"output_tokens":      event.OutputTokens,
+			"hive_credit_delta":  event.HiveCreditDelta,
+			"customer_tags":      event.CustomerTags,
+			"error_code":         event.ErrorCode,
+			"error_type":         event.ErrorType,
+			"created_at":         event.CreatedAt,
 		}
 		if event.CacheReadTokens > 0 {
 			item["cache_read_tokens"] = event.CacheReadTokens
@@ -127,7 +130,117 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		response = append(response, item)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"events": response})
+	// Keyset cursor, same convention as the ledger list endpoint: when the
+	// page came back exactly full, hand back the last row's id and let the
+	// next request continue from it. A shorter page means there is nothing
+	// left to fetch.
+	var nextCursor string
+	if len(events) == limit && len(events) > 0 {
+		nextCursor = events[len(events)-1].ID.String()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"events": response, "next_cursor": nextCursor})
+}
+
+// maxEventsPageLimit bounds the usage-events page so one browser tab cannot
+// pull the whole table through this account-scoped read.
+const maxEventsPageLimit = 100
+
+// windowPresets maps the console's time-range presets onto a from/to pair.
+// An absent window means no time filter; an unknown value is rejected by the
+// caller with 400.
+func applyWindowPreset(filter *ListEventsFilter, window string, now time.Time) bool {
+	switch window {
+	case "1h":
+		filter.From = now.Add(-1 * time.Hour)
+	case "24h":
+		filter.From = now.Add(-24 * time.Hour)
+	case "7d":
+		filter.From = now.AddDate(0, 0, -7)
+	case "30d":
+		filter.From = now.AddDate(0, 0, -30)
+	case "":
+		return true
+	default:
+		return false
+	}
+	filter.To = now
+	return true
+}
+
+// parseListEventsFilter reads the optional query-string filters into a
+// ListEventsFilter. Any malformed value answers 400 and returns ok=false;
+// nothing user-controlled is trusted as typed.
+func parseListEventsFilter(w http.ResponseWriter, r *http.Request, accountID uuid.UUID, limit int) (ListEventsFilter, bool) {
+	q := r.URL.Query()
+	filter := ListEventsFilter{
+		AccountID:  accountID,
+		RequestID:  q.Get("request_id"),
+		ModelAlias: q.Get("model_alias"),
+		Status:     q.Get("status"),
+		Limit:      limit,
+	}
+
+	if raw := strings.TrimSpace(q.Get("api_key_id")); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api_key_id must be a valid UUID"})
+			return ListEventsFilter{}, false
+		}
+		filter.APIKeyID = &parsed
+	}
+
+	switch q.Get("errors") {
+	case "", "false":
+	case "true":
+		filter.ErrorsOnly = true
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "errors must be true or false"})
+		return ListEventsFilter{}, false
+	}
+
+	now := time.Now().UTC()
+	if rawFrom := q.Get("from"); rawFrom != "" {
+		parsed, err := time.Parse(time.RFC3339, rawFrom)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from must be ISO8601 (RFC3339)"})
+			return ListEventsFilter{}, false
+		}
+		filter.From = parsed
+	}
+	if rawTo := q.Get("to"); rawTo != "" {
+		parsed, err := time.Parse(time.RFC3339, rawTo)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to must be ISO8601 (RFC3339)"})
+			return ListEventsFilter{}, false
+		}
+		filter.To = parsed
+	}
+	// A window preset and an explicit from/to are competing time bounds;
+	// silently dropping one would answer a different question than the
+	// caller asked, so the combination is rejected instead.
+	if q.Get("window") != "" && (!filter.From.IsZero() || !filter.To.IsZero()) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "window cannot be combined with from/to"})
+		return ListEventsFilter{}, false
+	}
+	// The window preset applies when no explicit bound was given.
+	if filter.From.IsZero() && filter.To.IsZero() {
+		if !applyWindowPreset(&filter, q.Get("window"), now) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "window must be one of: 1h, 24h, 7d, 30d"})
+			return ListEventsFilter{}, false
+		}
+	}
+
+	if rawCursor := strings.TrimSpace(q.Get("cursor")); rawCursor != "" {
+		parsed, err := uuid.Parse(rawCursor)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cursor must be a valid UUID"})
+			return ListEventsFilter{}, false
+		}
+		filter.CursorID = &parsed
+	}
+
+	return filter, true
 }
 
 func (h *Handler) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
@@ -439,7 +552,14 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 }
 
 func parseLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
-	limit := 20
+	return parseLimitWithCap(w, r, 20, 0)
+}
+
+// parseLimitWithCap reads the limit query param with the given default. A cap
+// above zero silently clamps oversized values instead of erroring: a page size
+// bound is a resource guard, not a caller mistake worth a 400.
+func parseLimitWithCap(w http.ResponseWriter, r *http.Request, def, cap int) (int, bool) {
+	limit := def
 	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
 		if err != nil || parsed <= 0 {
@@ -447,6 +567,9 @@ func parseLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 			return 0, false
 		}
 		limit = parsed
+	}
+	if cap > 0 && limit > cap {
+		limit = cap
 	}
 
 	return limit, true
