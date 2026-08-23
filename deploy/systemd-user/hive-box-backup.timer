@@ -1,0 +1,13 @@
+[Unit]
+# Twice daily gives every missed slot a second chance the same day. Persistent
+# plus Linger means a box that was down at 03:15 catches up on boot.
+Description=Hive demo box backup schedule (twice daily, UTC)
+
+[Timer]
+OnCalendar=*-*-* 03,15:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=hive-box-backup.service
+
+[Install]
+WantedBy=timers.target
