@@ -1,0 +1,14 @@
+#947 residual: authenticated export probe
+=========================================
+
+tenant A role=admin
+tenant A still lists its own collection: true
+collection id resolved: true
+tenant A GET /knowledge/{id} on its OWN collection -> 200
+
+tenant B role=admin
+tenant B GET /knowledge/{id}/export on tenant A's collection -> 404
+tenant B listing entries: 0
+
+export blocked for a cross-tenant admin: true
+owner retains use of its own collection: true
