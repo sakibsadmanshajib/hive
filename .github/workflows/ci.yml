@@ -1312,12 +1312,20 @@ jobs:
     # job-level `concurrency:` group. That was reverted: GitHub Actions
     # only holds one job per concurrency group as pending, so a third
     # queued run cancels the second outright before it ever executes.
-    # web-e2e is not a required check, so a canceled result would surface
-    # nowhere and a PR could merge with no browser coverage at all, a
+    # web-e2e was not a required check then, so a canceled result would
+    # surface nowhere and a PR could merge with no browser coverage at all, a
     # silent gap of exactly the kind issue #659 exists to prevent (a
     # skipped test and a passing test are indistinguishable inside a green
     # check). Trading a noisy false-red failure for a silent absence is
     # not a fix.
+    #
+    # `Web E2E (full stack)` IS a required context on main today, read off the
+    # live branch protection on 2026-08-23 (.github/branch-protection-main.json
+    # still lists the older six and has not caught up). That strengthens the
+    # revert rather than reversing it: a queue-race cancellation would now
+    # block the merge outright instead of vanishing, and it is also why the
+    # diagnostic steps at the end of this job had to stop being skipped on a
+    # cancellation.
     #
     # What replaced it: gate this job on `needs.changes.outputs.web_e2e`
     # (see the `changes` job's decide step for the path reasoning),
