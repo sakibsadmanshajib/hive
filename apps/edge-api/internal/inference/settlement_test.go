@@ -13,7 +13,7 @@ import (
 // settle_from_catalog_test.go for why it is not refreshed.
 var hiveFastRoute = SelectRouteResult{
 	AliasID:   "hive-fast",
-	Pricing:   SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+	Pricing:   FixedPricing(10_500, 42_000),
 	PriceUnit: PriceUnitTokens,
 }
 
@@ -23,7 +23,7 @@ var hiveFastRoute = SelectRouteResult{
 // 1-credit floor is the whole charge below 1.5M tokens.
 var embeddingRoute = SelectRouteResult{
 	AliasID:   "hive-embedding-default",
-	Pricing:   SelectRoutePricing{InputPriceCredits: 1},
+	Pricing:   FixedPricing(1, 0),
 	PriceUnit: PriceUnitTokens,
 }
 
@@ -182,25 +182,25 @@ func TestCanPriceTokens(t *testing.T) {
 		{
 			name: "output-priced only",
 			route: SelectRouteResult{
-				Pricing: SelectRoutePricing{OutputPriceCredits: 42_000}, PriceUnit: PriceUnitTokens},
+				Pricing: FixedPricing(0, 42_000), PriceUnit: PriceUnitTokens},
 			want: true,
 		},
 		{
 			name: "priced per second (voice): this endpoint cannot meter it",
 			route: SelectRouteResult{
-				Pricing: SelectRoutePricing{OutputPriceCredits: 4_316_667}, PriceUnit: "seconds"},
+				Pricing: FixedPricing(0, 4_316_667), PriceUnit: "seconds"},
 			want: false,
 		},
 		{
 			name: "priced per character (speech): this endpoint cannot meter it",
 			route: SelectRouteResult{
-				Pricing: SelectRoutePricing{OutputPriceCredits: 3_080_000}, PriceUnit: "characters"},
+				Pricing: FixedPricing(0, 3_080_000), PriceUnit: "characters"},
 			want: false,
 		},
 		{
 			name: "no unit at all: implicit is not explicit",
 			route: SelectRouteResult{
-				Pricing: SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}},
+				Pricing: FixedPricing(10_500, 42_000)},
 			want: false,
 		},
 		{

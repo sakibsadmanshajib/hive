@@ -62,6 +62,8 @@ func (r *pgxRepository) ListPublicAliases(ctx context.Context) ([]ModelAlias, er
 			output_price_credits,
 			cache_read_price_credits,
 			cache_write_price_credits,
+			pricing_mode,
+			reservation_estimate_credits,
 			created_at,
 			updated_at
 		FROM public.model_aliases
@@ -109,6 +111,8 @@ const tenantVisibilityQuery = `
 		a.output_price_credits,
 		a.cache_read_price_credits,
 		a.cache_write_price_credits,
+		a.pricing_mode,
+		a.reservation_estimate_credits,
 		a.created_at,
 		a.updated_at,
 		v.visible
@@ -212,6 +216,8 @@ func (r *pgxRepository) GetAlias(ctx context.Context, aliasID string) (ModelAlia
 			output_price_credits,
 			cache_read_price_credits,
 			cache_write_price_credits,
+			pricing_mode,
+			reservation_estimate_credits,
 			created_at,
 			updated_at
 		FROM public.model_aliases
@@ -329,6 +335,8 @@ func (r *pgxRepository) ListAllAliases(ctx context.Context) ([]ModelAlias, error
 			output_price_credits,
 			cache_read_price_credits,
 			cache_write_price_credits,
+			pricing_mode,
+			reservation_estimate_credits,
 			created_at,
 			updated_at
 		FROM public.model_aliases
@@ -399,6 +407,8 @@ func scanModelAlias(scanner aliasScanner, extra ...any) (ModelAlias, error) {
 		&alias.OutputPriceCredits,
 		&alias.CacheReadPriceCredits,
 		&alias.CacheWritePriceCredits,
+		&alias.PricingMode,
+		&alias.ReservationEstimateCredits,
 		&alias.CreatedAt,
 		&alias.UpdatedAt,
 	}

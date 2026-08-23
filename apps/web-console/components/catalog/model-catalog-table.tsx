@@ -8,6 +8,14 @@ interface ModelCatalogTableProps {
   models: CatalogModel[];
 }
 
+// A model priced from actual upstream cost has no per-million rate to show.
+// Rendering 0 there would read as "free", so the absence is shown as what it
+// is. formatCredits still owns every real number.
+function formatPrice(credits: number | null): string {
+  if (credits === null) return "Variable";
+  return formatCredits(credits);
+}
+
 type ToneName = "neutral" | "accent" | "success" | "warning" | "danger";
 
 function capabilityTone(badge: string): ToneName {
@@ -97,14 +105,14 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
       header: "Input / 1M",
       numeric: true,
       align: "right",
-      cell: (row) => formatCredits(row.pricing.input_price_credits),
+      cell: (row) => formatPrice(row.pricing.input_price_credits),
     },
     {
       key: "output",
       header: "Output / 1M",
       numeric: true,
       align: "right",
-      cell: (row) => formatCredits(row.pricing.output_price_credits),
+      cell: (row) => formatPrice(row.pricing.output_price_credits),
     },
     {
       key: "status",

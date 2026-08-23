@@ -80,7 +80,7 @@ func (c *controlPlane) handler() http.Handler {
 			// tokens, pinned on purpose rather than tracked against later
 			// repricings (see the note at the top of
 			// apps/edge-api/internal/inference/settle_from_catalog_test.go).
-			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			Pricing:   inference.FixedPricing(10_500, 42_000),
 			PriceUnit: inference.PriceUnitTokens,
 		})
 	})

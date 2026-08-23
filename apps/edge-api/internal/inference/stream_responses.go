@@ -119,13 +119,15 @@ func (o *Orchestrator) executeResponsesStreaming(
 
 	// 5. Create reservation
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
-		AccountID:        snapshot.AccountID,
-		RequestID:        requestID,
-		AttemptNumber:    1,
-		APIKeyID:         snapshot.KeyID,
-		Endpoint:         EndpointResponses,
-		ModelAlias:       model,
-		EstimatedCredits: estimatedCredits,
+		AccountID:     snapshot.AccountID,
+		RequestID:     requestID,
+		AttemptNumber: 1,
+		APIKeyID:      snapshot.KeyID,
+		Endpoint:      EndpointResponses,
+		ModelAlias:    model,
+		// A variable-price alias raises this from its catalog row; a fixed
+		// one keeps the flat endpoint default. See ReservationCredits.
+		EstimatedCredits: ReservationCredits(route, estimatedCredits),
 		PolicyMode:       "strict",
 	})
 	if err != nil && refuseOnReservationFailure(w, EndpointResponses, model, err) {

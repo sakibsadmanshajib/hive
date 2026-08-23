@@ -28,6 +28,17 @@ type UsageAccumulator struct {
 	TotalTokens     int64
 	HasUsage        bool
 	Content         strings.Builder
+	// RawUsageChunk is the VERBATIM bytes of the last streamed chunk that
+	// carried a usage object. It exists because ChatCompletionChunk is a typed
+	// struct and unmarshalling into it silently discards every field we did
+	// not declare, which includes the upstream's reported cost. That discard
+	// is exactly what keeps our cost from leaking to the customer, so the fix
+	// is not to widen the struct but to keep the original bytes here, where
+	// only settlement reads them.
+	//
+	// Empty for a fixed-price alias: nothing reads it there, and holding the
+	// bytes for every stream on every alias would be pure overhead.
+	RawUsageChunk []byte
 }
 
 // Accumulate copies usage fields from a chunk if present.
@@ -179,13 +190,15 @@ func (o *Orchestrator) executeStreaming(
 
 	// 5. Create reservation
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
-		AccountID:        snapshot.AccountID,
-		RequestID:        requestID,
-		AttemptNumber:    1,
-		APIKeyID:         snapshot.KeyID,
-		Endpoint:         endpoint,
-		ModelAlias:       model,
-		EstimatedCredits: estimatedCredits,
+		AccountID:     snapshot.AccountID,
+		RequestID:     requestID,
+		AttemptNumber: 1,
+		APIKeyID:      snapshot.KeyID,
+		Endpoint:      endpoint,
+		ModelAlias:    model,
+		// A variable-price alias raises this from its catalog row; a fixed
+		// one keeps the flat endpoint default. See ReservationCredits.
+		EstimatedCredits: ReservationCredits(route, estimatedCredits),
 		PolicyMode:       "strict",
 	})
 	if err != nil && refuseOnReservationFailure(w, endpoint, model, err) {
@@ -276,6 +289,11 @@ func (o *Orchestrator) executeStreaming(
 				// the terminal chunk once all deltas are flushed.
 				if chunk.Usage != nil {
 					accumulator.ClampUsage(chunk.Usage, chunk.ID, aliasID, endpoint)
+					// Keep the untyped bytes only for a route that settles
+					// against the upstream's reported cost; see RawUsageChunk.
+					if route.Pricing.IsUpstreamActual() {
+						accumulator.RawUsageChunk = append(accumulator.RawUsageChunk[:0], jsonData...)
+					}
 				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk)
@@ -435,7 +453,24 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// Parse promptBody (the raw request bytes) down to just the message/input
 	// text before estimating -- see promptText in usage_clamp.go for why the
 	// raw bytes themselves must never be counted directly (issue #602).
-	credits, confirmed, delivered := settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
+	var credits int64
+	var confirmed, delivered bool
+	if route.Pricing.IsUpstreamActual() {
+		// No catalog price exists for this alias, so the charge comes from the
+		// cost the upstream reported in its terminal usage chunk. A failed
+		// read settles at the hold rather than at zero; see
+		// UpstreamActualSettlement.
+		var reason string
+		credits, confirmed, delivered, reason = UpstreamActualSettlement(
+			acc.RawUsageChunk, reservation.EstimatedCredits,
+			acc.HasUsage, acc.InputTokens, acc.OutputTokens, content)
+		if delivered && !confirmed {
+			log.Printf("inference: upstream cost unavailable, settling at the hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s held_credits=%d: a variable-price alias could not read a reported cost, charging the hold rather than serving free",
+				requestID, reservation.ID, endpoint, model, reason, reservation.EstimatedCredits)
+		}
+	} else {
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
+	}
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		if reqCtx.Err() != nil {

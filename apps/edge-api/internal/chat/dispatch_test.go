@@ -39,7 +39,7 @@ func newPassthroughRoutingClient(t *testing.T) *inference.RoutingClient {
 			// rather than tracked against later repricings: the real endpoint
 			// always sends a price and an explicit unit, and the recorded cost
 			// is derived from them (#688).
-			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			Pricing:   inference.FixedPricing(10_500, 42_000),
 			PriceUnit: inference.PriceUnitTokens,
 		})
 	}))
@@ -217,7 +217,7 @@ func TestDispatchResolvesAliasToLiteLLMModelName(t *testing.T) {
 			AliasID:          "hive-fast",
 			LiteLLMModelName: "route-groq-fast",
 			Provider:         "groq",
-			Pricing:          inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			Pricing:          inference.FixedPricing(10_500, 42_000),
 			PriceUnit:        inference.PriceUnitTokens,
 		})
 	}))

@@ -181,13 +181,15 @@ func (o *Orchestrator) executeSync(
 	// 4. Create reservation
 	endCreateReservation := o.stage(endpoint, StageCreateReservation)
 	reservation, err := o.accounting.CreateReservation(ctx, CreateReservationInput{
-		AccountID:        snapshot.AccountID,
-		RequestID:        requestID,
-		AttemptNumber:    1,
-		APIKeyID:         snapshot.KeyID,
-		Endpoint:         endpoint,
-		ModelAlias:       model,
-		EstimatedCredits: estimatedCredits,
+		AccountID:     snapshot.AccountID,
+		RequestID:     requestID,
+		AttemptNumber: 1,
+		APIKeyID:      snapshot.KeyID,
+		Endpoint:      endpoint,
+		ModelAlias:    model,
+		// A variable-price alias raises this from its catalog row; a fixed
+		// one keeps the flat endpoint default. See ReservationCredits.
+		EstimatedCredits: ReservationCredits(route, estimatedCredits),
 		PolicyMode:       "strict",
 	})
 	endCreateReservation()
@@ -285,7 +287,24 @@ func (o *Orchestrator) executeSync(
 		if inputTokens+outputTokens <= 0 {
 			prompt, content = promptText(endpoint, body), responseText(endpoint, normalized)
 		}
-		actualCredits, confirmed, billable := settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
+		var actualCredits int64
+		var confirmed, billable bool
+		if route.Pricing.IsUpstreamActual() {
+			// respBody, not `normalized`: normalize re-marshals a typed struct
+			// and drops every field it does not declare, the upstream's
+			// reported cost among them. The raw bytes are the only place that
+			// figure still exists.
+			var reason string
+			actualCredits, confirmed, billable, reason = UpstreamActualSettlement(
+				respBody, reservation.EstimatedCredits,
+				hasUsage, inputTokens, outputTokens, responseText(endpoint, normalized))
+			if billable && !confirmed {
+				log.Printf("inference: upstream cost unavailable, settling at the hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s held_credits=%d: a variable-price alias could not read a reported cost, charging the hold rather than serving free",
+					requestID, reservation.ID, endpoint, model, reason, reservation.EstimatedCredits)
+			}
+		} else {
+			actualCredits, confirmed, billable = settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
+		}
 		if !billable {
 			// Nothing measured and nothing produced: there is no quantity to
 			// charge, so leave finalized false and let the deferred release

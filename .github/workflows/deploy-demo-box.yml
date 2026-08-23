@@ -1408,6 +1408,17 @@ jobs:
         # LITELLM_MASTER_KEY the box's .env already sets, via `Authorization:
         # Bearer`.
         #
+        # An `upstream_actual` alias is included explicitly. Its price columns
+        # are NULL by design (it bills the cost the upstream reports per
+        # request), and `NULL > 0` is NULL, not true, so the nonzero-price test
+        # alone would have dropped it from this query silently. It needs this
+        # assertion MORE than a fixed-price route does, not less: it is the one
+        # route where the deployment calling a different model than the catalog
+        # names would change what customers are charged per request. Trading a
+        # loud CI failure for a quiet absence is the mistake this repo keeps
+        # making, so the predicate names the mode rather than relying on a
+        # price comparison that cannot see it.
+        #
         # Restricted to routes whose alias actually prices tokens
         # (model_aliases.price_unit = 'tokens', a nonzero input or output
         # price): a mismatch anywhere else is not a mispricing, since D-033
@@ -1513,7 +1524,11 @@ jobs:
                 JOIN public.model_aliases ma ON ma.alias_id = pr.alias_id
                WHERE pr.health_state NOT IN ('disabled', 'eol')
                  AND ma.price_unit = 'tokens'
-                 AND (ma.input_price_credits > 0 OR ma.output_price_credits > 0)
+                 AND (
+                       ma.pricing_mode = 'upstream_actual'
+                    OR ma.input_price_credits > 0
+                    OR ma.output_price_credits > 0
+                 )
                ORDER BY pr.route_id;")
 
           if [ -z "$rows" ]; then

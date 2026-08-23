@@ -156,9 +156,7 @@ func pricedRouting(t *testing.T, litellmModel string, inPrice, outPrice int64) *
 			AliasID:          in.AliasID,
 			LiteLLMModelName: litellmModel,
 			Provider:         "test-provider",
-			Pricing: inference.SelectRoutePricing{
-				InputPriceCredits: inPrice, OutputPriceCredits: outPrice,
-			},
+			Pricing:          inference.FixedPricing(inPrice, outPrice),
 			PriceUnit: inference.PriceUnitTokens,
 		})
 	}))
@@ -560,7 +558,7 @@ func unpriceableRouting(t *testing.T) *inference.RoutingClient {
 			AliasID:          in.AliasID,
 			LiteLLMModelName: "route-test-audio",
 			Provider:         "test-provider",
-			Pricing:          inference.SelectRoutePricing{InputPriceCredits: 1_000},
+			Pricing:          inference.FixedPricing(1_000, 0),
 			PriceUnit:        "seconds",
 		})
 	}))

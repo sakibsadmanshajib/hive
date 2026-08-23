@@ -213,6 +213,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var inTokens, outTokens int
 	var hasUsage bool
 	var servedModel string
+	// Verbatim bytes of the terminal usage frame, populated only for a
+	// variable-price alias. See the capture site below.
+	var rawUsagePayload []byte
 	var finishReason string
 	var completion strings.Builder
 
@@ -258,6 +261,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			hasUsage = true
 			inTokens = envelope.Usage.PromptTokens
 			outTokens = envelope.Usage.CompletionTokens
+			// For a variable-price alias the charge comes from the cost the
+			// upstream reports, and sseEnvelope does not declare that field, so
+			// unmarshalling has already dropped it. Keep the untouched payload
+			// so settlement can read it; nothing else looks at these bytes and
+			// they never reach the client from here.
+			if route.Pricing.IsUpstreamActual() {
+				rawUsagePayload = append(rawUsagePayload[:0], payload...)
+			}
 		}
 	}
 
@@ -285,8 +296,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// unconfirmed, which is what tells control-plane to clamp the figure to the
 	// hold and open a reconciliation job. It never settles a delivered response
 	// at zero, and never bills a token count as though it were a credit amount.
-	costCredits, confirmed, delivered := inference.ChatSettlementCredits(
-		route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+	var costCredits int64
+	var confirmed, delivered bool
+	if route.Pricing.IsUpstreamActual() {
+		// This alias has no catalog price. Its charge is the cost the upstream
+		// reported for this generation, times the standard margin. A cost that
+		// is missing, unreadable or a confident zero settles at the hold rather
+		// than at nothing, which is the whole point: this is the streaming path
+		// Open WebUI uses, so it is where a silent free-serve would do the most
+		// damage.
+		var costReason string
+		costCredits, confirmed, delivered, costReason = inference.UpstreamActualSettlement(
+			rawUsagePayload, settle.held(), hasUsage,
+			int64(inTokens), int64(outTokens), completion.String())
+		if delivered && !confirmed {
+			slog.Error("session chat: upstream cost unavailable, settling at the hold",
+				"request_id", requestID, "alias", clientModel, "reason", costReason,
+				"held_credits", settle.held())
+		}
+	} else {
+		costCredits, confirmed, delivered = inference.ChatSettlementCredits(
+			route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
 		// and would be priced at another's rate (#743). The charge below still

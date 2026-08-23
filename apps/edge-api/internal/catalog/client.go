@@ -20,11 +20,21 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// CatalogPricing mirrors control-plane's catalog.CatalogPricing across the
+// HTTP boundary.
+//
+// The input and output prices are POINTERS because a variable-price alias
+// genuinely has none and control-plane sends JSON null for both. This is not
+// cosmetic: a plain int64 target makes encoding/json reject the whole payload,
+// and this struct is decoded as part of the catalog snapshot that backs
+// /v1/models, so one nulled alias would have taken down model listing for every
+// model rather than just its own.
 type CatalogPricing struct {
-	InputPriceCredits      int64  `json:"input_price_credits"`
-	OutputPriceCredits     int64  `json:"output_price_credits"`
+	InputPriceCredits      *int64 `json:"input_price_credits"`
+	OutputPriceCredits     *int64 `json:"output_price_credits"`
 	CacheReadPriceCredits  *int64 `json:"cache_read_price_credits,omitempty"`
 	CacheWritePriceCredits *int64 `json:"cache_write_price_credits,omitempty"`
+	PricingMode            string `json:"pricing_mode"`
 }
 
 type CatalogModel struct {
