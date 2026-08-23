@@ -78,7 +78,15 @@ on:
       - 'apps/edge-api/internal/agenttask/**'
       - 'deploy/apptainer/**'
       - 'deploy/docker/Caddyfile.agent-proof'
+      - 'deploy/docker/docker-compose.agent-proof.yml'
       - 'scripts/install-agent-engine-host.sh'
+      # The job stands its own Supabase up with these, so a change to any of
+      # them can break it. Without them here that break would land on main and
+      # only surface on the next unrelated pull request that happens to touch
+      # an agent path, which is the shape of the outage this job just had.
+      - 'scripts/ci-supabase-stack.sh'
+      - 'scripts/ci-throwaway-db.sh'
+      - 'scripts/generate-enterprise-jwt-keys.py'
       - '.github/workflows/agent-visual-proof.yml'
 
 # No concurrency group on purpose. GitHub holds only one run per group as
@@ -458,17 +466,43 @@ jobs:
           while IFS= read -r line; do
             [ -n "$line" ] || continue
             case "$line" in
+              # Dropped, and rewritten below to the bridge form. The script
+              # prints the localhost form, which is correct for the caller that
+              # runs everything on the runner and wrong for this job. Matching
+              # SUPABASE_URL= exactly, so SUPABASE_URL_FROM_CONTAINER= is left
+              # alone.
+              SUPABASE_URL=*) continue ;;
               *_KEY=*) echo "::add-mask::${line#*=}" ;;
             esac
             echo "$line" >> "$GITHUB_ENV"
           done < /tmp/supabase-env
 
-          # The mirrors the agent-console bundle is BUILT with. They must equal
-          # what the harness mints sessions against: @supabase/ssr names its
-          # cookie after the project ref in the URL it is given, so a bundle
-          # built with one origin cannot read a cookie written for another, and
-          # the browser lands on sign-in with a valid session in hand.
-          sed -n 's/^SUPABASE_URL=/NEXT_PUBLIC_SUPABASE_URL=/p'           /tmp/supabase-env >> "$GITHUB_ENV"
+          # ONE origin, and it has to be one, reached by three different
+          # things that do not share a network namespace:
+          #
+          #   * the Playwright browser and the seeder, on the runner
+          #   * agent-console's SERVER side, inside a container. middleware.ts
+          #     and lib/supabase/server.ts both build a client from
+          #     NEXT_PUBLIC_SUPABASE_URL and run in the container, where
+          #     localhost is the container itself. This is the difference from
+          #     ci.yml's web-e2e job, where the console is a host process and
+          #     the localhost form is right for every caller.
+          #   * agent-console's BROWSER bundle, which bakes the value at build
+          #     time, so it cannot be a per-caller override anyway.
+          #
+          # The docker bridge gateway address satisfies all three: containers
+          # route to it, and it is an interface on the runner itself, so a host
+          # process reaches the published port through it too. It also has to
+          # be a single value rather than a per-caller one because @supabase/ssr
+          # names its cookie after the project ref in the URL it is given: a
+          # bundle built with one origin cannot read a cookie written for
+          # another, and the browser then lands on sign-in holding a valid
+          # session.
+          container_url=$(sed -n 's/^SUPABASE_URL_FROM_CONTAINER=//p' /tmp/supabase-env)
+          {
+            echo "SUPABASE_URL=$container_url"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$container_url"
+          } >> "$GITHUB_ENV"
           sed -n 's/^SUPABASE_ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/p' /tmp/supabase-env >> "$GITHUB_ENV"
 
           # What docker-compose.agent-proof.yml reads to give edge-api the one
@@ -507,11 +541,10 @@ jobs:
       - name: Start the stack with the launcher socket wired in
         working-directory: deploy/docker
         env:
-          # control-plane calls GET /auth/v1/user on SUPABASE_URL from inside a
-          # container, where localhost is the container itself. The throwaway
-          # stack publishes its gateway on the runner, so the service gets the
-          # docker bridge form of the same URL the browser uses.
-          SUPABASE_URL: ${{ env.SUPABASE_URL_FROM_CONTAINER }}
+          # SUPABASE_URL is NOT set here. It is already the docker bridge form
+          # in $GITHUB_ENV, which is what control-plane needs for its
+          # GET /auth/v1/user call from inside a container, and a second source
+          # of truth for one value is how the two drift.
           # SUPABASE_SERVICE_ROLE_KEY is NOT repeated here. It comes from
           # $GITHUB_ENV, written by the throwaway stack step, and a step-level
           # entry would override that with the deleted hosted project's key.
