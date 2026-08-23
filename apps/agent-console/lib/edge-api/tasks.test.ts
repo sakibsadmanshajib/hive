@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 
 import {
   AgentTaskError,
+  artifactUrl,
+  parseArtifactRef,
   cancelTask,
   createTask,
   ENGINE_LAUNCH_FAILED_MESSAGE,
@@ -44,6 +46,7 @@ const TASK: AgentTask = {
 describe("edge-api tasks client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("listTasks sends a Bearer-authorized GET and decodes the tasks array", async () => {
@@ -200,5 +203,66 @@ describe("edge-api tasks client", () => {
     expect(TERMINAL_STATUSES.has("cancelled")).toBe(true);
     expect(TERMINAL_STATUSES.has("queued")).toBe(false);
     expect(TERMINAL_STATUSES.has("running")).toBe(false);
+  });
+
+  // The link targets this app's own deck proxy, not the artifacts origin: a
+  // deck is a private artifact and a browser navigation carries no
+  // Authorization header, so a direct artifacts-origin link 404s for its own
+  // owner. See artifactUrl's doc comment and app/api/deck/[...ref]/route.ts.
+  describe("artifactUrl", () => {
+    it("resolves an artifact ref to the base-path-prefixed proxy URL", () => {
+      expect(artifactUrl("/artifacts/abc-123")).toBe("/agent-workspace/api/deck/abc-123");
+    });
+
+    it("resolves a versioned artifact ref", () => {
+      expect(artifactUrl("/artifacts/abc-123/v/2")).toBe(
+        "/agent-workspace/api/deck/abc-123/v/2",
+      );
+    });
+
+    it("rejects an id that would otherwise open a query string upstream", () => {
+      expect(artifactUrl("/artifacts/abc?x=1")).toBeNull();
+    });
+
+    it("returns null for the plain-text final-response fallback shape", () => {
+      expect(artifactUrl("the agent's own summary text")).toBeNull();
+    });
+
+    it("returns null for an empty ref", () => {
+      expect(artifactUrl("")).toBeNull();
+    });
+
+    it("returns null for a ref with an extra path segment", () => {
+      expect(artifactUrl("/artifacts/abc-123/raw")).toBeNull();
+    });
+
+    it("returns null for a non-numeric version", () => {
+      expect(artifactUrl("/artifacts/abc-123/v/latest")).toBeNull();
+    });
+  });
+
+  describe("parseArtifactRef", () => {
+    it("splits the id and version out of a versioned ref", () => {
+      expect(parseArtifactRef("/artifacts/abc-123/v/2")).toEqual({
+        id: "abc-123",
+        version: "2",
+      });
+    });
+
+    it("reports a null version for the current-version ref", () => {
+      expect(parseArtifactRef("/artifacts/abc-123")).toEqual({
+        id: "abc-123",
+        version: null,
+      });
+    });
+
+    it("rejects a traversal segment", () => {
+      expect(parseArtifactRef("/artifacts/../../etc/passwd")).toBeNull();
+    });
+
+    it("rejects dot segments that would normalize away upstream", () => {
+      expect(parseArtifactRef("/artifacts/.")).toBeNull();
+      expect(parseArtifactRef("/artifacts/..")).toBeNull();
+    });
   });
 });

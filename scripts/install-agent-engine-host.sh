@@ -124,6 +124,17 @@ umask 077
   printf '%s=%q\n' HIVE_AGENT_ENGINE_SESSION_API_KEY "${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}"
   printf '%s=%q\n' CONTROL_PLANE_URL "${CONTROL_PLANE_URL:-http://127.0.0.1:8081}"
   printf '%s=%q\n' CONTROL_PLANE_INTERNAL_TOKEN "$CONTROL_PLANE_INTERNAL_TOKEN"
+  # Same reasoning as CONTROL_PLANE_URL above: this daemon runs as a bare
+  # host process, not inside the compose network, so edge-api's compose DNS
+  # name (agent-engine's own binary reads no default at all now — see
+  # serve.go) does not resolve here. This is the kill switch for
+  # knowledge-work-pack artifact publishing (issue #312/#300 wiring), which
+  # writes to external storage on every completed task, so it uses ${VAR-x},
+  # not ${VAR:-x}: a caller who explicitly sets EDGE_API_URL="" gets that
+  # empty value written through and publishing stays off, where ${VAR:-x}
+  # would silently treat empty the same as unset and turn it back on. Only a
+  # genuinely unset variable falls back to this host-reachable default.
+  printf '%s=%q\n' EDGE_API_URL "${EDGE_API_URL-http://127.0.0.1:8080}"
   printf '%s=%q\n' HIVE_QUOTA_TENANT_CONCURRENCY "${HIVE_QUOTA_TENANT_CONCURRENCY:-4}"
   printf '%s=%q\n' HIVE_QUOTA_USER_CONCURRENCY "${HIVE_QUOTA_USER_CONCURRENCY:-2}"
   printf '%s=%q\n' HIVE_SANDBOX_MEMORY_LIMIT "${HIVE_SANDBOX_MEMORY_LIMIT:-4G}"

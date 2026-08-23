@@ -43,11 +43,19 @@ func NewClient(controlPlaneURL string) *Client {
 }
 
 // Create posts a new task. POST /internal/agent-tasks/{tenant_id}/{user_id}.
-func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string) (Task, error) {
+// bearerJWT is the requesting user's own bearer JWT (handler.go's
+// handleCreate reads it straight off the incoming request's Authorization
+// header) — forwarded so a knowledge-work-pack session can later publish its
+// output as an artifact under this same tenant/user. Empty when the request
+// carried no recognizable Supabase JWT (e.g. API-key auth): control-plane
+// and the engine both treat that as "skip publishing", never as a reason to
+// fail the create.
+func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions, bearerJWT string) (Task, error) {
 	body, err := json.Marshal(struct {
 		Pack         string `json:"pack"`
 		Instructions string `json:"instructions"`
-	}{Pack: pack, Instructions: instructions})
+		BearerJWT    string `json:"bearer_jwt"`
+	}{Pack: pack, Instructions: instructions, BearerJWT: bearerJWT})
 	if err != nil {
 		return Task{}, fmt.Errorf("agenttask.client: marshal: %w", err)
 	}

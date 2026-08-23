@@ -75,6 +75,31 @@ describe("middleware basePath-aware redirects", () => {
     );
   });
 
+  // Regression guard for a bug that no route-handler test can see. Middleware
+  // headers do not merge with a handler's: this `set` replaces one the deck
+  // proxy already wrote, so before the exemption the handler's
+  // `sandbox allow-scripts` was silently deleted in production while every
+  // unit test calling the handler directly stayed green. Verified by curl
+  // against the built image, both before and after.
+  it("leaves the deck proxy's own security headers alone", async () => {
+    mockUser = { id: "user-1" };
+    const request = new NextRequest("http://localhost/api/deck/abc-123");
+    const response = await middleware(request);
+    expect(response.headers.get("content-security-policy")).toBeNull();
+    expect(response.headers.get("x-frame-options")).toBeNull();
+  });
+
+  it("still stamps its own security headers on every other route", async () => {
+    // The exemption is one path prefix, not a hole: a route that merely looks
+    // adjacent keeps the blanket policy.
+    mockUser = { id: "user-1" };
+    const request = new NextRequest("http://localhost/api/deckle");
+    const response = await middleware(request);
+    expect(response.headers.get("content-security-policy")).toBe(
+      "frame-ancestors 'self'"
+    );
+  });
+
   it("carries the embed and theme parameters through the sign-in redirect", async () => {
     // Without this the panel loses the shell's theme the moment it bounces to
     // sign-in, and a light login appears inside a dark shell.

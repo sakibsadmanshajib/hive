@@ -40,6 +40,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
 )
 
@@ -54,6 +55,11 @@ type launchRequest struct {
 	UserID       uuid.UUID `json:"user_id"`
 	Pack         string    `json:"pack"`
 	Instructions string    `json:"instructions"`
+	// BearerJWT is the task's own user's bearer JWT, forwarded from
+	// edge-api's task-create handler through control-plane untouched (see
+	// apps/agent-engine/internal/engine.Task.BearerJWT's doc comment). Never
+	// logged.
+	BearerJWT string `json:"bearer_jwt"`
 }
 
 type launchResponse struct {
@@ -136,7 +142,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return append(append([]string(nil), hosts...), llmHost), nil
 	}
 
-	engine := engineapi.New(engineapi.Config{
+	engineCfg := engineapi.Config{
 		SIFPath:       sifPath,
 		PacksDir:      packsDir,
 		WorkspaceRoot: workspaceRoot,
@@ -154,7 +160,23 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
 		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
 		PidsLimit:              envInt("HIVE_SANDBOX_PIDS_LIMIT", 512),
-	})
+	}
+	// EDGE_API_URL is the kill switch for knowledge-work-pack artifact
+	// publishing, and it is off unless explicitly set: no envOr, no guessed
+	// default. This writes to external storage (edge-api's artifacts
+	// backend) on every completed knowledge-work-pack task, so "on by
+	// default with a compose-DNS guess neither this process nor an operator
+	// can turn off" (the shape an earlier version of this had, caught in
+	// review: envOr's fallback made the `!= ""` check always true) is not
+	// acceptable. Left unset, engineCfg.Publisher stays nil and Status keeps
+	// returning the agent's own final-response text exactly as it always
+	// has. scripts/install-agent-engine-host.sh sets it explicitly for the
+	// demo box; anywhere else, publishing is off until someone deliberately
+	// turns it on.
+	if edgeAPIURL := os.Getenv("EDGE_API_URL"); edgeAPIURL != "" {
+		engineCfg.Publisher = artifactsclient.New(edgeAPIURL)
+	}
+	engine := engineapi.New(engineCfg)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /launch", func(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +193,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			UserID:       req.UserID,
 			Pack:         req.Pack,
 			Instructions: req.Instructions,
+			BearerJWT:    req.BearerJWT,
 		})
 		if err != nil {
 			log.Printf("agent-engine: launch task %s: %v", req.ID, err)

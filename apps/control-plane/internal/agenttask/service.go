@@ -84,7 +84,10 @@ const engineCancelTimeout = 10 * time.Second
 // A launch failure still reaches the caller, just on the next poll rather
 // than in the create response: the background launch transitions the task to
 // StatusFailed, so a task never sits queued forever with no signal.
-func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error) {
+// bearerJWT is the task's own user's bearer JWT (edge-api's handler is the
+// only caller with it; see Task.BearerJWT's doc comment). Threaded straight
+// through to the launch goroutine and never persisted by s.repo.Create.
+func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions, bearerJWT string) (Task, error) {
 	if !pack.Valid() {
 		return Task{}, ErrInvalidPack
 	}
@@ -93,6 +96,7 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	if err != nil {
 		return Task{}, err
 	}
+	t.BearerJWT = bearerJWT
 
 	// Nothing bounds how many of these goroutines can be in flight, and the
 	// launcher's quota does not: it gates the sandbox launch, which happens

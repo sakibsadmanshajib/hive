@@ -16,7 +16,7 @@ import (
 // TaskClient is the minimal interface the handler needs from Client.
 // Exported so tests can inject a fake without a real control-plane.
 type TaskClient interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions, bearerJWT string) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
@@ -95,12 +95,33 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions)
+	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions, bearerJWT(r))
 	if err != nil {
 		writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, task)
+}
+
+// bearerJWT extracts a Supabase JWT from r's Authorization header, for
+// forwarding to control-plane so a knowledge-work-pack session can later
+// publish its output as an artifact under this same tenant/user (see
+// apps/agent-engine/internal/artifactsclient's package doc). Returns "" for
+// anything that is not that shape: a missing header, a non-Bearer scheme, or
+// Hive's own "hk_"-prefixed API key (auth.UserFrom already accepted either
+// shape for this route, but only a real Supabase JWT is any use to
+// edge-api's JWT-gated /v1/artifacts route downstream) — every caller of
+// this function already treats "" as "skip publishing", never as a reason to
+// reject the request.
+func bearerJWT(r *http.Request) string {
+	scheme, raw, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "hk_") {
+		return ""
+	}
+	return raw
 }
 
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {

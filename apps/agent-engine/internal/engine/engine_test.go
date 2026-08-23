@@ -14,11 +14,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
@@ -44,6 +46,13 @@ type fakeAgentServer struct {
 	killed          bool
 	startReq        controlclient.StartConversationRequest
 	startBody       []byte
+
+	// finalStarted and finalGate, when set, let a test observe exactly when
+	// the final-response fetch begins and control when it returns, which is
+	// the point inside finishTerminal immediately before
+	// publishDeckArtifact reads the session's bearer JWT.
+	finalStarted chan struct{}
+	finalGate    chan struct{}
 
 	listener net.Listener
 	srv      *http.Server
@@ -91,6 +100,20 @@ func newFakeAgentServer(controlDir string) (*fakeAgentServer, error) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	})
 	mux.HandleFunc(convoPrefix+"/agent_final_response", func(w http.ResponseWriter, r *http.Request) {
+		// Read the gates and then release f.mu before blocking on them: a
+		// test that cancels during this window drives Interrupt through this
+		// same server, and holding f.mu across the wait would deadlock it
+		// rather than exercise the concurrency under test.
+		f.mu.Lock()
+		started, gate := f.finalStarted, f.finalGate
+		f.mu.Unlock()
+		if started != nil {
+			started <- struct{}{}
+		}
+		if gate != nil {
+			<-gate
+		}
+
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]string{"response": f.finalResponse})
@@ -113,6 +136,12 @@ func (f *fakeAgentServer) setStatus(s controlclient.ExecutionStatus) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.executionStatus = s
+}
+
+func (f *fakeAgentServer) setFinalGate(started, gate chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finalStarted, f.finalGate = started, gate
 }
 
 func (f *fakeAgentServer) setFinalResponse(s string) {
@@ -679,5 +708,656 @@ func TestSandboxEngine_Launch_SendsProfileIDWhenNoLLMConfigured(t *testing.T) {
 	}
 	if req.AgentProfileID == nil || *req.AgentProfileID != e.cfg.AgentProfileID {
 		t.Fatalf("agent_profile_id = %v, want %v", req.AgentProfileID, e.cfg.AgentProfileID)
+	}
+}
+
+// --- publishDeckArtifact (issue #312/#300 wiring) -------------------------
+
+// fakePublisher stands in for *artifactsclient.Client. Records every call so
+// tests can assert on exactly what reached it (in particular, the bearer
+// JWT), without a real edge-api.
+type fakePublisher struct {
+	mu sync.Mutex
+
+	createCalls     []struct{ bearerJWT, name, html string }
+	addVersionCalls []struct{ bearerJWT, artifactID, html string }
+
+	createErr     error
+	addVersionErr error
+	url           string
+
+	// started and gate, when both non-nil, let a test observe exactly when
+	// Create begins and control exactly when it returns — used to force a
+	// deterministic interleaving of two concurrent Status calls instead of
+	// hoping the scheduler produces one.
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func (f *fakePublisher) Create(_ context.Context, bearerJWT, name, html string) (artifactsclient.Artifact, error) {
+	if f.started != nil {
+		f.started <- struct{}{}
+	}
+	if f.gate != nil {
+		<-f.gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createCalls = append(f.createCalls, struct{ bearerJWT, name, html string }{bearerJWT, name, html})
+	if f.createErr != nil {
+		return artifactsclient.Artifact{}, f.createErr
+	}
+	return artifactsclient.Artifact{ID: "artifact-1", Version: 1, URL: f.url}, nil
+}
+
+func (f *fakePublisher) AddVersion(_ context.Context, bearerJWT, artifactID, html string) (artifactsclient.Artifact, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addVersionCalls = append(f.addVersionCalls, struct{ bearerJWT, artifactID, html string }{bearerJWT, artifactID, html})
+	if f.addVersionErr != nil {
+		return artifactsclient.Artifact{}, f.addVersionErr
+	}
+	return artifactsclient.Artifact{ID: artifactID, Version: 2, URL: f.url}, nil
+}
+
+// newTestEngineWithPublisher mirrors newTestEngineWithQuota but also exposes
+// the workspace root, so a test can write a deck manifest into a launched
+// session's /workspace before polling Status.
+func newTestEngineWithPublisher(t *testing.T, captured **fakeAgentServer, publisher deckPublisher) (*SandboxEngine, string) {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	cfg := Config{
+		QuotaTenantConcurrency: 4,
+		QuotaUserConcurrency:   2,
+
+		SIFPath:       "/fake/agent-server.sif",
+		PacksDir:      t.TempDir(),
+		WorkspaceRoot: workspaceRoot,
+		RunDir:        shortTempDir(t),
+		ResolveEgressHosts: func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error) {
+			return nil, nil
+		},
+		AgentProfileID:      uuid.New(),
+		ControlReadyTimeout: 5 * time.Second,
+		Publisher:           publisher,
+	}
+	e := New(cfg)
+	e.start = func(argv []string) (process, error) {
+		controlDir, err := extractControlDir(argv)
+		if err != nil {
+			return nil, err
+		}
+		f, err := newFakeAgentServer(controlDir)
+		if err != nil {
+			return nil, err
+		}
+		*captured = f
+		return f, nil
+	}
+	return e, workspaceRoot
+}
+
+func writeDeckManifest(t *testing.T, workspaceRoot string, taskID uuid.UUID, manifest string) {
+	t.Helper()
+	dir := filepath.Join(workspaceRoot, taskID.String(), filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	path := filepath.Join(workspaceRoot, taskID.String(), deckManifestRelPath)
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+}
+
+func knowledgeWorkTask() Task {
+	t := testTask()
+	t.Pack = packKnowledgeWork
+	t.BearerJWT = "test-user-jwt"
+	return t
+}
+
+func TestSandboxEngine_Status_PublishesDeckManifestAsArtifactURL(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/abc-123"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Q3 Review","slides":[{"title":"Intro","bullets":["hi"]}]}`)
+
+	fake.setFinalResponse("the agent's own text, not what should surface")
+	fake.setStatus(controlclient.StatusFinished)
+
+	status, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != StatusSucceeded {
+		t.Fatalf("status = %s, want succeeded", status)
+	}
+	if summary != pub.url {
+		t.Fatalf("resultSummary = %q, want the published artifact URL %q", summary, pub.url)
+	}
+
+	if len(pub.createCalls) != 1 {
+		t.Fatalf("expected exactly one Create call, got %d", len(pub.createCalls))
+	}
+	call := pub.createCalls[0]
+	if call.bearerJWT != task.BearerJWT {
+		t.Fatalf("Create called with bearerJWT %q, want the task's own %q", call.bearerJWT, task.BearerJWT)
+	}
+	if call.name != "Q3 Review" {
+		t.Fatalf("Create called with name %q, want the deck title", call.name)
+	}
+	if !strings.Contains(call.html, "Q3 Review") || !strings.Contains(call.html, "Intro") {
+		t.Fatalf("Create called with html that does not look like the rendered deck: %q", call.html)
+	}
+}
+
+func TestSandboxEngine_Status_AddsVersionWhenManifestNamesAnArtifact(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/existing-id"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID,
+		`{"title":"Q3 Review v2","slides":[{"title":"Intro","bullets":["hi"]}],"artifact_id":"existing-id"}`)
+
+	fake.setFinalResponse("ignored")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != pub.url {
+		t.Fatalf("resultSummary = %q, want %q", summary, pub.url)
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatalf("expected Create not to be called when artifact_id is set, got %d calls", len(pub.createCalls))
+	}
+	if len(pub.addVersionCalls) != 1 || pub.addVersionCalls[0].artifactID != "existing-id" {
+		t.Fatalf("expected one AddVersion call against existing-id, got %+v", pub.addVersionCalls)
+	}
+}
+
+// No manifest at all is the ordinary case for every coding-pack task, and
+// for most knowledge-work-pack tasks that were not a deck request: the
+// agent's own final-response text must reach the console unchanged.
+func TestSandboxEngine_Status_NoManifestFallsBackToFinalResponse(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, _ := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	fake.setFinalResponse("plain text summary")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "plain text summary" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
+	}
+	if len(pub.createCalls) != 0 || len(pub.addVersionCalls) != 0 {
+		t.Fatal("expected no publish call when no manifest was written")
+	}
+}
+
+// A task's own conversation already succeeded; a storage-side publish
+// failure must not turn that into anything worse than losing the link.
+func TestSandboxEngine_Status_PublishFailureFallsBackWithoutFailingTask(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{createErr: errors.New("edge-api: 503")}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Doomed Deck","slides":[{"title":"S1","bullets":["x"]}]}`)
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	status, summary, errMessage, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != StatusSucceeded || errMessage != "" {
+		t.Fatalf("expected the task to still report succeeded with no error, got status=%s errMessage=%q", status, errMessage)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
+	}
+}
+
+// A manifest larger than maxDeckManifestBytes is rejected outright rather
+// than silently truncated and parsed as a partial deck.
+func TestSandboxEngine_Status_OversizedManifestSkipsPublish(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	oversized := `{"title":"` + strings.Repeat("x", int(maxDeckManifestBytes)+1) + `","slides":[]}`
+	writeDeckManifest(t, workspaceRoot, task.ID, oversized)
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatal("expected no publish call for an oversized manifest")
+	}
+}
+
+// A coding-pack task must never trigger a publish attempt even if something
+// happened to leave a file at the same well-known path — the pack check
+// comes first.
+func TestSandboxEngine_Status_CodingPackNeverPublishes(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := testTask() // pack: "coding-pack"
+	task.BearerJWT = "test-user-jwt"
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Not A Deck Task","slides":[{"title":"S1","bullets":["x"]}]}`)
+
+	fake.setFinalResponse("build succeeded")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "build succeeded" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatal("expected no publish call for a coding-pack task")
+	}
+}
+
+// No bearer JWT (an API-key-authenticated task create, or any other caller
+// that never supplied one) must skip publishing rather than call edge-api
+// with an empty Authorization value.
+func TestSandboxEngine_Status_NoBearerJWTSkipsPublish(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := testTask()
+	task.Pack = packKnowledgeWork // BearerJWT left empty
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"No JWT","slides":[{"title":"S1","bullets":["x"]}]}`)
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatal("expected no publish call with no bearer JWT")
+	}
+}
+
+// A symlink at the manifest path, pointing outside the session's own
+// /workspace, must never be followed. Without resolveWithinRoot this would
+// let a knowledge-work-pack task (arbitrary shell access inside its
+// sandbox) make the host process read and potentially publish any file its
+// own OS user can see.
+func TestSandboxEngine_Status_RefusesSymlinkedManifestOutsideWorkspace(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// A file elsewhere on the host that happens to look exactly like a
+	// valid, publishable deck manifest -- standing in for whatever real
+	// secret the daemon's own OS user can read (its LLM key, the internal
+	// service token). If the symlink is followed, this test would see it
+	// published.
+	outsideDir := t.TempDir()
+	secretPath := filepath.Join(outsideDir, "not-yours.json")
+	if err := os.WriteFile(secretPath, []byte(`{"title":"Exfiltrated","slides":[{"title":"S1","bullets":["leaked"]}]}`), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	manifestDir := filepath.Join(workspaceRoot, task.ID.String(), filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(workspaceRoot, task.ID.String(), deckManifestRelPath)
+	if err := os.Symlink(secretPath, manifestPath); err != nil {
+		t.Fatalf("symlink manifest: %v", err)
+	}
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text (the symlink target must never be read)", summary)
+	}
+	if len(pub.createCalls) != 0 || len(pub.addVersionCalls) != 0 {
+		t.Fatal("expected no publish call for a manifest symlinked outside the session workspace")
+	}
+}
+
+// Security review finding (HIGH): a resolve-then-reopen-by-string fix (an
+// earlier version of readCapped, using filepath.EvalSymlinks then a plain
+// os.Open) checks one path string and opens a second, unsynchronized,
+// resolution of the same string. The agent-server is still alive at this
+// point (it keeps running after its conversation finishes, and this runs
+// before reap kills it), so hostile code in the sandbox can swap the file
+// for a symlink in the window between the two. This does not rely on
+// winning a precise race: hammering a real rename/symlink swap against real
+// reads for enough iterations gives a two-step implementation a realistic
+// chance of returning the secret's content at least once. os.Root's
+// single-syscall resolve-and-open (readCapped's whole point now) should
+// never do so, however many iterations run.
+func TestReadCapped_SwapDuringOpenNeverReadsOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	manifestDir := filepath.Join(root, filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(root, deckManifestRelPath)
+
+	outsideDir := t.TempDir()
+	secretPath := filepath.Join(outsideDir, "secret.json")
+	const secretMarker = "SECRET-SHOULD-NEVER-BE-READ"
+	if err := os.WriteFile(secretPath, []byte(secretMarker), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+	safeContent := []byte("safe content, not the secret")
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.WriteFile(manifestPath, safeContent, 0o600)
+			_ = os.Remove(manifestPath)
+			_ = os.Symlink(secretPath, manifestPath)
+			_ = os.Remove(manifestPath)
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	for i := 0; i < 500; i++ {
+		r, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatalf("OpenRoot: %v", err)
+		}
+		data, err := readCapped(r, deckManifestRelPath, maxDeckManifestBytes)
+		_ = r.Close()
+		if err == nil && string(data) == secretMarker {
+			t.Fatal("readCapped returned content from outside its root during a live symlink swap")
+		}
+	}
+}
+
+// Security review finding (MEDIUM-HIGH): a FIFO at the manifest path, with
+// no file-type check and no O_NONBLOCK, hangs a plain os.Open(name)
+// forever — nothing here ever opens the other end for writing — which
+// leaks the goroutine, the quota slot, and the whole session, since reap()
+// never runs while this is stuck. Deterministic, no race needed: mkfifo and
+// call Status once.
+func TestSandboxEngine_Status_RejectsFIFOManifestWithoutHanging(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/should-not-be-used"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	manifestDir := filepath.Join(workspaceRoot, task.ID.String(), filepath.Dir(deckManifestRelPath))
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(workspaceRoot, task.ID.String(), deckManifestRelPath)
+	if err := syscall.Mkfifo(manifestPath, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	type result struct {
+		summary string
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		done <- result{summary, statusErr}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Status: %v", r.err)
+		}
+		if r.summary != "fallback text" {
+			t.Fatalf("resultSummary = %q, want the agent's own final-response text", r.summary)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Status did not return within 2s: a FIFO at the manifest path hung the open, exactly the finding this test guards")
+	}
+	if len(pub.createCalls) != 0 {
+		t.Fatal("expected no publish call for a FIFO manifest")
+	}
+}
+
+// Go review finding: two concurrent Status calls for the same session each
+// independently observed the terminal execution status, each fetched the
+// final response and called publishDeckArtifact, and each returned its own
+// locally computed result — two Create calls, two different real artifact
+// URLs for one task, and whichever one lost the race to cache in
+// sess.terminal was silently orphaned. This forces the exact interleaving:
+// the first call is parked inside Create (holding sess.finishMu) when the
+// second one starts, so the second is guaranteed to block on that lock
+// rather than possibly running to completion first.
+func TestSandboxEngine_Status_ConcurrentCallsPublishExactlyOnce(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{
+		url:     "/artifacts/only-once",
+		started: make(chan struct{}, 1),
+		gate:    make(chan struct{}),
+	}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Race","slides":[{"title":"S1","bullets":["x"]}]}`)
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	type result struct {
+		summary string
+		err     error
+	}
+	results := make(chan result, 2)
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		results <- result{summary, statusErr}
+	}()
+
+	// Wait until the first call is actually inside Create (so it already
+	// holds sess.finishMu) before starting the second.
+	<-pub.started
+
+	go func() {
+		_, summary, _, statusErr := e.Status(context.Background(), sessionRef)
+		results <- result{summary, statusErr}
+	}()
+
+	// No signal exists for "a goroutine is now blocked on a mutex"; this
+	// short, one-time sleep is deliberate margin for the second goroutine to
+	// actually reach and block on finishMu.Lock() before the gate opens, not
+	// a poll loop.
+	time.Sleep(20 * time.Millisecond)
+	close(pub.gate)
+
+	first := <-results
+	second := <-results
+	for _, r := range []result{first, second} {
+		if r.err != nil {
+			t.Fatalf("Status: %v", r.err)
+		}
+		if r.summary != pub.url {
+			t.Fatalf("resultSummary = %q, want %q", r.summary, pub.url)
+		}
+	}
+	if len(pub.createCalls) != 1 {
+		t.Fatalf("expected exactly one Create call across two concurrent Status calls, got %d", len(pub.createCalls))
+	}
+}
+
+// A Cancel that lands while a knowledge-work-pack task is finishing must not
+// race with the publish. reap clears sess.bearerJWT under e.mu, and Cancel
+// reaches reap without ever taking sess.finishMu, so a publish that read that
+// field unlocked races with it. CI runs `go test -short -race`, so this fails
+// the build rather than corrupting a publish in production.
+//
+// The window is opened deliberately, and where it actually matters. The
+// engine is held inside the final-response fetch, which is the last step
+// before publishDeckArtifact reads the JWT, and Cancel is launched from
+// there. Gating on the publisher instead would be useless: Create runs after
+// the read, so waiting for it orders the read before the cancel and destroys
+// the very interleaving under test. That version of this test passed against
+// a deliberately unsynchronized read, which is how the ordering bug in it was
+// found.
+func TestSandboxEngine_Status_CancelDuringPublishIsRaceFree(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/cancel-race"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Cancel","slides":[{"title":"S1","bullets":["x"]}]}`)
+	fake.setFinalResponse("fallback text")
+
+	finalStarted, finalGate := make(chan struct{}, 1), make(chan struct{})
+	fake.setFinalGate(finalStarted, finalGate)
+	fake.setStatus(controlclient.StatusFinished)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, statusErr := e.Status(context.Background(), sessionRef)
+		done <- statusErr
+	}()
+
+	// Parked inside the final-response fetch, so the bearer JWT has not been
+	// read yet and the cancel below is genuinely concurrent with that read.
+	<-finalStarted
+
+	cancelled := make(chan error, 1)
+	go func() { cancelled <- e.Cancel(context.Background(), sessionRef) }()
+	close(finalGate)
+
+	if cancelErr := <-cancelled; cancelErr != nil {
+		t.Fatalf("Cancel: %v", cancelErr)
+	}
+	if statusErr := <-done; statusErr != nil {
+		t.Fatalf("Status: %v", statusErr)
+	}
+
+	// Whether the publish or the reap wins is a legitimate race in outcome
+	// and this deliberately does not pin it. What must hold either way is
+	// that no Create ever ran with a half-cleared credential.
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	for _, call := range pub.createCalls {
+		if call.bearerJWT == "" {
+			t.Fatal("Create ran with a blank bearer JWT, so reap cleared it mid-publish")
+		}
+	}
+}
+
+// A nil Publisher (Config's zero value, and every SandboxEngine built before
+// this field existed) must behave exactly as before: no publish attempt at
+// all, regardless of pack or manifest.
+func TestSandboxEngine_Status_NilPublisherNeverPublishes(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake) // Config.Publisher left nil
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, e.cfg.WorkspaceRoot, task.ID, `{"title":"No Publisher","slides":[{"title":"S1","bullets":["x"]}]}`)
+
+	fake.setFinalResponse("fallback text")
+	fake.setStatus(controlclient.StatusFinished)
+
+	_, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if summary != "fallback text" {
+		t.Fatalf("resultSummary = %q, want the agent's own final-response text", summary)
 	}
 }
