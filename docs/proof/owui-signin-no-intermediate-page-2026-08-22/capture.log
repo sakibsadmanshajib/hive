@@ -1,0 +1,19 @@
+local static server serving the rebased branch bundle at http://127.0.0.1:36987
+bundle: /tmp/claude-1001/-home-sakib-hive/47b1dc44-1a51-42c2-8e34-41475aa46c9d/scratchpad/rb952-build
+/auth?signed_out=true: password inputs=0, iframes=0, "sign in" in body text=true
+captured 01-signin-signed-out-does-not-bounce.png at http://127.0.0.1:36987/auth?signed_out=true :: signed_out blocks the automatic redirect so signing out is possible
+/auth?error=access_denied: password inputs=0, iframes=0, "sign in" in body text=true
+captured 02-signin-provider-error-explains-itself.png at http://127.0.0.1:36987/auth?error=access_denied :: a failed round trip explains rather than bouncing
+/auth?form=1: password inputs=1, iframes=0, "sign in" in body text=true
+captured 03-signin-manual-escape-hatch.png at http://127.0.0.1:36987/auth?form=1 :: ?form= reaches the manual page deliberately
+
+console transcript:
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:36987/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200

@@ -1,0 +1,160 @@
+Proof for the three chat front end changes (PR #952), captured 2026-08-17.
+
+Every "after" capture is against a stack running this branch's build, not a
+description of it. The Supabase project reference is masked as <project> below;
+no token, key or password appears in this file or in the images.
+
+HOW THE STACK WAS RUN
+---------------------
+  cd deploy/docker
+  docker compose --env-file ../../.env -p owui3proof --profile chat build open-webui
+  docker compose -f docker-compose.yml -f <local-override>.yml \
+      --env-file ../../.env -p owui3proof --profile chat \
+      up -d --no-deps --force-recreate open-webui
+
+The local override is three lines and is NOT in this repository, because none of
+it should ever be deployed:
+
+  ports: 3399:8080                        compose normally fronts this with Caddy
+  OAUTH_CLIENT_ID / _SECRET: obvious fakes so the provider is registered and the
+                                          outbound redirect is exercised without
+                                          minting or mutating anything on the
+                                          shared Supabase OAuth client, whose
+                                          redirect URI is registered for the demo
+                                          box host only
+  ENABLE_SIGNUP / ENABLE_INITIAL_ADMIN_SIGNUP: true, long enough to create one
+                                          local account, since the shipped
+                                          configuration turns signup off and no
+                                          local OAuth login is possible
+
+One further local-only change: the vector database DSN was pointed at the
+transaction pooler port instead of the session port. The session pool is capped
+at 15 clients and is shared with CI and the live demo box (issue #436); the proof
+container crash looped on EMAXCONNSESSION until it stopped competing for those
+slots. Nothing was reconfigured on the shared project itself.
+
+WHAT THE RUNNING BUILD REPORTS ABOUT ITSELF
+-------------------------------------------
+  $ curl -s localhost:3399/api/config
+  providers          ['oidc']
+  oauth.auto_redirect True      <- the compose flag reached persisted config
+  enable_login_form  False
+  default_prompt_suggestions  0
+
+00-before-live-signin-page.png
+  The live demo box on 2026-08-17, https://chat-hive.scubed.co/auth,
+  unauthenticated.
+  The state the owner described: a "Sign in to Hive" heading, a horizontal rule
+  with nothing above it, and one "Continue with Hive" button. A choice between
+  one option.
+
+ITEM 1, THE REDIRECT ITSELF
+---------------------------
+Navigating to http://localhost:3399/ with no session, no clicks:
+
+  http://localhost:3399/
+  -> http://localhost:3399/auth
+  -> http://localhost:3399/oauth/oidc/login
+  -> https://<project>.supabase.co/auth/v1/oauth/authorize
+       ?response_type=code
+       &client_id=local-proof-client-not-a-real-credential
+       &redirect_uri=http%3A%2F%2Flocalhost%3A3399%2Foauth%2Foidc%2Fcallback
+       &scope=openid+email+profile
+       &state=...&nonce=...&code_challenge=...&code_challenge_method=S256
+
+  HTTP 400 {"error_code":"oauth_client_not_found","msg":"invalid client_id format"}
+
+The provider rejects the deliberately fake client id, which is the expected end
+of this harness. What it proves is the half that changed: the browser leaves the
+sign in page for the provider on its own, carrying PKCE, with no intermediate
+page and no click. The inbound half of a successful round trip cannot run
+locally, because the real OAuth client's redirect URI is registered for the demo
+box host.
+
+02-after-loop-guard-explains-and-offers-retry.png
+  Returning to /auth immediately after that redirect. This is the failure the
+  owner named: a round trip that comes back without a session. The page does NOT
+  redirect again. It says "Sign in did not complete", explains that the provider
+  sent the visitor back without a session, and the provider button is the manual
+  retry. The orphaned divider is gone.
+
+03-after-provider-error.png
+  The provider error path, produced by the backend rather than hand written.
+  Hitting the callback with a bogus code:
+
+  $ GET http://localhost:3399/oauth/oidc/callback?code=not-a-real-code&state=not-a-real-state
+  -> 302 .../auth?error=The+email+or+password+provided+is+incorrect.+...
+
+  (that redirect targets the host in WEBUI_URL, which on this harness is another
+  local port, so the screenshot renders the same URL against this build.)
+  The banner carries our own wording, deliberately, and not the query parameter:
+  a persistent, officially styled panel on the page people type credentials into
+  is not the place to reflect a stranger's sentence back at them. The provider's
+  own message still appears once in the transient toast, exactly as before.
+
+04-after-signed-out.png
+  /auth?signed_out=1, the state a user lands in after signing out. Neutral, not
+  an error, and no redirect: without this the provider session, which outlives
+  ours and has no end session endpoint, would sign the same person straight back
+  in and signing out would be unreachable.
+
+05-after-manual-escape-hatch.png
+  /auth?form=1 still renders the manual page unconditionally. The page was not
+  removed; it is where every failure above lands.
+
+ITEM 2, THE SUGGESTED BLOCK
+---------------------------
+06-after-chat-landing-no-suggested.png
+  The chat landing, signed in. No "Suggested" list, no Roman Empire, no options
+  trading, no procrastination. The block is gone at the source, not hidden: the
+  component file is deleted and neither placeholder references it.
+
+ITEM 3, THE DISPLAY NAME
+------------------------
+07-after-settings-account-display-name.png
+  Settings then Account already carries an editable display name. Verified, not
+  assumed, which is what the task asked for.
+
+08-after-display-name-persisted-across-reload.png
+  The same account after editing that field and reloading the page: the greeting
+  reads "Hello, Ada Lovelace". A user can fix their own name and it sticks.
+
+The provisioning half, inside the built image, because the OAuth round trip
+cannot complete locally:
+
+  $ docker exec ... grep -n 'hive_display_name' /app/backend/open_webui/utils/oauth.py
+  87:from open_webui.utils.hive_display_name import display_name_from_email
+
+  $ docker exec ... sed -n '1972,1981p' /app/backend/open_webui/utils/oauth.py
+                      name = user_data.get(username_claim)
+                      if not name:
+                          # hive: derive a display name from the address instead of
+                          # storing the address itself. The configured claim is
+                          # still preferred; it is simply never present here.
+                          name = display_name_from_email(email)
+                          log.warning(
+                              'hive: username claim %s is missing, derived the display name from the email address',
+                              username_claim,
+                          )
+
+  $ docker exec ... python -c "from open_webui.utils.hive_display_name import display_name_from_email as d; ..."
+  first.last@example.com  -> First Last
+  demo@example.invalid    -> Demo
+  someone@example.co.uk   -> Someone
+
+  And the refresh path that protects a user edited name is untouched:
+  1919:  if new_name and new_name != user.name:
+
+  This had to be a build-time patch. The image builds only the front end from
+  vendor/open-webui and takes its backend from the pinned upstream image, so the
+  first version of this change, which edited the vendored backend, was inert. It
+  was found by running the built image rather than by reading the diff.
+
+WHAT IS NOT PROVEN HERE
+-----------------------
+The inbound half of a successful provider round trip, and therefore a real
+provisioning run. The first genuine sign in after this deploy will provide that
+confirmation. Existing accounts are unchanged by design: the five accounts that
+already store an email address as their display name keep it until their owner
+edits it, which 08 shows working, or until the owner approves a separate
+migration.

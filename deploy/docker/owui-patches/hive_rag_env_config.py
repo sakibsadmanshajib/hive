@@ -110,6 +110,15 @@ FEATURE_CONFIG_ENV = {
     # since, so this entry is what actually turns it off there.
     "memories.enable": "ENABLE_MEMORIES",
     "rag.enable_hybrid_search": "ENABLE_RAG_HYBRID_SEARCH",
+    # Added 2026-08-17. Sends an unauthenticated visitor straight to the one
+    # configured provider instead of rendering a page whose only control is
+    # "Continue with Hive". `oauth.auto_redirect` is in DEFAULT_CONFIG, so the
+    # demo box seeded it false on its first boot and the compose variable alone
+    # would be another silent no-op, the same trap as #722 and #772. The sign in
+    # page still refuses to redirect on its own when the deployment is not
+    # unambiguously SSO only, so this flag turns the behaviour on rather than
+    # forcing it.
+    "oauth.auto_redirect": "OAUTH_AUTO_REDIRECT",
 }
 
 # Keys Open WebUI stores as a JSON boolean rather than a string. The value has
