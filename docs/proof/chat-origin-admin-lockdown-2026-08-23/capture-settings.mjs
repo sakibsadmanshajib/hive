@@ -72,24 +72,41 @@ say(`[${label}] settings admin links in the DOM: ${adminLinks}`);
 say(`[${label}] settings tab rail text: ${JSON.stringify(adminText)}`);
 await page.screenshot({ path: join(outDir, `${label}-settings-dialog.png`) });
 
-// The removed link called goto('/admin/settings'). Ask the SPA to do exactly
-// that, so the claim is about the route and not only about the link.
-await page.keyboard.press('Escape');
-await page.waitForTimeout(300);
-const navResult = await page.evaluate(async () => {
-  history.pushState({}, '', '/admin/settings');
-  window.dispatchEvent(new PopStateEvent('popstate'));
-  await new Promise((r) => setTimeout(r, 1500));
-  return {
-    path: location.pathname,
-    heading: (document.querySelector('h1, h2, .text-2xl')?.innerText ?? '').slice(0, 80),
-    hasAdminPanel: Boolean(
-      document.querySelector('[href="/admin/settings/general"], [href="/admin/users/overview"]'),
+// The link itself, when there is one: click it exactly as a user would. This
+// is the half that made #949 a defect rather than a cosmetic leftover, because
+// the click never asks the server for the address Caddy 404s.
+const panelState = async () => ({
+  path: new URL(page.url()).pathname,
+  hasAdminPanel: await page.evaluate(() =>
+    Boolean(
+      document.querySelector(
+        '[href="/admin/settings/general"], [href="/admin/users/overview"], [href^="/admin/settings/"]',
+      ),
     ),
-    bodyStart: document.body.innerText.replace(/\s+/g, ' ').trim().slice(0, 120),
-  };
+  ),
+  bodyStart: (await page.evaluate(() => document.body.innerText))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 140),
 });
-say(`[${label}] client-side push to /admin/settings: ${JSON.stringify(navResult)}`);
+
+if (adminLinks > 0) {
+  await page.click('a[href="/admin/settings"]');
+  await page.waitForTimeout(2500);
+  say(`[${label}] after clicking the Admin Settings link: ${JSON.stringify(await panelState())}`);
+  await page.screenshot({ path: join(outDir, `${label}-admin-panel-after-click.png`) });
+} else {
+  say(`[${label}] no Admin Settings link to click`);
+}
+
+// And the route itself, reached as a fresh document. There is no proxy in
+// front of these containers, so Open WebUI's own SPA fallback serves the app
+// and its router decides what /admin/settings renders. That separates "the
+// route is gone from the bundle" from "a proxy answers 404 for it", which are
+// different claims and this change makes both.
+await page.goto(`${baseUrl}/admin/settings`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(2500);
+say(`[${label}] direct navigation to /admin/settings: ${JSON.stringify(await panelState())}`);
 await page.screenshot({ path: join(outDir, `${label}-admin-route.png`) });
 
 say(`[${label}] 4xx/5xx seen: ${JSON.stringify([...new Set(failed)])}`);

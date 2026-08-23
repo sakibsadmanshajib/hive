@@ -31,7 +31,7 @@ async def main() -> None:
         return
     user = await Auths.insert_new_auth(
         email=EMAIL,
-        password=get_password_hash(uuid.uuid4().hex),
+        password=await get_password_hash(uuid.uuid4().hex),
         name="Proof Admin 736",
         role="admin",
     )
