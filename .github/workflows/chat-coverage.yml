@@ -52,7 +52,7 @@ jobs:
           # Leave no usable git credential in the runner's config for the rest
           # of the job, which runs a browser against a live deployment.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -112,7 +112,7 @@ jobs:
           # Leave no usable git credential in the runner's config for the rest
           # of the job, which runs a browser against a live deployment.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
