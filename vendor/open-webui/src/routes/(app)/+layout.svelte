@@ -114,24 +114,18 @@
 	};
 
 	const setModels = async () => {
-		const directConnections = $config?.features?.enable_direct_connections
-			? ($settings?.directConnections ?? null)
-			: null;
-
-		// The root layout started this request before the config and session
-		// round trips, so by now it is usually already answered. Direct
-		// connections are the one case the prefetch cannot serve: they merge
-		// extra models from the user's own settings, which were not known when
-		// the request was started, so that case fetches normally.
-		if (!directConnections) {
-			const prefetched = consumeModelPrefetch(localStorage.token);
-			if (prefetched) {
-				models.set(await prefetched);
-				return;
-			}
+		// Direct connections are removed from user surfaces (settings declutter):
+		// never forward stored directConnections to model listing, even if a
+		// stale value exists in a browser from before this change. The root
+		// layout started this request before the config and session round
+		// trips, so by now it is usually already answered; reuse it.
+		const prefetched = consumeModelPrefetch(localStorage.token);
+		if (prefetched) {
+			models.set(await prefetched);
+			return;
 		}
 
-		models.set(await getModels(localStorage.token, directConnections));
+		models.set(await getModels(localStorage.token));
 	};
 
 	const setToolServers = async () => {
