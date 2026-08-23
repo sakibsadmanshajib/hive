@@ -136,9 +136,9 @@ type UsageSummaryRow struct {
 
 // SpendSummaryRow holds aggregated spend data grouped by a dimension.
 type SpendSummaryRow struct {
-	GroupKey    string `json:"group_key"`
+	GroupKey     string `json:"group_key"`
 	TotalCredits int64  `json:"total_credits"`
-	EntryCount  int64  `json:"entry_count"`
+	EntryCount   int64  `json:"entry_count"`
 }
 
 // ErrorSummaryRow holds aggregated error rate data grouped by a dimension.

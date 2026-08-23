@@ -103,20 +103,20 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	response := make([]map[string]any, 0, len(events))
 	for _, event := range events {
 		item := map[string]any{
-			"id":                event.ID,
-			"request_id":        event.RequestID,
+			"id":                 event.ID,
+			"request_id":         event.RequestID,
 			"request_attempt_id": event.RequestAttemptID,
-			"event_type":        event.EventType,
-			"endpoint":          event.Endpoint,
-			"model_alias":       event.ModelAlias,
-			"status":            event.Status,
-			"input_tokens":      event.InputTokens,
-			"output_tokens":     event.OutputTokens,
-			"hive_credit_delta": event.HiveCreditDelta,
-			"customer_tags":     event.CustomerTags,
-			"error_code":        event.ErrorCode,
-			"error_type":        event.ErrorType,
-			"created_at":        event.CreatedAt,
+			"event_type":         event.EventType,
+			"endpoint":           event.Endpoint,
+			"model_alias":        event.ModelAlias,
+			"status":             event.Status,
+			"input_tokens":       event.InputTokens,
+			"output_tokens":      event.OutputTokens,
+			"hive_credit_delta":  event.HiveCreditDelta,
+			"customer_tags":      event.CustomerTags,
+			"error_code":         event.ErrorCode,
+			"error_type":         event.ErrorType,
+			"created_at":         event.CreatedAt,
 		}
 		if event.CacheReadTokens > 0 {
 			item["cache_read_tokens"] = event.CacheReadTokens
