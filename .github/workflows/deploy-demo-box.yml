@@ -2025,6 +2025,34 @@ jobs:
             const results = `migrate=${process.env.MIGRATE_RESULT}, `
               + `deploy=${process.env.DEPLOY_RESULT}, `
               + `sdk-replay=${process.env.REPLAY_RESULT}`;
+            // The guidance has to match the job that actually failed. The
+            // previous text explained a migrate failure unconditionally, so
+            // issue #1084 was filed reading "A migrate failure means main is
+            // running against a stale schema ... Fix the migration" over a
+            // body whose own next line said `migrate=success`. That is a
+            // tracking issue actively misdirecting whoever picks it up, and it
+            // did: the actual causes were an exhausted provider token budget
+            // and then a Svelte compile error, neither of them a migration.
+            function guidance() {
+              if (process.env.MIGRATE_RESULT === 'failure') {
+                return 'The MIGRATION failed, so main is running against a stale schema and the deploy '
+                  + 'was deliberately stopped. Fix the migration, then re-run this workflow.';
+              }
+              if (process.env.DEPLOY_RESULT === 'failure') {
+                return 'The DEPLOY failed, after migrations applied successfully. The box is therefore '
+                  + 'still serving the previous image against the new schema. Read the "Rebuild + '
+                  + 'recreate changed services" step first: an image build failure stops here before '
+                  + 'anything is recreated, so nothing is half-deployed.';
+              }
+              if (process.env.REPLAY_RESULT === 'failure') {
+                return 'The deploy succeeded and the POST-DEPLOY SDK REPLAY failed, so the box is '
+                  + 'running the new code and something it serves does not work. Check the provider '
+                  + 'side before the code: a rate limit or an exhausted token budget fails this job '
+                  + 'without any commit having caused it.';
+              }
+              return 'No individual job reported failure, so the run failed somewhere outside the three '
+                + 'tracked jobs. Read the run itself.';
+            }
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -2045,8 +2073,7 @@ jobs:
                 title,
                 labels: [label],
                 body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
-                  'A migrate failure means main is running against a stale schema and the deploy was ' +
-                  'deliberately stopped. Fix the migration, then re-run this workflow.\n\n' +
+                  guidance() + '\n\n' +
                   'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
               });
             }
