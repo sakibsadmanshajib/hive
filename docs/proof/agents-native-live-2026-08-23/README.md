@@ -23,11 +23,25 @@ One complete local stack, nothing stubbed:
 - `web-console-prod` behind `caddy-console`, serving `/auth/v1`
 - Open WebUI behind `caddy-owui`
 
-Built from **`main` merged with #952, #956 and this branch**, which is the
-state that will exist after all three land, not this branch in isolation. The
-one merge conflict, in the `Makefile` `test-scripts` recipe, was resolved by
-keeping both sides: #952's `test-owui-frontend` target and this branch's
-`test_owui_agent_proxy.py` entry.
+Built from this branch **rebased onto `main` at `82375d07f`**, which is the
+commit where #952 and #956 have already landed. So the substrate is the real
+post-merge state and not this branch in isolation. `main` at that point also
+carries #1043's LiteLLM digest pin and #1012's actual-cost billing, and the
+migration chain was brought current against the local database before the
+capture (`20260822_30_openrouter_auto_variable_pricing.sql` applied).
+
+The rebase hit one conflict, in the `Makefile` `test-scripts` recipe, resolved
+by keeping both sides rather than either wholesale: #952's `test-owui-frontend`
+target, which is now on `main`, and this branch's `test_owui_agent_proxy.py`
+entry.
+
+The capture was re-run from scratch on that rebased build. The result is
+identical to the pre-rebase run, including the `200` from the proxied task
+endpoint.
+
+`/agent-workspace` still answers `307` to `/agent-workspace/tasks`, verified
+after the rebase. That redirect is deliberate, because the Tauri desktop app
+targets that base path, and nothing here changes it.
 
 Signed in through a real OAuth 2.1 authorization-code round trip. No session
 injected, no token minted by hand.
