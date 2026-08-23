@@ -82,8 +82,18 @@ func CanPriceTokens(route SelectRouteResult) bool {
 // expected to branch on IsUpstreamActual before they get here.
 func CreditsForTokens(route SelectRouteResult, inputTokens, outputTokens int64) int64 {
 	if route.Pricing.IsUpstreamActual() {
-		panic("inference: CreditsForTokens called for an upstream_actual route; " +
-			"its charge must come from the upstream reported cost, not the catalog price columns")
+		// Not a panic. The reachable chain is settleStream, called from a defer
+		// in executeStreaming, so a panic here would fire during deferred
+		// unwinding, before FinalizeReservation and before ReleaseReservation.
+		// net/http recovers it and the process survives, but the reservation
+		// reaches no terminal state at all and the hold is stranded, which is
+		// the outcome this guard was written to avoid. Returning the hold-sized
+		// sentinel keeps the settlement path intact and loud instead.
+		log.Printf("inference: BUG: CreditsForTokens called for an upstream_actual route alias=%s; "+
+			"its charge must come from the reported upstream cost, not the catalog price columns. "+
+			"Returning zero so the caller's own not-billable handling releases the hold rather than charging a fiction.",
+			route.AliasID)
+		return 0
 	}
 	if inputTokens < 0 {
 		inputTokens = 0
@@ -304,19 +314,33 @@ func UpstreamActualSettlement(rawUsage []byte, heldCredits int64, hasUsage bool,
 		return VariableSettlement{Reason: "nothing_delivered"}
 	}
 
-	// A hold of zero would make the fail-closed branch below settle at zero,
-	// which is the exact outcome it exists to prevent. Callers only reach here
-	// with a live reservation, so this is a guard against a future caller
-	// rather than a case seen today.
-	if heldCredits < 1 {
-		heldCredits = 1
+	// A hold of zero reaches here in exactly one case: the Enterprise posture,
+	// which has no reservation and charges nothing. Flooring it to 1 would
+	// invent a one-credit figure for the trace row on the one alias whose cost
+	// is genuinely unknown, so the floor is applied only where a real hold
+	// exists. Where there is none, the fail-closed branch returns zero credits
+	// and NOT delivered, so the caller releases rather than charging; that is
+	// the one zero this function is allowed to produce and it never reaches a
+	// ledger.
+	if heldCredits < 0 {
+		heldCredits = 0
 	}
 
 	charge, err := ParseUpstreamCost(rawUsage)
 	if err != nil {
+		reason := upstreamCostFailureReason(err)
+		if heldCredits == 0 {
+			// Reachable only where there is no reservation at all, which today
+			// means the Enterprise posture, where nothing is charged. Naming it
+			// keeps it out of the "we charged the hold" bucket and makes a
+			// future regression in the hold plumbing visible instead of
+			// arriving as a silent zero, which is exactly how the
+			// reserved_credits key mismatch presented.
+			reason = "no_hold_to_charge:" + reason
+		}
 		return VariableSettlement{
 			Credits: heldCredits, Delivered: true,
-			Reason: upstreamCostFailureReason(err), GenerationID: charge.GenerationID,
+			Reason: reason, GenerationID: charge.GenerationID,
 		}
 	}
 
@@ -348,6 +372,8 @@ func upstreamCostFailureReason(err error) string {
 		return "upstream_cost_negative"
 	case errors.Is(err, ErrUpstreamCostUnparseable):
 		return "upstream_cost_unparseable"
+	case errors.Is(err, ErrUpstreamCostImplausible):
+		return "upstream_cost_implausible"
 	default:
 		return "upstream_cost_error"
 	}

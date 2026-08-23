@@ -98,10 +98,12 @@ func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {
 			Summary:          alias.Summary,
 			CapabilityBadges: append([]string(nil), alias.CapabilityBadges...),
 			Pricing: CatalogPricing{
-				InputPriceCredits:      alias.InputPriceCredits,
-				OutputPriceCredits:     alias.OutputPriceCredits,
-				CacheReadPriceCredits:  alias.CacheReadPriceCredits,
-				CacheWritePriceCredits: alias.CacheWritePriceCredits,
+				InputPriceCredits:          alias.InputPriceCredits,
+				OutputPriceCredits:         alias.OutputPriceCredits,
+				CacheReadPriceCredits:      alias.CacheReadPriceCredits,
+				CacheWritePriceCredits:     alias.CacheWritePriceCredits,
+				PricingMode:                alias.PricingMode,
+				ReservationEstimateCredits: alias.ReservationEstimateCredits,
 			},
 			Lifecycle: alias.Lifecycle,
 		})

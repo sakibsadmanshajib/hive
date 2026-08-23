@@ -315,7 +315,21 @@ func (o *Orchestrator) executeStreaming(
 					continue
 				}
 			}
-			// Fallback: pass through the original line
+			// Fallback: pass through the original line. Everything that keeps
+			// our cost off this path relies on the typed struct discarding
+			// unknown fields, and this branch is exactly where that protection
+			// is not in force, so a variable-price route sanitizes explicitly
+			// and drops the frame outright if it cannot.
+			if route.Pricing.IsUpstreamActual() {
+				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID); sanOK {
+					fmt.Fprintf(w, "data: %s\n\n", sanitized)
+					flusher.Flush()
+				} else {
+					log.Printf("inference: dropping an unparseable upstream frame on a variable-price alias endpoint=%s alias=%s: forwarding it verbatim would publish our cost and the chosen model",
+						endpoint, aliasID)
+				}
+				continue
+			}
 			fmt.Fprintf(w, "%s\n\n", line)
 			flusher.Flush()
 			continue
@@ -471,7 +485,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		// read settles at the hold rather than at zero; see
 		// UpstreamActualSettlement.
 		settled := UpstreamActualSettlement(
-			acc.RawUsageChunk, reservation.EstimatedCredits,
+			acc.RawUsageChunk, reservation.Held(),
 			acc.HasUsage, acc.InputTokens, acc.OutputTokens, content)
 		credits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
 		if delivered {
@@ -480,7 +494,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			// itself no longer names. Operator log only, never audit_log.
 			log.Printf("inference: variable-price settlement request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s credits=%d confirmed=%v generation_id=%s held_credits=%d",
 				requestID, reservation.ID, endpoint, model, settled.Reason,
-				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.EstimatedCredits)
+				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
 		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)

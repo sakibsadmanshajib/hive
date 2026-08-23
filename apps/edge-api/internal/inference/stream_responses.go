@@ -246,6 +246,13 @@ func (o *Orchestrator) executeResponsesStreaming(
 		// translator.currentContent already holds the full response body.
 		if chunk.Usage != nil {
 			clampZeroCompletionUsage(chunk.Usage, []string{translator.currentContent.String()}, chunk.ID, model, EndpointResponses)
+			// Same capture as executeStreaming. Without it this path can only
+			// ever fail closed for a variable-price alias, because settleStream
+			// reads these bytes and ChatCompletionChunk has already discarded
+			// the cost field on the way in.
+			if route.Pricing.IsUpstreamActual() {
+				acc.RawUsageChunk = append(acc.RawUsageChunk[:0], jsonData...)
+			}
 		}
 
 		// Accumulate usage if present.

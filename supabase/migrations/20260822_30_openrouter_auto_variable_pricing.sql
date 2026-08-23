@@ -1,5 +1,20 @@
 -- openrouter-auto: an alias billed at ACTUAL upstream cost, not a catalog price.
 --
+-- Wrapped in a single transaction because this file drops NOT NULL from two
+-- columns several statements before the CHECK that re-imposes the invariant.
+-- Under `supabase db push` that window never exists, but this repo also applies
+-- migrations by hand with psql, which autocommits per statement, and an abort
+-- in between would leave the table accepting a `fixed` row with NULL prices,
+-- which is the exact state this design exists to prevent.
+--
+-- lock_timeout because model_aliases is read once per route selection, so once
+-- per request. Each statement here is microseconds against a single-digit-row
+-- table, but an ACCESS EXCLUSIVE request that queues behind one long-running
+-- reader blocks every reader that arrives after it. Failing fast is better than
+-- stalling the gateway.
+begin;
+set local lock_timeout = '5s';
+--
 -- `openrouter/auto-beta` is a router. It picks a different upstream model per
 -- request, so OpenRouter's models endpoint reports `prompt: -1, completion: -1`
 -- for it: the price is variable by construction. Every other alias in this
@@ -78,6 +93,11 @@ alter table public.model_aliases
             pricing_mode = 'upstream_actual'
             and input_price_credits is null
             and output_price_credits is null
+            -- The cache columns are covered too. They are serialized onto the
+            -- catalog surface, so a stale number left in either would be shown
+            -- as this alias's price even though nothing charges from it.
+            and cache_read_price_credits is null
+            and cache_write_price_credits is null
             and reservation_estimate_credits is not null
             and reservation_estimate_credits > 0
         )
@@ -89,17 +109,21 @@ alter table public.model_aliases
 -- payments.CreditsPerUSD = 100000. Derivation, so a later reader can argue with
 -- the number instead of guessing at it:
 --
---   The LiteLLM route sets provider.max_price, which OpenRouter's auto-router
---   documentation confirms still applies to the router and is enforced after it
---   resolves a model, failing the request rather than silently routing to a
---   pricier endpoint. With the ceiling set at 3.00 / 15.00 USD per million
---   prompt / completion tokens, a request of roughly 30k prompt and 4k
---   completion tokens costs at most 0.03 * 3 + 0.004 * 15 = 0.15 USD, times the
---   1.4 margin = 0.21 USD = 21000 credits. The hold is set an order of
---   magnitude above that envelope so ordinary traffic is never refused for an
---   under-sized hold, while still being a real solvency gate: control-plane
---   refuses the reservation outright when it exceeds available credits
---   (enforcePolicy, PolicyModeStrict).
+--   provider.max_price bounds the RATE and nothing else, so it alone does not
+--   bound one request. Both sides of the request are therefore bounded in Go
+--   before dispatch (EnforceVariablePriceBounds): 256 KiB of body, which is a
+--   rigorous upper bound of 262144 prompt tokens because a token can never be
+--   fewer than one UTF-8 byte, and 16384 completion tokens pinned onto the
+--   outbound request where a client cannot raise it.
+--
+--   At the configured 3.00 / 15.00 USD per million ceiling that worst bounded
+--   request is 144507 credits after the 1.4 margin, against this 200000 hold,
+--   leaving about 55000 credits of headroom. Those figures are not restated
+--   here as prose that can drift: TestTheHoldProvablyCoversTheWorstBoundedRequest
+--   recomputes them from this file, the LiteLLM config and the Go constants, and
+--   fails if the hold stops covering the bound. The hold is also a real
+--   solvency gate, because control-plane refuses a reservation that exceeds
+--   available credits (enforcePolicy, PolicyModeStrict).
 --
 --   The hold is NOT a price and is never charged as one. Settlement releases
 --   the whole hold and posts the real cost as the charge.
@@ -126,7 +150,24 @@ insert into public.model_aliases (
     'hive',
     'Openrouter Auto (Task Aware)',
     'Task-aware routing that selects a model per request. Billed at actual usage.',
-    'public',
+    -- `internal`, NOT `public`, and this is deliberate on two counts.
+    --
+    -- Deployment ordering: deploy-demo-box.yml has `deploy: needs: migrate`, so
+    -- this row lands while the PREVIOUS control-plane binary is still serving,
+    -- and that binary scans the price columns into non-pointer int64. The
+    -- readers are list queries, so one NULL-priced row would fail the scan for
+    -- the whole list and take /v1/models down for every model until the new
+    -- image arrived. ListPublicAliases filters `visibility IN ('public',
+    -- 'preview')`, so an `internal` row is simply not selected and the window
+    -- closes.
+    --
+    -- Correctness: this alias cannot bill correctly until the LiteLLM pin moves
+    -- off v1.77.7-stable, which destroys the reported cost on the streaming
+    -- path. Until then every streamed request would take the fail-closed branch
+    -- and be charged the hold. Flipping this to 'public' is a one-line
+    -- follow-up migration, to be applied only after the pin bump has landed and
+    -- been validated on the box.
+    'internal',
     'stable',
     '["chat","responses","tools","reasoning","vision","task-aware"]'::jsonb,
     null,
@@ -135,7 +176,21 @@ insert into public.model_aliases (
     'upstream_actual',
     200000
 )
-on conflict (alias_id) do nothing;
+on conflict (alias_id) do update set
+    -- `do nothing` is the right instinct for idempotency and the wrong one for
+    -- the money columns. If any concurrent same-day migration seeded
+    -- `openrouter-auto` first, in the default `fixed` mode with some price,
+    -- `do nothing` would leave a variable-cost router billed at a fixed price,
+    -- with the route row, the LiteLLM entry and the settlement branch all still
+    -- treating it as variable, and no error anywhere. These four columns are
+    -- the ones a wrong value silently misprices, so they converge on re-run
+    -- instead. Display name and summary are deliberately NOT updated: those may
+    -- have been retuned since and this migration has no business reverting
+    -- them, which is the reason the other seed migrations use `do nothing`.
+    pricing_mode                 = excluded.pricing_mode,
+    input_price_credits          = excluded.input_price_credits,
+    output_price_credits         = excluded.output_price_credits,
+    reservation_estimate_credits = excluded.reservation_estimate_credits;
 
 -- ─── 4. Route ───────────────────────────────────────────────────────────────
 --
@@ -235,3 +290,5 @@ on conflict (alias_id) do nothing;
 insert into public.model_policy_group_members (group_name, alias_id)
 values ('default', 'openrouter-auto')
 on conflict (group_name, alias_id) do nothing;
+
+commit;

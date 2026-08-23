@@ -231,9 +231,13 @@ func TestFreeServeGuardNeverSettlesAtZero(t *testing.T) {
 			wantReason: "upstream_cost_unparseable",
 		},
 		{
+			// Absence, not a parse failure. json.Unmarshal reports empty input
+			// as a syntax error, which used to file a stream that ended before
+			// its usage frame under `unparseable` and lose the very
+			// distinction this package is built around.
 			name:       "the lookup never happened: stream ended before the usage frame",
 			rawUsage:   ``,
-			wantReason: "upstream_cost_unparseable",
+			wantReason: "upstream_cost_absent",
 		},
 		{
 			name:       "a confident zero is refused, not billed as free",

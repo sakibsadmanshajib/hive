@@ -62,7 +62,28 @@ var (
 	// in practice this becomes a catalog-level allowance, not a silent
 	// default.
 	ErrUpstreamCostZero = errors.New("inference: upstream cost is zero while tokens were consumed")
+	// ErrUpstreamCostImplausible: a cost so large it cannot be a real charge.
+	// Refused rather than clamped, because silently capping an absurd figure
+	// would hide whatever produced it.
+	ErrUpstreamCostImplausible = errors.New("inference: upstream cost is implausibly large")
 )
+
+// maxCostLiteralBytes caps the raw numeric literal before it is handed to
+// big.Rat. json.Number only guarantees JSON number syntax, and JSON puts no
+// limit on digits, so an upstream (or anything able to answer as one) could
+// send a multi-megabyte literal and big.Rat would faithfully build the exact
+// rational for it. That is CPU spent inside a request, on a money path, at the
+// caller's choosing. No genuine USD cost needs anywhere near this many
+// characters.
+const maxCostLiteralBytes = 64
+
+// maxChargeableCredits is the largest charge a single request may settle at.
+// One request cannot plausibly cost more than 1,000,000 credits (10 USD) given
+// the request bounds enforced before dispatch, and refusing past that is what
+// stops a wrong or hostile figure becoming a real ledger entry. It also keeps
+// the conversion inside int64 by construction, so the Int64 check below is a
+// belt-and-braces assertion rather than the only line of defence.
+const maxChargeableCredits = 1_000_000
 
 // MarginNumerator / MarginDenominator express the 1.4 margin EXACTLY, as a
 // rational. Not 1.4 the float: this multiplies a money figure, and the repo
@@ -129,6 +150,14 @@ type upstreamCostEnvelope struct {
 // the caller must treat all of them as fail-closed. It never returns a zero
 // charge and a nil error together.
 func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
+	// No bytes at all is "the frame never arrived", which is absence, not a
+	// malformed payload. json.Unmarshal reports empty input as a syntax error,
+	// which would file a stream that ended before its usage frame under
+	// `unparseable` and lose the distinction this file is built around.
+	if len(raw) == 0 {
+		return UpstreamCharge{}, ErrUpstreamCostAbsent
+	}
+
 	var env upstreamCostEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return UpstreamCharge{}, fmt.Errorf("%w: %v", ErrUpstreamCostUnparseable, err)
@@ -140,9 +169,16 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 		return charge, ErrUpstreamCostAbsent
 	}
 
-	cost, ok := new(big.Rat).SetString(env.Usage.Cost.String())
+	literal := env.Usage.Cost.String()
+	// Length first, before big.Rat ever sees it: the parse itself is the
+	// expensive part, so checking afterwards would be too late.
+	if len(literal) > maxCostLiteralBytes {
+		return charge, fmt.Errorf("%w: cost literal is %d bytes, limit %d",
+			ErrUpstreamCostUnparseable, len(literal), maxCostLiteralBytes)
+	}
+	cost, ok := new(big.Rat).SetString(literal)
 	if !ok {
-		return charge, fmt.Errorf("%w: %q", ErrUpstreamCostUnparseable, env.Usage.Cost.String())
+		return charge, fmt.Errorf("%w: %q", ErrUpstreamCostUnparseable, literal)
 	}
 
 	switch cost.Sign() {
@@ -160,6 +196,64 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 
 	charge.CostUSD = cost
 	return charge, nil
+}
+
+// SanitizeVariablePriceFrame strips the fields a cost-reporting upstream adds
+// that must never reach a customer, and rewrites the model to the alias.
+//
+// Both streaming relays need this and for the same reason. Turning on usage
+// accounting is what makes the upstream put its own cost, its cost breakdown
+// and the model the router chose into the frame, so the moment that flag went
+// on, any path that forwards a frame verbatim started publishing all three.
+// The typed-struct relay in executeStreaming is safe by construction because
+// unmarshalling discards what it does not declare, but its raw-line fallback is
+// not, and apps/edge-api/internal/chat relays every line verbatim by design.
+//
+// ok is false when the frame cannot be parsed. The caller must then DROP the
+// frame rather than forward it, because an unparseable frame is exactly the one
+// whose contents are unknown.
+func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
+	var frame map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &frame); err != nil {
+		return nil, false
+	}
+
+	// Provider identity and our own cost. Deleting by key rather than
+	// rebuilding from a typed struct keeps every field the client legitimately
+	// needs, including ones this package does not model, such as tool calls.
+	delete(frame, "provider")
+
+	if rawUsage, present := frame["usage"]; present {
+		var usage map[string]json.RawMessage
+		if err := json.Unmarshal(rawUsage, &usage); err != nil {
+			return nil, false
+		}
+		for _, key := range []string{"cost", "cost_details", "is_byok"} {
+			delete(usage, key)
+		}
+		rebuilt, err := json.Marshal(usage)
+		if err != nil {
+			return nil, false
+		}
+		frame["usage"] = rebuilt
+	}
+
+	// The router's chosen model. Present on the sync path and on some
+	// streaming frames; the typed relay already does this, so doing it here
+	// keeps the two consistent.
+	if _, present := frame["model"]; present {
+		alias, err := json.Marshal(aliasID)
+		if err != nil {
+			return nil, false
+		}
+		frame["model"] = alias
+	}
+
+	out, err := json.Marshal(frame)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // CreditsForUpstreamCost converts a provider-reported USD cost into whole
@@ -188,7 +282,19 @@ func CreditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 		quotient.Add(quotient, big.NewInt(1))
 	}
 
+	// Int64() is UNDEFINED when the value does not fit: it returns the low 64
+	// bits with the sign reinterpreted, so an oversized charge wraps rather
+	// than saturating. A wrap to a negative then hit the floor below and became
+	// a charge of one credit, flagged confirmed, which is a failed cost read
+	// settling as very nearly free. Check before converting, and refuse.
+	if !quotient.IsInt64() {
+		return 0, fmt.Errorf("%w: does not fit in int64", ErrUpstreamCostImplausible)
+	}
 	credits := quotient.Int64()
+	if credits > maxChargeableCredits {
+		return 0, fmt.Errorf("%w: %d credits exceeds the %d per-request ceiling",
+			ErrUpstreamCostImplausible, credits, maxChargeableCredits)
+	}
 	if credits < 1 {
 		credits = 1
 	}

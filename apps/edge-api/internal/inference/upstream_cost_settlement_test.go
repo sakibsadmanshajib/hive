@@ -44,6 +44,13 @@ func newRoutingMockVariable() *httptest.Server {
 // unlike newAccountingMock which returns a fixed 10000. The echo matters here:
 // settlement charges the hold when it cannot read a cost, so a mock that lied
 // about the hold size would make the fail-closed assertions meaningless.
+//
+// It answers with `reserved_credits`, which is the key the real control plane
+// publishes (apps/control-plane/internal/accounting/types.go). An earlier
+// version of this mock answered `estimated_credits`, a key nothing sends, and
+// that single wrong word made every hold assertion here pass against a value
+// production would have decoded as 0. The mock has to speak the real wire shape
+// or it is testing itself.
 func newEchoingAccountingMock(rec *accountingRecorder) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -54,9 +61,12 @@ func newEchoingAccountingMock(rec *accountingRecorder) *httptest.Server {
 		switch r.URL.Path {
 		case "/internal/accounting/reservations":
 			estimated, _ := body["estimated_credits"].(float64)
-			_ = json.NewEncoder(w).Encode(ReservationResult{
-				ID: "res-test-1", AccountID: "acct-test-1", Status: "active",
-				EstimatedCredits: int64(estimated),
+			// Encoded as a raw map, not ReservationResult, so the test cannot
+			// accidentally start passing because the Go struct gained a field.
+			// This is the JSON the control plane really writes.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "res-test-1", "account_id": "acct-test-1", "status": "active",
+				"reserved_credits": int64(estimated),
 			})
 		case "/internal/usage/attempts":
 			_ = json.NewEncoder(w).Encode(AttemptResult{
@@ -247,5 +257,46 @@ func TestVariablePriceStreaming_LeaksNeitherCostNorChosenModelToTheClient(t *tes
 	// is unauditable. The generation id is the audit handle.
 	if !strings.Contains(client, "openrouter-auto") {
 		t.Error("the client should still see the alias it asked for")
+	}
+}
+
+// The Responses streaming path has its own relay loop, and it was missing the
+// raw-usage capture entirely, so a variable-price alias could only ever fail
+// closed there. Same assertion as the chat-completions path: the charge must be
+// the reported cost, not the hold.
+func TestResponsesStreamingSettlesAtTheReportedUpstreamCost(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newEchoingAccountingMock(rec)
+	defer acctSrv.Close()
+	litellmSrv := openrouterSSEServer("0.0123456")
+	defer litellmSrv.Close()
+	routingSrv := newRoutingMockVariable()
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := newHeaderCommitRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		orch.executeResponsesStreaming(context.Background(), w, req, []byte(`{}`),
+			ResponsesRequest{Model: "openrouter-auto"}, "openrouter-auto",
+			NeedFlags{NeedResponses: true, NeedStreaming: true}, 10000)
+	}()
+	waitDone(t, done)
+
+	body, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected a finalize on the responses path; calls: %+v", rec.calls)
+	}
+	// 0.0123456 x 1.4 x 100000 = 1728.384 -> 1728. If the capture is missing
+	// this reads 200000, the hold, because the cost was never seen.
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1728 {
+		t.Errorf("actual_credits = %v, want 1728. The responses relay must capture the raw usage frame too.",
+			body["actual_credits"])
+	}
+	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
+		t.Error("a charge from a real reported cost must be confirmed")
 	}
 }

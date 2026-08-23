@@ -228,15 +228,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			flush(flusher)
 			continue
 		}
-		_, _ = w.Write(line)
-		_, _ = w.Write([]byte("\n"))
-		flush(flusher)
+		// This relay is verbatim by design, which is fine while the upstream
+		// frame carries nothing we must not publish. Enabling usage accounting
+		// for a variable-price alias changes that: the frame then carries our
+		// cost, its breakdown and the model the router actually chose. So that
+		// one route is sanitized before the write, and an unparseable frame is
+		// dropped rather than forwarded, because an unparseable frame is
+		// precisely the one whose contents are unknown.
+		isData := bytes.HasPrefix(line, []byte("data: "))
+		payload := bytes.TrimPrefix(line, []byte("data: "))
+		isDone := isData && bytes.Equal(payload, []byte("[DONE]"))
 
-		if !bytes.HasPrefix(line, []byte("data: ")) {
+		if isData && !isDone && route.Pricing.IsUpstreamActual() {
+			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel)
+			if !sanOK {
+				slog.Warn("session chat: dropping an unparseable upstream frame on a variable-price alias",
+					"request_id", requestID, "alias", clientModel)
+				continue
+			}
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(sanitized)
+			_, _ = w.Write([]byte("\n"))
+			flush(flusher)
+		} else {
+			_, _ = w.Write(line)
+			_, _ = w.Write([]byte("\n"))
+			flush(flusher)
+		}
+
+		if !isData {
 			continue
 		}
-		payload := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(payload, []byte("[DONE]")) {
+		if isDone {
 			break
 		}
 		var envelope sseEnvelope

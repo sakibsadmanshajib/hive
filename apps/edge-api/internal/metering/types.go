@@ -110,6 +110,24 @@ type RouteInfo struct {
 	Provider           string
 	InputPriceCredits  int64 // model_aliases.input_price_credits, credits per million input tokens
 	OutputPriceCredits int64 // model_aliases.output_price_credits, credits per million output tokens
+	// PricingMode mirrors model_aliases.pricing_mode. A variable-price alias
+	// carries NULL prices, which flatten to zero here, and without this field
+	// HasCostBasis would read that as "no cost basis" and grade a request that
+	// genuinely bills as not_billable. The gate is shadow-mode today so the
+	// verdict is log-only, but a wrong verdict in the log is what a later
+	// enforcing step would inherit.
+	PricingMode string
+}
+
+// PricingModeUpstreamActual mirrors catalog.PricingModeUpstreamActual. Declared
+// here rather than imported because control-plane and edge-api are separate
+// modules.
+const PricingModeUpstreamActual = "upstream_actual"
+
+// IsUpstreamActual reports whether this route bills from the upstream's own
+// reported cost rather than from the price columns.
+func (r RouteInfo) IsUpstreamActual() bool {
+	return r.PricingMode == PricingModeUpstreamActual
 }
 
 // HasCostBasis reports whether this route carries a usable price. A route
@@ -117,6 +135,12 @@ type RouteInfo struct {
 // internal alias is legitimately unpriced) has no cost basis, and the gate
 // resolves not_billable/no_cost_basis without consulting anything else.
 func (r RouteInfo) HasCostBasis() bool {
+	// A variable-price alias has a cost basis by definition: it is billed from
+	// the cost the upstream reports for the request. Its price columns are
+	// NULL, so keying only on them would grade it not_billable.
+	if r.IsUpstreamActual() {
+		return true
+	}
 	return r.InputPriceCredits > 0 || r.OutputPriceCredits > 0
 }
 

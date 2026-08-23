@@ -305,7 +305,7 @@ func (o *Orchestrator) executeSync(
 			// reported cost among them. The raw bytes are the only place that
 			// figure still exists.
 			settled := UpstreamActualSettlement(
-				respBody, reservation.EstimatedCredits,
+				respBody, reservation.Held(),
 				hasUsage, inputTokens, outputTokens, responseText(endpoint, normalized))
 			actualCredits, confirmed, billable = settled.Credits, settled.Confirmed, settled.Delivered
 			if billable {
@@ -313,7 +313,7 @@ func (o *Orchestrator) executeSync(
 				// same line on the streaming path.
 				log.Printf("inference: variable-price settlement request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s credits=%d confirmed=%v generation_id=%s held_credits=%d",
 					requestID, reservation.ID, endpoint, model, settled.Reason,
-					settled.Credits, settled.Confirmed, settled.GenerationID, reservation.EstimatedCredits)
+					settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 			}
 		} else {
 			actualCredits, confirmed, billable = settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)

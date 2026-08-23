@@ -11,8 +11,15 @@ interface ModelCatalogTableProps {
 // A model priced from actual upstream cost has no per-million rate to show.
 // Rendering 0 there would read as "free", so the absence is shown as what it
 // is. formatCredits still owns every real number.
-function formatPrice(credits: number | null): string {
-  if (credits === null) return "Variable";
+//
+// The pricing mode decides which kind of absence this is. A null price on a
+// variable-price alias is the design; a null price on a fixed one means the
+// lookup failed, and calling that "Variable" would present a broken decode as a
+// deliberate pricing model on the very screen an admin uses to check pricing.
+function formatPrice(credits: number | null, pricingMode: string): string {
+  if (credits === null) {
+    return pricingMode === "upstream_actual" ? "Variable" : "Unknown";
+  }
   return formatCredits(credits);
 }
 
@@ -105,14 +112,14 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
       header: "Input / 1M",
       numeric: true,
       align: "right",
-      cell: (row) => formatPrice(row.pricing.input_price_credits),
+      cell: (row) => formatPrice(row.pricing.input_price_credits, row.pricing.pricing_mode),
     },
     {
       key: "output",
       header: "Output / 1M",
       numeric: true,
       align: "right",
-      cell: (row) => formatPrice(row.pricing.output_price_credits),
+      cell: (row) => formatPrice(row.pricing.output_price_credits, row.pricing.pricing_mode),
     },
     {
       key: "status",
