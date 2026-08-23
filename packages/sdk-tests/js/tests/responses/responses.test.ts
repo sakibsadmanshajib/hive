@@ -5,11 +5,36 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-default";
 
-// Known reasoning model identifiers — skip reasoning parameter rejection test
-// for these. `hive-default` is included because the CI stack now cascades
-// (via LiteLLM fallback) to gpt-oss models that natively accept reasoning
-// parameters, so the alias no longer rejects `reasoning` at the edge.
-const REASONING_MODEL_PATTERNS = ["o1", "o3", "reasoning", "hive-default", "hive-auto"];
+// Known reasoning model identifiers — skip the reasoning-parameter rejection
+// test for these, because the edge routes that parameter on
+// provider_capabilities.supports_reasoning and these aliases have it true, so
+// there is no rejection to assert.
+//
+// The Groq gpt-oss aliases (`hive-default`, `hive-auto`, `hive-small`,
+// `hive-medium`, and the deprecated `hive-fast`) accept reasoning parameters
+// natively, and every one of them is seeded supports_reasoning true. Listing
+// all five rather than the two this suite is usually pointed at, because
+// HIVE_TEST_MODEL is a knob and a run pointed at any of them would otherwise
+// assert a rejection that cannot happen. (An older comment here explained the
+// first two by a LiteLLM fallback cascade; those chat fallbacks were removed
+// from deploy/litellm/config.yaml by the 2026-08-22 catalog restructure, and
+// the flag on the route is the actual reason.)
+//
+// `deepseek` covers deepseek-v4-flash and deepseek-v4-pro. Not an accommodation
+// for CI: supabase/migrations/20260822_02_catalog_alias_restructure.sql seeds
+// both with supports_reasoning true and a "reasoning" capability badge, from
+// the provider's own supported_parameters list.
+const REASONING_MODEL_PATTERNS = [
+  "o1",
+  "o3",
+  "reasoning",
+  "hive-default",
+  "hive-auto",
+  "hive-small",
+  "hive-medium",
+  "hive-fast",
+  "deepseek",
+];
 
 function isReasoningModel(model: string): boolean {
   return REASONING_MODEL_PATTERNS.some((pattern) =>

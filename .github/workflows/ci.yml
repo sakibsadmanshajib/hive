@@ -14,8 +14,12 @@ on:
   push:
     branches: [main]
   schedule:
-    # Daily fidelity run on main: exercises paid hive-default model to catch
-    # provider regressions that a free-tier model might silently swallow.
+    # Daily run on main. It used to be described as the "paid hive-default
+    # fidelity run", which stopped being true when the 2026-08-22 catalog
+    # restructure moved hive-default onto Groq, and stopped being desirable
+    # when that shared free-tier daily budget ran out and reddened a required
+    # check (issue #1088). It now exercises the same alias every other trigger
+    # does; see live-integration's HIVE_TEST_MODEL below for which one and why.
     - cron: '0 4 * * *'
   workflow_dispatch:
 
@@ -660,6 +664,14 @@ jobs:
       # paste, which is how there came to be six.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:dead-supabase-secrets
+      # Issue #1088. The live-integration job set HIVE_TEST_MODEL, the SDK
+      # suites read it, and the compose services forwarded nothing, so the knob
+      # meant to keep a merge-gate check off the live demo's provider budget
+      # was wired to nothing for a month while every run reported green. This
+      # fails when a suite reads a HIVE_* variable that neither its compose
+      # service nor its image provides.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:sdk-test-env
       # A synchronous child process in a Playwright spec freezes the worker's
       # event loop, so no test timeout in that file can fire while it runs.
       # PR #838 found a test recorded as passed at 30194 ms under a 30000 ms
@@ -933,11 +945,10 @@ jobs:
     # that pays for real provider completions is also the one that gets
     # cancelled first on a degraded runner, with an empty step log to read.
     timeout-minutes: 35
-    # Run on push to main (post-merge gate) or on PRs that carry the
-    # run-live-integration label. The label gate lets contributors
-    # explicitly opt in without running paid completions on every PR.
-    # The daily cron variant (schedule) also runs here to exercise the
-    # paid hive-default model for fidelity checks.
+    # Run on push to main (post-merge gate), on the daily cron, or on PRs that
+    # carry the run-live-integration label. The label gate lets contributors
+    # explicitly opt in without spending a provider allowance on every PR.
+    # Every trigger now calls the same alias; see HIVE_TEST_MODEL below.
     # Fork PRs are excluded: GitHub does not expose secrets to fork
     # runners on pull_request events, so no secret can leak.
     if: >-
@@ -987,19 +998,65 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-      # Routine PR runs use a free OpenRouter model to avoid per-token
-      # charges on every merge-gate check. The daily cron run (schedule)
-      # and post-merge push runs use the paid hive-default model for
-      # full fidelity. HIVE_TEST_MODEL propagates into sdk-tests
-      # containers via docker compose env interpolation.
-      OPENROUTER_DEFAULT_MODEL: >-
-        ${{ (github.event_name == 'schedule' || github.event_name == 'push')
-            && vars.OPENROUTER_DEFAULT_MODEL
-            || 'openrouter/mistralai/mistral-7b-instruct:free' }}
-      HIVE_TEST_MODEL: >-
-        ${{ (github.event_name == 'schedule' || github.event_name == 'push')
-            && 'hive-default'
-            || 'hive-default' }}
+      # Which alias the token-consuming SDK suites call, and therefore which
+      # provider account this job bills. Issue #1088.
+      #
+      # What was here before was a per-event ternary that read as "free model
+      # on pull requests, paid fidelity on push and cron" and was dead three
+      # times over. Both branches of the HIVE_TEST_MODEL ternary evaluated to
+      # hive-default; the value never reached the suites at all, because the
+      # sdk-tests compose services forwarded nothing (fixed in
+      # deploy/docker/docker-compose.yml, guarded by
+      # tools/lint-sdk-test-env-propagation.mjs); and the variable the ternary
+      # actually switched, OPENROUTER_DEFAULT_MODEL, is documented UNUSED in
+      # .env.example after its consumer route-openrouter-default was deleted by
+      # the 2026-08-22 catalog restructure.
+      #
+      # That restructure is what made it matter: it moved hive-default from
+      # OpenRouter onto Groq, so every run of this job since then has spent the
+      # live demo box's Groq free-tier DAILY token budget (limit 200000, shared
+      # across the organization, hard cliff). On 2026-08-23 that budget ran out
+      # and a required check on main went red for a reason no commit caused,
+      # while the demo answered nothing.
+      #
+      # deepseek-v4-pro is an existing public alias pinned to
+      # route-deepseek-v4-pro on OpenRouter, a DIFFERENT provider account
+      # whose limit is prepaid credit rather than a daily token cliff.
+      # deepseek-v4-flash was tried first and rejected on evidence: its slug
+      # (~deepseek/deepseek-v4-flash-latest) is an unpinned OpenRouter router
+      # whose upstreams disagree about the OpenAI contract under
+      # response_format json_object. Across probes and the CI run of this
+      # branch it returned message.content as a parsed JSON object (run
+      # 32665985618), as null, and as string on different calls, so no strict
+      # assertion can survive it. deepseek-v4-pro-0813 is date-pinned, returns
+      # content as a string every time, and answers forced tool_choice with a
+      # real tool_calls shape (probed live 2026-08-23 through the demo box's
+      # LiteLLM). It costs more per completion than flash but a whole suite
+      # run stays in single-digit cents, bounded by the token ceiling below. A
+      # second Groq key would not have helped: the limit is per
+      # organization, not per key.
+      #
+      # Fidelity consequence, stated rather than buried: this check no longer
+      # exercises the Groq gpt-oss-20b route the demo serves chat from. A
+      # Groq-specific regression is caught by the sdk-replay job in
+      # deploy-demo-box.yml, which runs these same suites against the live box
+      # on hive-default after every deploy and is deliberately left alone. The
+      # "Declare which provider account this run bills" step below prints this
+      # every run so it is never an unstated assumption.
+      #
+      # Set the CI_LIVE_INTEGRATION_MODEL repository variable to point this
+      # back at hive-default (say, once a CI-only Groq organization exists)
+      # without touching this file.
+      HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'deepseek-v4-pro' }}
+      # The suites' own default, named here rather than left implicit, because
+      # the spend meter below asserts that no alias outside these two is ever
+      # billed by this job.
+      HIVE_EMBEDDING_MODEL: hive-embedding-default
+      # Nothing reads this. It is passed only because docker-compose.yml
+      # interpolates it into the litellm service's environment, and an unset
+      # variable there is a compose warning on every invocation. See
+      # .env.example, which documents it as UNUSED.
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
       OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
       OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
       OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
@@ -1029,6 +1086,28 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
+
+      # Say which provider allowance this run spends, and what it therefore
+      # does NOT cover, before it spends any of it. Issue #1088: for a month
+      # this job silently drove the same Groq daily token budget the live demo
+      # answers customers from, while its own comments described a cheaper
+      # path it was not taking. A reduced-fidelity check has to announce
+      # itself, every run, or it reads as coverage it does not have.
+      - name: Declare which provider account this run bills
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SDK suites will call alias: $HIVE_TEST_MODEL"
+          echo "embedding suites will call: $HIVE_EMBEDDING_MODEL"
+          if [ "$HIVE_TEST_MODEL" = "hive-default" ] \
+            || [ "$HIVE_TEST_MODEL" = "hive-small" ] \
+            || [ "$HIVE_TEST_MODEL" = "hive-medium" ] \
+            || [ "$HIVE_TEST_MODEL" = "hive-auto" ] \
+            || [ "$HIVE_TEST_MODEL" = "hive-fast" ]; then
+            echo "::warning::this run bills the SHARED Groq free-tier daily token budget, the same allowance the live demo box serves chat from. Exhausting it takes the demo down and reddens this required check for reasons no commit caused (issue #1088)."
+          else
+            echo "::notice::this run bills '$HIVE_TEST_MODEL', which is NOT the Groq route the live demo serves chat from. Groq-specific regressions are not covered here; the sdk-replay job in deploy-demo-box.yml covers them against the live box on hive-default after each deploy."
+          fi
 
       - name: Start a throwaway Postgres and apply the real schema
         shell: bash
@@ -1245,6 +1324,10 @@ jobs:
           jq -r '.data[0:3] | .[] | .id' /tmp/models.json
 
       - name: Run SDK suites in parallel (JS + Python + Java)
+        # id, because the spend meter below runs on always() and needs to tell
+        # "the suites failed, so the database may not exist" from "the suites
+        # passed and the meter is unreadable", which is a defect.
+        id: sdk-suites
         working-directory: deploy/docker
         shell: bash
         run: |
@@ -1278,6 +1361,167 @@ jobs:
           done
           exit $fail
 
+      # Issue #1088. A provider allowance this job spends was invisible until
+      # it ran out. This reads what the gateway actually metered on its own
+      # throwaway database, so the spend of a run is a number in the log every
+      # time rather than something reconstructed from a provider console after
+      # a red check.
+      #
+      # It also asserts the alias the suites called, which is the check that
+      # would have caught the original defect: HIVE_TEST_MODEL was set here,
+      # the suites read it, and nothing forwarded it, so the workflow's stated
+      # model and the model actually billed disagreed for a month with every
+      # run green.
+      - name: Report and bound this run's metered provider spend
+        if: always()
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: hive_ci
+          SUITES_OUTCOME: ${{ steps.sdk-suites.outcome }}
+          # Circuit breaker, not coverage: it is meant to sit dormant and to
+          # fire on a runaway loop or a suite that starts generating long
+          # completions, before a provider allowance is drained rather than
+          # after.
+          #
+          # Derived from two measured runs of this job rather than picked: 1348
+          # tokens across 22 completions on hive-default (run 32660770153) and
+          # 1434 across the same 22 on deepseek-v4-flash, which spends more per
+          # completion because it is a reasoning model (run 32661219454). About
+          # four times the larger of the two leaves room for a few new tests and
+          # for reasoning variance while still catching an order-of-magnitude
+          # runaway. Raise it only alongside a measurement, and only after
+          # finding out what grew.
+          RUN_TOKEN_CEILING: '6000'
+        run: |
+          set -uo pipefail
+          q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
+
+          if ! total=$(q "select coalesce(sum(input_tokens + output_tokens), 0)
+                            from public.usage_events where event_type = 'completed'"); then
+            # A job that already failed may have failed before this database
+            # existed, which is not a second defect. A job that PASSED and
+            # cannot be metered is: the ceiling silently did not run, and a
+            # check that quietly stops checking is worse than one that fails.
+            if [ "$SUITES_OUTCOME" = "success" ]; then
+              echo "::error::the SDK suites passed but the usage meter could not be read, so this run's provider spend is unknown and the token ceiling did not run"
+              exit 1
+            fi
+            echo "::warning::usage meter unreadable, and the suites had already failed, so no spend figure for this run"
+            exit 0
+          fi
+
+          echo "metered provider spend for this run, by alias:"
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            select model_alias,
+                   event_type,
+                   count(*)            as events,
+                   sum(input_tokens)   as input_tokens,
+                   sum(output_tokens)  as output_tokens
+              from public.usage_events
+             group by 1, 2
+             order by 1, 2"
+
+          # A non-numeric total means the query answered something this step
+          # cannot compare, and every assertion below would then quietly
+          # evaluate to "fine". Refuse instead.
+          case "$total" in
+            ''|*[!0-9]*)
+              echo "::error::the usage meter returned '${total}', which is not a token count, so nothing below actually checked anything"
+              exit 1
+              ;;
+          esac
+
+          echo "::notice::live-integration metered ${total} tokens on alias '${HIVE_TEST_MODEL}' (ceiling ${RUN_TOKEN_CEILING})"
+
+          if [ "$total" -gt "$RUN_TOKEN_CEILING" ]; then
+            echo "::error::this run metered ${total} tokens, over the ${RUN_TOKEN_CEILING} ceiling. Something is generating far more than the suites should. Find it before raising the ceiling: a provider allowance is shared with the live demo."
+            exit 1
+          fi
+
+          # The alias assertion. Only two aliases can legitimately appear: the
+          # chat/completions/responses suites use HIVE_TEST_MODEL and the
+          # embedding suites use HIVE_EMBEDDING_MODEL. Anything else means the
+          # value this workflow sets is not the value being billed.
+          #
+          # The query's own failure is checked, not just its result: a psql
+          # error returns an EMPTY string here, which reads exactly like "no
+          # unexpected alias" and would turn this into an assertion that cannot
+          # fail.
+          if ! unexpected=$(q "select string_agg(distinct model_alias, ', ')
+                                 from public.usage_events
+                                where event_type = 'completed'
+                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_EMBEDDING_MODEL}')"); then
+            echo "::error::the alias assertion query failed, so this run's billed alias is unverified"
+            exit 1
+          fi
+          if [ -n "$unexpected" ]; then
+            echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}') or HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
+            exit 1
+          fi
+
+          if [ "$SUITES_OUTCOME" = "success" ]; then
+            if ! served=$(q "select count(*) from public.usage_events
+                              where event_type = 'completed'
+                                and model_alias = '${HIVE_TEST_MODEL}'"); then
+              echo "::error::the completion-count query failed, so it is unknown whether this passing run served a single real completion"
+              exit 1
+            fi
+            if [ "$served" = "0" ]; then
+              echo "::error::the suites passed without a single metered completion on '${HIVE_TEST_MODEL}'. This job's whole purpose is a real provider round trip, so a pass with no completion is a pass over nothing."
+              exit 1
+            fi
+            echo "${served} completion(s) served by '${HIVE_TEST_MODEL}'"
+          fi
+
+      # Issue #1088 again, the half that cost a full diagnosis cycle. On
+      # 2026-08-23 this job went red with `Test timed out in 60000ms` as the
+      # only visible fact, because LiteLLM retried a rate-limited deployment
+      # three times at up to 45 seconds each while the suites time out at 60.
+      # The actual 429, naming an exhausted daily token budget, existed only
+      # inside a container-log artifact nobody reads first. A red check that
+      # misreports its own cause is worse than a slow one.
+      - name: Name the real cause when the upstream refused
+        if: failure()
+        working-directory: deploy/docker
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Redacted because this output is public: container logs carry bearer
+          # headers and provider keys verbatim. Same redactor the artifact
+          # upload below uses.
+          docker compose logs --no-color --tail=2000 litellm edge-api 2>&1 \
+            | python3 ../../scripts/redact-log-credentials.py > /tmp/upstream.log || true
+
+          # Grep a FILE, deliberately, never `printf '%s' "$logs" | grep -q`.
+          # grep -q exits at its first match, the writer then takes SIGPIPE, and
+          # under `set -o pipefail` the pipeline reports FAILURE even though it
+          # matched. That is not theoretical: the first draft of this step was
+          # run over the real 2026-08-23 compose-logs artifact, whose log says
+          # "on tokens per day (TPD)" eighteen times, and the daily-budget
+          # branch below silently lost to exactly that.
+          class=""
+          if grep -qiE 'tokens per day|per day \(TPD\)|TPD\b' /tmp/upstream.log; then
+            class="the provider refused on a DAILY token budget (TPD). It resets on the provider's own schedule, so retrying or re-running will not fix it; the allowance is gone until then. If that provider is also the live demo's, the demo is answering nothing right now for the same reason."
+          elif grep -qiE 'rate.?limit|RateLimitError|rate_limit_exceeded|status_code=429|status=429' /tmp/upstream.log; then
+            class="the provider rate limited us (429). Check whether the window is per minute (transient, so a rerun may pass) or per day (an allowance that is spent)."
+          elif grep -qiE 'insufficient.?credit|402 Payment Required' /tmp/upstream.log; then
+            class="the provider account is out of credit (402). No retry fixes this; it needs funding."
+          fi
+
+          if [ -n "$class" ]; then
+            echo "::error::UPSTREAM REFUSAL, not a performance regression: $class"
+            echo "matching lines (redacted, first 5):"
+            grep -iE 'tokens per day|rate.?limit|RateLimitError|rate_limit_exceeded|insufficient.?credit|402 Payment Required' \
+              /tmp/upstream.log | head -5
+            echo "UPSTREAM_FAILURE_CLASS=$class" >> "$GITHUB_ENV"
+          else
+            echo "no upstream refusal signature in the litellm or edge-api logs, so this failure is something else. The compose-logs artifact below is the next place to look."
+          fi
+
       - name: Dump compose logs on failure
         if: failure()
         working-directory: deploy/docker
@@ -1310,11 +1554,20 @@ jobs:
         # open issue with the label below instead of filing one per red run.
         if: failure() && (github.event_name == 'push' || github.event_name == 'schedule')
         uses: actions/github-script@v9
+        env:
+          # Written by the "Name the real cause" step above when it recognises
+          # an upstream refusal. Carried into the issue body so the first thing
+          # a reader sees is the cause, not a link to a run whose test output
+          # says "timed out" (issue #1088).
+          UPSTREAM_FAILURE_CLASS: ${{ env.UPSTREAM_FAILURE_CLASS }}
         with:
           script: |
             const label = 'ci-failure:live-integration';
             const title = 'Live integration (SDK tests + smoke) is failing on main';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const cause = process.env.UPSTREAM_FAILURE_CLASS
+              ? `**Cause identified from the container logs:** ${process.env.UPSTREAM_FAILURE_CLASS}\n\n`
+              : '';
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -1326,7 +1579,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: open[0].number,
-                body: `Still failing: ${runUrl}`,
+                body: `Still failing: ${runUrl}\n\n${cause}`,
               });
             } else {
               await github.rest.issues.create({
@@ -1335,6 +1588,7 @@ jobs:
                 title,
                 labels: [label],
                 body: `Live integration failed on ${context.eventName === 'schedule' ? 'the daily cron' : 'push to main'}.\n\n` +
+                  cause +
                   `First detected: ${runUrl}\n\n` +
                   'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
               });

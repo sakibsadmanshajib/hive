@@ -357,6 +357,56 @@ model_list:
 	assert.Contains(t, content, "gpt-4o")
 }
 
+// Issue #1089's fix is one top-level key in deploy/litellm/config.yaml,
+// router_settings.retry_policy, and control-plane rewrites that file on every
+// catalog sync. If the merge dropped an unrecognised top-level key, the fix
+// would work exactly until the first sync and then silently stop, which is the
+// shape of defect that has cost this project real time (a repository change
+// that looks applied and is inert on the running box). This asserts the merge
+// keeps it, by name and by value, rather than trusting the comment that says it
+// keeps "all other top-level keys".
+func TestWriteAndRestartPreservesRouterSettings(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	existing := `
+router_settings:
+  retry_policy:
+    RateLimitErrorRetries: 0
+litellm_settings:
+  num_retries: 3
+general_settings:
+  master_key: old-key
+model_list:
+  - model_name: old-model
+    litellm_params:
+      model: openrouter/old
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
+
+	cfg := litellmconfig.Config{
+		Models:             twoModels(),
+		GeneralSettings:    litellmconfig.GeneralSettings{MasterKey: "new-key"},
+		ExistingConfigPath: configPath,
+	}
+
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, &mockRestarter{}))
+
+	data, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+
+	var got struct {
+		RouterSettings struct {
+			RetryPolicy map[string]int `yaml:"retry_policy"`
+		} `yaml:"router_settings"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &got))
+
+	retries, ok := got.RouterSettings.RetryPolicy["RateLimitErrorRetries"]
+	require.True(t, ok, "router_settings.retry_policy.RateLimitErrorRetries must survive a catalog sync, or the rate-limit fix for issue #1089 is inert after the first sync")
+	assert.Equal(t, 0, retries, "the preserved value must be the operator's 0, not a re-defaulted one")
+}
+
 func TestWriteAndRestartSkipsRestarterOnGenerateFailure(t *testing.T) {
 	// To trigger a Generate failure we rely on the fact that nil Models slice
 	// with a bad config path combination never happens in normal flow.

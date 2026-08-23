@@ -395,11 +395,48 @@ model_list:
 # before consulting drop_params, so callers must not send that field at all
 # (see apps/edge-api/internal/rag/embed.go and
 # apps/control-plane/internal/rag/ingest.go, which reduce client-side instead).
+# Per-exception-class retry counts, which override num_retries below for the
+# classes named here. Issue #1089.
+#
+# A rate limit gets ZERO retries. The limit that actually fired on 2026-08-23
+# was Groq's tokens-per-DAY budget, and retrying a window that resets tomorrow
+# cannot succeed: it only converts a fast, correct, actionable 429 into a slow
+# wrong one. LiteLLM cannot tell a per-day budget from a per-second burst, so a
+# blanket retry on rate limits is a bet that every rate limit is transient, and
+# the one we hit was not.
+#
+# Measured on the image this stack runs (v1.98.0), against a stub upstream that
+# returns 429 on demand, rather than read off a doc page:
+#
+#   without this block   4 upstream attempts, 11.47s, client sees 429
+#   with this block      1 upstream attempt,   1.79s, client sees 429
+#   with this block, upstream 500 instead
+#                        4 upstream attempts, 13.27s, client sees 500
+#
+# The third line is the one that makes this safe: every other error class still
+# retries num_retries times. And the absorption for a genuine per-minute burst
+# is not lost, it moves one layer out: edge-api retries 429 itself, four
+# attempts inside about 2.9 seconds, and returns the final 429 verbatim
+# (apps/edge-api/internal/inference/retry.go). Fast absorption stays, the slow
+# multi-minute kind goes.
+#
+# One caution found while measuring: LiteLLM classifies partly on message
+# CONTENT, not only on status code. A stub returning HTTP 500 whose body
+# mentioned "limits" was mapped to RateLimitError and therefore not retried. So
+# a provider whose 5xx text talks about limits will now fail fast rather than
+# retry. That is the correct trade for the case this fixes and is written down
+# so the next reader does not rediscover it from a strange log line.
+router_settings:
+  retry_policy:
+    RateLimitErrorRetries: 0
+
 litellm_settings:
   # Sovereign edge: disable all LiteLLM telemetry so no call metadata is
   # sent to LiteLLM's hosted services. Must be set to False (string form)
   # per the LiteLLM docs; the Python bool False is also accepted at runtime.
   telemetry: False
+  # Applies to every error class EXCEPT the ones router_settings.retry_policy
+  # above names.
   num_retries: 3
   request_timeout: 45
   allowed_fails: 3
