@@ -78,7 +78,15 @@ on:
       - 'apps/edge-api/internal/agenttask/**'
       - 'deploy/apptainer/**'
       - 'deploy/docker/Caddyfile.agent-proof'
+      - 'deploy/docker/docker-compose.agent-proof.yml'
       - 'scripts/install-agent-engine-host.sh'
+      # The job stands its own Supabase up with these, so a change to any of
+      # them can break it. Without them here that break would land on main and
+      # only surface on the next unrelated pull request that happens to touch
+      # an agent path, which is the shape of the outage this job just had.
+      - 'scripts/ci-supabase-stack.sh'
+      - 'scripts/ci-throwaway-db.sh'
+      - 'scripts/generate-enterprise-jwt-keys.py'
       - '.github/workflows/agent-visual-proof.yml'
 
 # No concurrency group on purpose. GitHub holds only one run per group as
@@ -115,19 +123,35 @@ jobs:
       contents: write
       actions: read
       pull-requests: write
+      # For the failure notifier at the end of this job, which is the only
+      # thing here that touches an issue.
+      issues: write
     env:
       COMPOSE_PROFILES: local
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      # Without both of these edge-api logs "phase-19 JWT auth wiring
-      # skipped" at boot and then answers 403 to every Supabase-JWT caller,
-      # which the console renders as "the agent workspace is turned off for
-      # your organization": a real page, and proof of nothing. Measured in
-      # run 31819555736, where the token carried the right tenant and
-      # control-plane reported the gate on. Derived from SUPABASE_URL rather
-      # than added as two more secrets, since both are public URLs.
-      SUPABASE_JWT_ISSUER: ${{ secrets.SUPABASE_URL }}/auth/v1
-      SUPABASE_JWKS_URL: ${{ secrets.SUPABASE_URL }}/auth/v1/.well-known/jwks.json
+      # Every compose call in this job has to resolve the SAME project, and
+      # there are nine of them. A step that resolves a different file set
+      # resolves a different project, reads a stack missing services and
+      # reports on it; the teardown step, which also passes --remove-orphans,
+      # would delete what it does not know about. One environment variable is
+      # what keeps them identical, rather than nine hand-copied flag lists.
+      # docker-compose.override.yml is named explicitly because setting
+      # COMPOSE_FILE stops compose auto-loading it, and it is what every
+      # previous run of this job resolved.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml:docker-compose.agent-proof.yml
+      # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, the two
+      # NEXT_PUBLIC_ mirrors, SUPABASE_JWT_ISSUER and SUPABASE_JWKS_URL are
+      # deliberately NOT job-level entries.
+      #
+      # They used to name the hosted Supabase project, and that project is
+      # gone: it was deleted during the move to the self-hosted data plane, so
+      # from 2026-08-19 every run of this job on every branch failed with
+      # control-plane's "database unreachable" after the pooler answered
+      # "tenant or user not found". The job now stands up its own Postgres,
+      # GoTrue and PostgREST and writes all seven values to $GITHUB_ENV, and a
+      # job-level entry TAKES PRECEDENCE over what a step writes there, so
+      # naming one here would silently point the stack, the browser and the
+      # fixture seeder back at a project that no longer exists. Same reasoning,
+      # and the same trap, as ci.yml's web-e2e job.
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -154,8 +178,6 @@ jobs:
       S3_USE_SSL: 'true'
       S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
       S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       # The console's browser fetches must stay same-origin: edge-api serves
       # no CORS headers. Empty means relative, which is what the shipped
       # image is built with; Caddyfile.agent-proof is the same-origin front.
@@ -368,32 +390,143 @@ jobs:
           apptainer exec "$sif" /bin/true
           echo "rootless apptainer exec of the shipped image: ok"
 
-      - name: Reconstruct SUPABASE_DB_URL
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      - name: Stand up this run's own Supabase (Postgres, GoTrue, PostgREST)
+        shell: bash
         run: |
           set -euo pipefail
-          # Session-mode clients are capped at the shared project's pool_size
-          # of 15 and shared with the live demo stack, so a job that booted a
-          # stack on session mode alone could take chat-hive offline.
-          python3 scripts/derive-pooler-dsn.py --self-test
-          # Masked before it is exported. Actions masks the secrets it knows,
-          # but a DSN is a derived value it has never seen, and it carries the
-          # password inside it, so a later step that echoes the variable would
-          # print the credential in clear.
-          dsns=$(python3 scripts/derive-pooler-dsn.py \
-            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
-            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
-            --password "$SUPABASE_DB_PASSWORD")
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the bounded fallback, for the same reason ci.yml's
+          # web-e2e job bounds it: an unbounded apt hung there for a whole job
+          # budget and emitted nothing, and a hang that produces no evidence is
+          # worse than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
+
+          # Same image and tag ci.yml's go-tests and web-e2e jobs already use,
+          # so there is one throwaway-Postgres approach in this repository
+          # rather than a third.
+          docker run -d --name hive-ci-db -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=hive_ci \
+            pgvector/pgvector:pg17
+          for _ in $(seq 1 90); do
+            if docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          if ! docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1; then
+            echo "::error::the throwaway Postgres never became ready"
+            docker logs hive-ci-db | tail -40
+            exit 1
+          fi
+
+          export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+                 PGPASSWORD=postgres PGDATABASE=hive_ci
+
+          # A database alone is not enough, and the coupling is not separable.
+          # The fixture seeder below talks supabase-js (auth.admin.createUser
+          # against /auth/v1, .from(table) against /rest/v1), the harness signs
+          # a browser in through @supabase/ssr, and GoTrue's custom access
+          # token hook (20260516_07) runs INSIDE the database holding the user
+          # rows and raises no_active_membership for a user with no tenant_users
+          # row. Cloud auth over a local database therefore fails every login;
+          # it is all or nothing per job.
+          #
+          # --jwks-tls-ca is what this job needs beyond web-e2e: edge-api
+          # validates browser tokens against a JWKS document and refuses both a
+          # plain http URL and an empty key set, so the stack script signs with
+          # an EC key and fronts the endpoint with real TLS. See the "JWKS over
+          # TLS" section in that script.
+          ca_dir="$RUNNER_TEMP/supabase-ca"
+          scripts/ci-supabase-stack.sh --port 9000 \
+            --jwks-tls-ca "$ca_dir/root.crt" > /tmp/supabase-env
+
+          # set -e covers a non-zero exit and nothing covers a zero exit with
+          # truncated stdout: the loop below succeeds on an empty file and the
+          # job then dies inside the stack boot with an unset SUPABASE_URL,
+          # several steps from the cause.
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                   SUPABASE_URL_FROM_CONTAINER SUPABASE_JWT_ISSUER \
+                   SUPABASE_JWKS_URL SUPABASE_JWKS_HOST SUPABASE_JWKS_HOST_IP; do
+            if ! grep -q "^$v=." /tmp/supabase-env; then
+              echo "::error::the throwaway Supabase stack printed no $v line"
+              exit 1
+            fi
+          done
           while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            echo "::add-mask::${line#*=}"
+            [ -n "$line" ] || continue
+            case "$line" in
+              # Dropped, and rewritten below to the bridge form. The script
+              # prints the localhost form, which is correct for the caller that
+              # runs everything on the runner and wrong for this job. Matching
+              # SUPABASE_URL= exactly, so SUPABASE_URL_FROM_CONTAINER= is left
+              # alone.
+              SUPABASE_URL=*) continue ;;
+              *_KEY=*) echo "::add-mask::${line#*=}" ;;
+            esac
             echo "$line" >> "$GITHUB_ENV"
-          done <<<"$dsns"
+          done < /tmp/supabase-env
+
+          # ONE origin, and it has to be one, reached by three different
+          # things that do not share a network namespace:
+          #
+          #   * the Playwright browser and the seeder, on the runner
+          #   * agent-console's SERVER side, inside a container. middleware.ts
+          #     and lib/supabase/server.ts both build a client from
+          #     NEXT_PUBLIC_SUPABASE_URL and run in the container, where
+          #     localhost is the container itself. This is the difference from
+          #     ci.yml's web-e2e job, where the console is a host process and
+          #     the localhost form is right for every caller.
+          #   * agent-console's BROWSER bundle, which bakes the value at build
+          #     time, so it cannot be a per-caller override anyway.
+          #
+          # The docker bridge gateway address satisfies all three: containers
+          # route to it, and it is an interface on the runner itself, so a host
+          # process reaches the published port through it too. It also has to
+          # be a single value rather than a per-caller one because @supabase/ssr
+          # names its cookie after the project ref in the URL it is given: a
+          # bundle built with one origin cannot read a cookie written for
+          # another, and the browser then lands on sign-in holding a valid
+          # session.
+          container_url=$(sed -n 's/^SUPABASE_URL_FROM_CONTAINER=//p' /tmp/supabase-env)
+          {
+            echo "SUPABASE_URL=$container_url"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$container_url"
+          } >> "$GITHUB_ENV"
+          sed -n 's/^SUPABASE_ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/p' /tmp/supabase-env >> "$GITHUB_ENV"
+
+          # What docker-compose.agent-proof.yml reads to give edge-api the one
+          # certificate it needs and the name to reach the TLS front by.
+          {
+            echo "PROOF_SUPABASE_CA_DIR=$ca_dir"
+            sed -n 's/^SUPABASE_JWKS_HOST=/PROOF_JWKS_HOST=/p'       /tmp/supabase-env
+            sed -n 's/^SUPABASE_JWKS_HOST_IP=/PROOF_JWKS_HOST_IP=/p' /tmp/supabase-env
+          } >> "$GITHUB_ENV"
+
+          # The address a compose container reaches this database on. localhost
+          # inside those containers is the container itself; the docker0
+          # gateway is routable from every bridge network compose creates.
+          gw=$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')
+          dsn="postgres://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
+          echo "SUPABASE_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # There is no pooler here and none is wanted. The transaction-mode
+          # DSN existed to keep this job off the shared project's 15
+          # session-mode client slots, and the job no longer touches that
+          # project at all.
+          echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: Build the stack images
         run: |
@@ -411,7 +544,13 @@ jobs:
       - name: Start the stack with the launcher socket wired in
         working-directory: deploy/docker
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # SUPABASE_URL is NOT set here. It is already the docker bridge form
+          # in $GITHUB_ENV, which is what control-plane needs for its
+          # GET /auth/v1/user call from inside a container, and a second source
+          # of truth for one value is how the two drift.
+          # SUPABASE_SERVICE_ROLE_KEY is NOT repeated here. It comes from
+          # $GITHUB_ENV, written by the throwaway stack step, and a step-level
+          # entry would override that with the deleted hosted project's key.
           # THE variable that matters: with it set, buildAgentEngine forwards
           # every launch to the host daemon and reads none of the path
           # variables. The directory is bind-mounted into control-plane; the
@@ -503,7 +642,9 @@ jobs:
       - name: Seed this run's fixture tenant
         working-directory: apps/web-console
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # SUPABASE_SERVICE_ROLE_KEY is NOT repeated here. It comes from
+          # $GITHUB_ENV, written by the throwaway stack step, and a step-level
+          # entry would override that with the deleted hosted project's key.
           E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
@@ -570,7 +711,9 @@ jobs:
       - name: Capture the proof
         id: capture
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # SUPABASE_SERVICE_ROLE_KEY is NOT repeated here. It comes from
+          # $GITHUB_ENV, written by the throwaway stack step, and a step-level
+          # entry would override that with the deleted hosted project's key.
           PROOF_BASE_URL: ${{ env.PROOF_ORIGIN }}
           PROOF_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           PROOF_RUNTIME_DIR: ${{ env.RUNTIME_DIR }}
@@ -705,6 +848,62 @@ jobs:
             /tmp/compose.log
           if-no-files-found: ignore
           retention-days: 5
+
+      - name: Announce a red run on the tracking issue
+        # WHY THIS EXISTS, and why this job is still not a required check.
+        #
+        # This job failed on every branch for four days and nothing said so,
+        # which is how the deleted Supabase project went unnoticed while
+        # orchestrator rule 8 still depended on the proof it produces. The
+        # property actually needed is that a red run ANNOUNCES itself, not
+        # that it gates: this is a path-gated job that boots a real sandbox,
+        # so making it required would block unrelated pull requests and turn
+        # a flaky sandbox into a merge stopper. Announcing is the cheap half
+        # of the value; gating is the expensive half nobody asked for.
+        #
+        # Excluded on a sabotage dispatch on purpose. That arm is the job's
+        # own negative control and is SUPPOSED to go red, so paging on it
+        # would train everyone to ignore this issue, which is the same
+        # failure as the silence it replaces.
+        if: failure() && github.event.inputs.sabotage != 'true'
+        # Never let the notifier change the job's verdict. `if: failure()`
+        # already means it cannot turn a green run red, and this plus the
+        # `|| true` below mean a GitHub API hiccup cannot turn a red run into
+        # a differently-red run that hides the real failing step.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: agent visual proof is failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          body=$(printf '%s\n' \
+            "Run [\`${GITHUB_RUN_ID}\`](${RUN_URL}) failed on \`${GITHUB_REF_NAME}\` at commit \`${GITHUB_SHA}\`." \
+            "" \
+            "This job is deliberately not a required check, so nothing else will" \
+            "surface this. Read the run log and the uploaded failure artifacts" \
+            "before assuming it is the branch under test: when this job breaks" \
+            "repo-wide it is usually its own environment, not the change." \
+            "" \
+            "Close this by hand once a green run confirms the fix. It is not" \
+            "closed automatically, because a green run on one branch does not" \
+            "prove the job is healthy on main.")
+          # ONE issue, reused, or a bad week produces fifty and the signal
+          # drowns exactly the way the silence did.
+          #
+          # The list API rather than the search API on purpose: search is
+          # eventually consistent, and two failures minutes apart could both
+          # miss the issue the other just opened and file a duplicate.
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
+                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          if [ -n "${num:-}" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$body" || true
+            echo "commented on existing tracking issue #$num"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+            echo "opened the tracking issue"
+          fi
 
       - name: Tear down
         if: always()

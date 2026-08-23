@@ -1,0 +1,37 @@
+PR #951 live capture: the agent surface rendered natively inside chat
+====================================================================
+
+Local full stack: self-hosted GoTrue v2.189.0, PostgREST, storage,
+Caddy gateway, control-plane, edge-api, litellm, web-console and Open
+WebUI, all built from main merged with #952, #956 and this branch.
+Signed in through a real OAuth authorization-code round trip; no
+session injected and no backend stubbed.
+
+1. Signed in. origin: http://localhost:3003
+   chat landing, signed in:
+     password inputs                : 0
+     iframe elements                : 0
+     child browsing contexts        : 0
+     "sign in"/"log in" text nodes  : 0
+     anchors to /agent-workspace    : 0
+  [shot] 01-chat-signed-in-agents-in-sidebar.png  signed-in chat with Agents in the sidebar
+         url: http://localhost:3003/
+
+2. Click 'Agents' in the chat sidebar. No URL typed.
+   landed on: http://localhost:3003/agents
+   agent surface:
+     password inputs                : 0
+     iframe elements                : 0
+     child browsing contexts        : 0
+     "sign in"/"log in" text nodes  : 0
+     anchors to /agent-workspace    : 0
+   GET /api/v1/agent/tasks -> 200
+  [shot] 02-agent-surface-native-no-credential-prompt.png  the agent surface, reached from inside chat, rendered natively
+         url: http://localhost:3003/agents
+
+3. Verdict on the three parts of the claim, from the numbers above.
+   reached from inside chat  : /agents
+   rendered natively         : 0 iframes, 0 child contexts
+   no second credential      : 0 password inputs
+
+   Chat landing for comparison: 0 iframes, 0 password inputs.

@@ -12,6 +12,16 @@
 // OWUI would carry the shim key in Authorization, route through the
 // API-key path, and bind to the shim's principal — defeating per-user
 // audit attribution, RLS, and tenant scoping.
+//
+// The same middleware accepts that token on the UpstreamAuthHeader request
+// header, because a JSON body is not a carrier every request has. Three of
+// the four agent-task calls the chat container proxies are bodyless (GET
+// /v1/agent/tasks, GET /v1/agent/tasks/{id}, and the bodyless POST
+// .../cancel — see apps/edge-api/internal/agenttask/handler.go), so
+// `__metadata.upstream_auth` cannot reach them at all. The header is a
+// second carrier on the same trust boundary, not a second boundary: it is
+// honoured only when Authorization is exactly the shim key, which is the
+// identical gate the body carrier already sits behind.
 package auth
 
 import (
@@ -55,6 +65,13 @@ const maxOWUIUnwrapBody = 2 << 20 // 2 MiB
 // anyway but failing early here keeps the JWT path cheap.
 const maxOWUIBearerToken = 8 << 10 // 8 KiB
 
+// UpstreamAuthHeader carries the signed-in user's token on requests that
+// have no JSON body to hide it in. It is meaningful to this middleware and
+// to nothing else, so it is removed from every request that passes through
+// here — honoured, ignored, or rejected — before any handler, log or audit
+// sink can read it. Exported for the tests that assert exactly that.
+const UpstreamAuthHeader = "X-Hive-Upstream-Auth"
+
 // OWUIUnwrapConfig configures the OWUI body-metadata Authorization
 // rewrite. ShimKey is the static OPENAI_API_KEY value Open WebUI sends
 // on every upstream call; when this exact token arrives, the body is
@@ -77,6 +94,12 @@ type OWUIUnwrapConfig struct {
 //
 // Behaviour matrix:
 //
+//   - UpstreamAuthHeader present                               → always removed
+//     from the forwarded request, on every branch below. Honoured
+//     as the per-user token only under the shim key, in which case
+//     it wins over the body carrier: it is read before the body so
+//     that a bodyless request, the case it exists for, is not
+//     rejected before the header is ever consulted.
 //   - Authorization != shim key                                → pass through unchanged.
 //   - ShimKey == "" (disabled)                                 → pass through unchanged.
 //   - Content-Type not application/json (multipart, audio,
@@ -106,22 +129,69 @@ type OWUIUnwrapConfig struct {
 func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 	shimKey := strings.TrimSpace(cfg.ShimKey)
 	return func(next http.Handler) http.Handler {
-		if shimKey == "" {
-			return next
-		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !hasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
+			// Take the carrier off the request before anything else runs,
+			// including when the middleware is disabled and when the
+			// credential is not the shim key. It is ours alone, so a handler
+			// that can read it is a handler that could later be taught to
+			// trust it, and a header a client controls must never become a
+			// principal by that route.
+			// Presence is tested on the header map rather than on the trimmed
+			// value, so a whitespace-only or repeated header is removed too.
+			// Header.Del drops every value under the key, which is what makes
+			// "stripped on every branch" true rather than nearly true.
+			//
+			// The removal is in place, on the inbound request, and not on a
+			// clone. A clone would only protect code reachable through `next`,
+			// and this header has to disappear for everyone: an outer
+			// middleware still holding the original pointer would otherwise
+			// keep seeing a live per-user token, and no branch that answers
+			// without calling `next` at all, which is every rejection path
+			// below, would strip anything observable. In place makes the
+			// invariant one fact rather than one fact per branch, and lets a
+			// test assert it on the rejection paths too. Mutating the inbound
+			// header map is safe here because net/http never re-reads request
+			// headers after the handler returns, and this header is ours: no
+			// caller upstream of edge-api has any reason to send it, and none
+			// is permitted to.
+			_, carrierPresent := r.Header[http.CanonicalHeaderKey(UpstreamAuthHeader)]
+			carrier := strings.TrimSpace(r.Header.Get(UpstreamAuthHeader))
+			if carrierPresent {
+				r.Header.Del(UpstreamAuthHeader)
+			}
+			if shimKey == "" || !hasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// This check has to come before the pass-through below, not
-			// after it. A per-user path can only receive its user token in a
-			// JSON __metadata block, so a shim-key request there with a
-			// missing or non-JSON Content-Type can never be legitimate.
-			// Passing it through first would let any caller skip the
-			// rejection further down simply by omitting Content-Type.
+			// Fail closed on a carrier that is present but unusable. The only
+			// thing that sets this header is our own forwarder, so a value it
+			// cannot mean is a broken forwarder, and forwarding with the shim
+			// key still on Authorization would bill and audit the call against
+			// the shim's principal.
+			headerToken := ""
+			if carrierPresent {
+				if len(carrier) <= maxOWUIBearerToken {
+					headerToken = normalizeUpstreamAuth(carrier)
+				}
+				if headerToken == "" {
+					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
+					return
+				}
+			}
+			// The rejection has to come before the pass-through, not after it.
+			// With no carrier on the header, a per-user path can only receive
+			// its user token in a JSON __metadata block, so a shim-key request
+			// there with a missing or non-JSON Content-Type can never be
+			// legitimate. Passing it through first would let any caller skip
+			// the rejection simply by omitting Content-Type.
 			jsonBody := r.Body != nil && isJSONContent(r.Header.Get("Content-Type"))
 			if !jsonBody {
+				// The bodyless case the header carrier exists for. Nothing to
+				// read, nothing to strip, so forward immediately.
+				if headerToken != "" {
+					forwardUnwrapped(w, r, next, headerToken, nil)
+					return
+				}
 				if requiresPerUserAuth(r.URL.Path) {
 					warnMissingUpstreamAuth(r, 0, true)
 					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", missingUserTokenMessage)
@@ -149,7 +219,22 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				writeAuthError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "request body too large")
 				return
 			}
-			rewritten, token, status := unwrapOWUIBody(raw)
+			// The body is parsed even when the header already supplied the
+			// token, because __metadata must be stripped either way. Forwarding
+			// it would leak proxy-layer fields to downstream handlers, to the
+			// audit chain and on to a provider, which is the reason the strip
+			// is unconditional in unwrapOWUIBody.
+			rewritten, bodyToken, status := unwrapOWUIBody(raw)
+			token := bodyToken
+			if headerToken != "" {
+				// The header wins. It is the carrier our own forwarder sets on
+				// the request line, and a body that also carries one is either
+				// a second forwarder or a caller trying its luck; neither
+				// should be able to displace the credential already accepted.
+				token = headerToken
+				forwardUnwrapped(w, r, next, token, rewritten)
+				return
+			}
 			switch status {
 			case unwrapTokenTooLong:
 				writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
@@ -175,21 +260,43 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				// Authorization, which is the intended credential for
 				// this path (see requiresPerUserAuth).
 			}
-			// Forward a clone rather than mutating the inbound request
-			// in place — keeps this middleware side-effect free for any
-			// handler or middleware that retains a reference to the
-			// original *http.Request. r.Clone deep-copies the header map.
-			r2 := r.Clone(r.Context())
-			r2.Body = io.NopCloser(bytes.NewReader(rewritten))
-			r2.ContentLength = int64(len(rewritten))
-			r2.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
-			if token != "" {
-				r2.Header.Set("Authorization", "Bearer "+token)
-				r2 = r2.WithContext(context.WithValue(r2.Context(), owuiUnwrappedKey{}, true))
-			}
-			next.ServeHTTP(w, r2)
+			forwardUnwrapped(w, r, next, token, rewritten)
 		})
 	}
+}
+
+// forwardUnwrapped hands the request on with the per-user token on
+// Authorization and the context marked unwrapped, which is what lets
+// JWTMiddleware apply its tenant fallback (#269). An empty token forwards
+// unchanged credentials, which is the pass-through case on a path where the
+// shim key is itself the intended credential.
+//
+// A nil body leaves the request's own body alone, for the bodyless carrier
+// case where there is nothing to rewrite; a non-nil body replaces it with the
+// version that has __metadata stripped.
+//
+// Forwarding a clone rather than mutating the inbound request in place keeps
+// this middleware side-effect free for any handler or middleware that retains
+// a reference to the original *http.Request. r.Clone deep-copies the header
+// map.
+func forwardUnwrapped(
+	w http.ResponseWriter,
+	r *http.Request,
+	next http.Handler,
+	token string,
+	body []byte,
+) {
+	r2 := r.Clone(r.Context())
+	if body != nil {
+		r2.Body = io.NopCloser(bytes.NewReader(body))
+		r2.ContentLength = int64(len(body))
+		r2.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
+	if token != "" {
+		r2.Header.Set("Authorization", "Bearer "+token)
+		r2 = r2.WithContext(context.WithValue(r2.Context(), owuiUnwrappedKey{}, true))
+	}
+	next.ServeHTTP(w, r2)
 }
 
 // missingUserTokenMessage is the customer-facing reason for a shim-key
@@ -235,18 +342,49 @@ func hasShimAuthorization(header, shimKey string) bool {
 // carry a per-user token, i.e. whether a missing `__metadata.upstream_auth`
 // is a failure rather than the expected shape.
 //
-// Chat completions are the only path the `hive_jwt_forward` Function
-// decorates, and the only path where running under the shim principal
-// silently mis-attributes billing and audit. Open WebUI's other upstream
-// calls (document-RAG embeddings via RAG_OPENAI_API_KEY, and text-to-speech)
-// are never decorated and authenticate as the shim account by design, so
-// they must keep passing through.
+// Two families qualify, for the same reason. Chat completions are the path
+// the `hive_jwt_forward` Function decorates. The agent-task lifecycle is the
+// path the chat container's own agent proxy decorates
+// (deploy/docker/owui-patches/hive_agent_proxy.py). On both, running under
+// the shim principal silently mis-attributes billing and audit, and on the
+// agent path it would additionally list and cancel the shim account's tasks
+// rather than the signed-in user's. Open WebUI's other upstream calls
+// (document-RAG embeddings via RAG_OPENAI_API_KEY, and text-to-speech) are
+// never decorated and authenticate as the shim account by design, so they
+// must keep passing through.
 //
-// ponytail: exact-path list rather than a prefix rule, because /v1/chat is
-// the only prefix at stake today. If a second per-user OWUI path appears
-// (for example a future OWUI RAG chat route), add it here.
+// The agent arm is a prefix rather than an exact list because the subtree
+// carries a task id: /v1/agent/tasks/{id} and /v1/agent/tasks/{id}/cancel.
 func requiresPerUserAuth(path string) bool {
-	return path == "/v1/chat/completions"
+	return path == "/v1/chat/completions" ||
+		path == "/v1/agent/tasks" ||
+		strings.HasPrefix(path, "/v1/agent/tasks/")
+}
+
+// normalizeUpstreamAuth reduces a carried credential to a bare token,
+// tolerating both "Bearer <token>" (what the forwarders write today) and a
+// bare token (so a future revision that drops the scheme word is not a
+// silent auth failure). Returns "" for anything with no token in it, which
+// every caller treats as fail-closed.
+//
+// Shared by the header carrier and the body carrier so the two cannot drift
+// into accepting different shapes of the same credential.
+func normalizeUpstreamAuth(value string) string {
+	value = strings.TrimSpace(value)
+	scheme, rest, hasSpace := strings.Cut(value, " ")
+	if hasSpace && strings.EqualFold(scheme, "Bearer") {
+		return strings.TrimSpace(rest)
+	}
+	// A scheme word and nothing else is not a bare token. Without this, a
+	// carrier of "Bearer " arrives here as "Bearer" after the trim above, takes
+	// the bare-token arm, and is promoted to the credential "Bearer Bearer" --
+	// a nonsense token that then fails JWKS validation and reports itself as
+	// the user's session being invalid. Refusing it here names the real cause
+	// at the boundary that produced it.
+	if strings.EqualFold(value, "Bearer") {
+		return ""
+	}
+	return value
 }
 
 // isJSONContent reports whether the Content-Type media type is
@@ -325,11 +463,13 @@ func unwrapOWUIBody(raw []byte) (rewritten []byte, token string, status unwrapSt
 	if len(authStr) > maxOWUIBearerToken {
 		return out, "", unwrapTokenTooLong
 	}
-	scheme, tokenPart, hasSpace := strings.Cut(authStr, " ")
-	if hasSpace && strings.EqualFold(scheme, "Bearer") {
-		return out, strings.TrimSpace(tokenPart), unwrapOK
+	token = normalizeUpstreamAuth(authStr)
+	if token == "" {
+		// A present-but-empty upstream_auth is a pipeline that stopped
+		// forwarding, not a request that meant to run as the shim. Reported
+		// as a missing carrier so it takes the fail-closed arm and the warn
+		// log, rather than forwarding with the shim key on Authorization.
+		return out, "", unwrapNoMetadata
 	}
-	// Tolerate raw token (no scheme word). The pipeline writes
-	// "Bearer <jwt>" today but a future revision may drop the prefix.
-	return out, authStr, unwrapOK
+	return out, token, unwrapOK
 }

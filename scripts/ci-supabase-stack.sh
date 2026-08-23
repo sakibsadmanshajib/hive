@@ -63,12 +63,21 @@ db_user="${PGUSER:-postgres}"
 db_password=${PGPASSWORD:-postgres}
 network="hive-ci-supabase"
 gateway_port="9000"
+# Opt-in, and off by default so the callers that only need a browser login are
+# byte-for-byte unaffected. See the "JWKS over TLS" section further down for
+# why a second front exists and why the signing key changes shape with it.
+jwks_tls_ca=""
+jwks_tls_host="supabase-tls"
+jwks_tls_port="9443"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --db-container) db_container="$2"; shift 2 ;;
     --db-name) db_name="$2"; shift 2 ;;
     --port) gateway_port="$2"; shift 2 ;;
+    --jwks-tls-ca) jwks_tls_ca="$2"; shift 2 ;;
+    --jwks-tls-host) jwks_tls_host="$2"; shift 2 ;;
+    --jwks-tls-port) jwks_tls_port="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -109,6 +118,64 @@ anon_key="$(mint_key anon)"
 service_role_key="$(mint_key service_role)"
 
 # ---------------------------------------------------------------------------
+# JWKS over TLS. Opt-in, requested with --jwks-tls-ca.
+#
+# Why a caller would want it: edge-api does not take a shared secret. It
+# validates every browser token with jwt.WithKeySet against SUPABASE_JWKS_URL
+# and refuses to boot when the first refresh yields no usable key
+# (apps/edge-api/internal/auth/jwt_supabase.go). Two separate properties of the
+# default stack above defeat that, and fixing either one alone changes nothing:
+#
+#   * HS256 alone publishes NOTHING. GoTrue's internal/api/jwks.go skips every
+#     key whose public half is nil or of type jwa.OctetSeq, so with only
+#     GOTRUE_JWT_SECRET the endpoint answers {"keys":[]}. Measured against the
+#     pin above rather than inferred. The fix is upstream-supported and
+#     config-only: hand GoTrue an EC P-256 key through GOTRUE_JWT_KEYS and it
+#     signs user tokens ES256 and publishes the public half, while still
+#     accepting the legacy HS256 anon and service_role keys through the
+#     GOTRUE_JWT_SECRET fallback. Both halves come from
+#     scripts/generate-enterprise-jwt-keys.py, which the enterprise profile
+#     already uses for exactly this.
+#   * edge-api refuses a plain http JWKS URL, deliberately, because anything on
+#     the path to one can swap the key set and mint tokens it would then accept
+#     (loadJWTAuthEnv in apps/edge-api/cmd/server/main.go, guarded by
+#     jwt_env_test.go). That guard is NOT relaxed here. Caddy terminates real
+#     TLS with its own local authority and the caller is handed that authority
+#     to trust, so the chain and the hostname are still verified. It is the
+#     same arrangement docker-compose.enterprise.yml runs on the demo box.
+#
+# PostgREST moves to the verification key set at the same time, because the
+# user tokens it now sees are ES256 while the anon and service_role keys stay
+# HS256, and it has to accept both.
+# ---------------------------------------------------------------------------
+gotrue_key_args=()
+pgrst_jwt="${jwt_secret}"
+if [ -n "$jwks_tls_ca" ]; then
+  log "==> asymmetric signing key, so the JWKS endpoint is not empty"
+  keys_out="$(ENTERPRISE_JWT_SECRET="$jwt_secret" \
+    python3 "$repo_root/scripts/generate-enterprise-jwt-keys.py")"
+  jwt_keys="$(printf '%s\n' "$keys_out" | sed -n 's/^ENTERPRISE_JWT_KEYS=//p')"
+  jwt_verify_keys="$(printf '%s\n' "$keys_out" | sed -n 's/^ENTERPRISE_JWT_VERIFY_KEYS=//p')"
+  # Both, not either. A truncated generator run would otherwise leave GoTrue
+  # signing HS256 again, and that surfaces as edge-api refusing to boot, three
+  # components away from the cause.
+  if [ -z "$jwt_keys" ] || [ -z "$jwt_verify_keys" ]; then
+    log "::error::generate-enterprise-jwt-keys.py printed no ENTERPRISE_JWT_KEYS / ENTERPRISE_JWT_VERIFY_KEYS pair"
+    exit 1
+  fi
+  jwks_issuer="https://${jwks_tls_host}:${jwks_tls_port}/auth/v1"
+  gotrue_key_args=(
+    -e "GOTRUE_JWT_KEYS=${jwt_keys}"
+    # Set explicitly, and emitted verbatim below as SUPABASE_JWT_ISSUER. The
+    # issuer is a string comparison against the token claim and is never
+    # fetched, so the only way it goes wrong is by drifting from what GoTrue
+    # stamps. One variable feeding both is what stops that.
+    -e "GOTRUE_JWT_ISSUER=${jwks_issuer}"
+  )
+  pgrst_jwt="${jwt_verify_keys}"
+fi
+
+# ---------------------------------------------------------------------------
 # Network. The database container is already running and published on the host;
 # it is attached to a user-defined network here so GoTrue and PostgREST can
 # resolve it by name.
@@ -147,6 +214,7 @@ docker run -d --name supabase-auth --network "$network" \
   -e "GOTRUE_SITE_URL=http://localhost:3000" \
   -e "GOTRUE_URI_ALLOW_LIST=http://localhost:3000/**,http://127.0.0.1:3000/**" \
   -e "GOTRUE_JWT_SECRET=${jwt_secret}" \
+  ${gotrue_key_args[@]+"${gotrue_key_args[@]}"} \
   -e GOTRUE_JWT_AUD=authenticated \
   -e GOTRUE_JWT_ADMIN_ROLES=service_role \
   -e GOTRUE_JWT_EXP=3600 \
@@ -199,7 +267,7 @@ docker run -d --name supabase-rest --network "$network" \
   -e "PGRST_DB_URI=${db_url}" \
   -e "PGRST_DB_SCHEMAS=public,storage,graphql_public" \
   -e PGRST_DB_ANON_ROLE=anon \
-  -e "PGRST_JWT_SECRET=${jwt_secret}" \
+  -e "PGRST_JWT_SECRET=${pgrst_jwt}" \
   -e PGRST_DB_USE_LEGACY_GUCS=false \
   postgrest/postgrest:v12.2.3 >/dev/null
 
@@ -411,6 +479,76 @@ if [ "$preflight_failures" -ne 0 ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# The TLS front, when --jwks-tls-ca asked for one.
+#
+# It proxies the nginx gateway rather than replacing it, so the CORS handling
+# and prefix routing asserted above stay the one implementation. All this adds
+# is a verified-TLS listener for the single consumer that requires one.
+#
+# The listener carries a HOSTNAME, not the bridge IP, because the certificate
+# has to match what the consumer asks for and a name survives a runner whose
+# docker0 address differs. The consumer maps that name onto the published port
+# itself: for a compose service that is an extra_hosts entry pointing at the
+# bridge gateway address emitted below.
+# ---------------------------------------------------------------------------
+if [ -n "$jwks_tls_ca" ]; then
+  log "==> TLS front for the JWKS endpoint"
+  read -r -d '' tls_conf <<CADDY || true
+{
+	auto_https disable_redirects
+}
+https://${jwks_tls_host}:${jwks_tls_port} {
+	tls internal
+	reverse_proxy supabase-gw:80
+}
+CADDY
+  docker rm -f supabase-tls >/dev/null 2>&1 || true
+  # Same pinned Caddy digest deploy/docker/docker-compose.enterprise.yml runs,
+  # so this pulls nothing a stack boot has not already pulled.
+  docker run -d --name supabase-tls --network "$network" \
+    --network-alias "$jwks_tls_host" \
+    -p "${jwks_tls_port}:${jwks_tls_port}" \
+    -e "TLS_CONF=$tls_conf" \
+    --entrypoint /bin/sh \
+    caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794 \
+    -c 'printf "%s\n" "$TLS_CONF" > /etc/caddy/Caddyfile && exec caddy run --config /etc/caddy/Caddyfile' >/dev/null
+
+  ca_src="/data/caddy/pki/authorities/local/root.crt"
+  for _ in $(seq 1 60); do
+    if docker exec supabase-tls test -s "$ca_src" 2>/dev/null; then break; fi
+    sleep 2
+  done
+  if ! docker exec supabase-tls test -s "$ca_src" 2>/dev/null; then
+    log "::error::the TLS front never wrote its local authority certificate"
+    docker logs supabase-tls 2>&1 | tail -30 >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$jwks_tls_ca")"
+  docker cp "supabase-tls:${ca_src}" "$jwks_tls_ca" >/dev/null
+  # Caddy writes root.crt 0600 root. The published edge-api image runs as uid
+  # 10001, so an unreadable file means SUPABASE_JWKS_CA_FILE fails with
+  # permission denied and the process exits at boot. Same reason
+  # docker-compose.enterprise.yml exports the certificate through a one-shot
+  # service instead of mounting Caddy's data directory.
+  chmod 0644 "$jwks_tls_ca"
+
+  # The whole point of the two changes above, asserted end to end rather than
+  # assumed: real TLS, verified against that authority, returning a key set
+  # with at least one key in it. An empty "keys" array is the exact shape
+  # HS256-only GoTrue returns, and it is what makes edge-api refuse to boot, so
+  # it fails here by name instead of there by symptom.
+  jwks_body="$(curl -sS --cacert "$jwks_tls_ca" \
+    --resolve "${jwks_tls_host}:${jwks_tls_port}:127.0.0.1" \
+    "https://${jwks_tls_host}:${jwks_tls_port}/auth/v1/.well-known/jwks.json" || true)"
+  if ! printf '%s' "$jwks_body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("keys") else 1)' 2>/dev/null; then
+    log "::error::the JWKS endpoint served no usable key over TLS. edge-api validates every browser token against this document and refuses to boot on an empty key set."
+    docker logs supabase-tls 2>&1 | tail -20 >&2
+    exit 1
+  fi
+  log "JWKS is served over verified TLS and carries at least one key"
+fi
+
 # The gateway address a container on another docker network reaches. Not
 # localhost: inside those containers that is the container itself.
 gw_ip="$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')"
@@ -419,3 +557,13 @@ echo "SUPABASE_URL=${base}"
 echo "SUPABASE_ANON_KEY=${anon_key}"
 echo "SUPABASE_SERVICE_ROLE_KEY=${service_role_key}"
 echo "SUPABASE_URL_FROM_CONTAINER=http://${gw_ip}:${gateway_port}"
+if [ -n "$jwks_tls_ca" ]; then
+  # The issuer GoTrue was told to stamp, the https document edge-api fetches,
+  # the authority that makes it verifiable, and the address the hostname has to
+  # resolve to from inside a container. A consumer needs all four or none.
+  echo "SUPABASE_JWT_ISSUER=${jwks_issuer}"
+  echo "SUPABASE_JWKS_URL=https://${jwks_tls_host}:${jwks_tls_port}/auth/v1/.well-known/jwks.json"
+  echo "SUPABASE_JWKS_CA_PATH=${jwks_tls_ca}"
+  echo "SUPABASE_JWKS_HOST=${jwks_tls_host}"
+  echo "SUPABASE_JWKS_HOST_IP=${gw_ip}"
+fi

@@ -883,6 +883,46 @@ services:
       DEFAULT_USER_ROLE: "pending"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
+      # #947: both flags below default to true upstream (config.py:2005 and
+      # config.py:2013) and we never set them, so every Open WebUI
+      # administrator -- which is every sole tenant OWNER, per the
+      # tenant-role patch below -- could list every other tenant's Knowledge
+      # collections (routers/knowledge.py:143, :202) and read any user's chats
+      # (routers/chats.py:611, :1056). Confirmed live: a demo account's
+      # Knowledge collection was visible from an unrelated personal account.
+      # Both are plain os.getenv reads at import time, not PersistentConfig,
+      # and neither name appears in hive_rag_env_config.py's reconciler, so
+      # setting them here takes effect on the next container start and the
+      # database cannot quietly put them back.
+      #
+      # What this closes, stated precisely, because the two are not the same
+      # thing. Chats are closed: every route that can read another user's
+      # chat is gated on ENABLE_ADMIN_CHAT_ACCESS (chats.py:611, :1056,
+      # :1063, :1174, :1592), and the bulk route at :890 was already behind
+      # ENABLE_ADMIN_EXPORT above. Knowledge is closed for DISCOVERY only:
+      # the listing routes honour BYPASS_ADMIN_ACCESS_CONTROL, so an admin no
+      # longer sees another tenant's collections, but three by-id routes
+      # short-circuit on `user.role == 'admin'` without consulting either
+      # flag -- knowledge.py:1039 (GET /{id}), :1289 (GET /{id}/files, which
+      # takes include_content) and :2096 (GET /{id}/export, which checks not
+      # even ENABLE_ADMIN_EXPORT). The export route is blocked at the proxy
+      # instead, in Caddyfile.owui, since a backend edit here would be inert:
+      # Dockerfile.open-webui builds only the frontend from vendor/. The
+      # other two need a real ownership check through owui-patches and are
+      # tracked separately; they are reachable only by someone who already
+      # knows a collection id.
+      #
+      # Scope: this does not change who holds the admin role (#748) or the
+      # proxy write-verb gap (#949).
+      #
+      # BYPASS_ADMIN_ACCESS_CONTROL has an undocumented second name: unset,
+      # it falls back to ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS (also default
+      # true, config.py:2003). Irrelevant here because this line sets
+      # BYPASS_ADMIN_ACCESS_CONTROL directly and os.getenv's own default
+      # never triggers, but named so a future edit auditing this block does
+      # not have to rediscover the alias by reading the vendored source.
+      BYPASS_ADMIN_ACCESS_CONTROL: "false"
+      ENABLE_ADMIN_CHAT_ACCESS: "false"
       # #772: stock Open WebUI surfaces with no Hive counterpart. These three
       # are the ones upstream actually gates on a feature flag rather than on a
       # permission, and the flag is checked before the role, so turning them
