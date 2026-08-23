@@ -81,13 +81,34 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     # x86-64 only, so Playwright's own bundled Chromium download works
     # normally: no distro-Chromium workaround needed (that was only ever
     # required for arm64, which this box does not target).
+    #
+    # PLAYWRIGHT_BROWSERS_PATH pins the browser install to /opt/ms-playwright
+    # instead of the default $HOME/.cache/ms-playwright. The sandbox launches
+    # with --containall (apps/agent-engine/internal/sandbox), which replaces
+    # HOME with a per-session temp dir, so a browser cached under the image's
+    # root home is unreachable at runtime. /opt is part of the image and
+    # survives containment.
+    export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
     python3 -m playwright install --with-deps chromium
+
+    # openhands-tools' browser tool resolves the binary itself
+    # (vendor/openhands/openhands-tools/openhands/tools/browser_use/impl.py,
+    # check_chromium_available) and that scan checks standard install paths
+    # and PATH but not PLAYWRIGHT_BROWSERS_PATH, so expose the downloaded
+    # Chromium at a location that scan already covers. set -eu makes an empty
+    # find result fail the build loud instead of shipping a dangling link.
+    ln -sfn \
+        "$(find /opt/ms-playwright -type f -name chrome -path '*chrome-linux*' | head -n1)" \
+        /usr/bin/chromium
 
     mkdir -p /workspace
     chmod 0777 /workspace
 
 %environment
     export RUNTIME=process
+    # Same path the %post install above pinned; keeps any Playwright-API
+    # consumer (and future tool code) pointed at the HOME-independent cache.
+    export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 %runscript
     # The sandbox launches with --net --network none
