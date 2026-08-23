@@ -341,7 +341,18 @@ def check_ledger(auth: dict, negative: bool) -> None:
                        auth, {"nickname": nickname}, timeout=60)
     if status != 201:
         raise CheckFailed(f"minting an API key answered {status}, expected 201: {snippet(raw)}")
-    created = json.loads(raw)
+    try:
+        created = json.loads(raw)
+    except json.JSONDecodeError:
+        # A traceback here would report a crash in the verifier where the truth
+        # is a malformed response from the thing being verified, and it would
+        # skip the summary that names which check failed.
+        raise CheckFailed(
+            "minting an API key answered 201 with a body that is not JSON, so the key id "
+            "cannot be read and the key cannot be revoked"
+        ) from None
+    if not isinstance(created, dict):
+        raise CheckFailed("the API key create response is JSON but not an object")
     key_id, secret = created.get("id", ""), created.get("secret", "")
     if not key_id or not secret:
         raise CheckFailed("the API key create response carried no id or no secret")
