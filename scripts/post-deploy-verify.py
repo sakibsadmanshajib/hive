@@ -61,8 +61,13 @@ Required env for the `signin` and `ledger` checks only:
 
 Optional env:
     HIVE_VERIFY_MODEL          default hive-default
-    HIVE_VERIFY_LEDGER_TIMEOUT default 90 (seconds to wait for the charge)
+    HIVE_VERIFY_LEDGER_TIMEOUT default 90 (seconds to step-poll for the charge)
     HIVE_VERIFY_LEDGER_PAGES   default 20 (page cap on the ledger scan)
+    HIVE_VERIFY_COMPLETION_ATTEMPTS  default 3 (upstream 429/5xx retries on the
+                                     billed completion; the check exists to
+                                     catch a served-but-unbilled request, not
+                                     an upstream that refused to serve)
+    HIVE_VERIFY_RETRY_DELAY    default 20 (seconds between those attempts)
     HIVE_VERIFY_RUN_LABEL      free-text tag for the minted key's nickname
 
 Check 3 is a REAL SPEND on a real identity. HIVE_VERIFY_EMAIL has no default
@@ -110,6 +115,8 @@ MODEL = os.environ.get("HIVE_VERIFY_MODEL", "hive-default").strip() or "hive-def
 LEDGER_TIMEOUT = float(os.environ.get("HIVE_VERIFY_LEDGER_TIMEOUT", "90"))
 LEDGER_PAGES = int(os.environ.get("HIVE_VERIFY_LEDGER_PAGES", "20"))
 LEDGER_PAGE_SIZE = 500
+COMPLETION_ATTEMPTS = max(1, int(os.environ.get("HIVE_VERIFY_COMPLETION_ATTEMPTS", "3")))
+RETRY_DELAY = float(os.environ.get("HIVE_VERIFY_RETRY_DELAY", "20"))
 RUN_LABEL = os.environ.get("HIVE_VERIFY_RUN_LABEL", "").strip() or "local"
 
 
@@ -431,15 +438,30 @@ def check_ledger(auth: dict, negative: bool) -> None:
             print("  negative control: skipping the completion, so nothing should bill")
         else:
             key_auth = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
-            status, raw = http(
-                "POST", f"{EDGE}/v1/chat/completions", key_auth,
-                {"model": MODEL,
-                 "messages": [{"role": "user", "content": "Reply with the single word: pong."}],
-                 "max_tokens": 64},
-                timeout=120,
-            )
-            print(f"  POST {EDGE}/v1/chat/completions -> {status}")
-            if status != 200:
+            # A 429 or 5xx from this call is an upstream capacity answer, not
+            # the failure mode this check exists for. The check's claim is "a
+            # SERVED request produced a ledger row"; an upstream that refused
+            # to serve is retried a bounded number of times before the check
+            # gives up and says so. Measured live: OpenRouter free-route
+            # capacity answers 429 intermittently while chat itself stays up.
+            status = raw = ""
+            attempt = 0
+            while True:
+                attempt += 1
+                status, raw = http(
+                    "POST", f"{EDGE}/v1/chat/completions", key_auth,
+                    {"model": MODEL,
+                     "messages": [{"role": "user", "content": "Reply with the single word: pong."}],
+                     "max_tokens": 64},
+                    timeout=120,
+                )
+                print(f"  POST {EDGE}/v1/chat/completions -> {status} (attempt {attempt})")
+                if status == 200:
+                    break
+                if (status == 429 or 500 <= status < 600) and attempt < COMPLETION_ATTEMPTS:
+                    print(f"    retryable answer, waiting {RETRY_DELAY:.0f}s")
+                    time.sleep(RETRY_DELAY)
+                    continue
                 raise CheckFailed(
                     f"the completion answered {status}, expected 200: {snippet(raw)}"
                 )
