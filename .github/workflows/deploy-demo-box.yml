@@ -1283,6 +1283,67 @@ jobs:
           OWUI_ADMIN_TOKEN="$token" \
             ../../scripts/install-owui-jwt-forward-in-container.sh
 
+      - name: Assert the public chat origin refuses the admin surface
+        # Issue #736's own verification expectation, on the running box rather
+        # than in a unit test: a POST to each of the four Function endpoints
+        # against the PUBLIC origin must be refused, and so must the two
+        # configs routes #948 covers.
+        #
+        # Placed immediately after the install, which is the only step that
+        # legitimately needs those endpoints and now reaches them inside the
+        # container instead. If this ever fails while the install above
+        # succeeded, the running Caddy config is not the one in the repository,
+        # which is the exact failure the featuregate probe further up catches
+        # for a different matcher (#619): a Caddyfile is a single-file bind
+        # mount and is inode pinned, so a plain `up -d` leaves the old config
+        # in place.
+        #
+        # Deliberately UNAUTHENTICATED. Caddy answers before Open WebUI sees
+        # the request, so a working block is a 404 from the proxy; if the block
+        # regressed, the same request reaches Open WebUI and comes back 401.
+        # Both are refusals to an attacker, but only one of them means the
+        # matcher is doing its job, and the difference is what this asserts.
+        # Nothing is created, changed or read by these calls.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          failed=0
+          probe() {
+            local method=$1 path=$2 code
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+              -H 'Content-Type: application/json' -d '{}' \
+              "http://localhost:3003$path")
+            if [ "$code" = "404" ]; then
+              echo "ok   $method $path -> 404 (refused by caddy)"
+            else
+              echo "::error::$method $path answered $code through the public chat"\
+                " origin, expected 404. The running Caddy config does not match"\
+                " deploy/docker/Caddyfile.owui (issues #736, #948)."
+              failed=1
+            fi
+          }
+          probe POST /api/v1/functions/create
+          probe POST /api/v1/functions/id/hive_jwt_forward/update
+          probe POST /api/v1/functions/id/hive_jwt_forward/toggle
+          probe POST /api/v1/functions/id/hive_jwt_forward/toggle/global
+          probe POST /api/v1/configs/import
+          probe GET /api/v1/configs/namespace/oauth
+          # The other half of the same assertion: over-blocking is an outage,
+          # so two paths that MUST stay reachable are checked for not being
+          # 404. They answer 401 unauthenticated, which is Open WebUI's own
+          # answer and proves the request got through the proxy.
+          for open_path in /api/v1/configs/banners /api/v1/users/user/settings; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3003$open_path")
+            if [ "$code" = "404" ]; then
+              echo "::error::$open_path is blocked by the proxy and must not be:"\
+                " the chat UI reads it on every page load."
+              failed=1
+            else
+              echo "ok   GET $open_path -> $code (reached open-webui)"
+            fi
+          done
+          exit "$failed"
+
       - name: Dump container status + logs on failure
         if: failure()
         working-directory: /home/sakib/hive/deploy/docker

@@ -63,6 +63,40 @@ is #437's residue. It stays reachable because `users.py` and `models.py` carry
 per-route allowlist rather than a subtree block, and because the nightly Open
 WebUI e2e depends on that exact route for its own password sync.
 
+## 1b. Can a normalisation trick get past the new matcher
+
+`traversal-probe.sh`, output in `traversal-after.log`. Every request is sent
+with `curl --path-as-is`, so the dot segments and doubled slashes are not
+collapsed on the client side the way a browser would collapse them. Seventeen
+variants of the blocked paths, all refused:
+
+```
+POST //api/v1/functions/create                            404
+POST ///api/v1/functions/create                           404
+POST /api/v1//functions/create                            404
+POST /api/v1/functions//create                            404
+POST /API/v1/FUNCTIONS/Create                             404
+POST /api/v99/functions/create                            404
+POST /api/v1/functions/id/../create                       404
+POST /api/v1/hive/../functions/create                     404
+POST /api/v1/hive/../configs/import                       404
+POST /api//v1/configs/import                              404
+GET  /api/v1/configs/namespace/../namespace/oauth         404
+GET  /api/v1/./configs/namespace/oauth                    404
+POST /api/v1/functions%2Fcreate                           404
+POST /api/v1%2Fconfigs%2Fimport                           404
+POST /api/v1/functions/id/../valves/user/update           404
+POST /api/v1/functions/id/x/valves/user/update            200   <- the carve-out
+```
+
+Two things worth recording because they are easy to get wrong from reading
+alone. Caddy normalises the request path before matching, which is why
+`/api/v1/hive/../configs/import` is refused rather than forwarded as a literal
+string that Open WebUI might later resolve. And the `not` arm admits only the
+exact user-valves shape: the same path with a `..` for the function id
+normalises into the blocked subtree and is refused, so the carve-out cannot be
+used as a way in.
+
 ## 2. The same routes against a running Open WebUI, holding a real admin session
 
 `live-proof.sh` brings up `open-webui` and `caddy-owui` from the repo's own

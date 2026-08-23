@@ -15,11 +15,12 @@ caddyfile=$(realpath "$2")
 out=$3
 net=caddyab-$label
 port=3077
-sp=$(cd -- "$(dirname -- "$0")" && pwd)
+sp=$(mktemp -d)
 
 cleanup() {
   docker rm -f "caddyab-$label-proxy" "caddyab-$label-stub" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
+  rm -rf "$sp"
 }
 trap cleanup EXIT
 cleanup
