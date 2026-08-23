@@ -279,10 +279,17 @@ jobs:
             short_running=$(printf '%s' "$running" | cut -c8-19)
             short_current=$(printf '%s' "$current" | cut -c8-19)
             tag_born=$(docker image inspect -f '{{.Created}}' "$current")
-            # The running image still exists by definition: a container holds a
-            # reference to it. If it somehow does not, treat the container as
-            # stale rather than inventing a pass.
-            run_born=$(docker image inspect -f '{{.Created}}' "$running" 2>/dev/null || echo "")
+            # The running image is usually still in the local store, since a
+            # container holds a reference to it. When it is not, the reason is
+            # printed rather than swallowed, because "the image this container
+            # runs is gone" is itself a finding, and because the same silence
+            # would hide a plain inspect failure. Either way the container is
+            # treated as behind the tag, which is the safe direction: a pass
+            # must never be the answer to a question that did not resolve.
+            if ! run_born=$(docker image inspect -f '{{.Created}}' "$running" 2>&1); then
+              echo "  note     $name: its running image $short_running is not in the local image store: $(printf '%s' "$run_born" | head -1 | cut -c1-160)"
+              run_born=""
+            fi
             if [ -n "$run_born" ] && [ "$run_born" \> "$tag_born" ]; then
               # Newer than the tag, so nothing old is being served. This is tag
               # drift from a concurrent build, not a deploy that failed to
@@ -290,8 +297,8 @@ jobs:
               echo "  ahead    $name ($tag): running $short_running built $run_born, newer than the tag's $short_current built $tag_born"
               continue
             fi
-            echo "  STALE    $name ($tag): running $short_running built ${run_born:-unknown} (container created $born), tag now $short_current built $tag_born"
-            stale="$stale%0A  $name is running $short_running built ${run_born:-unknown} while $tag now resolves to $short_current built $tag_born"
+            echo "  STALE    $name ($tag): running $short_running built ${run_born:-<image absent>} (container created $born), tag now $short_current built $tag_born"
+            stale="$stale%0A  $name is running $short_running built ${run_born:-<image absent>} while $tag now resolves to $short_current built $tag_born"
 
           done < <(docker compose $HIVE_COMPOSE_FLAGS ps -q)
 
