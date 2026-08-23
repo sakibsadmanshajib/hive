@@ -19,7 +19,23 @@ SRC="$ROOT/vendor/open-webui/src/lib/hive"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-cp "$SRC"/*.ts "$WORK"/
+mkdir -p "$WORK/hive"
+cp "$SRC"/*.ts "$WORK"/hive/
+
+# The settings declutter guard pins the rendered surface of four chat
+# components by reading their sources. The scratch tree therefore keeps the
+# same hive-plus-components shape the sources have in the real tree, so the
+# same relative URLs resolve in both places.
+COMPONENT_SRC="$ROOT/vendor/open-webui/src/lib/components"
+for rel in \
+	chat/SettingsModal.svelte \
+	chat/ModelSelector/Selector.svelte \
+	chat/Settings/Account.svelte \
+	chat/Settings/Advanced/AdvancedParams.svelte
+do
+	mkdir -p "$WORK/components/${rel%/*}"
+	cp "$COMPONENT_SRC/$rel" "$WORK/components/$rel"
+done
 cd "$WORK"
 
 # Runs in a pinned node image rather than on host node, per CLAUDE.md's
