@@ -28,9 +28,25 @@ Usage:
     python3 scripts/post-deploy-verify.py
 
 Required env:
-    SUPABASE_URL, SUPABASE_ANON_KEY   the auth origin the deployment uses
+    SUPABASE_URL, SUPABASE_ANON_KEY   the auth origin the deployment uses.
+                                      This must be the PUBLIC origin, the one a
+                                      browser signs in against, not the
+                                      in-network compose hostname the services
+                                      talk to each other on. On the demo box
+                                      those are two different values
+                                      (NEXT_PUBLIC_SUPABASE_URL and
+                                      SUPABASE_URL respectively), and the
+                                      in-network one does not resolve outside
+                                      the compose network at all.
+
+Required env for the `signin` and `ledger` checks only:
     HIVE_VERIFY_EMAIL                 a dedicated verification identity
     HIVE_VERIFY_PASSWORD              its existing password
+
+    The `chat` check needs neither, so `--only chat` runs with no identity at
+    all. That is not a convenience: it means a deployment with no verification
+    identity configured yet still gets its chat backend checked, instead of the
+    whole gate going dark on a missing credential.
 
 Optional env:
     HIVE_CHAT_URL              default https://chat-hive.scubed.co
@@ -65,6 +81,18 @@ import uuid
 
 CHECKS = ("chat", "signin", "ledger")
 
+# Every request this script sends carries an explicit User-Agent, and that is
+# load bearing rather than politeness. Both demo hostnames sit behind
+# Cloudflare, whose bot rules answer 403 "Error 1010: Access denied ... based on
+# your browser's signature" to the literal default urllib sends
+# (`Python-urllib/3.x`). Measured, not guessed: the same GET of
+# https://chat-hive.scubed.co/api/config returns 403 with that default and 200
+# with the string below, from the same host in the same second. Without this the
+# gate would have gone red on every run, blaming a dead chat backend for a
+# blocked user agent, which is exactly the "fails for a reason it does not name"
+# outcome the checks are written to avoid.
+USER_AGENT = "hive-post-deploy-verify/1 (+https://github.com/sakibsadmanshajib/hive)"
+
 CHAT = os.environ.get("HIVE_CHAT_URL", "https://chat-hive.scubed.co").rstrip("/")
 CP = os.environ.get("HIVE_CONTROL_PLANE_URL", "https://control-hive.scubed.co").rstrip("/")
 EDGE = os.environ.get("HIVE_EDGE_API_URL", "https://api-hive.scubed.co").rstrip("/")
@@ -88,7 +116,9 @@ def env(name: str) -> str:
 
 def http(method, url, headers=None, body=None, timeout=120):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    sent = dict(headers or {})
+    sent.setdefault("User-Agent", USER_AGENT)
+    req = urllib.request.Request(url, data=data, method=method, headers=sent)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode(errors="replace")
@@ -394,20 +424,26 @@ def main() -> int:
 
     supabase = env("SUPABASE_URL").rstrip("/")
     anon = env("SUPABASE_ANON_KEY")
-    email = env("HIVE_VERIFY_EMAIL")
-    password = env("HIVE_VERIFY_PASSWORD")
-    if email == "demo@hive-demo.invalid":
-        raise SystemExit(
-            "error: HIVE_VERIFY_EMAIL is the shared demo account. This script mints a key "
-            "and sends a real completion, and issue #848 exists because that traffic ended "
-            "up on the account the owner demos to prospects. Use a dedicated identity."
-        )
+
+    # Only the checks that sign in need an identity, and demanding one for a
+    # run that does not use it would turn "no identity configured" into "chat
+    # is not checked either", which is strictly worse information.
+    email = password = ""
+    if {"signin", "ledger"} & set(selected):
+        email = env("HIVE_VERIFY_EMAIL")
+        password = env("HIVE_VERIFY_PASSWORD")
+        if email == "demo@hive-demo.invalid":
+            raise SystemExit(
+                "error: HIVE_VERIFY_EMAIL is the shared demo account. This script mints a key "
+                "and sends a real completion, and issue #848 exists because that traffic ended "
+                "up on the account the owner demos to prospects. Use a dedicated identity."
+            )
 
     print(f"chat {CHAT}")
     print(f"control-plane {CP}")
     print(f"edge-api {EDGE}")
     print(f"auth {supabase}")
-    print(f"caller {email}")
+    print(f"caller {email or '<none needed for the selected checks>'}")
     print(f"checks {', '.join(selected)}"
           + (f" | negative control on {negative}" if negative != "none" else ""))
 
@@ -446,7 +482,16 @@ def main() -> int:
         for name in failed:
             print(f"  - {name}: {results[name]}")
         return 1
-    print("\nPOST-DEPLOY VERIFICATION PASSED: chat answers, sign-in completes, billing charges")
+    # Name what actually ran. The old wording here claimed "chat answers,
+    # sign-in completes, billing charges" for every green run including a
+    # `--only chat` one, which is a pass claiming two checks it never made.
+    claims = {"chat": "chat answers", "signin": "sign-in completes",
+              "ledger": "billing charges"}
+    print("\nPOST-DEPLOY VERIFICATION PASSED: "
+          + ", ".join(claims[name] for name in selected))
+    skipped = [claims[name] for name in CHECKS if name not in selected]
+    if skipped:
+        print(f"  NOT VERIFIED by this run: {', '.join(skipped)}")
     return 0
 
 

@@ -60,6 +60,18 @@ import urllib.request
 
 TIMEOUT = float(os.environ.get("SUPABASE_PREFLIGHT_TIMEOUT", "15"))
 
+# Every request this script sends carries an explicit User-Agent, and that is
+# load bearing rather than politeness. Both demo hostnames sit behind
+# Cloudflare, whose bot rules answer 403 "Error 1010: Access denied ... based on
+# your browser's signature" to the literal default urllib sends
+# (`Python-urllib/3.x`). Measured, not guessed: the same GET of
+# https://chat-hive.scubed.co/api/config returns 403 with that default and 200
+# with the string below, from the same host in the same second. Without this this
+# preflight would report a live project dead whenever its auth origin is
+# published through Cloudflare, which is the shape of false negative that gets a
+# useful check deleted.
+USER_AGENT = "hive-preflight-supabase-config/1 (+https://github.com/sakibsadmanshajib/hive)"
+
 failures: list[str] = []
 notes: list[str] = []
 
@@ -149,7 +161,9 @@ def check_key(name: str, token: str, want_role: str, url_ref: str | None) -> Non
 
 
 def http_get(url: str, headers: dict) -> tuple[int, str]:
-    req = urllib.request.Request(url, method="GET", headers=headers)
+    sent = dict(headers)
+    sent.setdefault("User-Agent", USER_AGENT)
+    req = urllib.request.Request(url, method="GET", headers=sent)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             return r.status, r.read(4096).decode(errors="replace")
@@ -200,7 +214,38 @@ def main() -> int:
     status, body = http_get(f"{url}/auth/v1/health", {"apikey": anon})
     flat = " ".join(body.split())[:200]
     if status == 200:
-        ok(f"GET /auth/v1/health -> 200 {flat[:120]}")
+        # A 200 is not the evidence. This file's own opening claim is that
+        # asking GoTrue for its health separates "a server answered" from "our
+        # project answered", and a bare status code does not do that: pointed
+        # at https://chat-hive.scubed.co, which is a single-page app that
+        # answers 200 with HTML for every path it does not know, the status
+        # check passed and this preflight reported the configuration sound.
+        # Measured on the live box while writing the post-deploy gate, not
+        # imagined. So the body has to be GoTrue's own health document.
+        #
+        # GoTrue answers {"version": "...", "name": "GoTrue", "description":
+        # "..."} on both hosted and self-hosted deployments, so `name` is the
+        # thing to insist on, and `version` is accepted as well for a future
+        # release that drops the name.
+        document = None
+        try:
+            parsed_body = json.loads(body)
+            if isinstance(parsed_body, dict):
+                document = parsed_body
+        except ValueError:
+            document = None
+        if document is None:
+            fail(
+                "GET /auth/v1/health -> 200 with a body that is not JSON, so this URL is "
+                f"answering from something other than GoTrue: {flat[:120]}"
+            )
+        elif str(document.get("name", "")).lower() != "gotrue" and not document.get("version"):
+            fail(
+                "GET /auth/v1/health -> 200 with JSON that is not GoTrue's health document, "
+                f"so SUPABASE_URL does not name an auth origin: {flat[:120]}"
+            )
+        else:
+            ok(f"GET /auth/v1/health -> 200 from GoTrue {document.get('version') or ''}".rstrip())
     elif status == 401:
         fail(f"GET /auth/v1/health -> 401, the anon key was rejected by this project: {flat}")
     elif status == 0:
