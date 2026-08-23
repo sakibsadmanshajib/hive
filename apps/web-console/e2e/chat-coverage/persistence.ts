@@ -77,6 +77,16 @@ export async function saveIfPresent(page: Page): Promise<void> {
 export async function restore(page: Page, ctl: Control, before: string | null): Promise<void> {
   const el = page.locator(`[data-cov-id="${ctl.covId}"]`);
   if (ctl.role === "switch" || ctl.role === "checkbox" || ctl.type === "checkbox") {
+    // A toggle has no "set it to this value", only "flip it", so restoring one
+    // without looking is itself a mutation whenever the control already sits at
+    // its baseline. That is reachable: a flip can throw before it touches the
+    // control, or the app can reject the change and put it straight back, and
+    // the click below would then move a live account's setting away from the
+    // value this whole file exists to preserve. The state comparison lives here
+    // rather than in each caller because every caller needs it and only two of
+    // the three had it.
+    const now = await readState(page, ctl.covId).catch(() => null);
+    if (now !== null && now === before) return;
     await el.click({ timeout: 6000 });
     return;
   }

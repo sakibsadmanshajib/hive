@@ -28,7 +28,7 @@ import {
   type Control,
   type Result,
 } from "./lib";
-import { persistencePass } from "./persistence";
+import { persistencePass, valuePass } from "./persistence";
 import type { Surface } from "./surfaces";
 
 const SELF_TEST_HTML = `
@@ -86,6 +86,28 @@ const PERSIST_FIXTURE_HTML = (checked: boolean) => `
 <script>
   document.querySelector('input[type=checkbox]').addEventListener('change', (e) => {
     fetch('/persist-save?checked=' + e.target.checked).catch(() => {});
+  });
+</script>
+`;
+
+// A control the app refuses to change, which is the ordinary case valuePass's
+// own "value did not change" verdict describes. It rejects the first change and
+// only the first, so the pass's flip is thrown away and any later click lands
+// for real: that is what makes the restore step's own effect visible.
+const REVERTING_FIXTURE_HTML = `
+<main>
+  <label>
+    <input type="checkbox" aria-label="Chat Bubble" />
+    Chat Bubble
+  </label>
+</main>
+<script>
+  let rejected = false;
+  const box = document.querySelector('input[type=checkbox]');
+  box.addEventListener('change', () => {
+    if (rejected) return;
+    rejected = true;
+    box.checked = false;
   });
 </script>
 `;
@@ -312,6 +334,61 @@ test.describe("chat coverage gate self-checks", () => {
       "a reload failure must be recorded as an unprovable result, not swallowed silently",
     ).toBe(true);
     });
+  });
+
+  // The other half of the same guarantee, on the non-persisting path. Restoring
+  // a toggle means clicking it, so a restore that does not first check where the
+  // control actually sits is a mutation of its own whenever the flip it is
+  // undoing never landed. Reported by review on the pushed head: persistencePass
+  // and persistOne both compared state before restoring, valuePass did not.
+  test("a control whose flip never landed is not moved by the restore step", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.route("https://cov.selftest/**", async (route) => {
+      if (route.request().url().includes("/value-index")) {
+        await route.fulfill({ contentType: "text/html", body: REVERTING_FIXTURE_HTML });
+        return;
+      }
+      await route.fulfill({ status: 404, body: "not found" });
+    });
+
+    const surface: Surface = {
+      id: "settings:value-fixture",
+      persists: false,
+      open: async (p) => {
+        await p.goto("https://cov.selftest/value-index", { waitUntil: "domcontentloaded" });
+      },
+    };
+    // Same hand-built shape as the persistence fixture above: only `key` has to
+    // match what `enumerate` produces, since valuePass re-discovers the control
+    // itself and uses that copy's covId.
+    const checkbox: Control = {
+      key: `${surface.id}::input::Chat Bubble`,
+      surface: surface.id,
+      covId: "",
+      tag: "input",
+      type: "checkbox",
+      role: "",
+      name: "Chat Bubble",
+      label: "Chat Bubble",
+      disabled: false,
+      reason: "",
+      state: "false",
+      href: "",
+      contentEditable: false,
+    };
+
+    const results: Result[] = [];
+    await valuePass(page, surface, [checkbox], results);
+
+    expect(
+      await page.locator('input[type=checkbox]').isChecked(),
+      "the restore step flipped a control its own pass had left untouched, which is the same " +
+        "defect as never restoring one: a live account is left on a value nobody chose",
+    ).toBe(false);
+    expect(
+      results.some((r) => !r.proven && /did not change/i.test(r.detail)),
+      "a control the app refused to change must be reported unprovable, not proven",
+    ).toBe(true);
   });
 
   test("every inert-registry entry carries a justification", async () => {
