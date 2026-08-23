@@ -318,10 +318,10 @@ jobs:
           - module: agent-engine
             path: ./apps/agent-engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: needs.changes.outputs.run != 'false'
         with:
           go-version: '1.24'
@@ -474,13 +474,13 @@ jobs:
       run:
         working-directory: apps/desktop-sandbox
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install libcap headers
         # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.
         run: sudo apt-get update && sudo apt-get install -y libcap-dev pkg-config
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -533,7 +533,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install GTK/WebKit headers
         run: |
@@ -542,7 +542,7 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libayatana-appindicator3-dev libssl-dev
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -562,9 +562,9 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo test
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -602,13 +602,13 @@ jobs:
     needs: changes
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: needs.changes.outputs.run != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install repo-level dev deps
         if: needs.changes.outputs.run != 'false'
@@ -742,11 +742,11 @@ jobs:
       run:
         working-directory: apps/agent-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/agent-console/package-lock.json
 
@@ -777,13 +777,13 @@ jobs:
       run:
         working-directory: apps/web-console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.run != 'false'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: needs.changes.outputs.run != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
@@ -873,12 +873,12 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build all service images (cached)
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
-          workdir: .
+          source: .
           files: |
             ./deploy/docker/docker-bake.hcl
           targets: edge-api,control-plane,web-console
@@ -978,9 +978,9 @@ jobs:
       # writes to $GITHUB_ENV and silently point the SDK suites back at the
       # shared account.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Start a throwaway Postgres and apply the real schema
         shell: bash
@@ -1091,7 +1091,7 @@ jobs:
 
       - name: Cache third-party images (redis, litellm)
         id: img-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/docker-images
           # Keyed on the pinned tags so tag bumps invalidate the cache.
@@ -1115,9 +1115,9 @@ jobs:
           fi
 
       - name: Build stack images (buildx + GHA cache)
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
-          workdir: .
+          source: .
           files: |
             ./deploy/docker/docker-bake.hcl
           targets: edge-api,control-plane,sdk-tests-js,sdk-tests-py,sdk-tests-java
@@ -1231,7 +1231,7 @@ jobs:
 
       - name: Upload compose logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs
           path: /tmp/compose.log
@@ -1253,7 +1253,7 @@ jobs:
         # via the PR checks, no need to also file a repo issue. Dedupe on an
         # open issue with the label below instead of filing one per red run.
         if: failure() && (github.event_name == 'push' || github.event_name == 'schedule')
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const label = 'ci-failure:live-integration';
@@ -1403,13 +1403,13 @@ jobs:
       # and was already skipping here because this job has never set
       # EDGE_BASE_URL. Removing it changes no spec's outcome.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
@@ -1507,7 +1507,7 @@ jobs:
 
       - name: Cache third-party images (redis, litellm)
         id: img-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/docker-images
           key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
@@ -1528,9 +1528,9 @@ jobs:
           fi
 
       - name: Build stack images (reuse GHA cache from live-integration)
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
-          workdir: .
+          source: .
           files: |
             ./deploy/docker/docker-bake.hcl
           targets: edge-api,control-plane
@@ -1587,7 +1587,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -1751,7 +1751,7 @@ jobs:
 
       - name: Upload compose logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs-web-e2e-api
           path: /tmp/compose-web-e2e-api.log
@@ -1778,7 +1778,7 @@ jobs:
 
       - name: Upload the redacted Next.js server log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextjs-log-web-e2e
           path: /tmp/nextjs-redacted.log
@@ -1787,7 +1787,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
           # Traces (.zip), videos (.webm) and index.html are excluded. This
@@ -1850,7 +1850,7 @@ jobs:
       run:
         working-directory: apps/desktop-sandbox
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install libcap headers + build deps
         # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.
@@ -1863,7 +1863,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry

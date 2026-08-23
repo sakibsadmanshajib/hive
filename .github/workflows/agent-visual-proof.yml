@@ -209,7 +209,7 @@ jobs:
           gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json number,title,headRefOid \
             --jq '"proving PR #\(.number): \(.title) at head \(.headRefOid)"'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.target.outputs.ref }}
 
@@ -233,13 +233,13 @@ jobs:
           sudo chown "$(id -un):$(id -gn)" /mnt/ms-playwright
           df -h / /mnt
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Mint this run's internal service token
         # Random per run and masked. It authenticates control-plane to the
@@ -764,7 +764,7 @@ jobs:
         # not a silent absence either, because the lint step itself is red
         # and names the file it found.
         if: always() && steps.capture.conclusion != 'skipped' && steps.lint.conclusion != 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-visual-proof-${{ github.run_id }}
           path: ${{ env.CAPTURE_DIR }}
@@ -840,7 +840,7 @@ jobs:
 
       - name: Upload the failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-visual-proof-logs-${{ github.run_id }}
           path: |
