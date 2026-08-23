@@ -47,6 +47,13 @@ type fakeAgentServer struct {
 	startReq        controlclient.StartConversationRequest
 	startBody       []byte
 
+	// finalStarted and finalGate, when set, let a test observe exactly when
+	// the final-response fetch begins and control when it returns, which is
+	// the point inside finishTerminal immediately before
+	// publishDeckArtifact reads the session's bearer JWT.
+	finalStarted chan struct{}
+	finalGate    chan struct{}
+
 	listener net.Listener
 	srv      *http.Server
 }
@@ -93,6 +100,20 @@ func newFakeAgentServer(controlDir string) (*fakeAgentServer, error) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	})
 	mux.HandleFunc(convoPrefix+"/agent_final_response", func(w http.ResponseWriter, r *http.Request) {
+		// Read the gates and then release f.mu before blocking on them: a
+		// test that cancels during this window drives Interrupt through this
+		// same server, and holding f.mu across the wait would deadlock it
+		// rather than exercise the concurrency under test.
+		f.mu.Lock()
+		started, gate := f.finalStarted, f.finalGate
+		f.mu.Unlock()
+		if started != nil {
+			started <- struct{}{}
+		}
+		if gate != nil {
+			<-gate
+		}
+
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]string{"response": f.finalResponse})
@@ -115,6 +136,12 @@ func (f *fakeAgentServer) setStatus(s controlclient.ExecutionStatus) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.executionStatus = s
+}
+
+func (f *fakeAgentServer) setFinalGate(started, gate chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finalStarted, f.finalGate = started, gate
 }
 
 func (f *fakeAgentServer) setFinalResponse(s string) {
@@ -1242,6 +1269,70 @@ func TestSandboxEngine_Status_ConcurrentCallsPublishExactlyOnce(t *testing.T) {
 	}
 	if len(pub.createCalls) != 1 {
 		t.Fatalf("expected exactly one Create call across two concurrent Status calls, got %d", len(pub.createCalls))
+	}
+}
+
+// A Cancel that lands while a knowledge-work-pack task is finishing must not
+// race with the publish. reap clears sess.bearerJWT under e.mu, and Cancel
+// reaches reap without ever taking sess.finishMu, so a publish that read that
+// field unlocked races with it. CI runs `go test -short -race`, so this fails
+// the build rather than corrupting a publish in production.
+//
+// The window is opened deliberately, and where it actually matters. The
+// engine is held inside the final-response fetch, which is the last step
+// before publishDeckArtifact reads the JWT, and Cancel is launched from
+// there. Gating on the publisher instead would be useless: Create runs after
+// the read, so waiting for it orders the read before the cancel and destroys
+// the very interleaving under test. That version of this test passed against
+// a deliberately unsynchronized read, which is how the ordering bug in it was
+// found.
+func TestSandboxEngine_Status_CancelDuringPublishIsRaceFree(t *testing.T) {
+	var fake *fakeAgentServer
+	pub := &fakePublisher{url: "/artifacts/cancel-race"}
+	e, workspaceRoot := newTestEngineWithPublisher(t, &fake, pub)
+
+	task := knowledgeWorkTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	writeDeckManifest(t, workspaceRoot, task.ID, `{"title":"Cancel","slides":[{"title":"S1","bullets":["x"]}]}`)
+	fake.setFinalResponse("fallback text")
+
+	finalStarted, finalGate := make(chan struct{}, 1), make(chan struct{})
+	fake.setFinalGate(finalStarted, finalGate)
+	fake.setStatus(controlclient.StatusFinished)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, statusErr := e.Status(context.Background(), sessionRef)
+		done <- statusErr
+	}()
+
+	// Parked inside the final-response fetch, so the bearer JWT has not been
+	// read yet and the cancel below is genuinely concurrent with that read.
+	<-finalStarted
+
+	cancelled := make(chan error, 1)
+	go func() { cancelled <- e.Cancel(context.Background(), sessionRef) }()
+	close(finalGate)
+
+	if cancelErr := <-cancelled; cancelErr != nil {
+		t.Fatalf("Cancel: %v", cancelErr)
+	}
+	if statusErr := <-done; statusErr != nil {
+		t.Fatalf("Status: %v", statusErr)
+	}
+
+	// Whether the publish or the reap wins is a legitimate race in outcome
+	// and this deliberately does not pin it. What must hold either way is
+	// that no Create ever ran with a half-cleared credential.
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	for _, call := range pub.createCalls {
+		if call.bearerJWT == "" {
+			t.Fatal("Create ran with a blank bearer JWT, so reap cleared it mid-publish")
+		}
 	}
 }
 

@@ -583,7 +583,15 @@ services:
         # origin, not empty, or the console would link to a path on its own
         # host that nothing here serves. Mirrors Caddyfile.artifacts's own
         # scheme choice (plain http, not auto-HTTPS).
-        NEXT_PUBLIC_ARTIFACTS_BASE_URL: http://${ARTIFACTS_DOMAIN:-artifacts.localhost}
+        #
+        # The fallback carries :3004 because that is the host port
+        # caddy-artifacts actually publishes ("3004:80" below). A bare
+        # artifacts.localhost resolves to port 80, which nothing in this
+        # compose file listens on, so the local and enterprise profiles would
+        # hand the browser a link that cannot connect. A deployment that sets
+        # ARTIFACTS_DOMAIN supplies its own host and, if it needs one, its own
+        # port.
+        NEXT_PUBLIC_ARTIFACTS_BASE_URL: http://${ARTIFACTS_DOMAIN:-artifacts.localhost:3004}
     profiles:
       - chat
       - enterprise

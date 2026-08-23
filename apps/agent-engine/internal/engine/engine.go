@@ -576,6 +576,21 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 	}
 }
 
+// bearerJWTOf returns a copy of sess's task bearer JWT, read under e.mu.
+//
+// The lock is load bearing, not defensive habit. reap clears this field
+// under e.mu, and Cancel calls reap without ever taking sess.finishMu, so a
+// user cancelling a knowledge-work-pack task at the moment it finishes puts
+// Cancel's write concurrent with publishDeckArtifact's read with no
+// happens-before edge between them. That is a data race the detector fails
+// the build on (CI runs go test -race), and the value read is a string
+// header, so it is not even benign in principle.
+func (e *SandboxEngine) bearerJWTOf(sess *session) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return sess.bearerJWT
+}
+
 // replayOf returns sess's cached terminal outcome, or nil if it has not
 // reached one yet.
 func (e *SandboxEngine) replayOf(sess *session) *terminalOutcome {
@@ -665,7 +680,12 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 	if sess.pack != packKnowledgeWork || e.cfg.Publisher == nil {
 		return "", false
 	}
-	if sess.bearerJWT == "" {
+	// Copied once, under e.mu, and used for the rest of this call. A reap
+	// that lands after this point cannot blank the credential mid-publish:
+	// the conversation already succeeded, so finishing the publish it started
+	// is the correct outcome, and it is the racing read that was the defect.
+	bearerJWT := e.bearerJWTOf(sess)
+	if bearerJWT == "" {
 		// Expected for an API-key-authenticated task create (no Supabase JWT
 		// exists to forward) — see Task.BearerJWT's doc comment. Not an
 		// operator problem, so no log line.
@@ -711,9 +731,9 @@ func (e *SandboxEngine) publishDeckArtifact(ctx context.Context, sess *session) 
 
 	var artifact artifactsclient.Artifact
 	if manifest.ArtifactID != "" {
-		artifact, err = e.cfg.Publisher.AddVersion(ctx, sess.bearerJWT, manifest.ArtifactID, html)
+		artifact, err = e.cfg.Publisher.AddVersion(ctx, bearerJWT, manifest.ArtifactID, html)
 	} else {
-		artifact, err = e.cfg.Publisher.Create(ctx, sess.bearerJWT, manifest.Title, html)
+		artifact, err = e.cfg.Publisher.Create(ctx, bearerJWT, manifest.Title, html)
 	}
 	if err != nil {
 		// Never log sess.bearerJWT or html (tenant-authored deck content).
