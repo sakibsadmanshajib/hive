@@ -1,0 +1,431 @@
+OAuth scope capability mismatch (#787): live capture against the demo box
+=========================================================================
+
+Date:     2026-08-22
+Surfaces: https://chat-hive.scubed.co  (Open WebUI, OIDC client)
+          https://console-hive.scubed.co/auth/v1  (self-hosted GoTrue, issuer)
+Identity: rag-verify-e2e@hive-e2e.invalid, session minted through the admin
+          one-time-token flow. No password was read and none was changed.
+
+Every credential-bearing query parameter is redacted below (client_id, state,
+nonce, code_challenge, code, authorization_id). Token values are never printed:
+presence and length only.
+
+Two registers in this document, kept apart on purpose, because the whole
+incident came from confusing them. MEASURED means a request was made against
+the deployment and the response is transcribed. READ means a file was read in
+supabase/auth at tag v2.189.0, the tag this stack pins by digest; GoTrue is not
+vendored in this repository, so those attributions are a reading of an external
+source, not an observation of this server. Every conclusion below rests on the
+measured half; the read half explains why the measurement comes out the way it
+does. Where a line names a GoTrue file or function, it is READ.
+
+
+1. What the authorization server actually advertises
+---------------------------------------------------
+
+  GET https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+
+  issuer                              https://console-hive.scubed.co/auth/v1
+  scopes_supported                    openid profile email phone
+  grant_types_supported               authorization_code refresh_token
+  response_types_supported            code
+  token_endpoint_auth_methods         client_secret_basic client_secret_post none
+
+  GET http://supabase-auth:9999/health   (in-network, direct)
+  {"version":"v2.189.0","name":"GoTrue",...}
+
+  offline_access is absent, and it is not merely undeclared. At the pinned
+  supabase/gotrue v2.189.0, internal/models/oauth_scope.go declares
+  SupportedOAuthScopes as exactly openid, profile, email, phone, and
+  internal/api/oauthserver/authorize.go rejects anything outside that set.
+
+
+2. The outage, reproduced before the fix
+----------------------------------------
+
+  [1] GET https://chat-hive.scubed.co/oauth/oidc/login
+      -> 302
+      -> Location: https://console-hive.scubed.co/auth/v1/oauth/authorize
+                     ?response_type=code&client_id=<REDACTED>
+                     &redirect_uri=https://chat-hive.scubed.co/oauth/oidc/callback
+                     &scope=openid+email+profile+offline_access
+                     &state=<REDACTED>&nonce=<REDACTED>
+                     &code_challenge=<REDACTED>&code_challenge_method=S256
+      scope requested: openid email profile offline_access
+
+  [2] GET (that authorize URL)
+      -> 302 text/html
+      -> Location: https://chat-hive.scubed.co/oauth/oidc/callback
+                     ?error=invalid_request
+                     &error_description=unsupported+scope%3A+offline_access
+                     &state=<REDACTED>
+      VERDICT: FAILED at the authorization server. No consent screen, no
+               authorization code, no session. Sign-in dead for every user.
+
+
+3. The same chain after the fix
+-------------------------------
+
+  open-webui recreated with OAUTH_SCOPES="openid email profile", container
+  reported healthy, then:
+
+  [1] GET https://chat-hive.scubed.co/oauth/oidc/login
+      -> 302
+      -> Location: https://console-hive.scubed.co/auth/v1/oauth/authorize
+                     ?response_type=code&client_id=<REDACTED>
+                     &redirect_uri=https://chat-hive.scubed.co/oauth/oidc/callback
+                     &scope=openid+email+profile
+                     &state=<REDACTED>&nonce=<REDACTED>
+                     &code_challenge=<REDACTED>&code_challenge_method=S256
+      scope requested: openid email profile
+
+  [2] GET (that authorize URL)
+      -> 302 text/html
+      -> Location: https://console-hive.scubed.co/oauth/consent
+                     ?authorization_id=<REDACTED>
+
+  [3] GET https://console-hive.scubed.co/oauth/consent?authorization_id=<REDACTED>
+      -> 200 text/html
+      VERDICT: reached the consent page. No error parameter anywhere in the
+               chain.
+
+
+4. End to end in a real browser, signed in
+------------------------------------------
+
+  Chromium, cookies from a minted session for rag-verify-e2e@hive-e2e.invalid:
+
+    302 https://chat-hive.scubed.co/oauth/oidc/login
+    302 https://console-hive.scubed.co/auth/v1/oauth/authorize?...&scope=openid+email+profile&...
+    307 https://chat-hive.scubed.co/oauth/oidc/callback?code=<REDACTED>&state=<REDACTED>
+    landed on: https://chat-hive.scubed.co/
+    title:     Hive
+
+  Screenshot: the chat surface, signed in, account chip reading
+  rag-verify-e2e@hive-e2e.inva... in the sidebar. Posted on the pull request as
+  an inline image through scripts/post-pr-visual-proof.sh.
+
+  Unauthenticated, the same chain lands on the console sign-in page AT the
+  consent URL (https://console-hive.scubed.co/oauth/consent?authorization_id=
+  <REDACTED>), which is the correct behaviour and still not an error redirect.
+
+
+5. Does GoTrue issue a refresh token WITHOUT offline_access?
+-----------------------------------------------------------
+
+  This is the question that decides whether #787 retains any value. Answered
+  by walking a complete authorization code flow with the fix's scope set, from
+  a throwaway container on the stack's own network:
+
+  scope requested:      openid email profile   (deliberately no offline_access)
+  authorize:            HTTP 302 -> consent page, handle length 32 <REDACTED>
+  load authorization:   HTTP 200
+  consent approve:      HTTP 200 -> authorization code issued, length 36 <REDACTED>
+  token exchange:       HTTP 200
+    keys returned:      access_token expires_in id_token refresh_token token_type
+    access_token        present, 1236 chars
+    refresh_token       present, 12 chars
+    id_token            present, 724 chars
+    expires_in          3600
+
+  VERDICT: a refresh token IS issued with no offline_access in the request.
+  Consistent with the source: handleAuthorizationCodeGrant calls
+  tokenService.IssueRefreshToken unconditionally and always puts refresh_token
+  in the response map.
+
+  Consequence for #787: its scope half was never necessary and was fatal here.
+  Its other half, the client-authentication dialect on the refresh POST
+  (Dockerfile.open-webui's apply_oauth_client_auth_patch.py), is still
+  load bearing, because a refresh token that exists is still refused when the
+  refresh request authenticates the client in the wrong dialect. So this is a
+  partial revert, not a full one.
+
+
+6. The check that would have caught this, shown failing
+------------------------------------------------------
+
+  scripts/check-oauth-scopes.py reads the live scopes_supported and fails when
+  a configured scope is not in it.
+
+  Mutation: OAUTH_SCOPES in deploy/docker/docker-compose.yml put back to
+  "openid email profile offline_access", the exact #787 value, then run against
+  the real deployed discovery document:
+
+    $ python3 scripts/check-oauth-scopes.py --discovery \
+        https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+    ::error file=deploy/docker/docker-compose.yml,line=764::
+      deploy/docker/docker-compose.yml:764 requests offline_access, which
+      https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+      does not advertise. [...] chat sign-in is dead for every user (#787).
+      Advertised scopes are openid profile email phone.
+    authorization server: https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+    scopes_supported:     openid profile email phone
+    EXIT=1
+
+  Mutation reverted, same command:
+
+    authorization server: https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+    scopes_supported:     openid profile email phone
+    ok deploy/docker/docker-compose.yml:764 OAUTH_SCOPES='openid email profile'
+    EXIT=0
+
+  Mutation: scripts/check-oauth-scopes.py moved out of the tree, so the gate
+  is gone while the repository still claims it:
+
+    $ go test ./apps/edge-api/internal/auth/... -run OWUIOAuthScopeGateIsWired
+    --- FAIL: TestOWUIOAuthScopeGateIsWired (0.00s)
+        Error: stat /workspace/scripts/check-oauth-scopes.py: no such file or directory
+        Messages: scripts/check-oauth-scopes.py is the only check that compares
+                  a requested OAuth scope against what the deployed
+                  authorization server actually advertises (#787). It must exist.
+    FAIL
+
+  Script restored, both green:
+
+    $ python3 scripts/test_check_oauth_scopes.py
+    ... 16 checks, all passed
+    $ go test ./apps/edge-api/internal/auth/... -run OWUIOAuth -v
+    --- PASS: TestOWUIOAuthScopesRequestOpenID (0.00s)
+    --- PASS: TestOWUIOAuthScopeGateIsWired (0.00s)
+    ok
+
+
+Notes on how the box was restored ahead of the merge
+----------------------------------------------------
+
+Sign-in was dead on the live box while this pull request was still open, and
+the deploy that ships the repository fix only runs on merge. So the running
+open-webui container was recreated with the corrected scope supplied through a
+one-service compose override at /tmp/hive-owui-scope-hotfix.yml on the box,
+with --no-deps and no --remove-orphans, and nothing in the box's git checkout
+touched (a dirty tracked file there would break the deploy job's
+`git pull --ff-only`). The merge supersedes it: deploy-demo-box recreates
+open-webui from deploy/docker/docker-compose.yml, which now carries the same
+value.
+
+The temporary in-network tap used to reach GoTrue's admin API (a socat
+container publishing on 127.0.0.1 only, plus an ssh local forward) was removed
+afterwards, and its absence confirmed: the container is gone and the forwarded
+port answers nothing.
+
+
+7. Review-round mutations (CodeRabbit findings, second commit)
+--------------------------------------------------------------
+
+CodeRabbit's local review raised two blind spots, both real, both fixed:
+
+  major  the scope scanner read only Compose's mapping form
+         (`OAUTH_SCOPES: "..."`), not its list form
+         (`- OAUTH_SCOPES=...`). Compose accepts either, so a declaration
+         written the other way would not fail the check, it would be invisible
+         to it, and the check would report a clean run over a corpus of zero.
+         Both scripts/check-oauth-scopes.py and envDeclarations in
+         owui_oauth_scope_test.go now read both spellings.
+
+  minor  the wiring guard matched a bare filename, so a commented-out step, or
+         a comment explaining that the check had been removed, would satisfy
+         it. It now matches invocations and ignores comment lines
+         (containsUncommented), with its own table test.
+
+  Mutation, list form: `- OAUTH_SCOPES=openid email profile offline_access`
+
+    ok   list-form `- OAUTH_SCOPES=...` with a bad scope fails
+    ok   list-form with a good scope passes
+    ok   list form is seen as one declaration
+
+  Mutation, the Makefile invocation commented out rather than deleted:
+
+    $ go test ./apps/edge-api/internal/auth/... -run OWUIOAuthScopeGateIsWired
+    --- FAIL: TestOWUIOAuthScopeGateIsWired (0.00s)
+        Messages: Makefile no longer invokes
+                  "python3 scripts/test_check_oauth_scopes.py" outside a
+                  comment, so the comparator's own tests must run in a required
+                  check [...]
+    FAIL
+
+  Restored, green:
+
+    --- PASS: TestOWUIOAuthScopesRequestAnIdentity (0.00s)
+    --- PASS: TestOWUIOAuthScopeGateIsWired (0.00s)
+    --- PASS: TestContainsUncommentedRejectsCommentedInvocations (0.00s)
+    $ python3 scripts/test_check_oauth_scopes.py   -> all checks passed
+
+  Also confirmed in CI on the first commit: the new pull-request gate
+  ("Configured OAuth scopes are advertised by the auth server") passed in 8
+  seconds against the live discovery document from a GitHub-hosted runner, so
+  the gate genuinely reaches the deployed authorization server.
+
+
+8. The post-deploy step, rehearsed on the box before the merge
+-------------------------------------------------------------
+
+A step that only ever runs after a merge is a step nobody has run. So the exact
+command from deploy-demo-box.yml was executed by hand on the box, against the
+box's own still-unfixed checkout of main (851003b7b, OAUTH_SCOPES with
+offline_access at line 745), with the same HIVE_COMPOSE_FLAGS:
+
+  discovery URL read from the running container:
+    https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  authorization server: https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  scopes_supported:     openid profile email phone
+  ::error file=deploy/docker/docker-compose.yml,line=745::
+    deploy/docker/docker-compose.yml:745 requests offline_access, which [...]
+    does not advertise. [...] chat sign-in is dead for every user (#787).
+    Advertised scopes are openid profile email phone.
+
+So the step works mechanically on the box (compose exec resolves, printenv
+returns the concrete URL, python3 is present, the public discovery document is
+reachable from the box), and it goes RED on the exact commit that caused the
+outage, naming the exact line. After the merge it reads the fixed value and
+passes.
+
+One thing found by rehearsing rather than reasoning: the check resolves its
+corpus relative to its own path, so a copy of the script run from /tmp reported
+"no OAUTH_SCOPES declaration found under /deploy" and exited 1. That is correct
+behaviour and correctly loud, but the message did not name the likely cause, so
+it now does. The rehearsal was then redone with the script staged next to a
+deploy/ tree.
+
+The script was deliberately NOT copied into /home/sakib/hive/scripts/ for this
+rehearsal: an untracked file at a path the incoming merge also creates makes
+`git pull --ff-only` refuse, which would have broken the deploy this was
+rehearsing. Only /tmp paths and a symlink there were used, and both are removed.
+The box's checkout carries no tracked modification (`git status --porcelain`
+shows only pre-existing .env backups), so the deploy's fast-forward is clear.
+
+
+9. The other direction: losing a scope this deployment needs
+------------------------------------------------------------
+
+The live gate fails when the list GAINS a scope the server rejects. It is
+perfectly happy with a list trimmed to nothing but `openid`, because a smaller
+set is still a subset. That is a different outage with the same shape, so it is
+asserted offline instead, from the pinned source rather than from convention:
+
+  openid  handleAuthorizationCodeGrant generates an id_token only under
+          `if models.HasScope(scopeList, models.ScopeOpenID)`.
+  email   the email and email_verified claims are gated on `hasEmailScope`
+          (internal/api/oauthserver/handlers.go), and Open WebUI matches its
+          account on the email claim.
+
+  profile is deliberately not required: it carries only name and picture, whose
+  absence degrades an avatar rather than breaking sign-in.
+
+  Mutation: OAUTH_SCOPES set to "openid profile".
+
+    --- FAIL: TestOWUIOAuthScopesRequestAnIdentity (0.00s)
+        Error: []string{"openid", "profile"} does not contain "email"
+        Messages: deploy/docker/docker-compose.yml:764 declares OAUTH_SCOPES
+                  "openid profile" without email. GoTrue gates the email and
+                  email_verified claims on that scope [...]
+    FAIL
+
+  Restored to "openid email profile", green.
+
+
+10. Security review round, and the box left clean
+-------------------------------------------------
+
+An independent security pass on the pull request returned no blocker (nothing
+critical, high or medium) and four low findings, all applied:
+
+  * the discovery fetch now refuses any scheme but http and https, so a local
+    file cannot decide whether the gate passes, and it reads the body with a
+    256 KiB cap so a slow drip cannot stall the deploy job while it holds the
+    deploy-demo-box concurrency group. Redirect targets are re-checked. Fixture
+    cases cover file://, ftp:// and gopher://.
+  * oauth-scope-gate no longer cancels in-progress runs on main, only on pull
+    requests. Two commits landing close together would otherwise cancel the
+    earlier one's run, leaving that commit with no verdict, which reads exactly
+    like a pass.
+  * the deploy step's `printenv` now tolerates a missing variable, because
+    under `set -e` its exit 1 aborted the step before the branch that explains
+    what is wrong could print.
+  * the compose comment's claim about offline_access is scoped to GoTrue rather
+    than stated of OAuth in general, since on most authorization servers that
+    scope IS the switch gating a durable refresh credential.
+
+Nothing in this capture was found to be a real credential: every
+credential-bearing parameter is a placeholder and every token is reported as
+presence and length. The reviewer's one housekeeping note is closed too: the
+temporary /tmp/hive-owui-scope-hotfix.yml on the box has been deleted, and the
+running container still carries the fixed value independently of it:
+
+  $ docker inspect hive-open-webui-1 --format '{{range .Config.Env}}...'
+    OAUTH_SCOPES=openid email profile
+
+  $ (sign-in chain, re-run after the cleanup)
+    [3] GET https://console-hive.scubed.co/oauth/consent?authorization_id=<REDACTED>
+        -> 200 text/html
+        VERDICT: reached a rendered page (consent screen)
+
+11. Adversarial review round, and the step re-rehearsed after it
+----------------------------------------------------------------
+
+Four medium findings, all applied, none of them cosmetic:
+
+  * the audit step sat before the hive_jwt_forward install, so a momentary DNS
+    or tunnel blip reaching the discovery document would abort the deploy
+    before that Function was installed, which is the #556 failure the Function
+    step exists to prevent. It is an audit and changes no state, so it moved to
+    the END of the job. Failing last still fails the run.
+  * `printenv` under `set -e` ended the step before the friendly diagnostic
+    could print, so the two cases a reader expects that message to cover, an
+    unset variable and a container that is not running, were exactly the two it
+    could never reach. Now `if ! url=$(...) || [ -z "$url" ]`, the shape the
+    supabase-db probe in the same job already uses.
+  * the pull-request gate spells its origin by hand from CONSOLE_URL while Open
+    WebUI resolves SUPABASE_PUBLIC_URL. They agree today by hand, not by
+    construction, and a repoint would leave the gate interrogating the old host
+    and reporting green, which is #787 one level up. The deploy step now
+    compares the two and fails on a mismatch, which costs nothing because it
+    already holds the deployed value.
+  * the gate's paths filter was `deploy/**.yml`, matching Prometheus alerts,
+    Alertmanager, Grafana provisioning, the LiteLLM model list and headscale,
+    none of which can carry an OAUTH_SCOPES declaration. Narrowed to
+    `deploy/docker/**`, so a home lab outage cannot park monitoring or
+    model-catalog work. No coverage lost: the script still scans all of deploy/
+    on the runs that happen, and `make test-scripts` scans all of deploy/
+    offline on every pull request inside a required check.
+
+Two further findings from the same review were applied beyond that list, and
+they are the ones that changed behaviour rather than placement:
+
+  * nothing noticed a scope being LOST, only one being added, because every
+    subset passes a subset check. Two restorations: the offline guard now
+    requires email as well as openid (section 9), and check-oauth-scopes.py now
+    fails when the server ADVERTISES offline_access while the configuration
+    omits it. That second one is the important one. It turns the assertion #787
+    deleted from a convention-derived claim into a server-derived one: a no-op
+    against the self-hosted GoTrue, which does not advertise the scope, and an
+    automatic return of #782's guard if this stack ever moves to a server that
+    does.
+  * two legal YAML spellings got the wrong verdict. A trailing comment
+    (`OAUTH_SCOPES: "openid email profile"  # note`) was split into scopes
+    named `profile"`, `#` and `keep`, failing a legal edit with an
+    outage-flavoured message, which is how a check teaches people to route
+    around it. An interpolated value now says it cannot be resolved rather than
+    naming a brace as an unsupported scope. A folded multi-line value is named
+    as a known boundary in the docstring rather than parsed.
+
+Re-rehearsed on the box after those edits, still against its unfixed checkout:
+
+  discovery URL read from the running container:
+    https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  matches the URL the pull-request gate checks
+  ::error file=deploy/docker/docker-compose.yml,line=745:: [...] requests
+    offline_access, which [...] does not advertise. [...] (#787).
+
+So the new mismatch comparison passes on the real deployment, and the check
+still goes red on the commit that caused the outage. Box left clean again:
+`git status --porcelain` shows no tracked modification, and the /tmp staging is
+removed.
+
+Also recorded from the security review, for whoever next opens an admin surface: the
+socat tap used here published GoTrue's admin API on the box's loopback for the
+tap's lifetime, which put it in reach of every local process, outside the
+boundary Caddy defines for /auth/v1. The better pattern was already used in
+section 5 of this capture and needs no published port at all: run the admin
+calls from a throwaway container attached to the stack's own network
+(`docker run --rm --network hive_default ...`). Do that next time instead.
