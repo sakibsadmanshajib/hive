@@ -19,7 +19,7 @@
 # hive-supabase-db:pg16-cron, the exact production DB image).
 set -euo pipefail
 
-BACKUP_ROOT="${BACKUP_ROOT:-/tmp/hive-backups}"   # overridden on box to /home/sakib/hive-backups
+BACKUP_ROOT="${BACKUP_ROOT:-/home/sakib/hive-backups}"
 DB_CONTAINER="${DB_CONTAINER:-hive-supabase-db-1}"
 PGUSER="${PGUSER:-postgres}"
 VERIFY_IMAGE="${VERIFY_IMAGE:-hive-supabase-db:pg16-cron}"
