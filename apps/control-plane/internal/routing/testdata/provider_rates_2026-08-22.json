@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "Point-in-time snapshot of the upstream provider list rates every alias added by",
+    "supabase/migrations/20260822_02_catalog_alias_restructure.sql is priced against.",
+    "Fetched 2026-08-22. Committed so TestCatalogAliasPricesMatchProviderRates can check",
+    "the migration's arithmetic offline: CI has no provider API keys, and a test that",
+    "needs one is a test that silently skips.",
+    "",
+    "WHAT THIS FIXTURE CAN AND CANNOT CATCH.",
+    "Catches: a credit figure that does not follow from the rate beside it, a rate typo,",
+    "a provider_model string that is not one of the models actually verified (a dropped",
+    "tilde, a case change, a wrong date suffix), and an alias added to the migration with",
+    "no documented derivation at all.",
+    "Does NOT catch: a model the provider decommissions AFTER this date, or a rate the",
+    "provider changes after this date. That was issue #965 exactly, and only a live query",
+    "against the provider catalog catches it. Re-fetch and re-snapshot when repricing.",
+    "",
+    "usd_*_per_million are USD per 1,000,000 tokens, as strings so no float rounding",
+    "enters the fixture. null cache_read means the provider publishes no cache-read rate",
+    "for that model, which is not the same as a rate of zero."
+  ],
+  "fetched_utc": "2026-08-22",
+  "models": [
+    {
+      "provider_model": "groq/openai/gpt-oss-20b",
+      "usd_in_per_million": "0.075",
+      "usd_out_per_million": "0.30",
+      "usd_cache_read_per_million": null,
+      "source": "https://console.groq.com/docs/models",
+      "note": "Unchanged from the rate 20260801_01 and 20260818_01 both derived hive-fast from."
+    },
+    {
+      "provider_model": "groq/openai/gpt-oss-120b",
+      "usd_in_per_million": "0.15",
+      "usd_out_per_million": "0.60",
+      "usd_cache_read_per_million": null,
+      "source": "https://console.groq.com/docs/models",
+      "note": "Second Groq-owned source agreeing: https://console.groq.com/docs/compound/systems/compound-mini lists GPT-OSS 120B at $0.15 input / $0.60 output in its underlying-model cost breakdown. https://groq.com/pricing, the source 20260801_01 and 20260818_01 used, now 301-redirects to the marketing homepage and carries no rate card."
+    },
+    {
+      "provider_model": "openrouter/~deepseek/deepseek-v4-flash-latest",
+      "usd_in_per_million": "0.0639",
+      "usd_out_per_million": "0.1278",
+      "usd_cache_read_per_million": "0.01278",
+      "source": "https://openrouter.ai/api/v1/models",
+      "note": "The leading tilde is part of the real OpenRouter model id, not a typo. Verified live: the API returns id '~deepseek/deepseek-v4-flash-latest' with tokenizer 'Router', distinct from the pinned 'deepseek/deepseek-v4-flash-0731' (0.08/0.18) and 'deepseek/deepseek-v4-flash' (0.05586/0.11172). Being a -latest router alias, the model it resolves to can change under us and so can its rate; see the migration header."
+    },
+    {
+      "provider_model": "openrouter/deepseek/deepseek-v4-pro-0813",
+      "usd_in_per_million": "1.122",
+      "usd_out_per_million": "3.366",
+      "usd_cache_read_per_million": "0.0374",
+      "source": "https://openrouter.ai/api/v1/models",
+      "note": "Date-pinned build, so unlike the flash router alias this id resolves to one fixed model."
+    }
+  ]
+}

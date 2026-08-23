@@ -1,0 +1,121 @@
+postgres ready
+DROP POLICY
+COMMIT
+::endgroup::
+applied 20260822_01_tenant_email_domains_admin_only.sql
+::group::applying 20260822_02_catalog_alias_restructure.sql
+BEGIN
+INSERT 0 4
+INSERT 0 4
+INSERT 0 4
+INSERT 0 4
+INSERT 0 9
+INSERT 0 2
+INSERT 0 2
+UPDATE 2
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+COMMIT
+::endgroup::
+applied 20260822_02_catalog_alias_restructure.sql
+applied 91 migration(s)
+pg_cron: absent on this image, so 20260729_02 created its config table and purge procedure but scheduled no nightly job. Expected here; a throwaway database does not live long enough to run one.
+throwaway database ready: 91 of 91 migrations executed
+
+=============== CUSTOMER-FACING CATALOG AFTER MIGRATION ===============
+--- model_aliases visible in /v1/models (visibility public or preview) ---
+        alias_id        |      display_name      | visibility | lifecycle | in_cr  | out_cr  | price_unit 
+------------------------+------------------------+------------+-----------+--------+---------+------------
+ deepseek-v4-flash      | Deepseek V4 Flash      | public     | stable    |   8946 |   17892 | tokens
+ deepseek-v4-pro        | Deepseek V4 Pro        | public     | stable    | 157080 |  471240 | tokens
+ hive-auto              | Hive Auto              | preview    | preview   |  21000 |   84000 | tokens
+ hive-default           | Hive Default           | public     | stable    |  10500 |   42000 | tokens
+ hive-embedding-default | Hive Embedding Default | public     | stable    |      1 |       0 | tokens
+ hive-fast              | Hive Fast              | public     | hidden    |  10500 |   42000 | tokens
+ hive-medium            | Hive Medium            | public     | stable    |  21000 |   84000 | tokens
+ hive-small             | Hive Small             | public     | stable    |  10500 |   42000 | tokens
+ hive-stt               | Hive Voice STT         | public     | stable    |      0 | 4316667 | seconds
+ hive-tts               | Hive Voice TTS         | public     | stable    |      0 | 3080000 | characters
+(10 rows)
+
+
+--- enabled route per alias (health_state not disabled/eol) ---
+        alias_id        |              route_id               |  provider  |                    provider_model                    | health_state 
+------------------------+-------------------------------------+------------+------------------------------------------------------+--------------
+ deepseek-v4-flash      | route-deepseek-v4-flash             | openrouter | openrouter/~deepseek/deepseek-v4-flash-latest        | healthy
+ deepseek-v4-pro        | route-deepseek-v4-pro               | openrouter | openrouter/deepseek/deepseek-v4-pro-0813             | healthy
+ hive-auto              | route-groq-auto                     | groq       | groq/openai/gpt-oss-120b                             | healthy
+ hive-default           | route-groq-default                  | groq       | groq/openai/gpt-oss-20b                              | healthy
+ hive-embedding-default | route-openrouter-embedding          | openrouter | openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free | healthy
+ hive-embedding-default | route-openrouter-embedding-fallback | openrouter | openrouter/qwen/qwen3-embedding-8b                   | healthy
+ hive-fast              | route-groq-fast                     | groq       | groq/openai/gpt-oss-20b                              | healthy
+ hive-medium            | route-groq-medium                   | groq       | groq/openai/gpt-oss-120b                             | healthy
+ hive-small             | route-groq-small                    | groq       | groq/openai/gpt-oss-20b                              | healthy
+ hive-stt               | route-groq-stt                      | groq       | groq/whisper-large-v3                                | healthy
+ hive-tts               | route-groq-tts                      | groq       | groq/canopylabs/orpheus-v1-english                   | healthy
+(11 rows)
+
+
+--- INVARIANT: any alias whose enabled-route count is not exactly 1 ---
+        alias_id        | enabled_routes 
+------------------------+----------------
+ hive-embedding-default |              2
+(1 row)
+
+
+--- retired routes (should list the two OpenRouter ones plus the old fast fallback) ---
+            route_id            |   alias_id   |  provider  | health_state 
+--------------------------------+--------------+------------+--------------
+ route-openrouter-auto          | hive-auto    | openrouter | disabled
+ route-openrouter-default       | hive-default | openrouter | disabled
+ route-openrouter-fast-fallback | hive-fast    | openrouter | disabled
+(3 rows)
+
+
+--- default-tier reachability for the four new aliases ---
+     alias_id      |         groups         
+-------------------+------------------------
+ deepseek-v4-flash | closed,default
+ deepseek-v4-pro   | closed,default,premium
+ hive-medium       | closed,default
+ hive-small        | closed,default
+(4 rows)
+
+
+--- tools_supported on the new and moved routes ---
+        route_id         | tools_supported | supports_reasoning | supports_cache_read 
+-------------------------+-----------------+--------------------+---------------------
+ route-deepseek-v4-flash | t               | t                  | t
+ route-deepseek-v4-pro   | t               | t                  | t
+ route-groq-auto         | t               | t                  | f
+ route-groq-default      | t               | t                  | f
+ route-groq-medium       | t               | t                  | f
+ route-groq-small        | t               | t                  | f
+(6 rows)
+
+
+--- REGRESSION CHECK: enabled routes still serving batch / image endpoints ---
+    route_id     | alias_id  | supports_batch | supports_image_generation | supports_image_edit 
+-----------------+-----------+----------------+---------------------------+---------------------
+ route-groq-auto | hive-auto | t              | t                         | t
+(1 row)
+
+
+--- these three counts must all be non-zero or an endpoint is dead ---
+ batch_routes | imagegen_routes | imageedit_routes 
+--------------+-----------------+------------------
+            1 |               1 |                1
+(1 row)
+
+
+--- policy groups for deepseek-v4-pro ---
+ group_name |    alias_id     
+------------+-----------------
+ closed     | deepseek-v4-pro
+ default    | deepseek-v4-pro
+ premium    | deepseek-v4-pro
+(3 rows)
+

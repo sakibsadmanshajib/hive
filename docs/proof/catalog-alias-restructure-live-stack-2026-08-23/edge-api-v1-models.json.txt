@@ -1,0 +1,68 @@
+GET /v1/models  (edge-api, authenticated with a locally seeded Hive API key)
+host: http://127.0.0.1:18080   captured: 2026-08-23T04:02:09Z
+
+{
+    "data": [
+        {
+            "id": "deepseek-v4-flash",
+            "object": "model",
+            "created": 1787456241,
+            "owned_by": "hive"
+        },
+        {
+            "id": "deepseek-v4-pro",
+            "object": "model",
+            "created": 1787456241,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-auto",
+            "object": "model",
+            "created": 1787456222,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-default",
+            "object": "model",
+            "created": 1787456222,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-embedding-default",
+            "object": "model",
+            "created": 1787456225,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-fast",
+            "object": "model",
+            "created": 1787456222,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-medium",
+            "object": "model",
+            "created": 1787456241,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-small",
+            "object": "model",
+            "created": 1787456241,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-stt",
+            "object": "model",
+            "created": 1787456235,
+            "owned_by": "hive"
+        },
+        {
+            "id": "hive-tts",
+            "object": "model",
+            "created": 1787456235,
+            "owned_by": "hive"
+        }
+    ],
+    "object": "list"
+}

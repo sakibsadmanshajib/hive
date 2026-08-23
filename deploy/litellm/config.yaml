@@ -12,6 +12,22 @@
 
 # Demo budget posture — paid-route count
 # ──────────────────────────────────────
+# RECOUNTED 2026-08-22 by the catalog restructure. Every chat route except the
+# two DeepSeek ones is now Groq, which is free to us at present; the aliases
+# hive-default, hive-auto, hive-small, hive-medium and the deprecated hive-fast
+# all resolve to one of two Groq gpt-oss models. The remaining OpenRouter spend
+# is: route-deepseek-v4-flash, route-deepseek-v4-pro, route-doc-vlm (still
+# OPENROUTER_AUTO_MODEL, the only vision-capable route left) and
+# route-openrouter-embedding-fallback. So FOUR paid routes, down from a mix
+# where the default and vision chat paths were both paid.
+#
+# The concentration risk is the flip side and is called out here so a reader
+# meets it in the same paragraph as the saving: with the chat surface almost
+# entirely on one provider, and with no fallbacks left (see litellm_settings
+# below), a Groq outage takes chat down entirely rather than degrading it.
+#
+# The historical note below is kept for the reasoning it records.
+#
 # CORRECTED by issue #689 (2026-08). This block used to claim only ONE route
 # was paid, on the theory that OPENROUTER_DEFAULT_MODEL / OPENROUTER_AUTO_MODEL
 # default to `openrouter/free` in .env.example, so the flagship and vision
@@ -38,55 +54,117 @@
 # openai/ generic adapter), so there is no verified free embedding slug to swap
 # the fallback to; it stays paid by necessity and is documented here.
 model_list:
-  # ── 1. Flagship chat (paid; priced against gpt-4o-mini, hive-default) ───────
-  # OPENROUTER_DEFAULT_MODEL defaults to a paid slug (see .env.example), pinned
-  # to the exact model hive-default's catalog price is derived from. It used
-  # to default to the `openrouter/free` pool, an undisclosed free model billed
-  # at the paid price -- that mismatch was issue #689. See PR #99 and git
-  # history for the earlier flaky-usage-tokens root-cause debug notes on why a
-  # pinned slug beats the free pool regardless of price.
-  - model_name: route-openrouter-default
+  # ── 1. Default chat (Groq gpt-oss-20b, hive-default) ────────────────────────
+  # Was route-openrouter-default on OPENROUTER_DEFAULT_MODEL. The catalog
+  # restructure of 2026-08-22 moved hive-default onto Groq on cost grounds
+  # (OpenRouter is paid out of pocket, Groq is currently free to us) and gave
+  # it a new route id rather than repointing the old one. The old id is
+  # retired as `disabled` in provider_routes, so the config sync drops its
+  # entry from the live gateway; a new id is what lets that happen, because
+  # the OpenRouter-only `extra_body.provider` block above would otherwise have
+  # survived the field-level merge and been sent to Groq forever.
+  #
+  # The model is written literally, not through an env var. The upstream model
+  # for a DB-managed route comes from provider_routes.provider_model via
+  # POST /internal/litellm/sync (issue #713), and adding a fresh
+  # os.environ/... indirection would just rebuild the two-mechanisms-one-
+  # checked drift that issues #689 and #965 were. Same shape as route-groq-stt
+  # and route-groq-tts below. This literal is only the first-boot seed.
+  - model_name: route-groq-default
     litellm_params:
-      model: os.environ/OPENROUTER_DEFAULT_MODEL
-      api_key: os.environ/OPENROUTER_API_KEY
-      extra_body:
-        provider:
-          allow_fallbacks: false
-          sort: throughput
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY
 
-  # ── 2. Fast / cheap chat (Groq free tier) ───────────────────────────────────
-  # Groq free tier: moonshotai/kimi-k2-instruct — fast inference, free quota,
-  # ideal for lightweight everyday prompts and cost-sensitive paths.
-  # Falls back to the flagship route automatically via litellm_settings.fallbacks
-  # if Groq's free quota is exhausted or the service is unavailable.
+  # ── 2. Deprecated fast chat (hive-fast) ─────────────────────────────────────
+  # Serves Groq openai/gpt-oss-20b, via GROQ_FAST_MODEL, whose default is
+  # pinned to exactly that in .env.example (reverted there by issue #965 after
+  # Groq decommissioned llama-3.1-8b-instant). The older comment here named
+  # moonshotai/kimi-k2-instruct, which this route has not served for some time.
+  #
+  # hive-fast is DEPRECATED as of the 2026-08-22 catalog restructure. It is
+  # kept, priced and routed identically to hive-small, because the model id is
+  # persisted per-conversation in existing Open WebUI chats and in live API
+  # clients. Do not retire this route without a migration path for those.
+  #
+  # It no longer falls back to anything. The previous comment claimed an
+  # automatic cascade to the flagship route via litellm_settings.fallbacks;
+  # those chat fallbacks are gone, deliberately, because a fallback answers
+  # from a model the alias was not priced against. See litellm_settings below.
   - model_name: route-groq-fast
     litellm_params:
       model: os.environ/GROQ_FAST_MODEL
       api_key: os.environ/GROQ_API_KEY
 
-  # ── 3. Vision (paid; priced against gpt-4.1-mini, hive-auto) ────────────────
-  # OPENROUTER_AUTO_MODEL defaults to a paid, vision-capable slug pinned to the
-  # exact model hive-auto's catalog price is derived from (same #689 fix as
-  # route-openrouter-default above; this route used to default to the free
-  # pool too). Used for multimodal / image-analysis requests routed by the
-  # edge-api capability selector.
-  - model_name: route-openrouter-auto
+  # ── 3. Larger chat (Groq gpt-oss-120b, hive-auto) ───────────────────────────
+  # Was route-openrouter-auto on OPENROUTER_AUTO_MODEL, retired for the same
+  # reason and in the same way as route-openrouter-default above.
+  #
+  # NOTE this route is no longer vision-capable. gpt-oss-120b is text-only,
+  # where gpt-4.1-mini was multimodal, so state the consequence plainly rather
+  # than pointing somewhere reassuring: after this change there is NO
+  # customer-reachable vision path through the gateway. hive-auto was the last
+  # one.
+  #
+  # route-doc-vlm (section 4) is not a migration path for that traffic. It has
+  # no provider_routes row, which is why the config sync leaves it alone, and
+  # SelectRoute only ever returns routes joined to an alias, so nothing a
+  # customer sends in the OpenAI-compatible `model` field can select it. Its
+  # only consumer is apps/agent-engine/internal/docvlm, which addresses this
+  # LiteLLM model name directly and never goes through the catalog. Do not
+  # point a customer at it.
+  #
+  # hive-auto also no longer performs any automatic model selection; the name
+  # is kept for back-compat only.
+  - model_name: route-groq-auto
     litellm_params:
-      model: os.environ/OPENROUTER_AUTO_MODEL
-      api_key: os.environ/OPENROUTER_API_KEY
-      extra_body:
-        provider:
-          allow_fallbacks: false
-          sort: throughput
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
 
-  # ── 4. Doc-layout vision (paid, same model + env var as route-openrouter-auto) ─
+  # ── 3b. Catalog restructure routes (2026-08-22) ─────────────────────────────
+  # hive-small and hive-medium are the provider-blind names for the two Groq
+  # gpt-oss models; hive-default and hive-auto above resolve to the same two
+  # models through their own route rows, per the one-alias-one-enabled-route
+  # rule. The two DeepSeek routes are the only paid OpenRouter chat routes
+  # left after this change.
+  #
+  # The tilde in ~deepseek/deepseek-v4-flash-latest is part of the real
+  # OpenRouter model id. Removing it silently selects a different, differently
+  # priced model, so do not "tidy" it away.
+  - model_name: route-groq-small
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: route-groq-medium
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: route-deepseek-v4-flash
+    litellm_params:
+      model: openrouter/~deepseek/deepseek-v4-flash-latest
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-deepseek-v4-pro
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-pro-0813
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── 4. Doc-layout vision (paid, OpenRouter, the last multimodal route) ──────
   # Blueprint Wave 3, Step 3.2 (issue #300): the doc-layout knowledge-work-pack
   # skill (apps/agent-engine/internal/docvlm) sends contract/PDF page images
-  # here for structured layout extraction. Named as its own route (rather than
-  # reusing route-openrouter-auto directly) so the doc-layout skill's model
-  # choice can be tuned or swapped independently of the general vision route
-  # edge-api's capability selector uses; today both share OPENROUTER_AUTO_MODEL
-  # and so both point at the same paid vision model.
+  # here for structured layout extraction.
+  #
+  # UPDATED 2026-08-22. This section used to describe the route as sharing a
+  # model and an env var with route-openrouter-auto, and as being separable
+  # from "the general vision route edge-api's capability selector uses".
+  # Neither that route nor that selector path exists any more: the catalog
+  # restructure retired route-openrouter-auto and moved hive-auto to a
+  # text-only Groq model.
+  #
+  # What is left is this: route-doc-vlm is the ONLY multimodal route in the
+  # file, it is reachable only by agent-engine calling this LiteLLM model name
+  # directly, and it is NOT selectable by any customer request, because it has
+  # no provider_routes row and therefore no alias. OPENROUTER_AUTO_MODEL now
+  # exists for this route alone, so it must stay pointed at a vision-capable
+  # slug even though no alias is priced against it any more.
   - model_name: route-doc-vlm
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
@@ -182,11 +260,29 @@ litellm_settings:
   cooldown_time: 30
   drop_params: true
   fallbacks:
-    - route-openrouter-default: [route-groq-fast]
-    - route-openrouter-auto: [route-groq-fast]
+    # The two chat fallbacks that used to live here are GONE, deliberately.
+    # They read:
+    #   - route-openrouter-default: [route-groq-fast]
+    #   - route-openrouter-auto: [route-groq-fast]
+    # Both named routes are retired by the 2026-08-22 catalog restructure, so
+    # they would be inert anyway, but they should not simply be re-pointed at
+    # the replacement routes either. A gateway fallback serves a DIFFERENT
+    # upstream model than the alias is priced against: route-openrouter-auto
+    # was priced on gpt-4.1-mini and would silently answer from gpt-oss-20b.
+    # That is the one-alias-one-price rule being broken one layer below the
+    # database, where the catalog cannot see it. The owner's rule is that an
+    # alias maps to exactly one model, so a chat request now fails rather than
+    # being quietly served by a model the customer was not charged for.
+    #
+    # Consequence, stated plainly: there is no absorption if Groq has an
+    # outage. That is the accepted trade-off of one model, one price.
+    #
     # Embedding cascade: Nemotron-Embed VL (free pool) → Qwen3 Embedding
     # (paid, larger context). NVIDIA NIM is no longer in the chain after
-    # the 2026-05-18 retrieval-model EOL wave.
+    # the 2026-05-18 retrieval-model EOL wave. Kept, because both legs are
+    # embedding routes under one alias whose price is not per-token in the
+    # same sense, and RAG ingestion failing outright is worse than a
+    # second-choice embedding model.
     - route-openrouter-embedding: [route-openrouter-embedding-fallback]
 
 files_settings:
