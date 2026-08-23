@@ -123,4 +123,23 @@ try:
         finally:
             hive_conn.close()
 except Exception as hive_tenant_role_error:
+    # Keep the fallback, but never let a failure hand out admin. Admin must only
+    # ever come from a successful platform-attribute lookup (issue #748), so that
+    # is stated in code here rather than left to a deployment's configuration.
+    #
+    # Two cases where the fallback can be 'admin', both real:
+    #   * ENABLE_OAUTH_ROLE_MANAGEMENT on (what compose sets) and a claim that
+    #     matched OAUTH_ADMIN_ROLES, or role management off with
+    #     DEFAULT_USER_ROLE=admin and no existing user row.
+    #   * role management off and an EXISTING Open WebUI admin, where upstream
+    #     carries the stored role forward (utils/oauth.py's `role = user.role`).
+    #
+    # The cost, stated rather than hidden: in that second case a transient
+    # database failure demotes a real operator to 'user' for that session. Their
+    # next successful login restores admin, because the attribute is still there,
+    # so the failure mode is a recoverable loss of privilege instead of an
+    # unrecoverable grant of it. On this deployment the fallback is "pending"
+    # (deploy/docker/docker-compose.yml), where the clamp is a no-op.
+    if role == 'admin':
+        role = 'user'
     log.warning(f'hive tenant-role lookup failed, keeping fallback role: {hive_tenant_role_error}')

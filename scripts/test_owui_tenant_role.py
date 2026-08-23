@@ -294,6 +294,17 @@ def test_a_missing_database_url_changes_nothing() -> None:
     assert run_fragment([(True, True)], db_url=None)["role"] == "pending"
 
 
+def test_a_failure_can_never_leave_an_admin_fallback_standing() -> None:
+    """The fallback is DEFAULT_USER_ROLE, which a deployment chooses. If one
+    chooses `admin`, an unreachable database must not promote every login while
+    the check that decides admin is the thing that failed."""
+    outcome = run_fragment(
+        [], fallback_role="admin", raise_on_connect=OSError("connection refused")
+    )
+    assert outcome["role"] == "user", outcome["role"]
+    assert outcome["log"].warnings
+
+
 def test_an_already_resolved_role_is_never_upgraded_by_a_failure() -> None:
     """If the OAuth claim machinery above already resolved 'user', a failing
     lookup must leave it there rather than reaching for anything better."""

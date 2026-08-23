@@ -202,6 +202,43 @@ The role decision itself is not a UI event, so the evidence for it is the A/B
 above and the rendered summary posted on the pull request as
 `role-ab-evidence.png`.
 
+## The failure path, added during review
+
+The adversarial pass asked what happens when the lookup itself fails and the
+fallback role is already `admin`. Upstream carries a stored role forward when
+OAuth role management is off (`role = user.role`), so an existing Open WebUI
+admin keeps admin whenever the database is unreachable, which is the one shape
+where a failure grants privilege rather than withholding it. The fragment now
+clamps that to `user`.
+
+Two containers, database pointed at a host that does not resolve,
+`DEFAULT_USER_ROLE=admin`, and a stored role of `admin` carried in:
+
+```
+=== BEFORE, stored role admin, database unreachable ===
+  operator@hive-748.invalid      -> admin
+  owner@hive-748.invalid         -> admin
+  member@hive-748.invalid        -> admin
+  multi@hive-748.invalid         -> admin
+  stranger@hive-748.invalid      -> admin
+
+=== AFTER, stored role admin, database unreachable ===
+  operator@hive-748.invalid      -> user
+  owner@hive-748.invalid         -> user
+  member@hive-748.invalid        -> user
+  multi@hive-748.invalid         -> user
+  stranger@hive-748.invalid      -> user
+```
+
+The cost is stated in the fragment's own comment and is not hidden: a transient
+failure demotes a real operator for that session, and their next successful login
+restores admin because the attribute is still there. A recoverable loss of
+privilege in exchange for no unrecoverable grant of it. On this deployment the
+fallback is `pending`, so the clamp is a no-op.
+
+The identity resolution above was re-run against the rebuilt image after this
+change and is unchanged.
+
 ## Regression tests, red then green
 
 `apps/control-plane/internal/tenants` against the same throwaway Postgres, with

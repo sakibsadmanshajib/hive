@@ -131,6 +131,11 @@ async function installHiveJwtForwardFilter(page: Page, email: string): Promise<v
       HIVE_COMPOSE_FLAGS,
     },
     stdio: "inherit",
+    // Synchronous, so a stalled `docker compose exec` blocks the event loop and
+    // Playwright's own timer cannot fire: without a bound the setup project
+    // hangs until the job's own limit kills it, with no diagnosis. The work is
+    // one sqlite UPDATE, so a minute is already an order of magnitude of slack.
+    timeout: 60_000,
   });
 
   // Open WebUI stores its session JWT in a `token` cookie and mirrors it into
@@ -163,6 +168,11 @@ async function installHiveJwtForwardFilter(page: Page, email: string): Promise<v
       HIVE_COMPOSE_FLAGS,
     },
     stdio: "inherit",
+    // Same reasoning as the promotion above, with a wider bound because this
+    // one copies two files into the container and makes four API calls. It has
+    // never taken more than a few seconds; five minutes is a hang, not a slow
+    // run, and failing on it names the stall instead of eating the job.
+    timeout: 300_000,
   });
 }
 
