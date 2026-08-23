@@ -12,12 +12,11 @@
 	import { getModels, getToolServersData, getVersionUpdates } from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
 	import { getBanners } from '$lib/apis/configs';
-	import { getTerminalServers } from '$lib/apis/terminal';
 	import { getUserSettings } from '$lib/apis/users';
 	import { setTextScale } from '$lib/utils/text-scale';
 	import { consumeModelPrefetch } from '$lib/hive/model-prefetch';
 
-	import { WEBUI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
+	import { WEBUI_VERSION } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
 
 	import {
@@ -177,18 +176,12 @@
 			terminalServers.set([]);
 		}
 
-		// Fetch terminal servers the user has access to (for FileNav + terminal_id)
-		const systemTerminals = await getTerminalServers(localStorage.token);
-		if (systemTerminals.length > 0) {
-			// Store with proxy URL and session key for FileNav file browsing
-			const terminalEntries = systemTerminals.map((t) => ({
-				id: t.id,
-				url: `${WEBUI_API_BASE_URL}/terminals/${t.id}`,
-				name: t.name,
-				key: localStorage.token
-			}));
-			terminalServers.update((existing) => [...existing, ...terminalEntries]);
-		}
+		// The per-user system terminal probe (`GET /api/v1/terminals/`) was
+		// removed: this deployment runs no terminal service, Caddy blocks the
+		// path outright, and the probe fired on every chat layout mount only to
+		// come back empty. The admin Settings page and the model workspace's
+		// terminal selector keep calling the API on demand for deployments
+		// that do have one.
 	};
 
 	const setBanners = async () => {
