@@ -1,0 +1,293 @@
+name: post-deploy-verify
+
+# Asserts that the product still works after deploy-demo-box has already
+# exited 0. A green deploy is not the claim "the product works": PR #787
+# merged green and took chat sign-in down, and three consecutive deploys
+# failed at `migrate` while the box silently stayed on old code.
+#
+# The gating this adds is machine gating, not human gating. There is no
+# `environment:` key on any job here and there must never be one. `main` went
+# 7cfc460ea (which added an approval gate) then 09607ff05 (which removed it);
+# the owner's ruling is "keep it autonomous but make the gating more
+# professional", so rigour comes from stronger checks, not from a person in
+# the loop.
+#
+# ── Why this is a separate workflow, and not a job inside deploy-demo-box ────
+#
+# Correctness, not tidiness. A job embedded in the deploy workflow cannot be
+# exercised from a branch without actually deploying, so there would be no way
+# to prove it green, break the thing it guards, watch it go red, restore, and
+# watch it go green again. Here that loop runs on a pull request behind a
+# label, against the real box, with no deploy involved. A check nobody can
+# prove still fails is a check nobody should trust.
+#
+# It also keeps this out of deploy/docker/docker-compose.yml and out of
+# deploy-demo-box.yml, both of which are heavily contended.
+#
+# ── Why credentials come from the box, not from GitHub secrets ──────────────
+#
+# Six workflows in this repository read `SUPABASE_*` from GitHub secrets that
+# name a hosted project which has been deleted. Nothing went red. The Cowork
+# proof job ran for four days against a Supabase that was not there, and
+# deploy-web-console-workers shipped green on the day the project went away
+# (issue #1059). The box's own /home/sakib/hive/.env is what the running
+# containers actually use, so reading the same file is the only way this
+# verifies the deployment that exists rather than one that used to.
+#
+# The `preflight` step below is the generalisation of that lesson, and it is
+# the piece worth promoting into the other six workflows.
+
+on:
+  workflow_run:
+    workflows: [deploy-demo-box]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      negative_control:
+        description: >-
+          Deliberately remove the thing one check guards so that check goes red.
+          Proves the gate still bites. No value of this makes anything pass.
+        type: choice
+        default: none
+        options: [none, chat, signin, ledger]
+  # Label-gated, the same shape owui-nightly.yml uses, so this workflow can be
+  # exercised end to end from the branch that changes it and cannot fire by
+  # accident on unrelated pull requests. `synchronize` is here so that each
+  # push to a labelled branch re-runs it, which is what makes the
+  # green-break-red-restore-green loop a single push each way.
+  pull_request:
+    types: [labeled, synchronize]
+
+# No `concurrency:` block, deliberately. Grouping would queue runs, and GitHub
+# cancels a middle pending run when a third is queued behind it -- turning a
+# skipped verification into silence rather than a failure. deploy-demo-box is
+# already serialised by its own group, so the runs that matter arrive one at a
+# time anyway, and two overlapping runs here are harmless: each mints its own
+# key and each looks for any new usage_charge row, so the worst case is that
+# one of them sees the other's charge and still concludes, correctly, that
+# billing wrote a row.
+
+jobs:
+  verify:
+    name: Verify the deployment
+    # workflow_run fires on completion of any conclusion, including failure and
+    # cancellation. A failed deploy is already reported by deploy-demo-box's own
+    # report-failure job, and verifying a deploy that never happened would file
+    # a second, misleading issue about the product being down.
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'pull_request'
+            && contains(github.event.pull_request.labels.*.name, 'run-post-deploy-verify'))
+      }}
+    runs-on: [self-hosted, hive-demo]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For a workflow_run, pin to the commit that was actually deployed
+          # rather than to whatever main has drifted to since. For everything
+          # else the default ref is correct, and on a pull request that is what
+          # lets a branch exercise its own version of these scripts.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Report which credentials the box carries
+        # Presence and length only, never a value: this repository is public.
+        # This step never fails. Its whole job is to make the next step's
+        # failure legible, because "HIVE_VERIFY_EMAIL is not set" is a much
+        # cheaper thing to read than a sign-in that answered 400.
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          if [ ! -f "$env_file" ]; then
+            echo "::error::$env_file does not exist on this runner"
+            exit 1
+          fi
+          for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                      HIVE_VERIFY_EMAIL HIVE_VERIFY_PASSWORD \
+                      HIVE_QA_TESTER_EMAIL HIVE_QA_TESTER_PASSWORD \
+                      HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
+            # `|| true` matters: under `set -o pipefail` a grep that matches
+            # nothing kills the step before it can report what is missing,
+            # which is the one thing this step exists to do.
+            value=$(grep -E "^${name}=" "$env_file" | head -1 | cut -d= -f2- || true)
+            value=${value%\"}; value=${value#\"}
+            value=${value%\'}; value=${value#\'}
+            if [ -n "$value" ]; then
+              echo "  present  ${name} (${#value} characters)"
+            else
+              echo "  ABSENT   ${name}"
+            fi
+          done
+
+      - name: Preflight the Supabase configuration, then verify the deployment
+        # One step, so no credential ever reaches $GITHUB_ENV, the step summary,
+        # or another job. Values read here live in this shell and die with it.
+        env:
+          NEGATIVE_CONTROL: ${{ github.event.inputs.negative_control || 'none' }}
+          HIVE_VERIFY_RUN_LABEL: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+
+          read_env() {
+            # Same idiom as deploy-demo-box.yml's pooler-DSN step, including the
+            # quote stripping and the `|| true`.
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+
+          missing=""
+          for name in SUPABASE_URL SUPABASE_ANON_KEY HIVE_VERIFY_EMAIL HIVE_VERIFY_PASSWORD; do
+            value=$(read_env "$name")
+            if [ -z "$value" ]; then
+              missing="$missing $name"
+              continue
+            fi
+            # Mask before export. A masked value is still redacted if some
+            # later command echoes it, and neither this script nor the two
+            # Python scripts print one.
+            case "$name" in
+              *KEY|*PASSWORD) echo "::add-mask::$value" ;;
+            esac
+            export "$name=$value"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the box's .env is missing:$missing"
+            echo "HIVE_VERIFY_EMAIL must name a dedicated verification identity that is a"
+            echo "tenant OWNER with a verified email, and never demo@hive-demo.invalid"
+            echo "(issue #848). Minting an API key needs api_keys:write, which the"
+            echo "authorization policy grants to OWNER only. Add both to $env_file."
+            exit 1
+          fi
+
+          # Optional overrides; the scripts default to the public demo hostnames.
+          for name in HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
+            value=$(read_env "$name")
+            [ -n "$value" ] && export "$name=$value"
+          done
+          # Claim-checked by the preflight when present, never sent anywhere.
+          service=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          if [ -n "$service" ]; then
+            echo "::add-mask::$service"
+            export SUPABASE_SERVICE_ROLE_KEY="$service"
+          fi
+
+          echo "::group::preflight: does this Supabase configuration resolve at all"
+          # Seconds, deterministic, no writes. It answers the question that
+          # would have caught both halves of issue #1059 before anything slow
+          # ran: is the project alive, and do these keys belong to it. Running
+          # it first means a dead or mismatched configuration fails here with
+          # that reason, instead of surfacing ninety seconds later as a sign-in
+          # that answered 400.
+          python3 scripts/preflight-supabase-config.py
+          echo "::endgroup::"
+
+          args=""
+          if [ "$NEGATIVE_CONTROL" != "none" ]; then
+            echo "::warning::running with negative control '$NEGATIVE_CONTROL'; this run is EXPECTED to fail"
+            args="--negative-control $NEGATIVE_CONTROL"
+          fi
+          # No `|| true`, no continue-on-error. The script exits non-zero unless
+          # chat answered from its backend, the control-plane resolved a real
+          # bearer to the right identity, and a real completion produced a real
+          # usage_charge row.
+          python3 scripts/post-deploy-verify.py $args
+
+  report-failure:
+    # A separate label from deploy-demo-box's `ci-failure:deploy-demo-box`, and
+    # that is not arbitrary. This is a separate workflow, so it cannot join that
+    # job's `needs: [migrate, deploy, sdk-replay]` list; and its ledger check
+    # makes a real outbound call to a third-party inference provider, which can
+    # go red for reasons that have nothing to do with a deploy. Sharing the
+    # label would let a provider outage hold the deploy issue open, and would
+    # downgrade a genuine `migrate` failure into a comment on a stale issue --
+    # the exact trap already documented on agent-workspace-coverage.
+    name: Report failure
+    needs: [verify]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    # The notifier must never be able to change the verdict. `continue-on-error`
+    # plus the `|| true` below mean a rate-limited or broken notifier cannot
+    # turn a red verification green, and cannot turn a green one red either.
+    continue-on-error: true
+    steps:
+      - uses: actions/github-script@v7
+        continue-on-error: true
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          TRIGGER: ${{ github.event_name }}
+          DEPLOY_RUN: ${{ github.event.workflow_run.html_url }}
+        with:
+          script: |
+            // Dedupe by exact title over the issues LIST api, not the search
+            // api. Search is eventually consistent and returns nothing for an
+            // issue filed seconds ago, so two near-simultaneous failures each
+            // find no match and each file one. The list api is read-your-writes.
+            const label = 'ci-failure:post-deploy-verify';
+            const title = 'post-deploy-verify is failing against the demo box';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const detail = [
+              `verify=${process.env.VERIFY_RESULT}`,
+              `trigger=${process.env.TRIGGER}`,
+              process.env.DEPLOY_RUN ? `deploy run: ${process.env.DEPLOY_RUN}` : null,
+            ].filter(Boolean).join(', ');
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 100,
+            });
+            const existing = open.find((i) => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Still failing: ${runUrl}\n\n${detail}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: [label],
+              body: [
+                'Post-deploy verification failed against the demo box.',
+                '',
+                `First detected: ${runUrl}`,
+                '',
+                detail,
+                '',
+                'One of three things is true, and the run log names which:',
+                '',
+                '- chat answered but its backend did not, so chat-hive.scubed.co is serving',
+                '  the static shell over a dead Open WebUI.',
+                '- a freshly minted session did not resolve to the same user at the',
+                '  control-plane, so sign-in is broken even if the login page renders.',
+                '- a real completion produced no `usage_charge` ledger row, so billing has',
+                '  failed open and requests are being served for free.',
+                '',
+                'Nothing was rolled back and nothing should be: forward migrations run',
+                'before the deploy and are not reversible by redeploying code, so an',
+                'automatic rollback would leave old code against a new schema.',
+                '',
+                'Filed automatically. Close it once a run goes green; it will be refiled',
+                'if it fails again.',
+              ].join('\n'),
+            });
+      - name: Never let the notifier change the verdict
+        if: always()
+        run: echo "notifier finished" || true
