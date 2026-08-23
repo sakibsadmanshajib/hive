@@ -270,6 +270,14 @@ func main() {
 	voiceMW := voiceGateForAPIKeys(featureGate.Require(featuregate.FeatureVoice))
 	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler, voiceMW)
 
+	// Issue #997: Open WebUI's voice dropdowns fetch GET /v1/audio/voices with
+	// no Authorization header at all, so this route is registered without the
+	// hk_-key authorizer or the tenant voice gate. Serving the provider's real
+	// roster here is what keeps Open WebUI's get_available_voices from falling
+	// back to its hardcoded alloy-style list (#996); gating it would silently
+	// reinstate that fallback. See audio.VoicesHandler for the full rationale.
+	mux.Handle("/v1/audio/voices", audio.VoicesHandler())
+
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
 
 	// RAG routes (#232): always registered behind FeatureRAG so the gate returns

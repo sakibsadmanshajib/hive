@@ -1,0 +1,47 @@
+TTS read-aloud wiring proof (issues #997, #996). Captured 2026-08-23, WSL2 dev box.
+
+Environment: LiteLLM proxy started from this branch's deploy/litellm/config.yaml
+(pinned image ghcr.io/berriai/litellm:v1.98.0@sha256:20b5...ddaf4), master key
+redacted, GROQ_API_KEY supplied from the local .env and never printed.
+The edge-api handler ran unmodified via the repo's own production-twin harness
+(TestLiveVoiceRoundTripThroughLiteLLM, apps/edge-api/internal/audio/
+live_voice_integration_test.go): Handler -> LiteLLM route-groq-tts -> Groq
+Orpheus. No other Hive service was involved or affected.
+
+1) Live integration test (Handler -> LiteLLM -> Groq), voice troy:
+   --- PASS: TestLiveVoiceRoundTripThroughLiteLLM (2.86s)
+   Speech leg returned non-empty WAV with non-silent PCM; STT leg transcribed
+   the same sentence back verbatim ("The quick brown fox jumps over the lazy dog").
+
+2) Direct POST /v1/audio/speech against the same proxy (route-groq-tts):
+   supported voice  -> http=200 bytes=149830 content_type=audio/mpeg
+   WAV check: RIFF PCM 16-bit mono 24000 Hz, peak sample amplitude 29632
+   (non-silent audio confirmed by decoding, not just byte count).
+
+3) Unsupported voice (alloy), same route: http=500, body
+   {"error":{"message":"Internal server error","type":"internal_server_error"}}
+   Documents the remaining #996 contract gap (400-class provider rejection
+   surfaced as a 500). Unchanged by this PR on purpose; the PR prevents Hive's
+   own surfaces from offering alloy instead (see below).
+
+4) GET /v1/audio/voices (new edge-api route in this branch): covered by unit
+   tests TestVoicesHandlerGetReturnsProviderRoster /
+   TestVoicesHandlerRejectsNonGet (apps/edge-api/internal/audio/
+   handler_voices_test.go): returns {voices:[{id,name}...]} with exactly
+   autumn diana hannah austin daniel troy, no alloy, and 405 for non-GET.
+   Not exercised against a live edge-api container here because that needs a
+   full core stack (DB authz chain); the handler is a static catalog with no
+   dependencies, so httptest coverage exercises it fully.
+
+5) Patch self-check: python3 scripts/test_owui_rag_env_config.py
+   ok: owui RAG env-config reconcile (issue #722)
+   Includes new tests pinning the compose TTS lines, the paired-credential
+   refusal for audio.tts.openai.*, and the /v1/audio/voices registration.
+
+Pending-live-capture: the read-aloud button producing audible playback in the
+Open WebUI chat surface was NOT captured here; it requires the deployed demo
+stack running this branch's open-webui + edge-api images. Post-merge steps:
+deploy-demo-box.yml auto-deploys main to the box; then sign in at
+chat-hive.scubed.co, open any assistant message, click the speaker button, and
+confirm playback plus a Settings > Audio TTS Voice dropdown listing autumn,
+diana, hannah, austin, daniel, troy. Capture screenshot into docs/proof/tts-readaloud/.
