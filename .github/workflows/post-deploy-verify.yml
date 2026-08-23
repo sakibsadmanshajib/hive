@@ -193,9 +193,27 @@ jobs:
         #
         # Negative control: compare against a well-formed image ID that no
         # container can be running. That proves the comparison and its failure
-        # path both fire. It is deliberately not a real stale binary:
-        # manufacturing one means rolling a live service back onto an old
-        # image, and this box is the demo surface.
+        # path both fire, on any trigger. It is deliberately not a real stale
+        # binary: manufacturing one means rolling a live service back onto an
+        # old image, and this box is the demo surface.
+        #
+        # Who a real mismatch belongs to depends on the trigger, so the verdict
+        # does too. After a deploy (workflow_run) a mismatch means that deploy
+        # did not put its own build into service, which is the failure this
+        # check exists to stop, so it is fatal. On a pull request or a dispatch
+        # the box is carrying whatever the last deploy left, which the branch
+        # under test neither caused nor can fix, so failing here would block a
+        # pull request for somebody else's deploy and would eventually be
+        # ignored. There it reports, loudly, and the run continues to the
+        # checks the branch can actually be judged on.
+        #
+        # Measured on the first real run of this step, which is why the
+        # distinction is here at all: seven of twenty containers
+        # (control-plane, edge-api, open-webui, web-console-prod,
+        # agent-console, markitdown, supabase-db) were not on their tag's
+        # current image seven minutes after a green deploy. The evidence went
+        # to issue #869. A pull request adding the check is the wrong place to
+        # litigate it.
         working-directory: /home/sakib/hive/deploy/docker
         env:
           # The deploy's own flags, copied from deploy-demo-box.yml's
@@ -253,10 +271,25 @@ jobs:
             exit 1
           fi
           echo "  compared $checked container(s)"
-          if [ -n "$stale" ]; then
+          [ -n "$stale" ] || exit 0
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ] || [ "${NEGATIVE_CONTROL:-none}" = "freshness" ]; then
             echo "::error::containers are not running the image their tag points to (issue #869):$stale"
             exit 1
           fi
+          echo "::warning::containers are not running the image their tag points to (issue #869), left over from an earlier deploy rather than caused by this run:$stale"
+          {
+            echo "### Stale containers on the box (issue #869)"
+            echo
+            echo "Not fatal on a \`$GITHUB_EVENT_NAME\` run: this is the state the last"
+            echo "deploy left, not something this run or this branch caused. The same"
+            echo "mismatch is fatal on the \`workflow_run\` path, where it means the deploy"
+            echo "that just finished did not put its own build into service."
+            echo
+            echo '```'
+            printf '%b\n' "${stale//%0A/\\n}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report which inputs the box carries
         # Presence and length only, never a value: this repository is public.
