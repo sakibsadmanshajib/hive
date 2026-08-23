@@ -25,6 +25,7 @@ import {
   ControlPlaneError,
   createApiKey,
   getCheckoutRails,
+  getLedgerEntries,
   initiateCheckout,
   revokeApiKey,
 } from "@/lib/control-plane/client";
@@ -84,7 +85,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   return isRecord(body) ? body : {};
 }
 
-export async function GET(_request: Request, { params }: Params): Promise<Response> {
+export async function GET(request: Request, { params }: Params): Promise<Response> {
   const unauth = await requireSession();
   if (unauth) return unauth;
 
@@ -95,6 +96,24 @@ export async function GET(_request: Request, { params }: Params): Promise<Respon
       return NextResponse.json(await getCheckoutRails());
     } catch (err) {
       return errorResponse(err, "Failed to load checkout rails");
+    }
+  }
+
+  // GET /api/v1/accounts/current/credits/ledger?request_id=...
+  // Read-only lifecycle lookup backing the request-log detail expansion. The
+  // control-plane scopes every returned entry to the caller's account; the
+  // proxy only narrows which request_id is fetched.
+  if (path.length === 2 && path[0] === "credits" && path[1] === "ledger") {
+    const requestId = new URL(request.url).searchParams.get("request_id");
+    try {
+      return NextResponse.json(
+        await getLedgerEntries({
+          limit: 50,
+          requestId: requestId ?? undefined,
+        })
+      );
+    } catch (err) {
+      return errorResponse(err, "Failed to load ledger entries");
     }
   }
 

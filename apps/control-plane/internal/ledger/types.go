@@ -94,4 +94,7 @@ type ListEntriesFilter struct {
 	Cursor    *uuid.UUID
 	Limit     int
 	EntryType *EntryType
+	// RequestID, when set, narrows the page to the reservation lifecycle of
+	// one request (hold, charge, release entries sharing that request_id).
+	RequestID string
 }

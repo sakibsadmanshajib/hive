@@ -163,6 +163,47 @@ func TestListLedgerEntriesDefaultsLimit(t *testing.T) {
 	}
 }
 
+// TestListLedgerEntriesRequestIDFilter pins the request_id query param onto
+// the repository filter: the request-log detail view reads one request's
+// reservation lifecycle (hold, charge, release) through this endpoint, and a
+// dropped param would silently show every entry instead.
+func TestListLedgerEntriesRequestIDFilter(t *testing.T) {
+	repo := newStubRepo()
+	userID := uuid.New()
+	accountID := uuid.New()
+
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	handler := newHTTPHandler(repo)
+	viewer := auth.Viewer{
+		UserID:        userID,
+		Email:         "owner@example.com",
+		EmailVerified: true,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/credits/ledger?request_id=req_lifecycle_1", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if repo.lastListRequestID != "req_lifecycle_1" {
+		t.Fatalf("expected request_id filter req_lifecycle_1, got %q", repo.lastListRequestID)
+	}
+}
+
 func TestGetBalanceRejectsUnverifiedViewer(t *testing.T) {
 	repo := newStubRepo()
 	userID := uuid.New()
