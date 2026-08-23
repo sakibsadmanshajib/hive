@@ -475,11 +475,28 @@ jobs:
             export SUPABASE_SERVICE_ROLE_KEY="$service"
           fi
 
-          # Optional overrides; the scripts default to the public demo
-          # hostnames, which is what this box serves.
+          # ── verification targets ───────────────────────────────────────────
+          #
+          # The script requires all three from its environment and refuses to
+          # run unconfigured: a checker that silently assumes a fixed demo host
+          # when configuration is missing can return green for a product nobody
+          # deployed. Each is read from $env_file first. The fallbacks below
+          # are this deployment's public hostnames, written here where they are
+          # reviewed and logged rather than assumed inside the checking code,
+          # and every run reports which source each target came from.
           for name in HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
             value=$(read_env "$name")
-            [ -n "$value" ] && export "$name=$value"
+            source="box .env"
+            if [ -z "$value" ]; then
+              case "$name" in
+                HIVE_CHAT_URL)          value=https://chat-hive.scubed.co ;;
+                HIVE_CONTROL_PLANE_URL) value=https://control-hive.scubed.co ;;
+                HIVE_EDGE_API_URL)      value=https://api-hive.scubed.co ;;
+              esac
+              source="workflow fallback"
+            fi
+            export "$name=$value"
+            echo "target $name $value ($source)"
           done
 
           # ── the verification identity ─────────────────────────────────────

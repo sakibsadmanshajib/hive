@@ -39,6 +39,17 @@ Required env:
                                       in-network one does not resolve outside
                                       the compose network at all.
 
+    HIVE_CHAT_URL,                    the public origins this deployment is
+    HIVE_CONTROL_PLANE_URL,           supposed to serve. All three come from
+    HIVE_EDGE_API_URL                 the environment and none has a default,
+                                      and this is deliberate rather than
+                                      pedantry. A checker that silently falls
+                                      back to a fixed demo host can return a
+                                      green result for a product nobody
+                                      deployed: the target must be named by
+                                      whoever owns the topology, and a missing
+                                      name stops the run before any request.
+
 Required env for the `signin` and `ledger` checks only:
     HIVE_VERIFY_EMAIL                 a dedicated verification identity
     HIVE_VERIFY_PASSWORD              its existing password
@@ -49,9 +60,6 @@ Required env for the `signin` and `ledger` checks only:
     whole gate going dark on a missing credential.
 
 Optional env:
-    HIVE_CHAT_URL              default https://chat-hive.scubed.co
-    HIVE_CONTROL_PLANE_URL     default https://control-hive.scubed.co
-    HIVE_EDGE_API_URL          default https://api-hive.scubed.co
     HIVE_VERIFY_MODEL          default hive-default
     HIVE_VERIFY_LEDGER_TIMEOUT default 90 (seconds to wait for the charge)
     HIVE_VERIFY_LEDGER_PAGES   default 20 (page cap on the ledger scan)
@@ -71,6 +79,7 @@ Nothing secret is ever printed. Tokens, keys and passwords are reported by
 presence and length only, and this repository is public.
 """
 import argparse
+import base64
 import json
 import os
 import sys
@@ -93,9 +102,10 @@ CHECKS = ("chat", "signin", "ledger")
 # outcome the checks are written to avoid.
 USER_AGENT = "hive-post-deploy-verify/1 (+https://github.com/sakibsadmanshajib/hive)"
 
-CHAT = os.environ.get("HIVE_CHAT_URL", "https://chat-hive.scubed.co").rstrip("/")
-CP = os.environ.get("HIVE_CONTROL_PLANE_URL", "https://control-hive.scubed.co").rstrip("/")
-EDGE = os.environ.get("HIVE_EDGE_API_URL", "https://api-hive.scubed.co").rstrip("/")
+# Verification targets. Resolved in main() from the environment and nothing
+# else, before any request is sent: see the Required env note in the module
+# docstring for why none of these carries a default.
+CHAT = CP = EDGE = ""
 MODEL = os.environ.get("HIVE_VERIFY_MODEL", "hive-default").strip() or "hive-default"
 LEDGER_TIMEOUT = float(os.environ.get("HIVE_VERIFY_LEDGER_TIMEOUT", "90"))
 LEDGER_PAGES = int(os.environ.get("HIVE_VERIFY_LEDGER_PAGES", "20"))
@@ -205,8 +215,18 @@ def mint_session(supabase: str, anon: str, email: str, password: str) -> tuple[s
         payload = json.loads(raw)
     except json.JSONDecodeError:
         raise CheckFailed("sign-in answered 200 with a body that is not JSON") from None
+    if not isinstance(payload, dict):
+        raise CheckFailed(
+            "sign-in answered 200 with JSON that is not an object "
+            f"({type(payload).__name__}), so no access_token can be read"
+        )
+    user = payload.get("user")
+    if user is not None and not isinstance(user, dict):
+        raise CheckFailed(
+            f"sign-in answered 200 but its user field is {type(user).__name__}, not an object"
+        )
     token = payload.get("access_token") or ""
-    user_id = ((payload.get("user") or {}).get("id")) or ""
+    user_id = (user or {}).get("id") or ""
     if not token:
         raise CheckFailed("sign-in answered 200 but returned no access_token")
     if not user_id:
@@ -229,15 +249,31 @@ def check_signin(token: str, user_id: str, negative: bool) -> None:
     somebody else's identity is a worse outcome than a 401 and would otherwise
     read as a pass.
 
-    Negative control: corrupt one character of the bearer. A control-plane that
+    Negative control: corrupt the bearer's signature bytes. A control-plane that
     genuinely revalidates must reject it; one that trusts a cached or rendered
     session would not.
     """
     bearer = token
     if negative:
-        print("  negative control: corrupting one character of the bearer")
-        flipped = "A" if bearer[-1] != "A" else "B"
-        bearer = bearer[:-1] + flipped
+        print("  negative control: corrupting the bearer's signature bytes")
+        parts = token.split(".")
+        if len(parts) == 3 and parts[2]:
+            head, claims, sig = parts
+            # Swapping the final base64url CHARACTER is not enough: that
+            # character can carry unused low bits, so A->B there can decode to
+            # identical bytes and the control would send the original token and
+            # pass. Mutating DECODED bytes guarantees the signature the server
+            # sees differs, while header and payload stay intact, so a
+            # rejection can only be signature validation rather than a parse
+            # error.
+            decoded = bytearray(base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4)))
+            decoded[0] ^= 0xFF
+            bad_sig = base64.urlsafe_b64encode(bytes(decoded)).decode().rstrip("=")
+            bearer = ".".join((head, claims, bad_sig))
+        else:
+            # Not a three-segment JWT. Rejection is still the point; corrupt it
+            # wholesale instead of crashing on an unpack.
+            bearer = ("X" if not token.startswith("X") else "Y") + token[1:]
 
     status, raw = http("GET", f"{CP}/api/v1/viewer",
                        {"Authorization": f"Bearer {bearer}"}, timeout=60)
@@ -248,8 +284,18 @@ def check_signin(token: str, user_id: str, negative: bool) -> None:
         viewer = json.loads(raw)
     except json.JSONDecodeError:
         raise CheckFailed("/api/v1/viewer answered 200 with a body that is not JSON") from None
+    if not isinstance(viewer, dict):
+        raise CheckFailed(
+            "/api/v1/viewer answered 200 with JSON that is not an object "
+            f"({type(viewer).__name__})"
+        )
+    user = viewer.get("user")
+    if user is not None and not isinstance(user, dict):
+        raise CheckFailed(
+            f"/api/v1/viewer returned a user field that is {type(user).__name__}, not an object"
+        )
 
-    seen = ((viewer.get("user") or {}).get("id")) or ""
+    seen = (user or {}).get("id") or ""
     if seen != user_id:
         raise CheckFailed(
             f"/api/v1/viewer resolved the bearer to user {seen!r}, but the session was "
@@ -288,9 +334,24 @@ def scan_usage_charges(auth: dict, stop_when_new_of: set[str] | None = None) -> 
             body = json.loads(raw)
         except json.JSONDecodeError:
             raise CheckFailed("ledger read answered 200 with a body that is not JSON") from None
+        if not isinstance(body, dict):
+            raise CheckFailed(
+                "ledger read answered 200 with JSON that is not an object "
+                f"({type(body).__name__})"
+            )
+        entries = body.get("entries")
+        if not isinstance(entries, list):
+            raise CheckFailed(
+                f"ledger read answered 200 but carried entries as {type(entries).__name__}, "
+                "expected a list"
+            )
 
-        entries = body.get("entries") or []
         for entry in entries:
+            # A non-dict row is treated like a row without an id below: it
+            # cannot be the new charge, and inventing an id for it would be
+            # worse than skipping it.
+            if not isinstance(entry, dict):
+                continue
             entry_id = str(entry.get("id") or "")
             if not entry_id:
                 continue
@@ -397,7 +458,9 @@ def check_ledger(auth: dict, negative: bool) -> None:
                         "bills nothing."
                     )
                 print(f"  charge landed after {attempt} scan(s)")
-                return
+                # Break, not return: the revocation-failure verdict after the
+                # finally must be reachable on the happy path too.
+                break
             if time.monotonic() >= deadline:
                 raise CheckFailed(
                     f"no new usage_charge entry appeared within {LEDGER_TIMEOUT:.0f}s of the "
@@ -408,12 +471,27 @@ def check_ledger(auth: dict, negative: bool) -> None:
     finally:
         # Always, including on the failure paths above. A key left behind is a
         # live credential on a real account.
-        status, raw = http("POST", f"{CP}/api/v1/accounts/current/api-keys/{key_id}/revoke",
-                           auth, {}, timeout=60)
-        if status in (200, 204):
+        revoke_status, revoke_raw = http(
+            "POST", f"{CP}/api/v1/accounts/current/api-keys/{key_id}/revoke",
+            auth, {}, timeout=60)
+        if revoke_status in (200, 204):
             print(f"  revoked API key {key_id}")
         else:
-            print(f"  ::warning::failed to revoke API key {key_id}: {status} {snippet(raw, 120)}")
+            print(f"  ::warning::failed to revoke API key {key_id}: "
+                  f"{revoke_status} {snippet(revoke_raw, 120)}")
+
+    # An unrevoked key is not a footnote: it is a live credential this run put
+    # on a real account, so revocation failing is itself a check failure.
+    # Reached only when the body above succeeded; on a failed body the original
+    # CheckFailed has already propagated past the finally and remains the
+    # reason the check reports, which preserves the earlier verification
+    # failure rather than replacing it.
+    if revoke_status not in (200, 204):
+        raise CheckFailed(
+            f"revoking the minted API key {key_id} answered {revoke_status}, expected 200 or "
+            "204. The key this run minted stays active on a real account, so the run cannot "
+            f"be called clean: {snippet(revoke_raw, 160)}"
+        )
 
 
 # ── driver ───────────────────────────────────────────────────────────────────
@@ -432,6 +510,15 @@ def main() -> int:
     negative = args.negative_control
     if negative != "none" and negative not in selected:
         raise SystemExit(f"error: --negative-control {negative} is not among the selected checks")
+
+    # Verification targets first, from the environment and nothing else. A
+    # checker that assumes a fixed demo host when configuration is missing can
+    # return green for a product nobody deployed, so a missing name stops the
+    # run here, before any request.
+    global CHAT, CP, EDGE
+    CHAT = env("HIVE_CHAT_URL").rstrip("/")
+    CP = env("HIVE_CONTROL_PLANE_URL").rstrip("/")
+    EDGE = env("HIVE_EDGE_API_URL").rstrip("/")
 
     supabase = env("SUPABASE_URL").rstrip("/")
     anon = env("SUPABASE_ANON_KEY")
