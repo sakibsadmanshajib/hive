@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { UsageEventRow } from "@/lib/control-plane/client";
 
 vi.mock("next/navigation", () => ({
   redirect: vi.fn(() => {
@@ -83,7 +84,9 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-function eventRow(overrides: Record<string, unknown>): Record<string, unknown> {
+// Builds a fully-typed UsageEventRow fixture so no cast is needed anywhere
+// a row list is passed to the component under test.
+function eventRow(overrides: Partial<UsageEventRow> = {}): UsageEventRow {
   return {
     id: "evt_1",
     request_id: "req_aaa",
@@ -114,8 +117,8 @@ beforeEach(() => {
 });
 
 describe("UsageLogsTable", () => {
-  const baseRows = [
-    eventRow({}),
+  const baseRows: UsageEventRow[] = [
+    eventRow(),
     eventRow({
       id: "evt_2",
       request_id: "req_bbb",
@@ -124,7 +127,7 @@ describe("UsageLogsTable", () => {
       error_code: "upstream_timeout",
       api_key_id: "key_abc",
     }),
-  ] as never;
+  ];
 
   it("renders one row per usage event with model, tokens, and status", async () => {
     const { UsageLogsTable } = await import(
@@ -213,7 +216,7 @@ describe("UsageLogsTable", () => {
     const { UsageLogsTable } = await import(
       "@/components/logs/usage-logs-table"
     );
-    render(<UsageLogsTable rows={[] as never} keyNames={{}} />);
+    render(<UsageLogsTable rows={[]} keyNames={{}} />);
 
     expect(
       screen.getByText("No requests match these filters.")
@@ -242,13 +245,13 @@ describe("LogsFilters", () => {
     for (const label of ["All", "1h", "24h", "7d", "30d", "Errors only"]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
-    expect((screen.getByLabelText("Model") as HTMLSelectElement).options.length).toBe(3);
+    expect(screen.getByLabelText("Model").querySelectorAll("option")).toHaveLength(3);
     expect(
-      (screen.getByLabelText("Status") as HTMLSelectElement).options.length
+      screen.getByLabelText("Status").querySelectorAll("option").length
     ).toBeGreaterThan(1);
     expect(
-      (screen.getByLabelText("API key") as HTMLSelectElement).options.length
-    ).toBe(1);
+      screen.getByLabelText("API key").querySelectorAll("option")
+    ).toHaveLength(1);
   });
 });
 
