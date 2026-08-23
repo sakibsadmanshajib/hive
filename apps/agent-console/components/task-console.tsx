@@ -587,6 +587,9 @@ function TaskRow({
 }) {
   const view = describeTask(task, nowMs);
   const tone = TONE_STYLES[view.tone];
+  // Null for every ref that is not artifact-shaped, which is the plain-text
+  // final-response case and must stay inert text rather than become a link.
+  const deckHref = artifactUrl(task.result_summary_ref);
 
   return (
     <li className="flex flex-col gap-2.5 px-4 py-4">
@@ -620,9 +623,9 @@ function TaskRow({
       {task.result_summary_ref ? (
         <p className="font-mono text-xs break-all text-[var(--color-ink-2)]">
           Result:{" "}
-          {artifactUrl(task.result_summary_ref) ? (
+          {deckHref ? (
             <a
-              href={artifactUrl(task.result_summary_ref)!}
+              href={deckHref}
               target="_blank"
               rel="noopener noreferrer"
               className="underline hover:text-[var(--color-ink)]"

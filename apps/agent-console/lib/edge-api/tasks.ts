@@ -16,6 +16,7 @@
 // always sends one -- a task with no stated goal is not a task a person can
 // express. Status values are queued/running/succeeded/failed/cancelled.
 
+import { BASE_PATH } from "@/lib/base-path";
 import {
   isJsonObject,
   parseJsonValue,
@@ -284,23 +285,50 @@ export function isEngineLaunchFailure(task: AgentTask): boolean {
  * publishDeckArtifact); every other task's result_summary_ref is the agent's
  * own free-text final response, which this must not mistake for a link.
  */
-const ARTIFACT_REF_PATTERN = /^\/artifacts\/[^/]+(\/v\/\d+)?$/;
+const ARTIFACT_REF_PATTERN = /^\/artifacts\/([^/]+)(?:\/v\/(\d+))?$/;
+
+export interface ArtifactRef {
+  id: string;
+  /** Decimal version, or null for the ref that means "current". */
+  version: string | null;
+}
 
 /**
- * Resolves a task's result_summary_ref to an absolute, openable artifact
- * URL, or null when ref is not that shape (the plain-text fallback case) or
- * NEXT_PUBLIC_ARTIFACTS_BASE_URL is not configured for this deployment.
- * Artifacts are deliberately served from their own origin
- * (deploy/docker/Caddyfile.artifacts), never this app's, so ref alone -- a
- * bare path -- is never a usable href on its own.
+ * The single place a result_summary_ref is judged to be an artifact
+ * reference, and the single place its parts are extracted. Both callers go
+ * through it: the link builder below, and the deck proxy route that
+ * eventually fetches it (app/api/deck/[...ref]/route.ts). Keeping one guard
+ * is what stops the route from trusting a shape the link never produced.
+ */
+export function parseArtifactRef(ref: string): ArtifactRef | null {
+  const match = ARTIFACT_REF_PATTERN.exec(ref);
+  if (!match) {
+    return null;
+  }
+  return { id: match[1], version: match[2] ?? null };
+}
+
+/**
+ * Resolves a task's result_summary_ref to an openable URL, or null when ref
+ * is not artifact-shaped (the plain-text final-response fallback case).
+ *
+ * The URL is this app's own deck proxy, not the artifacts origin. A deck is a
+ * private artifact: edge-api's serving route resolves a viewer only from an
+ * Authorization header (optionalViewerTenant), and a browser navigation
+ * carries none, so linking straight at the artifacts origin hands the owner a
+ * 404 on their own deck. Publishing the artifact or signing the URL would fix
+ * that by weakening it; the proxy instead re-attaches the caller's existing
+ * Supabase session server side, so the deck stays private and the link stays
+ * a plain anchor.
+ *
+ * BASE_PATH is explicit because this is a raw href, not a next/link: Next.js
+ * does not prepend basePath to those (see lib/base-path.ts).
  */
 export function artifactUrl(ref: string): string | null {
-  if (!ARTIFACT_REF_PATTERN.test(ref)) {
+  const parsed = parseArtifactRef(ref);
+  if (!parsed) {
     return null;
   }
-  const base = process.env.NEXT_PUBLIC_ARTIFACTS_BASE_URL;
-  if (!base) {
-    return null;
-  }
-  return base.replace(/\/+$/, "") + ref;
+  const path = `${BASE_PATH}/api/deck/${encodeURIComponent(parsed.id)}`;
+  return parsed.version === null ? path : `${path}/v/${parsed.version}`;
 }

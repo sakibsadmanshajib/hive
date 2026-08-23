@@ -282,7 +282,6 @@ describe("TaskConsole states", () => {
   // artifact path, and the console must render an openable link, not the
   // inert text the plain-summary case above gets.
   it("succeeded with a published artifact: renders an openable link", async () => {
-    vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
     stubFetch({
       tasks: [
         {
@@ -296,7 +295,8 @@ describe("TaskConsole states", () => {
 
     expect(await screen.findByText("Done")).toBeTruthy();
     const link = screen.getByRole("link", { name: "/artifacts/abc-123" });
-    expect(link.getAttribute("href")).toBe("https://artifacts.example.com/artifacts/abc-123");
+    // The app's own deck proxy, not the artifacts origin: see artifactUrl.
+    expect(link.getAttribute("href")).toBe("/agent-workspace/api/deck/abc-123");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
   });

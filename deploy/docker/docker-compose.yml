@@ -574,24 +574,6 @@ services:
         # edge-api (deploy/docker/Caddyfile.owui). An empty base makes those
         # fetches relative, so they stay same-origin and need no CORS.
         NEXT_PUBLIC_EDGE_API_BASE_URL: ""
-        # Issue #312/#300 wiring: a published artifact's URL
-        # (agent_tasks.result_summary_ref) is a bare path ("/artifacts/{id}")
-        # deliberately served from its own origin (caddy-artifacts,
-        # ARTIFACTS_DOMAIN below), never this app's -- same-origin isolation
-        # is the whole point (see caddy-artifacts's doc comment). Unlike
-        # NEXT_PUBLIC_EDGE_API_BASE_URL above this must be an absolute
-        # origin, not empty, or the console would link to a path on its own
-        # host that nothing here serves. Mirrors Caddyfile.artifacts's own
-        # scheme choice (plain http, not auto-HTTPS).
-        #
-        # The fallback carries :3004 because that is the host port
-        # caddy-artifacts actually publishes ("3004:80" below). A bare
-        # artifacts.localhost resolves to port 80, which nothing in this
-        # compose file listens on, so the local and enterprise profiles would
-        # hand the browser a link that cannot connect. A deployment that sets
-        # ARTIFACTS_DOMAIN supplies its own host and, if it needs one, its own
-        # port.
-        NEXT_PUBLIC_ARTIFACTS_BASE_URL: http://${ARTIFACTS_DOMAIN:-artifacts.localhost:3004}
     profiles:
       - chat
       - enterprise

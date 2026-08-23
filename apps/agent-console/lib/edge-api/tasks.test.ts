@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   AgentTaskError,
   artifactUrl,
+  parseArtifactRef,
   cancelTask,
   createTask,
   ENGINE_LAUNCH_FAILED_MESSAGE,
@@ -204,41 +205,61 @@ describe("edge-api tasks client", () => {
     expect(TERMINAL_STATUSES.has("running")).toBe(false);
   });
 
+  // The link targets this app's own deck proxy, not the artifacts origin: a
+  // deck is a private artifact and a browser navigation carries no
+  // Authorization header, so a direct artifacts-origin link 404s for its own
+  // owner. See artifactUrl's doc comment and app/api/deck/[...ref]/route.ts.
   describe("artifactUrl", () => {
-    it("resolves an artifact ref to an absolute URL when configured", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
-      expect(artifactUrl("/artifacts/abc-123")).toBe(
-        "https://artifacts.example.com/artifacts/abc-123",
-      );
+    it("resolves an artifact ref to the base-path-prefixed proxy URL", () => {
+      expect(artifactUrl("/artifacts/abc-123")).toBe("/agent-workspace/api/deck/abc-123");
     });
 
     it("resolves a versioned artifact ref", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
       expect(artifactUrl("/artifacts/abc-123/v/2")).toBe(
-        "https://artifacts.example.com/artifacts/abc-123/v/2",
+        "/agent-workspace/api/deck/abc-123/v/2",
       );
     });
 
-    it("strips a trailing slash from the configured base", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com/");
-      expect(artifactUrl("/artifacts/abc-123")).toBe(
-        "https://artifacts.example.com/artifacts/abc-123",
+    it("percent-encodes the id rather than splicing it into the path", () => {
+      expect(artifactUrl("/artifacts/abc?x=1")).toBe(
+        "/agent-workspace/api/deck/abc%3Fx%3D1",
       );
     });
 
     it("returns null for the plain-text final-response fallback shape", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
       expect(artifactUrl("the agent's own summary text")).toBeNull();
     });
 
-    it("returns null when NEXT_PUBLIC_ARTIFACTS_BASE_URL is not configured", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "");
-      expect(artifactUrl("/artifacts/abc-123")).toBeNull();
+    it("returns null for an empty ref", () => {
+      expect(artifactUrl("")).toBeNull();
     });
 
-    it("returns null for an empty ref", () => {
-      vi.stubEnv("NEXT_PUBLIC_ARTIFACTS_BASE_URL", "https://artifacts.example.com");
-      expect(artifactUrl("")).toBeNull();
+    it("returns null for a ref with an extra path segment", () => {
+      expect(artifactUrl("/artifacts/abc-123/raw")).toBeNull();
+    });
+
+    it("returns null for a non-numeric version", () => {
+      expect(artifactUrl("/artifacts/abc-123/v/latest")).toBeNull();
+    });
+  });
+
+  describe("parseArtifactRef", () => {
+    it("splits the id and version out of a versioned ref", () => {
+      expect(parseArtifactRef("/artifacts/abc-123/v/2")).toEqual({
+        id: "abc-123",
+        version: "2",
+      });
+    });
+
+    it("reports a null version for the current-version ref", () => {
+      expect(parseArtifactRef("/artifacts/abc-123")).toEqual({
+        id: "abc-123",
+        version: null,
+      });
+    });
+
+    it("rejects a traversal segment", () => {
+      expect(parseArtifactRef("/artifacts/../../etc/passwd")).toBeNull();
     });
   });
 });
