@@ -32,6 +32,10 @@ type Deps struct {
 	// inference it cannot charge for: see startSettlement in billing.go.
 	Accounting *inference.AccountingClient
 	Billing    BillingResolver
+	// Memories supplies the cross-chat recall block (issue #172, ruling
+	// D-020). Optional: nil disables injection entirely, and a recall read
+	// failure degrades to serving without the block, never fails the chat.
+	Memories   MemorySource
 	LiteLLMURL string
 	LiteLLMKey string
 	DeploySHA  string
@@ -145,6 +149,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	clientModel := parsed.Model
 	requestID := uuid.New()
+
+	// Cross-chat recall (issue #172, ruling D-020): prepend the user's most
+	// recent memories as one system block before the body is rewritten and
+	// forwarded. Absent memories leave the body untouched; a recall failure
+	// logs a warning and serves without the block, chat never breaks on it.
+	if h.deps.Memories != nil {
+		contents, memErr := h.deps.Memories.Recent(r.Context(), user.TenantID, user.ID, memoryRecallLimit)
+		if memErr != nil {
+			slog.Warn("chat memory recall failed; serving without recall block", "err", memErr)
+		} else if block := buildMemoryBlock(contents); block != "" {
+			injected, injectErr := injectMemoryBlock(raw, block)
+			if injectErr != nil {
+				slog.Warn("chat memory injection failed; serving without recall block", "err", injectErr)
+			} else {
+				raw = injected
+			}
+		}
+	}
 
 	// Money path (#746): a session turn is served only once it can be
 	// charged. Every refusal inside startSettlement is written before a
