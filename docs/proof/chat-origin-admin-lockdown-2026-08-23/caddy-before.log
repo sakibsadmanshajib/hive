@@ -1,0 +1,50 @@
+# Caddyfile.owui matcher probe, label=before
+# file under test: Caddyfile.owui.before sha256=a5a73ce8b8c4ffc3
+# upstream: stub answering 200 to everything, reached through the
+# Caddyfile's own reverse_proxy lines via docker network aliases.
+# 404 = refused by Caddy. 200 = reached the (stubbed) chat backend.
+
+## Credential-bearing reads that must be refused (#769, #948)
+GET    /api/v1/configs/export                                   404
+GET    /api/v1/configs/import                                   200
+GET    /api/v1/configs/namespace/oauth                          200
+GET    /api/v1/configs/namespace/rag                            200
+GET    /openai/config                                           404
+GET    /admin/settings                                          404
+
+## Admin writes that must be refused (#736, #948, #949)
+POST   /api/v1/functions/create                                 200
+POST   /api/v1/functions/load/url                               200
+POST   /api/v1/functions/id/hive_jwt_forward/update             200
+POST   /api/v1/functions/id/hive_jwt_forward/toggle             200
+POST   /api/v1/functions/id/hive_jwt_forward/toggle/global      200
+DELETE /api/v1/functions/id/hive_jwt_forward/delete             200
+POST   /api/v1/configs/import                                   200
+POST   /api/v1/configs/code_execution                           200
+POST   /api/v1/configs/connections                              200
+POST   /api/v1/configs/tool_servers                             404
+
+## The chat product, which must keep working
+GET    /                                                        200
+GET    /api/config                                              200
+GET    /api/v1/auths/                                           200
+POST   /api/v1/auths/signin                                     200
+GET    /api/v1/configs/banners                                  200
+GET    /api/v1/configs/models                                   200
+GET    /api/v1/models/list                                      200
+GET    /openai/models                                           200
+POST   /openai/chat/completions                                 200
+GET    /api/v1/knowledge/                                       200
+POST   /api/v1/users/user/settings/update                       200
+POST   /api/v1/users/user/info/update                           200
+POST   /api/v1/models/model/toggle                              200
+POST   /api/v1/functions/id/hive_jwt_forward/valves/user/update 200
+GET    /api/v1/functions/id/hive_jwt_forward                    200
+POST   /api/v1/users/6fcba712-5631-4e7f-9c9c-ce41047914fa/update 200
+GET    /v1/featuregate                                          200
+GET    /agent-workspace                                         200
+
+# caddy container log (config load):
+{"level":"info","ts":1787507657.4062374,"msg":"serving initial configuration"}
+{"level":"info","ts":1787507657.4134305,"logger":"tls","msg":"cleaning storage unit","storage":"FileStorage:/data/caddy"}
+{"level":"info","ts":1787507657.4193442,"logger":"tls","msg":"finished cleaning storage units"}

@@ -11,7 +11,9 @@ filter and every chat completion from Open WebUI was refused by edge-api's
 OWUIUnwrap middleware with "This chat session is not carrying a signed-in user
 token".
 
-This is the single implementation of that install. Both callers use it:
+This is the single implementation of that install. Both callers reach it
+through scripts/install-owui-jwt-forward-in-container.sh, which runs this file
+inside the chat container rather than against the public chat origin (#736):
 
   * .github/workflows/deploy-demo-box.yml runs it on the demo box on every
     deploy, with a token minted by scripts/owui-mint-admin-token.py.
@@ -42,14 +44,15 @@ it has not read back.
 Auth: OWUI_ADMIN_TOKEN in the environment, sent as a Bearer token. Every
 Functions endpoint used here is admin-only (Depends(get_admin_user)).
 
-Base URL: the caddy-owui origin works (deploy/docker/Caddyfile.owui blocks
-mutation verbs only on paths that do not cross a slash, so /api/v1/functions/...
-passes through while /api/v1/auths/signin does not). Open WebUI's own port also
-works when reachable. Plaintext http is accepted only for a loopback host,
-where the token never leaves the machine; any remote origin must be https. See
-require_safe_origin.
+Base URL: Open WebUI's own address, and no longer the caddy-owui origin. That
+origin now answers 404 on every path this script writes to: Caddyfile.owui's
+@adminMutationSubtree matcher covers the whole /api/v1/functions subtree, which
+the `path /api/v*/functions*` glob it replaced never reached (#736). The default
+below is Open WebUI's in-container port for that reason. Plaintext http is
+accepted only for a loopback host, where the token never leaves the machine;
+any remote origin must be https. See require_safe_origin.
 
-Run: OWUI_ADMIN_TOKEN=... python3 scripts/install-owui-jwt-forward.py
+Run: OWUI_ADMIN_TOKEN=... scripts/install-owui-jwt-forward-in-container.sh
 """
 import argparse
 import ipaddress
@@ -67,7 +70,7 @@ FUNCTION_DESCRIPTION = (
     "Injects the signed-in user's OAuth access token into "
     "__metadata.upstream_auth for edge-api's OWUI unwrap middleware (#269)."
 )
-DEFAULT_BASE_URL = "http://localhost:3003"
+DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_SOURCE = (
     Path(__file__).resolve().parent.parent
     / "deploy"

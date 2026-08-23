@@ -92,10 +92,13 @@ on:
       # deploy job below. Same blind spot as every other script listed here:
       # without an entry, a fix to it would merge and never deploy.
       - 'scripts/install-agent-engine-host.sh'
-      # Both halves of the hive_jwt_forward install (#556). Without these
-      # entries a fix to the installer itself would merge and never deploy,
-      # the same blind spot the supabase/migrations entry above exists for.
+      # All three halves of the hive_jwt_forward install (#556, #736). Without
+      # these entries a fix to the installer itself would merge and never
+      # deploy, the same blind spot the supabase/migrations entry above exists
+      # for. The wrapper is what keeps the install off the public chat origin,
+      # so a fix to it is a security fix that has to reach the box.
       - 'scripts/install-owui-jwt-forward.py'
+      - 'scripts/install-owui-jwt-forward-in-container.sh'
       - 'scripts/owui-mint-admin-token.py'
       # Invoked by the deploy job's OAuth scope verification step below. Same
       # blind spot as every other script listed here: without an entry, a fix
@@ -1230,12 +1233,15 @@ jobs:
         # account, and needs no secret in .env, so a fresh Enterprise box
         # works the same way with nothing provisioned by hand.
         #
-        # localhost:3003 is caddy-owui's published port. Its @adminMutation
-        # matcher does not block this: a Caddy `path` wildcard does not cross
-        # a slash, so /api/v*/functions* matches /api/v1/functions but not
-        # /api/v1/functions/create (measured against caddy:2-alpine, not
-        # assumed). That is also why CI's installer reaches the same API
-        # through the same port.
+        # The install no longer goes through caddy-owui's published port, and
+        # that reroute is the reason #736 could be closed at all. That port is
+        # the PUBLIC chat origin, and its admin-mutation block used to miss
+        # every path this install writes to, because a Caddy `path` wildcard
+        # does not cross a slash: /api/v*/functions* matched /api/v1/functions
+        # and not /api/v1/functions/create (measured against caddy:2-alpine,
+        # not assumed). The deploy depended on that gap. It now runs the same
+        # single implementation inside the chat container against Open WebUI's
+        # own loopback, so the Caddyfile can refuse those paths for everyone.
         #
         # No `|| true`, no continue-on-error. The script exits nonzero unless
         # it has re-read the function from the API and confirmed it is present,
@@ -1274,9 +1280,8 @@ jobs:
               ;;
           esac
           echo "::add-mask::$token"
-          OWUI_ADMIN_TOKEN="$token" python3 \
-            ../../scripts/install-owui-jwt-forward.py \
-            --base-url http://localhost:3003
+          OWUI_ADMIN_TOKEN="$token" \
+            ../../scripts/install-owui-jwt-forward-in-container.sh
 
       - name: Dump container status + logs on failure
         if: failure()

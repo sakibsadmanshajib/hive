@@ -25,8 +25,20 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // Open WebUI admin session through the full OAuth journey.
 const HIVE_JWT_FORWARD_INSTALLER = path.resolve(
   __dirname,
-  "../../../../../scripts/install-owui-jwt-forward.py",
+  "../../../../../scripts/install-owui-jwt-forward-in-container.sh",
 );
+
+// #736: the install runs INSIDE the chat container, against Open WebUI's own
+// loopback, not against OWUI_URL. OWUI_URL is caddy-owui's published port, the
+// public chat origin, which now answers 404 on every path the installer writes
+// to. The wrapper is the same route the demo-box deploy uses, so this job still
+// exercises the deployment's own code path rather than a lookalike.
+//
+// Default matches this job's own boot step (`docker compose --env-file
+// ../../.env.ci --profile local up -d --build` in owui-nightly.yml). Override
+// with HIVE_COMPOSE_FLAGS to point the setup at a differently-composed stack.
+const HIVE_COMPOSE_FLAGS =
+  process.env.HIVE_COMPOSE_FLAGS ?? "--env-file ../../.env.ci --profile local";
 
 /**
  * Resets the signed-in `page`'s own Open WebUI account password to
@@ -74,18 +86,17 @@ async function syncOwuiLocalPassword(
 
 /**
  * Hands the already-authenticated `page`'s Open WebUI admin bearer token to
+ * scripts/install-owui-jwt-forward-in-container.sh, which runs
  * scripts/install-owui-jwt-forward.py, the single implementation of the
- * install (see #556 and that script's docstring). The script creates the
+ * install, inside the chat container (see #556, #736 and that script's
+ * docstring). The script creates the
  * Filter if absent, refreshes it if the stored body has drifted from the
  * repo source, toggles it active and global only when those flags are
  * false, then re-reads the end state and fails unless it is present, active
  * AND global -- a filter only runs when it is both (see
  * open_webui.utils.filter.get_sorted_filter_ids upstream).
  */
-async function installHiveJwtForwardFilter(
-  page: Page,
-  owuiOrigin: string,
-): Promise<void> {
+async function installHiveJwtForwardFilter(page: Page): Promise<void> {
   // Open WebUI stores its session JWT in a `token` cookie and mirrors it into
   // localStorage. The cookie is the one the API itself reads, so it is
   // preferred; localStorage is the fallback for a build that stops setting it.
@@ -109,8 +120,12 @@ async function installHiveJwtForwardFilter(
   // deadline it can eat is its own, and `stdio: "inherit"` streams the
   // installer's progress into the job log live, which a buffered async child
   // would withhold until it exits. Convert it if this ever moves into a test.
-  execFileSync("python3", [HIVE_JWT_FORWARD_INSTALLER, "--base-url", owuiOrigin], {
-    env: { ...process.env, OWUI_ADMIN_TOKEN: token },
+  execFileSync(HIVE_JWT_FORWARD_INSTALLER, [], {
+    env: {
+      ...process.env,
+      OWUI_ADMIN_TOKEN: token,
+      HIVE_COMPOSE_FLAGS,
+    },
     stdio: "inherit",
   });
 }
@@ -228,7 +243,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
         "and docker-compose.yml's open-webui OAUTH_ROLES_CLAIM).",
     );
   }
-  await installHiveJwtForwardFilter(page, owuiOrigin);
+  await installHiveJwtForwardFilter(page);
   // #712: see syncOwuiLocalPassword's docstring -- without this, Open
   // WebUI's own local password for this OAuth-provisioned account never
   // matches OWUI_E2E_PASSWORD, and any native (non-OAuth) sign-in with it

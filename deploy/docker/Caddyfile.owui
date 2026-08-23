@@ -57,6 +57,23 @@
   # script treats a non-200 as a failure and deliberately does not revoke
   # the previous key, so a deployment is never stranded on a dead one.
   #
+  # `configs/import` and `configs/namespace` close #948: two sibling routes in
+  # the same router return the same values `configs/export` was blocked for.
+  # `import_config` ends with `return await Config.get_all()`, the identical
+  # call `export_config` makes, so a POST with any body reads back the whole
+  # persisted configuration -- gateway key and `oauth.client_secret` included --
+  # and overwrites configuration on the way through. `GET
+  # /namespace/{namespace}` needs no body at all: `oauth` returns
+  # `oauth.client_secret`, `rag` returns `rag.openai.api_key`, which is
+  # OWUI_SHIM_KEY. Both are admin-only in Open WebUI and nothing else, and on
+  # this deployment every tenant OWNER holds an administrator session (#748),
+  # so the session check is the only thing that was in front of them. Blocked
+  # here for every verb rather than only for writes, because the disclosure
+  # half is a GET. Segment-exact like their sibling above, so
+  # `configs/banners`, `configs/models` and `configs/connections` still reach
+  # Open WebUI; `namespace` carries its namespace as a child path segment,
+  # which the trailing `(?:/.*)?` of this matcher covers.
+  #
   # `terminals` closes #770. Open WebUI mounts routers/terminals.py at
   # /api/v1/terminals and gates none of it on `get_admin_user`: the
   # `{server_id}/{path:path}` route proxies every HTTP verb, and the
@@ -132,7 +149,7 @@
   # Python through owui-patches, tracked separately; blocking them here would
   # be an outage, not a fix.
   @blocked {
-    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|notes|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|terminal_servers|tool_servers)|knowledge/[^/]+/export))/?(?:/.*)?$
+    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|notes|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|import|namespace|terminal_servers|tool_servers)|knowledge/[^/]+/export))/?(?:/.*)?$
   }
   respond @blocked 404
 
@@ -162,16 +179,60 @@
   # hive-open-webui:v0.10.2-branded image: the only prefixes are
   # /api/v1/<router> for the routers it registers, plus /ollama and
   # /openai). They matched nothing and made this list read as broader
-  # coverage than it has. The remaining globs still under-match by design
-  # of Caddy's `path`, which falls through to Go path.Match where `*`
-  # never crosses `/`; that gap is #736 and is deliberately left alone
-  # here, because the demo deploy currently installs hive_jwt_forward
-  # through `POST /api/v1/functions/create` on this origin.
+  # coverage than it has.
+  #
+  # The three globs LEFT here still under-match by design of Caddy's `path`,
+  # which falls through to Go path.Match where `*` never crosses `/`, so
+  # `/api/v*/groups*` covers `/api/v1/groups` and nothing below it. That
+  # residue is #437, and it is not fixable by widening these three the way
+  # the two below were widened: `/api/v1/users/user/settings/update`,
+  # `/user/status/update` and `/user/info/update` are `get_verified_user`
+  # routes that every signed-in session writes, and in models.py `create`,
+  # `import`, `model/toggle`, `model/update`, `model/access/update` and
+  # `model/delete` are all `get_verified_user` too. A subtree block on
+  # `users` or `models` would therefore be an outage, not a fix; closing
+  # #437 needs a per-route allowlist, which is a separate change.
   @adminMutation {
     method PUT POST PATCH DELETE
-    path /api/v*/configs* /api/v*/users/* /api/v*/groups* /api/v*/functions* /api/v*/models*
+    path /api/v*/users/* /api/v*/groups* /api/v*/models*
   }
   respond @adminMutation 404
+
+  # #736 and #948: the `configs` and `functions` arms of the same block,
+  # rewritten as a regexp so they actually reach the sub-paths the admin
+  # panel and the Functions API live on. `path /api/v*/functions*` matched
+  # `/api/v1/functions` and, because a Go path.Match `*` never crosses a
+  # slash, none of `/create`, `/id/<id>/update`, `/id/<id>/toggle` or
+  # `/id/<id>/toggle/global` -- every endpoint that installs and enables
+  # plugin code inside this container, which holds PGVECTOR_DB_URL and
+  # OWUI_SHIM_KEY. Same shape for `configs`, whose live children include
+  # `code_execution` (an arbitrary Jupyter URL and token), `connections`
+  # (browser-direct endpoints that bypass the gateway and its billing) and
+  # `import` (overwrites every persisted key).
+  #
+  # Written as default-deny over both subtrees rather than as a list of the
+  # endpoints that exist today, because the list is the failure mode: this
+  # is the fourth patch to the same family, and an upstream bump that adds
+  # an admin write route must not quietly land outside the block. Every
+  # write route under both prefixes is `get_admin_user` in the pinned
+  # v0.10.2 image, with exactly one exception, carved out by the `not`
+  # below: `POST /api/v1/functions/id/{id}/valves/user/update` is
+  # `get_verified_user` and writes only the calling user's own valve
+  # values, so blocking it would take a user-scoped write with it.
+  #
+  # The demo deploy no longer depends on the gap this closes. The
+  # hive_jwt_forward install used to run through this origin -- that is what
+  # #736 records -- and now runs inside the chat container against Open
+  # WebUI's own loopback, through
+  # scripts/install-owui-jwt-forward-in-container.sh. Reroute first, then
+  # block: closing this before that script existed would have failed every
+  # deploy at the install step.
+  @adminMutationSubtree {
+    method PUT POST PATCH DELETE
+    path_regexp adminsubtree (?i)^/+api/v[0-9]+/+(?:configs|functions)(?:/.*)?$
+    not path_regexp uservalves (?i)^/+api/v[0-9]+/+functions/+id/+[^/]+/+valves/+user/+update/?$
+  }
+  respond @adminMutationSubtree 404
 
   # Blueprint Step 3.1 (#311) agent console sidecar. Path-prefixed, not a
   # subdomain, so it shares this listener and the /admin, /signup, and
