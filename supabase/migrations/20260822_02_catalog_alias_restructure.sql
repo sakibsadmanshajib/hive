@@ -416,6 +416,17 @@ on conflict (alias_id) do nothing;
 --    patched by hand twice, by 20260717_01 for hive-auto and by 20260717_02 for
 --    the voice aliases. 'closed' mirrors how 20260331_03 seeded every chat
 --    alias into both groups.
+--    deepseek-v4-pro is additionally placed in 'premium'. That group exists
+--    for "Premium or higher-cost models" (20260331_03), and after this
+--    migration deepseek-v4-pro is by a wide margin the most expensive alias in
+--    the catalog at 157080 in and 471240 out, while hive-auto, the alias
+--    'premium' was originally created around, has just been repriced DOWN to
+--    21000 and 84000. Leaving the highest-cost model out of the cost-gating
+--    group would quietly break that group's only purpose, and a key scoped to
+--    ["premium"] could not reach the premium model at all. It stays in
+--    'default' as well because the owner asked for these aliases to be
+--    customer-facing, and prepaid credit balance, not group membership, is
+--    what actually bounds spend.
 insert into public.model_policy_group_members (group_name, alias_id) values
     ('default', 'hive-small'),
     ('default', 'hive-medium'),
@@ -424,7 +435,8 @@ insert into public.model_policy_group_members (group_name, alias_id) values
     ('closed', 'hive-small'),
     ('closed', 'hive-medium'),
     ('closed', 'deepseek-v4-flash'),
-    ('closed', 'deepseek-v4-pro')
+    ('closed', 'deepseek-v4-pro'),
+    ('premium', 'deepseek-v4-pro')
 on conflict (group_name, alias_id) do nothing;
 
 -- 6. Move hive-default and hive-auto off OpenRouter and onto the two Groq
@@ -482,6 +494,32 @@ insert into public.provider_routes (
     )
 on conflict (route_id) do nothing;
 
+--    route-groq-auto additionally inherits three flags that live on NO other
+--    route in the catalog: supports_batch, supports_image_generation and
+--    supports_image_edit. 20260414_01_provider_capabilities_media_columns.sql
+--    granted all five media flags to route-openrouter-auto and to no other
+--    row, and 20260717_02 later corrected two of them (tts, stt) back to
+--    false. Disabling route-openrouter-auto without carrying the remaining
+--    three forward would delete three product surfaces catalog-wide, not just
+--    for hive-auto: SelectRoute skips disabled candidates and then hard
+--    filters on each flag (service.go), and both batchstore/submitter.go and
+--    batchstore/local_executor_adapters.go send NeedBatch = true for EVERY
+--    batch, so /v1/batches, /v1/images/generations and /v1/images/edits would
+--    each find zero eligible routes for every alias in the system.
+--
+--    supports_batch is a true claim: Phase 15 ships a control-plane local
+--    batch executor and the route carries executor_kind 'local', so batching
+--    does not depend on Groq having a native batch API, which it does not.
+--
+--    The two image flags are carried forward as a STATUS QUO PRESERVATION and
+--    are not a fresh assertion by this migration. They were already untrue of
+--    route-openrouter-auto's previous model: gpt-4.1-mini cannot generate or
+--    edit images either. Carrying them keeps this catalog change from
+--    silently removing two endpoints as a side effect, which is not what a
+--    repricing was asked to do. Correcting them properly needs a real image
+--    route with a model that can actually serve one, and that is its own
+--    change with its own decision behind it. Tracked separately; do not read
+--    these two flags as a claim that gpt-oss-120b does images.
 insert into public.provider_capabilities (
     route_id,
     supports_responses,
@@ -492,10 +530,13 @@ insert into public.provider_capabilities (
     supports_reasoning,
     supports_cache_read,
     supports_cache_write,
-    tools_supported
+    tools_supported,
+    supports_batch,
+    supports_image_generation,
+    supports_image_edit
 ) values
-    ('route-groq-default', true, true, true, false, true, false, false, false, true),
-    ('route-groq-auto',    true, true, true, false, true, false, false, false, true)
+    ('route-groq-default', true, true, true, false, true, false, false, false, true, false, false, false),
+    ('route-groq-auto',    true, true, true, false, true, false, false, false, true, true,  true,  true)
 on conflict (route_id) do nothing;
 
 -- 6b. Retire the two OpenRouter routes these aliases used to take. Disabled,

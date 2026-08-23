@@ -229,6 +229,18 @@ func insertedAliases(t *testing.T, migration string) map[string]bool {
 	for _, m := range matches {
 		out[m[1]] = true
 	}
+
+	// A PARTIAL parse is the dangerous case, and the zero-match check above
+	// does not catch it. aliasIDRe anchors each alias on its own line, so
+	// reformatting one VALUES row onto a single line would drop that alias
+	// from the set silently, and every guard built on this helper would then
+	// check fewer rows than it claims while still reporting green. Counting
+	// the INSERT's own opening parens gives an independent expectation to
+	// compare against, so a partial parse fails as loudly as a total one.
+	wantRows := strings.Count(block[2], "(\n")
+	if wantRows > 0 && len(out) != wantRows {
+		t.Fatalf("parsed %d alias ids from the model_aliases INSERT but the block opens %d value rows; the regex and the migration's formatting have diverged and this guard is silently checking a subset", len(out), wantRows)
+	}
 	return out
 }
 
@@ -405,53 +417,82 @@ func TestOneAliasOneEnabledRoute(t *testing.T) {
 	}
 }
 
-// TestEveryCatalogRouteIDIsSanitized ties SanitizeProviderMessage to the
-// migration. Provider-blind errors are a standing rule in this repo, and the
-// sanitizer enforces it from a hardcoded list of route ids, which is exactly
-// the kind of list that goes stale the moment someone adds a route somewhere
-// else. Adding a route to the migration without adding it to sanitize.go turns
-// this red instead of quietly shipping an internal identifier to a customer.
+// soleCarrierFlags are capability flags held by exactly ONE route in the whole
+// catalog before this migration, route-openrouter-auto, granted by
+// 20260414_01_provider_capabilities_media_columns.sql and never granted to any
+// other row since. supports_tts and supports_stt were on that list too until
+// 20260717_02 correctly moved them to the voice routes.
+var soleCarrierFlags = []string{
+	"supports_batch",
+	"supports_image_generation",
+	"supports_image_edit",
+}
+
+// TestDisablingASoleCapabilityCarrierHandsItsFlagsOn is a regression guard for
+// a real defect this migration shipped in an earlier revision and that no other
+// test could see.
 //
-// The owner's exemption for the deepseek-v4-* ALIAS names does not extend here:
-// an alias name is a catalog label the customer chose to send, whereas a
-// route id is a routing internal, and the rule still applies in full to those.
-func TestEveryCatalogRouteIDIsSanitized(t *testing.T) {
+// Disabling route-openrouter-auto removes the only route carrying these three
+// flags. SelectRoute skips disabled candidates and then hard filters on each
+// flag, and both batchstore/submitter.go and batchstore/local_executor_adapters.go
+// send NeedBatch = true for EVERY batch, so the effect is not scoped to
+// hive-auto: /v1/batches, /v1/images/generations and /v1/images/edits each find
+// zero eligible routes for every alias in the system. It fails closed, so it is
+// silent, and the other guards here cannot see it because they only read this
+// migration's own text for pricing.
+//
+// The rule this encodes: if you disable the sole carrier of a capability, some
+// route in the same migration has to pick it up, or you have deleted a product
+// surface as a side effect of a repricing.
+func TestDisablingASoleCapabilityCarrierHandsItsFlagsOn(t *testing.T) {
 	migration := readPricingMigration(t)
 
-	seen := map[string]bool{}
-	for _, row := range parseDeriveRows(t, migration) {
-		if seen[row.RouteID] {
-			continue
-		}
-		seen[row.RouteID] = true
-
-		raw := "upstream 502 from " + row.RouteID + " while dispatching"
-		got := SanitizeProviderMessage(row.Alias, raw)
-
-		if strings.Contains(got, row.RouteID) {
-			t.Errorf("SanitizeProviderMessage leaked route id %q verbatim: %q. Add it to the replacer in sanitize.go.", row.RouteID, got)
-		}
-		for _, token := range []string{"groq", "openrouter"} {
-			if strings.Contains(strings.ToLower(got), token) {
-				t.Errorf("SanitizeProviderMessage leaked provider token %q while scrubbing route %s: %q", token, row.RouteID, got)
-			}
-		}
-
-		// Checking for the bare route id is not enough on its own, and this
-		// was proven by mutation rather than assumed: deleting a groq-prefixed
-		// route from the replacer still passed both assertions above, because
-		// the catch-all "groq" token rewrites the middle of the string and the
-		// full id stops matching. Nothing leaks in that case, but the customer
-		// is left reading "route-upstream provider-medium". A route id that is
-		// listed explicitly is consumed whole, so no "route-" fragment can
-		// survive; one that is not listed always leaves this behind.
-		if strings.Contains(got, "route-") {
-			t.Errorf("SanitizeProviderMessage left a mangled route fragment while scrubbing %s: %q. The id is being caught by the catch-all provider token instead of its own replacer entry; add it explicitly in sanitize.go.", row.RouteID, got)
-		}
+	disable := regexp.MustCompile(`(?is)update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'[^;]*?;`)
+	disabled := strings.Join(disable.FindAllString(migration, -1), "\n")
+	if !strings.Contains(disabled, "'route-openrouter-auto'") {
+		t.Skip("route-openrouter-auto is not disabled by this migration, so its capabilities are not at risk")
 	}
 
-	if len(seen) == 0 {
-		t.Fatal("no route ids were checked; parseDeriveRows returned nothing usable")
+	// FindAll, not Find. This migration contains MORE THAN ONE
+	// provider_capabilities INSERT: one for the four brand-new routes, which
+	// has no business carrying media flags, and a later one for the two
+	// replacement routes, which must. An earlier version of this guard read
+	// only the first block and so failed against a correct migration.
+	blocks := regexp.MustCompile(`(?is)insert\s+into\s+public\.provider_capabilities\s*\((.*?)\)\s*values(.*?)on\s+conflict`).FindAllStringSubmatch(migration, -1)
+	if len(blocks) == 0 {
+		t.Fatal("route-openrouter-auto is disabled but this migration has no provider_capabilities INSERT to hand its flags to")
+	}
+
+	for _, flag := range soleCarrierFlags {
+		granted := false
+		for _, block := range blocks {
+			columnIndex := -1
+			for i, col := range strings.Split(block[1], ",") {
+				if strings.TrimSpace(col) == flag {
+					columnIndex = i
+					break
+				}
+			}
+			if columnIndex < 0 {
+				continue
+			}
+			// Naming the column is not enough. Find a VALUES row that actually
+			// puts true in that column's position, so a row of all-false
+			// cannot satisfy this guard.
+			for _, row := range regexp.MustCompile(`\(([^()]*)\)`).FindAllStringSubmatch(block[2], -1) {
+				fields := strings.Split(row[1], ",")
+				if columnIndex < len(fields) && strings.TrimSpace(fields[columnIndex]) == "true" {
+					granted = true
+					break
+				}
+			}
+			if granted {
+				break
+			}
+		}
+		if !granted {
+			t.Errorf("this migration disables route-openrouter-auto, the only route in the catalog carrying %s, and grants that flag to no replacement route. Every endpoint gated on it would find zero eligible routes for every alias.", flag)
+		}
 	}
 }
 

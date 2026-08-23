@@ -9,7 +9,7 @@ INSERT 0 4
 INSERT 0 4
 INSERT 0 4
 INSERT 0 4
-INSERT 0 8
+INSERT 0 9
 INSERT 0 2
 INSERT 0 2
 UPDATE 2
@@ -76,10 +76,10 @@ throwaway database ready: 91 of 91 migrations executed
 
 
 --- default-tier reachability for the four new aliases ---
-     alias_id      |     groups     
--------------------+----------------
+     alias_id      |         groups         
+-------------------+------------------------
  deepseek-v4-flash | closed,default
- deepseek-v4-pro   | closed,default
+ deepseek-v4-pro   | closed,default,premium
  hive-medium       | closed,default
  hive-small        | closed,default
 (4 rows)
@@ -95,4 +95,27 @@ throwaway database ready: 91 of 91 migrations executed
  route-groq-medium       | t               | f                  | f
  route-groq-small        | t               | f                  | f
 (6 rows)
+
+
+--- REGRESSION CHECK: enabled routes still serving batch / image endpoints ---
+    route_id     | alias_id  | supports_batch | supports_image_generation | supports_image_edit 
+-----------------+-----------+----------------+---------------------------+---------------------
+ route-groq-auto | hive-auto | t              | t                         | t
+(1 row)
+
+
+--- these three counts must all be non-zero or an endpoint is dead ---
+ batch_routes | imagegen_routes | imageedit_routes 
+--------------+-----------------+------------------
+            1 |               1 |                1
+(1 row)
+
+
+--- policy groups for deepseek-v4-pro ---
+ group_name |    alias_id     
+------------+-----------------
+ closed     | deepseek-v4-pro
+ default    | deepseek-v4-pro
+ premium    | deepseek-v4-pro
+(3 rows)
 
