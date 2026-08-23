@@ -275,19 +275,24 @@ func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []Ta
 	})
 }
 
-// ListEvents serves the cursor read: strictly newer rows in seq order. The
-// task's user scoping was checked by the caller's Get; RLS scopes the tenant
-// via withTenantTx.
+// ListEvents serves the cursor read: strictly newer rows in seq order.
+// User scoping follows the package's application-layer pattern: an explicit
+// user_id filter on every read (here an EXISTS against the parent task), so a
+// same-tenant cross-user read returns nothing even if a future caller skips
+// the Service's Get pre-check.
 func (r *pgxRepository) ListEvents(ctx context.Context, tenantID, userID, id uuid.UUID, afterSeq int64, limit int) ([]TaskEvent, error) {
 	var out []TaskEvent
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT seq, source_event_id, kind, payload, created_at
-			  FROM public.agent_task_events
-			 WHERE task_id = $1 AND seq > $2
-			 ORDER BY seq ASC
-			 LIMIT $3
-		`, id, afterSeq, limit)
+			SELECT e.seq, e.source_event_id, e.kind, e.payload, e.created_at
+			  FROM public.agent_task_events e
+			 WHERE e.task_id = $1
+			   AND e.seq > $2
+			   AND EXISTS (SELECT 1 FROM public.agent_tasks at
+			                WHERE at.id = e.task_id AND at.user_id = $3)
+			 ORDER BY e.seq ASC
+			 LIMIT $4
+		`, id, afterSeq, userID, limit)
 		if err != nil {
 			return fmt.Errorf("agenttask: list events query: %w", err)
 		}
