@@ -15,12 +15,28 @@
 // end's whole dependency graph, which is the same trick
 // scripts/test-owui-hive-frontend.sh already plays for the unit tests.
 import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { compile } from "svelte/compiler";
 
+// Recursive on purpose. A flat scan would silently stop covering components the
+// day someone put one in a subdirectory, and a check that quietly narrows its
+// own scope is the failure mode this whole guard exists to close.
+function collect(dir, prefix = "") {
+  const found = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      found.push(...collect(join(dir, entry.name), rel));
+    } else if (entry.name.endsWith(".svelte")) {
+      found.push(rel);
+    }
+  }
+  return found;
+}
+
 const dir = process.argv[2] ?? ".";
-const files = readdirSync(dir)
-  .filter((f) => f.endsWith(".svelte"))
-  .sort();
+const files = collect(dir).sort();
 
 if (files.length === 0) {
   console.error(`no .svelte files found in ${dir}`);
