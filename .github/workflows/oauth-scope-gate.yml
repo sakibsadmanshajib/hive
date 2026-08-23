@@ -21,10 +21,17 @@ name: OAuth scope gate
 # the box, and refusing to merge a deploy configuration change while its target
 # is unreachable is the correct answer anyway.
 #
-# Not a required status check, for the same reason. The repository's merge
-# policy is all checks green plus zero unresolved threads, so a red run here
-# still blocks a merge in practice, without wedging every unrelated pull
-# request behind a home lab machine's uptime.
+# Not a required status check, for the same reason, and it is worth being
+# precise about what that costs rather than talking it away.
+# .github/branch-protection-main.json lists six required contexts and this is
+# not one of them, `strict` is false and `required_pull_request_reviews` is
+# null, so GitHub will merge a pull request with this run red. Since this
+# repository merges autonomously through the merge API, nothing sits between a
+# red run here and a merge except the merging agent reading it. This is an
+# advisory signal, not an enforced gate. If it should genuinely gate, the
+# honest change is adding the context to branch protection and accepting that
+# box downtime blocks deploy YAML merges, which the paragraph above argues is
+# acceptable anyway.
 #
 # The paths filter is deploy/docker rather than all of deploy/ for that same
 # reason, narrowed after review. `deploy/**.yml` also matched Prometheus

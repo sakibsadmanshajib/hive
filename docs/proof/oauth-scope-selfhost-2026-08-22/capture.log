@@ -11,6 +11,15 @@ Every credential-bearing query parameter is redacted below (client_id, state,
 nonce, code_challenge, code, authorization_id). Token values are never printed:
 presence and length only.
 
+Two registers in this document, kept apart on purpose, because the whole
+incident came from confusing them. MEASURED means a request was made against
+the deployment and the response is transcribed. READ means a file was read in
+supabase/auth at tag v2.189.0, the tag this stack pins by digest; GoTrue is not
+vendored in this repository, so those attributions are a reading of an external
+source, not an observation of this server. Every conclusion below rests on the
+measured half; the read half explains why the measurement comes out the way it
+does. Where a line names a GoTrue file or function, it is READ.
+
 
 1. What the authorization server actually advertises
 ---------------------------------------------------
@@ -379,6 +388,26 @@ Four medium findings, all applied, none of them cosmetic:
     model-catalog work. No coverage lost: the script still scans all of deploy/
     on the runs that happen, and `make test-scripts` scans all of deploy/
     offline on every pull request inside a required check.
+
+Two further findings from the same review were applied beyond that list, and
+they are the ones that changed behaviour rather than placement:
+
+  * nothing noticed a scope being LOST, only one being added, because every
+    subset passes a subset check. Two restorations: the offline guard now
+    requires email as well as openid (section 9), and check-oauth-scopes.py now
+    fails when the server ADVERTISES offline_access while the configuration
+    omits it. That second one is the important one. It turns the assertion #787
+    deleted from a convention-derived claim into a server-derived one: a no-op
+    against the self-hosted GoTrue, which does not advertise the scope, and an
+    automatic return of #782's guard if this stack ever moves to a server that
+    does.
+  * two legal YAML spellings got the wrong verdict. A trailing comment
+    (`OAUTH_SCOPES: "openid email profile"  # note`) was split into scopes
+    named `profile"`, `#` and `keep`, failing a legal edit with an
+    outage-flavoured message, which is how a check teaches people to route
+    around it. An interpolated value now says it cannot be resolved rather than
+    naming a brace as an unsupported scope. A folded multi-line value is named
+    as a known boundary in the docstring rather than parsed.
 
 Re-rehearsed on the box after those edits, still against its unfixed checkout:
 

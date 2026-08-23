@@ -75,6 +75,18 @@ def declarations(deploy_dir: Path) -> list[tuple[Path, int, str]]:
     accepts either, so a declaration written the other way would sail past a
     check whose entire job is to have no blind spot, and it would do it
     silently, reporting a clean run over a corpus of zero.
+
+    Known boundary, named rather than parsed: this reads the key's own line, so
+    a value folded across two lines is seen only as its first line, and the
+    continuation is invisible.
+
+        OAUTH_SCOPES: openid email
+          profile offline_access
+
+    YAML folds that into four scopes; this sees two, and passes. Nothing in
+    this repository is written that way and a real YAML parse is a bigger
+    dependency than the risk justifies, but a reader adding a scope should
+    keep the value on one line. Both call sites already do.
     """
     found: list[tuple[Path, int, str]] = []
     for path in sorted(deploy_dir.rglob("*")):
@@ -90,6 +102,15 @@ def declarations(deploy_dir: Path) -> list[tuple[Path, int, str]]:
                 raw = stripped.split("=", 1)[1]
             else:
                 continue
+            # A trailing YAML comment is not part of the value. Without this,
+            # `OAUTH_SCOPES: "openid email profile"  # keep in sync` is split
+            # into scopes named `profile"`, `#`, `keep` and `in`, and the check
+            # fails an entirely legal edit with an outage-flavoured message
+            # naming `#` as an unsupported scope. Failing closed is the right
+            # direction, but a check that cries wolf on legal style is one
+            # people learn to route around, and this repository's own Go
+            # matcher already treats a trailing comment as legitimate.
+            raw = raw.split(" #", 1)[0]
             found.append((path, number, raw.strip().strip("\"'")))
     return found
 
@@ -185,6 +206,44 @@ def report(
         except ValueError:
             relative = path
         requested = value.split()
+
+        if "${" in value:
+            failures += 1
+            print(
+                f"::error file={relative},line={number}::{relative}:{number} declares "
+                f"{ENV_KEY} as {value!r}, which this check cannot resolve: the value that "
+                "reaches the container is decided by an environment file it cannot read. "
+                "Spell the scopes literally here, or the gate is guessing.",
+                file=sys.stderr,
+            )
+            continue
+
+        # The direction a subset check cannot see on its own. If the server
+        # advertises offline_access and this configuration does not ask for
+        # it, that is #782 waiting to happen: on an authorization server that
+        # gates refresh issuance on the scope, Open WebUI destroys the OAuth
+        # session at its first refresh and every user is locked out roughly 55
+        # minutes after signing in.
+        #
+        # Server-derived rather than convention-derived, which is the whole
+        # point. Against the self-hosted GoTrue this is a no-op, because that
+        # server does not advertise the scope and does not need it. If this
+        # stack ever moves to a server that does, the guard #787 deleted comes
+        # back by itself instead of being rediscovered through another outage.
+        if "offline_access" in advertised and "offline_access" not in requested:
+            failures += 1
+            print(
+                f"::error file={relative},line={number}::{relative}:{number} declares "
+                f"{ENV_KEY} {value!r} while {origin} advertises offline_access. On a server "
+                "that gates refresh issuance on that scope, Open WebUI's first token "
+                "refresh finds no refresh_token, deletes the OAuth session, and every chat "
+                "completion 401s about 55 minutes after sign-in (#782). Ask for it, or "
+                "establish that this server issues a refresh token without it the way "
+                "docs/proof/oauth-scope-selfhost-2026-08-22/ did for GoTrue.",
+                file=sys.stderr,
+            )
+            continue
+
         unknown = [scope for scope in requested if scope not in advertised]
         if unknown:
             failures += 1

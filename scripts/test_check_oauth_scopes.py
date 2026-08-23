@@ -119,6 +119,16 @@ def main() -> int:
         # server that advertises it.
         expect(verdict(red, HOSTED)[0] == 0, "#787's scope string passes against hosted Supabase")
 
+        # And the direction a plain subset check cannot see: against a server
+        # that DOES advertise offline_access, omitting it is #782 waiting to
+        # happen, so it fails. This is what turns the assertion #787's revert
+        # deleted into a server-derived one instead of a convention-derived
+        # one. Against the self-hosted GoTrue it is a no-op, which the
+        # "fixed scope string passes" case above already proves.
+        code, output = verdict(green, HOSTED)
+        expect(code == 1, "omitting offline_access fails against a server that advertises it")
+        expect("#782" in output, "that failure cites the incident it prevents")
+
         # A second file cannot smuggle the bad value back in past a first file
         # that is clean, which is the whole reason the corpus is every deploy
         # YAML rather than one known line.
@@ -134,6 +144,33 @@ def main() -> int:
         list_green = list_corpus(tmp / "list-ok", "openid email profile")
         expect(verdict(list_green, SELF_HOSTED)[0] == 0, "list-form with a good scope passes")
         expect(len(check.declarations(list_green)) == 1, "list form is seen as one declaration")
+
+        # A trailing YAML comment is legal style and must not become scopes.
+        # Without stripping it the comparator is handed `profile"`, `#`, `keep`
+        # and `in` as scope names and fails a perfectly good edit, which is how
+        # a check teaches people to route around it.
+        commented = tmp / "trailing" / "deploy" / "docker"
+        commented.mkdir(parents=True)
+        (commented / "docker-compose.yml").write_text(
+            "services:\n  open-webui:\n    environment:\n"
+            '      OAUTH_SCOPES: "openid email profile"  # keep in sync with the gate\n'
+        )
+        code, output = verdict(tmp / "trailing" / "deploy", SELF_HOSTED)
+        expect(code == 0, "a trailing YAML comment is not read as scopes")
+        expect("#" not in output.split("OAUTH_SCOPES=")[-1].split("\n")[0],
+               "the parsed value excludes the comment")
+
+        # An interpolated value cannot be resolved from here, and saying so
+        # beats naming a brace as an unsupported scope.
+        interpolated = tmp / "interp" / "deploy" / "docker"
+        interpolated.mkdir(parents=True)
+        (interpolated / "docker-compose.yml").write_text(
+            "services:\n  open-webui:\n    environment:\n"
+            '      OAUTH_SCOPES: "${OWUI_OAUTH_SCOPES:-openid email profile}"\n'
+        )
+        code, output = verdict(tmp / "interp" / "deploy", SELF_HOSTED)
+        expect(code == 1, "an interpolated value fails rather than being guessed at")
+        expect("cannot resolve" in output, "and says why, rather than naming a brace as a scope")
 
         # A commented-out declaration is not a declaration. Every fixture file
         # above carries one, so this asserts the scanner ignored it rather than
@@ -204,6 +241,16 @@ def main() -> int:
     # This is what makes the check part of the build rather than a library: if
     # someone adds an unadvertised scope to deploy YAML, this fails offline,
     # without waiting for the live gate to reach the box.
+    #
+    # Note the asymmetry, so its failure mode is understood before it happens
+    # rather than after: this assertion runs against the SELF_HOSTED fixture
+    # above, not against the server. check-oauth-scopes.py's own docstring
+    # argues against snapshots, and it is right about the live gate; this is
+    # deliberately the other thing, a fast offline backstop. So if this stack
+    # moves to an authorization server that advertises offline_access and the
+    # scope is added legitimately, this required check goes red while the live
+    # gate stays green, and the correct fix is to update SELF_HOSTED at the top
+    # of this file rather than to argue with the deployment.
     expect(
         verdict(check.DEPLOY_DIR, SELF_HOSTED)[0] == 0,
         "this repository's own deploy YAML passes against self-hosted GoTrue",

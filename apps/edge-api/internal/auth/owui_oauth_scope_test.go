@@ -195,6 +195,20 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 				"subset check that can no longer go red is indistinguishable " +
 				"from one that passes unconditionally",
 		},
+		{
+			// Deleting `pull_request:` and leaving `workflow_dispatch:` keeps
+			// every invocation above on an uncommented line while the gate
+			// stops firing on pull requests entirely. Of the ways to disable
+			// this quietly it is the most likely one to be reached for, since
+			// it looks like trimming a noisy trigger rather than removing a
+			// check.
+			file:   filepath.Join(".github", "workflows", "oauth-scope-gate.yml"),
+			needle: "pull_request:",
+			why: "without a pull_request trigger the gate runs only on main and " +
+				"on demand, so an unadvertised scope is caught after it is " +
+				"merged rather than before, which is the whole gap #787 " +
+				"went through",
+		},
 	} {
 		body, readErr := os.ReadFile(filepath.Join(root, wiring.file))
 		require.NoError(t, readErr, "%s must exist: %s", wiring.file, wiring.why)
@@ -204,6 +218,42 @@ func TestOWUIOAuthScopeGateIsWired(t *testing.T) {
 			"%s no longer invokes %q outside a comment, so %s",
 			wiring.file, wiring.needle, wiring.why)
 	}
+
+	// The Makefile check above reads the whole file, so moving the line out of
+	// `test-scripts` into a target nothing calls would satisfy it while the
+	// comparator's tests stopped running. ci.yml runs `make test-scripts` and
+	// nothing else, so the recipe is the thing that matters.
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	require.NoError(t, err)
+	require.True(t, inMakeRecipe(string(makefile), "test-scripts", "python3 scripts/test_check_oauth_scopes.py"),
+		"scripts/test_check_oauth_scopes.py is somewhere in the Makefile but not inside "+
+			"the test-scripts recipe, which is the only target CI invokes "+
+			"(.github/workflows/ci.yml, repo-policy-lints). A target nobody calls runs "+
+			"nothing, and the comparator is then unguarded.")
+}
+
+// inMakeRecipe reports whether needle appears in the recipe lines of target.
+//
+// A make recipe is the tab-indented run of lines under `target:`, ending at
+// the first line that is neither indented nor blank.
+func inMakeRecipe(makefile, target, needle string) bool {
+	inTarget := false
+	for _, line := range strings.Split(makefile, "\n") {
+		switch {
+		case strings.HasPrefix(line, target+":"):
+			inTarget = true
+		case inTarget && strings.TrimSpace(line) == "":
+			continue
+		case inTarget && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, " "):
+			inTarget = false
+		}
+		if inTarget && strings.HasPrefix(line, "\t") &&
+			!strings.HasPrefix(strings.TrimSpace(line), "#") &&
+			strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestContainsUncommentedRejectsCommentedInvocations is the self-check for the
@@ -227,6 +277,23 @@ func TestContainsUncommentedRejectsCommentedInvocations(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, containsUncommented(tc.body, needle), tc.name)
 	}
+
+	// The Makefile recipe matcher, same idea: being in the file is not being
+	// in the target CI runs.
+	const call = "python3 scripts/test_check_oauth_scopes.py"
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"inside the recipe", "test-scripts:\n\tpython3 a.py\n\t" + call + "\n", true},
+		{"in another target", "test-scripts:\n\tpython3 a.py\n\nsomething-else:\n\t" + call + "\n", false},
+		{"after the recipe ends", "test-scripts:\n\tpython3 a.py\n\nnotes = " + call + "\n", false},
+		{"commented inside the recipe", "test-scripts:\n\t# " + call + "\n", false},
+		{"absent entirely", "test-scripts:\n\tpython3 a.py\n", false},
+	} {
+		require.Equal(t, tc.want, inMakeRecipe(tc.body, "test-scripts", call), tc.name)
+	}
 }
 
 // containsUncommented reports whether needle appears on a line that is not
@@ -235,6 +302,14 @@ func TestContainsUncommentedRejectsCommentedInvocations(t *testing.T) {
 // Plain strings.Contains would accept a step that had been commented out, or a
 // comment describing the invocation that used to be there. Those are the exact
 // states this guard exists to catch, so matching them would make it decorative.
+//
+// The edge of what this can see, stated so the next reader does not assume
+// more of it: `if: false`, or any never-true `if:` expression, on the deploy
+// step or on the gate's job leaves the invocation on an uncommented line and
+// reads as wired here. Catching that needs a YAML parse and an expression
+// evaluator, which is a bigger dependency than the risk justifies. The two
+// disabling moves that ARE caught are a commented-out invocation and a removed
+// pull_request trigger, plus the recipe check below for the Makefile.
 func containsUncommented(body, needle string) bool {
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
