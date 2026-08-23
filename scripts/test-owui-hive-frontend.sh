@@ -27,7 +27,14 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/lib/hive"
-cp "$SRC"/*.ts "$WORK"/lib/hive/
+# The whole Hive directory, recursively, rather than a glob per extension. A
+# glob covers only what sits at the top of it today and would silently stop
+# covering a component the day someone put one in a subdirectory, which is the
+# same quiet narrowing that let AgentSchedules.svelte reach the deploy
+# uncompiled. The .svelte files cost the unit run nothing: vitest's default
+# include globs match test files only. Structure is preserved rather than
+# flattened, so the mirroring described above still holds.
+cp -R "$SRC"/. "$WORK"/lib/hive/
 
 # The settings declutter guard pins the rendered surface of chat components,
 # plus the layout/page files that also forward directConnections, by reading
@@ -52,6 +59,17 @@ do
 	mkdir -p "$WORK/routes/$(dirname -- "$rel")"
 	cp "$ROUTES_SRC/$rel" "$WORK/routes/$rel"
 done
+
+cp "$ROOT/scripts/owui-hive-svelte-compile-check.mjs" "$WORK"/
+
+# The vendored lockfile travels too, so the compile pass installs the EXACT
+# svelte version the image build resolves rather than whatever `svelte@5`
+# points at today. A major-only pin would let this check compile with a
+# different 5.x than deploy/docker/Dockerfile.open-webui does, which is a fresh
+# way to get a green check and a red deploy. Read inside the container, so this
+# still needs no host node, per the Docker-only testing contract above.
+cp "$ROOT/vendor/open-webui/package-lock.json" "$WORK"/owui-package-lock.json
+
 cd "$WORK"
 
 # Runs in a pinned node image rather than on host node, per CLAUDE.md's
@@ -61,9 +79,33 @@ cd "$WORK"
 # the meaning of a green run. The scratch directory is the only mount, and the
 # container is given the caller's uid so the npx cache it writes there is not
 # left root owned on the host.
+# Two passes in one container: the unit tests, then a Svelte compile of every
+# component under lib/hive. The compile pass is what stops a component that does
+# not build from merging green, which happened on 2026-08-23 and only surfaced
+# in the deploy-demo-box image build, four minutes into a Docker build and hours
+# after merge.
+#
+# Scoped to lib/hive, not the whole scratch tree. The upstream components and
+# routes copied in above are fixtures the declutter guard READS as text; they
+# are compiled by the image build with the real preprocessor chain and their
+# imports resolved against the real node_modules, neither of which exists here,
+# so compiling them out of context would test this script rather than them.
 docker run --rm \
   -v "$WORK:/work" -w /work \
   -u "$(id -u):$(id -g)" \
   -e HOME=/work \
   node:22-alpine3.20 \
-  npx --yes vitest@2 run
+  sh -c 'set -eu
+    npx --yes vitest@2 run
+    svelte_version=$(node -e "
+      const lock = require(\"/work/owui-package-lock.json\");
+      const entry = lock.packages && lock.packages[\"node_modules/svelte\"];
+      if (!entry || !entry.version) {
+        console.error(\"svelte absent from vendor/open-webui/package-lock.json\");
+        process.exit(1);
+      }
+      process.stdout.write(entry.version);
+    ")
+    echo "compiling components with svelte@$svelte_version, the version the image build resolves"
+    npm install --no-save --no-audit --no-fund --loglevel=error "svelte@$svelte_version"
+    node owui-hive-svelte-compile-check.mjs lib/hive'
