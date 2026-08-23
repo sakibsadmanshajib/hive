@@ -16,6 +16,11 @@ const account = () => component('../components/chat/Settings/Account.svelte');
 const advancedParams = () =>
 	component('../components/chat/Settings/Advanced/AdvancedParams.svelte');
 
+// src/routes is a sibling of src/lib, not a child of it, so this is two
+// levels up from src/lib/hive/ (this file), matching the real tree exactly.
+const route = (rel: string): string =>
+	readFileSync(fileURLToPath(new URL(`../../routes/${rel}`, import.meta.url)), 'utf8');
+
 describe('connections tab removal', () => {
 	it('drops the tab from the settings modal rail, search index and content pane', () => {
 		const src = settingsModal();
@@ -40,6 +45,18 @@ describe('connections tab removal', () => {
 			expect(component(rel)).not.toContain('enable_direct_connections');
 		}
 	});
+
+	it('stops the root layout, app layout and shared-chat page from forwarding or honoring stored direct connections', () => {
+		for (const rel of ['+layout.svelte', '(app)/+layout.svelte', 's/[id]/+page.svelte']) {
+			const src = route(rel);
+			const withoutComments = src
+				.split('\n')
+				.filter((line) => !line.trim().startsWith('//'))
+				.join('\n');
+			expect(withoutComments).not.toContain('directConnections');
+			expect(withoutComments).not.toContain('enable_direct_connections');
+		}
+	});
 });
 
 describe('account page stubs and field removal', () => {
@@ -58,6 +75,24 @@ describe('account page stubs and field removal', () => {
 	it('removes the OWUI API key and session JWT sections', () => {
 		const src = account();
 		for (const marker of ['createAPIKey', 'getAPIKey', 'JWT Token', 'Create new secret key']) {
+			expect(src).not.toContain(marker);
+		}
+	});
+
+	it('removes the Account tab search keywords for removed controls (CodeRabbit finding on this PR)', () => {
+		const src = settingsModal();
+		for (const marker of [
+			"'api keys'",
+			"'apikeys'",
+			"'change password'",
+			"'changepassword'",
+			"'jwt token'",
+			"'jwttoken'",
+			"'new password'",
+			"'newpassword'",
+			"'update password'",
+			"'updatepassword'"
+		]) {
 			expect(src).not.toContain(marker);
 		}
 	});
