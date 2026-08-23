@@ -11,9 +11,9 @@
 # a flood of individual PRs. Major and security-only updates still get their
 # own PRs.
 #
-# Note on limits: Dependabot applies open-pull-requests-limit per configured
-# directory, not globally, so the Go and npm caps below bound each manifest at
-# 10 concurrent update PRs.
+# Note on limits: open-pull-requests-limit caps version-update pull requests
+# per configured directory. Security-update pull requests are separate and do
+# not count against the cap, so triage those as they arrive.
 version: 2
 
 updates:
