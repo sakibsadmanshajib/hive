@@ -1019,12 +1019,21 @@ jobs:
       # and a required check on main went red for a reason no commit caused,
       # while the demo answered nothing.
       #
-      # deepseek-v4-flash is an existing public alias pinned to
-      # route-deepseek-v4-flash on OpenRouter, a DIFFERENT provider account
-      # whose limit is prepaid credit rather than a daily token cliff. Measured
-      # 2026-08-23 against the live provider with this suite's own request
-      # shapes: about USD 0.000017 per completion, so a whole run is a fraction
-      # of a cent. A second Groq key would not have helped: the limit is per
+      # deepseek-v4-pro is an existing public alias pinned to
+      # route-deepseek-v4-pro on OpenRouter, a DIFFERENT provider account
+      # whose limit is prepaid credit rather than a daily token cliff.
+      # deepseek-v4-flash was tried first and rejected on evidence: its slug
+      # (~deepseek/deepseek-v4-flash-latest) is an unpinned OpenRouter router
+      # whose upstreams disagree about the OpenAI contract under
+      # response_format json_object. Across probes and the CI run of this
+      # branch it returned message.content as a parsed JSON object (run
+      # 32665985618), as null, and as string on different calls, so no strict
+      # assertion can survive it. deepseek-v4-pro-0813 is date-pinned, returns
+      # content as a string every time, and answers forced tool_choice with a
+      # real tool_calls shape (probed live 2026-08-23 through the demo box's
+      # LiteLLM). It costs more per completion than flash but a whole suite
+      # run stays in single-digit cents, bounded by the token ceiling below. A
+      # second Groq key would not have helped: the limit is per
       # organization, not per key.
       #
       # Fidelity consequence, stated rather than buried: this check no longer
@@ -1038,7 +1047,7 @@ jobs:
       # Set the CI_LIVE_INTEGRATION_MODEL repository variable to point this
       # back at hive-default (say, once a CI-only Groq organization exists)
       # without touching this file.
-      HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
+      HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'deepseek-v4-pro' }}
       # The suites' own default, named here rather than left implicit, because
       # the spend meter below asserts that no alias outside these two is ever
       # billed by this job.
