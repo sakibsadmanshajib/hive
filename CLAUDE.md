@@ -200,8 +200,14 @@ Full runtime UAT results, phase closure notes, and v1.1 deferred scope live in t
 
 ## Project State
 
-- **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete. Covers chat-app + CLI-coding-agent integrators.
-- **v1.1 — in progress**: Phase 20 (Provider Catalog) waves 1-3 complete (PRs 197, 199, 204, 205, 206), wave 4 pending. Phases 12-19 complete.
-- **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
+- **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete.
+- **v1.1 — closed out late July 2026**; the phase-numbering frame (phases 12-20) is retired as a tracking device. Work now tracks through GitHub issues and pull requests.
+- **Milestones**: `v1.2 agentic surface` (in progress), `v1.3 device era` (early), `Hive Enterprise edge-first v1` (15 closed, 7 open). Roadmap board: https://github.com/users/sakibsadmanshajib/projects/3
+- **Recent major work** (detail in `.wolf/decisions.md` D-031 to D-044 and the vault timeline):
+  - Money path: credit unit per million tokens (D-031), one alias one price on `model_aliases` (D-032), fail-closed money path verified live (D-034); billing repaired 2026-08-03.
+  - Chat front end: the Open WebUI fork IS the product shell; D-040 retires the LibreChat migration (D-028) permanently; frontend built from forked source with one Hive navigation (PR #938); OWUI reduced to a view over control-plane-owned state (D-044).
+  - Data plane: self-hosted Supabase cutover on the demo box (PRs #982-#993, Aug 2026); CI decoupled from the live database with throwaway Postgres (PR #983).
+  - Agent surface: sandbox token streaming (PR #920), Anthropic Messages compatibility fixes (PRs #954, #964), native agent surface inside the fork in flight (issue #944).
+- **Open operational risks at last review (2026-08-22)**: deploy-demo-box migration failure (#1002); no off-box backup of any production data store since the Supabase cutover (#1000); shared-chat-instance admin exposure family (#947, #948, #949).
 
 Planning ground truth (milestone state, roadmap, requirements traceability, UAT results, deferred scope) lives in the project vault (Obsidian), not in-repo.
