@@ -1,41 +1,55 @@
-# #457: Supabase's OAuth Authorization Server issues a minimal
-# third-party OIDC id_token/userinfo (standard OIDC claims only) for
-# external relying parties like Open WebUI. It never carries a custom
-# owui_role claim (supabase/migrations/20260726_01_owui_role_claim.sql
-# only reaches GoTrue's own first-party session access tokens, not this
-# third-party OAuth-provider token path), and it does not carry
-# user_metadata either -- both confirmed live via DEBUG logs
-# ("User roles from oauth: []" both times) against the physical demo
-# box for a real tenant OWNER's real OAuth login. Neither
-# OAUTH_ROLES_CLAIM nor any Postgres claims hook can fix this: the
-# third-party id_token is simply too minimal, by Supabase's own design.
+# Resolves this login's Open WebUI role from Hive's own Postgres.
 #
-# Open WebUI's own pgvector connection (PGVECTOR_DB_URL,
-# deploy/docker/docker-compose.yml) already reaches the same Postgres
-# project, so the real tenant role is looked up there directly instead,
-# keyed by email -- the one claim that IS reliably present in every
-# login. Falls back to whatever role the OAUTH_* claim machinery above
-# already computed (DEFAULT_USER_ROLE) if the lookup fails or the user
-# has no active tenant membership, so a lookup/network hiccup degrades
-# to the pre-existing behaviour instead of raising.
+# Two separate questions are answered here, and keeping them separate is the
+# whole point of this file (issue #748):
 #
-# This Open WebUI instance is shared across every Hive tenant (one
-# instance, not one-per-tenant -- see apps/control-plane/internal/
-# signup/webhook.go's per-tenant OWUI *group* provisioning, which only
-# makes sense against a shared instance). An email-keyed lookup that
-# picks "some" active membership would let a user who owns their own
-# throwaway tenant become Open WebUI admin for everyone, regardless of
-# their role in any OTHER tenant -- a cross-tenant privilege escalation.
-# There is no tenant_id available anywhere in this OAuth callback
-# context to scope against instead: the third-party id_token carries
-# neither the owui_role claim nor user_metadata (both confirmed empty
-# above), so tenant_id would be equally unreachable via that path.
-# Given that, this only ever resolves a role when the email has EXACTLY
-# ONE active tenant membership (the actual shape of the incident: a
-# brand-new self-serve tenant's sole OWNER). Zero or more than one
-# active membership is genuinely ambiguous and must never resolve
-# toward more privilege, so both fail closed to the existing fallback
-# (DEFAULT_USER_ROLE, "pending") rather than guessing.
+#   1. May this login use the chat at all? Yes if the email has any ACTIVE
+#      public.tenant_users membership on a non-archived tenant. That resolves
+#      Open WebUI's ordinary 'user' role.
+#   2. Does this login administer the Open WebUI instance? Only if the control
+#      plane says so, explicitly, at the platform level: an ACTIVE 'owner' row
+#      in public.account_memberships on an account carrying
+#      is_platform_admin = true. That is the same predicate the control plane
+#      uses for its own platform-admin surfaces
+#      (apps/control-plane/internal/platform/role_pgx.go, IsPlatformAdmin), so
+#      there is one definition of "platform operator" with two consumers rather
+#      than a second, chat-only notion of admin.
+#
+# What this file used to do, and must never do again: map a tenant_users row
+# with role OWNER onto Open WebUI 'admin'. This Open WebUI instance is shared
+# by every Hive tenant (one instance, not one per tenant, which is why
+# apps/control-plane/internal/signup provisions per-tenant OWUI *groups*), so
+# that mapping made a customer an administrator of every other customer's chat.
+# A live audit of the demo box confirmed it: a legitimately provisioned tenant
+# OWNER signed in, received admin, enumerated other tenants' users, read another
+# user's chat titles and read another tenant's uploaded file. A tenant OWNER is
+# a customer. Tenant ownership is a billing and RBAC concept and carries no
+# platform authority, so it must not decide the administrative role of a shared
+# deployment. See .wolf/decisions.md D-044: the control plane owns state and
+# knobs, Open WebUI is a view.
+#
+# Why the lookup exists at all (#457): Supabase's OAuth Authorization Server
+# issues a minimal third-party OIDC id_token/userinfo (standard OIDC claims
+# only) for external relying parties like Open WebUI. It never carries a custom
+# owui_role claim (supabase/migrations/20260823_03_owui_role_never_admin.sql,
+# like the migrations before it, only reaches GoTrue's own first-party session
+# access tokens, not this third-party OAuth-provider token path), and it does
+# not carry user_metadata either -- both confirmed live via DEBUG logs
+# ("User roles from oauth: []" both times) against the physical demo box for a
+# real tenant OWNER's real OAuth login. Neither OAUTH_ROLES_CLAIM nor any
+# Postgres claims hook can fix that: the third-party id_token is simply too
+# minimal, by Supabase's own design. Open WebUI's own pgvector connection
+# (PGVECTOR_DB_URL, deploy/docker/docker-compose.yml) already reaches the same
+# Postgres, so the real state is read there directly, keyed by email, the one
+# claim that IS reliably present in every login.
+#
+# Failure is closed, not open. A lookup that raises, an email this Postgres has
+# never seen, or an email that somehow resolves more than one auth.users row all
+# leave `role` at whatever the OAUTH_* claim machinery above already computed,
+# which is DEFAULT_USER_ROLE ("pending" on this deployment). Pending means the
+# account activation screen, so the failure mode is no access rather than more
+# access. The multi-row case is genuine ambiguity about who is signing in, and
+# ambiguity must never resolve toward privilege.
 try:
     import os as hive_os
 
@@ -72,19 +86,60 @@ try:
             with hive_conn.cursor() as hive_cur:
                 hive_cur.execute("SET LOCAL statement_timeout = 3000")
                 hive_cur.execute("SET LOCAL lock_timeout = 3000")
+                # One round trip, two independent booleans, so neither answer
+                # can be derived from the other. The email is a bound
+                # parameter, never interpolated.
                 hive_cur.execute(
-                    "SELECT tu.role FROM public.tenant_users tu "
-                    "JOIN auth.users u ON u.id = tu.user_id "
-                    "WHERE lower(u.email) = lower(%s) AND tu.status = 'ACTIVE'",
+                    "SELECT"
+                    "  EXISTS ("
+                    "    SELECT 1 FROM public.account_memberships m"
+                    "      JOIN public.accounts a ON a.id = m.account_id"
+                    "     WHERE m.user_id = u.id"
+                    "       AND m.role = 'owner'"
+                    "       AND m.status = 'active'"
+                    "       AND a.is_platform_admin = true"
+                    "  ) AS is_platform_operator,"
+                    "  EXISTS ("
+                    "    SELECT 1 FROM public.tenant_users tu"
+                    "      JOIN public.tenants t ON t.id = tu.tenant_id"
+                    "     WHERE tu.user_id = u.id"
+                    "       AND tu.status = 'ACTIVE'"
+                    "       AND t.archived_at IS NULL"
+                    "  ) AS has_active_membership "
+                    "FROM auth.users u "
+                    "WHERE lower(u.email) = lower(%s)",
                     (hive_email,),
                 )
                 hive_rows = hive_cur.fetchall()
                 if len(hive_rows) == 1:
-                    role = 'admin' if hive_rows[0][0] == 'OWNER' else 'user'
-                # else: no membership, or more than one (ambiguous which
-                # tenant this login is for) -- leave `role` at whatever
-                # the fallback machinery above already computed.
+                    hive_is_operator, hive_has_membership = hive_rows[0]
+                    if hive_is_operator:
+                        role = 'admin'
+                    elif hive_has_membership:
+                        role = 'user'
+                    # else: no active membership anywhere -- leave `role` at
+                    # the fallback (pending) rather than admitting an identity
+                    # this deployment knows nothing about.
         finally:
             hive_conn.close()
 except Exception as hive_tenant_role_error:
+    # Keep the fallback, but never let a failure hand out admin. Admin must only
+    # ever come from a successful platform-attribute lookup (issue #748), so that
+    # is stated in code here rather than left to a deployment's configuration.
+    #
+    # Two cases where the fallback can be 'admin', both real:
+    #   * ENABLE_OAUTH_ROLE_MANAGEMENT on (what compose sets) and a claim that
+    #     matched OAUTH_ADMIN_ROLES, or role management off with
+    #     DEFAULT_USER_ROLE=admin and no existing user row.
+    #   * role management off and an EXISTING Open WebUI admin, where upstream
+    #     carries the stored role forward (utils/oauth.py's `role = user.role`).
+    #
+    # The cost, stated rather than hidden: in that second case a transient
+    # database failure demotes a real operator to 'user' for that session. Their
+    # next successful login restores admin, because the attribute is still there,
+    # so the failure mode is a recoverable loss of privilege instead of an
+    # unrecoverable grant of it. On this deployment the fallback is "pending"
+    # (deploy/docker/docker-compose.yml), where the clamp is a no-op.
+    if role == 'admin':
+        role = 'user'
     log.warning(f'hive tenant-role lookup failed, keeping fallback role: {hive_tenant_role_error}')

@@ -146,12 +146,21 @@ func ensurePersonalTenant(ctx context.Context, pool *pgxpool.Pool, userID uuid.U
 //
 // Role is MEMBER, matching (*Provisioner).provision, and that is deliberate
 // even though the user is the only member of their own tenant. OWNER would be
-// the intuitive choice, but public.custom_access_token_hook remaps an OWNER
-// role to owui_role ADMIN for Open WebUI's OAUTH_ROLES_CLAIM, so making every
-// self-serve signup an OWNER would silently make every self-serve signup an
-// Open WebUI administrator. Workspace-level authority already lives on
-// public.account_memberships, where the same user is 'owner' of their own
-// account, so nothing is lost by keeping the tenant role minimal.
+// the intuitive choice, and the original reason for refusing it was that a
+// tenant OWNER became an administrator of the shared Open WebUI instance, in
+// public.custom_access_token_hook's owui_role remap and in
+// deploy/docker/owui-patches/tenant_role_from_db.py. Issue #748 removed both:
+// instance admin is now public.accounts.is_platform_admin plus an ACTIVE owner
+// membership, so a tenant role no longer decides it.
+//
+// MEMBER stays anyway, for the reason that outlives that mapping: the console's
+// own permissions (billing, API keys, members) resolve from
+// public.account_memberships, where the same user is already 'owner' of their
+// own account (apps/control-plane/internal/authz/policy.go). What the tenant
+// role still gates is platform.WorkspaceAdminGate, the workspace feature-gate
+// and marketplace surfaces, which a personal single-member tenant has no use
+// for. Issue #749 is the separate question of honouring an invited role, and it
+// is that path, not this one, that needs a role parameter.
 func insertPersonalMembership(ctx context.Context, pool *pgxpool.Pool, tenantID, userID uuid.UUID) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO public.tenant_users(tenant_id, user_id, role, status)

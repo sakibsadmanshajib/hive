@@ -10,12 +10,24 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // #269: hive_jwt_forward is an Open WebUI Function (Admin > Functions), not
 // a file the container auto-loads; there is no mount or env var that
 // installs it. It must be created via the Functions REST API by an admin
-// session. The real fixture user below signs in with tenant role OWNER,
-// which the owui_role JWT claim maps to Open WebUI's "ADMIN" OAuth role
-// (OAUTH_ADMIN_ROLES in docker-compose.yml), so Open WebUI grants it a real
-// admin session on every login -- not the (separate, and now deliberately
-// consumed by the bootstrap login first) unconditional first-user-becomes-
-// admin promotion.
+// session.
+//
+// Where that admin session comes from changed with issue #748. It used to be
+// free: the fixture signs in with tenant role OWNER, and a tenant OWNER was
+// mapped onto Open WebUI admin. That mapping was a cross-tenant grant on a
+// shared instance and is gone, along with upstream's unconditional
+// first-user-becomes-admin promotion.
+//
+// The replacement on a real deployment is the control plane's platform
+// attribute, and it is deliberately NOT what this fixture uses: granting
+// accounts.is_platform_admin to a CI fixture would hand it the platform-wide
+// authority behind credit minting and provider base-URL rewrites, in whatever
+// database the job points at, which is the hazard #747 is about. This job's
+// chat container is created and destroyed inside the job, so the fixture is
+// promoted in that container's own database instead, after its login and
+// before the install, by scripts/owui-promote-instance-admin.py. That
+// promotion carries no Hive authority and is undone by that account's next
+// login, which is exactly the lifetime this needs.
 //
 // #556: the create/update/activate/verify sequence itself is no longer
 // written here. It lives in scripts/install-owui-jwt-forward.py, which the
@@ -26,6 +38,14 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 const HIVE_JWT_FORWARD_INSTALLER = path.resolve(
   __dirname,
   "../../../../../scripts/install-owui-jwt-forward-in-container.sh",
+);
+
+// #748: the fixture's Open WebUI admin role, granted in this job's own
+// container and nowhere else. Same wrapper shape as the installer above, so
+// both reach the container the way the deploy does.
+const HIVE_INSTANCE_ADMIN_PROMOTER = path.resolve(
+  __dirname,
+  "../../../../../scripts/owui-promote-instance-admin-in-container.sh",
 );
 
 // #736: the install runs INSIDE the chat container, against Open WebUI's own
@@ -96,7 +116,28 @@ async function syncOwuiLocalPassword(
  * AND global -- a filter only runs when it is both (see
  * open_webui.utils.filter.get_sorted_filter_ids upstream).
  */
-async function installHiveJwtForwardFilter(page: Page): Promise<void> {
+async function installHiveJwtForwardFilter(page: Page, email: string): Promise<void> {
+  // #748: nothing makes this account an Open WebUI admin by itself any more.
+  // The Functions API is admin-gated, so the account is promoted inside this
+  // job's own disposable chat container first. Not through
+  // accounts.is_platform_admin: see this file's header for why a CI fixture
+  // must not hold that. Runs after the login, because the promotion targets a
+  // row that only exists once the account has signed in, and before the
+  // install, because that is what needs the role.
+  execFileSync(HIVE_INSTANCE_ADMIN_PROMOTER, [], {
+    env: {
+      ...process.env,
+      OWUI_PROMOTE_EMAIL: email,
+      HIVE_COMPOSE_FLAGS,
+    },
+    stdio: "inherit",
+    // Synchronous, so a stalled `docker compose exec` blocks the event loop and
+    // Playwright's own timer cannot fire: without a bound the setup project
+    // hangs until the job's own limit kills it, with no diagnosis. The work is
+    // one sqlite UPDATE, so a minute is already an order of magnitude of slack.
+    timeout: 60_000,
+  });
+
   // Open WebUI stores its session JWT in a `token` cookie and mirrors it into
   // localStorage. The cookie is the one the API itself reads, so it is
   // preferred; localStorage is the fallback for a build that stops setting it.
@@ -127,6 +168,11 @@ async function installHiveJwtForwardFilter(page: Page): Promise<void> {
       HIVE_COMPOSE_FLAGS,
     },
     stdio: "inherit",
+    // Same reasoning as the promotion above, with a wider bound because this
+    // one copies two files into the container and makes four API calls. It has
+    // never taken more than a few seconds; five minutes is a hang, not a slow
+    // run, and failing on it names the stall instead of eating the job.
+    timeout: 300_000,
   });
 }
 
@@ -191,12 +237,15 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
     .or(page.getByRole("link", { name: /new chat/i }))
     .first();
 
-  // Bootstrap login: Open WebUI auto-promotes the very first user it ever
-  // sees to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM entirely.
-  // The OWUI container in this job is freshly created every run, so without
-  // this step the real fixture user below would always land as that
-  // unconditional first-user admin and never actually exercise the
-  // owui_role allow-list gate PR #451 fixed.
+  // Bootstrap login: upstream Open WebUI auto-promoted the very first user it
+  // ever saw to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM
+  // entirely, and the container in this job is freshly created every run, so
+  // without this step the real fixture user below landed as that unconditional
+  // first-user admin and never exercised the role resolution at all. Issue
+  // #748 removed that promotion, so this step no longer has a promotion to
+  // consume. It is kept, cheaply: it still guarantees the fixture is not the
+  // instance's only account, which is what made the old promotion fire, so a
+  // regression that restores it cannot hide behind this fixture.
   //
   // Runs in its own, throwaway browser context (separate cookie jar), not
   // signed out and reused in `page` -- components/oauth/consent-panel.tsx
@@ -243,7 +292,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
         "and docker-compose.yml's open-webui OAUTH_ROLES_CLAIM).",
     );
   }
-  await installHiveJwtForwardFilter(page);
+  await installHiveJwtForwardFilter(page, email);
   // #712: see syncOwuiLocalPassword's docstring -- without this, Open
   // WebUI's own local password for this OAuth-provisioned account never
   // matches OWUI_E2E_PASSWORD, and any native (non-OAuth) sign-in with it

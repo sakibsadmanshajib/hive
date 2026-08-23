@@ -897,9 +897,19 @@ services:
       # itself resolved. Left wired to the original claim name in case a
       # future Supabase change ever starts including it; the real fix is
       # Dockerfile.open-webui's tenant-role-from-Postgres patch, which
-      # looks the role up directly instead of depending on this claim.
+      # looks the role up directly instead of depending on this claim. That
+      # first-user bypass is itself gone as of #748: on an instance shared by
+      # every tenant it made whichever account authenticated first after a
+      # volume reset the administrator of everyone's chat.
       OAUTH_ROLES_CLAIM: "owui_role"
       OAUTH_ALLOWED_ROLES: "ADMIN,MEMBER,VIEWER"
+      # #748: no tenant role can produce this value any more. The token hook
+      # emits owui_role MEMBER for OWNER and ADMIN alike, so this list is
+      # deliberately unmatchable, and instance admin comes from the control
+      # plane's platform attribute (accounts.is_platform_admin) resolved by
+      # the tenant-role patch. It stays set rather than blanked because Open
+      # WebUI only runs its claim path at all when the claim name, the allowed
+      # list and the admin list are all present.
       OAUTH_ADMIN_ROLES: "ADMIN"
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
       OAUTH_GROUPS_CLAIM: "tenants"
@@ -918,8 +928,9 @@ services:
       ENABLE_COMMUNITY_SHARING: "false"
       # #947: both flags below default to true upstream (config.py:2005 and
       # config.py:2013) and we never set them, so every Open WebUI
-      # administrator -- which is every sole tenant OWNER, per the
-      # tenant-role patch below -- could list every other tenant's Knowledge
+      # administrator -- which was every sole tenant OWNER, per the
+      # tenant-role patch below, until #748 made instance admin a deliberate
+      # platform attribute instead -- could list every other tenant's Knowledge
       # collections (routers/knowledge.py:143, :202) and read any user's chats
       # (routers/chats.py:611, :1056). Confirmed live: a demo account's
       # Knowledge collection was visible from an unrelated personal account.

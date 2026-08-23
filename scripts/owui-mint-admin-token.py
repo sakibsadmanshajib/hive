@@ -112,9 +112,16 @@ def first_admin_id(database: Path) -> str:
     if not row:
         raise SystemExit(
             "Open WebUI has no admin account yet, so the hive_jwt_forward "
-            "Function cannot be installed. Sign in once as a tenant OWNER "
-            "(which this deployment maps to an Open WebUI admin) and re-run "
-            "the deploy."
+            "Function cannot be installed. Instance admin is no longer derived "
+            "from a tenant role (issue #748): a tenant OWNER is a customer, and "
+            "on this shared instance that grant reached every other tenant. "
+            "Grant it deliberately instead. Set "
+            "public.accounts.is_platform_admin = true on the operator's own "
+            "workspace and give that user an ACTIVE 'owner' row in "
+            "public.account_memberships for it, the same predicate the control "
+            "plane's platform-admin surfaces use, then have that account sign "
+            "in to chat once so Open WebUI records the role, and re-run the "
+            "deploy."
         )
     return row[0]
 
