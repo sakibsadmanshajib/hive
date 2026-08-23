@@ -48,7 +48,7 @@ The one-enabled-route query returns `hive-embedding-default` with two enabled ro
 
 ## Reproducing
 
-```
+```bash
 bash scripts/ci-throwaway-db.sh   # with PGHOST/PGPORT/PGUSER/PGDATABASE exported
 ```
 

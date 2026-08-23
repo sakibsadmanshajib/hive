@@ -2,6 +2,7 @@ package routing
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"os"
 	"regexp"
@@ -21,16 +22,26 @@ import (
 // mispricings that passed it. Every one of them is now a positional assertion
 // against a named column of a named row:
 //
-//   * hive-default's reprice changed to hive-medium's figures. Both numbers were
+//   - hive-default's reprice changed to hive-medium's figures. Both numbers were
 //     already elsewhere in the file, so a 100 percent overcharge on the
 //     no-model-specified default alias stayed green.
-//   * input and output swapped inside one alias tuple. Both numbers present, green.
-//   * a route repointed at a different upstream model with the price untouched,
+//   - input and output swapped inside one alias tuple. Both numbers present, green.
+//   - a route repointed at a different upstream model with the price untouched,
 //     a 2x undercharge, green, because provider_model was checked against the
 //     rate snapshot but never against the SQL.
 //
 // Presence of digits in a file is not the assertion. A value in a column of a
 // row is.
+//
+// KNOWN LIMIT, stated rather than left to be discovered. This whole file is
+// pinned to ONE migration filename. The next migration that reprices these
+// aliases inherits none of these guards, and will pass this suite while doing
+// anything it likes to the catalog. Two ways out when that day comes: key the
+// pricing checks off every migration that writes input_price_credits, or move
+// the assertions to the database level where catalog_pricing_integration_test.go
+// already lives. Neither is done here, because a guard that scans every
+// migration has to cope with the historical ones that predate the DERIVE
+// convention entirely.
 const (
 	pricingMigrationRelPath = "supabase/migrations/20260822_02_catalog_alias_restructure.sql"
 	providerRatesRelPath    = "testdata/provider_rates_2026-08-22.json"
@@ -77,28 +88,36 @@ type providerRatesFixture struct {
 // otherwise parse as a valid provider rate.
 var decimalRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
-// expectedCredits computes ceil(usd * MARGIN * CREDITS_PER_USD) in exact
-// rational arithmetic. big.Rat parses a decimal string without loss, so
-// "0.01278" is 1278/100000 and not the nearest float64 to it. That is the one
-// rate in this migration whose product is fractional, so it is the row a float
-// would round differently.
-func expectedCredits(t *testing.T, usd string) *big.Int {
-	t.Helper()
-
+// parseRate turns a documented provider rate into an exact rational, rejecting
+// anything that is not a plain positive decimal.
+//
+// big.Rat parses a decimal string without loss, so "0.01278" is 1278/100000 and
+// not the nearest float64 to it. That is the one rate in this migration whose
+// product is fractional, so it is the row a float would round differently.
+//
+// It returns an error rather than calling t.Fatalf, because the callers loop
+// over every DERIVE row with t.Errorf and continue: one malformed rate must not
+// abort the run and hide every remaining row, which is the difference between
+// a review that reports one problem and one that reports all of them.
+func parseRate(usd string) (*big.Rat, error) {
 	if !decimalRe.MatchString(usd) {
-		t.Fatalf("provider rate %q is not a plain decimal; big.Rat would also accept ratio, exponent and hex-float forms, which are not prices", usd)
+		return nil, fmt.Errorf("rate %q is not a plain decimal; big.Rat also accepts ratio, exponent and hex-float forms, which are not prices", usd)
 	}
 	rate, ok := new(big.Rat).SetString(usd)
 	if !ok {
-		t.Fatalf("provider rate %q is not a valid decimal", usd)
+		return nil, fmt.Errorf("rate %q is not a valid decimal", usd)
 	}
 	// A zero or negative rate is a mispricing, not a derivation. Without this,
 	// a DERIVE row claiming 0 USD and 0 credits satisfies every assertion here
 	// as a correctly derived free model.
 	if rate.Sign() <= 0 {
-		t.Fatalf("provider rate %q is zero or negative; that is a mispricing, not a rate", usd)
+		return nil, fmt.Errorf("rate %q is zero or negative; that is a mispricing, not a rate", usd)
 	}
+	return rate, nil
+}
 
+// expectedCredits computes ceil(usd * MARGIN * CREDITS_PER_USD) exactly.
+func expectedCredits(rate *big.Rat) *big.Int {
 	product := new(big.Rat).Mul(rate, big.NewRat(marginNum*creditsPerUSD, marginDen))
 	quotient, remainder := new(big.Int).QuoRem(product.Num(), product.Denom(), new(big.Int))
 	if remainder.Sign() != 0 {
@@ -162,6 +181,10 @@ func loadProviderRates(t *testing.T) map[string]providerRate {
 }
 
 var deriveLineRe = regexp.MustCompile(`(?m)^--\s*DERIVE\|([^\n]*)$`)
+
+// disableRe matches a statement that retires a route. Compiled once at package
+// level rather than per call.
+var disableRe = regexp.MustCompile(`(?is)^update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'`)
 
 func parseDeriveRows(t *testing.T, migration string) []deriveRow {
 	t.Helper()
@@ -264,13 +287,26 @@ func TestCatalogAliasPricesMatchProviderRates(t *testing.T) {
 			snapshotUSD = *rate.CacheRead
 		}
 
-		if row.USD != snapshotUSD {
+		// Compared as rationals, not as strings: "0.3" and "0.30" are the same
+		// rate, and a string comparison would report a false red on a purely
+		// cosmetic difference in how one of the two files writes it.
+		documented, err := parseRate(row.USD)
+		if err != nil {
+			t.Errorf("alias %s %s: migration's documented %v", row.Alias, row.Field, err)
+			continue
+		}
+		snapshot, err := parseRate(snapshotUSD)
+		if err != nil {
+			t.Errorf("alias %s %s: snapshot's %v", row.Alias, row.Field, err)
+			continue
+		}
+		if documented.Cmp(snapshot) != 0 {
 			t.Errorf("alias %s %s: migration documents the provider rate as $%s per million, snapshot recorded $%s",
 				row.Alias, row.Field, row.USD, snapshotUSD)
 			continue
 		}
 
-		want := expectedCredits(t, snapshotUSD)
+		want := expectedCredits(snapshot)
 		if want.String() != row.Credits {
 			t.Errorf("alias %s %s: ceil($%s * 1.4 * 100000) = %s credits, migration claims %s",
 				row.Alias, row.Field, snapshotUSD, want.String(), row.Credits)
@@ -458,7 +494,6 @@ func TestRetiredRoutesAreDisabledAndRepointed(t *testing.T) {
 	// Per statement, not over a concatenation of all of them: a file disabling
 	// route A in one statement and merely mentioning route B in another must
 	// not satisfy the guard for B.
-	disableRe := regexp.MustCompile(`(?is)^update\s+public\.provider_routes\s+set\s+health_state\s*=\s*'disabled'`)
 	var disablers []string
 	for _, stmt := range splitStatements(sql) {
 		if disableRe.MatchString(strings.TrimSpace(stmt)) {
