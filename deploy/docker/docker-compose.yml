@@ -472,7 +472,7 @@ services:
       # buildAgentEngine ignores every HIVE_AGENT_ENGINE_* path variable
       # below and forwards launches to that daemon.
       #
-      # Why: this service runs inside a golang:1.24-alpine container, which
+      # Why: this service runs inside a golang:1.26-alpine container, which
       # cannot exec the host's Apptainer directly (glibc-linked binary, no
       # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
       # privilege on the service holding Stripe/Supabase/payment secrets).
