@@ -16,13 +16,18 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // free: the fixture signs in with tenant role OWNER, and a tenant OWNER was
 // mapped onto Open WebUI admin. That mapping was a cross-tenant grant on a
 // shared instance and is gone, along with upstream's unconditional
-// first-user-becomes-admin promotion. The fixture's own workspace now carries
-// the platform attribute instead (accounts.is_platform_admin plus an ACTIVE
-// owner membership, written by scripts/seed-owui-e2e-user.py), which is what
-// resolves an admin role for this login. The bootstrap login below is
-// therefore no longer load-bearing for that promotion; it is kept because it
-// costs one round trip and still proves the fixture is not the instance's
-// only account.
+// first-user-becomes-admin promotion.
+//
+// The replacement on a real deployment is the control plane's platform
+// attribute, and it is deliberately NOT what this fixture uses: granting
+// accounts.is_platform_admin to a CI fixture would hand it the platform-wide
+// authority behind credit minting and provider base-URL rewrites, in whatever
+// database the job points at, which is the hazard #747 is about. This job's
+// chat container is created and destroyed inside the job, so the fixture is
+// promoted in that container's own database instead, after its login and
+// before the install, by scripts/owui-promote-instance-admin.py. That
+// promotion carries no Hive authority and is undone by that account's next
+// login, which is exactly the lifetime this needs.
 //
 // #556: the create/update/activate/verify sequence itself is no longer
 // written here. It lives in scripts/install-owui-jwt-forward.py, which the
@@ -33,6 +38,14 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 const HIVE_JWT_FORWARD_INSTALLER = path.resolve(
   __dirname,
   "../../../../../scripts/install-owui-jwt-forward-in-container.sh",
+);
+
+// #748: the fixture's Open WebUI admin role, granted in this job's own
+// container and nowhere else. Same wrapper shape as the installer above, so
+// both reach the container the way the deploy does.
+const HIVE_INSTANCE_ADMIN_PROMOTER = path.resolve(
+  __dirname,
+  "../../../../../scripts/owui-promote-instance-admin-in-container.sh",
 );
 
 // #736: the install runs INSIDE the chat container, against Open WebUI's own
@@ -103,7 +116,23 @@ async function syncOwuiLocalPassword(
  * AND global -- a filter only runs when it is both (see
  * open_webui.utils.filter.get_sorted_filter_ids upstream).
  */
-async function installHiveJwtForwardFilter(page: Page): Promise<void> {
+async function installHiveJwtForwardFilter(page: Page, email: string): Promise<void> {
+  // #748: nothing makes this account an Open WebUI admin by itself any more.
+  // The Functions API is admin-gated, so the account is promoted inside this
+  // job's own disposable chat container first. Not through
+  // accounts.is_platform_admin: see this file's header for why a CI fixture
+  // must not hold that. Runs after the login, because the promotion targets a
+  // row that only exists once the account has signed in, and before the
+  // install, because that is what needs the role.
+  execFileSync(HIVE_INSTANCE_ADMIN_PROMOTER, [], {
+    env: {
+      ...process.env,
+      OWUI_PROMOTE_EMAIL: email,
+      HIVE_COMPOSE_FLAGS,
+    },
+    stdio: "inherit",
+  });
+
   // Open WebUI stores its session JWT in a `token` cookie and mirrors it into
   // localStorage. The cookie is the one the API itself reads, so it is
   // preferred; localStorage is the fallback for a build that stops setting it.
@@ -253,7 +282,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
         "and docker-compose.yml's open-webui OAUTH_ROLES_CLAIM).",
     );
   }
-  await installHiveJwtForwardFilter(page);
+  await installHiveJwtForwardFilter(page, email);
   // #712: see syncOwuiLocalPassword's docstring -- without this, Open
   // WebUI's own local password for this OAuth-provisioned account never
   // matches OWUI_E2E_PASSWORD, and any native (non-OAuth) sign-in with it
