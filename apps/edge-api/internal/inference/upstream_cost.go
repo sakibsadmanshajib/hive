@@ -78,12 +78,12 @@ var (
 const maxCostLiteralBytes = 64
 
 // maxChargeableCredits is the largest charge a single request may settle at.
-// One request cannot plausibly cost more than 1,000,000 credits (10 USD) given
-// the request bounds enforced before dispatch, and refusing past that is what
-// stops a wrong or hostile figure becoming a real ledger entry. It also keeps
-// the conversion inside int64 by construction, so the Int64 check below is a
-// belt-and-braces assertion rather than the only line of defence.
-const maxChargeableCredits = 1_000_000
+// One request cannot plausibly cost more than 10,000,000,000 credits (10 USD)
+// given the request bounds enforced before dispatch, and refusing past that is
+// what stops a wrong or hostile figure becoming a real ledger entry. It also
+// keeps the conversion inside int64 by construction, so the Int64 check below
+// is a belt-and-braces assertion rather than the only line of defence.
+const maxChargeableCredits = 10_000_000_000
 
 // MarginNumerator / MarginDenominator express the 1.4 margin EXACTLY, as a
 // rational. Not 1.4 the float: this multiplies a money figure, and the repo
@@ -99,12 +99,14 @@ const (
 	MarginDenominator = 5
 )
 
-// CreditsPerUSD mirrors payments.CreditsPerUSD (1 USD = 100,000 credits).
+// CreditsPerUSD mirrors payments.CreditsPerUSD (1 USD = 1,000,000,000
+// credits, since the 2026-08-23 credit unit rescale; migration
+// 20260823_40_credit_unit_rescale_billion.sql rescaled stored data to match).
 // Duplicated rather than imported: payments lives under control-plane's
 // internal/ tree in a different module, so Go's own visibility rules make it
 // unimportable from edge-api. TestCreditsPerUSDMatchesPaymentsPackage guards
 // the duplication against drift.
-const CreditsPerUSD = 100_000
+const CreditsPerUSD = 1_000_000_000
 
 // UpstreamCharge is what a completed generation cost us and what identifies it.
 type UpstreamCharge struct {
@@ -257,7 +259,8 @@ func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
 }
 
 // CreditsForUpstreamCost converts a provider-reported USD cost into whole
-// credits at the standard margin: cost x 7/5 x 100000, summed as one exact
+// credits at the standard margin: cost x 7/5 x CreditsPerUSD (1e9 since the
+// 2026-08-23 rescale), summed as one exact
 // rational and rounded half up exactly once, the same rounding discipline
 // metering.ChargeCredits applies to the per-million path (D-031).
 //

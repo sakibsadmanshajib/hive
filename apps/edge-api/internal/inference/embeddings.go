@@ -46,8 +46,9 @@ func handleEmbeddings(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
 		NeedEmbeddings: true,
 	}
 
-	// Embeddings are cheaper than completions; use 1000 credits as default reservation.
-	const estimatedCredits int64 = 1000
+	// Embeddings are cheaper than completions; the default reservation is
+	// one cent equivalent at the current credit unit.
+	const estimatedCredits int64 = DefaultHoldEmbeddings
 
 	o.executeSync(r.Context(), w, r, EndpointEmbeddings, body, req.Model, needFlags, estimatedCredits,
 		o.litellm.Embeddings, normalizeEmbeddings)

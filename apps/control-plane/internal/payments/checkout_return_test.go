@@ -321,7 +321,7 @@ func TestInitiateCheckoutPassesBothOriginsToTheRail(t *testing.T) {
 	svc := NewService(repo, led, prof, fx, map[Rail]PaymentRail{RailStripe: rail})
 
 	if _, err := svc.InitiateCheckout(
-		context.Background(), uuid.New(), RailStripe, 1000,
+		context.Background(), uuid.New(), RailStripe, CreditIncrement,
 		"https://cp.example.com", "https://console.example.com", "idem-1",
 	); err != nil {
 		t.Fatalf("InitiateCheckout: %v", err)
@@ -341,7 +341,7 @@ func TestInitiateCheckoutRefusesAnUnusableReturnBaseURL(t *testing.T) {
 	svc := NewService(repo, led, prof, fx, map[Rail]PaymentRail{RailStripe: rail})
 
 	_, err := svc.InitiateCheckout(
-		context.Background(), uuid.New(), RailStripe, 1000,
+		context.Background(), uuid.New(), RailStripe, CreditIncrement,
 		"https://cp.example.com", "", "idem-1",
 	)
 	if err == nil {
@@ -413,7 +413,7 @@ func TestGetCheckoutIntentResolvesPendingToSuccessOnceSettled(t *testing.T) {
 		AccountID: accountID,
 		Rail:      RailSSLCommerz,
 		Status:    IntentStatusConfirming,
-		Credits:   1000,
+		Credits:   CreditIncrement,
 	}); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestGetCheckoutIntentHidesIntentsOwnedByAnotherAccount(t *testing.T) {
 		AccountID: ownerID,
 		Rail:      RailStripe,
 		Status:    IntentStatusCompleted,
-		Credits:   100000,
+		Credits:   CreditsPerUSD,
 	}); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}

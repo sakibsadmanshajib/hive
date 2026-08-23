@@ -289,7 +289,7 @@ func (s *StubService) GetCheckoutOptions(
 	return &payments.CheckoutOptions{
 		Rails:              railOptions,
 		PredefinedTiers:    payments.PredefinedTiers,
-		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX)
+		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX); the block itself scales with CreditsPerUSD
 		CreditBlockSize:    payments.CreditsPerUSD,
 		Currency:           currencyForCountry(countryCode),
 	}, nil

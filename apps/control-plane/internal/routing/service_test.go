@@ -1044,7 +1044,7 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 				SupportsChatCompletions: true,
 			},
 		},
-		// 0.05 in / 0.08 out USD per million * 1.4 * CreditsPerUSD (100_000).
+		// 0.05 in / 0.08 out USD per million * 1.4 * the then-current CreditsPerUSD (100_000 pre-rescale).
 		pricing: catalog.FixedPricing(7_000, 11_200),
 	}
 

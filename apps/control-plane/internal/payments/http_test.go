@@ -234,7 +234,7 @@ func TestInitiateCheckout_HappyPath(t *testing.T) {
 		initiateResult: &payments.PaymentIntent{
 			ID:           intentID,
 			Rail:         payments.RailStripe,
-			Credits:      10000,
+			Credits:      10000000,
 			AmountUSD:    10,
 			RedirectURL:  "https://stripe.com/checkout/abc",
 			ExpiresAt:    &expiresAt,
@@ -244,7 +244,7 @@ func TestInitiateCheckout_HappyPath(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":10000,"idempotency_key":"test-key-123"}`
+	body := `{"rail":"stripe","credits":10000000,"idempotency_key":"test-key-123"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -273,7 +273,7 @@ func TestInitiateCheckout_MissingBillingProfile(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":10000,"idempotency_key":"test-key-456"}`
+	body := `{"rail":"stripe","credits":10000000,"idempotency_key":"test-key-456"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -317,7 +317,7 @@ func TestInitiateCheckout_MissingIdempotencyKey(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":10000,"idempotency_key":""}`
+	body := `{"rail":"stripe","credits":10000000,"idempotency_key":""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -333,7 +333,7 @@ func TestInitiateCheckout_MissingRail(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"","credits":10000,"idempotency_key":"test-key-abc"}`
+	body := `{"rail":"","credits":10000000,"idempotency_key":"test-key-abc"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -508,7 +508,7 @@ func TestRouterIntegration_CheckoutInitiate_NoAuth_Returns401(t *testing.T) {
 	})
 
 	// POST /api/v1/accounts/current/checkout/initiate without auth — must return 401
-	body := `{"rail":"stripe","credits":10000,"idempotency_key":"test-key"}`
+	body := `{"rail":"stripe","credits":10000000,"idempotency_key":"test-key"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	// Explicitly NO Authorization header
 	rr := httptest.NewRecorder()

@@ -42,7 +42,7 @@ func newBodyCapFixture(t *testing.T) *bodyCapFixture {
 		AccountID:        uuid.New(),
 		Rail:             RailStripe,
 		Status:           IntentStatusPendingRedirect,
-		Credits:          100_000,
+		Credits:          CreditsPerUSD,
 		AmountUSD:        100,
 		IdempotencyKey:   "idem-640",
 		ProviderIntentID: providerIntentID,

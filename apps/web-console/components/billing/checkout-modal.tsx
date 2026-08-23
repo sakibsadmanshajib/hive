@@ -90,15 +90,19 @@ export function CheckoutModal({
   const isBdAccount = accountCountryCode === "BD";
 
   // FX-17-04 (post-review): the server prices in minor units per
-  // `credit_block_size` credits (= CreditsPerUSD = 100,000). To get the
-  // localised total for an arbitrary credit count we integer-divide by
-  // the block size. Order of operations is `(credits * price) / size`
-  // so the multiplication happens at full int64 precision before the
-  // truncating division, matching the server-side math/big truncation.
+  // `credit_block_size` credits (= CreditsPerUSD = 1,000,000,000 since the
+  // 2026-08-23 credit unit rescale). To get the localised total for an
+  // arbitrary credit count we integer-divide by the block size, matching the
+  // server-side math/big truncation.
   //
-  // Worst-case magnitude: 500_000_000 credits * ~15_000 paisa ≈ 7.5e12,
-  // well inside Number.MAX_SAFE_INTEGER (9.0e15), so plain Number math
-  // is safe — no BigInt needed.
+  // Magnitude safety at the new unit: the raw product
+  // `5e12 credits * 15000 paisa = 7.5e16` EXCEEDS Number.MAX_SAFE_INTEGER,
+  // so the multiplication is split around the block: whole blocks are priced
+  // exactly (block quotient and price are both small), and the remainder is
+  // priced on its own, where `remainder * price` stays below 2^53 because a
+  // remainder is < credit_block_size (1e9) and price per block is bounded by
+  // real-world paisa rates (~1e6). Both terms are exact integers; their sum
+  // is the floor of the true total.
   function computeAmountMinor(): number {
     // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
     // block size. NaN comparisons return false for `<= 0`, so a pathological
@@ -111,8 +115,11 @@ export function CheckoutModal({
     ) {
       return 0;
     }
-    return Math.floor(
-      (creditAmount * options.price_per_block_minor) / options.credit_block_size,
+    const wholeBlocks = Math.trunc(creditAmount / options.credit_block_size);
+    const remainderCredits = creditAmount - wholeBlocks * options.credit_block_size;
+    return (
+      wholeBlocks * options.price_per_block_minor +
+      Math.floor((remainderCredits * options.price_per_block_minor) / options.credit_block_size)
     );
   }
 
@@ -170,9 +177,12 @@ export function CheckoutModal({
     }
   }
 
-  const increment = options?.credit_increment ?? 1000;
-  const minCredits = options?.min_credits ?? 1000;
-  const maxCredits = options?.max_credits ?? 100_000;
+  // Fallbacks are whole one-cent steps at the current credit unit
+  // (1 USD = 1e9 credits since the 2026-08-23 rescale); the server normally
+  // supplies all three.
+  const increment = options?.credit_increment ?? 10_000_000;
+  const minCredits = options?.min_credits ?? 10_000_000;
+  const maxCredits = options?.max_credits ?? 1_000_000_000;
 
   function decrementAmount() {
     setCreditAmount((prev) => Math.max(minCredits, prev - increment));

@@ -253,18 +253,22 @@ func TestPriceEstimate_LegacyIsFlatTokenSum(t *testing.T) {
 // by hand in the comment so a later price change cannot silently invalidate
 // the test -- it has to fail and be re-derived.
 
-// correctedHiveFast mirrors the post-migration public.model_aliases row for
-// hive-fast: Groq llama-3.1-8b-instant at 0.05 in / 0.08 out USD per million
-// (20260801_14_route_groq_fast_cheapest_model.sql, the cheapest available
-// Groq model as of 2026-08-03), times the 1.4 margin multiplier, times
-// CreditsPerUSD (100_000).
+// correctedHiveFast mirrors the public.model_aliases row for hive-fast AS OF
+// its 20260801-era repricing, in the PRE-RESCALE credit unit (1 USD was then
+// 100,000 credits; since 2026-08-23 it is 1e9 and every stored figure is
+// 10,000x larger). These are hand-built fixtures for ChargeCredits arithmetic,
+// so their absolute size is arbitrary; only the derivation below has to stay
+// true of what they claim to mirror: Groq llama-3.1-8b-instant at 0.05 in /
+// 0.08 out USD per million (20260801_14_route_groq_fast_cheapest_model.sql),
+// times the 1.4 margin multiplier, times the then-current CreditsPerUSD.
 //
 //	input:  0.05 * 1.4 * 100_000 =  7_000
 //	output: 0.08 * 1.4 * 100_000 = 11_200
 var correctedHiveFast = RouteInfo{InputPriceCredits: 7_000, OutputPriceCredits: 11_200}
 
-// correctedHiveDefault mirrors hive-default: OpenRouter openai/gpt-4o-mini
-// at 0.15 in / 0.60 out USD per million.
+// correctedHiveDefault mirrors hive-default AS OF its 20260801-era repricing,
+// in the pre-rescale credit unit: OpenRouter openai/gpt-4o-mini at 0.15 in /
+// 0.60 out USD per million.
 //
 //	input:  0.15 * 1.4 * 100_000 = 21_000
 //	output: 0.60 * 1.4 * 100_000 = 84_000

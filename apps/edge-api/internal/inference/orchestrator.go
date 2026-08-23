@@ -278,8 +278,8 @@ func (o *Orchestrator) executeSync(
 		// actually exchanged when it reported nothing -- never the flat
 		// reservation estimate (issue #636). estimatedCredits is a hold size,
 		// an authorization floor picked before the request ran; billing it as
-		// though it were a measurement charged a three-token reply 10000
-		// credits, and did so under TerminalUsageConfirmed = true, which tells
+		// though it were a measurement charged a three-token reply 10,000
+		// pre-rescale credits, and did so under TerminalUsageConfirmed = true, which tells
 		// control-plane the figure is a fact and so skips both the hold clamp
 		// and the reconciliation job that exist to correct estimates. Same
 		// settlementCredits helper the streaming path uses, so the two paths

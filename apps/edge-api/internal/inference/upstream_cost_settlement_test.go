@@ -21,8 +21,11 @@ import (
 // the hold has to come from the catalog rather than the endpoint default.
 
 // openrouterAutoPricing is the openrouter-auto catalog row: no fixed price, a
-// 200000 credit hold (supabase/migrations/20260822_30_...sql).
-var openrouterAutoPricing = UpstreamActualPricing(200_000)
+// 2,000,000,000 credit hold: the catalog figure for openrouter-auto at the
+// current unit ($2.00 equivalent; seeded 200000 by
+// supabase/migrations/20260822_30_...sql and rescaled by 10000 in
+// 20260823_40_credit_unit_rescale_billion.sql).
+var openrouterAutoPricing = UpstreamActualPricing(2_000_000_000)
 
 // newRoutingMockVariable answers route selection with a variable-price alias.
 func newRoutingMockVariable() *httptest.Server {
@@ -149,20 +152,20 @@ func TestVariablePriceStreaming_SettlesAtTheReportedUpstreamCost(t *testing.T) {
 	if !ok {
 		t.Fatalf("no reservation was created; calls: %+v", rec.calls)
 	}
-	if held, _ := reservation["estimated_credits"].(float64); int64(held) != 200_000 {
-		t.Errorf("hold = %v, want the catalog figure 200000; a router request cannot be held at the flat endpoint default", reservation["estimated_credits"])
+	if held, _ := reservation["estimated_credits"].(float64); int64(held) != 2_000_000_000 {
+		t.Errorf("hold = %v, want the catalog figure 2000000000; a router request cannot be held at the flat endpoint default", reservation["estimated_credits"])
 	}
 
 	body, ok := rec.find("/internal/accounting/reservations/finalize")
 	if !ok {
 		t.Fatalf("expected a finalize on a normal completion; calls: %+v", rec.calls)
 	}
-	// 0.0123456 USD x 1.4 margin x 100000 credits per USD = 1728.384 -> 1728.
+	// 0.0123456 USD x 1.4 margin x 1e9 credits per USD = 17,283,840 exactly.
 	// Asserted against the KNOWN upstream cost. Note this is nowhere near the
-	// token count (1500) nor the hold (200000), so a regression to either
+	// token count (1500) nor the hold (2e9), so a regression to either
 	// shape fails here rather than sliding past a non-zero check.
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1728 {
-		t.Errorf("actual_credits = %v, want 1728 for a reported cost of 0.0123456 USD", body["actual_credits"])
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 17_283_840 {
+		t.Errorf("actual_credits = %v, want 17283840 for a reported cost of 0.0123456 USD", body["actual_credits"])
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
 		t.Error("a charge derived from a real reported cost is measured truth and must be confirmed")
@@ -205,8 +208,8 @@ func TestVariablePriceStreaming_MissingCostChargesTheHoldNotZero(t *testing.T) {
 			if int64(actual) == 0 {
 				t.Fatal("settled at ZERO with no readable upstream cost: this is the free-serve bug")
 			}
-			if int64(actual) != 200_000 {
-				t.Errorf("actual_credits = %v, want the full hold 200000", body["actual_credits"])
+			if int64(actual) != 2_000_000_000 {
+				t.Errorf("actual_credits = %v, want the full hold 2000000000", body["actual_credits"])
 			}
 			if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 				t.Error("a charge with no readable cost must NOT be flagged as measured truth")
@@ -290,10 +293,10 @@ func TestResponsesStreamingSettlesAtTheReportedUpstreamCost(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a finalize on the responses path; calls: %+v", rec.calls)
 	}
-	// 0.0123456 x 1.4 x 100000 = 1728.384 -> 1728. If the capture is missing
-	// this reads 200000, the hold, because the cost was never seen.
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1728 {
-		t.Errorf("actual_credits = %v, want 1728. The responses relay must capture the raw usage frame too.",
+	// 0.0123456 x 1.4 x 1e9 = 17,283,840 exactly. If the capture is missing
+	// this reads the hold (2e9), because the cost was never seen.
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 17_283_840 {
+		t.Errorf("actual_credits = %v, want 17283840. The responses relay must capture the raw usage frame too.",
 			body["actual_credits"])
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {

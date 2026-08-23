@@ -11,7 +11,9 @@ import (
 //
 // Why a separate file rather than widening catalog_alias_pricing_test.go: that
 // file's guards all bottom out in the margin formula, credits = usd_per_million
-// * 1.4 * 100000, and its parseRate refuses a zero rate outright ("that is a
+// * 1.4 * 100000 (the pre-rescale unit; since migration
+// 20260823_40_credit_unit_rescale_billion.sql every stored price is 10,000x
+// larger), and its parseRate refuses a zero rate outright ("that is a
 // mispricing, not a rate"). A free upstream costs zero, so there is no rate to
 // derive these two prices from and the formula cannot be the invariant here.
 //

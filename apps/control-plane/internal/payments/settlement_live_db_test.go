@@ -93,7 +93,7 @@ func TestSettlement_ConcurrentDeliveriesGrantExactlyOnce(t *testing.T) {
 	repo := NewPgxRepository(pool)
 	ledgerSvc := ledger.NewService(ledger.NewPgxRepository(pool))
 
-	const credits int64 = 100_000
+	const credits int64 = CreditsPerUSD
 	providerIntentID := "prov_concurrent_" + uuid.NewString()
 	intent := PaymentIntent{
 		ID:               uuid.New(),
