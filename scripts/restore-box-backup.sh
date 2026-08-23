@@ -34,6 +34,11 @@ for arg in "$@"; do
   esac
 done
 
+# Only a real date string may reach file paths.
+if [[ "$DAY" != "latest" ]]; then
+  [[ "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FATAL: day must be YYYY-MM-DD"; exit 2; }
+fi
+
 [[ -r "$PASSPHRASE_FILE" ]] || { echo "FATAL: passphrase not readable"; exit 1; }
 
 if [[ "$DAY" == "latest" && -d "$BACKUP_ROOT/daily" ]]; then

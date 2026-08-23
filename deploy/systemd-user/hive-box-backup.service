@@ -11,6 +11,10 @@ ConditionPathIsReadWrite=/home/sakib/hive-backups
 Type=oneshot
 ExecStart=/home/sakib/hive-backups/bin/backup-box.sh
 EnvironmentFile=/home/sakib/hive-backups/etc/backup.env
+# The run handles plaintext identity and ledger data: private temp handling
+# and no privilege gain, defense in depth on top of the script's own umask.
+UMask=0077
+NoNewPrivileges=true
 
 # A run that hangs must not hold the flock forever: kill after one hour and
 # let the failure alert fire through the script's own error trap.

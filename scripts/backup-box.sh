@@ -54,6 +54,10 @@
 #   PASSPHRASE_FILE   $BACKUP_ROOT/etc/passphrase
 set -euo pipefail
 
+# Plaintext artifacts (identities, ledger, chat db) exist only inside
+# $BACKUP_ROOT while a run is in flight; keep them off other local users.
+umask 077
+
 BACKUP_ROOT="${BACKUP_ROOT:-/home/sakib/hive-backups}"
 DB_CONTAINER="${DB_CONTAINER:-hive-supabase-db-1}"
 OWUI_CONTAINER="${OWUI_CONTAINER:-hive-open-webui-1}"
@@ -90,11 +94,17 @@ die()  { log "ERROR: $*"; exit 1; }
 # nothing user-controlled and nothing sensitive can reach the email body.
 # ---------------------------------------------------------------------------
 post_alert() {
-  local alertname="$1" description="$2" startsAt body
+  local alertname="$1" description="$2" startsAt body safe_desc
   startsAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Escape JSON-significant characters so a description that ever gains
+  # interpolated content cannot produce malformed JSON. All current call
+  # sites are fixed literals; this is the latent foot-gun guard.
+  safe_desc="${2//\\/\\\\}"
+  safe_desc="${safe_desc//\"/\\\"}"
+  safe_desc="${safe_desc//$'\n'/ }"
   # Alertmanager v2 expects an ARRAY of alerts; a bare object is a 400.
   body=$(printf '[{"labels":{"alertname":"%s","severity":"critical","job":"box-backup","instance":"hive-demo"},"annotations":{"description":"%s"}}]' \
-    "$alertname" "$description")
+    "$alertname" "$safe_desc")
   # Delivery failure must not fail the backup itself on the success path, and
   # must not mask the underlying failure on the failure path. Log it either way.
   curl -fsS -m 10 -XPOST "$ALERTMANAGER_URL/api/v2/alerts" \
@@ -137,6 +147,11 @@ trap 'fail_run "killed_by_signal"' TERM HUP INT
 [[ -r "$PASSPHRASE_FILE" ]] || fail_run "passphrase_missing"
 [[ "$(stat -c %a "$PASSPHRASE_FILE")" == "600" ]] \
   || die "PASSPHRASE_FILE must be chmod 600, refusing to run"
+
+# Sweep work dirs abandoned by an untrappable death (SIGKILL, power loss):
+# they hold PLAINTEXT artifacts and nothing else removes them. Anything older
+# than a day cannot be a live run.
+find "$BACKUP_ROOT/tmp" -maxdepth 1 -name 'run-*' -mtime +0 -exec rm -rf {} + 2>/dev/null || true
 
 WORK="$BACKUP_ROOT/tmp/run-$TS"
 mkdir -p "$WORK"
@@ -239,6 +254,7 @@ ls -1 | sort -r | tail -n +$(( KEEP_DAILY + 1 )) | while read -r old; do
   rm -rf "$old"
   log "retention: removed $old"
 done
+find "$LOG_DIR" -name '*.log' -mtime "+$(( KEEP_DAILY - 1 ))" -delete 2>/dev/null || true
 
 # 8. Status + heartbeat ------------------------------------------------------
 NOW_EPOCH="$(date +%s)"

@@ -88,7 +88,7 @@ cp scripts/backup-box.sh ~/hive-backups/bin/backup-box.sh
 cp scripts/restore-box-backup.sh ~/hive-backups/bin/restore-box-backup.sh
 chmod +x ~/hive-backups/bin/*.sh
 [ -f ~/hive-backups/etc/passphrase ] || { umask 077; openssl rand -base64 48 > ~/hive-backups/etc/passphrase; }
-chmod 600 ~/hive-backups/etc/passphrase
+chmod 600 ~/hive-backups/etc/passphrase ~/hive-backups/etc/backup.env
 mkdir -p ~/.config/systemd/user
 cp deploy/systemd-user/hive-box-backup.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -223,8 +223,15 @@ The backup tar was created as `tar czf - -C / var/lib/storage`, so its entries c
 - True offsite destination: one encrypted copy lives on the dev machine, which
   stops the box-death scenario but not dev-machine-plus-box co-loss. Choosing
   the real offsite/object-store destination is an owner decision, tracked in
-  the follow-up issue filed alongside this change.
+  the follow-up issue filed alongside this change (#1100).
 - Point-in-time recovery: pg_dump gives snapshots at run times, nothing finer.
+- Encryption is aes-256-cbc with a per-file salt and PBKDF2 (600k iterations);
+  checksums detect corruption but are not signed, so an attacker who can write
+  inside /home/sakib/hive-backups could tamper with artifacts without
+  detection. Adequate for this box's threat model; if the threat model grows,
+  move to age or encrypt-then-HMAC before trusting these files in anger.
 - Prometheus-scraped metric: would need node_exporter, which this deployment
   does not run. The direct Alertmanager post reuses the transport that already
-  works; revisit if node_exporter lands later.
+  works; revisit if node_exporter lands later. Related hardening shipped with
+  this change: alertmanager now binds host port 9093 to loopback only, since
+  the backup failure channel made its unauthenticated API load-bearing.
