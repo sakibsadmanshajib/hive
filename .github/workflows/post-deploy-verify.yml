@@ -324,6 +324,9 @@ jobs:
             echo "  STALE    $name ($tag): $state from $short_running built ${run_born:-<unresolved>} (container created $born), tag now $short_current built $tag_born"
             stale="$stale%0A  $name is $state from $short_running built ${run_born:-<unresolved>} while $tag now resolves to $short_current built $tag_born"
 
+          # shellcheck disable=SC2086: HIVE_COMPOSE_FLAGS must word-split into
+          # separate compose arguments; quoting it would pass one blob and
+          # compose would reject it. Intentional splitting, scoped here.
           done < <(docker compose $HIVE_COMPOSE_FLAGS ps -q)
 
           if [ "$checked" -eq 0 ]; then
@@ -378,7 +381,12 @@ jobs:
             value=${value%\"}; value=${value#\"}
             value=${value%\'}; value=${value#\'}
             if [ -n "$value" ]; then
-              echo "  present  ${name} (${#value} characters)"
+              # Presence only for password and service-role values: this log is
+              # public, and even a character count is secret metadata.
+              case "$name" in
+                *PASSWORD*|*SERVICE_ROLE_KEY*) echo "  present  ${name}" ;;
+                *)                             echo "  present  ${name} (${#value} characters)" ;;
+              esac
             else
               echo "  ABSENT   ${name}"
             fi
@@ -538,19 +546,27 @@ jobs:
           python3 scripts/preflight-supabase-config.py
           echo "::endgroup::"
 
-          args=""
+          args=()
           case "$control" in
             # `freshness` is handled by its own step above and `config` by the
             # auth-origin override above; neither is a value this script knows,
             # and passing one would make argparse reject the whole run.
-            chat|signin|ledger) args="--negative-control $control" ;;
+            chat|signin|ledger) args+=(--negative-control "$control") ;;
           esac
 
           if [ "$identity" = "no" ]; then
+            # A control whose subject does not exist cannot be proved. Failing
+            # here names the precondition instead of surfacing later as an
+            # argparse selection error that says nothing about identity.
+            case "$control" in
+              signin|ledger)
+                echo "::error::negative control '$control' needs a verification identity to remove, and none is configured"
+                exit 1 ;;
+            esac
             # Run everything that needs no identity. No `|| true`: if chat is
             # down, that is the failure that matters and it must be the one
             # that surfaces.
-            python3 scripts/post-deploy-verify.py --only chat $args
+            python3 scripts/post-deploy-verify.py "${args[@]}" --only chat
 
             # Then report the missing coverage WITHOUT failing the job, and
             # this is a deliberate call rather than a softening.
@@ -597,7 +613,7 @@ jobs:
           # chat answered from its backend, the control-plane resolved a real
           # bearer to the right identity, and a real completion produced a real
           # usage_charge row.
-          python3 scripts/post-deploy-verify.py $args
+          python3 scripts/post-deploy-verify.py "${args[@]}"
 
   report-failure:
     # A separate label from deploy-demo-box's `ci-failure:deploy-demo-box`, and
