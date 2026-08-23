@@ -139,14 +139,24 @@ CREATE TABLE IF NOT EXISTS public.credit_unit_rescale (
 COMMENT ON TABLE public.credit_unit_rescale IS
     'One-row marker for migration 20260823_40 (credit unit rescale, factor 10000). applied_at is the clock_timestamp() upper bound of the work this file did; the id=1 PRIMARY KEY makes a concurrent replay fail loudly instead of double-scaling. NEVER delete or truncate: emptying this table lets a replay multiply every balance again.';
 
--- Lockdown, same shape as the 20260529_01 ledger-family RLS: force RLS with
--- NO policies (nothing reads or writes this table through PostgREST) plus
--- explicit REVOKEs from anon and authenticated. DELETE here is the named
--- path to doubling every balance on replay; it must not be reachable by any
--- published-key role under any circumstance.
+-- Lockdown, same shape as the 20260529_01 ledger family and
+-- 20260801_01_payment_webhook_deliveries: force RLS with no policy for the
+-- published-key roles, so PostgREST can neither read nor mutate the marker.
+-- DELETE here is the named path to doubling every balance on replay; it must
+-- not be reachable by anon or authenticated under any circumstance. The role
+-- statements are guarded on role existence so this file also applies to a
+-- plain Postgres (CI throwaway) that has no Supabase-managed roles.
 ALTER TABLE public.credit_unit_rescale ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_unit_rescale FORCE ROW LEVEL SECURITY;
-REVOKE ALL ON public.credit_unit_rescale FROM anon, authenticated;
+do $lockdown$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'revoke all on public.credit_unit_rescale from anon';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'revoke all on public.credit_unit_rescale from authenticated';
+  end if;
+end $lockdown$;
 
 DO $rescale$
 DECLARE

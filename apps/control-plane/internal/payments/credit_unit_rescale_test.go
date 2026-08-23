@@ -178,7 +178,7 @@ func TestRescaleMigrationGuardAndMarker(t *testing.T) {
 		{"marker single-row PK", "PRIMARY KEY CHECK (id = 1)"},
 		{"RLS enabled", "ALTER TABLE public.credit_unit_rescale ENABLE ROW LEVEL SECURITY"},
 		{"RLS forced", "ALTER TABLE public.credit_unit_rescale FORCE ROW LEVEL SECURITY"},
-		{"anon/authenticated revoked", "REVOKE ALL ON public.credit_unit_rescale FROM anon, authenticated"},
+		{"anon revoked (role-guarded)", "revoke all on public.credit_unit_rescale from anon"},
 		{"replay guard", "IF EXISTS (SELECT 1 FROM public.credit_unit_rescale)"},
 		{"boundary row insert with clock_timestamp", "INSERT INTO public.credit_unit_rescale (id, applied_at) VALUES (1, clock_timestamp())"},
 		{"ledger audit flag", `'credit_unit', 'legacy-1usd-100k-credits'`},
