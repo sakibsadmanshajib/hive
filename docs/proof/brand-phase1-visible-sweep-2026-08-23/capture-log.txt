@@ -1,0 +1,182 @@
+Capture log for PR #1071, fix/brand-phase1-visible-sweep, HEAD 0a5b2b4c533c5fdd5111e95a38fcdf1ab62d82c8
+Captured 2026-08-23 against a local stack built from this branch, not the demo box. No live service was touched.
+
+Build
+-----
+Image built from this branch's vendor/open-webui + Dockerfile.open-webui, tagged
+privately as hive-open-webui:brand1071-verify to avoid the repo's shared,
+non-namespaced hive-open-webui:v0.10.2-branded tag (a concurrent build on the
+same host had already overwritten that tag mid-session; see PR body buglog entry).
+
+Stack
+-----
+docker compose -p brand1071, profile local+chat, services: redis, edge-api,
+control-plane, open-webui, caddy-owui. Ports remapped off the host defaults to
+avoid collisions with other agents' stacks on the same shared Docker host
+(redis 47379, control-plane 47081, edge-api 47080, caddy-owui 47003, open-webui
+direct 47008). edge-api/control-plane run DB-degraded (the repo's shared cloud
+Supabase project is decommissioned per the self-hosted migration; see
+.wolf/decisions.md) since neither is required for the frontend surfaces this PR
+touches. open-webui's own VECTOR_DB was overridden to the bundled Chroma store
+(no Postgres) purely so the container boots; RAG itself is not exercised here.
+Account verify-admin@hive.local / throwaway password, created via ENABLE_SIGNUP
+flipped on the direct backend port only (caddy-owui's Caddyfile.owui blocks
+/api/v1/auths/signup unconditionally, by design, at the real ingress; the direct
+port bypasses that on purpose for this local-admin verification pass, since the
+real deployment is SSO-only). No credential in any captured URL; nothing to
+redact.
+
+Static checks (curl, no browser)
+---------------------------------
+$ curl -s http://localhost:47003/ | grep -i '<title>'
+		<title>Hive Chat</title>
+
+$ docker exec brand1071-open-webui-1 sh -c "grep -n '<title>' /app/build/index.html"
+125:		<title>Hive Chat</title>
+
+$ curl -s http://localhost:47008/opensearch.xml
+    <ShortName>Hive</ShortName>
+    <Description>Search Hive</Description>
+
+DOM text checks (CDP Runtime.evaluate against document.body.innerText)
+------------------------------------------------------------------------
+"Get started with Hive"                                                    -> true (see 01)
+"Hive team" (AddToolServerModal MCP warning)                                -> true (see 04)
+"External vectors must be generated with the same embedding model
+ configured in Hive" (admin ExternalKnowledge modal)                        -> true (see 05)
+"Discover how to use Hive and seek support from the community."
+ (admin Settings > General)                                                 -> true (see 03)
+Stray old-string check: zero remaining call sites anywhere in
+vendor/open-webui/src for any of the 17 rewritten en-US strings' OLD text
+(grep across *.svelte, *.ts) -> confirmed zero.
+
+Screenshots
+-----------
+01-onboarding-get-started-with-hive.png : pre-auth onboarding screen after
+    clicking "Get started", showing the i18n string "Get started with Hive"
+    (translation.json key rewritten from "Get started with Open WebUI").
+02-logged-in-home-hive-sidebar.png      : logged-in chat home, sidebar reads
+    "Hive" (top-left), confirming APP_NAME/WEBUI_NAME reach the shell.
+03-admin-settings-general-help-text.png : Admin Settings > General, "Discover
+    how to use Hive and seek support from the community." (was "...use Open
+    WebUI...").
+04-add-tool-server-mcp-warning.png      : Admin Settings > Integrations >
+    External Tool Servers > Add Connection > Type=MCP, showing "OpenAPI
+    specification support is directly maintained by the Hive team..." (was
+    "...the Open WebUI team...").
+05-external-knowledge-connection-modal.png : Admin Settings > Integrations >
+    External Knowledge Sources > Add Knowledge Connection, showing "External
+    vectors must be generated with the same embedding model configured in
+    Hive." (was "...configured in Open WebUI.").
+
+Completeness audit beyond the diff (grep across vendor/open-webui/src)
+-------------------------------------------------------------------------
+Ran a full-tree grep for "Open WebUI" excluding openwebui.com/github.com URLs.
+~1044 raw hits remain, entirely explained by:
+  - ~60 non-English locale translation.json files carrying the same 17
+    strings untranslated (this PR's stated scope is en-US only; noted in the
+    PR body as deliberately deferred).
+  - 4 code comments in Hive's own src/lib/hive/* files and one route file,
+    accurately describing that the Python backend is still upstream Open
+    WebUI's own code (not user-facing UI text).
+  - 1 literal HTTP header name (X-OpenWebUI-File-Id) shown as a code sample
+    in admin/Settings/Documents.svelte: a real backend-contract header name,
+    not a display string; renaming it would break requests against the
+    pinned upstream backend.
+  - 1 conditional string comparison in chat/Settings/About.svelte
+    (`!$WEBUI_NAME.includes('Open WebUI')`) that already behaves correctly
+    for our WEBUI_NAME=Hive and is gated behind an enterprise
+    license_metadata config this deployment does not set.
+No missed English, user-visible, unconditional "Open WebUI" string was found
+outside the diff.
+
+Expanded to the full token set this repo's own scripts/test_owui_ui_surfaces.py
+already checks (openwebui.com, open-webui, tjbck, Timothy), per review
+feedback, rather than "Open WebUI" alone:
+  - tjbck / Timothy: zero hits anywhere in vendor/open-webui/src (already
+    handled by a prior PR; not this diff's concern).
+  - open-webui as a MIME type string (`application/x-open-webui-drag`, four
+    call sites) is an internal HTML5 drag-and-drop protocol identifier the
+    app sets and reads on itself; never rendered, so out of scope for a
+    "user-visible surfaces" sweep.
+  - open-webui in AddTerminalServerModal.svelte's placeholder
+    (`ghcr.io/open-webui/open-terminal:latest`) is a real, correct container
+    registry path for the actual upstream companion tool; changing it would
+    make the placeholder point at an image that does not exist.
+  - open-webui as example metadata in admin/Functions/FunctionEditor.svelte's
+    starter code boilerplate (`author: open-webui`, twice) is genuine
+    admin-visible text (shown when creating a new Function), of materially
+    lower severity than a direct product-name claim (it reads as attribution
+    for the example template, the common `author:` manifest convention).
+    Left as-is in this pass: renaming it is a defensible follow-up, not a
+    completeness gap in the same class as the fixed strings.
+  - openwebui.com as href targets (Help link in admin/Settings/General.svelte,
+    translation CONTRIBUTING.md link in chat/Settings/General.svelte): both
+    point at real, working upstream documentation this fork does not
+    maintain a replacement for. The visible link text was already correct
+    ("Help us translate Hive Chat!"); only the destination names Open WebUI.
+    Left as a reasoned exception (PR body), not fixed: repointing a
+    documentation link to a URL that does not exist would trade a real
+    reference for a broken one.
+
+Follow-up fix from this same review pass: SyncStatsModal.svelte's usage-stats
+download built its filename as `open-webui-stats-<version>-<timestamp>.json`,
+a literal string a signed-in user sees in their own Downloads folder. Renamed
+to `hive-chat-stats-<version>-<timestamp>.json`.
+
+Reachability audit (import-graph grep, not just route list)
+----------------------------------------------------------------
+workspace/Models.svelte, workspace/Prompts.svelte and workspace/Tools.svelte
+are edited by this PR but have zero importers anywhere in
+vendor/open-webui/src as of this branch's HEAD: `/workspace/+page.svelte`
+unconditionally redirects to `/workspace/knowledge` (a prior merged change,
+not part of this PR), and its own comment says Models/Prompts/Tools/Skills
+are gone. The three components cannot be reached via any current route, so
+their fix, while correct, is not independently demonstrable live; noted in
+the PR body. workspace/common/ManifestModal.svelte is also edited but was
+NOT dead at the time this section was first written: it was separately
+imported by admin/Functions.svelte, a real, reachable route
+(/admin/functions).
+
+Correction after rebasing onto main a second time (#1091, "close the public
+chat origin's admin surface")
+--------------------------------------------------------------------------
+#1091 deletes the entire routes/(app)/admin/ tree and the SettingsModal
+"Admin Settings" link. Re-ran the reachability audit with an import-PATH
+grep (matching the actual `from '...'` specifier) instead of a basename
+grep: the basename version had been producing false positives whenever two
+files shared a name in different directories (e.g. admin/Settings/Audio.svelte
+vs. chat/Settings/Audio.svelte both matched a bare "Audio" search; a plain
+{$i18n.t('Functions')} label text also matched a basename search for
+"Functions", with no import at all). Confirmed with a direct grep for
+`components/admin/` imports in vendor/open-webui/src/routes: zero hits. The
+entire lib/components/admin/** subtree is now an orphaned cluster with no
+external entry point, including admin/Functions.svelte, so
+workspace/common/ManifestModal.svelte lost its last live path too.
+
+Reverted rather than kept as unreachable "fixes": admin/Evaluations/
+Feedbacks.svelte, admin/Functions.svelte, admin/Settings/{Audio,Events,
+ExternalKnowledge,General}.svelte, workspace/Models.svelte,
+workspace/Prompts.svelte, workspace/Tools.svelte, workspace/common/
+ManifestModal.svelte (all restored to main's content), plus the two
+admin/functions/{create,edit}/+page.svelte files (deleted entirely by
+#1091 itself, no revert needed). translation.json trimmed from 17 to 8
+en-US keys: the 9 originally added keys with no remaining live caller
+("Discover how to use...", "Event names may change...", "External vectors
+must be generated...", "Open WebUI uses faster-whisper...", "Open WebUI
+uses SpeechT5...", "Open WebUI version" x2, "Your entire contribution...",
+"Made by Open WebUI Community") were reverted to their original text so no
+orphaned Hive-branded key sits in the file unused. Re-verified with a
+script that greps every remaining Hive-branded translation.json key
+against the full source tree and confirms at least one live-surface
+caller for each: all 8 pass (CORS/Integrations, MCP/AddToolServerModal,
+"Hive can use tools"/ToolServersModal, Participate+"Do you want to
+sync"/SyncStatsModal, "This knowledge base"/KnowledgeBase,
+Redirecting+"Share to"/ShareChatModal).
+
+Rebuilt Dockerfile.open-webui end to end against this final tree: exit 0,
+frontend vitest suite passes, `<title>Hive Chat</title>` confirmed via curl
+against the running container, and the AddToolServerModal MCP-warning
+string confirmed present in the built JS bundle via grep (that surface's
+live path is chat/Settings/Integrations.svelte, a personal-settings tab,
+not the deleted admin route; not re-screenshotted in this pass for time).
