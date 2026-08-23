@@ -1,0 +1,60 @@
+# Static proof: PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright lands browsers outside HOME
+Date: 2026-08-23T12:48:47Z
+Base image: nikolaik/python-nodejs:python3.12-nodejs22-bookworm (same as agent-engine.def From)
+Commands mirror deploy/apptainer/agent-engine.def %post browser block.
+---
+Unable to find image 'nikolaik/python-nodejs:python3.12-nodejs22-bookworm' locally
+python3.12-nodejs22-bookworm: Pulling from nikolaik/python-nodejs
+34e7f1cb7a29: Pulling fs layer
+957d7edbe91a: Pulling fs layer
+2dd2dd4f152b: Pulling fs layer
+478b71b3aa44: Pulling fs layer
+70d6fabcd00c: Pulling fs layer
+4e52cc066ec8: Pulling fs layer
+cc836a4a4441: Pulling fs layer
+bd0ec93c9c52: Pulling fs layer
+c4013e1e3834: Pulling fs layer
+071836a5e5d5: Pulling fs layer
+4b6bf4040e90: Pulling fs layer
+8c25b52dcbc8: Pulling fs layer
+f28fcf489c65: Download complete
+071836a5e5d5: Download complete
+957d7edbe91a: Download complete
+4e52cc066ec8: Download complete
+cc836a4a4441: Download complete
+4b6bf4040e90: Download complete
+bd0ec93c9c52: Download complete
+70d6fabcd00c: Download complete
+c4013e1e3834: Download complete
+c4013e1e3834: Pull complete
+8c25b52dcbc8: Download complete
+bd0ec93c9c52: Pull complete
+2dd2dd4f152b: Download complete
+478b71b3aa44: Download complete
+2dd2dd4f152b: Pull complete
+34e7f1cb7a29: Download complete
+34e7f1cb7a29: Pull complete
+4e52cc066ec8: Pull complete
+70d6fabcd00c: Pull complete
+071836a5e5d5: Pull complete
+957d7edbe91a: Pull complete
+4b6bf4040e90: Pull complete
+8c25b52dcbc8: Pull complete
+cc836a4a4441: Pull complete
+478b71b3aa44: Pull complete
+Digest: sha256:c0d1856945dd471fe29666957a13ac3880e8b348086632c179cb4d0eb61da92a
+Status: Downloaded newer image for nikolaik/python-nodejs:python3.12-nodejs22-bookworm
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 26.1.2 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+[1] dirs under /opt/ms-playwright:
+chromium-1234
+chromium_headless_shell-1234
+ffmpeg-1011
+[2] found binary: /opt/ms-playwright/chromium-1234/chrome-linux64/chrome
+[3] readlink /usr/bin/chromium -> /opt/ms-playwright/chromium-1234/chrome-linux64/chrome
+[4] launch under simulated --containall HOME (per-session temp dir):
+Google Chrome for Testing 151.0.7922.34 
+[5] default-HOME cache absent as expected:
+ls: cannot access '/root/.cache/ms-playwright': No such file or directory
