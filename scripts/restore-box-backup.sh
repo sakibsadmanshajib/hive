@@ -50,10 +50,25 @@ cleanup() {
   if [[ "$KEEP" == "0" ]]; then docker rm -f "$CNAME" >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
+FAIL=0
+
+# 0. Verify the artifact set at its boundary BEFORE consuming anything: the
+#    published SHA256SUMS covers the encrypted files exactly as they were
+#    written, so corruption is caught here rather than as a confusing
+#    decrypt or restore failure.
+(
+  cd "$DIR"
+  ENCS=$(ls | grep '\.enc$' | wc -l)
+  if [[ "$ENCS" != "4" ]]; then
+    echo "FATAL: expected 4 encrypted artifacts in $DIR, found $ENCS (incomplete set?)"
+    exit 1
+  fi
+  sha256sum -c SHA256SUMS --quiet
+) || { echo "FATAL: checksum verification failed for $DAY"; exit 1; }
 
 # 1. Decrypt into a private temp dir on the box. Never crosses the network in
-#    the clear, never lands inside any git checkout.
-chmod 700 "$WORK"
+#    the clear, never lands inside any git checkout. mktemp already created
+#    this directory with 0700 permissions.
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt \
   -in "$DIR/db.pgdump.enc" -out "$WORK/db.pgdump" \
   -pass file:"$PASSPHRASE_FILE"
@@ -72,16 +87,28 @@ done
 docker exec "$CNAME" pg_isready -U postgres >/dev/null
 
 # 3. Restore. Extension DDL that needs shared-preload libraries the vanilla
-#    entrypoint does not set (pg_cron) fails here WITHOUT failing the data;
-#    pg_restore continues past individual object errors by default, and the
-#    row-count comparison below decides pass or fail, not pg_restore's exit code.
-echo "-- restoring (extension DDL errors are expected here, data errors are not)"
+#    entrypoint does not set (pg_cron) fails here WITHOUT failing the data,
+#    and grants to Supabase roles that only exist in production fail too.
+#    pg_restore continues past individual errors by default. Those known
+#    categories are filtered out; ANY other error line fails verification even
+#    if the row counts below would have matched.
+echo "-- restoring (known pg_cron and role-grant errors are filtered, anything else fails)"
+RESTORE_LOG="$WORK/restore.log"
 docker exec -i "$CNAME" pg_restore -U postgres -d postgres --no-owner --role=postgres \
-  < "$WORK/db.pgdump" || true
+  < "$WORK/db.pgdump" > "$RESTORE_LOG" 2>&1 || true
+
+ALLOWED='pg_cron|cron\.|unrecognized configuration parameter|role "(service_role|authenticated|anon|supabase_auth_admin)"'
+UNEXPECTED="$(grep -i 'error' "$RESTORE_LOG" | grep -Ev "$ALLOWED" || true)"
+if [[ -n "$UNEXPECTED" ]]; then
+  echo "-- UNEXPECTED restore errors (these are NOT in the allowed pg_cron/role set):"
+  echo "$UNEXPECTED"
+  FAIL=1
+else
+  echo "-- no unexpected restore errors ($(grep -ci 'error' "$RESTORE_LOG" || true) known-category lines suppressed)"
+fi
 
 # 4. Compare counts. Live side is read-only SELECT count(*).
 TABLES=(public.credit_ledger_entries public.tenants public.api_keys auth.users auth.identities storage.objects)
-FAIL=0
 printf '%-32s %12s %12s\n' TABLE LIVE RESTORED
 for t in "${TABLES[@]}"; do
   LIVE="$(docker exec "$DB_CONTAINER" psql -U "$PGUSER" -Atc "SELECT count(*) FROM $t")"

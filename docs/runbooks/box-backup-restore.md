@@ -84,7 +84,9 @@ Run as sakib on the box, from a checkout containing these files:
 
 ```
 mkdir -p ~/hive-backups/bin ~/hive-backups/etc
-cp scripts/backup-box.sh ~/hive-backups/bin/backup-box.sh && chmod +x $_
+cp scripts/backup-box.sh ~/hive-backups/bin/backup-box.sh
+cp scripts/restore-box-backup.sh ~/hive-backups/bin/restore-box-backup.sh
+chmod +x ~/hive-backups/bin/*.sh
 [ -f ~/hive-backups/etc/passphrase ] || { umask 077; openssl rand -base64 48 > ~/hive-backups/etc/passphrase; }
 chmod 600 ~/hive-backups/etc/passphrase
 mkdir -p ~/.config/systemd/user
@@ -129,7 +131,7 @@ tar tzf /tmp/storage-check.tgz | wc -l               # entry count vs live:
 docker exec hive-supabase-storage-1 find /var/lib/storage | wc -l
 ```
 
-Always shred decrypted temps afterwards:
+Table names in the webui examples (chat, user, knowledge) are current Open WebUI schema and can drift across upstream upgrades; if a count query errors, list tables with `.tables` first. Always shred decrypted temps afterwards:
 
 ```
 shred -u /tmp/webui-check.db /tmp/storage-check.tgz
@@ -147,9 +149,12 @@ whoever declares the disaster; this section covers data, not orchestration.
 # decrypt
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass file:~/hive-backups/etc/passphrase \
   -in ~/hive-backups/daily/<day>/db.pgdump.enc -out /tmp/db.pgdump
-# restore into the existing postgres database (drop/create is destructive, do it consciously)
-docker exec hive-supabase-db-1 psql -U postgres -c 'DROP DATABASE postgres;'   # destructive by design
-docker exec hive-supabase-db-1 psql -U postgres -c 'CREATE DATABASE postgres;'
+# restore into the existing postgres database. Connect to template1 for both
+# administrative commands: Postgres refuses to drop the database the session
+# is connected to. drop/create is destructive by design, do it consciously,
+# and only once every client of this database is stopped.
+docker exec hive-supabase-db-1 psql -U postgres -d template1 -c 'DROP DATABASE postgres;'
+docker exec hive-supabase-db-1 psql -U postgres -d template1 -c 'CREATE DATABASE postgres;'
 docker exec -i hive-supabase-db-1 pg_restore -U postgres -d postgres --no-owner < /tmp/db.pgdump || true
 shred -u /tmp/db.pgdump
 ```
@@ -160,18 +165,28 @@ same comparison the verify script prints.
 
 ### Open WebUI state
 
+The restore REPLACES webui.db, it never merges. Open WebUI keeps the database open and its WAL files beside it, so a stale webui.db-wal replaying over a restored file would corrupt it: the -wal and -shm files must go with the old database, and every swap happens while the container is stopped.
+
 ```
+# 1. decrypt
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass file:~/hive-backups/etc/passphrase \
   -in ~/hive-backups/daily/<day>/webui.db.enc -out /tmp/webui.db
+# 2. copy the restored file into the volume under a staging name
 docker cp /tmp/webui.db hive-open-webui-1:/data/webui.db.restored
-# Open WebUI keeps webui.db open: coordinate a container restart with the
-# incident owner, then swap the restored file into place around that restart.
-docker exec hive-open-webui-1 mv /data/webui.db /data/webui.db.pre-restore
-docker restart hive-open-webui-1        # only together with the incident owner
-docker exec hive-open-webui-1 mv /data/webui.db.restored /data/webui.db
-docker restart hive-open-webui-1
+# 3. stop the writer (coordinate with whoever owns the incident)
+docker stop hive-open-webui-1
+# 4. swap files inside the volume using a throwaway helper on an image the box
+#    already has (no new pull), since a stopped container cannot exec
+docker run --rm -v hive_owui-data:/data --entrypoint sh hive-supabase-db:pg16-cron -c '
+  mv /data/webui.db /data/webui.db.pre-restore
+  rm -f /data/webui.db-wal /data/webui.db-shm
+  mv /data/webui.db.restored /data/webui.db'
+# 5. back up
+docker start hive-open-webui-1
 shred -u /tmp/webui.db
 ```
+
+Keep webui.db.pre-restore until chat history is confirmed intact.
 
 Open WebUI holds webui.db open, so replacing the live file requires restarting
 the open-webui container, which is out of scope for an automated path here.
@@ -180,14 +195,28 @@ file into place across the restart.
 
 ### Storage objects
 
+The restore REPLACES the object tree, it never merges. Extracting over the live tree would preserve objects created after the backup day while the restored Postgres metadata no longer knows about them, so the bucket bytes and the restored storage.objects rows must agree. Coordinate stopping the storage container with whoever owns the incident, replace the whole tree, then start again.
+
 ```
+# 1. decrypt
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass file:~/hive-backups/etc/passphrase \
   -in ~/hive-backups/daily/<day>/storage.tgz.enc -out /tmp/storage.tgz
-docker cp /tmp/storage.tgz hive-supabase-storage-1:/tmp/
-docker exec hive-supabase-storage-1 tar xzf /tmp/storage.tgz -C /
-docker exec hive-supabase-storage-1 rm -f /tmp/storage.tgz
+# 2. stop the writer (coordinate with whoever owns the incident)
+docker stop hive-supabase-storage-1
+# 3. replace the whole tree through a throwaway helper mounting the volume
+#    plus host /tmp read-only for the archive
+docker run --rm \
+  -v hive_supabase-storage-data:/storage \
+  -v /tmp:/host-tmp:ro \
+  --entrypoint bash hive-supabase-db:pg16-cron -c '
+  set -e
+  mkdir -p /storage/.pre-restore
+  find /storage -mindepth 1 -maxdepth 1 ! -name .pre-restore -exec mv {} /storage/.pre-restore/ +
+  tar xzf /host-tmp/storage.tgz --strip-components=2 -C /storage'
 shred -u /tmp/storage.tgz
 ```
+
+The backup tar was created as `tar czf - -C / var/lib/storage`, so its entries carry a `var/lib/storage/` prefix that `--strip-components=2` removes; the volume root becomes `/storage` inside the helper. The old tree is moved into `/storage/.pre-restore` inside the same volume: verify the extracted content, then delete `.pre-restore` (through a second helper run) and `docker start hive-supabase-storage-1`.
 
 ## Gaps this does not close
 

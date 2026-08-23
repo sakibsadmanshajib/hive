@@ -68,6 +68,14 @@ PASSPHRASE_FILE="${PASSPHRASE_FILE:-$BACKUP_ROOT/etc/passphrase}"
 MODE="run"
 if [[ "${1:-}" == "--check" ]]; then MODE="check"; fi
 
+# Validate required configuration up front so an empty environment value fails
+# here rather than halfway through a run. Defaults above are the
+# parameterization; this only rejects explicitly broken configuration.
+for var in BACKUP_ROOT DB_CONTAINER OWUI_CONTAINER STORAGE_CONTAINER \
+           PGUSER PGDATABASE KEEP_DAILY STALE_AFTER ALERTMANAGER_URL PASSPHRASE_FILE; do
+  [[ -n "${!var}" ]] || { echo "FATAL: $var is empty"; exit 1; }
+done
+
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_DIR="$BACKUP_ROOT/logs"
 mkdir -p "$LOG_DIR" "$BACKUP_ROOT/status" "$BACKUP_ROOT/tmp"
@@ -121,6 +129,11 @@ fi
 exec 9>"$BACKUP_ROOT/lock"
 flock -n 9 || { log "another backup run holds the lock, exiting"; exit 0; }
 
+# A systemd TimeoutStartSec kill must be as loud as any other failure: without
+# this trap the terminated script would die silently and only the staleness
+# watchdog would notice, hours later.
+trap 'fail_run "killed_by_signal"' TERM HUP INT
+
 [[ -r "$PASSPHRASE_FILE" ]] || fail_run "passphrase_missing"
 [[ "$(stat -c %a "$PASSPHRASE_FILE")" == "600" ]] \
   || die "PASSPHRASE_FILE must be chmod 600, refusing to run"
@@ -130,8 +143,9 @@ mkdir -p "$WORK"
 PUBLISH="$BACKUP_ROOT/daily/$(date -u +%F)"
 
 # Run the staleness check first so a half-dead schedule still alerts even when
-# this particular invocation succeeds.
-"$0" --check || true
+# this particular invocation succeeds. Output goes to THIS run's log, not the
+# journal, so two runs' lines never interleave.
+"$0" --check >>"$LOG_FILE" 2>&1 || true
 
 cleanup() {
   rm -rf "$WORK"
@@ -191,22 +205,32 @@ for f in "$DB_DUMP" "$OWUI_SNAP" "$UPLOADS_TGZ" "$STORAGE_TGZ"; do
 done
 log "encryption ok"
 
-# 6. Publish the day directory atomically enough ---------------------------
-mkdir -p "$PUBLISH"
+# 6. Publish the day directory as ONE committed unit -----------------------
+# Everything is assembled in a staging directory first; the published set is
+# then swapped in by rename. A failed run can never leave today's published
+# directory holding a mix of old and new artifacts, and the off-box pull can
+# treat the presence of SHA256SUMS as the commit marker for a complete set.
+STAGE="$WORK/stage"
+mkdir -p "$STAGE"
 for f in "$WORK"/*.enc; do
   base="$(basename "$f" .enc)"
-  # Write-then-rename so a reader (or the off-box pull) never sees a torn file.
-  cp "$f" "$PUBLISH/$base.enc.partial" && mv -f "$PUBLISH/$base.enc.partial" "$PUBLISH/$base.enc"
+  # Write-then-rename so a reader inside this script never sees a torn file.
+  cp "$f" "$STAGE/$base.enc.partial" && mv -f "$STAGE/$base.enc.partial" "$STAGE/$base.enc"
 done
 (
-  cd "$PUBLISH"
-  # Regenerate checksums over exactly today's four artifacts.
+  cd "$STAGE"
+  # Regenerate checksums over exactly this run's four artifacts.
   ls | grep '\.enc$' | sort | xargs sha256sum > SHA256SUMS
   {
     echo "created $(date -u +%FT%TZ)"
     ls -l --block-size=K *.enc | awk '{print $5, $9}'
   } > MANIFEST.txt
 )
+if [[ -d "$PUBLISH" ]]; then
+  mv "$PUBLISH" "$PUBLISH.old.$$"
+fi
+mv "$STAGE" "$PUBLISH"
+rm -rf "$PUBLISH.old.$$" 2>/dev/null || true
 log "published to $PUBLISH"
 
 # 7. Retention --------------------------------------------------------------
