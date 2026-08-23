@@ -10,9 +10,13 @@ const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-default";
 // provider_capabilities.supports_reasoning and these aliases have it true, so
 // there is no rejection to assert.
 //
-// `hive-default` and `hive-auto` are on Groq gpt-oss models, which accept
-// reasoning parameters natively. (An older comment here explained their
-// presence by a LiteLLM fallback cascade; those chat fallbacks were removed
+// The Groq gpt-oss aliases (`hive-default`, `hive-auto`, `hive-small`,
+// `hive-medium`, and the deprecated `hive-fast`) accept reasoning parameters
+// natively, and every one of them is seeded supports_reasoning true. Listing
+// all five rather than the two this suite is usually pointed at, because
+// HIVE_TEST_MODEL is a knob and a run pointed at any of them would otherwise
+// assert a rejection that cannot happen. (An older comment here explained the
+// first two by a LiteLLM fallback cascade; those chat fallbacks were removed
 // from deploy/litellm/config.yaml by the 2026-08-22 catalog restructure, and
 // the flag on the route is the actual reason.)
 //
@@ -26,6 +30,9 @@ const REASONING_MODEL_PATTERNS = [
   "reasoning",
   "hive-default",
   "hive-auto",
+  "hive-small",
+  "hive-medium",
+  "hive-fast",
   "deepseek",
 ];
 

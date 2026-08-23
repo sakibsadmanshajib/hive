@@ -1038,7 +1038,7 @@ jobs:
       # Set the CI_LIVE_INTEGRATION_MODEL repository variable to point this
       # back at hive-default (say, once a CI-only Groq organization exists)
       # without touching this file.
-      HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'hive-default' }}
+      HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
       # The suites' own default, named here rather than left implicit, because
       # the spend meter below asserts that no alias outside these two is ever
       # billed by this job.
