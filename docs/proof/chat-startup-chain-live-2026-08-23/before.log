@@ -1,0 +1,50 @@
+PR #956 startup chain measurement -- arm: before
+====================================================
+
+Local full stack: self-hosted GoTrue, PostgREST, storage, Caddy
+gateway, control-plane, edge-api, litellm, web-console, Open WebUI.
+Signed in through a real OAuth authorization-code round trip.
+
+/api/config reachable: 200
+immutable asset /_app/immutable/entry/start.CxLaSoNw.js...
+  Cache-Control: (none)
+
+signed in, origin: http://localhost:3003
+
+run 0: composer visible 1090 ms, api requests 20, serial depth 5
+run 1: composer visible 1053 ms, api requests 20, serial depth 5
+run 2: composer visible 1071 ms, api requests 20, serial depth 4
+run 3: composer visible 1027 ms, api requests 20, serial depth 4
+run 4: composer visible 1125 ms, api requests 20, serial depth 5
+
+ARM before summary over 5 runs
+  composer visible, upper median : 1071 ms
+  composer visible, all samples  : 1090, 1053, 1071, 1027, 1125
+  serial depth, all samples      : 5, 5, 4, 4, 5
+  api request count, all samples : 20, 20, 20, 20, 20
+
+Waterfall for the representative run (composer 1071 ms):
+  wave 1:
+      246 ->   276 (  29 ms)  /api/config
+  wave 2:
+      280 ->   352 (  72 ms)  /api/v1/auths/
+      296 ->   331 (  35 ms)  /api/version
+  wave 3:
+      353 ->   389 (  36 ms)  /api/config
+  wave 4:
+      429 ->   554 ( 125 ms)  /api/v1/auths/update/timezone
+      431 ->   431 (   0 ms)  /api/v1/users/523404fb-f3c9-4b7d-8272-ee3e1f79774f/profile/image
+      431 ->   634 ( 204 ms)  /api/v1/folders/
+      431 ->   793 ( 362 ms)  /api/v1/folders/
+      431 ->   584 ( 154 ms)  /api/v1/chats/all/tags
+      431 ->   603 ( 173 ms)  /api/v1/chats/pinned
+      431 ->   604 ( 174 ms)  /api/v1/chats/?
+      431 ->   610 ( 179 ms)  /api/v1/configs/banners
+      431 ->   760 ( 329 ms)  /api/v1/tools/
+      431 ->   687 ( 256 ms)  /api/v1/users/user/settings
+      637 ->   830 ( 194 ms)  /api/v1/folders/shared
+      688 ->   905 ( 217 ms)  /api/models
+      720 ->   825 ( 104 ms)  /api/v1/chats/?
+      793 ->  1005 ( 212 ms)  /api/v1/folders/shared
+      985 ->  1005 (  20 ms)  /api/v1/terminals/
+      985 ->   986 (   1 ms)  /api/v1/models/model/profile/image?

@@ -1,0 +1,46 @@
+PR #956 startup chain measurement -- arm: after
+====================================================
+
+Local full stack: self-hosted GoTrue, PostgREST, storage, Caddy
+gateway, control-plane, edge-api, litellm, web-console, Open WebUI.
+Signed in through a real OAuth authorization-code round trip.
+
+/api/config reachable: 200
+immutable asset /_app/immutable/entry/start.CxLaSoNw.js...
+  Cache-Control: public, max-age=31536000, immutable
+
+signed in, origin: http://localhost:3003
+
+run 0: composer visible 901 ms, api requests 19, serial depth 1
+run 1: composer visible 853 ms, api requests 19, serial depth 2
+run 2: composer visible 889 ms, api requests 19, serial depth 2
+run 3: composer visible 1122 ms, api requests 19, serial depth 2
+run 4: composer visible 1032 ms, api requests 19, serial depth 2
+
+ARM after summary over 5 runs
+  composer visible, upper median : 901 ms
+  composer visible, all samples  : 901, 853, 889, 1122, 1032
+  serial depth, all samples      : 1, 2, 2, 2, 2
+  api request count, all samples : 19, 19, 19, 19, 19
+
+Waterfall for the representative run (composer 901 ms):
+  wave 1:
+      225 ->   315 (  90 ms)  /api/v1/auths/
+      226 ->   513 ( 288 ms)  /api/models
+      226 ->   307 (  81 ms)  /api/config
+      373 ->   537 ( 164 ms)  /api/v1/auths/update/timezone
+      376 ->   376 (   0 ms)  /api/v1/users/523404fb-f3c9-4b7d-8272-ee3e1f79774f/profile/image
+      376 ->   607 ( 231 ms)  /api/v1/folders/
+      376 ->   933 ( 556 ms)  /api/v1/folders/
+      376 ->   708 ( 332 ms)  /api/v1/chats/all/tags
+      376 ->   556 ( 180 ms)  /api/v1/chats/pinned
+      377 ->   556 ( 180 ms)  /api/v1/chats/?
+      377 ->   812 ( 435 ms)  /api/v1/configs/banners
+      377 ->   812 ( 435 ms)  /api/v1/tools/
+      377 ->   701 ( 324 ms)  /api/v1/users/user/settings
+      391 ->   681 ( 290 ms)  /api/version
+      607 ->   934 ( 326 ms)  /api/v1/folders/shared
+      888 ->   932 (  45 ms)  /api/v1/terminals/
+      888 ->   889 (   1 ms)  /api/v1/models/model/profile/image?
+      908 ->   956 (  47 ms)  /api/v1/chats/?
+      944 ->   991 (  47 ms)  /api/v1/folders/shared
