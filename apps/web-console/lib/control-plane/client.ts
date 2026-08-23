@@ -2305,7 +2305,9 @@ export async function getUsageEvents(
 
   return {
     events,
-    next_cursor: readStringField(payload, "next_cursor") ?? null,
+    // Upstream writes an empty string when there is no further page; normalize
+    // to null so callers can test falsiness without string comparisons.
+    next_cursor: readStringField(payload, "next_cursor") || null,
   };
 }
 

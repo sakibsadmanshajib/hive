@@ -30,8 +30,10 @@ interface LogsPageProps {
 
 const WINDOW_PRESETS = ["1h", "24h", "7d", "30d"] as const;
 
-function isValidWindow(value: string | undefined): boolean {
-  return value !== undefined && WINDOW_PRESETS.includes(value as (typeof WINDOW_PRESETS)[number]);
+// Type predicate so the page can narrow searchParams.window to a defined
+// string without a cast.
+function isValidWindow(value: string | undefined): value is string {
+  return WINDOW_PRESETS.some((preset) => preset === value);
 }
 
 export default async function LogsPage({ searchParams }: LogsPageProps) {
@@ -42,7 +44,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
 
   const params = await searchParams;
   const state = {
-    window: isValidWindow(params.window) ? params.window! : null,
+    window: isValidWindow(params.window) ? params.window : null,
     model: params.model?.trim() || null,
     status: params.status?.trim() || null,
     key: params.key?.trim() || null,
