@@ -242,6 +242,13 @@ jobs:
             name=$(docker inspect -f '{{.Name}}' "$cid" | sed 's|^/||')
             running=$(docker inspect -f '{{.Image}}' "$cid")
             tag=$(docker inspect -f '{{.Config.Image}}' "$cid")
+            # Ages, because they are what makes a mismatch diagnosable. These
+            # tags are a shared mutable pointer on this box: any build moves
+            # them, including a CI job that has nothing to do with a deploy.
+            # "image built two seconds ago, container four days old" and "image
+            # built by the test job that just ran" are the same comparison and
+            # very different problems, and only the timestamps separate them.
+            born=$(docker inspect -f '{{.Created}}' "$cid")
             checked=$((checked + 1))
             if ! current=$(docker image inspect -f '{{.Id}}' "$tag" 2>/dev/null); then
               # Not a skip. An unresolvable image reference means freshness
@@ -259,8 +266,9 @@ jobs:
             else
               short_running=$(printf '%s' "$running" | cut -c8-19)
               short_current=$(printf '%s' "$current" | cut -c8-19)
-              echo "  STALE    $name ($tag): running $short_running, tag now $short_current"
-              stale="$stale%0A  $name is running $short_running while $tag now resolves to $short_current"
+              image_born=$(docker image inspect -f '{{.Created}}' "$tag")
+              echo "  STALE    $name ($tag): running $short_running (container created $born), tag now $short_current (image created $image_born)"
+              stale="$stale%0A  $name is running $short_running (created $born) while $tag now resolves to $short_current (created $image_born)"
             fi
           done < <(docker compose $HIVE_COMPOSE_FLAGS ps -q)
 
@@ -303,7 +311,8 @@ jobs:
             echo "::error::$env_file does not exist on this runner"
             exit 1
           fi
-          for name in SUPABASE_URL NEXT_PUBLIC_SUPABASE_URL SUPABASE_ANON_KEY \
+          for name in SUPABASE_URL NEXT_PUBLIC_SUPABASE_URL \
+                      SUPABASE_ANON_KEY NEXT_PUBLIC_SUPABASE_ANON_KEY \
                       SUPABASE_SERVICE_ROLE_KEY \
                       HIVE_VERIFY_EMAIL HIVE_VERIFY_PASSWORD \
                       HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
@@ -335,7 +344,6 @@ jobs:
           set -euo pipefail
           env_file=/home/sakib/hive/.env
           control="${NEGATIVE_CONTROL:-none}"
-          echo "reason=product" >> "$GITHUB_OUTPUT"
 
           read_env() {
             # Same idiom as deploy-demo-box.yml's pooler-DSN step, including the
@@ -392,9 +400,14 @@ jobs:
           export SUPABASE_URL="$supabase"
           echo "auth origin $supabase"
 
-          anon=$(read_env SUPABASE_ANON_KEY)
+          # Paired with the origin chosen above, in the same order. A
+          # publishable key belongs to the listener it was issued for, and
+          # taking the origin from one variable and the key from another is
+          # precisely the half-updated configuration issue #1059 was.
+          anon=$(read_env NEXT_PUBLIC_SUPABASE_ANON_KEY)
+          [ -n "$anon" ] || anon=$(read_env SUPABASE_ANON_KEY)
           if [ -z "$anon" ]; then
-            echo "::error::SUPABASE_ANON_KEY is not set in $env_file"
+            echo "::error::neither NEXT_PUBLIC_SUPABASE_ANON_KEY nor SUPABASE_ANON_KEY is set in $env_file"
             exit 1
           fi
           echo "::add-mask::$anon"
