@@ -1,0 +1,23 @@
+capture started 2026-08-23T03:59:53.441Z
+target http://127.0.0.1:13002
+[console:warning] No token found in localStorage, user-join event not emitted
+landed on http://127.0.0.1:13002/auth
+clicked through the splash panel
+no sign-up toggle found; form may already be in sign-up mode
+submitted local sign-up form (password generated at run time, not recorded)
+after auth, url = http://127.0.0.1:13002/
+captured 00-chat-loaded.png
+opened model picker via selector: button#model-selector-0-button
+captured 01-model-picker.png
+--- text nodes visible in the open picker ---
+  deepseek-v4-flash
+  deepseek-v4-pro
+  hive-auto
+  hive-default
+  hive-fast
+  hive-medium
+  hive-small
+selected hive-small in the picker
+sent a prompt through the selected alias
+captured 02-completion.png
+capture finished 2026-08-23T04:00:37.050Z

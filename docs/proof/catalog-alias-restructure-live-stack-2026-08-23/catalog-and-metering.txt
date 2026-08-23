@@ -1,0 +1,36 @@
+public.usage_events after the Open WebUI chat turn in 02-completion.png.
+Local throwaway Postgres. captured: 2026-08-23T04:02:10Z
+
+ model_alias |     endpoint     |   status    | input_tokens | output_tokens | hive_credit_delta |          created_at           
+-------------+------------------+-------------+--------------+---------------+-------------------+-------------------------------
+ hive-small  | chat_completions | completed   |          248 |            85 |               333 | 2026-08-23 04:00:21.856366+00
+ hive-small  | chat_completions | completed   |            0 |             0 |                -6 | 2026-08-23 04:00:21.840192+00
+ hive-small  | chat_completions | dispatching |            0 |             0 |                 0 | 2026-08-23 04:00:21.284816+00
+ hive-small  | chat_completions | completed   |          297 |           459 |               756 | 2026-08-23 04:00:21.15038+00
+ hive-small  | chat_completions | completed   |            0 |             0 |               -22 | 2026-08-23 04:00:21.128388+00
+ hive-small  | chat_completions | dispatching |            0 |             0 |                 0 | 2026-08-23 04:00:20.105854+00
+ hive-small  | chat_completions | completed   |            0 |             0 |                 0 | 2026-08-23 04:00:19.93307+00
+ hive-small  | chat_completions | completed   |            0 |             0 |                -1 | 2026-08-23 04:00:19.914845+00
+(8 rows)
+
+
+--- catalog rows this stack was serving from ---
+        alias_id        |      display_name      | visibility | lifecycle |  provider  |                     provider_model                      |         litellm_model_name          | health_state 
+------------------------+------------------------+------------+-----------+------------+---------------------------------------------------------+-------------------------------------+--------------
+ deepseek-v4-flash      | Deepseek V4 Flash      | public     | stable    | openrouter | openrouter/~deepseek/deepseek-v4-flash-latest           | route-deepseek-v4-flash             | healthy
+ deepseek-v4-pro        | Deepseek V4 Pro        | public     | stable    | openrouter | openrouter/deepseek/deepseek-v4-pro-0813                | route-deepseek-v4-pro               | healthy
+ hive-auto              | Hive Auto              | preview    | preview   | groq       | groq/openai/gpt-oss-120b                                | route-groq-auto                     | healthy
+ hive-auto              | Hive Auto              | preview    | preview   | openrouter | openrouter/openai/gpt-4.1-mini                          | route-openrouter-auto               | disabled
+ hive-default           | Hive Default           | public     | stable    | groq       | groq/openai/gpt-oss-20b                                 | route-groq-default                  | healthy
+ hive-default           | Hive Default           | public     | stable    | openrouter | openrouter/openai/gpt-4o-mini                           | route-openrouter-default            | disabled
+ hive-embedding-default | Hive Embedding Default | public     | stable    | nvidia_nim | nvidia_nim/nvidia/llama-3.2-nemoretriever-300m-embed-v1 | route-nvidia-embedding              | eol
+ hive-embedding-default | Hive Embedding Default | public     | stable    | openrouter | openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free    | route-openrouter-embedding          | healthy
+ hive-embedding-default | Hive Embedding Default | public     | stable    | openrouter | openrouter/qwen/qwen3-embedding-8b                      | route-openrouter-embedding-fallback | healthy
+ hive-fast              | Hive Fast              | public     | hidden    | groq       | groq/openai/gpt-oss-20b                                 | route-groq-fast                     | healthy
+ hive-fast              | Hive Fast              | public     | hidden    | openrouter | openrouter/meta-llama/3.1-8b-instruct                   | route-openrouter-fast-fallback      | disabled
+ hive-medium            | Hive Medium            | public     | stable    | groq       | groq/openai/gpt-oss-120b                                | route-groq-medium                   | healthy
+ hive-small             | Hive Small             | public     | stable    | groq       | groq/openai/gpt-oss-20b                                 | route-groq-small                    | healthy
+ hive-stt               | Hive Voice STT         | public     | stable    | groq       | groq/whisper-large-v3                                   | route-groq-stt                      | healthy
+ hive-tts               | Hive Voice TTS         | public     | stable    | groq       | groq/canopylabs/orpheus-v1-english                      | route-groq-tts                      | healthy
+(15 rows)
+

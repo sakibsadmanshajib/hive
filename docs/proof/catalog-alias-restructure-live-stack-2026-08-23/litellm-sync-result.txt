@@ -1,0 +1,46 @@
+LiteLLM gateway, after POST /internal/litellm/sync regenerated its
+model_list from public.provider_routes.provider_model.
+captured: 2026-08-23T04:02:09Z
+
+--- /etc/litellm/config.yaml, model_name -> upstream model ---
+20:        model: openrouter/~deepseek/deepseek-v4-flash-latest
+21:      model_name: route-deepseek-v4-flash
+25:        model: openrouter/deepseek/deepseek-v4-pro-0813
+26:      model_name: route-deepseek-v4-pro
+30:        model: groq/openai/gpt-oss-120b
+31:      model_name: route-groq-auto
+35:        model: groq/openai/gpt-oss-20b
+36:      model_name: route-groq-default
+40:        model: groq/openai/gpt-oss-20b
+41:      model_name: route-groq-fast
+45:        model: groq/openai/gpt-oss-120b
+46:      model_name: route-groq-medium
+50:        model: groq/openai/gpt-oss-20b
+51:      model_name: route-groq-small
+55:        model: groq/whisper-large-v3
+58:      model_name: route-groq-stt
+62:        model: groq/canopylabs/orpheus-v1-english
+65:      model_name: route-groq-tts
+69:        model: openai/nvidia/llama-nemotron-embed-vl-1b-v2:free
+72:      model_name: route-openrouter-embedding
+76:        model: openai/qwen/qwen3-embedding-8b
+79:      model_name: route-openrouter-embedding-fallback
+86:        model: os.environ/OPENROUTER_AUTO_MODEL
+87:      model_name: route-doc-vlm
+91:        model: openai/bge-m3
+94:      model_name: bge-m3
+
+--- GET /v1/models on the running gateway (what it actually serves) ---
+route-deepseek-v4-flash
+route-deepseek-v4-pro
+route-groq-auto
+route-groq-default
+route-groq-fast
+route-groq-medium
+route-groq-small
+route-groq-stt
+route-groq-tts
+route-openrouter-embedding
+route-openrouter-embedding-fallback
+route-doc-vlm
+bge-m3

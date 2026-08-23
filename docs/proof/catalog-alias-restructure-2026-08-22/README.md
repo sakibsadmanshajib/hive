@@ -15,6 +15,8 @@ That was not possible when this PR was raised, for a reason outside this change:
 
 A live capture is still owed once #1002 lands and the box takes this migration. Until then this file is the strongest honest evidence available, and it deliberately does not claim to be more.
 
+**Update, 2026-08-23.** A live capture now exists: `docs/proof/catalog-alias-restructure-live-stack-2026-08-23/`. It is a local full-stack capture, not a demo-box one, and it covers the two gaps named under "Limits of this evidence" below: the LiteLLM config sync and `GET /v1/models` end to end. #1002 is fixed and #1005 merged, so the box is deployable again; a deployed capture is still owed after this merges and deploys.
+
 ## What was actually done
 
 `catalog-after-migration.txt` is the unedited transcript of:
