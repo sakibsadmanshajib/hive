@@ -393,9 +393,13 @@ on conflict (route_id) do nothing;
 --    (routing/service.go) drops it, SelectRoute returns ErrRouteNotEligible
 --    and writeRoutingError maps that to 422. An under-claim on a pinned alias
 --    is not a withheld feature, it is a failed request.
---    The flag is also simply true: the gpt-oss family exposes reasoning
---    effort, and apps/edge-api/internal/inference/chat_completions.go sets
---    NeedReasoning whenever a request carries reasoning_effort.
+--    The flag is also simply true, and verified rather than assumed:
+--    https://console.groq.com/docs/reasoning (checked 2026-08-22) lists both
+--    openai/gpt-oss-20b and openai/gpt-oss-120b as reasoning models and states
+--    that reasoning_effort values 'low', 'medium' and 'high' "are only
+--    supported by GPT-OSS 20B and GPT-OSS 120B". On our side,
+--    apps/edge-api/internal/inference/chat_completions.go sets NeedReasoning
+--    whenever a request carries reasoning_effort.
 --    route-groq-fast still carries false from its original seed. That is a
 --    pre-existing under-claim on the deprecated alias, left alone here rather
 --    than widened in a pricing migration.
