@@ -260,6 +260,12 @@ jobs:
             # something newer than the tag, which is not the failure this
             # check is for.
             born=$(docker inspect -f '{{.Created}}' "$cid")
+            # State, because `ps -q` lists containers that are not running and
+            # a dead container is a bigger finding than a stale one. It also
+            # explains an image that has left the store: docker will not prune
+            # an image a running container holds, so an absent image and a
+            # stopped container are the same story.
+            state=$(docker inspect -f '{{.State.Status}}' "$cid")
             checked=$((checked + 1))
             if ! current=$(docker image inspect -f '{{.Id}}' "$tag" 2>/dev/null); then
               # Not a skip. An unresolvable image reference means freshness
@@ -272,8 +278,11 @@ jobs:
             if [ "${NEGATIVE_CONTROL:-none}" = "freshness" ]; then
               current=$bogus
             fi
+            if [ "$state" != "running" ]; then
+              echo "  note     $name is $state, not running ($tag)"
+            fi
             if [ "$running" = "$current" ]; then
-              echo "  current  $name ($tag)"
+              echo "  current  $name ($tag), $state"
               continue
             fi
             short_running=$(printf '%s' "$running" | cut -c8-19)
@@ -297,7 +306,7 @@ jobs:
               echo "  ahead    $name ($tag): running $short_running built $run_born, newer than the tag's $short_current built $tag_born"
               continue
             fi
-            echo "  STALE    $name ($tag): running $short_running built ${run_born:-<image absent>} (container created $born), tag now $short_current built $tag_born"
+            echo "  STALE    $name ($tag): $state from $short_running built ${run_born:-<image absent>} (container created $born), tag now $short_current built $tag_born"
             stale="$stale%0A  $name is running $short_running built ${run_born:-<image absent>} while $tag now resolves to $short_current built $tag_born"
 
           done < <(docker compose $HIVE_COMPOSE_FLAGS ps -q)
