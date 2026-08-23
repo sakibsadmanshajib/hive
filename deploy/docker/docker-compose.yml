@@ -191,17 +191,48 @@ services:
       # LiteLLM reads from it. The volume persists generated config across
       # container recreates; the seed file is copied in on first start.
       - litellm-config:/etc/litellm
-      # Mount the repo seed config read-only so the entrypoint can copy it
-      # into the shared volume when the volume is empty (first boot).
-      - ../../deploy/litellm/config.yaml:/seed/config.yaml:ro
-    # On first boot the shared volume is empty; copy the seed config so LiteLLM
-    # has a valid config.yaml before control-plane pushes its first sync.
+      # The DIRECTORY, read-only, not the single file it used to be.
+      #
+      # A single-file bind mount resolves to one inode at container start and
+      # keeps it. git checkout does not edit a file in place, it writes a
+      # replacement and renames over the old name, so a `git pull` that changes
+      # this config gives the host a NEW inode while the container goes on
+      # showing the old one until it is recreated. Measured on the demo box,
+      # replacing a file the same way git does: the file-mounted container
+      # still read the old content, the directory-mounted one read the new
+      # content. Mounting the directory means /seed/config.yaml is resolved per
+      # open, so the container always reads what the repository currently says.
+      - ../../deploy/litellm:/seed:ro
+    # Reconcile the shared volume against the repo's seed on every start.
+    #
+    # This used to be `if [ ! -f /etc/litellm/config.yaml ]`, which copies the
+    # seed exactly once in the lifetime of the volume. The volume outlives
+    # container recreates by design, so on any box that had already booted once
+    # (the demo box included) an edit to deploy/litellm/config.yaml never
+    # reached the running proxy again: routes added or repointed there were
+    # inert, silently, while the repository, the pull request and CI all looked
+    # correct. Deleting the volume by hand was the only cure, and nothing said
+    # so.
+    #
+    # Keyed on a checksum of the seed rather than on the config's existence,
+    # and that distinction is what makes it safe. control-plane owns
+    # /etc/litellm/config.yaml at runtime: it merges the DB's model catalog
+    # over this seed and RESTARTS this container to apply it. An unconditional
+    # copy here would therefore overwrite, on that very restart, the config
+    # control-plane just wrote and restarted for. Comparing the seed against
+    # the checksum recorded when it was last copied means a control-plane
+    # restart is a no-op (the seed did not change) while a genuine repository
+    # change is applied (it did).
     entrypoint:
       - /bin/sh
       - -c
       - |
-        if [ ! -f /etc/litellm/config.yaml ]; then
+        seed_sha="$$(sha256sum /seed/config.yaml | cut -d" " -f1)"
+        if [ ! -f /etc/litellm/config.yaml ] \
+          || [ "$$seed_sha" != "$$(cat /etc/litellm/.seed.sha256 2>/dev/null)" ]; then
+          echo "litellm: seeding /etc/litellm/config.yaml from the repo config ($$seed_sha)"
           cp /seed/config.yaml /etc/litellm/config.yaml
+          printf '%s' "$$seed_sha" > /etc/litellm/.seed.sha256
         fi
         exec litellm --config=/etc/litellm/config.yaml
     command: []

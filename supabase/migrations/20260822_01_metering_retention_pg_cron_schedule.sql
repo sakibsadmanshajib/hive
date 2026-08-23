@@ -115,7 +115,25 @@ DECLARE
 BEGIN
   SELECT rolsuper INTO is_super FROM pg_roles WHERE rolname = current_user;
 
-  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+  -- Both halves, and the second one is not redundant.
+  --
+  -- pg_extension is a catalog row. pg_available_extensions is what is on disk.
+  -- Those two normally agree, and this block gated on the catalog row alone
+  -- until they disagreed on the demo box: the restored production dump carried
+  -- a pg_extension row for pg_cron (and the cron schema and cron.schedule
+  -- alongside it) into a server whose image never shipped the library. So the
+  -- block above correctly reported the extension unavailable and skipped, and
+  -- then this block saw the catalog row, resolved cron.schedule by name, and
+  -- died on `could not access file "$libdir/pg_cron"` at the point of actually
+  -- calling it. As a superuser, which the box migrates as, the handler below
+  -- re-raises, so the migration aborted, the deploy job `needs:` it, and the
+  -- box could not deploy the very image that would have supplied the library.
+  --
+  -- Availability means the files are present, not that a row survived a
+  -- restore. Asking the same question the block above asks is what makes this
+  -- file the clean no-op its own NOTICE already promises it is.
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+     AND EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') THEN
     -- Same name, schedule and command as 20260729_02. cron.schedule upserts on
     -- (jobname, username), so re-running this against a database that already
     -- has the job is a no-op rather than a duplicate.

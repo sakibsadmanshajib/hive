@@ -230,6 +230,188 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Pull latest main
+        # In migrate, and first, because of the 2026-08-22 deadlock.
+        #
+        # This step used to be the deploy job's first step. That put the only
+        # thing that advances the box's clone AFTER the only thing that
+        # reconciles the box's database, and the two are not independent: the
+        # reconcile step below runs `docker compose ... up -d --build
+        # supabase-db` with working-directory /home/sakib/hive/deploy/docker,
+        # so it reads THIS clone's compose file, not the runner workspace's.
+        #
+        # So a change to how supabase-db is built could not reach the job that
+        # depends on it. PR #994 moved supabase-db onto a locally built image
+        # carrying pg_cron, and 20260822_01 needs that extension. migrate ran
+        # the old compose file, left the container on the old image, applied a
+        # migration that wanted pg_cron, and failed; deploy `needs: migrate`,
+        # so the job that would have pulled the fixed compose file was skipped.
+        # Three runs (32605288283, 32605296549, 32607780396) burned on that
+        # circle and the demo box could not deploy at all, chat sign-in
+        # included, until the image was recreated by hand.
+        #
+        # Pulling here breaks the circle by ordering it correctly: update the
+        # tree, reconcile the database service from the tree, then migrate
+        # against it, then deploy the rest. scripts/test_selfhost_supabase_seam.py
+        # fails if these three steps ever go back out of order, or if the pull
+        # and the reconcile stop naming the same directory.
+        #
+        # Root cause of the 2026-08-13 outage (every deploy since failing
+        # `fatal: could not read Username for 'https://github.com': No such
+        # device or address`, exit 128): the box's persistent clone at
+        # /home/sakib/hive authenticates its HTTPS remote from some
+        # credential external to this workflow (a stored PAT or a git
+        # credential helper on the box; this runner has no shell access to
+        # inspect which). That credential worked through the 2026-08-12
+        # 20:04 UTC run (confirmed from that run's own log: `git fetch`
+        # printed a real ref listing, not an error) and was gone by the next
+        # deploy 17 hours later, with the workflow file byte-identical
+        # across that gap (`git log -- .github/workflows/deploy-demo-box.yml`
+        # between those two commits is empty). That is an expired or rotated
+        # credential, not a missing config line: nothing in this repo
+        # changed to cause it.
+        #
+        # Fix: stop depending on any credential that lives on the box at
+        # all. `github.token` is this job's own ephemeral, auto-rotated
+        # GITHUB_TOKEN (scoped read-only by `contents: read` above, minted
+        # fresh per run), the same mechanism actions/checkout uses
+        # internally. It is supplied as per-invocation `GIT_CONFIG_*`
+        # environment variables rather than `.git/config`, so there is
+        # nothing here to expire or rotate again. Two things a first pass
+        # of this comment got wrong, corrected after security review on
+        # this PR: the interpolated value IS written to disk, in the
+        # runner's own materialized step script under $RUNNER_TEMP (this
+        # runner is not ephemeral, see the box-reboot note below, so that
+        # file is not on a fresh tmpfs); and GitHub only auto-masks the
+        # literal token, not the base64 Basic-auth blob derived from it, so
+        # that blob is masked explicitly below instead. The token itself
+        # now reaches the script only via the `GH_TOKEN` env var, never
+        # interpolated into the script text, matching the pattern the
+        # agent-engine step below already uses.
+        #
+        # actions/checkout itself was considered instead of fixing the pull
+        # in place, letting the runner's own already-authenticated checkout
+        # do the fetch. Rejected: every step below assumes /home/sakib/hive is
+        # a long-lived directory carrying the box's own untracked .env
+        # (every secret this stack runs on) and Docker build cache.
+        # actions/checkout's default `clean: true` runs `git clean -ffdx`,
+        # which would delete that untracked .env on first use, a bigger
+        # and riskier change than fixing the credential the persistent
+        # clone already uses.
+        #
+        # GIT_TERMINAL_PROMPT=0 makes a still-bad credential fail in one
+        # git-native line instead of the opaque "could not read Username /
+        # No such device or address" this outage actually produced (that
+        # message is itself just what a denied non-interactive prompt looks
+        # like on a runner with no tty).
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd /home/sakib/hive
+
+          # A leftover .git/index.lock from a prior run killed mid checkout
+          # (the timeout-minutes below, a manual cancel, or a box reboot
+          # this file's own header says the runner does not survive) would
+          # fail this line with a lock message instead of the real problem.
+          # Age-gated, not unconditional: this clone is the box's shared
+          # checkout, other writers (git gc --auto, a human on the box) can
+          # legitimately hold this lock, and the workflow-level concurrency
+          # group only serializes this workflow's own runs against each
+          # other. 30 minutes matches this job's own timeout-minutes above,
+          # so a lock younger than that is still someone's live operation.
+          # Both moved together when the chat frontend build landed; they are
+          # one invariant and must not drift apart.
+          find .git -maxdepth 1 -name index.lock -mmin +30 -delete
+          git checkout main
+
+          # The token below authenticates ANY public github.com repo, not
+          # just this one, so it would fetch happily from a repointed
+          # origin. Check first, or a repointed remote pulls the wrong
+          # content while reporting the same green this whole fix exists to
+          # make honest.
+          # Redacted unconditionally, not just when a mismatch is found:
+          # origin can embed a credential (https://user:token@github.com/...)
+          # and this value reaches both the error branch below and the
+          # diagnostic dump after it, so redacting once here keeps every
+          # later use safe by construction instead of relying on each print
+          # site to remember.
+          expected_url="https://github.com/${{ github.repository }}"
+          actual_url=$(git remote get-url origin)
+          # Greedy up to the LAST @, not the first: a credential whose
+          # secret half itself contains an unencoded @ would otherwise
+          # leave part of it printed after a first-@ match.
+          redacted_url=$(printf '%s' "$actual_url" | sed -E 's#//.*@#//REDACTED@#')
+          case "$actual_url" in
+            "$expected_url"|"$expected_url.git") ;;
+            *)
+              echo "::error::box remote 'origin' is $redacted_url, expected $expected_url(.git). Refusing to pull: this job's GITHUB_TOKEN would authenticate a fetch from any public github.com repo, so a repointed remote would silently deploy the wrong source. Fix with: git -C /home/sakib/hive remote set-url origin $expected_url.git" >&2
+              exit 1
+              ;;
+          esac
+
+          # Secret-free, and answers exactly what this PR could not verify
+          # without box access: whether a credential path older than this
+          # fix could still shadow or rescue it. --name-only reports THAT a
+          # helper is configured, never its value: a helper can be an
+          # inline shell snippet with a PAT embedded in it, and that value
+          # is exactly the on-box credential this whole PR suspects.
+          git config --show-origin --name-only --get-regexp '^credential\.helper$' \
+            && echo "credential.helper is configured (value withheld)" \
+            || echo "no credential helper configured"
+          echo "origin: $redacted_url"
+          [ -f "$HOME/.git-credentials" ] && echo "a stored credential file exists on the box" || true
+          [ -f "$HOME/.netrc" ] && echo "a .netrc file exists on the box" || true
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN is empty. This job's permissions block (needs contents: read) or the runner's token minting is the problem, not the box." >&2
+            exit 1
+          fi
+
+          # GIT_CONFIG_* env vars, not `git -c` on argv: argv is world
+          # readable via /proc/<pid>/cmdline on a stock box with no
+          # hidepid, env is readable only by the same uid or root. Slot 1
+          # empties credential.helper for this invocation so a stored PAT
+          # or netrc on the box cannot shadow or rescue the header in slot
+          # 0: a failure below is unambiguously this token's failure.
+          b64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$b64"
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $b64"
+          export GIT_CONFIG_KEY_1="credential.helper"
+          export GIT_CONFIG_VALUE_1=""
+
+          if ! git fetch origin main; then
+            echo "::error::git fetch origin main failed. See the git error above for the actual cause. If it names the username/credential, check the deploy job's permissions block (needs contents: read)." >&2
+            exit 1
+          fi
+          if ! git pull --ff-only origin main; then
+            echo "::error::git pull --ff-only origin main failed after a successful fetch, so this is a fast-forward divergence (a stray local commit on the box, or main force-pushed), not a credential problem. See the git error above; git -C /home/sakib/hive log --oneline -5 origin/main on the box will show what diverged." >&2
+            exit 1
+          fi
+
+          # pull --ff-only moves the ref and writes the worktree as two
+          # separate steps, not one atomic operation. A run killed in
+          # between (this job's own timeout, a cancel, or a box reboot)
+          # leaves HEAD advanced over a half-written tree; the next run's
+          # fetch/pull then reports "Already up to date" over that same
+          # half-written tree and goes green. This catches either case:
+          # this run's own interruption never reaches this line anyway, so
+          # only a genuinely dirty tree (this run's or a leftover one) fails
+          # it.
+          if [ -n "$(git status --porcelain -uno)" ]; then
+            echo "::error::working tree at /home/sakib/hive has tracked-file changes against HEAD after the pull, consistent with a previous deploy interrupted mid checkout. Recover with: git -C /home/sakib/hive reset --hard origin/main (safe: reset --hard does not remove untracked files, so the box's .env is not touched)." >&2
+            exit 1
+          fi
+
+          # --ff-only means this line only runs after a real advance or a
+          # no-op "Already up to date.", never after a silent partial pull,
+          # but nothing upstream of this could tell the two apart without
+          # reading raw git output. Record the outcome explicitly instead.
+          echo "deployed commit: $(git rev-parse HEAD)"
+
       - name: Validate the migration baseline file
         # Cheap, no database: catches a typo'd or stale baseline entry before
         # anything connects.
@@ -436,15 +618,19 @@ jobs:
     name: Pull + recreate stack on the demo box
     needs: migrate
     runs-on: [self-hosted, hive-demo]
-    # This job never checks out the repo (the box already has its own clone).
+    # This job never checks out the repo, and it no longer pulls either. The
+    # box's clone at /home/sakib/hive is advanced by the migrate job above,
+    # which `needs:` guarantees has already run, so every step here reads a
+    # tree that is already at this run's commit. See the Pull latest main step
+    # in migrate for why the pull has to happen that early.
+    #
     # Failure reporting lives in the report-failure job at the end of this
     # file, so that a failed migrate is reported too rather than vanishing
     # when this job is skipped. actions:read exists for one reason: the
     # agent-engine step below downloads the CI-built Apptainer image when the
     # box has none, since that image is linux/amd64 only and cannot be built
-    # on the dev machine. contents:read is for the Pull latest main step
-    # below: it authenticates the box's own HTTPS remote with this job's own
-    # ephemeral github.token instead of a credential stored on the box.
+    # on the dev machine. contents:read is still required: the agent-engine
+    # step's own GH_TOKEN is job-scoped and needs it.
     permissions:
       actions: read
       contents: read
@@ -458,163 +644,6 @@ jobs:
     # vendored tree alone hit the cache and cost nothing extra.
     timeout-minutes: 30
     steps:
-      - name: Pull latest main
-        # Root cause of the 2026-08-13 outage (every deploy since failing
-        # `fatal: could not read Username for 'https://github.com': No such
-        # device or address`, exit 128): the box's persistent clone at
-        # /home/sakib/hive authenticates its HTTPS remote from some
-        # credential external to this workflow (a stored PAT or a git
-        # credential helper on the box; this runner has no shell access to
-        # inspect which). That credential worked through the 2026-08-12
-        # 20:04 UTC run (confirmed from that run's own log: `git fetch`
-        # printed a real ref listing, not an error) and was gone by the next
-        # deploy 17 hours later, with the workflow file byte-identical
-        # across that gap (`git log -- .github/workflows/deploy-demo-box.yml`
-        # between those two commits is empty). That is an expired or rotated
-        # credential, not a missing config line: nothing in this repo
-        # changed to cause it.
-        #
-        # Fix: stop depending on any credential that lives on the box at
-        # all. `github.token` is this job's own ephemeral, auto-rotated
-        # GITHUB_TOKEN (scoped read-only by `contents: read` above, minted
-        # fresh per run), the same mechanism actions/checkout uses
-        # internally. It is supplied as per-invocation `GIT_CONFIG_*`
-        # environment variables rather than `.git/config`, so there is
-        # nothing here to expire or rotate again. Two things a first pass
-        # of this comment got wrong, corrected after security review on
-        # this PR: the interpolated value IS written to disk, in the
-        # runner's own materialized step script under $RUNNER_TEMP (this
-        # runner is not ephemeral, see the box-reboot note below, so that
-        # file is not on a fresh tmpfs); and GitHub only auto-masks the
-        # literal token, not the base64 Basic-auth blob derived from it, so
-        # that blob is masked explicitly below instead. The token itself
-        # now reaches the script only via the `GH_TOKEN` env var, never
-        # interpolated into the script text, matching the pattern the
-        # agent-engine step below already uses.
-        #
-        # actions/checkout itself was considered instead of fixing the pull
-        # in place, letting the runner's own already-authenticated checkout
-        # do the fetch. Rejected: every step below assumes /home/sakib/hive is
-        # a long-lived directory carrying the box's own untracked .env
-        # (every secret this stack runs on) and Docker build cache.
-        # actions/checkout's default `clean: true` runs `git clean -ffdx`,
-        # which would delete that untracked .env on first use, a bigger
-        # and riskier change than fixing the credential the persistent
-        # clone already uses.
-        #
-        # GIT_TERMINAL_PROMPT=0 makes a still-bad credential fail in one
-        # git-native line instead of the opaque "could not read Username /
-        # No such device or address" this outage actually produced (that
-        # message is itself just what a denied non-interactive prompt looks
-        # like on a runner with no tty).
-        env:
-          GIT_TERMINAL_PROMPT: "0"
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          cd /home/sakib/hive
-
-          # A leftover .git/index.lock from a prior run killed mid checkout
-          # (the timeout-minutes below, a manual cancel, or a box reboot
-          # this file's own header says the runner does not survive) would
-          # fail this line with a lock message instead of the real problem.
-          # Age-gated, not unconditional: this clone is the box's shared
-          # checkout, other writers (git gc --auto, a human on the box) can
-          # legitimately hold this lock, and the workflow-level concurrency
-          # group only serializes this workflow's own runs against each
-          # other. 30 minutes matches this job's own timeout-minutes above,
-          # so a lock younger than that is still someone's live operation.
-          # Both moved together when the chat frontend build landed; they are
-          # one invariant and must not drift apart.
-          find .git -maxdepth 1 -name index.lock -mmin +30 -delete
-          git checkout main
-
-          # The token below authenticates ANY public github.com repo, not
-          # just this one, so it would fetch happily from a repointed
-          # origin. Check first, or a repointed remote pulls the wrong
-          # content while reporting the same green this whole fix exists to
-          # make honest.
-          # Redacted unconditionally, not just when a mismatch is found:
-          # origin can embed a credential (https://user:token@github.com/...)
-          # and this value reaches both the error branch below and the
-          # diagnostic dump after it, so redacting once here keeps every
-          # later use safe by construction instead of relying on each print
-          # site to remember.
-          expected_url="https://github.com/${{ github.repository }}"
-          actual_url=$(git remote get-url origin)
-          # Greedy up to the LAST @, not the first: a credential whose
-          # secret half itself contains an unencoded @ would otherwise
-          # leave part of it printed after a first-@ match.
-          redacted_url=$(printf '%s' "$actual_url" | sed -E 's#//.*@#//REDACTED@#')
-          case "$actual_url" in
-            "$expected_url"|"$expected_url.git") ;;
-            *)
-              echo "::error::box remote 'origin' is $redacted_url, expected $expected_url(.git). Refusing to pull: this job's GITHUB_TOKEN would authenticate a fetch from any public github.com repo, so a repointed remote would silently deploy the wrong source. Fix with: git -C /home/sakib/hive remote set-url origin $expected_url.git" >&2
-              exit 1
-              ;;
-          esac
-
-          # Secret-free, and answers exactly what this PR could not verify
-          # without box access: whether a credential path older than this
-          # fix could still shadow or rescue it. --name-only reports THAT a
-          # helper is configured, never its value: a helper can be an
-          # inline shell snippet with a PAT embedded in it, and that value
-          # is exactly the on-box credential this whole PR suspects.
-          git config --show-origin --name-only --get-regexp '^credential\.helper$' \
-            && echo "credential.helper is configured (value withheld)" \
-            || echo "no credential helper configured"
-          echo "origin: $redacted_url"
-          [ -f "$HOME/.git-credentials" ] && echo "a stored credential file exists on the box" || true
-          [ -f "$HOME/.netrc" ] && echo "a .netrc file exists on the box" || true
-
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_TOKEN is empty. This job's permissions block (needs contents: read) or the runner's token minting is the problem, not the box." >&2
-            exit 1
-          fi
-
-          # GIT_CONFIG_* env vars, not `git -c` on argv: argv is world
-          # readable via /proc/<pid>/cmdline on a stock box with no
-          # hidepid, env is readable only by the same uid or root. Slot 1
-          # empties credential.helper for this invocation so a stored PAT
-          # or netrc on the box cannot shadow or rescue the header in slot
-          # 0: a failure below is unambiguously this token's failure.
-          b64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          echo "::add-mask::$b64"
-          export GIT_CONFIG_COUNT=2
-          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $b64"
-          export GIT_CONFIG_KEY_1="credential.helper"
-          export GIT_CONFIG_VALUE_1=""
-
-          if ! git fetch origin main; then
-            echo "::error::git fetch origin main failed. See the git error above for the actual cause. If it names the username/credential, check the deploy job's permissions block (needs contents: read)." >&2
-            exit 1
-          fi
-          if ! git pull --ff-only origin main; then
-            echo "::error::git pull --ff-only origin main failed after a successful fetch, so this is a fast-forward divergence (a stray local commit on the box, or main force-pushed), not a credential problem. See the git error above; git -C /home/sakib/hive log --oneline -5 origin/main on the box will show what diverged." >&2
-            exit 1
-          fi
-
-          # pull --ff-only moves the ref and writes the worktree as two
-          # separate steps, not one atomic operation. A run killed in
-          # between (this job's own timeout, a cancel, or a box reboot)
-          # leaves HEAD advanced over a half-written tree; the next run's
-          # fetch/pull then reports "Already up to date" over that same
-          # half-written tree and goes green. This catches either case:
-          # this run's own interruption never reaches this line anyway, so
-          # only a genuinely dirty tree (this run's or a leftover one) fails
-          # it.
-          if [ -n "$(git status --porcelain -uno)" ]; then
-            echo "::error::working tree at /home/sakib/hive has tracked-file changes against HEAD after the pull, consistent with a previous deploy interrupted mid checkout. Recover with: git -C /home/sakib/hive reset --hard origin/main (safe: reset --hard does not remove untracked files, so the box's .env is not touched)." >&2
-            exit 1
-          fi
-
-          # --ff-only means this line only runs after a real advance or a
-          # no-op "Already up to date.", never after a silent partial pull,
-          # but nothing upstream of this could tell the two apart without
-          # reading raw git output. Record the outcome explicitly instead.
-          echo "deployed commit: $(git rev-parse HEAD)"
-
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
         # control-plane's own container cannot exec Apptainer. The launcher
@@ -1295,6 +1324,62 @@ jobs:
             sleep 10
           done
           echo "SMOKE FAIL"
+          exit 1
+
+      - name: Reconcile LiteLLM's config volume with the repo seed
+        # Ordering, and that is the whole job of this step.
+        #
+        # The litellm service reconciles its config volume against the repo's
+        # seed on start, keyed on the seed's checksum (see its entrypoint in
+        # docker-compose.yml). But `up -d` above only recreates a service whose
+        # DEFINITION changed, and editing deploy/litellm/config.yaml changes no
+        # service definition, so a deploy that only changes that file never
+        # restarts this container and the entrypoint never runs.
+        #
+        # Something does restart it: the catalog sync in the next step, after
+        # it has written its merged config. That is the wrong order. The sync
+        # would merge the DB over the STALE config, write it, restart, and the
+        # entrypoint would then notice the seed changed and overwrite that
+        # merged result with the raw seed, leaving the proxy with no DB-managed
+        # routes at all. So the reconcile has to happen before the sync, not as
+        # a side effect after it.
+        #
+        # Restarting only on drift, rather than every deploy, because a LiteLLM
+        # restart is a real if brief chat interruption and the sync below
+        # already performs one whenever it has something to apply.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+
+          seed_sha=$(sha256sum ../../deploy/litellm/config.yaml | cut -d' ' -f1)
+          # `|| true`: a missing marker file is the normal state on a volume
+          # seeded before this mechanism existed, and on a fresh volume. Both
+          # are drift, which is exactly what the comparison below concludes.
+          applied_sha=$("${COMPOSE[@]}" exec -T litellm \
+            cat /etc/litellm/.seed.sha256 2>/dev/null </dev/null | tr -d '\r\n' || true)
+
+          if [ "$seed_sha" = "$applied_sha" ]; then
+            echo "LiteLLM config volume already carries this seed ($seed_sha); no restart needed."
+            exit 0
+          fi
+
+          echo "LiteLLM seed drifted (repo=$seed_sha applied=${applied_sha:-none}); restarting so its entrypoint reseeds."
+          "${COMPOSE[@]}" restart litellm
+
+          # Prove the reseed actually happened rather than assuming the restart
+          # implies it. A container that came back up still carrying the old
+          # marker means the entrypoint did not reconcile, and continuing would
+          # hand the sync below the same stale base this step exists to
+          # replace.
+          for i in $(seq 1 12); do
+            applied_sha=$("${COMPOSE[@]}" exec -T litellm \
+              cat /etc/litellm/.seed.sha256 2>/dev/null </dev/null | tr -d '\r\n' || true)
+            [ "$seed_sha" = "$applied_sha" ] && { echo "reseeded to $seed_sha"; exit 0; }
+            echo "attempt $i: marker is ${applied_sha:-none}, waiting"
+            sleep 5
+          done
+          echo "::error::LiteLLM restarted but its config volume still does not carry the repo seed ($seed_sha). Its entrypoint did not reconcile, so the catalog sync below would merge onto a stale base." >&2
           exit 1
 
       - name: Sync LiteLLM model list from the DB catalog (issue #713)
