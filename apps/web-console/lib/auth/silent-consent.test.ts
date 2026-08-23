@@ -106,6 +106,18 @@ describe("decideConsentLanding", () => {
     expect(decision.action).toBe("error");
   });
 
+  it("refuses the trailing-slash consent path (308 normalization loop)", () => {
+    const decision = decideConsentLanding({
+      hasSession: true,
+      authorizationId: AUTH_ID,
+      lookup: okLookup({
+        kind: "auto-approved",
+        redirectUrl: "https://console-hive.scubed.co/oauth/consent/",
+      }),
+    });
+    expect(decision.action).toBe("error");
+  });
+
   it("refuses a relative redirect target", () => {
     const decision = decideConsentLanding({
       hasSession: true,
@@ -180,9 +192,9 @@ describe("buildSignInRedirect", () => {
   });
 
   it("appends the reason marker when one is given", () => {
-    const url = buildSignInRedirect(AUTH_ID, "stale");
-    expect(url.startsWith(`/auth/sign-in?next=`)).toBe(true);
-    expect(url.endsWith("&reason=stale")).toBe(true);
+    expect(buildSignInRedirect(AUTH_ID, "stale")).toBe(
+      `/auth/sign-in?next=${encodeURIComponent(`/oauth/consent?authorization_id=${AUTH_ID}`)}&reason=stale`,
+    );
   });
 });
 

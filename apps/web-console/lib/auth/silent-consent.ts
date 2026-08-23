@@ -149,7 +149,14 @@ export function isSafeRedirectTarget(target: string): boolean {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return false;
   }
-  if (parsed.pathname === CONSENT_LANDING_PATH) {
+  // Trailing slash counts too: Next.js 308-normalizes /oauth/consent/ back to
+  // /oauth/consent, so a target with the slash would re-enter this page and
+  // GoTrue would hand back the same target forever.
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+  if (
+    normalizedPath === CONSENT_LANDING_PATH ||
+    parsed.pathname === CONSENT_LANDING_PATH
+  ) {
     return false;
   }
   return true;

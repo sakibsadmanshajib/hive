@@ -32,11 +32,16 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const { data } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token ?? null;
 
+  // A config gap (either var unset) is not an auth failure: skip the lookup
+  // and let the panel handle the request, exactly as before this change.
   const lookup =
-    accessToken && authorizationId && process.env.NEXT_PUBLIC_SUPABASE_URL
+    accessToken &&
+    authorizationId &&
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
       ? await lookupGoTrueAuthorization(authorizationId, accessToken, {
           baseUrl: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1`,
-          anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+          anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
         })
       : null;
 
