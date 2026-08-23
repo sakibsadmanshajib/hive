@@ -158,6 +158,17 @@ func TestOWUIUnwrap_HeaderCarrierPresentButBlank_StrippedAndRejected(t *testing.
 			if captured.served {
 				t.Fatal("a blank carrier must not reach the handler")
 			}
+			// The "Stripped" half of this test's name. Without it the test
+			// asserts only "Rejected": `next` never runs on a 401, so the
+			// capture handler observes nothing, and moving the strip out of
+			// its unconditional position into the success branches alone
+			// would leave every assertion above green while the rejection
+			// paths stopped stripping. The middleware removes the header from
+			// the inbound request itself, so the request this test still
+			// holds is the one to inspect.
+			if _, seen := req.Header[http.CanonicalHeaderKey(auth.UpstreamAuthHeader)]; seen {
+				t.Fatal("the carrier must be stripped on the rejection path too")
+			}
 		})
 	}
 }
@@ -195,6 +206,12 @@ func TestOWUIUnwrap_HeaderCarrierOverLongToken_Rejects401(t *testing.T) {
 	}
 	if captured.served {
 		t.Fatal("an over-long carrier must not reach the handler")
+	}
+	// Same reasoning as the blank-carrier case: the 401 arms are exactly the
+	// arms `next` cannot observe, so the strip is asserted on the request the
+	// middleware was handed.
+	if _, seen := req.Header[http.CanonicalHeaderKey(auth.UpstreamAuthHeader)]; seen {
+		t.Fatal("an over-long carrier must still be stripped")
 	}
 }
 

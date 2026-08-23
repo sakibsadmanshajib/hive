@@ -140,10 +140,23 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			// value, so a whitespace-only or repeated header is removed too.
 			// Header.Del drops every value under the key, which is what makes
 			// "stripped on every branch" true rather than nearly true.
+			//
+			// The removal is in place, on the inbound request, and not on a
+			// clone. A clone would only protect code reachable through `next`,
+			// and this header has to disappear for everyone: an outer
+			// middleware still holding the original pointer would otherwise
+			// keep seeing a live per-user token, and no branch that answers
+			// without calling `next` at all, which is every rejection path
+			// below, would strip anything observable. In place makes the
+			// invariant one fact rather than one fact per branch, and lets a
+			// test assert it on the rejection paths too. Mutating the inbound
+			// header map is safe here because net/http never re-reads request
+			// headers after the handler returns, and this header is ours: no
+			// caller upstream of edge-api has any reason to send it, and none
+			// is permitted to.
 			_, carrierPresent := r.Header[http.CanonicalHeaderKey(UpstreamAuthHeader)]
 			carrier := strings.TrimSpace(r.Header.Get(UpstreamAuthHeader))
 			if carrierPresent {
-				r = r.Clone(r.Context())
 				r.Header.Del(UpstreamAuthHeader)
 			}
 			if shimKey == "" || !hasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
