@@ -1,0 +1,47 @@
+SSO wave 1 live capture: silent server-completed consent landing
+================================================================
+
+Substrate: full local stack on the dev box (self-hosted GoTrue v2.189.0,
+PostgREST, storage behind caddy-supabase; control-plane, edge-api,
+web-console-prod built FROM THIS BRANCH behind caddy-console; Open WebUI
+behind caddy-owui). Real OAuth 2.1 authorization-code round trips only;
+no session injected, nothing stubbed. Sessions minted through the audited
+one-time-token flow (tests/e2e/support/live-auth.mjs); no password was
+set, read, reset or rotated for any account.
+
+Every URL in this log has query strings AND fragments stripped before
+commit; the same redaction is burned into the screenshot banners.
+
+1. BEFORE (tracer baseline, team-lead 2026-08-23): repeat sign-in cost
+   3 HTML loads plus 3 redirects, and the /oauth/consent stop painted
+   "Checking your authorization request..." plus the Approve/Deny panel
+   even when an auth.oauth_consents row already existed.
+
+2. AFTER: repeat second-surface entry with ONLY the console ssr session
+   (chat cookies and localStorage wiped first). Main-frame chain:
+
+     200 http://localhost:3003/
+     302 http://localhost:3003/oauth/oidc/login
+     302 http://console.hive.test/auth/v1/oauth/authorize
+     307 http://console.hive.test/oauth/consent        <- zero paint
+     307 http://localhost:3003/oauth/oidc/callback
+     200 http://localhost:3003/auth                    <- pass-through
+     200 http://localhost:3003/
+     FINAL http://localhost:3003/ (signed in)
+
+   Consent landing answered 307: zero painted documents, zero Approve or
+   Deny buttons ever rendered, zero password inputs. One redirect beyond
+   the authorize round trip (the landing's own hand-off to the registered
+   callback).
+
+3. First-ever consent for a fresh user still paints the interactive panel
+   exactly once; Approve completes into chat (frame captured:
+   02-after-first-consent-panel-still-works.png). Wave 1 did not break
+   the genuine approve/deny case.
+
+Frames:
+  02-after-first-consent-panel-still-works.png
+  03-after-repeat-entry-silent-handoff.png
+
+E2E: apps/web-console/tests/e2e/sso-silent-consent.spec.ts (journeys above,
+asserted programmatically) passed against this stack.

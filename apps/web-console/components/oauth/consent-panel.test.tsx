@@ -43,7 +43,8 @@ vi.mock("@/lib/navigate", () => ({
   navigate: vi.fn(),
 }));
 
-import { ConsentPanel, buildSignInRedirect } from "./consent-panel";
+import { ConsentPanel } from "./consent-panel";
+import { buildSignInRedirect } from "@/lib/auth/silent-consent";
 import { navigate } from "@/lib/navigate";
 
 const mockNavigate = vi.mocked(navigate);
