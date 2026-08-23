@@ -419,20 +419,49 @@ jobs:
           esac
 
           if [ "$identity" = "no" ]; then
-            # Run everything that needs no identity, so a real outage is still
-            # reported by this run, and only then fail for the configuration.
-            # No `|| true`: if chat is down, that is the failure that matters
-            # and it must be the one that surfaces.
+            # Run everything that needs no identity. No `|| true`: if chat is
+            # down, that is the failure that matters and it must be the one
+            # that surfaces.
             python3 scripts/post-deploy-verify.py --only chat $args
+
+            # Then report the missing coverage WITHOUT failing the job, and
+            # this is a deliberate call rather than a softening.
+            #
+            # An unconfigured identity is not a broken deploy, and it cannot be
+            # fixed by anything in this repository: it needs a funded, non-demo
+            # tenant OWNER that only the owner can create. Failing every deploy
+            # for it would make this gate red permanently, and a permanently red
+            # gate is indistinguishable from a real outage on the day one
+            # happens. That is the check that cries wolf until nobody reads it,
+            # which is the failure mode this whole workflow exists to avoid, and
+            # it is worse than the alternative below.
+            #
+            # It is not silence either. It emits a warning annotation, a job
+            # summary block, and `reason=unconfigured`, on which the job below
+            # files a separately titled, permanently open issue. The absence
+            # sits in the issue list until somebody fixes it, rather than in a
+            # log nobody opens, and the checks that CAN run keep a verdict that
+            # still means something.
             echo "reason=unconfigured" >> "$GITHUB_OUTPUT"
-            echo "::error::no verification identity is configured, so sign-in and billing were NOT verified"
-            echo "Set repository secrets HIVE_VERIFY_EMAIL and HIVE_VERIFY_PASSWORD (no SSH needed),"
-            echo "or add the same two lines to $env_file on the box. It must name a dedicated"
-            echo "identity that is a tenant OWNER with a verified email and a positive credit"
-            echo "balance, and it must never be demo@hive-demo.invalid (issue #848): minting an"
-            echo "API key needs api_keys:write, which the authorization policy grants to OWNER"
-            echo "only, and the ledger check sends one real, billed completion per run."
-            exit 1
+            echo "::warning::no verification identity is configured, so sign-in and billing were NOT verified by this run"
+            {
+              echo "### post-deploy-verify: two of four checks did not run"
+              echo
+              echo "Ran: container image freshness (#869), chat backend answers."
+              echo
+              echo "**Did NOT run: sign-in resolves at the control-plane, and a real"
+              echo "completion produces a \`usage_charge\` row.** Both need a verification"
+              echo "identity and none is configured."
+              echo
+              echo "Set repository secrets \`HIVE_VERIFY_EMAIL\` and \`HIVE_VERIFY_PASSWORD\`"
+              echo "(no SSH needed), or add the same two lines to \`$env_file\` on the box."
+              echo "It must be a dedicated identity that is a tenant OWNER with a verified"
+              echo "email and a positive credit balance, and never demo@hive-demo.invalid"
+              echo "(issue #848): minting an API key needs \`api_keys:write\`, which the"
+              echo "authorization policy grants to OWNER only, and the ledger check sends"
+              echo "one real, billed completion per run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
           # No `|| true`, no continue-on-error. The script exits non-zero unless
@@ -450,7 +479,7 @@ jobs:
     # label would let a provider outage hold the deploy issue open, and would
     # downgrade a genuine `migrate` failure into a comment on a stale issue --
     # the exact trap already documented on agent-workspace-coverage.
-    name: Report failure
+    name: Report failure or unverified coverage
     needs: [verify]
     # workflow_run only, and that is a bug fix rather than a narrowing. Issue
     # #1062 exists because a pull_request run of this very workflow filed it
@@ -459,7 +488,9 @@ jobs:
     # check. Worse, every negative-control run is EXPECTED to fail, so leaving
     # this open to dispatches and pull requests turns the proof that the gate
     # bites into a stream of issues claiming the product is down.
-    if: failure() && github.event_name == 'workflow_run'
+    if: >-
+      github.event_name == 'workflow_run'
+      && (failure() || needs.verify.outputs.reason == 'unconfigured')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -512,6 +543,14 @@ jobs:
               per_page: 100,
             });
             const existing = open.find((i) => i.title === title);
+            if (existing && unconfigured) {
+              // Nothing to add. The configuration is missing today for exactly
+              // the reason it was missing yesterday, and a comment per deploy
+              // would train everyone to mute the thread that is supposed to be
+              // the reminder.
+              core.info(`already tracked: ${existing.html_url}`);
+              return;
+            }
             if (existing) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
