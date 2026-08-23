@@ -1,0 +1,113 @@
+# Dependabot baseline.
+#
+# Cadence choice: GitHub Actions, Go modules, and npm packages move weekly, so
+# those ecosystems run every Monday in the early-morning UTC quiet hours,
+# keeping dependency churn predictable and away from working hours. Docker base
+# images change far less often, so a monthly pass is enough there.
+#
+# Grouping: minor and patch updates within each manifest are grouped into a
+# single pull request per ecosystem label ("actions", "go-minor-patch",
+# "npm-minor-patch") so routine bumps arrive as one reviewable diff instead of
+# a flood of individual PRs. Major and security-only updates still get their
+# own PRs.
+#
+# Note on limits: open-pull-requests-limit caps version-update pull requests
+# per configured directory. Security-update pull requests are separate and do
+# not count against the cap, so triage those as they arrive.
+version: 2
+
+updates:
+  # GitHub Actions workflows at the repository root.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      actions:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  # Go modules, one entry per module in the workspace.
+  - package-ecosystem: gomod
+    directory: /apps/control-plane
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: gomod
+    directory: /apps/edge-api
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: gomod
+    directory: /apps/agent-engine
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+
+  # npm frontends.
+  - package-ecosystem: npm
+    directory: /apps/web-console
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /apps/agent-console
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 10
+
+  # Dockerfiles (control-plane, edge-api, web-console, agent services, etc).
+  - package-ecosystem: docker
+    directory: /deploy/docker
+    schedule:
+      interval: monthly
+      time: "04:00"
+      timezone: UTC
