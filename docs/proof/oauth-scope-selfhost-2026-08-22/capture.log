@@ -351,7 +351,49 @@ running container still carries the fixed value independently of it:
         -> 200 text/html
         VERDICT: reached a rendered page (consent screen)
 
-Also recorded from that review, for whoever next opens an admin surface: the
+11. Adversarial review round, and the step re-rehearsed after it
+----------------------------------------------------------------
+
+Four medium findings, all applied, none of them cosmetic:
+
+  * the audit step sat before the hive_jwt_forward install, so a momentary DNS
+    or tunnel blip reaching the discovery document would abort the deploy
+    before that Function was installed, which is the #556 failure the Function
+    step exists to prevent. It is an audit and changes no state, so it moved to
+    the END of the job. Failing last still fails the run.
+  * `printenv` under `set -e` ended the step before the friendly diagnostic
+    could print, so the two cases a reader expects that message to cover, an
+    unset variable and a container that is not running, were exactly the two it
+    could never reach. Now `if ! url=$(...) || [ -z "$url" ]`, the shape the
+    supabase-db probe in the same job already uses.
+  * the pull-request gate spells its origin by hand from CONSOLE_URL while Open
+    WebUI resolves SUPABASE_PUBLIC_URL. They agree today by hand, not by
+    construction, and a repoint would leave the gate interrogating the old host
+    and reporting green, which is #787 one level up. The deploy step now
+    compares the two and fails on a mismatch, which costs nothing because it
+    already holds the deployed value.
+  * the gate's paths filter was `deploy/**.yml`, matching Prometheus alerts,
+    Alertmanager, Grafana provisioning, the LiteLLM model list and headscale,
+    none of which can carry an OAUTH_SCOPES declaration. Narrowed to
+    `deploy/docker/**`, so a home lab outage cannot park monitoring or
+    model-catalog work. No coverage lost: the script still scans all of deploy/
+    on the runs that happen, and `make test-scripts` scans all of deploy/
+    offline on every pull request inside a required check.
+
+Re-rehearsed on the box after those edits, still against its unfixed checkout:
+
+  discovery URL read from the running container:
+    https://console-hive.scubed.co/auth/v1/.well-known/openid-configuration
+  matches the URL the pull-request gate checks
+  ::error file=deploy/docker/docker-compose.yml,line=745:: [...] requests
+    offline_access, which [...] does not advertise. [...] (#787).
+
+So the new mismatch comparison passes on the real deployment, and the check
+still goes red on the commit that caused the outage. Box left clean again:
+`git status --porcelain` shows no tracked modification, and the /tmp staging is
+removed.
+
+Also recorded from the security review, for whoever next opens an admin surface: the
 socat tap used here published GoTrue's admin API on the box's loopback for the
 tap's lifetime, which put it in reach of every local process, outside the
 boundary Caddy defines for /auth/v1. The better pattern was already used in

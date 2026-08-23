@@ -25,19 +25,34 @@ name: OAuth scope gate
 # policy is all checks green plus zero unresolved threads, so a red run here
 # still blocks a merge in practice, without wedging every unrelated pull
 # request behind a home lab machine's uptime.
+#
+# The paths filter is deploy/docker rather than all of deploy/ for that same
+# reason, narrowed after review. `deploy/**.yml` also matched Prometheus
+# alerts, the Alertmanager config, Grafana provisioning, the LiteLLM model list
+# and the headscale config, none of which can carry an OAUTH_SCOPES
+# declaration in any realistic sense, and the justification above does not
+# stretch to parking a Grafana datasource change behind a home lab machine.
+# Nothing is lost by narrowing: the script still scans all of deploy/ on the
+# runs that do happen, and `make test-scripts` in the required repo-policy
+# lints job scans all of deploy/ offline on EVERY pull request, so a scope
+# added anywhere else still fails a required check without waiting on the box.
+#
+# One more reason to keep it narrow, from the same review: the wider this
+# filter is, the more motive someone has to quietly stop the gate firing, and
+# that is the one change TestOWUIOAuthScopeGateIsWired cannot see.
 
 on:
   pull_request:
     paths:
-      - 'deploy/**.yml'
-      - 'deploy/**.yaml'
+      - 'deploy/docker/**.yml'
+      - 'deploy/docker/**.yaml'
       - 'scripts/check-oauth-scopes.py'
       - '.github/workflows/oauth-scope-gate.yml'
   push:
     branches: [main]
     paths:
-      - 'deploy/**.yml'
-      - 'deploy/**.yaml'
+      - 'deploy/docker/**.yml'
+      - 'deploy/docker/**.yaml'
       - 'scripts/check-oauth-scopes.py'
       - '.github/workflows/oauth-scope-gate.yml'
   workflow_dispatch:

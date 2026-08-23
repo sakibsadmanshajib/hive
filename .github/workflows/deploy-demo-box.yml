@@ -867,47 +867,6 @@ jobs:
           head -c 400 "$body" || true
           exit 1
 
-      - name: Verify the OAuth scopes the chat container asks for are supported
-        # Issue #787. The scope list Open WebUI sends on its authorize request
-        # has to be a subset of what the deployed authorization server
-        # advertises, and nothing in this repository can know that on its own.
-        # #787 added `offline_access` after validating against hosted Supabase,
-        # which advertised it. The self-hosted GoTrue does not, and GoTrue
-        # rejects an unknown scope outright instead of ignoring it, so the
-        # authorize request 302'd back to the callback with
-        # error=invalid_request and chat sign-in was dead for every user, with
-        # a fully green deploy sitting on top of it.
-        #
-        # .github/workflows/oauth-scope-gate.yml runs the same check on pull
-        # requests, and catches a scope this repository adds. This one catches
-        # the other direction, which is the one that actually happened: the
-        # server dropping a capability while the repository stands still. No
-        # pull request exists at that moment for a pull-request gate to fire
-        # on, so only a post-deploy check can see it.
-        #
-        # The discovery URL is read out of the running container rather than
-        # written here, so the check interrogates exactly the document Open
-        # WebUI itself resolves. A second URL spelled by hand would be a second
-        # thing that can drift, and drift is the whole defect.
-        #
-        # Placed after the recreate above, so the container being asked is the
-        # one this deploy just shipped, and before the Function install below,
-        # which is a slower step whose failure would otherwise mask this one.
-        working-directory: /home/sakib/hive/deploy/docker
-        run: |
-          set -euo pipefail
-          # `|| true` on purpose: printenv exits 1 when the variable is absent,
-          # and under `set -e` that aborts the step here, before the branch
-          # below that explains what is wrong. The explanation is the point, so
-          # the failure has to reach it.
-          url=$(docker compose $HIVE_COMPOSE_FLAGS exec -T open-webui \
-            printenv OPENID_PROVIDER_URL </dev/null | tr -d '\r' || true)
-          if [ -z "$url" ]; then
-            echo "::error::open-webui has no OPENID_PROVIDER_URL, so its OIDC login is not configured at all. That is a deploy failure, not a reason to skip this check." >&2
-            exit 1
-          fi
-          python3 /home/sakib/hive/scripts/check-oauth-scopes.py --discovery "$url"
-
       - name: Install the hive_jwt_forward Open WebUI Function
         # Issue #556. Per-user chat attribution depends on an Open WebUI
         # Function that no deployment has ever had. Open WebUI offers no mount
@@ -1290,6 +1249,75 @@ jobs:
             exit 1
           fi
           echo "model catalog matches every priced route LiteLLM will actually call"
+
+      - name: Verify the OAuth scopes the chat container asks for are supported
+        # Issue #787. The scope list Open WebUI sends on its authorize request
+        # has to be a subset of what the deployed authorization server
+        # advertises, and nothing in this repository can know that on its own.
+        # #787 added `offline_access` after validating against hosted Supabase,
+        # which advertised it. The self-hosted GoTrue does not, and GoTrue
+        # rejects an unknown scope outright instead of ignoring it, so the
+        # authorize request 302'd back to the callback with
+        # error=invalid_request and chat sign-in was dead for every user, with
+        # a fully green deploy sitting on top of it.
+        #
+        # .github/workflows/oauth-scope-gate.yml runs the same check on pull
+        # requests, and catches a scope this repository adds. This one catches
+        # the other direction, which is the one that actually happened: the
+        # server dropping a capability while the repository stands still. No
+        # pull request exists at that moment for a pull-request gate to fire
+        # on, so only a post-deploy check can see it.
+        #
+        # The discovery URL is read out of the running container rather than
+        # written here, so the check interrogates exactly the document Open
+        # WebUI itself resolves. A second URL spelled by hand would be a second
+        # thing that can drift, and drift is the whole defect.
+        #
+        # Which is why this step also compares that URL against the one the
+        # pull-request gate uses. That gate runs on a cloud runner with no
+        # stack to interrogate, so it has to spell the origin by hand, from
+        # CONSOLE_URL. Open WebUI resolves SUPABASE_PUBLIC_URL instead: a
+        # different variable with a different owner, agreeing today by hand
+        # rather than by construction. Repoint one and the gate would go on
+        # interrogating the old host and go on reporting green, which is #787
+        # one level up. The comparison costs nothing here because this step
+        # already holds the deployed value, and it turns that agreement into
+        # something a deploy fails over once, loudly, instead of a silence.
+        #
+        # Placed at the END of the job, deliberately. This is an audit, it
+        # changes no deployment state, and it is the only step here that
+        # depends on reaching a host over the internet. Earlier in the job, a
+        # momentary DNS or tunnel blip would abort the deploy before the
+        # hive_jwt_forward install, leaving the box without the attribution
+        # Function, which is the #556 failure that step exists to prevent.
+        # Failing last still fails the run.
+        env:
+          # The same expression oauth-scope-gate.yml uses, so the two cannot
+          # drift apart without one of them saying so.
+          CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          # `if ! url=$(...)` rather than a bare assignment, matching the
+          # supabase-db probe earlier in this job: printenv exits 1 when the
+          # variable is absent, and under `set -e` a failed command
+          # substitution ends the step right there, before the branch that
+          # explains what is wrong can print. The two cases a reader expects
+          # that message to cover, an unset variable and a container that is
+          # not running, are exactly the two it would never have reached.
+          if ! url=$(docker compose $HIVE_COMPOSE_FLAGS exec -T open-webui \
+               printenv OPENID_PROVIDER_URL </dev/null | tr -d '\r') || [ -z "$url" ]; then
+            echo "::error::open-webui has no OPENID_PROVIDER_URL, or the container is not running, so its OIDC login is not configured at all. That is a deploy failure, not a reason to skip this check." >&2
+            exit 1
+          fi
+
+          expected="${CONSOLE_URL}/auth/v1/.well-known/openid-configuration"
+          if [ "$url" != "$expected" ]; then
+            echo "::error::the chat container resolves its OIDC discovery document at $url, but .github/workflows/oauth-scope-gate.yml checks $expected. The pull-request gate is therefore interrogating a different authorization server than the deployment uses, and would report green over a scope this one rejects (#787). Point the CONSOLE_URL repository variable at the deployment's auth origin, or fix SUPABASE_PUBLIC_URL." >&2
+            exit 1
+          fi
+
+          python3 /home/sakib/hive/scripts/check-oauth-scopes.py --discovery "$url"
 
       - name: Prune build cache older than 24h
         # Measured on the demo box 2026-07-29: `docker system df` showed
