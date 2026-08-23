@@ -1312,12 +1312,20 @@ jobs:
     # job-level `concurrency:` group. That was reverted: GitHub Actions
     # only holds one job per concurrency group as pending, so a third
     # queued run cancels the second outright before it ever executes.
-    # web-e2e is not a required check, so a canceled result would surface
-    # nowhere and a PR could merge with no browser coverage at all, a
+    # web-e2e was not a required check then, so a canceled result would
+    # surface nowhere and a PR could merge with no browser coverage at all, a
     # silent gap of exactly the kind issue #659 exists to prevent (a
     # skipped test and a passing test are indistinguishable inside a green
     # check). Trading a noisy false-red failure for a silent absence is
     # not a fix.
+    #
+    # `Web E2E (full stack)` IS a required context on main today, read off the
+    # live branch protection on 2026-08-23 (.github/branch-protection-main.json
+    # still lists the older six and has not caught up). That strengthens the
+    # revert rather than reversing it: a queue-race cancellation would now
+    # block the merge outright instead of vanishing, and it is also why the
+    # diagnostic steps at the end of this job had to stop being skipped on a
+    # cancellation.
     #
     # What replaced it: gate this job on `needs.changes.outputs.web_e2e`
     # (see the `changes` job's decide step for the path reasoning),
@@ -1708,14 +1716,31 @@ jobs:
         # as justified debt in tests/dark-spec-allowlist.json.
         run: npx playwright test --project=chromium
 
-      - name: Dump compose logs on failure
-        if: failure()
+      # The four diagnostic steps below run on `always()`, not `failure()`.
+      # This job carries `timeout-minutes: 35`, and GitHub reports a job killed
+      # by its own cap as cancelled rather than failed, so a plain `failure()`
+      # step is skipped in exactly the case that most needs explaining. That is
+      # observed here, not theoretical: runs that walked into the cap in August
+      # 2026 uploaded no compose log and no Next.js log, and the only artifact
+      # that survived was the Playwright report, which survived because its
+      # upload step already carried `always()`.
+      #
+      # Measured, not assumed, on a throwaway one minute job that slept past
+      # its own cap (run 32628384742, branch deleted after): the job concluded
+      # `cancelled`, its `if: failure()` step was skipped, and its `always()`,
+      # `cancelled()` and `failure() || cancelled()` steps all ran. So either
+      # condition would work. `always()` is the one used here because it is
+      # what the three sibling steps at the end of this job already carry and
+      # it does not depend on which flavour of cancellation arrives. The cost
+      # is a few seconds and one small log artifact on a green run.
+      - name: Dump compose logs
+        if: always()
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
       - name: Upload compose logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: compose-logs-web-e2e-api
@@ -1723,8 +1748,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 5
 
-      - name: Redact the Next.js server log on failure
-        if: failure()
+      - name: Redact the Next.js server log
+        if: always()
         # The console renders an error boundary ("Something went wrong on this
         # page", plus a digest) when a server component throws, and the cause is
         # only ever in this log. On 2026-08-16 an invitation-acceptance spec
@@ -1742,7 +1767,7 @@ jobs:
           fi
 
       - name: Upload the redacted Next.js server log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-log-web-e2e
