@@ -104,6 +104,23 @@ func seedUser(t *testing.T) uuid.UUID {
 
 // mustCreate inserts a schedule through the repository and fails the test on
 // error.
+// adminExec runs one statement as the migration owner (postgres), bypassing
+// RLS, for test-only state overrides the hive_app pool cannot perform (the
+// tenant GUC is not set on it, so RLS denies every direct UPDATE).
+func adminExec(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	dsn := os.Getenv("HIVE_TEST_DB_URL")
+	ctx := context.Background()
+	setup, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	defer setup.Close()
+	if _, err := setup.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("adminExec %s: %v", sql, err)
+	}
+}
+
 func mustCreate(t *testing.T, repo agentsched.Repository, tenantID, userID uuid.UUID, name string) agentsched.Schedule {
 	t.Helper()
 	now := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
@@ -198,19 +215,13 @@ func TestRepository_ClaimDueAgainstRealDB(t *testing.T) {
 
 	due := mustCreate(t, repo, tenantID, userID, "due")
 	notDue := mustCreate(t, repo, tenantID, userID, "not-due")
-	if _, err := pool.Exec(ctx,
-		`UPDATE public.agent_task_schedules SET next_run_at = $1 WHERE id = $2`, past, due.ID); err != nil {
-		t.Fatalf("set due time: %v", err)
-	}
-	if _, err := pool.Exec(ctx,
-		`UPDATE public.agent_task_schedules SET next_run_at = $1 WHERE id = $2`, future, notDue.ID); err != nil {
-		t.Fatalf("set not-due time: %v", err)
-	}
+	adminExec(t,
+		`UPDATE public.agent_task_schedules SET next_run_at = $1 WHERE id = $2`, past, due.ID)
+	adminExec(t,
+		`UPDATE public.agent_task_schedules SET next_run_at = $1 WHERE id = $2`, future, notDue.ID)
 	disabled := mustCreate(t, repo, tenantID, userID, "disabled")
-	if _, err := pool.Exec(ctx,
-		`UPDATE public.agent_task_schedules SET enabled = false, next_run_at = $1 WHERE id = $2`, past, disabled.ID); err != nil {
-		t.Fatalf("disable: %v", err)
-	}
+	adminExec(t,
+		`UPDATE public.agent_task_schedules SET enabled = false, next_run_at = $1 WHERE id = $2`, past, disabled.ID)
 
 	claimed, err := repo.ClaimDue(ctx, now, 100)
 	if err != nil {
