@@ -169,6 +169,39 @@ gates the list route on `get_verified_user`, not on admin, so its 200 at role
 `user` is upstream behaviour and not a hole this change opened. The admin gated
 sibling on the same router, `/export`, is refused.
 
+## Browser capture, the real product
+
+A third container, `hive-owui-748:full`, built from the complete
+`deploy/docker/Dockerfile.open-webui` on this branch (fork frontend plus every
+patch), against the same throwaway Postgres. Signed in as
+`owner@hive-748.invalid`, the tenant OWNER, whose Open WebUI role this change
+resolves to `user`. The session bearer was minted inside the container and is
+not reproduced here or visible in any screenshot.
+
+```
+chat url: http://127.0.0.1:3903/
+user menu: opened
+admin url after navigation: http://127.0.0.1:3903/admin/users
+```
+
+No console errors were emitted during the capture.
+
+* `chat-as-tenant-owner.png`: the Hive shell, greeting the account by name,
+  composer live, sidebar present. This is the half that has to keep working:
+  a legitimately provisioned tenant owner is a customer and loses nothing.
+* `user-menu-as-tenant-owner.png`: the account menu carries Settings, Archived
+  Chats and Sign Out, and no administrative entry. Stated precisely, because
+  the two changes are adjacent: the menu's admin link and the `(app)/admin`
+  route tree were removed from the fork by #1091, so their absence here is
+  that change's work. What this change removes is the role behind them.
+* `admin-attempt-as-tenant-owner.png`: navigating straight to `/admin/users`
+  renders `404: Not Found`, again #1091's route removal, captured here as the
+  state a demoted account now meets end to end.
+
+The role decision itself is not a UI event, so the evidence for it is the A/B
+above and the rendered summary posted on the pull request as
+`role-ab-evidence.png`.
+
 ## Regression tests, red then green
 
 `apps/control-plane/internal/tenants` against the same throwaway Postgres, with
@@ -208,9 +241,12 @@ Against this branch, all 20 pass, and `make test-scripts` is green end to end.
 
 ## Caveats, stated rather than left to be found
 
-1. The frontend build stage was skipped for both images in the A/B pair, so the
-   containers serve upstream's frontend rather than the Hive fork's. The change
-   under test is a backend role decision and the backend layers are production's.
+1. The frontend build stage was skipped for both images in the A/B pair, so those
+   two containers serve upstream's frontend rather than the Hive fork's. The
+   change under test is a backend role decision and the backend layers are
+   production's. The browser capture below is against a third container built
+   from the full `deploy/docker/Dockerfile.open-webui`, fork frontend included,
+   so the product screenshots are the real product.
 2. Native signup carries its own first user promotion, in
    `open_webui/routers/auths.py`, which this change does not touch: both images
    answered HTTP 200 with role `admin` to the first `POST /api/v1/auths/signup`.
