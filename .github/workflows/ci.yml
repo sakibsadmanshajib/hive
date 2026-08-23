@@ -651,6 +651,15 @@ jobs:
         run: npm run lint:pgx-dsn
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:litellm-config
+      # Issue #1059. Six workflows configured themselves from the SUPABASE_*
+      # repository secrets, which name the hosted project deleted in the move
+      # to the self-hosted data plane. Two of them failed loudly for four days,
+      # three were gated off and silently misconfigured, and the sixth was
+      # GREEN while shipping the dead origin in a Cloudflare Workers bundle.
+      # Nothing structural stopped the next workflow adopting them by copy
+      # paste, which is how there came to be six.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:dead-supabase-secrets
       # A synchronous child process in a Playwright spec freezes the worker's
       # event loop, so no test timeout in that file can fire while it runs.
       # PR #838 found a test recorded as passed at 30194 ms under a 30000 ms
@@ -951,9 +960,25 @@ jobs:
       # `docker compose <subcommand>` invocation in this job — up, ps,
       # logs, down — sees the profile.
       COMPOSE_PROFILES: local
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Deliberately literal placeholders, not the SUPABASE_* repository
+      # secrets. Those secrets name the hosted project that was deleted in the
+      # move to the self-hosted data plane (issue #1059), so reading them here
+      # configured this job against a project that does not exist.
+      #
+      # Nothing in this job calls the Supabase HTTP surface. It seeds its own
+      # API key on its own throwaway Postgres in the step below, and the SDK
+      # suites authenticate with that `hk_` key, never with a user session, so
+      # GoTrue is never reached. The two services still require the variables
+      # to be set at boot, which is all these satisfy. Same values the web
+      # unit and build jobs in this file already use for the same reason.
+      #
+      # If a suite here ever does need a real Supabase, the route is
+      # scripts/ci-supabase-stack.sh (as the web-e2e job does), not a shared
+      # secret: an unresolvable placeholder fails immediately and names itself,
+      # where a stale project answers DNS and fails three steps later.
+      SUPABASE_URL: https://ci-placeholder.supabase.co
+      SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -989,8 +1014,11 @@ jobs:
       S3_USE_SSL: 'true'
       S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
       S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      # Same placeholders, same reason as the SUPABASE_* block above. No
+      # console container runs under the `local` profile this job activates;
+      # these exist only so compose has something to interpolate.
+      NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       # HIVE_API_KEY is deliberately NOT the repository secret any more. This
       # job seeds its own key, on its own database, in the step below, and a

@@ -1844,9 +1844,18 @@ jobs:
       # Minting a session needs all three. live-auth.mjs uses the admin
       # one-time-token flow, which touches no password, and there is no
       # credential-rotating fallback in it (docs/live-test-auth.md).
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      #
+      # The origin is the deployment's own public auth origin, which is the
+      # console origin (Caddy fronts GoTrue at /auth/v1 there, PR #992), taken
+      # from the same CONSOLE_URL expression the OIDC discovery check in this
+      # file already uses. The two keys are named for the deployment rather
+      # than read from secrets.SUPABASE_*, which name the hosted project
+      # deleted in the self-hosted cutover (issue #1059). Absent, this
+      # dispatch-only job fails at session minting instead of authenticating
+      # against a project that is not there.
+      SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
       # Optional. The spec defaults to the demo account, which is named in
       # docs/proof/live-auth-helper-2026-08-08/README.md and is not a
       # credential. Set this secret to point the run at a different identity.
