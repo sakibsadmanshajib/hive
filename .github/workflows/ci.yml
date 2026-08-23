@@ -1376,10 +1376,17 @@ jobs:
           # Circuit breaker, not coverage: it is meant to sit dormant and to
           # fire on a runaway loop or a suite that starts generating long
           # completions, before a provider allowance is drained rather than
-          # after. Set at roughly four times the measured spend of a passing
-          # run (see the PR for issue #1088 for the measurement), which leaves
-          # room for a suite being added without a false alarm.
-          RUN_TOKEN_CEILING: '80000'
+          # after.
+          #
+          # Derived from two measured runs of this job rather than picked: 1348
+          # tokens across 22 completions on hive-default (run 32660770153) and
+          # 1434 across the same 22 on deepseek-v4-flash, which spends more per
+          # completion because it is a reasoning model (run 32661219454). About
+          # four times the larger of the two leaves room for a few new tests and
+          # for reasoning variance while still catching an order-of-magnitude
+          # runaway. Raise it only alongside a measurement, and only after
+          # finding out what grew.
+          RUN_TOKEN_CEILING: '6000'
         run: |
           set -uo pipefail
           q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
@@ -1409,6 +1416,16 @@ jobs:
              group by 1, 2
              order by 1, 2"
 
+          # A non-numeric total means the query answered something this step
+          # cannot compare, and every assertion below would then quietly
+          # evaluate to "fine". Refuse instead.
+          case "$total" in
+            ''|*[!0-9]*)
+              echo "::error::the usage meter returned '${total}', which is not a token count, so nothing below actually checked anything"
+              exit 1
+              ;;
+          esac
+
           echo "::notice::live-integration metered ${total} tokens on alias '${HIVE_TEST_MODEL}' (ceiling ${RUN_TOKEN_CEILING})"
 
           if [ "$total" -gt "$RUN_TOKEN_CEILING" ]; then
@@ -1420,19 +1437,30 @@ jobs:
           # chat/completions/responses suites use HIVE_TEST_MODEL and the
           # embedding suites use HIVE_EMBEDDING_MODEL. Anything else means the
           # value this workflow sets is not the value being billed.
-          unexpected=$(q "select string_agg(distinct model_alias, ', ')
-                            from public.usage_events
-                           where event_type = 'completed'
-                             and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_EMBEDDING_MODEL}')")
+          #
+          # The query's own failure is checked, not just its result: a psql
+          # error returns an EMPTY string here, which reads exactly like "no
+          # unexpected alias" and would turn this into an assertion that cannot
+          # fail.
+          if ! unexpected=$(q "select string_agg(distinct model_alias, ', ')
+                                 from public.usage_events
+                                where event_type = 'completed'
+                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_EMBEDDING_MODEL}')"); then
+            echo "::error::the alias assertion query failed, so this run's billed alias is unverified"
+            exit 1
+          fi
           if [ -n "$unexpected" ]; then
             echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}') or HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
             exit 1
           fi
 
           if [ "$SUITES_OUTCOME" = "success" ]; then
-            served=$(q "select count(*) from public.usage_events
-                         where event_type = 'completed'
-                           and model_alias = '${HIVE_TEST_MODEL}'")
+            if ! served=$(q "select count(*) from public.usage_events
+                              where event_type = 'completed'
+                                and model_alias = '${HIVE_TEST_MODEL}'"); then
+              echo "::error::the completion-count query failed, so it is unknown whether this passing run served a single real completion"
+              exit 1
+            fi
             if [ "$served" = "0" ]; then
               echo "::error::the suites passed without a single metered completion on '${HIVE_TEST_MODEL}'. This job's whole purpose is a real provider round trip, so a pass with no completion is a pass over nothing."
               exit 1
@@ -1456,24 +1484,30 @@ jobs:
           # Redacted because this output is public: container logs carry bearer
           # headers and provider keys verbatim. Same redactor the artifact
           # upload below uses.
-          logs=$(docker compose logs --no-color --tail=2000 litellm edge-api 2>&1 \
-            | python3 ../../scripts/redact-log-credentials.py || true)
+          docker compose logs --no-color --tail=2000 litellm edge-api 2>&1 \
+            | python3 ../../scripts/redact-log-credentials.py > /tmp/upstream.log || true
 
+          # Grep a FILE, deliberately, never `printf '%s' "$logs" | grep -q`.
+          # grep -q exits at its first match, the writer then takes SIGPIPE, and
+          # under `set -o pipefail` the pipeline reports FAILURE even though it
+          # matched. That is not theoretical: the first draft of this step was
+          # run over the real 2026-08-23 compose-logs artifact, whose log says
+          # "on tokens per day (TPD)" eighteen times, and the daily-budget
+          # branch below silently lost to exactly that.
           class=""
-          if printf '%s' "$logs" | grep -qiE 'tokens per day|per day \(TPD\)|TPD\b'; then
-            class="the provider refused on a DAILY token budget (TPD). It resets on the provider's own schedule, so retrying or re-running will not fix it; the allowance is gone until then. This is shared with the live demo box, which is answering nothing right now for the same reason."
-          elif printf '%s' "$logs" | grep -qiE 'rate.?limit|RateLimitError|rate_limit_exceeded|HTTP/1.1" 429|status_code=429|status=429'; then
-            class="the provider rate limited us (429). Check whether the window is per minute (transient, retry) or per day (an allowance that is spent)."
-          elif printf '%s' "$logs" | grep -qiE 'insufficient.?credit|402 Payment Required|quota'; then
-            class="the provider account is out of credit or quota (402). No retry fixes this; it needs funding."
+          if grep -qiE 'tokens per day|per day \(TPD\)|TPD\b' /tmp/upstream.log; then
+            class="the provider refused on a DAILY token budget (TPD). It resets on the provider's own schedule, so retrying or re-running will not fix it; the allowance is gone until then. If that provider is also the live demo's, the demo is answering nothing right now for the same reason."
+          elif grep -qiE 'rate.?limit|RateLimitError|rate_limit_exceeded|status_code=429|status=429' /tmp/upstream.log; then
+            class="the provider rate limited us (429). Check whether the window is per minute (transient, so a rerun may pass) or per day (an allowance that is spent)."
+          elif grep -qiE 'insufficient.?credit|402 Payment Required' /tmp/upstream.log; then
+            class="the provider account is out of credit (402). No retry fixes this; it needs funding."
           fi
 
           if [ -n "$class" ]; then
             echo "::error::UPSTREAM REFUSAL, not a performance regression: $class"
             echo "matching lines (redacted, first 5):"
-            printf '%s' "$logs" \
-              | grep -iE 'tokens per day|rate.?limit|RateLimitError|rate_limit_exceeded|429|insufficient.?credit|402 Payment Required' \
-              | head -5
+            grep -iE 'tokens per day|rate.?limit|RateLimitError|rate_limit_exceeded|insufficient.?credit|402 Payment Required' \
+              /tmp/upstream.log | head -5
             echo "UPSTREAM_FAILURE_CLASS=$class" >> "$GITHUB_ENV"
           else
             echo "no upstream refusal signature in the litellm or edge-api logs, so this failure is something else. The compose-logs artifact below is the next place to look."
