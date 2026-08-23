@@ -305,14 +305,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// than at nothing, which is the whole point: this is the streaming path
 		// Open WebUI uses, so it is where a silent free-serve would do the most
 		// damage.
-		var costReason string
-		costCredits, confirmed, delivered, costReason = inference.UpstreamActualSettlement(
+		settled := inference.UpstreamActualSettlement(
 			rawUsagePayload, settle.held(), hasUsage,
 			int64(inTokens), int64(outTokens), completion.String())
-		if delivered && !confirmed {
-			slog.Error("session chat: upstream cost unavailable, settling at the hold",
-				"request_id", requestID, "alias", clientModel, "reason", costReason,
-				"held_credits", settle.held())
+		costCredits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
+		if delivered {
+			// generation_id is the audit handle for this charge. Operator log
+			// only: an upstream identifier can carry a provider name and
+			// audit_log fans out to third-party sinks.
+			slog.Info("session chat: variable-price settlement",
+				"request_id", requestID, "alias", clientModel, "reason", settled.Reason,
+				"credits", settled.Credits, "confirmed", settled.Confirmed,
+				"generation_id", settled.GenerationID, "held_credits", settle.held())
 		}
 	} else {
 		costCredits, confirmed, delivered = inference.ChatSettlementCredits(

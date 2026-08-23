@@ -470,13 +470,17 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		// cost the upstream reported in its terminal usage chunk. A failed
 		// read settles at the hold rather than at zero; see
 		// UpstreamActualSettlement.
-		var reason string
-		credits, confirmed, delivered, reason = UpstreamActualSettlement(
+		settled := UpstreamActualSettlement(
 			acc.RawUsageChunk, reservation.EstimatedCredits,
 			acc.HasUsage, acc.InputTokens, acc.OutputTokens, content)
-		if delivered && !confirmed {
-			log.Printf("inference: upstream cost unavailable, settling at the hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s held_credits=%d: a variable-price alias could not read a reported cost, charging the hold rather than serving free",
-				requestID, reservation.ID, endpoint, model, reason, reservation.EstimatedCredits)
+		credits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
+		if delivered {
+			// generation_id is the audit handle for this charge: it is what
+			// recovers the model the router actually chose, which the response
+			// itself no longer names. Operator log only, never audit_log.
+			log.Printf("inference: variable-price settlement request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s credits=%d confirmed=%v generation_id=%s held_credits=%d",
+				requestID, reservation.ID, endpoint, model, settled.Reason,
+				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.EstimatedCredits)
 		}
 	} else {
 		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)

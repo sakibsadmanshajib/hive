@@ -120,9 +120,6 @@ func TestParseUpstreamCostReadsCostExactlyAndCapturesAuditHandles(t *testing.T) 
 	if charge.GenerationID != "gen-1755900000-XYZ" {
 		t.Fatalf("generation id not captured, got %q", charge.GenerationID)
 	}
-	if charge.Provider != "Anthropic" {
-		t.Fatalf("provider not captured, got %q", charge.Provider)
-	}
 }
 
 // --- CreditsForUpstreamCost: the charge magnitude must be RIGHT ------------
@@ -252,8 +249,9 @@ func TestFreeServeGuardNeverSettlesAtZero(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			credits, confirmed, delivered, reason := UpstreamActualSettlement(
+			settled := UpstreamActualSettlement(
 				[]byte(tc.rawUsage), held, true, 1000, 500, "some answer text")
+			credits, confirmed, delivered, reason := settled.Credits, settled.Confirmed, settled.Delivered, settled.Reason
 
 			if !delivered {
 				t.Fatal("work was delivered; refusing to charge for it is the free-serve bug itself")
@@ -280,8 +278,14 @@ func TestFreeServeGuardNeverSettlesAtZero(t *testing.T) {
 func TestUpstreamActualSettlementChargesTheReportedCost(t *testing.T) {
 	raw := `{"id":"gen-1","provider":"Anthropic","usage":{"prompt_tokens":1000,"completion_tokens":500,"cost":0.0123456}}`
 
-	credits, confirmed, delivered, reason := UpstreamActualSettlement(
-		[]byte(raw), 200_000, true, 1000, 500, "answer")
+	settled := UpstreamActualSettlement([]byte(raw), 200_000, true, 1000, 500, "answer")
+	credits, confirmed, delivered, reason := settled.Credits, settled.Confirmed, settled.Delivered, settled.Reason
+
+	// The audit handle must survive settlement, not just parsing: this is what
+	// recovers the model the router chose, and the response no longer names it.
+	if settled.GenerationID != "gen-1" {
+		t.Errorf("generation id not carried through settlement, got %q", settled.GenerationID)
+	}
 
 	if !delivered || !confirmed {
 		t.Fatalf("expected a confirmed delivered settlement, got delivered=%v confirmed=%v", delivered, confirmed)
@@ -299,7 +303,8 @@ func TestUpstreamActualSettlementChargesTheReportedCost(t *testing.T) {
 
 func TestUpstreamActualSettlementReleasesWhenNothingWasDelivered(t *testing.T) {
 	// The ONLY path allowed to produce a zero charge: no tokens, no content.
-	credits, confirmed, delivered, reason := UpstreamActualSettlement(nil, 200_000, false, 0, 0, "")
+	settled := UpstreamActualSettlement(nil, 200_000, false, 0, 0, "")
+	credits, confirmed, delivered, reason := settled.Credits, settled.Confirmed, settled.Delivered, settled.Reason
 	if delivered || confirmed || credits != 0 {
 		t.Fatalf("nothing delivered should release: got credits=%d confirmed=%v delivered=%v", credits, confirmed, delivered)
 	}

@@ -157,7 +157,7 @@ func pricedRouting(t *testing.T, litellmModel string, inPrice, outPrice int64) *
 			LiteLLMModelName: litellmModel,
 			Provider:         "test-provider",
 			Pricing:          inference.FixedPricing(inPrice, outPrice),
-			PriceUnit: inference.PriceUnitTokens,
+			PriceUnit:        inference.PriceUnitTokens,
 		})
 	}))
 	t.Cleanup(srv.Close)

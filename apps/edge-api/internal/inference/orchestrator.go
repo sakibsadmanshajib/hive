@@ -304,13 +304,16 @@ func (o *Orchestrator) executeSync(
 			// and drops every field it does not declare, the upstream's
 			// reported cost among them. The raw bytes are the only place that
 			// figure still exists.
-			var reason string
-			actualCredits, confirmed, billable, reason = UpstreamActualSettlement(
+			settled := UpstreamActualSettlement(
 				respBody, reservation.EstimatedCredits,
 				hasUsage, inputTokens, outputTokens, responseText(endpoint, normalized))
-			if billable && !confirmed {
-				log.Printf("inference: upstream cost unavailable, settling at the hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s held_credits=%d: a variable-price alias could not read a reported cost, charging the hold rather than serving free",
-					requestID, reservation.ID, endpoint, model, reason, reservation.EstimatedCredits)
+			actualCredits, confirmed, billable = settled.Credits, settled.Confirmed, settled.Delivered
+			if billable {
+				// generation_id is the audit handle for this charge; see the
+				// same line on the streaming path.
+				log.Printf("inference: variable-price settlement request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s credits=%d confirmed=%v generation_id=%s held_credits=%d",
+					requestID, reservation.ID, endpoint, model, settled.Reason,
+					settled.Credits, settled.Confirmed, settled.GenerationID, reservation.EstimatedCredits)
 			}
 		} else {
 			actualCredits, confirmed, billable = settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)

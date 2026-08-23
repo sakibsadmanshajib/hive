@@ -281,12 +281,27 @@ func ReservationCredits(route SelectRouteResult, endpointDefault int64) int64 {
 //     reconciliation state rather than recording it as measured truth.
 //
 // reason is a short machine-ish token for the log line, never customer-facing.
+type VariableSettlement struct {
+	Credits   int64
+	Confirmed bool
+	Delivered bool
+	// Reason is a short machine-ish token for the log line, never
+	// customer-facing.
+	Reason string
+	// GenerationID is the upstream's own id for this generation. It is the
+	// audit handle: LiteLLM rewrites the response `model` field, so this id is
+	// what lets anyone recover WHICH model the router actually chose long after
+	// the fact. Logged with every settlement, and deliberately kept out of the
+	// customer response and out of audit_log, which fans out to third parties.
+	GenerationID string
+}
+
 func UpstreamActualSettlement(rawUsage []byte, heldCredits int64, hasUsage bool,
-	inputTokens, outputTokens int64, content string) (credits int64, confirmed bool, delivered bool, reason string) {
+	inputTokens, outputTokens int64, content string) VariableSettlement {
 
 	tokensSeen := hasUsage && inputTokens+outputTokens > 0
 	if !tokensSeen && content == "" {
-		return 0, false, false, "nothing_delivered"
+		return VariableSettlement{Reason: "nothing_delivered"}
 	}
 
 	// A hold of zero would make the fail-closed branch below settle at zero,
@@ -299,14 +314,23 @@ func UpstreamActualSettlement(rawUsage []byte, heldCredits int64, hasUsage bool,
 
 	charge, err := ParseUpstreamCost(rawUsage)
 	if err != nil {
-		return heldCredits, false, true, upstreamCostFailureReason(err)
+		return VariableSettlement{
+			Credits: heldCredits, Delivered: true,
+			Reason: upstreamCostFailureReason(err), GenerationID: charge.GenerationID,
+		}
 	}
 
-	credits, err = CreditsForUpstreamCost(charge.CostUSD)
+	credits, err := CreditsForUpstreamCost(charge.CostUSD)
 	if err != nil {
-		return heldCredits, false, true, upstreamCostFailureReason(err)
+		return VariableSettlement{
+			Credits: heldCredits, Delivered: true,
+			Reason: upstreamCostFailureReason(err), GenerationID: charge.GenerationID,
+		}
 	}
-	return credits, true, true, "upstream_cost"
+	return VariableSettlement{
+		Credits: credits, Confirmed: true, Delivered: true,
+		Reason: "upstream_cost", GenerationID: charge.GenerationID,
+	}
 }
 
 // upstreamCostFailureReason maps a cost-read failure to a distinct log token.

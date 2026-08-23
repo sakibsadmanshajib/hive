@@ -95,9 +95,6 @@ type UpstreamCharge struct {
 	// without us having to carry the model name through a proxy that rewrites
 	// it. Recorded internally, never returned to a customer.
 	GenerationID string
-	// Provider is the upstream the router resolved to, when the response says
-	// so. Coarser than the model, internal only, and frequently absent.
-	Provider string
 }
 
 // upstreamCostEnvelope is a private view of the RAW upstream response. It is
@@ -106,10 +103,16 @@ type UpstreamCharge struct {
 // customer, so a cost field living on UsageResponse would be serialised onto a
 // customer-bound body. Parsing separately means our upstream cost cannot leak
 // by construction rather than by remembering to strip it.
+// The upstream's `provider` field is deliberately NOT decoded. It is redundant,
+// because the generation id recovers both the provider and the exact model that
+// `provider` alone cannot name, and tools/lint-no-client-cost-fields.mjs forbids
+// any provider-named JSON struct tag as a structural guard against provider
+// identity reaching a customer, matching on raw file text so a comment quoting
+// the tag trips it too. Not decoding the field at all is a smaller and safer
+// answer than an allowlist entry arguing that this particular struct is private.
 type upstreamCostEnvelope struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	Usage    *struct {
+	ID    string `json:"id"`
+	Usage *struct {
 		// json.Number, never float64: the literal is preserved as text and
 		// handed to big.Rat, so no binary floating point ever touches a money
 		// figure.
@@ -131,7 +134,7 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 		return UpstreamCharge{}, fmt.Errorf("%w: %v", ErrUpstreamCostUnparseable, err)
 	}
 
-	charge := UpstreamCharge{GenerationID: env.ID, Provider: env.Provider}
+	charge := UpstreamCharge{GenerationID: env.ID}
 
 	if env.Usage == nil || env.Usage.Cost == nil {
 		return charge, ErrUpstreamCostAbsent
