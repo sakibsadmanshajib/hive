@@ -16,11 +16,15 @@ a check that has quietly stopped checking.
 
 The two failures this catches, and nothing else:
 
-  1. The project is gone, unreachable, or the URL is wrong. A deleted hosted
-     project keeps resolving in DNS (the wildcard is Supabase's, not the
-     project's) and answers HTTP, so a plain connectivity probe passes. Asking
-     GoTrue for its health is what separates "a server answered" from "our
-     project answered".
+  1. The project is gone, unreachable, or the URL is wrong. A connectivity
+     probe is not enough for this in either direction: a wrong hostname may
+     fail to resolve at all, and it may equally answer 200 from something that
+     is not an auth origin, which is the case a status code sails straight
+     through. Measured on the demo box: pointed at chat-hive.scubed.co, whose
+     single-page app answers 200 with HTML for every path it does not know,
+     this preflight used to report the configuration sound. So what is asserted
+     is that the health document came from GoTrue, which is what actually
+     separates "a server answered" from "our project answered".
 
   2. The keys name a different project than the URL. This is the shape #1059
      actually took: a URL updated in one place and a key left behind in
@@ -41,7 +45,10 @@ Usage:
     set -a; . .env; set +a
     python3 scripts/preflight-supabase-config.py
 
-Required env: SUPABASE_URL, SUPABASE_ANON_KEY.
+Required env: SUPABASE_URL, SUPABASE_ANON_KEY. SUPABASE_URL must be an origin
+this process can actually reach: on a self-hosted box the services talk to auth
+over an in-network hostname that resolves only inside the container network, and
+the public origin is a different value (NEXT_PUBLIC_SUPABASE_URL).
 Optional env: SUPABASE_SERVICE_ROLE_KEY (claim-checked when present, never
 sent anywhere), SUPABASE_PREFLIGHT_TIMEOUT (seconds, default 15).
 
@@ -66,7 +73,7 @@ TIMEOUT = float(os.environ.get("SUPABASE_PREFLIGHT_TIMEOUT", "15"))
 # your browser's signature" to the literal default urllib sends
 # (`Python-urllib/3.x`). Measured, not guessed: the same GET of
 # https://chat-hive.scubed.co/api/config returns 403 with that default and 200
-# with the string below, from the same host in the same second. Without this this
+# with the string below, from the same host in the same second. Without it this
 # preflight would report a live project dead whenever its auth origin is
 # published through Cloudflare, which is the shape of false negative that gets a
 # useful check deleted.
