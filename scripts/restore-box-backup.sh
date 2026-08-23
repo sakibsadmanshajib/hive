@@ -97,14 +97,28 @@ RESTORE_LOG="$WORK/restore.log"
 docker exec -i "$CNAME" pg_restore -U postgres -d postgres --no-owner --role=postgres \
   < "$WORK/db.pgdump" > "$RESTORE_LOG" 2>&1 || true
 
-ALLOWED='pg_cron|cron\.|unrecognized configuration parameter|role "(service_role|authenticated|anon|supabase_auth_admin)"'
-UNEXPECTED="$(grep -i 'error' "$RESTORE_LOG" | grep -Ev "$ALLOWED" || true)"
+# Known-expected restore error categories, each justified:
+#   pg_cron / schema "cron" / its GUC: extension needs shared_preload_libraries
+#     the vanilla entrypoint does not set; DATA is unaffected.
+#   supabase + app roles (service_role, authenticated, anon, auth admin,
+#     hive_app, auditor_ro, ...): production roles do not exist in a bare
+#     container, so EVERY "role ... does not exist" grant or ownership error
+#     is expected; none of them touch row data.
+#   *_request_attempt_id_fkey: PRODUCTION ITSELF violates these three FKs
+#     (credit_reservations, usage_events and credit_reconciliation_jobs keep
+#     rows whose request_attempts were purged by retention: 2356, 483 and 161
+#     orphans counted live on 2026-08-23). Re-adding the constraint against a
+#     faithful copy of that data fails by design; every row itself restored.
+# Match actual error lines ("pg_restore: error: ..." possibly nested) while
+# excluding warning-summary lines like "pg_restore: warning: errors ignored".
+ALLOWED='pg_cron|cron\.|schema "cron"|unrecognized configuration parameter|role "[A-Za-z0-9_]+" does not exist|request_attempt_id_fkey'
+UNEXPECTED="$(grep -E ': ([Ee]rror|ERROR):' "$RESTORE_LOG" | grep -Ev "$ALLOWED" || true)"
 if [[ -n "$UNEXPECTED" ]]; then
   echo "-- UNEXPECTED restore errors (these are NOT in the allowed pg_cron/role set):"
   echo "$UNEXPECTED"
   FAIL=1
 else
-  echo "-- no unexpected restore errors ($(grep -ci 'error' "$RESTORE_LOG" || true) known-category lines suppressed)"
+  echo "-- no unexpected restore errors ($(grep -cE ': ([Ee]rror|ERROR):' "$RESTORE_LOG" || true) error lines, all in allowed categories)"
 fi
 
 # 4. Compare counts. Live side is read-only SELECT count(*).
@@ -122,7 +136,11 @@ echo ""
 if [[ "$FAIL" == "0" ]]; then
   echo "PASS: all compared tables match between live and restored throwaway."
 else
-  echo "FAIL: at least one table count differs. Keep with --keep and inspect."
+  echo "FAIL: at least one table count differs. Two known causes:"
+  echo "  1. LIVE DRIFT: production moved between the dump and this comparison"
+  echo "     (api_keys and ledger grow during live traffic). Take a fresh backup"
+  echo "     and rerun this script immediately; counts should settle equal."
+  echo "  2. REAL LOSS: the dump itself is short. Investigate before trusting it."
 fi
 
 if [[ "$KEEP" == "1" ]]; then
