@@ -24,9 +24,14 @@ var EmbeddingDimension = 1024
 
 // UploadRequest is the JSON body for POST /v1/rag/documents.
 type UploadRequest struct {
-	Name     string `json:"name"`
-	Content  string `json:"content"`   // raw text; future: accept base64 PDF
-	MimeType string `json:"mime_type"` // optional, defaults to text/plain
+	Name    string `json:"name"`
+	Content string `json:"content"` // raw text; embedded as-is
+	// ContentBase64 optionally carries a binary document (PDF, DOCX, ...)
+	// standard-base64 encoded. When set, bytes go to the markitdown sidecar
+	// and only the converted markdown reaches chunk + embed. Mutually
+	// exclusive with Content.
+	ContentBase64 string `json:"content_base64"`
+	MimeType      string `json:"mime_type"` // optional, defaults to text/plain
 }
 
 // DocumentResponse is the JSON body returned for a single document.
