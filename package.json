@@ -12,6 +12,7 @@
     "lint:model-visibility": "node tools/lint-tenant-model-visibility-single-source.mjs",
     "lint:litellm-routing": "node tools/lint-litellm-dispatch-requires-routing.mjs",
     "lint:litellm-config": "node tools/lint-litellm-config-fallbacks.mjs",
+    "lint:sdk-test-env": "node tools/lint-sdk-test-env-propagation.mjs",
     "lint:proof-tokens": "node tools/lint-no-token-in-proof-captures.mjs",
     "lint:pgx-dsn": "node tools/lint-no-pgx-dsn-for-libpq.mjs",
     "lint:dead-supabase-secrets": "node tools/lint-no-dead-supabase-secrets.mjs",
