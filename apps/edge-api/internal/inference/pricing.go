@@ -18,9 +18,12 @@ package inference
 // cannot answer that.
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
@@ -115,6 +118,117 @@ func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, inputTokens, 
 	requestBody []byte, content string) (credits int64, confirmed bool, delivered bool) {
 	return settlementCredits(route, hasUsage, inputTokens, outputTokens,
 		promptText(EndpointChatCompletions, requestBody), content)
+}
+
+// Request bounds for a variable-price alias.
+//
+// These exist because provider.max_price bounds the RATE and nothing else. It
+// filters out endpoints above a per-million ceiling; it does not bound how many
+// tokens one request may contain. openrouter/auto-beta advertises a 2,000,000
+// token context, so at the configured ceiling a single request near that
+// context could cost roughly 6.00 USD of prompt alone, which is 840,000 credits
+// after margin, against a 200,000 credit hold. Settlement charges the reported
+// cost rather than the hold, so without a bound on the REQUEST one call could
+// settle several times past the solvency gate the hold is supposed to be.
+//
+// Bounding both sides makes the hold a proof rather than a hope:
+//
+//	prompt:     262,144 bytes is a rigorous upper bound of 262,144 tokens,
+//	            because a token can never be fewer than one UTF-8 byte, and the
+//	            body also carries JSON structure that is not prompt text.
+//	            262,144 x 3.00 USD/M x 1.4 = 1.10 USD = 110,096 credits.
+//	completion: 16,384 tokens x 15.00 USD/M x 1.4 = 0.35 USD = 34,406 credits.
+//	total:      about 144,502 credits, comfortably inside the 200,000 hold.
+//
+// Change either constant, or provider.max_price in deploy/litellm/config.yaml,
+// and reservation_estimate_credits in the migration has to be re-derived. The
+// three numbers are one decision, not three.
+const (
+	// VariablePriceMaxRequestBytes caps the request body for a variable-price
+	// alias. 256 KiB of chat is enormous; the cap exists to bound spend, not to
+	// be reached.
+	VariablePriceMaxRequestBytes = 256 * 1024
+	// VariablePriceMaxCompletionTokens caps generated output for a
+	// variable-price alias, forced onto the outbound request so a client
+	// cannot raise it.
+	VariablePriceMaxCompletionTokens = 16384
+)
+
+// completionLimitFields names the request field that caps generated tokens for
+// each endpoint. Chat carries both spellings and OpenAI treats the newer one as
+// authoritative, so both are pinned rather than guessing which the upstream
+// honours.
+var completionLimitFields = map[string][]string{
+	EndpointChatCompletions: {"max_tokens", "max_completion_tokens"},
+	EndpointCompletions:     {"max_tokens"},
+	EndpointResponses:       {"max_output_tokens"},
+}
+
+// EnforceVariablePriceBounds refuses an over-large request and pins the
+// completion ceiling for a variable-price alias, returning the body to
+// dispatch. For every other alias it is a pass-through and costs one comparison.
+//
+// It returns ok=false only when it has already written the customer-facing
+// refusal.
+func EnforceVariablePriceBounds(w http.ResponseWriter, route SelectRouteResult, endpoint, model string, body []byte) ([]byte, bool) {
+	if !route.Pricing.IsUpstreamActual() {
+		return body, true
+	}
+
+	if len(body) > VariablePriceMaxRequestBytes {
+		log.Printf("inference: refusing oversize request on a variable-price alias endpoint=%s alias=%s bytes=%d limit=%d: the credit hold is only provably sufficient below this size",
+			endpoint, model, len(body), VariablePriceMaxRequestBytes)
+		code := "context_length_exceeded"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error",
+			"This request is too large for the requested model. Please shorten the input and try again.", &code)
+		return nil, false
+	}
+
+	bounded, err := clampCompletionLimit(body, completionLimitFields[endpoint])
+	if err != nil {
+		// Refuse rather than dispatch unbounded. An unparseable body here is
+		// not something to shrug at on a path where the ceiling is what keeps
+		// the charge inside the hold.
+		log.Printf("inference: refusing variable-price request whose body could not be bounded endpoint=%s alias=%s: %v", endpoint, model, err)
+		code := "invalid_request_error"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error",
+			"The request body could not be processed. Please check the request and try again.", &code)
+		return nil, false
+	}
+	return bounded, true
+}
+
+// clampCompletionLimit forces each named field down to
+// VariablePriceMaxCompletionTokens, setting it when the client omitted it. Every
+// other field the caller sent survives byte for byte, the same contract
+// metering.RewriteBody keeps.
+func clampCompletionLimit(raw []byte, fields []string) ([]byte, error) {
+	if len(fields) == 0 {
+		return raw, nil
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("inference: decode body to bound completion: %w", err)
+	}
+	if decoded == nil {
+		decoded = map[string]json.RawMessage{}
+	}
+
+	capped := json.RawMessage(strconv.Itoa(VariablePriceMaxCompletionTokens))
+	for _, field := range fields {
+		current, present := decoded[field]
+		if present {
+			var value int64
+			// A field we cannot read is replaced rather than trusted: leaving
+			// an unreadable ceiling in place would defeat the bound.
+			if err := json.Unmarshal(current, &value); err == nil && value <= VariablePriceMaxCompletionTokens && value > 0 {
+				continue
+			}
+		}
+		decoded[field] = capped
+	}
+
+	return json.Marshal(decoded)
 }
 
 // ReservationCredits sizes the up-front credit hold for a request.
@@ -228,8 +342,12 @@ func requireTokenPricing(w http.ResponseWriter, route SelectRouteResult, endpoin
 	if CanPriceTokens(route) {
 		return true
 	}
+	// Accessors, not the raw fields: those are *int64 now, and fmt accepts %d
+	// for a pointer and prints the ADDRESS. go vet does not flag it because %d
+	// is a legal verb for a pointer, so this would have quietly turned the only
+	// operator-facing explanation of a refusal into a memory address.
 	log.Printf("inference: refusing endpoint=%s alias=%s: catalog price is %d/%d credits per million %q but this endpoint meters %q",
-		endpoint, model, route.Pricing.InputPriceCredits, route.Pricing.OutputPriceCredits, route.PriceUnit, PriceUnitTokens)
+		endpoint, model, route.Pricing.InputCredits(), route.Pricing.OutputCredits(), route.PriceUnit, PriceUnitTokens)
 	code := "model_not_supported"
 	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error",
 		"The requested model is not available for this endpoint. Please retry with a supported model.", &code)

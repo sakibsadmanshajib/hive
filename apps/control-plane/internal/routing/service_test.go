@@ -764,9 +764,15 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 	repo := entitlementTestRepo()
 	cacheRead := int64(1)
 	cacheWrite := int64(5)
-	repo.pricing = catalog.FixedPricing(12, 36)
-	repo.pricing.CacheReadPriceCredits = &cacheRead
-	repo.pricing.CacheWritePriceCredits = &cacheWrite
+	input := int64(12)
+	output := int64(36)
+	repo.pricing = catalog.CatalogPricing{
+		InputPriceCredits:      &input,
+		OutputPriceCredits:     &output,
+		CacheReadPriceCredits:  &cacheRead,
+		CacheWritePriceCredits: &cacheWrite,
+		PricingMode:            catalog.PricingModeFixed,
+	}
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
 

@@ -173,6 +173,16 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
+	// 2c. Bound the request for a variable-price alias, before dispatch. Its
+	// hold is only provably sufficient below a known request size and a known
+	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
+	// every fixed-price alias.
+	boundedBody, withinBounds := EnforceVariablePriceBounds(w, route, endpoint, model, body)
+	if !withinBounds {
+		return nil
+	}
+	body = boundedBody
+
 	// 4. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
