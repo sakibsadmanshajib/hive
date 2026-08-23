@@ -507,6 +507,25 @@ jobs:
             echo "target $name $value ($source)"
           done
 
+          # ── the verification model ─────────────────────────────────────────
+          #
+          # The ledger check sends one real, billed completion per run, on the
+          # alias named by HIVE_VERIFY_MODEL (scripts/post-deploy-verify.py,
+          # default hive-default). Left unset it would land on the same free
+          # tier the demo serves chat from and compete with real users for its
+          # daily cap, so the box names a paid alias here and the gate uses
+          # that instead of assuming anything about the routing table.
+          model=$(read_env HIVE_VERIFY_MODEL)
+          source="box .env"
+          if [ -z "$model" ]; then
+            # Same default as the script's own, so absence here behaves
+            # identically to running the script by hand.
+            model=hive-default
+            source="workflow default"
+          fi
+          export HIVE_VERIFY_MODEL="$model"
+          echo "verification model $model ($source)"
+
           # ── the verification identity ─────────────────────────────────────
           email="$SECRET_VERIFY_EMAIL"
           password="$SECRET_VERIFY_PASSWORD"

@@ -60,7 +60,10 @@ Required env for the `signin` and `ledger` checks only:
     whole gate going dark on a missing credential.
 
 Optional env:
-    HIVE_VERIFY_MODEL          default hive-default
+    HIVE_VERIFY_MODEL          default hive-default. post-deploy-verify.yml
+                               passes it through from the box .env when set
+                               there, so the gate's billed completion can use
+                               a paid alias instead of hive-default
     HIVE_VERIFY_LEDGER_TIMEOUT default 90 (seconds to step-poll for the charge)
     HIVE_VERIFY_LEDGER_PAGES   default 20 (page cap on the ledger scan)
     HIVE_VERIFY_COMPLETION_ATTEMPTS  default 3 (upstream 429/5xx retries on the
