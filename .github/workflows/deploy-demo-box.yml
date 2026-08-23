@@ -1326,6 +1326,62 @@ jobs:
           echo "SMOKE FAIL"
           exit 1
 
+      - name: Reconcile LiteLLM's config volume with the repo seed
+        # Ordering, and that is the whole job of this step.
+        #
+        # The litellm service reconciles its config volume against the repo's
+        # seed on start, keyed on the seed's checksum (see its entrypoint in
+        # docker-compose.yml). But `up -d` above only recreates a service whose
+        # DEFINITION changed, and editing deploy/litellm/config.yaml changes no
+        # service definition, so a deploy that only changes that file never
+        # restarts this container and the entrypoint never runs.
+        #
+        # Something does restart it: the catalog sync in the next step, after
+        # it has written its merged config. That is the wrong order. The sync
+        # would merge the DB over the STALE config, write it, restart, and the
+        # entrypoint would then notice the seed changed and overwrite that
+        # merged result with the raw seed, leaving the proxy with no DB-managed
+        # routes at all. So the reconcile has to happen before the sync, not as
+        # a side effect after it.
+        #
+        # Restarting only on drift, rather than every deploy, because a LiteLLM
+        # restart is a real if brief chat interruption and the sync below
+        # already performs one whenever it has something to apply.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+
+          seed_sha=$(sha256sum ../../deploy/litellm/config.yaml | cut -d' ' -f1)
+          # `|| true`: a missing marker file is the normal state on a volume
+          # seeded before this mechanism existed, and on a fresh volume. Both
+          # are drift, which is exactly what the comparison below concludes.
+          applied_sha=$("${COMPOSE[@]}" exec -T litellm \
+            cat /etc/litellm/.seed.sha256 2>/dev/null </dev/null | tr -d '\r\n' || true)
+
+          if [ "$seed_sha" = "$applied_sha" ]; then
+            echo "LiteLLM config volume already carries this seed ($seed_sha); no restart needed."
+            exit 0
+          fi
+
+          echo "LiteLLM seed drifted (repo=$seed_sha applied=${applied_sha:-none}); restarting so its entrypoint reseeds."
+          "${COMPOSE[@]}" restart litellm
+
+          # Prove the reseed actually happened rather than assuming the restart
+          # implies it. A container that came back up still carrying the old
+          # marker means the entrypoint did not reconcile, and continuing would
+          # hand the sync below the same stale base this step exists to
+          # replace.
+          for i in $(seq 1 12); do
+            applied_sha=$("${COMPOSE[@]}" exec -T litellm \
+              cat /etc/litellm/.seed.sha256 2>/dev/null </dev/null | tr -d '\r\n' || true)
+            [ "$seed_sha" = "$applied_sha" ] && { echo "reseeded to $seed_sha"; exit 0; }
+            echo "attempt $i: marker is ${applied_sha:-none}, waiting"
+            sleep 5
+          done
+          echo "::error::LiteLLM restarted but its config volume still does not carry the repo seed ($seed_sha). Its entrypoint did not reconcile, so the catalog sync below would merge onto a stale base." >&2
+          exit 1
+
       - name: Sync LiteLLM model list from the DB catalog (issue #713)
         # control-plane's litellmconfig service (Phase 20 Plan 03) already
         # generates deploy/litellm/config.yaml's model_list directly from
