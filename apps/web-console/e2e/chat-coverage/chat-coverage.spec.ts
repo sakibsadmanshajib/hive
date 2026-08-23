@@ -20,14 +20,11 @@ import {
   enumerate,
   exclusionFailures,
   floorFailures,
-  flip,
   isDeferred,
   isDestructive,
   identityOf,
   isStateful,
-  locate,
   proveByClick,
-  readState,
   redactText,
   redactUrl,
   sampleChatter,
@@ -36,6 +33,7 @@ import {
   type Result,
   type Swept,
 } from "./lib";
+import { persistencePass, valuePass } from "./persistence";
 import {
   STATIC_SURFACES,
   discoverSettingsTabs,
@@ -62,14 +60,6 @@ const REPORT_DIR = path.join(__dirname, "../../chat-coverage-report");
 function isDestructiveRequest(method: string, url: string): boolean {
   if (method === "DELETE") return true;
   return /\/(delete|archive|clear|reset|unshare)/i.test(url);
-}
-
-async function saveIfPresent(page: Page): Promise<void> {
-  const save = page.getByRole("button", { name: /^save$/i }).first();
-  if (await save.isVisible().catch(() => false)) {
-    await save.click().catch(() => {});
-    await page.waitForTimeout(1500);
-  }
 }
 
 /**
@@ -167,173 +157,13 @@ async function clickPass(
   }
 }
 
-/**
- * Persistence pass. Open WebUI keeps user settings in a persisted config blob,
- * so a toggle that flips visually and persists nothing is invisible until the
- * next reload. Every stateful control on a persisting surface is flipped, saved,
- * and re-read after a full reload, then put back the way it was found.
- */
-async function persistencePass(
-  page: Page,
-  surface: Surface,
-  statefuls: Control[],
-  results: Result[],
-): Promise<void> {
-  if (statefuls.length === 0) return;
-
-  let live = await enumerateSurface(page, surface);
-  const baselines = new Map<string, string | null>();
-
-  for (const ctl of statefuls) {
-    const target = live.find((c) => c.key === ctl.key);
-    if (!target) continue;
-    baselines.set(ctl.key, target.state);
-    await flip(page, target).catch(() => {});
-    await page.waitForTimeout(200);
-  }
-  await saveIfPresent(page);
-
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
-  live = await enumerateSurface(page, surface);
-
-  const missing: Control[] = [];
-  const reverted: Control[] = [];
-  for (const ctl of statefuls) {
-    if (!baselines.has(ctl.key)) {
-      results.push(unprovable(surface, ctl, "control was not present when the pass started"));
-      continue;
-    }
-    const after = live.find((c) => c.key === ctl.key);
-    if (!after) {
-      missing.push(ctl);
-      continue;
-    }
-    const before = baselines.get(ctl.key) ?? null;
-    if (after.state !== before) {
-      results.push(proven(surface, ctl, "persisted", `${before} -> ${after.state} survived a reload`));
-    } else {
-      // Do not report a batch result as a defect. Open WebUI saves some
-      // sections on their own Save button and some immediately, and flipping a
-      // whole tab at once can leave one of them behind for reasons that have
-      // nothing to do with this control. Re-check it on its own before saying
-      // it saves nothing.
-      reverted.push(ctl);
-    }
-  }
-
-  // Put the surface back the way it was found before doing anything else.
-  for (const ctl of statefuls) {
-    if (!baselines.has(ctl.key)) continue;
-    const target = live.find((c) => c.key === ctl.key);
-    if (!target) continue;
-    const before = baselines.get(ctl.key) ?? null;
-    if (target.state === before) continue;
-    await restore(page, target, before).catch(() => {});
-  }
-  await saveIfPresent(page);
-
-  // Controls the batch could not re-locate (a flipped toggle can hide its own
-  // dependants) get an individual pass rather than a false negative.
-  for (const ctl of [...missing, ...reverted]) {
-    results.push(await persistOne(page, surface, ctl));
-  }
-}
-
-async function restore(page: Page, ctl: Control, before: string | null): Promise<void> {
-  const el = locate(page, ctl);
-  if (ctl.role === "switch" || ctl.role === "checkbox" || ctl.type === "checkbox") {
-    await el.click({ timeout: 6000 });
-    return;
-  }
-  if (ctl.tag === "select") {
-    await el.selectOption(before ?? "", { timeout: 6000 });
-    return;
-  }
-  await el.fill(before ?? "", { timeout: 6000 });
-}
-
-async function persistOne(page: Page, surface: Surface, ctl: Control): Promise<Result> {
-  const live = await enumerateSurface(page, surface);
-  const target = live.find((c) => c.key === ctl.key);
-  if (!target) return unprovable(surface, ctl, "not present on a clean re-open");
-  const before = target.state;
-  await flip(page, target).catch(() => {});
-  await saveIfPresent(page);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
-  const after = await enumerateSurface(page, surface);
-  const back = after.find((c) => c.key === ctl.key);
-  if (!back) return unprovable(surface, ctl, "disappeared after its own change");
-  const ok = back.state !== before;
-  if (ok) {
-    await restore(page, back, before).catch(() => {});
-    await saveIfPresent(page);
-  }
-  return ok
-    ? proven(surface, ctl, "persisted", `${before} -> ${back.state} survived a reload`)
-    : {
-        key: ctl.key,
-        surface: surface.id,
-        name: ctl.label || ctl.name,
-        role: ctl.role || ctl.tag,
-        proven: false,
-        proof: "none",
-        detail: `changed in the UI but reverted to ${before} after reload`,
-      };
-}
-
-function proven(surface: Surface, ctl: Control, proof: Result["proof"], detail: string): Result {
-  return {
-    key: ctl.key,
-    surface: surface.id,
-    name: ctl.label || ctl.name,
-    role: ctl.role || ctl.tag,
-    proven: true,
-    proof,
-    detail,
-  };
-}
-
-function unprovable(surface: Surface, ctl: Control, detail: string): Result {
-  return {
-    key: ctl.key,
-    surface: surface.id,
-    name: ctl.label || ctl.name,
-    role: ctl.role || ctl.tag,
-    proven: false,
-    proof: "none",
-    detail,
-  };
-}
-
-/** Non-persisting surfaces still have to show that typing lands somewhere. */
-async function valuePass(
-  page: Page,
-  surface: Surface,
-  statefuls: Control[],
-  results: Result[],
-): Promise<void> {
-  if (statefuls.length === 0) return;
-  const live = await enumerateSurface(page, surface);
-  for (const ctl of statefuls) {
-    const target = live.find((c) => c.key === ctl.key);
-    if (!target) {
-      results.push(unprovable(surface, ctl, "not present on re-open"));
-      continue;
-    }
-    const before = target.state;
-    const written = await flip(page, target).catch(() => null);
-    await page.waitForTimeout(400);
-    const after = await readState(page, target.covId);
-    results.push(
-      after !== before
-        ? proven(surface, ctl, "value", `${before} -> ${after ?? written}`)
-        : unprovable(surface, ctl, `value did not change (still ${before})`),
-    );
-    await restore(page, target, before).catch(() => {});
-  }
-}
+// persistencePass and valuePass (the flip-verify-restore logic for stateful
+// controls, e.g. Settings > Interface's checkboxes and switches) live in
+// ./persistence, not here. See that file's header for why: a throw between
+// flipping a control on this shared live account and restoring it used to
+// leave the flip permanent (issue #855, recurrence 2026-08-14), and the fix
+// needed a harness (break-proof.spec.ts) that does not require a live
+// deployment.
 
 test.describe("chat interaction coverage", () => {
   test("every rendered chat control has a proven live effect", async ({ page }) => {

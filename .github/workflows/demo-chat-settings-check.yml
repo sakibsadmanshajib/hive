@@ -1,0 +1,178 @@
+name: Demo chat settings drift check
+
+# Backstop for issue #855. The real fix is structural (persistence.ts's
+# persistencePass now restores a flipped control even when the reload used to
+# verify persistence fails), but the account this protects is shared, live,
+# mutable state, and the detector already existed (PR #863) with nowhere
+# automated to run. This wires it in.
+#
+#   schedule       Detector only, no repair. `scripts/demo-chat-settings.mjs`
+#                   (unchanged, shipped by PR #863) exits 1 both when it finds
+#                   real drift and when anything else fails it (sign-in, a
+#                   #815 box blip, a timeout), so a bare exit code cannot tell
+#                   those apart. The `check` step below classifies the two by
+#                   the script's own distinct output instead, and
+#                   `report-failure` files or updates a GitHub issue, with a
+#                   label that names which one happened, on a schedule-
+#                   triggered failure. GitHub sends no default notification for
+#                   a failed scheduled run beyond an opt-in email to whoever it
+#                   attributes the run to, so a red 5am run with no issue would
+#                   otherwise go unseen until the next live check.
+#   workflow_dispatch  Repairs by default (repair=true) and captures fresh
+#                   proof with docs/proof/issue-855-enter-key/capture.mjs, the
+#                   same script PR #863 used, uploaded as a build artifact.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      repair:
+        description: 'Fix drift and capture fresh proof (false = detector only)'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: demo-chat-settings-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web-console
+    env:
+      CHAT_URL: ${{ vars.CHAT_URL || 'https://chat-hive.scubed.co' }}
+      CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      DEMO_ACCOUNT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL || secrets.HIVE_QA_TESTER_EMAIL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    outputs:
+      kind: ${{ steps.check.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+      - name: Check the inputs this job cannot run without
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DEMO_ACCOUNT_EMAIL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Check demo account settings
+        # Classifies the two failure shapes the unchanged detector script can
+        # produce, by its own printed output rather than its exit code, since
+        # both shapes exit 1: "drift" is the script's own
+        # "re-run with --repair to correct it" line (drift.length > 0, no
+        # --repair passed); anything else that exits non-zero (sign-in
+        # failure, box unreachable, timeout) is "broken". The distinction
+        # only matters on the schedule trigger; workflow_dispatch's own
+        # repair/check steps below read plainly either way.
+        if: github.event_name == 'schedule'
+        id: check
+        shell: bash
+        run: |
+          set +e
+          node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL" 2>&1 | tee /tmp/demo-chat-settings.log
+          status="${PIPESTATUS[0]}"
+          if [ "$status" -eq 0 ]; then
+            echo "kind=clean" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -q "re-run with --repair to correct it" /tmp/demo-chat-settings.log; then
+            echo "kind=drift" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=broken" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Repair demo account settings
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        run: node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL" --repair
+      - name: Check only (repair not requested)
+        if: github.event_name == 'workflow_dispatch' && inputs.repair != 'true'
+        run: node scripts/demo-chat-settings.mjs "$DEMO_ACCOUNT_EMAIL"
+      - name: Capture Enter-sends proof
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        run: |
+          mkdir -p /tmp/proof
+          node ../../docs/proof/issue-855-enter-key/capture.mjs manual-repair /tmp/proof "$DEMO_ACCOUNT_EMAIL"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.repair == 'true'
+        with:
+          name: enter-key-proof
+          path: /tmp/proof/*.png
+          retention-days: 14
+
+  report-failure:
+    # Loud channel for the one trigger nobody is watching in real time. A
+    # manual workflow_dispatch already has a human at the keyboard who sees
+    # the run fail; a 5am schedule does not, so only that trigger files or
+    # updates an issue here. Mirrors deploy-demo-box.yml's own report-failure
+    # job (dedupe on an open issue by label, comment if one is already open),
+    # with two distinct labels so a drifted account and a broken check are
+    # never conflated into the same thread.
+    name: Report failure
+    needs: check
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          KIND: ${{ needs.check.outputs.kind }}
+        with:
+          script: |
+            const kind = process.env.KIND || 'broken';
+            const label = kind === 'drift'
+              ? 'ci-failure:demo-chat-settings-drift'
+              : 'ci-failure:demo-chat-settings-check-broken';
+            const title = kind === 'drift'
+              ? 'Demo chat account has drifted (ui.ctrlEnterToSend or similar)'
+              : 'Demo chat settings check cannot run (not necessarily drifted)';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = kind === 'drift'
+              ? `The scheduled check found the shared demo account drifted from its demo-safe settings.\n\nRun: ${runUrl}\n\nRepair: \`gh workflow run demo-chat-settings-check.yml -f repair=true\`, or ` +
+                '`node apps/web-console/scripts/demo-chat-settings.mjs <email> --repair` with real Supabase credentials.'
+              : `The scheduled check could not complete (sign-in failure, the box unreachable, or a timeout), so it did NOT confirm the account is drifted, only that it could not tell.\n\nRun: ${runUrl}\n\nRe-run \`gh workflow run demo-chat-settings-check.yml\`, or read the job log for the actual cause.`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Still failing: ${runUrl}\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: [label],
+                body,
+              });
+            }

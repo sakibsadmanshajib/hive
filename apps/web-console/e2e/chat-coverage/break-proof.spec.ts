@@ -25,7 +25,11 @@ import {
   isDeferred,
   proveByClick,
   sampleChatter,
+  type Control,
+  type Result,
 } from "./lib";
+import { persistencePass, valuePass } from "./persistence";
+import type { Surface } from "./surfaces";
 
 const SELF_TEST_HTML = `
 <main style="min-height:400px">
@@ -64,6 +68,47 @@ const SELF_TEST_HTML = `
   // nothing. Without the idle sample the poll lands inside the settle window
   // and is counted as this button's network proof.
   setInterval(() => { fetch('/api/poll').catch(() => {}); }, 300);
+</script>
+`;
+
+// A minimal stand-in for Settings > Interface's persisted checkbox rows
+// (Enter Key Behavior among them). `checked` here plays the role Open WebUI's
+// own database plays for a real deployment: it survives navigation, and only
+// changes when the fixture's own change handler posts to /persist-save,
+// mirroring how a real toggle calls the settings-update endpoint.
+const PERSIST_FIXTURE_HTML = (checked: boolean) => `
+<main>
+  <label>
+    <input type="checkbox" aria-label="Enter Key Behavior" ${checked ? "checked" : ""} />
+    Enter Key Behavior
+  </label>
+</main>
+<script>
+  document.querySelector('input[type=checkbox]').addEventListener('change', (e) => {
+    fetch('/persist-save?checked=' + e.target.checked).catch(() => {});
+  });
+</script>
+`;
+
+// A control the app refuses to change, which is the ordinary case valuePass's
+// own "value did not change" verdict describes. It rejects the first change and
+// only the first, so the pass's flip is thrown away and any later click lands
+// for real: that is what makes the restore step's own effect visible.
+const REVERTING_FIXTURE_HTML = `
+<main>
+  <label>
+    <input type="checkbox" aria-label="Chat Bubble" />
+    Chat Bubble
+  </label>
+</main>
+<script>
+  let rejected = false;
+  const box = document.querySelector('input[type=checkbox]');
+  box.addEventListener('change', () => {
+    if (rejected) return;
+    rejected = true;
+    box.checked = false;
+  });
 </script>
 `;
 
@@ -181,6 +226,169 @@ test.describe("chat coverage gate self-checks", () => {
     );
     expect(locked.proof).toBe("not-fired");
     expect(locked.detail).toContain("finish the form first");
+  });
+
+  // Regression for issue #855's recurrence on 2026-08-14. persistencePass
+  // flips a real control on a shared live account before it knows whether the
+  // app saves it, so the restoration step must run even when the reload used
+  // to check persistence fails outright, the same way the demo box goes
+  // briefly unreachable mid-run (issue #815). No live deployment is needed to
+  // prove this: the fixture below plays the role of Open WebUI's own
+  // database (a change survives navigation, because /persist-save updates
+  // it), and the second GET to /persist-index hangs (never fulfilled, never
+  // aborted) to stand in for that mid-run outage.
+  //
+  // Hangs rather than aborts on purpose. `route.abort("connectionreset")`
+  // was tried first and made this test flaky in a revealing way: Chromium
+  // retries a GET that failed with a connection reset before any response
+  // began, so the "aborted" request quietly succeeded on its own retry and
+  // `page.reload()` never threw at all, which defeated the entire premise of
+  // the test without failing it for an honest reason. A route that never
+  // answers has no completed failure to retry; Playwright's own navigation
+  // timeout is what rejects `page.reload()`, deterministically, the same way
+  // this file's own "Hanging" button fixture works above.
+  test.describe("reload failure resilience", () => {
+    // Scoped to just this test: the fixture's hang needs a short navigation
+    // timeout so the test does not spend real time waiting out the config's
+    // default 60s per attempted navigation.
+    test.use({ navigationTimeout: 3000 });
+
+    test("a reload failure while verifying persistence still restores the flipped control", async ({
+      page,
+    }) => {
+      test.setTimeout(60_000);
+      let checked = false;
+      let indexRequests = 0;
+
+      await page.route("https://cov.selftest/**", async (route) => {
+        const url = route.request().url();
+        if (url.includes("/persist-save")) {
+          checked = new URL(url).searchParams.get("checked") === "true";
+          await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+          return;
+        }
+        if (url.includes("/persist-index")) {
+          indexRequests += 1;
+          // The first GET is the pass's own baseline read, the third is its
+          // recovery re-open after the failed reload. Only the second, the
+          // `page.reload()` this test exists to break, hangs.
+          if (indexRequests === 2) {
+            return;
+          }
+          await route.fulfill({
+            contentType: "text/html",
+            body: PERSIST_FIXTURE_HTML(checked),
+          });
+          return;
+        }
+        await route.fulfill({ status: 404, body: "not found" });
+      });
+
+    const fixtureSurface: Surface = {
+      id: "settings:fixture",
+      persists: true,
+      open: async (p) => {
+        await p.goto("https://cov.selftest/persist-index", { waitUntil: "domcontentloaded" });
+      },
+    };
+
+    // Hand-built rather than read from a live page: its key matches what
+    // `enumerate` would produce for the fixture's checkbox
+    // (`${surface}::${role || tag}::${label}`, no aria-label collision), so
+    // this describes the control persistencePass will re-discover on its own
+    // first open. Building it this way means the very first GET to
+    // /persist-index is that pass's own baseline read, which is what keeps
+    // the request count below exact rather than off by one.
+    const checkbox: Control = {
+      key: `${fixtureSurface.id}::input::Enter Key Behavior`,
+      surface: fixtureSurface.id,
+      covId: "",
+      tag: "input",
+      type: "checkbox",
+      role: "",
+      name: "Enter Key Behavior",
+      label: "Enter Key Behavior",
+      disabled: false,
+      reason: "",
+      state: "false",
+      href: "",
+      contentEditable: false,
+    };
+
+    const results: Result[] = [];
+    await persistencePass(page, fixtureSurface, [checkbox], results);
+    // The restore click's own change handler posts /persist-save
+    // asynchronously; persistencePass does not wait on it (neither does a
+    // real settings toggle), so give it a moment to land before reading the
+    // fixture's persisted state below.
+    await page.waitForTimeout(300);
+
+    expect(indexRequests, "the reload this test breaks must actually have been attempted").toBe(3);
+    expect(
+      checked,
+      "the fixture's persisted state was left flipped after a reload failure aborted the " +
+        "verification step; the control was never restored",
+    ).toBe(false);
+    expect(
+      results.some((r) => !r.proven && /reload failed/i.test(r.detail)),
+      "a reload failure must be recorded as an unprovable result, not swallowed silently",
+    ).toBe(true);
+    });
+  });
+
+  // The other half of the same guarantee, on the non-persisting path. Restoring
+  // a toggle means clicking it, so a restore that does not first check where the
+  // control actually sits is a mutation of its own whenever the flip it is
+  // undoing never landed. Reported by review on the pushed head: persistencePass
+  // and persistOne both compared state before restoring, valuePass did not.
+  test("a control whose flip never landed is not moved by the restore step", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.route("https://cov.selftest/**", async (route) => {
+      if (route.request().url().includes("/value-index")) {
+        await route.fulfill({ contentType: "text/html", body: REVERTING_FIXTURE_HTML });
+        return;
+      }
+      await route.fulfill({ status: 404, body: "not found" });
+    });
+
+    const surface: Surface = {
+      id: "settings:value-fixture",
+      persists: false,
+      open: async (p) => {
+        await p.goto("https://cov.selftest/value-index", { waitUntil: "domcontentloaded" });
+      },
+    };
+    // Same hand-built shape as the persistence fixture above: only `key` has to
+    // match what `enumerate` produces, since valuePass re-discovers the control
+    // itself and uses that copy's covId.
+    const checkbox: Control = {
+      key: `${surface.id}::input::Chat Bubble`,
+      surface: surface.id,
+      covId: "",
+      tag: "input",
+      type: "checkbox",
+      role: "",
+      name: "Chat Bubble",
+      label: "Chat Bubble",
+      disabled: false,
+      reason: "",
+      state: "false",
+      href: "",
+      contentEditable: false,
+    };
+
+    const results: Result[] = [];
+    await valuePass(page, surface, [checkbox], results);
+
+    expect(
+      await page.locator('input[type=checkbox]').isChecked(),
+      "the restore step flipped a control its own pass had left untouched, which is the same " +
+        "defect as never restoring one: a live account is left on a value nobody chose",
+    ).toBe(false);
+    expect(
+      results.some((r) => !r.proven && /did not change/i.test(r.detail)),
+      "a control the app refused to change must be reported unprovable, not proven",
+    ).toBe(true);
   });
 
   test("every inert-registry entry carries a justification", async () => {
