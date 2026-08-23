@@ -1534,7 +1534,15 @@ services:
     profiles:
       - monitoring
     ports:
-      - "9093:9093"
+      # Loopback only. The API is unauthenticated by design, and the box
+      # backup (scripts/backup-box.sh, issue #1000) now posts its failure
+      # alerts through this port as its failure channel, which makes the
+      # exposure load-bearing: anything on the LAN could forge a
+      # BackupFailed/Stale alert into the ops inbox or read firing alerts.
+      # Prometheus reaches alertmanager over the container network, and
+      # host-side callers use localhost, so nothing legitimate needed the
+      # LAN-reachable binding.
+      - "127.0.0.1:9093:9093"
     configs:
       - source: alertmanager_config
         target: /etc/alertmanager/alertmanager.yml

@@ -1,0 +1,24 @@
+[Unit]
+# Runs the box backup as the sakib user via the user systemd manager. Linger
+# is already enabled for this user on the demo box, so user timers survive
+# reboot without root. The script is the installed copy under
+# /home/sakib/hive-backups/bin, not a repo checkout, so a deploy that resets
+# /home/sakib/hive can never take backups down with it.
+Description=Hive demo box backup (four production data stores)
+ConditionPathIsReadWrite=/home/sakib/hive-backups
+
+[Service]
+Type=oneshot
+ExecStart=/home/sakib/hive-backups/bin/backup-box.sh
+EnvironmentFile=/home/sakib/hive-backups/etc/backup.env
+# The run handles plaintext identity and ledger data: private temp handling
+# and no privilege gain, defense in depth on top of the script's own umask.
+UMask=0077
+NoNewPrivileges=true
+
+# A run that hangs must not hold the flock forever: kill after one hour and
+# let the failure alert fire through the script's own error trap.
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=default.target
