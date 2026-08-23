@@ -122,6 +122,12 @@ COMPLETION_ATTEMPTS = max(1, int(os.environ.get("HIVE_VERIFY_COMPLETION_ATTEMPTS
 RETRY_DELAY = float(os.environ.get("HIVE_VERIFY_RETRY_DELAY", "20"))
 RUN_LABEL = os.environ.get("HIVE_VERIFY_RUN_LABEL", "").strip() or "local"
 
+# The flat credit hold every chat completion takes before dispatch (see the
+# preflight in check_ledger for why this number lives here). Optional
+# override for a deployment where that endpoint default has moved.
+LEDGER_CHAT_HOLD_CREDITS = int(
+    os.environ.get("HIVE_VERIFY_CHAT_HOLD_CREDITS", "10000"))
+
 
 class CheckFailed(Exception):
     """One check's assertion did not hold. Carries the operator-facing reason."""
@@ -410,6 +416,59 @@ def check_ledger(auth: dict, negative: bool) -> None:
     Negative control: skip the spend. Nothing bills, no row appears, and the
     check must go red exactly as it would if billing had failed open.
     """
+    if not negative:
+        # Preflight the account's spendable balance against the flat credit
+        # hold every chat completion takes. A fixed-price alias reserves a
+        # flat 10000 credits per request regardless of model or price
+        # (apps/edge-api/internal/inference/chat_completions.go passes that
+        # endpoint default to ReservationCredits, which falls back to it
+        # whenever reservation_estimate_credits is null on the alias), and
+        # control-plane refuses the reservation with a 409 when available
+        # credits are below it. Edge maps that 409 to a 429 whose message
+        # reads like an upstream provider quota error, which sent a real
+        # incident (2026-08-23) chasing OpenRouter, AtlasCloud and Google
+        # theories before the ledger said the verify workspace held 9999
+        # credits against the 10000 hold. Name that condition here instead:
+        # fail for THIS reason, before any upstream retry is burned.
+        status, raw = http("GET", f"{CP}/api/v1/accounts/current/credits/balance",
+                           auth, timeout=60)
+        if status != 200:
+            # The preflight is diagnostic, not load-bearing for correctness:
+            # if the balance cannot be read, let the completion attempt speak
+            # for itself rather than redacting its answer behind a read error.
+            print(f"  ::warning::could not read balance ({status}), "
+                  "skipping the headroom preflight")
+        else:
+            try:
+                summary = json.loads(raw)
+            except json.JSONDecodeError:
+                raise CheckFailed(
+                    "the balance endpoint answered 200 with a body that is not JSON, "
+                    f"so the headroom preflight cannot run: {snippet(raw)}"
+                ) from None
+            if not isinstance(summary, dict):
+                raise CheckFailed(
+                    "the balance endpoint answered 200 with JSON that is not an object "
+                    f"({type(summary).__name__})"
+                )
+            try:
+                available = int(summary.get("available_credits"))
+            except (TypeError, ValueError):
+                raise CheckFailed(
+                    "the balance endpoint answered 200 with a body this script cannot "
+                    f"read: {snippet(raw)}"
+                ) from None
+            if available < LEDGER_CHAT_HOLD_CREDITS:
+                raise CheckFailed(
+                    f"workspace has {available} available credits, below the flat "
+                    f"{LEDGER_CHAT_HOLD_CREDITS}-credit hold every chat completion "
+                    "reserves. Control-plane refuses the reservation and edge surfaces "
+                    "it as a 429 insufficient_quota that looks like an upstream quota "
+                    "error but is not one. Top up the verify workspace's ledger "
+                    "(credit_ledger_entries grant row) and rerun."
+                )
+            print(f"  balance preflight ok ({available} available credits)")
+
     print("  scanning existing usage_charge entries")
     before, _ = scan_usage_charges(auth)
     print(f"  {len(before)} usage_charge entries already on this account")
