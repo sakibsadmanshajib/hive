@@ -10,12 +10,19 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // #269: hive_jwt_forward is an Open WebUI Function (Admin > Functions), not
 // a file the container auto-loads; there is no mount or env var that
 // installs it. It must be created via the Functions REST API by an admin
-// session. The real fixture user below signs in with tenant role OWNER,
-// which the owui_role JWT claim maps to Open WebUI's "ADMIN" OAuth role
-// (OAUTH_ADMIN_ROLES in docker-compose.yml), so Open WebUI grants it a real
-// admin session on every login -- not the (separate, and now deliberately
-// consumed by the bootstrap login first) unconditional first-user-becomes-
-// admin promotion.
+// session.
+//
+// Where that admin session comes from changed with issue #748. It used to be
+// free: the fixture signs in with tenant role OWNER, and a tenant OWNER was
+// mapped onto Open WebUI admin. That mapping was a cross-tenant grant on a
+// shared instance and is gone, along with upstream's unconditional
+// first-user-becomes-admin promotion. The fixture's own workspace now carries
+// the platform attribute instead (accounts.is_platform_admin plus an ACTIVE
+// owner membership, written by scripts/seed-owui-e2e-user.py), which is what
+// resolves an admin role for this login. The bootstrap login below is
+// therefore no longer load-bearing for that promotion; it is kept because it
+// costs one round trip and still proves the fixture is not the instance's
+// only account.
 //
 // #556: the create/update/activate/verify sequence itself is no longer
 // written here. It lives in scripts/install-owui-jwt-forward.py, which the
@@ -191,12 +198,15 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
     .or(page.getByRole("link", { name: /new chat/i }))
     .first();
 
-  // Bootstrap login: Open WebUI auto-promotes the very first user it ever
-  // sees to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM entirely.
-  // The OWUI container in this job is freshly created every run, so without
-  // this step the real fixture user below would always land as that
-  // unconditional first-user admin and never actually exercise the
-  // owui_role allow-list gate PR #451 fixed.
+  // Bootstrap login: upstream Open WebUI auto-promoted the very first user it
+  // ever saw to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM
+  // entirely, and the container in this job is freshly created every run, so
+  // without this step the real fixture user below landed as that unconditional
+  // first-user admin and never exercised the role resolution at all. Issue
+  // #748 removed that promotion, so this step no longer has a promotion to
+  // consume. It is kept, cheaply: it still guarantees the fixture is not the
+  // instance's only account, which is what made the old promotion fire, so a
+  // regression that restores it cannot hide behind this fixture.
   //
   // Runs in its own, throwaway browser context (separate cookie jar), not
   // signed out and reused in `page` -- components/oauth/consent-panel.tsx
