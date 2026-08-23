@@ -77,17 +77,13 @@ func TestTokenHookNeverRaisesForMembershiplessUser(t *testing.T) {
 		}
 	}
 
-	// Belt and braces on the same property, stated as a prohibition rather
-	// than a match: whatever shape the owui_role expression takes in future,
-	// the literal 'ADMIN' must not appear in it.
-	for _, line := range strings.Split(code, "\n") {
-		if strings.Contains(line, "'owui_role'") && strings.Contains(line, "'ADMIN'") {
-			t.Fatalf("%s: owui_role emits 'ADMIN', which OAUTH_ADMIN_ROLES maps to "+
-				"Open WebUI instance admin. Instance admin is a platform attribute, "+
-				"never a tenant role (issue #748): %s",
-				filepath.Base(path), strings.TrimSpace(line))
-		}
-	}
+	// This file can only match text. The behavioural guard on the same
+	// property, which executes the hook for every tenant role against a real
+	// database and asserts the emitted value is never Open WebUI's admin role,
+	// is TestCustomAccessTokenHook_OwuiRoleNeverGrantsInstanceAdmin in
+	// apps/control-plane/internal/tenants. A text check cannot tell an 'ADMIN'
+	// on the input side of the CASE from one on the output side, so it is not
+	// attempted here.
 
 	// Absent, not null. An explicit null tenant_id claim invites a consumer
 	// to read the key, find JSON null, and treat it as a wildcard.
