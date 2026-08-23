@@ -45,6 +45,17 @@ CADDYFILE = pathlib.Path(__file__).resolve().parent.parent / "deploy" / "docker"
 
 # Must be refused by the proxy before Open WebUI ever sees them.
 MUST_BLOCK = [
+    # #947 residual: bulk Knowledge export. `export_knowledge_by_id` depends on
+    # `get_admin_user` alone, with no ownership check, no
+    # BYPASS_ADMIN_ACCESS_CONTROL check and no ENABLE_ADMIN_EXPORT check, so a
+    # tenant OWNER (an instance admin here) could download another tenant's
+    # whole collection given only its id. The two environment flags gate the
+    # listing routes and cannot reach this one.
+    "/api/v1/knowledge/0b3f2c1e-7a5d-4e11-9c8b-2f6a1d3e4b57/export",
+    "/api/v1/knowledge/any-id/export",
+    "/api/v2/knowledge/any-id/export",
+    "/API/V1/KNOWLEDGE/any-id/EXPORT",
+    "/api/v1/knowledge/any-id/export/",
     # #769: credential-bearing admin config reads and writes.
     "/api/v1/configs/export",
     "/openai/config",
@@ -109,6 +120,15 @@ MUST_BLOCK = [
 # Must reach Open WebUI. Every entry without a comment came off the access log
 # of a real signed-in session.
 MUST_STAY_OPEN = [
+    # The Knowledge routes an owner actually uses. These carry the same admin
+    # short-circuit as the export route and need a real ownership check in
+    # Python through owui-patches; blocking them at the proxy would be an
+    # outage rather than a fix, so the over-block guard names them explicitly.
+    "/api/v1/knowledge/",
+    "/api/v1/knowledge/0b3f2c1e-7a5d-4e11-9c8b-2f6a1d3e4b57",
+    "/api/v1/knowledge/0b3f2c1e-7a5d-4e11-9c8b-2f6a1d3e4b57/files",
+    "/api/v1/knowledge/create",
+    "/api/v1/knowledge/search",
     "/",
     "/auth",
     "/health",

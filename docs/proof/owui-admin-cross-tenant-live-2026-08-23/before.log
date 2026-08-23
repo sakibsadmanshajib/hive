@@ -1,0 +1,29 @@
+PR #960 cross-tenant isolation -- arm: before
+==================================================
+
+Same two accounts, same Knowledge collection, same containers and the
+same database volume in both arms. The ONLY difference between arms is
+BYPASS_ADMIN_ACCESS_CONTROL and ENABLE_ADMIN_CHAT_ACCESS.
+
+  before = the upstream default (true), which is what every deployment
+           runs today because we never set them
+  after  = this PR's values (false)
+
+Tenant A account: role=admin email=owner@hive-verify-952.invalid
+  GET /api/v1/knowledge/ as A -> HTTP 200, shape object, entries 1
+  collection already present from the previous arm, reused
+  collection name: Verify-960-Tenant-A-Secret-Kb
+  collection id present: true
+  tenant A sees its own collection on its Knowledge page: true
+  [shot] before-01-tenantA-owns-the-collection.png  tenant A, the owner, sees its own Knowledge collection
+         url: http://localhost:3003/workspace/knowledge
+
+Tenant B account: role=admin email=owner-b@hive-verify-960.invalid
+  different account from A: true
+  GET /api/v1/knowledge/ as B -> HTTP 200, entries 1
+  B's API response contains tenant A's collection: true
+  B's Knowledge page shows tenant A's collection: true
+  [shot] before-02-tenantB-knowledge-page.png  tenant B (admin, different tenant) Knowledge page, arm=before
+         url: http://localhost:3003/workspace/knowledge
+
+RESULT arm=before: roleA=admin roleB=admin bSeesFixtureACollection=true
