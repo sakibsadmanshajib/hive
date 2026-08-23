@@ -68,6 +68,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usermemories"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
@@ -1046,11 +1047,19 @@ func main() {
 	// section for why the real Engine is still conditional on deployment
 	// env vars rather than unconditionally wired.
 	var agentTaskHandler *agenttask.Handler
+	var userMemoriesHandler *usermemories.Handler
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
 		agentEngine, agentEngineStatus := buildAgentEngine(egressSvc)
 		agentTaskSvc := agenttask.NewService(agentTaskRepo, agentEngine)
 		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
+
+		// Issue #172 (ruling D-020): cross-chat user memory, four-verb
+		// internal surface. Recall reads the same rows directly in edge-api's
+		// chat dispatch path; nothing else consumes them yet.
+		memoryRepo := usermemories.NewPgxRepository(pool)
+		memorySvc := usermemories.NewService(memoryRepo)
+		userMemoriesHandler = usermemories.NewHandler(memorySvc)
 
 		// Poller needs a real StatusChecker to poll — NotConfiguredEngine has
 		// no Status method — so it is only started when the engine itself
@@ -1098,6 +1107,7 @@ func main() {
 		EgressPolicyHandler:      egressPolicyHandler,
 		MarketplaceHandler:       marketplaceHandler,
 		AgentTaskHandler:         agentTaskHandler,
+		UserMemoriesHandler:      userMemoriesHandler,
 		RoutingHandler:           routingHandler,
 		UsageHandler:             usageHandler,
 		MetricsRegistry:          metricsRegistry,

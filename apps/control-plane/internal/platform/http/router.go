@@ -20,6 +20,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usermemories"
 )
 
 // healthResponse is the JSON body returned by the /health endpoint.
@@ -172,6 +173,11 @@ type RouterConfig struct {
 	// customer-facing /v1/agent/tasks routes call into. When nil the route
 	// is not registered.
 	AgentTaskHandler *agenttask.Handler
+
+	// UserMemoriesHandler serves cross-chat user memory (issue #172, ruling
+	// D-020): the shared-secret-guarded four-verb surface at
+	// /internal/user-memories/. When nil the route is not registered.
+	UserMemoriesHandler *usermemories.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -400,6 +406,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// customer-facing surface, this is the internal store they call into.
 	if cfg.AgentTaskHandler != nil {
 		mux.Handle("/internal/agent-tasks/", internal(cfg.AgentTaskHandler.InternalMux()))
+	}
+
+	// Issue #172 (ruling D-020): cross-chat user memory, four-verb internal
+	// surface. Service-to-service only this slice; a customer bearer route
+	// is a follow-up if the pattern earns one.
+	if cfg.UserMemoriesHandler != nil {
+		mux.Handle("/internal/user-memories/", internal(cfg.UserMemoriesHandler.InternalMux()))
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.

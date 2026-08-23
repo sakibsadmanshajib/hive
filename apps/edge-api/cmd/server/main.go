@@ -166,6 +166,9 @@ func main() {
 		// defect this wiring closes, not a degraded mode to fall back to.
 		Accounting: accountingClient,
 		Billing:    &metering.PGBillingAccountResolver{Pool: dbPool},
+		// Cross-chat recall (#172, D-020): reads public.user_memories under
+		// RLS. Injection degrades to no block until the migration is applied.
+		Memories:   chat.NewMemorySource(dbPool),
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
