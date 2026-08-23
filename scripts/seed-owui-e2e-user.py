@@ -586,6 +586,45 @@ def provision_billing_mapping(rest, headers, tenant_id: str, account_id: str) ->
     sys.exit(1)
 
 
+def provision_instance_admin(rest, headers, account_id: str, user_id: str) -> None:
+    """Grant the platform attribute that makes this fixture an Open WebUI admin.
+
+    owui.setup.ts installs the hive_jwt_forward Function through the Functions
+    REST API, and every one of those endpoints is admin gated, so the fixture
+    needs a real Open WebUI admin session. It used to get one for free: a tenant
+    OWNER was mapped onto Open WebUI admin, which is the cross-tenant grant
+    issue #748 removed. Instance admin is now public.accounts.is_platform_admin
+    plus an ACTIVE 'owner' row in public.account_memberships, the same predicate
+    apps/control-plane/internal/platform/role_pgx.go uses, so this fixture asks
+    for it explicitly instead of inheriting it from a tenant role.
+
+    The flag itself is set on the shim account by the caller's upsert. This
+    writes the membership half, because the flag alone confers nothing: the
+    predicate needs an ACTIVE owner row, and accounts.owner_user_id is not it.
+
+    Deliberate and narrow: the account being flagged is the throwaway shim
+    account this script owns, and scripts/seed-demo-owner.py still refuses the
+    same flag, because a demo account is not a platform operator."""
+    status, body = request(
+        rest, headers, "POST", "/account_memberships",
+        body={
+            "account_id": account_id,
+            "user_id": user_id,
+            "role": "owner",
+            "status": "active",
+        },
+        params={"on_conflict": "account_id,user_id"},
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    if status not in (200, 201) or not body:
+        print(
+            f"error: platform-admin membership upsert failed: {status} {body}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print("instance admin: ok (platform attribute granted to the shim account)", file=sys.stderr)
+
+
 def provision_tenant_member(
     rest, gotrue, headers, tenant_id: str, email: str, role: str, env_password: str = "",
 ) -> tuple[str, str | None]:
@@ -738,6 +777,11 @@ def main() -> None:
     # schema -- separate from the tenants/tenant_users rows above).
     account_slug = args.account_slug
     account_name = SHIM_ACCOUNT_NAME if account_slug == SHIM_ACCOUNT_SLUG else f"OWUI Shim ({account_slug})"
+    # is_platform_admin is set here on purpose, and it is the only thing in this
+    # repository that asks for it outside a test fixture. See
+    # provision_instance_admin below for why the Open WebUI half of this suite
+    # cannot work without it since issue #748, and why the demo seeder still
+    # refuses the same flag.
     status, body = request(
         rest, headers, "POST", "/accounts",
         body={
@@ -745,6 +789,7 @@ def main() -> None:
             "display_name": account_name,
             "account_type": "business",
             "owner_user_id": user_id,
+            "is_platform_admin": True,
         },
         params={"on_conflict": "slug"},
         prefer="resolution=merge-duplicates,return=representation",
@@ -753,6 +798,11 @@ def main() -> None:
         print(f"error: shim account upsert failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
     shim_account_id = body[0]["id"]
+
+    # 4a. The membership half of the platform-admin predicate. Runs before the
+    # key mint below for the same reason the billing mapping does: a failure
+    # here costs nothing, because no key has been minted or revoked yet.
+    provision_instance_admin(rest, headers, shim_account_id, user_id)
 
     # 4b. Map the tenant to that account. Runs BEFORE the mint below so a
     # collision it cannot resolve costs nothing: no key is minted and none is

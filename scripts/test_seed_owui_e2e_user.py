@@ -501,6 +501,79 @@ def test_tenant_slug_defaults_to_ci_and_is_overridable() -> None:
     print("ok: --tenant-slug defaults to the CI tenant and can be overridden")
 
 
+# --- instance admin comes from the platform attribute (issue #748) --------
+
+USER = "44444444-4444-4444-4444-444444444444"
+
+
+def run_instance_admin():
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if req.get_method() == "POST":
+            return FakeResponse(201, [{"id": ACCOUNT}])
+        raise AssertionError(f"unexpected call: {req.get_method()} {req.full_url}")
+
+    original = patch_urlopen(fake_urlopen)
+    try:
+        seed_owui_e2e_user.provision_instance_admin(REST, HEADERS, ACCOUNT, USER)
+    finally:
+        restore_urlopen(original)
+    return calls
+
+
+def test_instance_admin_membership_is_active_and_owner() -> None:
+    """This suite installs the hive_jwt_forward Function, which is admin gated.
+    It used to obtain that admin session because a tenant OWNER was mapped onto
+    Open WebUI admin, the cross-tenant grant issue #748 removed. The replacement
+    is the control plane's own predicate, and both halves are load bearing: an
+    'invited' membership or a 'member' role confers nothing."""
+    posts = [c for c in run_instance_admin() if c.get_method() == "POST"]
+    assert len(posts) == 1, [c.full_url for c in posts]
+    assert posts[0].full_url.startswith(REST + "/account_memberships")
+    assert json.loads(posts[0].data) == {
+        "account_id": ACCOUNT,
+        "user_id": USER,
+        "role": "owner",
+        "status": "active",
+    }
+    print("ok: provision_instance_admin writes an ACTIVE owner membership")
+
+
+def test_instance_admin_membership_upsert_is_idempotent() -> None:
+    """Every nightly run re-seeds the same fixture, so a second run must not
+    fail on the unique (account_id, user_id) constraint."""
+    posts = [c for c in run_instance_admin() if c.get_method() == "POST"]
+    assert "on_conflict=account_id%2Cuser_id" in posts[0].full_url or (
+        "on_conflict=account_id,user_id" in posts[0].full_url
+    ), posts[0].full_url
+    prefer = posts[0].headers.get("Prefer", "")
+    assert "resolution=merge-duplicates" in prefer, prefer
+    print("ok: provision_instance_admin upserts rather than inserting blindly")
+
+
+def test_the_shim_account_asks_for_the_platform_flag() -> None:
+    """The membership half is useless without the flag half, and the flag lives
+    on the account row this script upserts."""
+    source = (Path(__file__).parent / "seed-owui-e2e-user.py").read_text(encoding="utf-8")
+    assert '"is_platform_admin": True' in source, (
+        "the shim account must carry the platform attribute, or the fixture has "
+        "no Open WebUI admin session and cannot install hive_jwt_forward"
+    )
+    print("ok: the shim account carries is_platform_admin")
+
+
+def test_the_demo_seeder_still_refuses_the_platform_flag() -> None:
+    """Paired with the assertion above so the two never blur together. A demo
+    account is on a public host and is not an operator (issue #747)."""
+    demo = (Path(__file__).parent / "seed-demo-owner.py").read_text(encoding="utf-8")
+    assert '"is_platform_admin": False' in demo or "is_platform_admin\": False" in demo, (
+        "scripts/seed-demo-owner.py must keep writing is_platform_admin false"
+    )
+    print("ok: the demo seeder still refuses platform admin")
+
+
 # --- account scoping ------------------------------------------------------
 
 def test_account_slug_defaults_to_ci_and_is_overridable() -> None:
@@ -652,6 +725,10 @@ def main() -> None:
     test_billing_mapping_never_repoints_an_account()
     test_billing_mapping_accepts_a_lost_race_on_the_same_pairing()
     test_billing_mapping_still_fails_when_the_race_winner_is_another_account()
+    test_instance_admin_membership_is_active_and_owner()
+    test_instance_admin_membership_upsert_is_idempotent()
+    test_the_shim_account_asks_for_the_platform_flag()
+    test_the_demo_seeder_still_refuses_the_platform_flag()
     test_tenant_slug_defaults_to_ci_and_is_overridable()
     test_password_is_never_rotated_on_an_existing_account()
     test_run_key_namespaces_the_fixture_addresses()

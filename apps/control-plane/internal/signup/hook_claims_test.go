@@ -62,16 +62,30 @@ func TestTokenHookNeverRaisesForMembershiplessUser(t *testing.T) {
 	// The member path must still emit all four claims. owui_role in
 	// particular is what Open WebUI's OAUTH_ROLES_CLAIM reads
 	// (deploy/docker/docker-compose.yml), and dropping it would strand every
-	// member on Open WebUI's activation-pending screen.
+	// member on Open WebUI's activation-pending screen. It must also never
+	// carry the value OAUTH_ADMIN_ROLES names, because instance admin is
+	// accounts.is_platform_admin and never a tenant role (issue #748).
 	for _, want := range []string{
 		"jsonb_build_object('tenant_id', selected)",
 		"jsonb_build_object('tenants',   COALESCE(tenant_list, '[]'::jsonb))",
 		"jsonb_build_object('role',      user_role)",
-		"jsonb_build_object('owui_role', CASE WHEN user_role = 'OWNER' THEN 'ADMIN' ELSE user_role END)",
+		"jsonb_build_object('owui_role', CASE WHEN user_role IN ('OWNER', 'ADMIN') THEN 'MEMBER' ELSE user_role END)",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("%s: member claim emission must still contain %q",
 				filepath.Base(path), want)
+		}
+	}
+
+	// Belt and braces on the same property, stated as a prohibition rather
+	// than a match: whatever shape the owui_role expression takes in future,
+	// the literal 'ADMIN' must not appear in it.
+	for _, line := range strings.Split(code, "\n") {
+		if strings.Contains(line, "'owui_role'") && strings.Contains(line, "'ADMIN'") {
+			t.Fatalf("%s: owui_role emits 'ADMIN', which OAUTH_ADMIN_ROLES maps to "+
+				"Open WebUI instance admin. Instance admin is a platform attribute, "+
+				"never a tenant role (issue #748): %s",
+				filepath.Base(path), strings.TrimSpace(line))
 		}
 	}
 
@@ -148,7 +162,7 @@ func TestTokenHookClaimsUnchangedForMember(t *testing.T) {
 	userID := mustInsertAuthUser(t, ctx, pool, "hookmember-"+uuid.NewString()+"@example.com")
 
 	// OWNER specifically, because that is the role the owui_role remap
-	// rewrites to ADMIN. A MEMBER would pass a weaker version of this test.
+	// rewrites. A MEMBER would pass a weaker version of this test.
 	_, err := pool.Exec(ctx,
 		`INSERT INTO public.tenant_users(tenant_id, user_id, role, status)
 		 VALUES ($1, $2, 'OWNER', 'ACTIVE')`, tenantID, userID)
@@ -160,8 +174,10 @@ func TestTokenHookClaimsUnchangedForMember(t *testing.T) {
 		"member must be bound to their tenant")
 	require.Equal(t, "OWNER", claims["role"],
 		"role claim is read verbatim by RLS policies and must stay OWNER")
-	require.Equal(t, "ADMIN", claims["owui_role"],
-		"owui_role must remap OWNER to ADMIN for Open WebUI's OAUTH_ALLOWED_ROLES")
+	require.Equal(t, "MEMBER", claims["owui_role"],
+		"owui_role must remap OWNER to a non-admin value in Open WebUI's "+
+			"OAUTH_ALLOWED_ROLES: the OWNER to ADMIN remap made a customer an "+
+			"administrator of the shared chat instance (issue #748)")
 
 	tenants, ok := claims["tenants"].([]any)
 	require.True(t, ok, "tenants claim must be a JSON array, got %T", claims["tenants"])
