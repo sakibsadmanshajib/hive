@@ -340,6 +340,13 @@ def scan_usage_charges(auth: dict, stop_when_new_of: set[str] | None = None) -> 
                 f"({type(body).__name__})"
             )
         entries = body.get("entries")
+        if entries is None:
+            # The control-plane's Go handler builds this list with
+            # `var entries []LedgerEntry`, so an account with no rows yet
+            # marshals as null rather than []. Measured live: a funded-later,
+            # zero-row account answered {"entries": null}. That is a designed
+            # empty ledger, not a malformed body.
+            entries = []
         if not isinstance(entries, list):
             raise CheckFailed(
                 f"ledger read answered 200 but carried entries as {type(entries).__name__}, "
