@@ -1529,6 +1529,9 @@ export async function getLedgerEntries(params: {
   limit?: number;
   cursor?: string;
   type?: string;
+  // Narrows the page to one request's reservation lifecycle (hold, charge,
+  // release entries sharing that request_id) for the request-log detail view.
+  requestId?: string;
 }): Promise<LedgerPage> {
   const { baseUrl, headers } = await getRequestContext();
 
@@ -1541,6 +1544,9 @@ export async function getLedgerEntries(params: {
   }
   if (params.type) {
     searchParams.set("type", params.type);
+  }
+  if (params.requestId) {
+    searchParams.set("request_id", params.requestId);
   }
 
   const qs = searchParams.toString();
@@ -2210,6 +2216,148 @@ export async function getAnalyticsErrors(params: {
     if (decoded) rows.push(decoded);
   }
   return rows;
+}
+
+// =============================================================================
+// Usage events (console request log browser, /console/logs)
+// =============================================================================
+
+// One usage event as the console renders it. The control-plane response
+// deliberately omits provider_request_id and internal_metadata; this shape
+// carries only what the table and its detail expansion show.
+export interface UsageEventRow {
+  id: string;
+  request_id: string;
+  request_attempt_id: string;
+  event_type: string;
+  endpoint: string;
+  model_alias: string;
+  status: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  hive_credit_delta: number;
+  customer_tags: Record<string, unknown>;
+  error_code?: string;
+  error_type?: string;
+  api_key_id?: string;
+  created_at: string;
+}
+
+export interface UsageEventsPage {
+  events: UsageEventRow[];
+  next_cursor: string | null;
+}
+
+export interface UsageLogsFilters {
+  limit?: number;
+  window?: string;
+  modelAlias?: string;
+  status?: string;
+  apiKeyId?: string;
+  errorsOnly?: boolean;
+  cursor?: string;
+}
+
+export async function getUsageEvents(
+  filters: UsageLogsFilters,
+): Promise<UsageEventsPage> {
+  const { baseUrl, headers } = await getRequestContext();
+
+  const qs = new URLSearchParams();
+  if (filters.limit !== undefined) {
+    qs.set("limit", String(filters.limit));
+  }
+  if (filters.window) qs.set("window", filters.window);
+  if (filters.modelAlias) qs.set("model_alias", filters.modelAlias);
+  if (filters.status) qs.set("status", filters.status);
+  if (filters.apiKeyId) qs.set("api_key_id", filters.apiKeyId);
+  if (filters.errorsOnly) qs.set("errors", "true");
+  if (filters.cursor) qs.set("cursor", filters.cursor);
+
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/usage-events?${qs.toString()}`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch usage events"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse usage events response");
+  }
+
+  // handleListEvents wraps rows under "events" and exposes the keyset cursor
+  // as next_cursor (empty string when there is no further page). Same
+  // loud-failure contract as the analytics wrappers above (issue #856).
+  const rawData = requireArrayField(payload, "events", "Failed to parse usage events response");
+  const events: UsageEventRow[] = [];
+  for (const item of rawData) {
+    const decoded = decodeUsageEventRow(item);
+    if (!decoded) {
+      throw new Error("Failed to parse usage events response");
+    }
+    events.push(decoded);
+  }
+
+  return {
+    events,
+    // Upstream writes an empty string when there is no further page; normalize
+    // to null so callers can test falsiness without string comparisons.
+    next_cursor: readStringField(payload, "next_cursor") || null,
+  };
+}
+
+function decodeUsageEventRow(value: JsonValue): UsageEventRow | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const id = readStringField(value, "id");
+  const requestId = readStringField(value, "request_id");
+  const requestAttemptId = readStringField(value, "request_attempt_id");
+  const eventType = readStringField(value, "event_type");
+  const endpoint = readStringField(value, "endpoint");
+  const modelAlias = readStringField(value, "model_alias");
+  const status = readStringField(value, "status");
+  const createdAt = readStringField(value, "created_at");
+
+  if (!id || !requestId || !requestAttemptId || !eventType || !endpoint || !modelAlias || !status || !createdAt) {
+    return null;
+  }
+
+  const rawTags = readObjectField(value, "customer_tags");
+  const customerTags: Record<string, unknown> = {};
+  if (rawTags) {
+    for (const [k, v] of Object.entries(rawTags)) {
+      customerTags[k] = v;
+    }
+  }
+
+  const apiKeyId = readStringField(value, "api_key_id");
+
+  return {
+    id,
+    request_id: requestId,
+    request_attempt_id: requestAttemptId,
+    event_type: eventType,
+    endpoint,
+    model_alias: modelAlias,
+    status,
+    input_tokens: readNumberField(value, "input_tokens") ?? 0,
+    output_tokens: readNumberField(value, "output_tokens") ?? 0,
+    cache_read_tokens: readNumberField(value, "cache_read_tokens") ?? undefined,
+    cache_write_tokens: readNumberField(value, "cache_write_tokens") ?? undefined,
+    hive_credit_delta: readNumberField(value, "hive_credit_delta") ?? 0,
+    customer_tags: customerTags,
+    error_code: readStringField(value, "error_code") ?? undefined,
+    error_type: readStringField(value, "error_type") ?? undefined,
+    api_key_id: apiKeyId ?? undefined,
+    created_at: createdAt,
+  }
 }
 
 export async function getBudgetThreshold(): Promise<BudgetThreshold | null> {

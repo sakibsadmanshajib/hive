@@ -77,7 +77,24 @@ export async function middleware(request: NextRequest) {
   // harvest a click or a session, is still refused: 'self' matches the scheme,
   // host and port of this document and nothing else, and X-Frame-Options
   // SAMEORIGIN says the same to a browser too old to read the CSP directive.
+  //
+  // One route is exempt, and the exemption is load-bearing rather than
+  // cosmetic. Middleware headers do not merely merge with a route handler's:
+  // verified by curl against the production image, this `set` REPLACES a
+  // Content-Security-Policy the handler already wrote. The deck proxy
+  // (app/api/deck/[...ref]/route.ts) serves tenant-authored HTML from this
+  // app's own origin and depends on a full policy of its own, including
+  // `sandbox allow-scripts`, to keep that HTML out of this origin. Stamping
+  // `frame-ancestors 'self'` over it silently deletes the sandbox and hands
+  // the deck the app's cookies, with nothing failing and nothing logged. That
+  // route writes its own strictly narrower policy, frame-ancestors included,
+  // so leaving it alone loses no protection.
+  const ownsItsSecurityHeaders = pathname.startsWith("/api/deck/");
+
   const withSecurityHeaders = (res: NextResponse) => {
+    if (ownsItsSecurityHeaders) {
+      return res;
+    }
     res.headers.set("X-Frame-Options", "SAMEORIGIN");
     res.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
     return res;

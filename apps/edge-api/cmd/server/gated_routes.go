@@ -30,3 +30,13 @@ func registerAgentTaskRoutes(mux *http.ServeMux, gate *featuregate.Gate, taskHan
 	mux.Handle("/v1/agent/tasks", gated)
 	mux.Handle("/v1/agent/tasks/", gated)
 }
+
+// registerAgentScheduleRoutes attaches the scheduled-agent-task ("routines")
+// CRUD surface to mux behind FeatureCowork: deployments (tenants) without
+// Cowork enabled get the same 403 the task routes return, never a 404, and
+// removing or swapping this gate turns gated_routes_test.go red.
+func registerAgentScheduleRoutes(mux *http.ServeMux, gate *featuregate.Gate, scheduleHandler http.Handler) {
+	gated := gate.Require(featuregate.FeatureCowork)(scheduleHandler)
+	mux.Handle("/v1/agent/schedules", gated)
+	mux.Handle("/v1/agent/schedules/", gated)
+}

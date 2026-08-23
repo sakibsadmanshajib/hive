@@ -105,6 +105,14 @@ func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 type createRequest struct {
 	Pack         string `json:"pack"`
 	Instructions string `json:"instructions"`
+	// BearerJWT is forwarded by edge-api's task-create handler from the
+	// original request's own Authorization header. This is a
+	// service-to-service surface guarded by RequireInternalToken, not a
+	// customer-reachable one, so carrying it in the body here widens no
+	// trust boundary: edge-api is the only caller and it is relaying the
+	// same user's own already-validated JWT, never minting one. See
+	// Task.BearerJWT's doc comment.
+	BearerJWT string `json:"bearer_jwt"`
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID) {
@@ -114,7 +122,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID,
 		writeJSON(w, http.StatusBadRequest, errBody("invalid JSON body"))
 		return
 	}
-	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions)
+	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, req.BearerJWT)
 	if err != nil {
 		writeTaskError(w, err)
 		return

@@ -150,21 +150,56 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 		limit = 20
 	}
 
+	// Every predicate is parameterized; the placeholder numbers are derived
+	// from the running arg count so no user-controlled value is ever
+	// interpolated into the SQL text.
 	query := `
 		SELECT id, account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
 		FROM public.usage_events
 		WHERE account_id = $1
 	`
 	args := []any{filter.AccountID}
-	if strings.TrimSpace(filter.RequestID) != "" {
-		query += ` AND request_id = $2`
-		args = append(args, filter.RequestID)
-		query += ` ORDER BY created_at DESC LIMIT $3`
-		args = append(args, limit)
-	} else {
-		query += ` ORDER BY created_at DESC LIMIT $2`
-		args = append(args, limit)
+	next := func() int { return len(args) + 1 }
+
+	if v := strings.TrimSpace(filter.RequestID); v != "" {
+		query += fmt.Sprintf(` AND request_id = $%d`, next())
+		args = append(args, v)
 	}
+	if v := strings.TrimSpace(filter.ModelAlias); v != "" {
+		query += fmt.Sprintf(` AND model_alias = $%d`, next())
+		args = append(args, v)
+	}
+	if filter.APIKeyID != nil {
+		query += fmt.Sprintf(` AND api_key_id = $%d`, next())
+		args = append(args, *filter.APIKeyID)
+	}
+	if v := strings.TrimSpace(filter.Status); v != "" {
+		query += fmt.Sprintf(` AND status = $%d`, next())
+		args = append(args, v)
+	}
+	if filter.ErrorsOnly {
+		query += ` AND error_code IS NOT NULL AND error_code <> ''`
+	}
+	if !filter.From.IsZero() {
+		query += fmt.Sprintf(` AND created_at >= $%d`, next())
+		args = append(args, filter.From)
+	}
+	if !filter.To.IsZero() {
+		query += fmt.Sprintf(` AND created_at < $%d`, next())
+		args = append(args, filter.To)
+	}
+	// Keyset pagination: the cursor is the id of the last row on the previous
+	// page. The subquery resolves that row's (created_at, id) pair so the
+	// row-value comparison continues the same created_at DESC, id DESC order
+	// the page was read in. A cursor whose row has since been deleted yields
+	// an empty (not a wrong) page.
+	if filter.CursorID != nil && *filter.CursorID != uuid.Nil {
+		query += fmt.Sprintf(` AND (created_at, id) < (SELECT created_at, id FROM public.usage_events WHERE id = $%d)`, next())
+		args = append(args, *filter.CursorID)
+	}
+
+	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, next())
+	args = append(args, limit)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {

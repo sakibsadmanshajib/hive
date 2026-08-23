@@ -103,6 +103,12 @@ func (h *Handler) handleListEntries(w http.ResponseWriter, r *http.Request) {
 		filter.EntryType = &et
 	}
 
+	// Parse optional request_id filter (the request-log detail view reads the
+	// reservation lifecycle of one request through this same endpoint).
+	if rawRequestID := strings.TrimSpace(r.URL.Query().Get("request_id")); rawRequestID != "" {
+		filter.RequestID = rawRequestID
+	}
+
 	entries, err := h.svc.ListEntriesWithCursor(r.Context(), filter)
 	if err != nil {
 		writeLedgerError(w, err)

@@ -263,6 +263,20 @@ COPY deploy/docker/owui-patches/apply_oauth_client_auth_patch.py /tmp/apply_oaut
 RUN python3 /tmp/apply_oauth_client_auth_patch.py \
     && test "$(grep -c '\*\*hive_refresh_request(client, refresh_data),' /app/backend/open_webui/utils/oauth.py)" = "2" \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/oauth.py').read_text())"
+# A repeat sign-in paid one extra full HTML document for nothing: the OAuth
+# callback redirected to /auth, whose only job was converting the token cookie
+# into a stored session before client-side navigating to / anyway. The root
+# layout in the frontend source now performs that conversion itself (the
+# `token=` recovery block in vendor/open-webui/src/routes/+layout.svelte), so
+# the success leg lands directly on `/`. The error leg is deliberately left
+# alone: its display lives on the sign-in page, and the patch asserts that leg
+# keeps targeting /auth?error=.
+COPY deploy/docker/owui-patches/apply_oauth_callback_landing_patch.py /tmp/apply_oauth_callback_landing_patch.py
+RUN python3 /tmp/apply_oauth_callback_landing_patch.py \
+    && grep -q "redirect_base_url}/'" /app/backend/open_webui/utils/oauth.py \
+    && ! grep -q "redirect_base_url}/auth'" /app/backend/open_webui/utils/oauth.py \
+    && grep -q 'redirect_url}?error=' /app/backend/open_webui/utils/oauth.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/oauth.py').read_text())"
 # Chat was broken on every route because Open WebUI attached tool schemas that
 # no route in this deployment can serve.
 #

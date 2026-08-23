@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -111,11 +112,13 @@ func TestListUsageEventsUsesCurrentAccount(t *testing.T) {
 		t.Fatalf("expected account filter %s, got %s", accountTwoID, repo.lastEventsFilter.AccountID)
 	}
 
-	var response map[string][]map[string]any
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatalf("invalid response JSON: %v", err)
 	}
-	events := response["events"]
+	events := response.Events
 	if len(events) != 1 {
 		t.Fatalf("expected 1 usage event, got %d", len(events))
 	}
@@ -219,15 +222,17 @@ func TestListEventsOmitsCacheFieldsWhenZero(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	var response map[string][]map[string]any
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatalf("invalid response JSON: %v", err)
 	}
-	if len(response["events"]) != 1 {
-		t.Fatalf("expected 1 usage event, got %d", len(response["events"]))
+	if len(response.Events) != 1 {
+		t.Fatalf("expected 1 usage event, got %d", len(response.Events))
 	}
 
-	event := response["events"][0]
+	event := response.Events[0]
 	if _, ok := event["cache_read_tokens"]; ok {
 		t.Fatal("expected cache_read_tokens to be omitted when zero")
 	}
@@ -271,15 +276,17 @@ func TestListEventsIncludesCacheFieldsWhenPresent(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	var response map[string][]map[string]any
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatalf("invalid response JSON: %v", err)
 	}
-	if len(response["events"]) != 1 {
-		t.Fatalf("expected 1 usage event, got %d", len(response["events"]))
+	if len(response.Events) != 1 {
+		t.Fatalf("expected 1 usage event, got %d", len(response.Events))
 	}
 
-	event := response["events"][0]
+	event := response.Events[0]
 	if got := event["cache_read_tokens"]; got != float64(11) {
 		t.Fatalf("expected cache_read_tokens 11, got %#v", got)
 	}
@@ -320,12 +327,14 @@ func TestListEventsIncludesAPIKeyIDWhenPresent(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	var response map[string][]map[string]any
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatalf("invalid response JSON: %v", err)
 	}
 
-	got := response["events"][0]["api_key_id"]
+	got := response.Events[0]["api_key_id"]
 	if got != apiKeyID.String() {
 		t.Fatalf("expected api_key_id %s, got %#v", apiKeyID, got)
 	}
@@ -472,5 +481,238 @@ func TestListUsageEvents_PlatformAdminOverlayGrantsUnverifiedAccess(t *testing.T
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUsageEventsRequireAuthenticatedViewer(t *testing.T) {
+	repo := newStubRepo()
+
+	handler := newHTTPHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without a viewer, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUsageEventsRejectMalformedFilters(t *testing.T) {
+	cases := []struct {
+		name   string
+		query  string
+		expect string
+	}{
+		{name: "bad api_key_id", query: "api_key_id=not-a-uuid", expect: "api_key_id must be a valid UUID"},
+		{name: "bad errors", query: "errors=yes", expect: "errors must be true or false"},
+		{name: "bad window", query: "window=2h", expect: "window must be one of: 1h, 24h, 7d, 30d"},
+		{name: "bad from", query: "from=yesterday", expect: "from must be ISO8601 (RFC3339)"},
+		{name: "bad to", query: "to=123", expect: "to must be ISO8601 (RFC3339)"},
+		{name: "bad cursor", query: "cursor=nope", expect: "cursor must be a valid UUID"},
+		{name: "window plus explicit bound", query: "window=24h&from=2026-08-01T00%3A00%3A00Z", expect: "window cannot be combined with from/to"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepo()
+			viewer, _ := seedUsageHTTPAccount(repo)
+
+			handler := newHTTPHandler(repo)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events?"+tc.query, nil)
+			req = req.WithContext(viewerCtx(viewer))
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatalf("invalid response JSON: %v", err)
+			}
+			if body["error"] != tc.expect {
+				t.Fatalf("expected error %q, got %q", tc.expect, body["error"])
+			}
+		})
+	}
+}
+
+// seedEvents gives the account n completed events with strictly increasing
+// created_at stamps so the stub's newest-first ordering is deterministic.
+func seedEvents(repo *stubRepo, accountID uuid.UUID, n int) {
+	base := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		repo.events[accountID] = append(repo.events[accountID], UsageEvent{
+			ID:               uuid.New(),
+			AccountID:        accountID,
+			RequestAttemptID: uuid.New(),
+			RequestID:        "req_" + strconv.Itoa(i),
+			EventType:        UsageEventCompleted,
+			Endpoint:         "/v1/chat/completions",
+			ModelAlias:       "hive-fast",
+			Status:           "completed",
+			OutputTokens:     int64(i + 1),
+			CreatedAt:        base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+}
+
+func TestUsageEventsCursorPagination(t *testing.T) {
+	repo := newStubRepo()
+	viewer, accountID := seedUsageHTTPAccount(repo)
+	seedEvents(repo, accountID, 25)
+
+	handler := newHTTPHandler(repo)
+
+	type page struct {
+		requestIDs []string
+		nextCursor string
+	}
+	fetchPage := func(t *testing.T, query string) page {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events"+query, nil)
+		req = req.WithContext(viewerCtx(viewer))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %q, got %d: %s", query, rr.Code, rr.Body.String())
+		}
+		var body struct {
+			Events     []map[string]any `json:"events"`
+			NextCursor string           `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("invalid response JSON: %v", err)
+		}
+		p := page{nextCursor: body.NextCursor}
+		for _, event := range body.Events {
+			if id, ok := event["request_id"].(string); ok {
+				p.requestIDs = append(p.requestIDs, id)
+			}
+		}
+		return p
+	}
+
+	first := fetchPage(t, "?limit=10")
+	if len(first.requestIDs) != 10 {
+		t.Fatalf("expected 10 events on page one, got %d", len(first.requestIDs))
+	}
+	if first.nextCursor == "" {
+		t.Fatal("expected a next cursor on a full first page")
+	}
+
+	second := fetchPage(t, "?limit=10&cursor="+first.nextCursor)
+	if len(second.requestIDs) != 10 {
+		t.Fatalf("expected 10 events on page two, got %d", len(second.requestIDs))
+	}
+	for _, id := range first.requestIDs {
+		for _, seen := range second.requestIDs {
+			if id == seen {
+				t.Fatalf("page two repeats page-one event %s", id)
+			}
+		}
+	}
+	if second.nextCursor == "" {
+		t.Fatal("expected a next cursor on a full second page")
+	}
+
+	third := fetchPage(t, "?limit=10&cursor="+second.nextCursor)
+	if len(third.requestIDs) != 5 {
+		t.Fatalf("expected the 5 remaining events on page three, got %d", len(third.requestIDs))
+	}
+	if third.nextCursor != "" {
+		t.Fatalf("expected no next cursor on a short final page, got %q", third.nextCursor)
+	}
+}
+
+// TestUsageEventsFiltersReachRepository pins each filter param onto the
+// ListEventsFilter the repository receives: model_alias and status verbatim,
+// api_key_id parsed, errors=true as ErrorsOnly, window as a From bound.
+func TestUsageEventsFiltersReachRepository(t *testing.T) {
+	repo := newStubRepo()
+	viewer, _ := seedUsageHTTPAccount(repo)
+	keyID := uuid.New()
+
+	handler := newHTTPHandler(repo)
+	query := "model_alias=hive-fast&status=completed&api_key_id=" + keyID.String() + "&errors=true&window=24h"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events?"+query, nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	filter := repo.lastEventsFilter
+	if filter.ModelAlias != "hive-fast" {
+		t.Fatalf("expected model_alias hive-fast, got %q", filter.ModelAlias)
+	}
+	if filter.Status != "completed" {
+		t.Fatalf("expected status completed, got %q", filter.Status)
+	}
+	if filter.APIKeyID == nil || *filter.APIKeyID != keyID {
+		t.Fatalf("expected api_key_id %s, got %v", keyID, filter.APIKeyID)
+	}
+	if !filter.ErrorsOnly {
+		t.Fatal("expected errors=true to set ErrorsOnly")
+	}
+	if filter.From.IsZero() || filter.To.IsZero() {
+		t.Fatal("expected window=24h to populate from/to")
+	}
+	if !filter.From.Before(filter.To) {
+		t.Fatalf("expected from before to, got from=%v to=%v", filter.From, filter.To)
+	}
+}
+
+func TestUsageEventsLimitCappedAt100(t *testing.T) {
+	repo := newStubRepo()
+	viewer, _ := seedUsageHTTPAccount(repo)
+
+	handler := newHTTPHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events?limit=5000", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if repo.lastEventsFilter.Limit != 100 {
+		t.Fatalf("expected limit clamped to 100, got %d", repo.lastEventsFilter.Limit)
+	}
+}
+
+func TestUsageEventsModelAliasFilterNarrowsResults(t *testing.T) {
+	repo := newStubRepo()
+	viewer, accountID := seedUsageHTTPAccount(repo)
+	seedEvents(repo, accountID, 3)
+	repo.events[accountID][0].ModelAlias = "hive-pro"
+
+	handler := newHTTPHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events?model_alias=hive-pro", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid response JSON: %v", err)
+	}
+	if len(body.Events) != 1 {
+		t.Fatalf("expected only the hive-pro event, got %d events", len(body.Events))
+	}
+	if body.Events[0]["model_alias"] != "hive-pro" {
+		t.Fatalf("expected the hive-pro event, got %#v", body.Events[0]["model_alias"])
 	}
 }

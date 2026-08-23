@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -120,8 +121,45 @@ func (s *stubRepo) ListEvents(_ context.Context, filter ListEventsFilter) ([]Usa
 
 	var events []UsageEvent
 	for _, event := range s.events[filter.AccountID] {
-		if filter.RequestID == "" || event.RequestID == filter.RequestID {
-			events = append(events, event)
+		if filter.RequestID != "" && event.RequestID != filter.RequestID {
+			continue
+		}
+		if filter.ModelAlias != "" && event.ModelAlias != filter.ModelAlias {
+			continue
+		}
+		if filter.APIKeyID != nil && (event.APIKeyID == nil || *event.APIKeyID != *filter.APIKeyID) {
+			continue
+		}
+		if filter.Status != "" && event.Status != filter.Status {
+			continue
+		}
+		if filter.ErrorsOnly && event.ErrorCode == "" {
+			continue
+		}
+		if !filter.From.IsZero() && event.CreatedAt.Before(filter.From) {
+			continue
+		}
+		if !filter.To.IsZero() && !event.CreatedAt.Before(filter.To) {
+			continue
+		}
+		events = append(events, event)
+	}
+
+	// Same order the pgx query reads in: newest first, id as the tiebreaker.
+	sort.Slice(events, func(i, j int) bool {
+		if !events[i].CreatedAt.Equal(events[j].CreatedAt) {
+			return events[i].CreatedAt.After(events[j].CreatedAt)
+		}
+		return events[i].ID.String() > events[j].ID.String()
+	})
+
+	// Continue after the keyset cursor row.
+	if filter.CursorID != nil && *filter.CursorID != uuid.Nil {
+		for idx, event := range events {
+			if event.ID == *filter.CursorID {
+				events = events[idx+1:]
+				break
+			}
 		}
 	}
 

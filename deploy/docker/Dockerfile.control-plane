@@ -1,8 +1,9 @@
-FROM golang:1.24-alpine
+FROM golang:1.26-alpine
 
 RUN apk add --no-cache git
 
-# Install air for hot reload (requires GOTOOLCHAIN=auto for Go 1.24 base)
+# Install air for hot reload (GOTOOLCHAIN=auto lets this step self-upgrade
+# if air's own go.mod ever outpaces the base image's native Go version)
 ENV GOTOOLCHAIN=auto
 RUN go install github.com/air-verse/air@v1.64.5
 

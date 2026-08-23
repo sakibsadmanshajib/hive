@@ -58,8 +58,15 @@
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
 	import { isAuthenticatedConfig, prefetchModels } from '$lib/hive/model-prefetch';
+	import {
+		clearSignedOut,
+		clearSsoAttempt,
+		markSsoAttempt,
+		readSsoAttemptAt,
+		readSignedOut,
+		ssoAutoRedirectDecision
+	} from '$lib/hive/sso-redirect';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
-	import { chatCompletion } from '$lib/apis/openai';
 	import {
 		addOpenAIConnection,
 		removeOpenAIConnection,
@@ -534,81 +541,15 @@
 				return;
 			} else if (type === 'request:chat:completion') {
 				console.log(data, $socket.id);
-				const { session_id, channel, form_data, model } = data;
+				const { channel } = data;
 
 				try {
-					const directConnections = $settings?.directConnections ?? {};
-
-					if (directConnections) {
-						const urlIdx = model?.urlIdx;
-
-						const OPENAI_API_URL = directConnections.OPENAI_API_BASE_URLS[urlIdx];
-						const OPENAI_API_KEY = directConnections.OPENAI_API_KEYS[urlIdx];
-						const API_CONFIG = directConnections.OPENAI_API_CONFIGS[urlIdx];
-
-						try {
-							if (API_CONFIG?.prefix_id) {
-								const prefixId = API_CONFIG.prefix_id;
-								form_data['model'] = form_data['model'].replace(`${prefixId}.`, ``);
-							}
-
-							const [res, controller] = await chatCompletion(
-								OPENAI_API_KEY,
-								form_data,
-								OPENAI_API_URL
-							);
-
-							if (res) {
-								// raise if the response is not ok
-								if (!res.ok) {
-									throw await res.json();
-								}
-
-								if (form_data?.stream ?? false) {
-									cb({
-										status: true
-									});
-									console.log({ status: true });
-
-									// res will either be SSE or JSON
-									const reader = res.body.getReader();
-									const decoder = new TextDecoder();
-
-									const processStream = async () => {
-										while (true) {
-											// Read data chunks from the response stream
-											const { done, value } = await reader.read();
-											if (done) {
-												break;
-											}
-
-											// Decode the received chunk
-											const chunk = decoder.decode(value, { stream: true });
-
-											// Process lines within the chunk
-											const lines = chunk.split('\n').filter((line) => line.trim() !== '');
-
-											for (const line of lines) {
-												console.log(line);
-												$socket?.emit(channel, line);
-											}
-										}
-									};
-
-									// Process the stream in the background
-									await processStream();
-								} else {
-									const data = await res.json();
-									cb(data);
-								}
-							} else {
-								throw new Error('An error occurred while fetching the completion');
-							}
-						} catch (error) {
-							console.error('chatCompletion', error);
-							cb(error);
-						}
-					}
+					// Direct connections are removed from every user surface (settings
+					// declutter): a browser-side completion straight to a user supplied
+					// base URL and key must never be honored here either, even for a
+					// session whose stored settings still carry a value from before
+					// this change. This RPC has no other purpose, so it always fails.
+					throw new Error('Direct connections are not supported.');
 				} catch (error) {
 					console.error('chatCompletion', error);
 					cb(error);
@@ -897,14 +838,8 @@
 		if (event.type === 'models:refresh') {
 			const token = localStorage.token;
 			if (token) {
-				models.set(
-					await getModels(
-						token,
-						$config?.features?.enable_direct_connections
-							? ($settings?.directConnections ?? null)
-							: null
-					)
-				);
+				// Direct connections are removed from user surfaces; never send them.
+				models.set(await getModels(token));
 			}
 			return;
 		}
@@ -1103,7 +1038,29 @@
 		// the deployment, so the depth of the chain, rather than any single
 		// slow call, is what kept the composer off screen. Start all three
 		// here and await each result at the point it is first needed.
-		const startupToken = localStorage.token;
+		let startupToken = localStorage.token;
+		// An OAuth round trip lands directly on this application now: the
+		// callback's success redirect targets `/` rather than `/auth` (see the
+		// apply_oauth_callback_landing_patch.py splice in Dockerfile.open-webui).
+		// The round trip's only artifact is the `token` cookie, so recover the
+		// session here instead of bouncing through /auth to do it. The cookie is
+		// only trusted after the server validates it; an invalid or stale cookie
+		// falls through to the anonymous path below unchanged.
+		if (!startupToken) {
+			const rawCookie = document.cookie
+				.split('; ')
+				.find((cookie) => cookie.startsWith('token='));
+			if (rawCookie) {
+				const cookieToken = decodeURIComponent(rawCookie.split('=')[1] ?? '');
+				const cookieSession = await getSessionUser(cookieToken).catch(() => null);
+				if (cookieSession) {
+					clearSsoAttempt();
+					clearSignedOut();
+					localStorage.token = cookieToken;
+					startupToken = cookieToken;
+				}
+			}
+		}
 		const sessionUserRequest = startupToken
 			? getSessionUser(startupToken).catch((error) => {
 					toast.error(`${error}`);
@@ -1214,6 +1171,28 @@
 					// Don't redirect if we're already on the auth page
 					// Needed because we pass in tokens from OAuth logins via URL fragments
 					if ($page.url.pathname !== '/auth') {
+						// On an SSO-only deployment the /auth intermediate state is a
+						// wasted full-page hop: the sign-in page would immediately hand
+						// this visitor to the single configured provider anyway. Decide
+						// that here with the same tested decision function the sign-in
+						// page uses, so every guard (auto_redirect off, an error landing,
+						// the signed-out marker, a recent failed attempt, any second
+						// auth mode, onboarding) keeps the old route. The attempt stamp
+						// is written before leaving for the same reason it is there:
+						// an unrecorded attempt is how an endless bounce starts.
+						const decision = ssoAutoRedirectDecision($config, {
+							lastAttemptAt: readSsoAttemptAt(),
+							now: Date.now(),
+							signedOut: readSignedOut(),
+							hasSession: false
+						});
+						if (decision.redirect && markSsoAttempt()) {
+							if (currentUrl !== '/') {
+								localStorage.setItem('redirectPath', currentUrl);
+							}
+							window.location.href = `${WEBUI_BASE_URL}/oauth/${decision.provider}/login`;
+							return;
+						}
 						await goto(`/auth?redirect=${encodedUrl}`);
 					}
 				}

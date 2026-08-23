@@ -72,12 +72,45 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-route-openrouter-embedding-fallback}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       EMBEDDING_TRUNCATE_TO: ${EMBEDDING_TRUNCATE_TO:-1024}
+      # Binary document ingest for RAG: markitdown sidecar (default profile,
+      # same group as edge-api). MARKITDOWN_URL defaults to the compose DNS
+      # name; RAG_MAX_UPLOAD_BYTES must match the sidecar's MAX_UPLOAD_BYTES
+      # below so the edge rejects before the sidecar has to.
+      MARKITDOWN_URL: ${MARKITDOWN_URL:-http://markitdown:8700}
+      RAG_MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-26214400}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Binary document ingest for RAG: converts PDF/DOCX/PPTX/XLSX uploads to
+  # markdown before chunk + embed (markitdown[all]==0.1.7, pinned exact).
+  # Runs on the default profile wherever edge-api runs; internal network
+  # only, no host port. markitdown loads whole files in memory, so the cap
+  # below and edge-api's RAG_MAX_UPLOAD_BYTES must stay in sync.
+  markitdown:
+    image: hive-markitdown:ci
+    build:
+      context: ../../
+      dockerfile: deploy/docker/markitdown/Dockerfile
+    environment:
+      MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-26214400}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8700/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 1g
+    cpus: 1.0
     logging:
       driver: json-file
       options:
@@ -439,7 +472,7 @@ services:
       # buildAgentEngine ignores every HIVE_AGENT_ENGINE_* path variable
       # below and forwards launches to that daemon.
       #
-      # Why: this service runs inside a golang:1.24-alpine container, which
+      # Why: this service runs inside a golang:1.26-alpine container, which
       # cannot exec the host's Apptainer directly (glibc-linked binary, no
       # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
       # privilege on the service holding Stripe/Supabase/payment secrets).

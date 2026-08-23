@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
+	edgeagentsched "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agentsched"
 	edgeagenttask "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/artifacts"
@@ -166,6 +167,9 @@ func main() {
 		// defect this wiring closes, not a degraded mode to fall back to.
 		Accounting: accountingClient,
 		Billing:    &metering.PGBillingAccountResolver{Pool: dbPool},
+		// Cross-chat recall (#172, D-020): reads public.user_memories under
+		// RLS. Injection degrades to no block until the migration is applied.
+		Memories:   chat.NewMemorySource(dbPool),
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
@@ -413,7 +417,14 @@ func main() {
 		}
 
 		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
-			WithChat(ragSelectRoute, litellmClient.ChatCompletion)
+			WithChat(ragSelectRoute, litellmClient.ChatCompletion).
+			// Binary document ingest: convert PDF/DOCX/etc to markdown via the
+			// pinned markitdown sidecar before chunk + embed. MARKITDOWN_URL
+			// defaults to the compose service DNS name; without the sidecar
+			// reachable, binary uploads fail loud (503/422) while raw-text
+			// uploads are unaffected.
+			WithConverter(edgerag.NewMarkitdownClient(resolveMarkitdownURL()),
+				resolveRAGMaxUploadBytes())
 		if ragRepo != nil {
 			// Fail RAG search closed for a tenant whose stored documents were
 			// embedded under a different model/dim than this process is
@@ -438,6 +449,19 @@ func main() {
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
 		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)
+	}
+
+	// Scheduled agent tasks ("routines"): customer-facing CRUD for the rows
+	// control-plane's scheduler turns into real tasks. Same trust shape as
+	// the block above: persistence lives in control-plane
+	// (apps/control-plane/internal/agentsched), this is only the auth
+	// boundary, registered behind FeatureCowork like /v1/agent/tasks.
+	{
+		agentSchedClient := edgeagentsched.NewClient(resolveControlPlaneBaseURL())
+		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient)
+		agentSchedMux := http.NewServeMux()
+		agentSchedHandler.Register(agentSchedMux)
+		registerAgentScheduleRoutes(mux, featureGate, agentSchedMux)
 	}
 
 	// API routes
@@ -913,6 +937,32 @@ func resolveControlPlaneBaseURL() string {
 	}
 
 	return "http://control-plane:8081"
+}
+
+// resolveMarkitdownURL returns the markitdown sidecar base URL. Defaults to
+// the compose service DNS name; the sidecar runs on the default profile
+// wherever edge-api runs.
+func resolveMarkitdownURL() string {
+	if u := strings.TrimSpace(os.Getenv("MARKITDOWN_URL")); u != "" {
+		return u
+	}
+	return "http://markitdown:8700"
+}
+
+// resolveRAGMaxUploadBytes caps the binary/base64 RAG upload path. Must stay
+// in sync with the sidecar's own MAX_UPLOAD_BYTES (compose passes the same
+// value to both). 0 or invalid falls back to the package default (25MB).
+func resolveRAGMaxUploadBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("RAG_MAX_UPLOAD_BYTES"))
+	if raw == "" {
+		return edgerag.DefaultMaxUploadBytes
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		log.Printf("WARNING: RAG_MAX_UPLOAD_BYTES=%q is not a positive integer; using default %d", raw, edgerag.DefaultMaxUploadBytes)
+		return edgerag.DefaultMaxUploadBytes
+	}
+	return n
 }
 
 func resolveRedisURL() string {
