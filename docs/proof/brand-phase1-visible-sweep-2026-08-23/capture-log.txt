@@ -133,9 +133,50 @@ unconditionally redirects to `/workspace/knowledge` (a prior merged change,
 not part of this PR), and its own comment says Models/Prompts/Tools/Skills
 are gone. The three components cannot be reached via any current route, so
 their fix, while correct, is not independently demonstrable live; noted in
-the PR body. workspace/common/ManifestModal.svelte is also edited but is
-NOT dead: it is separately imported by admin/Functions.svelte, a real,
-reachable route (/admin/functions), so that fix is live (not screenshotted
-in this pass; the funding-modal path needs an existing installed function
-with a manifest funding_url, which is setup-heavy for a text-only fix
-already covered by the i18n lockstep check above).
+the PR body. workspace/common/ManifestModal.svelte is also edited but was
+NOT dead at the time this section was first written: it was separately
+imported by admin/Functions.svelte, a real, reachable route
+(/admin/functions).
+
+Correction after rebasing onto main a second time (#1091, "close the public
+chat origin's admin surface")
+--------------------------------------------------------------------------
+#1091 deletes the entire routes/(app)/admin/ tree and the SettingsModal
+"Admin Settings" link. Re-ran the reachability audit with an import-PATH
+grep (matching the actual `from '...'` specifier) instead of a basename
+grep: the basename version had been producing false positives whenever two
+files shared a name in different directories (e.g. admin/Settings/Audio.svelte
+vs. chat/Settings/Audio.svelte both matched a bare "Audio" search; a plain
+{$i18n.t('Functions')} label text also matched a basename search for
+"Functions", with no import at all). Confirmed with a direct grep for
+`components/admin/` imports in vendor/open-webui/src/routes: zero hits. The
+entire lib/components/admin/** subtree is now an orphaned cluster with no
+external entry point, including admin/Functions.svelte, so
+workspace/common/ManifestModal.svelte lost its last live path too.
+
+Reverted rather than kept as unreachable "fixes": admin/Evaluations/
+Feedbacks.svelte, admin/Functions.svelte, admin/Settings/{Audio,Events,
+ExternalKnowledge,General}.svelte, workspace/Models.svelte,
+workspace/Prompts.svelte, workspace/Tools.svelte, workspace/common/
+ManifestModal.svelte (all restored to main's content), plus the two
+admin/functions/{create,edit}/+page.svelte files (deleted entirely by
+#1091 itself, no revert needed). translation.json trimmed from 17 to 8
+en-US keys: the 9 originally added keys with no remaining live caller
+("Discover how to use...", "Event names may change...", "External vectors
+must be generated...", "Open WebUI uses faster-whisper...", "Open WebUI
+uses SpeechT5...", "Open WebUI version" x2, "Your entire contribution...",
+"Made by Open WebUI Community") were reverted to their original text so no
+orphaned Hive-branded key sits in the file unused. Re-verified with a
+script that greps every remaining Hive-branded translation.json key
+against the full source tree and confirms at least one live-surface
+caller for each: all 8 pass (CORS/Integrations, MCP/AddToolServerModal,
+"Hive can use tools"/ToolServersModal, Participate+"Do you want to
+sync"/SyncStatsModal, "This knowledge base"/KnowledgeBase,
+Redirecting+"Share to"/ShareChatModal).
+
+Rebuilt Dockerfile.open-webui end to end against this final tree: exit 0,
+frontend vitest suite passes, `<title>Hive Chat</title>` confirmed via curl
+against the running container, and the AddToolServerModal MCP-warning
+string confirmed present in the built JS bundle via grep (that surface's
+live path is chat/Settings/Integrations.svelte, a personal-settings tab,
+not the deleted admin route; not re-screenshotted in this pass for time).
