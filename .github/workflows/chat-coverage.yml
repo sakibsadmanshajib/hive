@@ -102,9 +102,24 @@ jobs:
       # removing the fallback here is what lets that check actually catch
       # this instead of quietly succeeding against the wrong account.
       HIVE_QA_AGENT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # The deployment's public auth origin, which is the console origin: Caddy
+      # fronts GoTrue at /auth/v1 there (PR #992). Same expression the OAuth
+      # scope gate and the deploy workflow's OIDC discovery check already use,
+      # so there is one knob for it rather than three.
+      #
+      # Not secrets.SUPABASE_URL. That secret names the hosted project deleted
+      # in the self-hosted cutover (issue #1059), and this sweep runs against
+      # the live deployment, so it needs the deployment's own origin.
+      SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      # Renamed, not repointed. These two must be the self-hosted deployment's
+      # keys, and the old names still hold the deleted project's, so keeping
+      # them would mean this sweep authenticated against nothing. Under the new
+      # names they are simply absent until provisioned, and the "Check the
+      # inputs the sweep cannot run without" step below fails the job by name
+      # on an empty value, which is the whole point: this job would rather not
+      # run than run against a project that is not there.
+      SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
       COV_SURFACES: ${{ inputs.surfaces }}
     steps:
       - uses: actions/checkout@v7

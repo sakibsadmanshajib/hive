@@ -1,0 +1,6 @@
+[after] session role, read from Open WebUI itself: admin admin@localhost
+[after] settings admin links in the DOM: 0
+[after] settings tab rail text: ["Search General Interface Audio Data Controls Account About"]
+[after] no Admin Settings link to click
+[after] direct navigation to /admin/settings: {"path":"/admin/settings","hasAdminPanel":false,"bodyStart":"404: Not Found"}
+[after] 4xx/5xx seen: []

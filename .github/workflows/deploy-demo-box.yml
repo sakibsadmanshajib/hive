@@ -92,10 +92,13 @@ on:
       # deploy job below. Same blind spot as every other script listed here:
       # without an entry, a fix to it would merge and never deploy.
       - 'scripts/install-agent-engine-host.sh'
-      # Both halves of the hive_jwt_forward install (#556). Without these
-      # entries a fix to the installer itself would merge and never deploy,
-      # the same blind spot the supabase/migrations entry above exists for.
+      # All three halves of the hive_jwt_forward install (#556, #736). Without
+      # these entries a fix to the installer itself would merge and never
+      # deploy, the same blind spot the supabase/migrations entry above exists
+      # for. The wrapper is what keeps the install off the public chat origin,
+      # so a fix to it is a security fix that has to reach the box.
       - 'scripts/install-owui-jwt-forward.py'
+      - 'scripts/install-owui-jwt-forward-in-container.sh'
       - 'scripts/owui-mint-admin-token.py'
       # Invoked by the deploy job's OAuth scope verification step below. Same
       # blind spot as every other script listed here: without an entry, a fix
@@ -1230,12 +1233,15 @@ jobs:
         # account, and needs no secret in .env, so a fresh Enterprise box
         # works the same way with nothing provisioned by hand.
         #
-        # localhost:3003 is caddy-owui's published port. Its @adminMutation
-        # matcher does not block this: a Caddy `path` wildcard does not cross
-        # a slash, so /api/v*/functions* matches /api/v1/functions but not
-        # /api/v1/functions/create (measured against caddy:2-alpine, not
-        # assumed). That is also why CI's installer reaches the same API
-        # through the same port.
+        # The install no longer goes through caddy-owui's published port, and
+        # that reroute is the reason #736 could be closed at all. That port is
+        # the PUBLIC chat origin, and its admin-mutation block used to miss
+        # every path this install writes to, because a Caddy `path` wildcard
+        # does not cross a slash: /api/v*/functions* matched /api/v1/functions
+        # and not /api/v1/functions/create (measured against caddy:2-alpine,
+        # not assumed). The deploy depended on that gap. It now runs the same
+        # single implementation inside the chat container against Open WebUI's
+        # own loopback, so the Caddyfile can refuse those paths for everyone.
         #
         # No `|| true`, no continue-on-error. The script exits nonzero unless
         # it has re-read the function from the API and confirmed it is present,
@@ -1274,9 +1280,69 @@ jobs:
               ;;
           esac
           echo "::add-mask::$token"
-          OWUI_ADMIN_TOKEN="$token" python3 \
-            ../../scripts/install-owui-jwt-forward.py \
-            --base-url http://localhost:3003
+          OWUI_ADMIN_TOKEN="$token" \
+            ../../scripts/install-owui-jwt-forward-in-container.sh
+
+      - name: Assert the public chat origin refuses the admin surface
+        # Issue #736's own verification expectation, on the running box rather
+        # than in a unit test: a POST to each of the four Function endpoints
+        # against the PUBLIC origin must be refused, and so must the two
+        # configs routes #948 covers.
+        #
+        # Placed immediately after the install, which is the only step that
+        # legitimately needs those endpoints and now reaches them inside the
+        # container instead. If this ever fails while the install above
+        # succeeded, the running Caddy config is not the one in the repository,
+        # which is the exact failure the featuregate probe further up catches
+        # for a different matcher (#619): a Caddyfile is a single-file bind
+        # mount and is inode pinned, so a plain `up -d` leaves the old config
+        # in place.
+        #
+        # Deliberately UNAUTHENTICATED. Caddy answers before Open WebUI sees
+        # the request, so a working block is a 404 from the proxy; if the block
+        # regressed, the same request reaches Open WebUI and comes back 401.
+        # Both are refusals to an attacker, but only one of them means the
+        # matcher is doing its job, and the difference is what this asserts.
+        # Nothing is created, changed or read by these calls.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          failed=0
+          probe() {
+            local method=$1 path=$2 code
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+              -H 'Content-Type: application/json' -d '{}' \
+              "http://localhost:3003$path")
+            if [ "$code" = "404" ]; then
+              echo "ok   $method $path -> 404 (refused by caddy)"
+            else
+              echo "::error::$method $path answered $code through the public chat"\
+                " origin, expected 404. The running Caddy config does not match"\
+                " deploy/docker/Caddyfile.owui (issues #736, #948)."
+              failed=1
+            fi
+          }
+          probe POST /api/v1/functions/create
+          probe POST /api/v1/functions/id/hive_jwt_forward/update
+          probe POST /api/v1/functions/id/hive_jwt_forward/toggle
+          probe POST /api/v1/functions/id/hive_jwt_forward/toggle/global
+          probe POST /api/v1/configs/import
+          probe GET /api/v1/configs/namespace/oauth
+          # The other half of the same assertion: over-blocking is an outage,
+          # so two paths that MUST stay reachable are checked for not being
+          # 404. They answer 401 unauthenticated, which is Open WebUI's own
+          # answer and proves the request got through the proxy.
+          for open_path in /api/v1/configs/banners /api/v1/users/user/settings; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3003$open_path")
+            if [ "$code" = "404" ]; then
+              echo "::error::$open_path is blocked by the proxy and must not be:"\
+                " the chat UI reads it on every page load."
+              failed=1
+            else
+              echo "ok   GET $open_path -> $code (reached open-webui)"
+            fi
+          done
+          exit "$failed"
 
       - name: Dump container status + logs on failure
         if: failure()
@@ -1844,9 +1910,18 @@ jobs:
       # Minting a session needs all three. live-auth.mjs uses the admin
       # one-time-token flow, which touches no password, and there is no
       # credential-rotating fallback in it (docs/live-test-auth.md).
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      #
+      # The origin is the deployment's own public auth origin, which is the
+      # console origin (Caddy fronts GoTrue at /auth/v1 there, PR #992), taken
+      # from the same CONSOLE_URL expression the OIDC discovery check in this
+      # file already uses. The two keys are named for the deployment rather
+      # than read from secrets.SUPABASE_*, which name the hosted project
+      # deleted in the self-hosted cutover (issue #1059). Absent, this
+      # dispatch-only job fails at session minting instead of authenticating
+      # against a project that is not there.
+      SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
       # Optional. The spec defaults to the demo account, which is named in
       # docs/proof/live-auth-helper-2026-08-08/README.md and is not a
       # credential. Set this secret to point the run at a different identity.
@@ -1867,6 +1942,26 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Before `npm ci` and before a browser is installed, because an absent
+      # value here is a configuration fault and should read as one. Without
+      # this the job installs everything, launches Chromium, and then fails
+      # inside live-auth.mjs's session mint, three minutes and one stack trace
+      # away from the actual cause. The sibling jobs that mint a live session
+      # (chat-coverage's live sweep, demo-chat-settings-check) already have the
+      # same check; this one did not, which CodeRabbit caught on PR #1086.
+      - name: Check the inputs this job cannot run without
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::this job mints a live session and needs:$missing. The two keys are the self-hosted deployment's own, provisioned as DEMO_SUPABASE_ANON_KEY and DEMO_SUPABASE_SERVICE_ROLE_KEY from the box's .env (issue #1059)."
+            exit 1
+          fi
 
       - uses: actions/setup-node@v7
         with:
@@ -1996,6 +2091,34 @@ jobs:
             const results = `migrate=${process.env.MIGRATE_RESULT}, `
               + `deploy=${process.env.DEPLOY_RESULT}, `
               + `sdk-replay=${process.env.REPLAY_RESULT}`;
+            // The guidance has to match the job that actually failed. The
+            // previous text explained a migrate failure unconditionally, so
+            // issue #1084 was filed reading "A migrate failure means main is
+            // running against a stale schema ... Fix the migration" over a
+            // body whose own next line said `migrate=success`. That is a
+            // tracking issue actively misdirecting whoever picks it up, and it
+            // did: the actual causes were an exhausted provider token budget
+            // and then a Svelte compile error, neither of them a migration.
+            function guidance() {
+              if (process.env.MIGRATE_RESULT === 'failure') {
+                return 'The MIGRATION failed, so main is running against a stale schema and the deploy '
+                  + 'was deliberately stopped. Fix the migration, then re-run this workflow.';
+              }
+              if (process.env.DEPLOY_RESULT === 'failure') {
+                return 'The DEPLOY failed, after migrations applied successfully. The box is therefore '
+                  + 'still serving the previous image against the new schema. Read the "Rebuild + '
+                  + 'recreate changed services" step first: an image build failure stops here before '
+                  + 'anything is recreated, so nothing is half-deployed.';
+              }
+              if (process.env.REPLAY_RESULT === 'failure') {
+                return 'The deploy succeeded and the POST-DEPLOY SDK REPLAY failed, so the box is '
+                  + 'running the new code and something it serves does not work. Check the provider '
+                  + 'side before the code: a rate limit or an exhausted token budget fails this job '
+                  + 'without any commit having caused it.';
+              }
+              return 'No individual job reported failure, so the run failed somewhere outside the three '
+                + 'tracked jobs. Read the run itself.';
+            }
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -2016,8 +2139,7 @@ jobs:
                 title,
                 labels: [label],
                 body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
-                  'A migrate failure means main is running against a stale schema and the deploy was ' +
-                  'deliberately stopped. Fix the migration, then re-run this workflow.\n\n' +
+                  guidance() + '\n\n' +
                   'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
               });
             }

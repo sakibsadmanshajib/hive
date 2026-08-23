@@ -422,6 +422,17 @@ COPY --from=frontend /build/vendor/open-webui/build /app/build
 # The Hive shell has to be in what actually ships, and the surfaces removed in
 # source have to be absent from it. Cheap, and it is the one check that fails
 # if the frontend stage silently built a tree without our changes in it.
+#
+# The admin-panel line is #949. Its removal is a source deletion, of the
+# /admin route tree and of the Settings dialog's link into it, and the bundle
+# rewrite that used to cover the link runs against a bundle this stage then
+# discards, so nothing was checking the output. The string is a route from
+# lib/components/admin/Settings.svelte's own tab table, which reaches the
+# built output only through an import chain that starts at those routes: with
+# them gone the component has no importer and the bundler drops it, and the
+# check fails if either half comes back. Verified in both directions against
+# two images built from the same digest, before and after the deletion, rather
+# than assumed.
 RUN set -eu; \
     grep -rqF 'data-hive-nav' /app/build/_app/immutable || { \
       echo "the built bundle carries no Hive navigation" >&2; exit 1; }; \
@@ -431,4 +442,6 @@ RUN set -eu; \
       echo "Workspace > Models came back in the built bundle" >&2; exit 1; }; \
     ! grep -rqF 'discord.gg/5rJgQTnV4s' /app/build/_app/immutable || { \
       echo "the vendor social badges came back in the built bundle" >&2; exit 1; }; \
+    ! grep -rqF '/admin/settings/code-execution' /app/build/_app/immutable || { \
+      echo "the Open WebUI admin panel came back in the built bundle (#949)" >&2; exit 1; }; \
     echo "hive: shell present, removed surfaces absent"

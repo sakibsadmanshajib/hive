@@ -695,11 +695,88 @@ def test_every_hidden_surface_has_a_live_mechanism() -> None:
             assert caddy_token in caddy_pattern, surface
 
 
+# --------------------------------------------------------------------------
+# 5. The admin panel, in the source that actually ships (#949)
+# --------------------------------------------------------------------------
+#
+# The bundle rewrite for `settings-admin-link` asserted above runs against the
+# stock bundle inside the pinned image, which Dockerfile.open-webui then throws
+# away and replaces with our own build from vendor/open-webui (see
+# docs/owui-fork.md). So the rewrite is a drift check on upstream and nothing
+# more: the removal a user meets has to exist in the vendored source, and for
+# this one surface it did not. The link rendered for `role === 'admin'` and
+# navigated with goto(), so Caddy's 404 on /admin was never asked, and the
+# panel drew itself out of the loaded bundle for every tenant OWNER (#748).
+
+VENDOR_SRC = REPO / "vendor" / "open-webui" / "src"
+SETTINGS_MODAL = VENDOR_SRC / "lib" / "components" / "chat" / "SettingsModal.svelte"
+
+
+def test_the_settings_dialog_has_no_admin_settings_link() -> None:
+    # Markup comments are stripped first: the replacement left in place names
+    # the removed link and its goto() so the next reader knows why the dialog
+    # has no admin entry, and a substring test over the raw file would read
+    # that explanation as the surface coming back.
+    body = re.sub(r"<!--.*?-->", "", SETTINGS_MODAL.read_text(), flags=re.S)
+    assert 'href="/admin/settings"' not in body, (
+        "the Admin Settings link is back in the Settings dialog (#949)"
+    )
+    assert "goto('/admin/settings')" not in body, (
+        "the Settings dialog navigates to the admin panel again (#949)"
+    )
+    assert "'Admin Settings'" not in body, (
+        "the Admin Settings entry is back in the Settings dialog (#949)"
+    )
+
+
+def test_the_admin_route_tree_is_gone_from_the_fork() -> None:
+    """Removing the link alone leaves the panel one goto() away, from any
+    component that has one. The routes themselves are what make it a page."""
+    admin_routes = VENDOR_SRC / "routes" / "(app)" / "admin"
+    assert not admin_routes.exists(), (
+        f"{admin_routes} is back: the Open WebUI admin panel is a page in this "
+        "fork again, and admin configuration belongs to the control plane "
+        "(.wolf/decisions.md D-014, D-044)"
+    )
+
+
+def test_nothing_outside_the_admin_components_imports_them() -> None:
+    """Why the bundle assertion below can work at all. With the routes gone,
+    lib/components/admin/** has no importer, so the bundler drops it; a new
+    import from a kept surface would pull the panel's code back into the
+    shipped bundle even with no route pointing at it."""
+    offenders = []
+    for path in VENDOR_SRC.rglob("*"):
+        if path.suffix not in (".svelte", ".ts") or not path.is_file():
+            continue
+        relative = path.relative_to(VENDOR_SRC).as_posix()
+        if relative.startswith("lib/components/admin/"):
+            continue
+        if "components/admin/" in path.read_text():
+            offenders.append(relative)
+    assert not offenders, (
+        "these files import Open WebUI admin panel components, which puts the "
+        f"panel back into the shipped bundle: {offenders}"
+    )
+
+
+def test_the_build_asserts_the_admin_panel_is_absent_from_the_bundle() -> None:
+    """A source deletion that the build does not check is one careless subtree
+    pull from coming back. The Dockerfile already asserts the removed Workspace
+    tabs and the vendor badges are absent from the built output; the admin
+    panel needs to be in that same list."""
+    dockerfile = DOCKERFILE.read_text()
+    assert "/admin/settings/code-execution" in dockerfile, (
+        "Dockerfile.open-webui does not check the built bundle for the admin "
+        "panel, so a restored /admin route tree would ship silently (#949)"
+    )
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
-    print("ok: owui removed chat surfaces (issue #772)")
+    print("ok: owui removed chat surfaces (issues #772, #949)")
 
 
 if __name__ == "__main__":
