@@ -1,0 +1,780 @@
+name: post-deploy-verify
+
+# Asserts that the product still works after deploy-demo-box has already
+# exited 0. A green deploy is not the claim "the product works": PR #787
+# merged green and took chat sign-in down, and three consecutive deploys
+# failed at `migrate` while the box silently stayed on old code.
+#
+# The gating this adds is machine gating, not human gating. There is no
+# `environment:` key on any job here and there must never be one. `main` went
+# 7cfc460ea (which added an approval gate) then 09607ff05 (which removed it);
+# the owner's ruling is "keep it autonomous but make the gating more
+# professional", so rigour comes from stronger checks, not from a person in
+# the loop.
+#
+# ── Why this is a separate workflow, and not a job inside deploy-demo-box ────
+#
+# Correctness, not tidiness. A job embedded in the deploy workflow cannot be
+# exercised from a branch without actually deploying, so there would be no way
+# to prove it green, break the thing it guards, watch it go red, restore, and
+# watch it go green again. Here that loop runs on a pull request behind a
+# label, against the real box, with no deploy involved. A check nobody can
+# prove still fails is a check nobody should trust.
+#
+# It also keeps this out of deploy/docker/docker-compose.yml and out of
+# deploy-demo-box.yml, both of which are heavily contended.
+#
+# ── Where each input comes from, and why the two answers differ ─────────────
+#
+# URLs and keys come from the BOX. Six workflows in this repository read
+# `SUPABASE_*` values from GitHub secrets that name a hosted project which no
+# longer exists. Nothing went red. The Cowork proof job ran for four days
+# against a Supabase that was not there, and deploy-web-console-workers shipped
+# green on the day the project went away (issue #1059). The box's own
+# /home/sakib/hive/.env is what the running containers actually use, so reading
+# the same file is the only way this verifies the deployment that exists rather
+# than one that used to.
+#
+# The verification IDENTITY may come from a repository secret, and that is not
+# a contradiction of the paragraph above. A stale URL is dangerous precisely
+# because nothing exercises it: the run stays green over a dead backend. A
+# stale credential cannot hide, because the very next thing this job does is
+# sign in with it, and a wrong identity fails in the same second it is read.
+# The secret is also the only delivery route that exists: there is no SSH path
+# to this box from an agent session, so a value that must reach it either
+# arrives through a workflow or is typed into that .env by the owner. Secret
+# first, box .env second, and the run proves whichever it used.
+#
+# The `preflight` step below is the generalisation of the URL half of that
+# lesson, and it is the piece worth promoting into the other six workflows.
+
+on:
+  workflow_run:
+    workflows: [deploy-demo-box]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      negative_control:
+        description: >-
+          Deliberately remove the thing one check guards so that check goes red.
+          Proves the gate still bites. No value of this makes anything pass.
+          Before this workflow reaches the default branch it is not
+          dispatchable at all, so the same five values are also accepted as
+          `verify-negative:<value>` labels on a pull request.
+        type: choice
+        default: none
+        options: [none, chat, signin, ledger, freshness, config]
+  # Label-gated, the same shape owui-nightly.yml uses, so this workflow can be
+  # exercised end to end from the branch that changes it and cannot fire by
+  # accident on unrelated pull requests. `synchronize` is here so that each
+  # push to a labelled branch re-runs it, which is what makes the
+  # green-break-red-restore-green loop a single push each way.
+  #
+  # The job below additionally requires the head repository to be this one. A
+  # label is a maintainer action, but this job runs on a self-hosted runner
+  # that IS the demo box, with its own docker socket and its own .env, so one
+  # mislabelled fork pull request would be arbitrary code execution there. The
+  # label is the intent gate; that condition is the trust boundary.
+  pull_request:
+    types: [labeled, synchronize]
+
+# No `concurrency:` block, deliberately. Grouping would queue runs, and GitHub
+# cancels a middle pending run when a third is queued behind it -- turning a
+# skipped verification into silence rather than a failure. deploy-demo-box is
+# already serialised by its own group, so the runs that matter arrive one at a
+# time anyway, and two overlapping runs here are harmless: each mints its own
+# key and each looks for any new usage_charge row, so the worst case is that
+# one of them sees the other's charge and still concludes, correctly, that
+# billing wrote a row.
+
+jobs:
+  verify:
+    name: Verify the deployment
+    # workflow_run fires on completion of any conclusion, including failure and
+    # cancellation. A failed deploy is already reported by deploy-demo-box's own
+    # report-failure job, and verifying a deploy that never happened would file
+    # a second, misleading issue about the product being down.
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-post-deploy-verify'))
+      }}
+    runs-on: [self-hosted, hive-demo]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      # Which KIND of failure this was, so the notifier below can file it under
+      # a title that is true. "The product is down" and "this gate has never
+      # been given an identity to verify with" are different problems with
+      # different owners, and collapsing them into one issue is how a real
+      # outage gets downgraded into a comment on a stale housekeeping thread.
+      reason: ${{ steps.verify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # No `ref:` here, deliberately, and it is not a detail. Pinning to
+          # `github.event.workflow_run.head_sha` is a privileged checkout of a
+          # ref this job cannot vouch for, which is what CodeQL's
+          # actions/cache-poisoning/poisonable-step flagged on this pull
+          # request (alert 27): a workflow_run job runs with the DEFAULT
+          # BRANCH's Actions cache scope, so executing repository scripts from
+          # an unvouched sha in that context can write a cache that every
+          # default-branch workflow afterwards reads.
+          #
+          # The pin also bought less than it looked like it did. What this job
+          # measures is the running box, reached over HTTPS and over the local
+          # docker socket. The checked-out tree is only the harness that asks
+          # the questions, so asking today's questions of the box that exists
+          # is at least as correct as asking a slightly older commit's version
+          # of them, and the freshness step below is what actually establishes
+          # which image the box is serving.
+          #
+          # persist-credentials: false leaves no usable git credential in the
+          # runner's config for the rest of a job that talks to a live
+          # deployment, matching the other live-surface jobs in this
+          # repository.
+          persist-credentials: false
+
+      - name: Decide whether this run carries a negative control
+        # One derivation, read by both the freshness step and the verification
+        # script. Two copies would drift.
+        #
+        # Labels as well as the workflow_dispatch input, because a workflow is
+        # not dispatchable until it exists on the default branch, so
+        # workflow_dispatch cannot be used before this merges. Proving that
+        # each check still goes red is a merge requirement for this pull
+        # request, so the proof has to be reachable FROM the pull request, and
+        # it must not be reachable by editing the check: a check proved by
+        # editing it proves nothing about the check that ships.
+        #
+        # Labels are `verify-negative:<check>`. Only a repository collaborator
+        # can label a pull request, which is the same trust boundary the
+        # `run-post-deploy-verify` label already relies on.
+        env:
+          DISPATCH_CONTROL: ${{ github.event.inputs.negative_control || 'none' }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          control="$DISPATCH_CONTROL"
+          if [ "$control" = "none" ]; then
+            for candidate in chat signin ledger freshness config; do
+              case "$PR_LABELS" in
+                *"\"verify-negative:$candidate\""*) control="$candidate"; break ;;
+              esac
+            done
+          fi
+          echo "NEGATIVE_CONTROL=$control" >> "$GITHUB_ENV"
+          if [ "$control" = "none" ]; then
+            echo "no negative control: every check is expected to pass"
+          else
+            echo "::warning::negative control '$control' is active, so this run is EXPECTED to fail"
+          fi
+
+      - name: Assert every container runs the image its tag now points to
+        # Issue #869, and the check that issue explicitly asks for. A deploy
+        # logged "Image hive-control-plane:ci Built" and "Container
+        # hive-control-plane-1 Recreated", reported success, and left
+        # control-plane executing the previous binary while edge-api came up
+        # current from the same compose invocation. It was noticed only because
+        # the commit had just added two columns to a settlement row, so the old
+        # binary wrote zeroes where the new one writes token counts. A change
+        # with a less observable side effect would not have been caught at all.
+        #
+        # The deploy trusts `docker compose up -d --build` to have replaced
+        # what it says it replaced. This verifies it, using two identifiers the
+        # box already has: `.Image` is the image ID the container was created
+        # from, fixed at creation, and `.Config.Image` is the tag it was
+        # created from, which `docker image inspect` resolves as it stands NOW.
+        # A rebuild that did not take moves the tag and leaves the container
+        # behind, so the two diverge. Nothing here needs a credential, which is
+        # why this check runs on every deploy regardless of how the
+        # verification identity below is configured.
+        #
+        # Every running container in the stack, not a hand-maintained list of
+        # the interesting ones. A list is precisely what would omit whichever
+        # service breaks next.
+        #
+        # This REPORTS and does not gate, and that is a deliberate, temporary
+        # position rather than a soft one. What the comparison establishes on
+        # this box today is that a container's image is not the tag's current
+        # image. What it cannot yet establish is the direction, which is the
+        # part that matters, and the numbers are the reason:
+        #
+        #   * 15 of 20 containers match their tag exactly, so the comparison
+        #     itself is sound.
+        #   * 5 (control-plane, edge-api, agent-console, markitdown,
+        #     supabase-db) report an image id that `docker image inspect`
+        #     cannot resolve at all, while their tag resolves to an image built
+        #     BEFORE the container was created. Every one of them is running.
+        #     A container newer than its tag's image did not miss that image,
+        #     so "stale binary" is not a conclusion those numbers support.
+        #   * open-webui and web-console-prod were in that set forty minutes
+        #     earlier and are current now, after a deploy recreated them, so
+        #     the check does track real state changes.
+        #
+        # Failing a deploy on a comparison whose direction is unexplained would
+        # make this gate red on every deploy from the day it merges, and a gate
+        # that is always red is one nobody reads on the day it means something.
+        # So the measurement ships, loudly, with the evidence attached to issue
+        # #869 for the investigation that issue already asks for. Turning it
+        # fatal is one line, here, and should happen the moment somebody
+        # explains the five.
+        #
+        # Negative control: compare against a well-formed image ID that no
+        # container can be running. That one IS fatal, on every trigger, so the
+        # assertion and its failure path can still be proved alive from a pull
+        # request. It is deliberately not a real stale binary: manufacturing one
+        # means rolling a live service back onto an old image, and this box is
+        # the demo surface.
+        working-directory: /home/sakib/hive/deploy/docker
+        env:
+          # The deploy's own flags, copied from deploy-demo-box.yml's
+          # HIVE_COMPOSE_FLAGS. A narrower set here would enumerate fewer
+          # containers and quietly stop checking the ones it dropped.
+          HIVE_COMPOSE_FLAGS: >-
+            --env-file ../../.env
+            -f docker-compose.yml
+            -f docker-compose.override.yml
+            -f docker-compose.enterprise.yml
+            --profile local
+            --profile chat
+            --profile monitoring
+            --profile selfhost
+        run: |
+          set -euo pipefail
+          bogus=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          control=none
+          if [ "${NEGATIVE_CONTROL:-none}" = "freshness" ]; then
+            control=freshness
+            echo "  negative control: comparing against an image ID nothing can be running"
+          fi
+
+          checked=0
+          stale=""
+          while read -r cid; do
+            [ -n "$cid" ] || continue
+            name=$(docker inspect -f '{{.Name}}' "$cid" | sed 's|^/||')
+            running=$(docker inspect -f '{{.Image}}' "$cid")
+            tag=$(docker inspect -f '{{.Config.Image}}' "$cid")
+            born=$(docker inspect -f '{{.Created}}' "$cid")
+            # State, because `ps -q` lists containers that are not running, and
+            # a dead container is a bigger finding than a stale one. It also
+            # bears on an image that has left the store: docker will not prune
+            # an image a running container holds.
+            state=$(docker inspect -f '{{.State.Status}}' "$cid")
+            checked=$((checked + 1))
+
+            # Resolved from the TAG, never from the id below, because the
+            # negative control replaces that id and an inspect of the
+            # replacement would kill the step before the assertion it is meant
+            # to exercise. That is not hypothetical: it is what the first run of
+            # this control did, failing for an inspect error and proving
+            # nothing.
+            if ! current=$(docker image inspect -f '{{.Id}}' "$tag" 2>/dev/null); then
+              # Not a skip. An unresolvable image reference means freshness
+              # cannot be established for this container, and a check that
+              # cannot establish its claim has to say so rather than pass.
+              echo "  UNKNOWN  $name ($tag no longer resolves on this box)"
+              stale="$stale%0A  $name: image reference $tag no longer resolves"
+              continue
+            fi
+            tag_born=$(docker image inspect -f '{{.Created}}' "$tag")
+            [ "$control" = "freshness" ] && current=$bogus
+
+            if [ "$state" != "running" ]; then
+              echo "  note     $name is $state, not running ($tag)"
+            fi
+            if [ "$running" = "$current" ]; then
+              echo "  current  $name ($tag), $state"
+              continue
+            fi
+
+            short_running=$(printf '%s' "$running" | cut -c8-19)
+            short_current=$(printf '%s' "$current" | cut -c8-19)
+            # Both images' build times, because the id comparison alone cannot
+            # tell the two directions apart and only one of them is a stale
+            # binary. These tags are a shared mutable pointer on this box: any
+            # build moves one, including a CI job that has nothing to do with a
+            # deploy, and two concurrent builds can leave a tag on the older of
+            # them. Measured rather than theorised: hive-supabase-db's container
+            # was created 1.3 seconds AFTER the image its tag resolves to, so it
+            # was running something newer than the tag, which is not the failure
+            # this check is for.
+            #
+            # The running image is usually still in the store, since a container
+            # holds a reference to it. When the inspect fails the reason is
+            # printed rather than swallowed, and the container is treated as
+            # behind the tag, which is the safe direction: a pass must never be
+            # the answer to a question that did not resolve.
+            run_born=""
+            if [ "$control" != "freshness" ]; then
+              if ! run_born=$(docker image inspect -f '{{.Created}}' "$running" 2>&1); then
+                echo "  note     $name: its running image $short_running did not inspect: ${run_born:-<no output>}"
+                run_born=""
+              fi
+              if [ -n "$run_born" ] && [ "$run_born" \> "$tag_born" ]; then
+                echo "  ahead    $name ($tag): running $short_running built $run_born, newer than the tag's $short_current built $tag_born"
+                continue
+              fi
+            fi
+            echo "  STALE    $name ($tag): $state from $short_running built ${run_born:-<unresolved>} (container created $born), tag now $short_current built $tag_born"
+            stale="$stale%0A  $name is $state from $short_running built ${run_born:-<unresolved>} while $tag now resolves to $short_current built $tag_born"
+
+          # shellcheck disable=SC2086: HIVE_COMPOSE_FLAGS must word-split into
+          # separate compose arguments; quoting it would pass one blob and
+          # compose would reject it. Intentional splitting, scoped here.
+          done < <(docker compose $HIVE_COMPOSE_FLAGS ps -q)
+
+          if [ "$checked" -eq 0 ]; then
+            # A loop that compared nothing must never report a pass. That is
+            # the exact shape in which a check quietly stops checking.
+            echo "::error::no running containers matched these compose flags, so nothing was compared"
+            exit 1
+          fi
+          echo "  compared $checked container(s)"
+          [ -n "$stale" ] || exit 0
+
+          if [ "${NEGATIVE_CONTROL:-none}" = "freshness" ]; then
+            echo "::error::containers are not running the image their tag points to (issue #869):$stale"
+            exit 1
+          fi
+          echo "::warning::containers are not running the image their tag points to (issue #869):$stale"
+          {
+            echo "### Containers not on their tag's current image (issue #869)"
+            echo
+            echo "Reported, not gated, and the comment above this step in"
+            echo "\`.github/workflows/post-deploy-verify.yml\` says why: the comparison is"
+            echo "sound for the 15 containers that match, and for the ones below it cannot"
+            echo "yet establish the DIRECTION, which is the part that would make it a stale"
+            echo "binary. Failing a deploy on that would make this gate permanently red."
+            echo
+            echo '```'
+            printf '%b\n' "${stale//%0A/\\n}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report which inputs the box carries
+        # Presence and length only, never a value: this repository is public.
+        # This step never fails. Its whole job is to make the next step's
+        # failure legible, because "HIVE_VERIFY_EMAIL is not set" is a much
+        # cheaper thing to read than a sign-in that answered 400.
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          if [ ! -f "$env_file" ]; then
+            echo "::error::$env_file does not exist on this runner"
+            exit 1
+          fi
+          for name in SUPABASE_URL NEXT_PUBLIC_SUPABASE_URL \
+                      SUPABASE_ANON_KEY NEXT_PUBLIC_SUPABASE_ANON_KEY \
+                      SUPABASE_SERVICE_ROLE_KEY \
+                      HIVE_VERIFY_EMAIL HIVE_VERIFY_PASSWORD \
+                      HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
+            # `|| true` matters: under `set -o pipefail` a grep that matches
+            # nothing kills the step before it can report what is missing,
+            # which is the one thing this step exists to do.
+            value=$(grep -E "^${name}=" "$env_file" | head -1 | cut -d= -f2- || true)
+            value=${value%\"}; value=${value#\"}
+            value=${value%\'}; value=${value#\'}
+            if [ -n "$value" ]; then
+              # Presence only for password and service-role values: this log is
+              # public, and even a character count is secret metadata.
+              case "$name" in
+                *PASSWORD*|*SERVICE_ROLE_KEY*) echo "  present  ${name}" ;;
+                *)                             echo "  present  ${name} (${#value} characters)" ;;
+              esac
+            else
+              echo "  ABSENT   ${name}"
+            fi
+          done
+
+      - name: Preflight the Supabase configuration, then verify the deployment
+        id: verify
+        # One step, so no credential ever reaches $GITHUB_ENV, the step summary,
+        # or another job. Values read here live in this shell and die with it.
+        env:
+          HIVE_VERIFY_RUN_LABEL: ${{ github.run_id }}
+          # Secret first, box .env second (see the header). Both empty is a
+          # legal state today and is reported as its own kind of failure
+          # rather than as a broken product.
+          SECRET_VERIFY_EMAIL: ${{ secrets.HIVE_VERIFY_EMAIL }}
+          SECRET_VERIFY_PASSWORD: ${{ secrets.HIVE_VERIFY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          control="${NEGATIVE_CONTROL:-none}"
+
+          read_env() {
+            # Same idiom as deploy-demo-box.yml's pooler-DSN step, including the
+            # quote stripping and the `|| true`.
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+
+          # ── the auth origin ────────────────────────────────────────────────
+          #
+          # NEXT_PUBLIC_SUPABASE_URL first, and this is a correctness fix, not
+          # a preference. On this box SUPABASE_URL is `http://caddy-supabase`,
+          # an in-network compose hostname that the services resolve and this
+          # runner cannot: the job runs on the host, outside the compose
+          # network, so a sign-in against that value dies in DNS with a
+          # transport error that names nothing. NEXT_PUBLIC_SUPABASE_URL is the
+          # public origin the product's own browser clients use
+          # (Caddyfile.console proxies /auth/v1 there), which is also the
+          # surface a customer's sign-in actually crosses, so it is the right
+          # thing to verify rather than merely the reachable one.
+          supabase=$(read_env NEXT_PUBLIC_SUPABASE_URL)
+          [ -n "$supabase" ] || supabase=$(read_env SUPABASE_URL)
+          if [ "$control" = "config" ]; then
+            # The #1059 class, reproduced with the sharpest version of it: not
+            # a URL that fails to resolve (any connectivity probe catches
+            # that), but another live host in this same deployment. That is the
+            # real shape of the failure, a hostname updated in one place and
+            # left behind in another, and it is the one a status-code check
+            # sails through: chat-hive.scubed.co is a single-page app that
+            # answers 200 with HTML for every path it does not recognise, so
+            # /auth/v1/health "succeeds" there. Only asserting that the
+            # document came from GoTrue catches it, and nothing after the
+            # preflight may run.
+            supabase=https://chat-hive.scubed.co
+            echo "  negative control: pointing the auth origin at another live host in this deployment"
+          fi
+          if [ -z "$supabase" ]; then
+            echo "::error::neither NEXT_PUBLIC_SUPABASE_URL nor SUPABASE_URL is set in $env_file"
+            exit 1
+          fi
+          host=${supabase#*://}; host=${host%%/*}; host=${host%%:*}
+          case "$host" in
+            *.*) ;;
+            *)
+              # A single-label host is a container name. Fail here, legibly,
+              # rather than fifteen seconds later inside a Python traceback.
+              echo "::error::the auth origin resolved to '$supabase', whose host '$host' is an in-network container name and cannot resolve from this runner. Set NEXT_PUBLIC_SUPABASE_URL in $env_file to the public auth origin."
+              exit 1
+              ;;
+          esac
+          export SUPABASE_URL="$supabase"
+          echo "auth origin $supabase"
+
+          # Paired with the origin chosen above, in the same order. A
+          # publishable key belongs to the listener it was issued for, and
+          # taking the origin from one variable and the key from another is
+          # precisely the half-updated configuration issue #1059 was.
+          anon=$(read_env NEXT_PUBLIC_SUPABASE_ANON_KEY)
+          [ -n "$anon" ] || anon=$(read_env SUPABASE_ANON_KEY)
+          if [ -z "$anon" ]; then
+            echo "::error::neither NEXT_PUBLIC_SUPABASE_ANON_KEY nor SUPABASE_ANON_KEY is set in $env_file"
+            exit 1
+          fi
+          echo "::add-mask::$anon"
+          export SUPABASE_ANON_KEY="$anon"
+
+          # Claim-checked by the preflight when present, never sent anywhere.
+          service=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          if [ -n "$service" ]; then
+            echo "::add-mask::$service"
+            export SUPABASE_SERVICE_ROLE_KEY="$service"
+          fi
+
+          # ── verification targets ───────────────────────────────────────────
+          #
+          # The script requires all three from its environment and refuses to
+          # run unconfigured: a checker that silently assumes a fixed demo host
+          # when configuration is missing can return green for a product nobody
+          # deployed. Each is read from $env_file first. The fallbacks below
+          # are this deployment's public hostnames, written here where they are
+          # reviewed and logged rather than assumed inside the checking code,
+          # and every run reports which source each target came from.
+          for name in HIVE_CHAT_URL HIVE_CONTROL_PLANE_URL HIVE_EDGE_API_URL; do
+            value=$(read_env "$name")
+            source="box .env"
+            if [ -z "$value" ]; then
+              case "$name" in
+                HIVE_CHAT_URL)          value=https://chat-hive.scubed.co ;;
+                HIVE_CONTROL_PLANE_URL) value=https://control-hive.scubed.co ;;
+                HIVE_EDGE_API_URL)      value=https://api-hive.scubed.co ;;
+              esac
+              source="workflow fallback"
+            fi
+            export "$name=$value"
+            echo "target $name $value ($source)"
+          done
+
+          # ── the verification model ─────────────────────────────────────────
+          #
+          # The ledger check sends one real, billed completion per run, on the
+          # alias named by HIVE_VERIFY_MODEL (scripts/post-deploy-verify.py,
+          # default hive-default). Left unset it would land on the same free
+          # tier the demo serves chat from and compete with real users for its
+          # daily cap, so the box names a paid alias here and the gate uses
+          # that instead of assuming anything about the routing table.
+          model=$(read_env HIVE_VERIFY_MODEL)
+          source="box .env"
+          if [ -z "$model" ]; then
+            # Same default as the script's own, so absence here behaves
+            # identically to running the script by hand.
+            model=hive-default
+            source="workflow default"
+          fi
+          export HIVE_VERIFY_MODEL="$model"
+          echo "verification model $model ($source)"
+
+          # ── the verification identity ─────────────────────────────────────
+          email="$SECRET_VERIFY_EMAIL"
+          password="$SECRET_VERIFY_PASSWORD"
+          source="repository secret"
+          if [ -z "$email" ] || [ -z "$password" ]; then
+            email=$(read_env HIVE_VERIFY_EMAIL)
+            password=$(read_env HIVE_VERIFY_PASSWORD)
+            source="$env_file"
+          fi
+          identity="yes"
+          if [ -z "$email" ] || [ -z "$password" ]; then
+            identity="no"
+          else
+            # The address is masked as well as the password. docs/live-test-auth.md
+            # is right that an address is not a credential, and this is not a
+            # disagreement with it: when the value arrives as a repository
+            # secret GitHub masks it in the log whether or not this line
+            # exists, so masking the .env path too is what makes the two paths
+            # behave the same instead of leaving one of them printing an
+            # account address into a public log. Which identity ran is still
+            # legible from `verification identity from ...` below and from the
+            # place the value is configured.
+            echo "::add-mask::$email"
+            echo "::add-mask::$password"
+            export HIVE_VERIFY_EMAIL="$email"
+            export HIVE_VERIFY_PASSWORD="$password"
+            echo "verification identity from $source"
+          fi
+
+          echo "::group::preflight: does this Supabase configuration resolve at all"
+          # Seconds, deterministic, no writes. It answers the question that
+          # would have caught both halves of issue #1059 before anything slow
+          # ran: is the project alive, and do these keys belong to it. Running
+          # it first means a dead or mismatched configuration fails here with
+          # that reason, instead of surfacing ninety seconds later as a sign-in
+          # that answered 400.
+          python3 scripts/preflight-supabase-config.py
+          echo "::endgroup::"
+
+          args=()
+          case "$control" in
+            # `freshness` is handled by its own step above and `config` by the
+            # auth-origin override above; neither is a value this script knows,
+            # and passing one would make argparse reject the whole run.
+            chat|signin|ledger) args+=(--negative-control "$control") ;;
+          esac
+
+          if [ "$identity" = "no" ]; then
+            # A control whose subject does not exist cannot be proved. Failing
+            # here names the precondition instead of surfacing later as an
+            # argparse selection error that says nothing about identity.
+            case "$control" in
+              signin|ledger)
+                echo "::error::negative control '$control' needs a verification identity to remove, and none is configured"
+                exit 1 ;;
+            esac
+            # Run everything that needs no identity. No `|| true`: if chat is
+            # down, that is the failure that matters and it must be the one
+            # that surfaces.
+            python3 scripts/post-deploy-verify.py "${args[@]}" --only chat
+
+            # Then report the missing coverage WITHOUT failing the job, and
+            # this is a deliberate call rather than a softening.
+            #
+            # An unconfigured identity is not a broken deploy, and it cannot be
+            # fixed by anything in this repository: it needs a funded, non-demo
+            # tenant OWNER that only the owner can create. Failing every deploy
+            # for it would make this gate red permanently, and a permanently red
+            # gate is indistinguishable from a real outage on the day one
+            # happens. That is the check that cries wolf until nobody reads it,
+            # which is the failure mode this whole workflow exists to avoid, and
+            # it is worse than the alternative below.
+            #
+            # It is not silence either. It emits a warning annotation, a job
+            # summary block, and `reason=unconfigured`, on which the job below
+            # files a separately titled, permanently open issue. The absence
+            # sits in the issue list until somebody fixes it, rather than in a
+            # log nobody opens, and the checks that CAN run keep a verdict that
+            # still means something.
+            echo "reason=unconfigured" >> "$GITHUB_OUTPUT"
+            echo "::warning::no verification identity is configured, so sign-in and billing were NOT verified by this run"
+            {
+              echo "### post-deploy-verify: two of four checks did not run"
+              echo
+              echo "Ran: chat backend answers. Reported without gating: container"
+              echo "image freshness (#869)."
+              echo
+              echo "**Did NOT run: sign-in resolves at the control-plane, and a real"
+              echo "completion produces a \`usage_charge\` row.** Both need a verification"
+              echo "identity and none is configured."
+              echo
+              echo "Set repository secrets \`HIVE_VERIFY_EMAIL\` and \`HIVE_VERIFY_PASSWORD\`"
+              echo "(no SSH needed), or add the same two lines to \`$env_file\` on the box."
+              echo "It must be a dedicated identity that is a tenant OWNER with a verified"
+              echo "email and a positive credit balance, and never demo@hive-demo.invalid"
+              echo "(issue #848): minting an API key needs \`api_keys:write\`, which the"
+              echo "authorization policy grants to OWNER only, and the ledger check sends"
+              echo "one real, billed completion per run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # No `|| true`, no continue-on-error. The script exits non-zero unless
+          # chat answered from its backend, the control-plane resolved a real
+          # bearer to the right identity, and a real completion produced a real
+          # usage_charge row.
+          python3 scripts/post-deploy-verify.py "${args[@]}"
+
+  report-failure:
+    # A separate label from deploy-demo-box's `ci-failure:deploy-demo-box`, and
+    # that is not arbitrary. This is a separate workflow, so it cannot join that
+    # job's `needs: [migrate, deploy, sdk-replay]` list; and its ledger check
+    # makes a real outbound call to a third-party inference provider, which can
+    # go red for reasons that have nothing to do with a deploy. Sharing the
+    # label would let a provider outage hold the deploy issue open, and would
+    # downgrade a genuine `migrate` failure into a comment on a stale issue --
+    # the exact trap already documented on agent-workspace-coverage.
+    name: Report failure or unverified coverage
+    needs: [verify]
+    # workflow_run only, and that is a bug fix rather than a narrowing. Issue
+    # #1062 exists because a pull_request run of this very workflow filed it
+    # ("verify=failure, trigger=pull_request"), reporting the demo box broken
+    # when what had actually happened was that a branch exercised its own new
+    # check. Worse, every negative-control run is EXPECTED to fail, so leaving
+    # this open to dispatches and pull requests turns the proof that the gate
+    # bites into a stream of issues claiming the product is down.
+    if: >-
+      github.event_name == 'workflow_run'
+      && (failure() || needs.verify.outputs.reason == 'unconfigured')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    # The notifier must never be able to change the verdict. `continue-on-error`
+    # plus the `|| true` below mean a rate-limited or broken notifier cannot
+    # turn a red verification green, and cannot turn a green one red either.
+    continue-on-error: true
+    steps:
+      - uses: actions/github-script@v7
+        continue-on-error: true
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          VERIFY_REASON: ${{ needs.verify.outputs.reason }}
+          TRIGGER: ${{ github.event_name }}
+          DEPLOY_RUN: ${{ github.event.workflow_run.html_url }}
+        with:
+          script: |
+            // Dedupe by exact title over the issues LIST api, not the search
+            // api. Search is eventually consistent and returns nothing for an
+            // issue filed seconds ago, so two near-simultaneous failures each
+            // find no match and each file one. The list api is read-your-writes.
+            const label = 'ci-failure:post-deploy-verify';
+            // Two titles, because they are two different problems with two
+            // different fixes. Deduping both onto one title is the trap this
+            // workflow's own header warns about: a housekeeping issue that
+            // stays open would swallow a genuine outage as a comment.
+            // A failed job's outputs are not guaranteed to reach `needs`, so an
+            // empty reason falls back to the product title. That is the safe
+            // direction of failure: a real outage is never filed as
+            // housekeeping, at worst a housekeeping gap is filed as an outage
+            // and the run log says which it was in its first ten lines.
+            const unconfigured = process.env.VERIFY_REASON === 'unconfigured';
+            const title = unconfigured
+              ? 'post-deploy-verify has no verification identity, so sign-in and billing are unverified'
+              : 'post-deploy-verify is failing against the demo box';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const detail = [
+              `verify=${process.env.VERIFY_RESULT}`,
+              `trigger=${process.env.TRIGGER}`,
+              process.env.VERIFY_REASON ? `reason=${process.env.VERIFY_REASON}` : null,
+              process.env.DEPLOY_RUN ? `deploy run: ${process.env.DEPLOY_RUN}` : null,
+            ].filter(Boolean).join(', ');
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 100,
+            });
+            const existing = open.find((i) => i.title === title);
+            if (existing && unconfigured) {
+              // Nothing to add. The configuration is missing today for exactly
+              // the reason it was missing yesterday, and a comment per deploy
+              // would train everyone to mute the thread that is supposed to be
+              // the reminder.
+              core.info(`already tracked: ${existing.html_url}`);
+              return;
+            }
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Still failing: ${runUrl}\n\n${detail}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: [label],
+              body: (unconfigured
+                ? [
+                    'This gate has no verification identity, so two of its four checks did',
+                    'not run: sign-in against the control-plane, and the billing ledger.',
+                    '',
+                    `First detected: ${runUrl}`,
+                    '',
+                    detail,
+                    '',
+                    'The product is not known to be broken. What is known is that nobody is',
+                    'checking two of the things it depends on.',
+                    '',
+                    'To fix, either set repository secrets `HIVE_VERIFY_EMAIL` and',
+                    '`HIVE_VERIFY_PASSWORD`, or add the same two lines to the box\'s',
+                    '/home/sakib/hive/.env. The identity must be a tenant OWNER with a',
+                    'verified email and a positive credit balance, and must never be',
+                    'demo@hive-demo.invalid (issue #848): the ledger check mints a key and',
+                    'sends one real, billed completion per run.',
+                    '',
+                    'Filed automatically. Close it once a run goes green; it will be refiled',
+                    'if it fails again.',
+                  ]
+                : [
+                    'Post-deploy verification failed against the demo box.',
+                    '',
+                    `First detected: ${runUrl}`,
+                    '',
+                    detail,
+                    '',
+                    'One of three things is true, and the run log names which:',
+                    '',
+                    '- chat answered but its backend did not, so chat-hive.scubed.co is serving',
+                    '  the static shell over a dead Open WebUI.',
+                    '- a freshly minted session did not resolve to the same user at the',
+                    '  control-plane, so sign-in is broken even if the login page renders.',
+                    '- a real completion produced no `usage_charge` ledger row, so billing has',
+                    '  failed open and requests are being served for free.',
+                    '',
+                    'Nothing was rolled back and nothing should be: forward migrations run',
+                    'before the deploy and are not reversible by redeploying code, so an',
+                    'automatic rollback would leave old code against a new schema.',
+                    '',
+                    'Filed automatically. Close it once a run goes green; it will be refiled',
+                    'if it fails again.',
+                  ]).join('\n'),
+            });
+      - name: Never let the notifier change the verdict
+        if: always()
+        run: echo "notifier finished" || true
