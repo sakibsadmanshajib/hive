@@ -34,9 +34,11 @@ The security properties this file is responsible for, all of them load bearing:
     influence which principal edge-api resolves.
   * Neither the shim key nor the user's token is ever returned to the browser,
     logged, or echoed in an error.
-  * The upstream path is built from a fixed set of four operations, with the
-    task id validated as a UUID before it is interpolated. This is not a
-    general-purpose proxy, which is the shape #770 removed from this image.
+  * The upstream path is built from a fixed set of six operations, with the
+    task id validated as a UUID before it is interpolated and the events
+    cursor params validated as plain non-negative integers before they reach
+    a URL. This is not a general-purpose proxy, which is the shape #770
+    removed from this image.
   * The request body forwarded upstream is rebuilt from two named fields rather
     than passed through, so nothing a caller invents (a `__metadata` block, for
     one) reaches edge-api.
@@ -246,3 +248,40 @@ async def get_task(task_id: str, request: Request, user=Depends(get_verified_use
 @router.post('/tasks/{task_id}/cancel')
 async def cancel_task(task_id: str, request: Request, user=Depends(get_verified_user)):
     return await _call(request, user, 'POST', f'/agent/tasks/{_task_id(task_id)}/cancel')
+
+
+def _cursor_param(raw: str | None, name: str) -> str:
+    """Validate one cursor/limit query parameter before it reaches a URL.
+
+    Only plain non-negative integers survive. Anything else (negative,
+    non-numeric, oversized) is a 400 here rather than edge-api's error later,
+    because this is the boundary where the value first becomes part of a URL.
+    """
+    if raw is None:
+        return ''
+    if not raw.isdigit() or len(raw) > 18:
+        raise HTTPException(status_code=400, detail='Invalid cursor.')
+    return f'&{name}={raw}'
+
+
+@router.get('/tasks/{task_id}/events')
+async def list_task_events(
+    task_id: str,
+    request: Request,
+    user=Depends(get_verified_user),
+    after_seq: str | None = None,
+    limit: str | None = None,
+):
+    id_ = _task_id(task_id)
+    qs = _cursor_param(after_seq, 'after_seq') + _cursor_param(limit, 'limit')
+    path = f'/agent/tasks/{id_}/events'
+    if qs:
+        # The leading '&' pairs with a '?' added here; edge-api reads both
+        # params from its own query parsing either way.
+        path += '?' + qs.lstrip('&')
+    return await _call(request, user, 'GET', path)
+
+
+@router.get('/tasks/{task_id}/files')
+async def list_task_files(task_id: str, request: Request, user=Depends(get_verified_user)):
+    return await _call(request, user, 'GET', f'/agent/tasks/{_task_id(task_id)}/files')

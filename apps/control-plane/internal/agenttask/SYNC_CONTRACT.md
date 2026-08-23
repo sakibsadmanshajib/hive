@@ -59,6 +59,42 @@ by the authenticated caller, never round-tripped.
 | GET | `/v1/agent/tasks` | — | `{"tasks": [Task, ...]}`, newest first, scoped to the caller |
 | GET | `/v1/agent/tasks/{id}` | — | 404 if the task belongs to a different user or does not exist |
 | POST | `/v1/agent/tasks/{id}/cancel` | — | 409 if the task already reached a terminal state |
+| GET | `/v1/agent/tasks/{id}/events` | — | `{"events": [Event, ...]}`; cursor `after_seq` (default 0), `limit` default 100 capped at 500. A non-numeric or negative `after_seq` is a 400, never silently zero. 404 across users |
+| GET | `/v1/agent/tasks/{id}/files` | — | `{"files": [WorkspaceFile, ...]}`: the running session's workspace listing, name/size/mtime only, best-effort (empty when no session) |
+
+Event, as returned by the events endpoints (both surfaces):
+
+```json
+{
+  "seq": 42,
+  "source_event_id": "sandbox event id, or a deterministic synthetic id for status/file rows",
+  "kind": "status | tool_call | tool_result | message | error | file",
+  "payload": {"kind-specific JSONB, previews truncated at 2000 chars, whole payload capped at 64 KiB"},
+  "created_at": "RFC3339"
+}
+```
+
+WorkspaceFile:
+
+```json
+{"name": "string", "size": 0, "mtime": "RFC3339"}
+```
+
+Kinds and their payloads (written by the eventsync syncer):
+
+- `status`: `{"status": "queued | running | succeeded | failed | cancelled"}`. Synthetic
+  (source id `status:<status>`); one per transition including into terminal states, deduped
+  by the partial unique index.
+- `tool_call`: `{"tool_name", "tool_call_id", "preview"}` from OpenHands ActionEvent.
+- `tool_result`: `{"tool_name", "tool_call_id", "preview"}` from ObservationEvent and
+  UserRejectObservation.
+- `message`: `{"role", "preview"}` from MessageEvent, every role carried (the role rides in
+  the payload so consumers tell them apart; nothing is silently dropped).
+- `error`: `{"preview"}` from AgentErrorEvent.
+- `file`: the WorkspaceFile JSON itself, source id `file:<name>:<size>:<mtime>` so an
+  unchanged file dedups out and a rewritten file is recorded.
+- Any sandbox kind the mapping does not name lands as `status` carrying the raw sandbox
+  payload (or an unmapped marker when the dump was oversized), never dropped silently.
 
 Status is read by polling `GET /v1/agent/tasks/{id}`. No SSE/websocket
 channel ships in this step — the existing SSE pattern in this repo (see
@@ -84,6 +120,8 @@ untrusted client input.
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}` | — |
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}` | — |
 | POST | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/cancel` | — |
+| GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/events?after_seq=&limit=` | — |
+| GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/files` | — |
 
 ## Create is asynchronous over the launch (issue #881)
 

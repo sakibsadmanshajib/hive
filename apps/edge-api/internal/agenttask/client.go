@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +107,71 @@ func (c *Client) Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (T
 func (c *Client) Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error) {
 	path := c.basePath(tenantID, userID) + "/" + taskID.String() + "/cancel"
 	return c.do(ctx, http.MethodPost, path, nil)
+}
+
+// Events fetches one task's event rows after afterSeq.
+// GET /internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/events?after_seq=&limit=.
+// The handler validates the cursor before calling; a 400 from control-plane
+// still maps to ErrCursor so nothing can silently flatten it.
+func (c *Client) Events(ctx context.Context, tenantID, userID, taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error) {
+	q := url.Values{}
+	q.Set("after_seq", strconv.FormatInt(afterSeq, 10))
+	q.Set("limit", strconv.Itoa(limit))
+	path := c.basePath(tenantID, userID) + "/" + taskID.String() + "/events?" + q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: build request: %w", err)
+	}
+	cpauth.SetHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		drain(resp.Body)
+		if resp.StatusCode == http.StatusBadRequest {
+			return nil, ErrCursor
+		}
+		return nil, statusErr(resp.StatusCode)
+	}
+	var listResp struct {
+		Events []Event `json:"events"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&listResp); err != nil {
+		return nil, fmt.Errorf("agenttask.client: decode events response: %w", err)
+	}
+	return listResp.Events, nil
+}
+
+// Files lists one task's workspace through control-plane and the launcher.
+// GET /internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/files.
+func (c *Client) Files(ctx context.Context, tenantID, userID, taskID uuid.UUID) ([]WorkspaceFile, error) {
+	path := c.basePath(tenantID, userID) + "/" + taskID.String() + "/files"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: build request: %w", err)
+	}
+	cpauth.SetHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		drain(resp.Body)
+		return nil, statusErr(resp.StatusCode)
+	}
+	var listResp struct {
+		Files []WorkspaceFile `json:"files"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&listResp); err != nil {
+		return nil, fmt.Errorf("agenttask.client: decode files response: %w", err)
+	}
+	return listResp.Files, nil
 }
 
 func (c *Client) basePath(tenantID, userID uuid.UUID) string {

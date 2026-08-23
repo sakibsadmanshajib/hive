@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -20,6 +21,8 @@ type TaskClient interface {
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
+	Events(ctx context.Context, tenantID, userID, taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	Files(ctx context.Context, tenantID, userID, taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
 // Handler serves /v1/agent/tasks routes. Callers wrap with
@@ -52,24 +55,38 @@ func (h *Handler) routeTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) routeTaskByID(w http.ResponseWriter, r *http.Request) {
-	taskID, cancel, err := extractTaskPath(r.URL.Path)
-	if err != nil {
+	taskID, suffix, ok := extractTaskPath(r.URL.Path)
+	if !ok {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid task id")
 		return
 	}
-	switch {
-	case cancel:
-		if r.Method != http.MethodPost {
-			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
-			return
-		}
-		h.handleCancel(w, r, taskID)
-	default:
+	switch suffix {
+	case "":
 		if r.Method != http.MethodGet {
 			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
 			return
 		}
 		h.handleGet(w, r, taskID)
+	case "cancel":
+		if r.Method != http.MethodPost {
+			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
+			return
+		}
+		h.handleCancel(w, r, taskID)
+	case "events":
+		if r.Method != http.MethodGet {
+			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
+			return
+		}
+		h.handleEvents(w, r, taskID)
+	case "files":
+		if r.Method != http.MethodGet {
+			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
+			return
+		}
+		h.handleFiles(w, r, taskID)
+	default:
+		apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "not found")
 	}
 }
 
@@ -177,30 +194,103 @@ func writeTaskError(w http.ResponseWriter, err error) {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid pack")
 	case errors.Is(err, ErrTerminalState):
 		apierrors.Write(w, http.StatusConflict, apierrors.CodeInvalidRequest, "task already reached a terminal state")
+	case errors.Is(err, ErrCursor):
+		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, ErrCursor.Error())
 	default:
 		// Provider-blind: the underlying error (control-plane infra detail) is never echoed.
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "agent task request failed")
 	}
 }
 
-// extractTaskPath parses "/v1/agent/tasks/{id}" or
-// "/v1/agent/tasks/{id}/cancel" into (id, isCancel).
-func extractTaskPath(path string) (uuid.UUID, bool, error) {
+// extractTaskPath parses "/v1/agent/tasks/{id}", "/v1/agent/tasks/{id}/cancel",
+// ".../events" or ".../files" into (id, suffix). ok is false for any other
+// shape.
+func extractTaskPath(path string) (uuid.UUID, string, bool) {
 	rest := strings.Trim(strings.TrimPrefix(path, "/v1/agent/tasks/"), "/")
 	parts := strings.Split(rest, "/")
-	switch len(parts) {
-	case 1:
-		id, err := uuid.Parse(parts[0])
-		return id, false, err
-	case 2:
-		if parts[1] != "cancel" {
-			return uuid.Nil, false, errors.New("unknown suffix")
-		}
-		id, err := uuid.Parse(parts[0])
-		return id, true, err
-	default:
-		return uuid.Nil, false, errors.New("unexpected path shape")
+	if len(parts) < 1 || len(parts) > 2 || parts[0] == "" {
+		return uuid.Nil, "", false
 	}
+	id, err := uuid.Parse(parts[0])
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	if len(parts) == 1 {
+		return id, "", true
+	}
+	switch parts[1] {
+	case "cancel", "events", "files":
+		return id, parts[1], true
+	default:
+		return uuid.Nil, "", false
+	}
+}
+
+// Events cursor bounds. The cap is a clamp: a client asking for "everything"
+// gets the newest 500-event window instead of an error to special-case. A bad
+// cursor is a 400, never silently zero.
+const (
+	defaultEventsLimit = 100
+	maxEventsLimit     = 500
+)
+
+// handleEvents serves GET /v1/agent/tasks/{id}/events?after_seq=N&limit=M.
+func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, taskID uuid.UUID) {
+	user, ok := auth.UserFrom(r.Context())
+	if !ok || user == nil {
+		apierrors.Write(w, http.StatusUnauthorized, apierrors.CodeUnauthenticated, "unauthenticated")
+		return
+	}
+
+	var afterSeq int64
+	var err error
+	if raw := r.URL.Query().Get("after_seq"); raw != "" {
+		if afterSeq, err = strconv.ParseInt(raw, 10, 64); err != nil || afterSeq < 0 {
+			apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, ErrCursor.Error())
+			return
+		}
+	}
+	limit := defaultEventsLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		var n int
+		if n, err = strconv.Atoi(raw); err != nil || n < 1 {
+			apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	if limit > maxEventsLimit {
+		limit = maxEventsLimit
+	}
+
+	events, err := h.client.Events(r.Context(), user.TenantID, user.ID, taskID, afterSeq, limit)
+	if err != nil {
+		writeTaskError(w, err)
+		return
+	}
+	if events == nil {
+		events = []Event{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// handleFiles serves GET /v1/agent/tasks/{id}/files: the running session's
+// workspace listing, best-effort.
+func (h *Handler) handleFiles(w http.ResponseWriter, r *http.Request, taskID uuid.UUID) {
+	user, ok := auth.UserFrom(r.Context())
+	if !ok || user == nil {
+		apierrors.Write(w, http.StatusUnauthorized, apierrors.CodeUnauthenticated, "unauthenticated")
+		return
+	}
+	files, err := h.client.Files(r.Context(), user.TenantID, user.ID, taskID)
+	if err != nil {
+		writeTaskError(w, err)
+		return
+	}
+	if files == nil {
+		files = []WorkspaceFile{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

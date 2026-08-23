@@ -1048,17 +1048,21 @@ func main() {
 	var agentTaskHandler *agenttask.Handler
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
-		agentEngine, agentEngineStatus := buildAgentEngine(egressSvc)
-		agentTaskSvc := agenttask.NewService(agentTaskRepo, agentEngine)
+		agentEngine, agentEngineStatus, agentEngineEvents := buildAgentEngine(egressSvc)
+		agentTaskSvc := agenttask.NewService(agentTaskRepo, agentEngine,
+			agenttask.WithEventSource(agentEngineEvents))
 		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
 
 		// Poller needs a real StatusChecker to poll — NotConfiguredEngine has
 		// no Status method — so it is only started when the engine itself
 		// is (same HIVE_AGENT_ENGINE_* gate; see SYNC_CONTRACT.md's Engine
-		// seam section).
+		// seam section). The event syncer shares that gate: it needs the same
+		// live engine surface, and its per-task failures degrade to missed
+		// events, never wrong ones.
 		if agentEngineStatus != nil {
+			interval := parseDurationEnv("HIVE_AGENT_TASK_POLL_INTERVAL", 15*time.Second)
 			poller := agenttask.NewPoller(agentTaskRepo, agentEngineStatus, agenttask.PollerConfig{
-				Interval: parseDurationEnv("HIVE_AGENT_TASK_POLL_INTERVAL", 15*time.Second),
+				Interval: interval,
 				Logger:   slog.Default(),
 			})
 			// Bound to runCtx so it stops cleanly on shutdown, same as the
@@ -1066,6 +1070,16 @@ func main() {
 			poller.Start(runCtx)
 			defer poller.Stop()
 			log.Println("agent task status poller started")
+
+			if agentEngineEvents != nil {
+				syncer := agenttask.NewEventSyncer(agentTaskRepo, agentEngineEvents, agenttask.PollerConfig{
+					Interval: interval,
+					Logger:   slog.Default(),
+				})
+				syncer.Start(runCtx)
+				defer syncer.Stop()
+				log.Println("agent task event syncer started")
+			}
 		}
 	}
 
@@ -1665,8 +1679,12 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 // buildAgentEngine's second return value is the same *agentengine.Engine as
 // a agenttask.StatusChecker (nil when unconfigured) — the seam
 // cmd/server/main.go's poller wiring uses, since NotConfiguredEngine has no
-// Status method to poll.
-func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.StatusChecker) {
+// Status method to poll. The third is that same value as an
+// agenttask.EventSource for the event-sync loop (nil only when the engine is
+// unconfigured or, on the socket arm, when the daemon failed its boot health
+// probe — a missed events pull degrades safely and the daemon coming up later
+// still serves every task it registered).
+func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.StatusChecker, agenttask.EventSource) {
 	// Issue #780: on any deployment where this process runs in a container
 	// (every compose topology this repo ships), it cannot exec Apptainer at
 	// all — musl base, no /dev/fuse, no CAP_SYS_ADMIN — and granting it
@@ -1687,7 +1705,7 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 		} else {
 			log.Printf("control-plane: agent-engine daemon reachable at %s", socketPath)
 		}
-		return remote, remote
+		return remote, remote, remote
 	}
 
 	sifPath := os.Getenv("HIVE_AGENT_ENGINE_SIF_PATH")
@@ -1716,12 +1734,12 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 			missing = append(missing, "HIVE_AGENT_ENGINE_PROFILE_ID")
 		}
 		log.Printf("control-plane: WARN agent engine not configured, every agent task submitted will fail immediately (never runs) — missing: %s", strings.Join(missing, ", "))
-		return agenttask.NotConfiguredEngine{}, nil
+		return agenttask.NotConfiguredEngine{}, nil, nil
 	}
 	profileID, err := uuid.Parse(profileIDRaw)
 	if err != nil {
 		log.Printf("control-plane: HIVE_AGENT_ENGINE_PROFILE_ID invalid, agent-engine stays unconfigured: %v", err)
-		return agenttask.NotConfiguredEngine{}, nil
+		return agenttask.NotConfiguredEngine{}, nil, nil
 	}
 
 	sandbox := engineapi.New(engineapi.Config{
@@ -1748,7 +1766,7 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 		PidsLimit:              parseIntEnv("HIVE_SANDBOX_PIDS_LIMIT", 512),
 	})
 	real := agentengine.New(sandbox)
-	return real, real
+	return real, real, real
 }
 
 // dbReadyFunc builds the callback platformhttp.RouterConfig.DBReady calls on

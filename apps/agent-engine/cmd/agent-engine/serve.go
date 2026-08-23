@@ -41,6 +41,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
 )
 
@@ -244,6 +245,42 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		}
 		writeJSON(w, http.StatusOK, struct{}{})
 	})
+	mux.HandleFunc("POST /events", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req sessionRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		events, err := engine.Events(r.Context(), req.SessionRef)
+		if err != nil {
+			writeSessionErr(w, err)
+			return
+		}
+		if events == nil {
+			events = []controlclient.Event{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events})
+	})
+	mux.HandleFunc("POST /files", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req sessionRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		files, err := engine.Files(r.Context(), req.SessionRef)
+		if err != nil {
+			writeSessionErr(w, err)
+			return
+		}
+		if files == nil {
+			files = []controlclient.WorkspaceFile{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -317,6 +354,20 @@ func authorized(w http.ResponseWriter, r *http.Request, token string) bool {
 	}
 	writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
 	return false
+}
+
+// writeSessionErr maps an engine error onto the same status contract /status
+// and /cancel use: unknown session 404, everything else 502 with the detail
+// logged server-side only (the body carries the daemon's own text, which is
+// fine here because the only caller is control-plane over a root-owned Unix
+// socket; Remote.post logs it rather than surfacing it onward).
+func writeSessionErr(w http.ResponseWriter, err error) {
+	code := http.StatusBadGateway
+	if errors.Is(err, engineapi.ErrUnknownSession) {
+		code = http.StatusNotFound
+	}
+	log.Printf("agent-engine: session call failed: %v", err)
+	writeJSON(w, code, errorResponse{Error: err.Error()})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

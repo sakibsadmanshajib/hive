@@ -23,6 +23,19 @@ type Repository interface {
 	// somewhere) — the Poller's input. Cross-tenant by design; see
 	// 20260716_05_agent_tasks_service_scan.sql.
 	ListActive(ctx context.Context) ([]Task, error)
+	// AppendEvents inserts events for one task inside withTenantTx, assigning
+	// per-task monotonic seq values continuing after the current maximum.
+	// Rows whose (task_id, source_event_id) already exist are skipped via the
+	// dedup partial unique index; everything else in the batch commits.
+	// task must be the row AppendEvents scopes the writes to (its ID and
+	// TenantID drive the transaction).
+	AppendEvents(ctx context.Context, task Task, events []TaskEvent) error
+	// ListEvents returns at most limit events of one task with seq >
+	// afterSeq, ordered by seq ascending — exactly what the internal and
+	// customer read routes serve. Caller-scoped: Get(tenantID, userID, id)
+	// must have succeeded first, since user scoping stays at the application
+	// layer.
+	ListEvents(ctx context.Context, tenantID, userID, id uuid.UUID, afterSeq int64, limit int) ([]TaskEvent, error)
 }
 
 type pgxRepository struct {
@@ -220,6 +233,78 @@ func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("agenttask: list active: %w", err)
+	}
+	return out, nil
+}
+
+// AppendEvents assigns per-task monotonic seq inside the same transaction
+// that inserts, then writes each row with ON CONFLICT DO NOTHING against the
+// dedup partial unique index. Two deliberate properties:
+//
+//   - seq is computed from COALESCE(MAX(seq), 0) + i inside the tx. The
+//     syncer is the only writer per task (one goroutine, tasks processed
+//     sequentially), so the computed values are collision-free in the normal
+//     path; if a second writer ever races one (a future second replica), the
+//     UNIQUE(task_id, seq) constraint fails the whole batch, which the syncer
+//     treats like any other pass failure and retries — never a duplicate or
+//     a gap silently swallowed.
+//   - ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> ”
+//     targets the partial unique index exactly, so a re-pulled event is a
+//     no-op while genuinely new events in the same batch still land.
+func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []TaskEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	return r.withTenantTx(ctx, task.TenantID, func(tx pgx.Tx) error {
+		var base int64
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(MAX(seq), 0) FROM public.agent_task_events WHERE task_id = $1`,
+			task.ID).Scan(&base); err != nil {
+			return fmt.Errorf("agenttask: append events base seq: %w", err)
+		}
+		for i, ev := range events {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO public.agent_task_events (task_id, seq, source_event_id, kind, payload)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> '' DO NOTHING
+			`, task.ID, base+int64(i)+1, ev.SourceEventID, string(ev.Kind), []byte(ev.Payload)); err != nil {
+				return fmt.Errorf("agenttask: append event %d: %w", i, err)
+			}
+		}
+		return nil
+	})
+}
+
+// ListEvents serves the cursor read: strictly newer rows in seq order. The
+// task's user scoping was checked by the caller's Get; RLS scopes the tenant
+// via withTenantTx.
+func (r *pgxRepository) ListEvents(ctx context.Context, tenantID, userID, id uuid.UUID, afterSeq int64, limit int) ([]TaskEvent, error) {
+	var out []TaskEvent
+	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT seq, source_event_id, kind, payload, created_at
+			  FROM public.agent_task_events
+			 WHERE task_id = $1 AND seq > $2
+			 ORDER BY seq ASC
+			 LIMIT $3
+		`, id, afterSeq, limit)
+		if err != nil {
+			return fmt.Errorf("agenttask: list events query: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ev TaskEvent
+			var kind string
+			if err := rows.Scan(&ev.Seq, &ev.SourceEventID, &kind, &ev.Payload, &ev.CreatedAt); err != nil {
+				return fmt.Errorf("agenttask: scan event: %w", err)
+			}
+			ev.Kind = TaskEventKind(kind)
+			out = append(out, ev)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agenttask: list events: %w", err)
 	}
 	return out, nil
 }

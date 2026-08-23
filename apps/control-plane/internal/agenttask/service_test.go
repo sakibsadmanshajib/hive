@@ -33,10 +33,13 @@ type fakeRepository struct {
 	// non-ErrTerminalState error takes.
 	failTransitionTo  agenttask.Status
 	failTransitionErr error
+	appendedEvents    [][]agenttask.TaskEvent
+	eventsByID        map[uuid.UUID][]agenttask.TaskEvent
 }
 
 func newFakeRepository() *fakeRepository {
-	return &fakeRepository{tasks: make(map[uuid.UUID]agenttask.Task)}
+	return &fakeRepository{
+		eventsByID: make(map[uuid.UUID][]agenttask.TaskEvent), tasks: make(map[uuid.UUID]agenttask.Task)}
 }
 
 func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string) (agenttask.Task, error) {
@@ -796,4 +799,20 @@ func TestService_Cancel_UnknownTaskReturnsNotFound(t *testing.T) {
 	if _, err := svc.Cancel(context.Background(), uuid.New(), uuid.New(), uuid.New()); !errors.Is(err, agenttask.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
+}
+
+func (f *fakeRepository) AppendEvents(_ context.Context, _ agenttask.Task, events []agenttask.TaskEvent) error {
+	f.appendedEvents = append(f.appendedEvents, events)
+	return nil
+}
+
+func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.UUID, afterSeq int64, limit int) ([]agenttask.TaskEvent, error) {
+	all := f.eventsByID[id]
+	var out []agenttask.TaskEvent
+	for _, ev := range all {
+		if ev.Seq > afterSeq && len(out) < limit {
+			out = append(out, ev)
+		}
+	}
+	return out, nil
 }
