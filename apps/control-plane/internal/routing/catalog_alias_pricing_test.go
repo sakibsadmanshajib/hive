@@ -88,6 +88,10 @@ type providerRatesFixture struct {
 // otherwise parse as a valid provider rate.
 var decimalRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
+// isoDateRe pins fetched_utc to a full calendar date, which is what the two
+// substring checks in loadProviderRates need in order to compare anything.
+var isoDateRe = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+
 // parseRate turns a documented provider rate into an exact rational, rejecting
 // anything that is not a plain positive decimal.
 //
@@ -161,6 +165,16 @@ func loadProviderRates(t *testing.T) map[string]providerRate {
 	// The snapshot date must match the migration it backs. Repricing against a
 	// stale snapshot is the failure this catches, deterministically and with no
 	// wall-clock comparison.
+	//
+	// The shape is checked before the two comparisons, because strings.Contains
+	// reports true for an empty substring. A snapshot that omits fetched_utc, or
+	// sets it to "", satisfies both checks below while comparing nothing, and so
+	// does a one-character value such as "2", which occurs in both of these
+	// paths anyway. That is a guard structurally incapable of failing, which is
+	// worse than no guard at all, because it reads as coverage.
+	if !isoDateRe.MatchString(fixture.FetchedUTC) {
+		t.Fatalf("provider rate snapshot has fetched_utc %q; want a full YYYY-MM-DD date. An empty or one-character value passes both substring checks below without comparing anything.", fixture.FetchedUTC)
+	}
 	if !strings.Contains(providerRatesRelPath, fixture.FetchedUTC) {
 		t.Errorf("snapshot fetched_utc %q does not match its own filename %q; the rates and the file have drifted apart", fixture.FetchedUTC, providerRatesRelPath)
 	}
@@ -242,7 +256,17 @@ func pricedAliases(t *testing.T, sql string) map[string]map[string]string {
 		out[alias] = row
 	}
 	for alias, assigns := range updateAssignments(sql, "public.model_aliases", "alias_id") {
-		if _, writesPrice := assigns["input_price_credits"]; !writesPrice {
+		// Either price counts. Testing input alone let an
+		// `UPDATE ... SET output_price_credits = N` through: the alias landed in
+		// neither TestEveryPricedAliasHasCompleteDerivation nor
+		// TestDeclaredCreditsLandOnTheirOwnAliasRow, so an output reprice with no
+		// DERIVE row behind it passed the whole suite. On an alias this migration
+		// also INSERTs, the merge below is what binds the later value to the
+		// assertion; without it the INSERT's superseded figure is the one checked,
+		// and the figure customers are actually charged goes unexamined.
+		_, writesIn := assigns["input_price_credits"]
+		_, writesOut := assigns["output_price_credits"]
+		if !writesIn && !writesOut {
 			continue // e.g. the hive-fast lifecycle marker, which touches no price
 		}
 		if existing, ok := out[alias]; ok {
@@ -567,7 +591,11 @@ func TestDisablingASoleCapabilityCarrierHandsItsFlagsOn(t *testing.T) {
 
 	stillDisabled := false
 	for _, stmt := range splitStatements(sql) {
-		if strings.Contains(strings.ToLower(stmt), "health_state = 'disabled'") && strings.Contains(stmt, "'route-openrouter-auto'") {
+		// disableRe, not a literal substring: `health_state='disabled'`, or the
+		// assignment broken across lines, would otherwise leave stillDisabled
+		// false and send this guard to the t.Skip below, while the migration went
+		// on disabling the route and stripping its three flags unobserved.
+		if disableRe.MatchString(strings.TrimSpace(stmt)) && strings.Contains(stmt, "'route-openrouter-auto'") {
 			stillDisabled = true
 			break
 		}
