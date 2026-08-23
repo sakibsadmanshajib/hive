@@ -149,6 +149,21 @@ $$;
 COMMENT ON FUNCTION public.agent_task_schedules_claim_due(TIMESTAMPTZ, INTEGER) IS
   'Scheduler-only cross-tenant claim (scheduled agent tasks, first slice). SECURITY DEFINER bypasses RLS internally for this one fixed statement; agent_task_schedules_tenant_isolation is never weakened at the table level. Advances next_run_at at claim time so each tick fires a schedule at most once. See apps/control-plane/internal/agentsched/scheduler.go.';
 
+-- Postgres grants EXECUTE on every new function to PUBLIC by default; the
+-- explicit hive_app grant below does not remove that. Without this revoke,
+-- Supabase's anon/authenticated roles could call this SECURITY DEFINER
+-- function directly through PostgREST's RPC surface (the anon key is
+-- public): a cross-tenant read of every tenant's schedule rows plus a
+-- starvation DoS, each call claiming due rows and advancing next_run_at
+-- without ever creating a task.
+REVOKE ALL ON FUNCTION public.agent_task_schedules_claim_due(TIMESTAMPTZ, INTEGER) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.agent_task_schedules_claim_due(TIMESTAMPTZ, INTEGER) TO hive_app;
+
+-- Same default-PUBLIC grant hole, closed here for the poller's sibling
+-- SECURITY DEFINER function rather than editing its already-applied
+-- migration (20260716_05_agent_tasks_service_scan.sql): an edit there would
+-- do nothing on databases that have already run it.
+REVOKE ALL ON FUNCTION public.agent_tasks_list_active() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.agent_tasks_list_active() TO hive_app;
 
 COMMIT;

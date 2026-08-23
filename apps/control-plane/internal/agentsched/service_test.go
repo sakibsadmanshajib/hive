@@ -68,6 +68,7 @@ func TestService_Create_RejectsInvalidInput(t *testing.T) {
 		{CreateInput{Name: "n", Instructions: "x", Schedule: "interval:0"}, ErrInvalidSchedule},
 		{CreateInput{Name: "n", Instructions: "x", Schedule: "interval:99999"}, ErrInvalidSchedule},
 		{CreateInput{Name: "n", Instructions: "x", Schedule: "interval:-3"}, ErrInvalidSchedule},
+		{CreateInput{Name: "n", Instructions: "x", Schedule: "interval:007"}, ErrInvalidSchedule},
 	}
 	for i, tc := range cases {
 		if _, err := svc.Create(ctx, tenantA, userA, tc.in); !errors.Is(err, tc.wantErr) {

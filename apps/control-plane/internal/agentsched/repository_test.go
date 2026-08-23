@@ -184,6 +184,28 @@ func TestRepository_CRUDRoundTripAndScoping(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
+	// SetEnabled round trip against the live RLS policy.
+	reenabled := mustCreate(t, repo, tenantA, userA, "toggle")
+	if _, err := repo.SetEnabled(ctx, tenantA, userA, reenabled.ID, false, nil); err != nil {
+		t.Fatalf("SetEnabled(false): %v", err)
+	}
+	got2, _ := repo.Get(ctx, tenantA, userA, reenabled.ID)
+	if got2.Enabled {
+		t.Fatal("expected disabled after SetEnabled(false)")
+	}
+	next := got2.NextRunAt
+	fresh := time.Now().UTC().Add(time.Hour)
+	if _, err := repo.SetEnabled(ctx, tenantA, userA, reenabled.ID, true, &fresh); err != nil {
+		t.Fatalf("SetEnabled(true): %v", err)
+	}
+	got2, _ = repo.Get(ctx, tenantA, userA, reenabled.ID)
+	if !got2.Enabled {
+		t.Fatal("expected enabled after SetEnabled(true)")
+	}
+	if next != nil && got2.NextRunAt != nil && got2.NextRunAt.Equal(*next) {
+		t.Fatal("enable with a fresh next_run_at must overwrite the stored one")
+	}
+
 	// Delete by the wrong user is not found; by the owner removes the row.
 	if err := repo.Delete(ctx, tenantA, userB, created.ID); !errors.Is(err, agentsched.ErrNotFound) {
 		t.Fatalf("cross-user Delete = %v, want ErrNotFound", err)

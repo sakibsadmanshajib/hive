@@ -47,8 +47,8 @@
 								<SidebarIcon />
 							</div>
 						</button>
-						</div>
-					</div>
+					</Tooltip>
+				</div>
 			</div>
 		</nav>
 	{/if}

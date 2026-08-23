@@ -171,8 +171,8 @@ func (r *pgxRepository) SetEnabled(ctx context.Context, tenantID, userID, id uui
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			UPDATE public.agent_task_schedules
-			   SET enabled = $4,
-			       next_run_at = CASE WHEN $5::timestamptz IS NULL OR NOT $4 THEN next_run_at ELSE $5 END,
+			   SET enabled = $3,
+			       next_run_at = CASE WHEN $4::timestamptz IS NULL OR NOT $3 THEN next_run_at ELSE $4 END,
 			       updated_at = now()
 			 WHERE id = $1 AND user_id = $2
 			RETURNING `+scheduleColumns+`
@@ -213,7 +213,10 @@ func (r *pgxRepository) RecordRunSuccess(ctx context.Context, tenantID, id, task
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE public.agent_task_schedules
-			   SET last_task_id = $2, updated_at = now()
+			   SET last_task_id = $2,
+			       last_run_at = now(),
+			       last_error = '',
+			       updated_at = now()
 			 WHERE id = $1
 		`, id, taskID)
 		if err != nil {
@@ -234,7 +237,9 @@ func (r *pgxRepository) RecordRunFailure(ctx context.Context, tenantID, id uuid.
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE public.agent_task_schedules
-			   SET last_error = $2, updated_at = now()
+			   SET last_error = $2,
+			       last_run_at = now(),
+			       updated_at = now()
 			 WHERE id = $1
 		`, id, message)
 		if err != nil {

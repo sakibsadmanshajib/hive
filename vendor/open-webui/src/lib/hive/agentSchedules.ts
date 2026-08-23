@@ -68,7 +68,7 @@ export function validateScheduleInput(name: string, instructions: string, schedu
 	if (!stripped.trim() || stripped.length > 4000) {
 		return 'Instructions must be 1-4000 characters.';
 	}
-	if (!['daily', 'weekly'].includes(schedule) && !/^interval:([1-9]|[1-9][0-9]|1[0-6][0-8])$/.test(schedule)) {
+	if (!['daily', 'weekly'].includes(schedule) && !/^interval:([1-9]|[1-9][0-9]|1[0-5][0-9]|16[0-8])$/.test(schedule)) {
 		return 'Pick daily, weekly, or an hourly interval between 1 and 168.';
 	}
 	return null;

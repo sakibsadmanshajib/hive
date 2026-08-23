@@ -19,6 +19,9 @@ describe('agentSchedules', () => {
 		expect(validateScheduleInput('n', '', 'daily')).not.toBeNull();
 		expect(validateScheduleInput('n', 'i', '* * * * *')).not.toBeNull();
 		expect(validateScheduleInput('n', 'i', 'interval:99999')).not.toBeNull();
+		expect(validateScheduleInput('n', 'i', 'interval:109')).toBeNull();
+		expect(validateScheduleInput('n', 'i', 'interval:168')).toBeNull();
+		expect(validateScheduleInput('n', 'i', 'interval:169')).not.toBeNull();
 		expect(validateScheduleInput('n', 'i', 'daily')).toBeNull();
 	});
 });

@@ -170,7 +170,7 @@ type RouterConfig struct {
 
 	// AgentTaskHandler serves agent task persistence (issue #311, agent-
 	// subsystem blueprint Step 3.4): the shared-secret-guarded
-	// service-to-service surface at /internal/agent-schedules/ that edge-api's
+	// service-to-service surface at /internal/agent-tasks/ that edge-api's
 	// customer-facing /v1/agent/tasks routes call into. When nil the route
 	// is not registered.
 	AgentTaskHandler *agenttask.Handler

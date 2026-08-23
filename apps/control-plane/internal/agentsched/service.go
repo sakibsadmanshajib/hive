@@ -85,6 +85,12 @@ func parseIntervalHours(s string) (int, bool) {
 	if !ok || rest == "" || len(rest) > 3 {
 		return 0, false
 	}
+	if len(rest) > 1 && rest[0] == '0' {
+		// Leading zeros ("interval:007") parse here but the migration's CHECK
+		// regex rejects them, so accepting them would turn a validation error
+		// into a 500 at insert time.
+		return 0, false
+	}
 	n := 0
 	for _, c := range rest {
 		if c < '0' || c > '9' {
@@ -115,7 +121,12 @@ func cadence(schedule string) (time.Duration, error) {
 // instruction length after control-char stripping, schedule grammar. Returns
 // the cleaned values.
 func validate(name, instructions, schedule string) (string, string, error) {
-	name = strings.TrimSpace(name)
+	name = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name))
 	instructions = sanitizeInstructions(strings.TrimSpace(instructions))
 
 	if name == "" || len(name) > maxNameLength {
