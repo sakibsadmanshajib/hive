@@ -15,6 +15,7 @@
 	import { getTerminalServers } from '$lib/apis/terminal';
 	import { getUserSettings } from '$lib/apis/users';
 	import { setTextScale } from '$lib/utils/text-scale';
+	import { consumeModelPrefetch } from '$lib/hive/model-prefetch';
 
 	import { WEBUI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
@@ -113,12 +114,24 @@
 	};
 
 	const setModels = async () => {
-		models.set(
-			await getModels(
-				localStorage.token,
-				$config?.features?.enable_direct_connections ? ($settings?.directConnections ?? null) : null
-			)
-		);
+		const directConnections = $config?.features?.enable_direct_connections
+			? ($settings?.directConnections ?? null)
+			: null;
+
+		// The root layout started this request before the config and session
+		// round trips, so by now it is usually already answered. Direct
+		// connections are the one case the prefetch cannot serve: they merge
+		// extra models from the user's own settings, which were not known when
+		// the request was started, so that case fetches normally.
+		if (!directConnections) {
+			const prefetched = consumeModelPrefetch(localStorage.token);
+			if (prefetched) {
+				models.set(await prefetched);
+				return;
+			}
+		}
+
+		models.set(await getModels(localStorage.token, directConnections));
 	};
 
 	const setToolServers = async () => {

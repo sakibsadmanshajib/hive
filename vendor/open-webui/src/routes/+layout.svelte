@@ -57,6 +57,7 @@
 
 	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
+	import { isAuthenticatedConfig, prefetchModels } from '$lib/hive/model-prefetch';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 	import {
@@ -1095,6 +1096,22 @@
 			}
 		});
 
+		// The config fetch, the session fetch and the model list are three
+		// independent round trips that used to run strictly one after another:
+		// the session request waited on a config it never reads, and the model
+		// list waited on both. Every one of those hops costs a full request to
+		// the deployment, so the depth of the chain, rather than any single
+		// slow call, is what kept the composer off screen. Start all three
+		// here and await each result at the point it is first needed.
+		const startupToken = localStorage.token;
+		const sessionUserRequest = startupToken
+			? getSessionUser(startupToken).catch((error) => {
+					toast.error(`${error}`);
+					return null;
+				})
+			: null;
+		prefetchModels(startupToken, () => getModels(startupToken, null));
+
 		let backendConfig = null;
 		try {
 			backendConfig = await getBackendConfig();
@@ -1135,19 +1152,42 @@
 				const currentUrl = `${window.location.pathname}${window.location.search}`;
 				const encodedUrl = encodeURIComponent(currentUrl);
 
-				if (localStorage.token) {
-					// Get Session User Info
-					const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-						toast.error(`${error}`);
-						return null;
-					});
+				if (startupToken) {
+					// Get Session User Info, started above alongside the config
+					// fetch rather than after it.
+					const sessionUser = await sessionUserRequest;
 
 					if (sessionUser) {
 						await user.set(sessionUser);
-						try {
-							await config.set(await getBackendConfig());
-						} catch (error) {
-							console.error('Error refreshing backend config:', error);
+
+						// The second GET /api/config that used to sit here is
+						// now conditional rather than unconditional. In the
+						// normal case it was byte-identical to the first and
+						// cost a whole round trip in the middle of the startup
+						// chain, blocking everything the app layout does
+						// afterwards: getBackendConfig sends no per-user header
+						// and relies on the `token` cookie the browser already
+						// attached to the first call.
+						//
+						// There is one case where it is not identical, and
+						// dropping it outright was wrong. `GET /api/v1/auths/`
+						// is what refreshes that cookie, and it now runs
+						// concurrently with the first config call instead of
+						// before it. A startup whose cookie was missing or
+						// expired while its localStorage token was still valid
+						// therefore gets the anonymous config shape on the
+						// first call: no authenticated feature flags, no
+						// permissions, no default models. Keeping that for the
+						// page lifetime silently ignores configured direct
+						// connections among other things. The session call has
+						// since set the cookie, so asking once more is what
+						// turns the anonymous reply into the authenticated one.
+						if (!isAuthenticatedConfig(backendConfig)) {
+							try {
+								await config.set(await getBackendConfig());
+							} catch (error) {
+								console.error('Error refreshing backend config:', error);
+							}
 						}
 
 						// Keep user timezone in sync on every app load/refresh
