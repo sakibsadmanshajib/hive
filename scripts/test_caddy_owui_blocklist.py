@@ -60,6 +60,22 @@ MUST_BLOCK = [
     "/api/v1/configs/export",
     "/openai/config",
     "/openai/config/update",
+    # #948: the two sibling routes in the same router that return exactly what
+    # `configs/export` was blocked for. `import_config` returns
+    # `await Config.get_all()`, the same call `export_config` makes, so a POST
+    # with any body reads the whole persisted configuration back and overwrites
+    # configuration on the way through. `GET /namespace/oauth` returns
+    # `oauth.client_secret` and `GET /namespace/rag` returns
+    # `rag.openai.api_key`, which is OWUI_SHIM_KEY. Blocked for every verb, not
+    # only writes, because the disclosure half is a GET.
+    "/api/v1/configs/import",
+    "/api/v1/configs/import/",
+    "/api/v1/configs/namespace",
+    "/api/v1/configs/namespace/oauth",
+    "/api/v1/configs/namespace/rag",
+    "/API/V1/CONFIGS/NAMESPACE/OAUTH",
+    "/api/v2/configs/namespace/oauth",
+    "//api/v1/configs/import",
     # The /api/v1/ mount of the signup and admin family, which the
     # `^/+`-anchored alternatives never covered.
     "/api/v1/auths/signup",
@@ -162,12 +178,70 @@ MUST_STAY_OPEN = [
     "/openai/chat/completions",       # the chat itself
     "/api/v1/configs/models",
     "/api/v1/configs/connections",
-    # #736 leaves the Function install on this origin until it is rerouted.
-    # Blocking these here would break every fresh deploy and CI run.
+    # The Functions API is blocked by VERB, in @adminMutationSubtree below,
+    # not by this all-verb matcher, so these four must not appear in @blocked.
+    # #736 is closed by that matcher plus the install reroute
+    # (scripts/install-owui-jwt-forward-in-container.sh), and the write-verb
+    # half is asserted separately in MUST_BLOCK_WRITES.
     "/api/v1/functions/create",
     "/api/v1/functions/id/hive_jwt_forward/update",
     "/api/v1/functions/id/hive_jwt_forward/toggle",
     "/api/v1/functions/id/hive_jwt_forward/toggle/global",
+]
+
+# @adminMutationSubtree: refused for PUT, POST, PATCH and DELETE, whatever the
+# depth. This is the #736 and #948 half of the fix. Every route under both
+# prefixes is `get_admin_user` in the pinned v0.10.2 image, so the matcher is
+# default-deny over the subtree rather than a list of today's endpoints, which
+# is the failure mode that produced #769, #771 and #948 in turn.
+MUST_BLOCK_WRITES = [
+    # #736's four. `POST /api/v1/functions/create` executes arbitrary Python
+    # inside a container holding PGVECTOR_DB_URL and OWUI_SHIM_KEY.
+    "/api/v1/functions/create",
+    "/api/v1/functions/load/url",
+    "/api/v1/functions/sync",
+    "/api/v1/functions/id/hive_jwt_forward/update",
+    "/api/v1/functions/id/hive_jwt_forward/toggle",
+    "/api/v1/functions/id/hive_jwt_forward/toggle/global",
+    "/api/v1/functions/id/hive_jwt_forward/delete",
+    "/api/v1/functions/id/hive_jwt_forward/valves/update",
+    "/API/V1/FUNCTIONS/CREATE",
+    "/api/v2/functions/create",
+    "//api/v1/functions/create",
+    "/api/v1/functions/create/",
+    # The configs writes the admin panel's own forms make, every one of them
+    # `get_admin_user` and nothing more.
+    "/api/v1/configs/import",
+    "/api/v1/configs/connections",
+    "/api/v1/configs/code_execution",
+    "/api/v1/configs/models",
+    "/api/v1/configs/banners",
+    "/api/v1/configs/suggestions",
+    "/api/v1/configs/oauth/clients/register",
+    # Bare mounts, which the globs this matcher replaced did cover. Keeping
+    # them here means the rewrite cannot narrow coverage on its way past.
+    "/api/v1/configs",
+    "/api/v1/functions",
+]
+
+# Writes that must still reach Open WebUI. The first entry is the reason this
+# matcher carries a `not` arm at all: it is the one route under either prefix
+# that is `get_verified_user`, and it writes only the calling user's own valve
+# values. The rest are outside both prefixes and are listed because a
+# subtree-shaped edit to the wrong prefix is exactly how this family of
+# defects keeps recurring: users.py and models.py both carry
+# `get_verified_user` writes, so #437's residue cannot be closed by widening
+# those two globs the way these were widened.
+MUST_ALLOW_WRITES = [
+    "/api/v1/functions/id/hive_jwt_forward/valves/user/update",
+    "/api/v1/users/user/settings/update",
+    "/api/v1/users/user/status/update",
+    "/api/v1/users/user/info/update",
+    "/api/v1/models/model/toggle",
+    "/api/v1/models/create",
+    "/api/v1/chats/new",
+    "/api/v1/auths/signin",
+    "/openai/chat/completions",
 ]
 
 
@@ -186,6 +260,32 @@ def load_blocked_regex(text: str) -> str:
             "test deliberately -- do not let it pass by matching nothing."
         )
     return matches[0]
+
+
+def load_admin_mutation_subtree(text: str) -> tuple[str, str]:
+    """Pull the @adminMutationSubtree matcher's two regexes out of the Caddyfile.
+
+    Returns `(blocked, excepted)`. The second is the `not` arm, so a path is
+    refused only when the first matches and the second does not, which is how
+    Caddy evaluates the matcher set. Both are required to be present exactly
+    once: a rewrite that drops the `not` arm silently blocks a user-scoped
+    write, and one that drops the block arm silently reopens the whole subtree.
+    """
+    blocked = re.findall(
+        r"^\s*path_regexp\s+adminsubtree\s+(\S+)\s*$", text, re.MULTILINE
+    )
+    excepted = re.findall(
+        r"^\s*not\s+path_regexp\s+uservalves\s+(\S+)\s*$", text, re.MULTILINE
+    )
+    if len(blocked) != 1 or len(excepted) != 1:
+        raise AssertionError(
+            "expected exactly one `path_regexp adminsubtree` line and one "
+            f"`not path_regexp uservalves` line in {CADDYFILE}, found "
+            f"{len(blocked)} and {len(excepted)}. If the matcher was renamed or "
+            "restructured, update this test deliberately -- do not let it pass "
+            "by matching nothing."
+        )
+    return blocked[0], excepted[0]
 
 
 def _dockerfile_runs_patch(dockerfile: pathlib.Path, script: str) -> tuple[bool, bool]:
@@ -237,6 +337,41 @@ def main() -> int:
         if pattern.search(path):
             failures.append(f"BLOCKED but must stay open: {path}")
 
+    subtree_re, uservalves_re = load_admin_mutation_subtree(text)
+    subtree = re.compile(subtree_re)
+    uservalves = re.compile(uservalves_re)
+
+    def write_refused(path: str) -> bool:
+        return bool(subtree.search(path)) and not uservalves.search(path)
+
+    for path in MUST_BLOCK_WRITES:
+        if not write_refused(path):
+            failures.append(f"WRITE NOT BLOCKED but must be: {path}")
+    for path in MUST_ALLOW_WRITES:
+        if write_refused(path):
+            failures.append(f"WRITE BLOCKED but must stay open: {path}")
+
+    # The install that used to depend on the gap #736 records must not be
+    # pointed back at this origin. A tightened matcher plus a caller still
+    # talking to caddy-owui is a red deploy, and the ordering constraint in
+    # #736 ("do not do step 2 first") is the whole reason both halves ship
+    # together.
+    workflow = (
+        CADDYFILE.parents[2] / ".github" / "workflows" / "deploy-demo-box.yml"
+    ).read_text(encoding="utf-8")
+    if "install-owui-jwt-forward-in-container.sh" not in workflow:
+        failures.append(
+            "deploy-demo-box.yml no longer runs the in-container install "
+            "wrapper, so the hive_jwt_forward install is back on the public "
+            "chat origin that @adminMutationSubtree now refuses (#736)"
+        )
+    if "--base-url http://localhost:3003" in workflow:
+        failures.append(
+            "deploy-demo-box.yml installs hive_jwt_forward through "
+            "localhost:3003, the public chat origin, whose write verbs on "
+            "/api/v1/functions/* are refused (#736)"
+        )
+
     # Guard the two dead globs removed from @adminMutation. Open WebUI mounts no
     # /api/v1/admin and no /api/v1/roles router, so re-adding them would restore
     # coverage that reads real and matches nothing. Comment lines are stripped
@@ -282,7 +417,9 @@ def main() -> int:
 
     print(
         f"Caddyfile.owui @blocked: {len(MUST_BLOCK)} blocked, "
-        f"{len(MUST_STAY_OPEN)} open, as expected"
+        f"{len(MUST_STAY_OPEN)} open; @adminMutationSubtree: "
+        f"{len(MUST_BLOCK_WRITES)} writes refused, {len(MUST_ALLOW_WRITES)} "
+        "writes open, as expected"
     )
     return 0
 

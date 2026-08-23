@@ -4,7 +4,6 @@
 	import { config, models, settings, user } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
 	import { getModels as _getModels } from '$lib/apis';
-	import { goto } from '$app/navigation';
 
 	import Modal from '../common/Modal.svelte';
 	import Account from './Settings/Account.svelte';
@@ -25,7 +24,6 @@
 	import WrenchAlt from '../icons/WrenchAlt.svelte';
 	import Face from '../icons/Face.svelte';
 	import AppNotification from '../icons/AppNotification.svelte';
-	import UserBadgeCheck from '../icons/UserBadgeCheck.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -784,25 +782,17 @@
 						{$i18n.t('No results found')}
 					</div>
 				{/if}
-				{#if $user?.role === 'admin'}
-					<a
-						href="/admin/settings"
-						draggable="false"
-						class="px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none md:mt-auto flex select-none text-left transition {$settings?.highContrastMode
-							? 'hover:bg-gray-200 dark:hover:bg-gray-800'
-							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
-						on:click={async (e) => {
-							e.preventDefault();
-							await goto('/admin/settings');
-							show = false;
-						}}
-					>
-						<div class=" self-center mr-2">
-							<UserBadgeCheck strokeWidth="2" />
-						</div>
-						<div class=" self-center">{$i18n.t('Admin Settings')}</div>
-					</a>
-				{/if}
+				<!-- hive: the upstream "Admin Settings" link is removed here, not
+				hidden. It navigated client side with goto('/admin/settings'), so
+				the address was never requested and Caddy's 404 on /admin never
+				saw it: the panel rendered straight out of the loaded bundle for
+				every account with role 'admin', which on this deployment is
+				every tenant OWNER (#748). The whole /admin route tree is gone
+				from this fork alongside it, so there is no longer a page for a
+				link like this one to reach. Admin configuration belongs to the
+				control plane, which is code we own and review (.wolf/decisions.md
+				D-014, D-044). Issue #949; do not restore this on a subtree
+				pull. -->
 			</div>
 			<div
 				class="flex-1 px-3.5 md:pl-0 md:pr-4.5 md:min-h-[min(42rem,calc(100dvh-10rem))] max-h-[min(42rem,calc(100dvh-10rem))] overflow-y-auto"

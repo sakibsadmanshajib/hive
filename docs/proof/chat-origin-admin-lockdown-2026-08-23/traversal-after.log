@@ -1,0 +1,20 @@
+# traversal and normalisation probes, --path-as-is, label=after
+# 404 = refused by Caddy. 200 = forwarded to the (stub) upstream.
+POST   //api/v1/functions/create                                      404
+POST   ///api/v1/functions/create                                     404
+POST   /api/v1//functions/create                                      404
+POST   /api/v1/functions//create                                      404
+POST   /API/v1/FUNCTIONS/Create                                       404
+POST   /api/v99/functions/create                                      404
+POST   /api/v1/functions/id/../create                                 404
+POST   /api/v1/hive/../functions/create                               404
+POST   /api/v1/hive/../configs/import                                 404
+POST   /api//v1/configs/import                                        404
+GET    /api/v1/configs/namespace/../namespace/oauth                   404
+GET    /api/v1/./configs/namespace/oauth                              404
+POST   /api/v1/functions/id/x/valves/user/update                      200
+POST   /api/v1/functions/id/../valves/user/update                     404
+
+# percent-encoded separators (Go decodes %2F into URL.Path)
+POST   /api/v1/functions%2Fcreate                                     404
+POST   /api/v1%2Fconfigs%2Fimport                                     404

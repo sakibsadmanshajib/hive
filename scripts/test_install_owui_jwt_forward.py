@@ -370,11 +370,68 @@ def test_a_non_http_scheme_is_refused_at_the_guard() -> None:
             raise AssertionError(f"non-HTTP scheme allowed: {refused}")
 
 
-def test_deploy_workflow_uses_a_loopback_base_url() -> None:
+def test_the_default_base_url_is_open_webuis_own_port() -> None:
+    """#736. The default used to be caddy-owui's published port, the PUBLIC
+    chat origin, which now refuses every write verb on /api/v1/functions/*.
+    A default pointing there would fail closed, but only at deploy time."""
+    assert installer.DEFAULT_BASE_URL == "http://127.0.0.1:8080"
+    installer.require_safe_origin(installer.DEFAULT_BASE_URL)
+
+
+def test_no_caller_installs_through_the_public_chat_origin() -> None:
+    """#736's ordering constraint, pinned. The Caddyfile block and this reroute
+    ship together: a caller still pointed at localhost:3003 turns the block
+    into a red deploy, and the gap is what the block exists to close."""
+    callers = {
+        ".github/workflows/deploy-demo-box.yml": (
+            REPO_ROOT / ".github" / "workflows" / "deploy-demo-box.yml"
+        ),
+        "owui.setup.ts": (
+            REPO_ROOT / "apps" / "web-console" / "e2e" / "phase-19" / "owui"
+            / "owui.setup.ts"
+        ),
+    }
+    for name, path in callers.items():
+        text = path.read_text(encoding="utf-8")
+        assert "install-owui-jwt-forward-in-container.sh" in text, (
+            f"{name} no longer runs the install through the in-container "
+            "wrapper, so it is back on the public chat origin (#736)"
+        )
+        assert "--base-url http://localhost:3003" not in text, (
+            f"{name} installs hive_jwt_forward through localhost:3003, the "
+            "public chat origin (#736)"
+        )
+
+
+def test_the_wrapper_runs_the_installer_inside_the_container() -> None:
+    """The wrapper is the whole reroute, so its three load-bearing parts are
+    asserted rather than described: it reaches Open WebUI over the container's
+    own loopback, it runs the single implementation rather than a copy of the
+    logic, and it hands the token over as an environment variable instead of
+    putting it on a command line other processes can read."""
+    wrapper = (
+        REPO_ROOT / "scripts" / "install-owui-jwt-forward-in-container.sh"
+    ).read_text(encoding="utf-8")
+    assert "--base-url \"http://127.0.0.1:$port\"" in wrapper
+    assert "install-owui-jwt-forward.py" in wrapper
+    assert "-e OWUI_ADMIN_TOKEN" in wrapper
+    assert "OWUI_ADMIN_TOKEN=" not in wrapper.replace('"${OWUI_ADMIN_TOKEN:-}"', "")
+    assert "docker compose" in wrapper
+
+
+def test_the_wrapper_is_executable() -> None:
+    """It is invoked directly, not through `bash <file>`, by both callers."""
+    wrapper = REPO_ROOT / "scripts" / "install-owui-jwt-forward-in-container.sh"
+    assert wrapper.stat().st_mode & 0o111, f"{wrapper} is not executable"
+
+
+def test_the_wrapper_is_on_the_deploy_paths_filter() -> None:
+    """A security fix that never reaches the box is not a fix. Same blind spot
+    the other two halves of this install already have entries for."""
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "deploy-demo-box.yml"
     ).read_text(encoding="utf-8")
-    assert "--base-url http://localhost:3003" in workflow
+    assert "- 'scripts/install-owui-jwt-forward-in-container.sh'" in workflow
 
 
 def test_deploy_workflow_installs_the_function() -> None:

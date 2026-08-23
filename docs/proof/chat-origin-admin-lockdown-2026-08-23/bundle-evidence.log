@@ -1,0 +1,18 @@
+# admin panel presence in the built bundle
+# before: hive-open-webui:v0.10.2-branded, a fork build from main
+#         (it carries data-hive-nav, so it is our own frontend and not
+#          upstream's prebuilt bundle)
+# after:  hive-owui-adminlock:after, this branch's frontend over the same base
+
+before (main)                      /admin/settings/code-execution             2 chunk(s)
+after (this branch)                /admin/settings/code-execution             0 chunk(s)
+
+# control: the two strings the Dockerfile already asserted, unchanged
+before (main)                      data-hive-nav                              2 chunk(s)
+after (this branch)                data-hive-nav                              2 chunk(s)
+before (main)                      "/workspace/models"                        0 chunk(s)
+after (this branch)                "/workspace/models"                        0 chunk(s)
+
+# the Settings dialog's own link target, as a second independent needle
+before (main)                      Admin Settings                             64 chunk(s)
+after (this branch)                Admin Settings                             63 chunk(s)

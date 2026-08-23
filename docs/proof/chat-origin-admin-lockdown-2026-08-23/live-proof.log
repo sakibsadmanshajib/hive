@@ -1,0 +1,138 @@
+# Live proof: chat origin admin lockdown (#736, #948, #949)
+# stack: isolated compose project 'adminlock736', image hive-owui-adminlock:after
+#        built from branch fix/chat-origin-admin-lockdown
+# public origin under test: http://localhost:3079 (caddy-owui, this branch's Caddyfile.owui)
+# in-container comparison:  http://127.0.0.1:8080 inside the open-webui container
+# placeholders only: no real gateway key, OAuth secret or password exists in this stack
+
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"GROQ_API_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_FAST_FALLBACK_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_EMBEDDING_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_EMBEDDING_FALLBACK_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"GROQ_FAST_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"GROQ_REASONING_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_API_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_DEFAULT_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"OPENROUTER_AUTO_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"SUPABASE_DB_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_REGION\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_SECRET_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_ENDPOINT\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_ACCESS_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_SECRET_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_ACCESS_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"REDIS_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_ENDPOINT\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"S3_REGION\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"SUPABASE_DB_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:08-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+ Container adminlock736-open-webui-1 Running 
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_SECRET_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_REGION\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"SUPABASE_DB_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_ACCESS_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_ENDPOINT\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_ANON_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"NEXT_PUBLIC_SUPABASE_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_API_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_AUTO_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_FAST_FALLBACK_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_EMBEDDING_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_EMBEDDING_FALLBACK_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"GROQ_FAST_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"GROQ_API_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"OPENROUTER_DEFAULT_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"GROQ_REASONING_MODEL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_SECRET_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"SUPABASE_DB_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_ENDPOINT\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"REDIS_URL\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_ACCESS_KEY\" variable is not set. Defaulting to a blank string."
+time="2026-08-23T14:35:09-04:00" level=warning msg="The \"S3_REGION\" variable is not set. Defaulting to a blank string."
+ Container adminlock736-caddy-owui-1 Running 
+## stack up
+caddy-owui	Up 37 seconds
+open-webui	Up 5 minutes (healthy)
+
+## admin session
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon-dark.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/site.webmanifest'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/custom.css'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/user-import.csv'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon-96x96.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon.ico'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/user.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/splash-dark.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/apple-touch-icon.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/loader.js'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/web-app-manifest-512x512.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/web-app-manifest-192x192.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon.svg'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/splash.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/logo.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/favicon.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/splash.png'
+ERROR [root] An error occurred: [Errno 30] Read-only file system: '/data/static/loader.js'
+WARNI [open_webui.env] 
+
+WARNING: CORS_ALLOW_ORIGIN IS SET TO '*' - NOT RECOMMENDED FOR PRODUCTION DEPLOYMENTS.
+
+proof admin user id: 96273276... (throwaway account, isolated stack)
+minted a five minute Open WebUI admin session (scripts/owui-mint-admin-token.py), value not printed
+session role as reported by Open WebUI itself: admin proof-admin@hive-verify-736.invalid
+
+## 1. #736: the Functions API, which installs and enables plugin code
+#     inside the container that holds PGVECTOR_DB_URL and OWUI_SHIM_KEY.
+POST   /api/v1/functions/create                             origin=404
+POST   /api/v1/functions/id/hive_jwt_forward/update         origin=404
+POST   /api/v1/functions/id/hive_jwt_forward/toggle         origin=404
+POST   /api/v1/functions/id/hive_jwt_forward/toggle/global  origin=404
+DELETE /api/v1/functions/id/hive_jwt_forward/delete         origin=404
+#     Same admin session, same path, from inside the container: served.
+GET    /api/v1/functions/                                   inside={"status": 200, "secret_fields_present": []}
+
+## 2. #948: the two routes that return the gateway key and oauth.client_secret
+GET    /api/v1/configs/namespace/oauth                      origin=404
+GET    /api/v1/configs/namespace/rag                        origin=404
+POST   /api/v1/configs/import                               origin=404
+GET    /api/v1/configs/export                               origin=404
+#     From inside the container the same admin session still reaches them,
+#     which is what makes the 404s above the proxy's answer and not a 401.
+GET    /api/v1/configs/namespace/oauth                      inside={"status": 200, "secret_fields_present": ["oauth.client_secret"]}
+GET    /api/v1/configs/namespace/rag                        inside={"status": 200, "secret_fields_present": ["rag.openai.api_key"]}
+
+## 3. The chat product on the same origin, same session
+GET    /api/config                                          origin=200
+GET    /api/v1/configs/banners                              origin=200
+GET    /api/v1/models/list                                  origin=200
+POST   /api/v1/users/user/settings/update                   origin=200
+POST   /api/v1/functions/id/hive_jwt_forward/valves/user/update origin=401
+
+## 4. #736's install, rerouted: scripts/install-owui-jwt-forward-in-container.sh
+#     (the reroute is what made blocking the paths above possible)
+ adminlock736-open-webui-1 Copying /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/scripts/install-owui-jwt-forward.py to adminlock736-open-webui-1:/tmp/hive-install-owui-jwt-forward.py
+ adminlock736-open-webui-1 Copied /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/scripts/install-owui-jwt-forward.py to adminlock736-open-webui-1:/tmp/hive-install-owui-jwt-forward.py
+ adminlock736-open-webui-1 Copying /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/deploy/docker/pipelines/hive_jwt_forward.py to adminlock736-open-webui-1:/tmp/hive-jwt-forward-source.py
+ adminlock736-open-webui-1 Copied /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/deploy/docker/pipelines/hive_jwt_forward.py to adminlock736-open-webui-1:/tmp/hive-jwt-forward-source.py
+hive_jwt_forward: verified present, active and global on http://127.0.0.1:8080 (type=filter)
+wrapper exit code: 0
+ adminlock736-open-webui-1 Copying /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/deploy/docker/pipelines/hive_jwt_forward.py to adminlock736-open-webui-1:/tmp/hive-jwt-forward-source.py
+ adminlock736-open-webui-1 Copied /home/sakib/hive/.claude/worktrees/agent-a96bf508ddcff45f7/deploy/docker/pipelines/hive_jwt_forward.py to adminlock736-open-webui-1:/tmp/hive-jwt-forward-source.py
+hive_jwt_forward: verified present, active and global on http://127.0.0.1:8080 (type=filter)
+#     End state read back out of the API, inside the container:
+GET    /api/v1/functions/id/hive_jwt_forward                inside={"status": 200, "secret_fields_present": []}
+installed function: {"id": "hive_jwt_forward", "name": "Hive JWT Forward", "type": "filter", "is_active": true, "is_global": true}
+
+# stack left running for the screenshot pass; torn down at the end of the proof run.
