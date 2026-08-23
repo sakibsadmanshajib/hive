@@ -841,6 +841,144 @@ def test_the_retention_check_demands_evidence_of_execution() -> None:
     )
 
 
+def _step_pos(job_text: str, step_name: str) -> int:
+    """Character offset of a step's `- name:` line within a job, for ordering
+    assertions. Ordering is the whole point of the deadlock below, so it is
+    asserted on positions rather than on mere presence."""
+    match = re.search(
+        rf"^      - name: {re.escape(step_name)}\s*$", job_text, re.MULTILINE
+    )
+    assert match, f"the migrate job has no step named {step_name!r}"
+    return match.start()
+
+
+def test_migrations_run_against_a_reconciled_database_container() -> None:
+    """The 2026-08-22 deadlock, which cost three deploy runs and took chat
+    sign-in down while its fix sat merged on main.
+
+    The shape: migrate reconciles the database service by running
+    `docker compose ... up -d --build supabase-db` with a working-directory of
+    /home/sakib/hive/deploy/docker, so it reads the BOX's clone, not the
+    runner workspace this job checks out. Nothing in migrate advanced that
+    clone. The only step that did was deploy's Pull latest main, and deploy
+    `needs: migrate`.
+
+    So the moment a migration depended on something only a newer compose file
+    provides, the run could not converge: PR #994 moved supabase-db onto a
+    locally built image carrying pg_cron, 20260822_01 needed pg_cron, migrate
+    rebuilt from the pre-#994 compose file, got the old image, failed on the
+    missing extension, and skipped the job that would have pulled the fix.
+
+    The fix is ordering, so the assertions are on order. Presence alone would
+    pass against the exact arrangement that deadlocked."""
+    migrate = _job_block("migrate")
+
+    pull = _step_pos(migrate, "Pull latest main")
+    reconcile = _step_pos(migrate, "Make sure the stack's database is up")
+    apply_ = _step_pos(migrate, "Apply pending migrations")
+
+    assert pull < reconcile, (
+        "the migrate job reconciles the database container before it updates "
+        "the box's clone, so the compose file it builds from is whatever the "
+        "last successful deploy left behind. A migration that needs a change "
+        "to that file can then never be satisfied."
+    )
+    assert reconcile < apply_, (
+        "migrations are applied before the database service is reconciled to "
+        "the compose file, so they run against yesterday's server"
+    )
+
+    # The coupling that makes the order matter: the pull and the reconcile must
+    # act on the SAME directory. A pull that updated some other clone would
+    # satisfy the ordering assertions above and change nothing.
+    pull_step = _step_block(migrate, "Pull latest main")
+    reconcile_step = _step_block(migrate, "Make sure the stack's database is up")
+    clone = "/home/sakib/hive"
+    assert f"cd {clone}\n" in pull_step, (
+        f"the Pull latest main step does not update {clone}, which is the "
+        "clone the reconcile step below builds from"
+    )
+    assert "git pull --ff-only origin main" in pull_step, pull_step[:200]
+    assert f"working-directory: {clone}/deploy/docker" in reconcile_step, (
+        "the reconcile step does not build from the clone the pull updates, "
+        f"so updating {clone} would not change what it builds"
+    )
+    assert "--build supabase-db" in reconcile_step, (
+        "the reconcile step does not pass --build, so a change to "
+        "Dockerfile.supabase-db never reaches the running container: compose "
+        "builds a locally built image only when it is absent entirely"
+    )
+
+    # Exactly one pull, and it is this one. Leaving a second copy behind in
+    # deploy would be harmless today and would rot into two sources of truth
+    # for which commit the box is on.
+    deploy = _job_block("deploy")
+    assert "- name: Pull latest main" not in deploy, (
+        "the deploy job still pulls as well; the box's clone must be advanced "
+        "in exactly one place, and that place has to be upstream of migrate"
+    )
+
+
+def _do_blocks(sql: str) -> list:
+    """Every `DO $tag$ ... $tag$;` body in a migration, in file order."""
+    return [m.group(2) for m in re.finditer(r"DO \$(\w+)\$(.*?)\$\1\$;", sql, re.DOTALL)]
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """`-- ...` comments removed, so an assertion about code cannot be
+    satisfied by prose.
+
+    Written because it happened: the first version of the guard test below
+    passed against a deliberately reverted guard, because the comment
+    explaining the guard mentions pg_available_extensions by name and the
+    assertion was reading the comment. A check that cannot go red is worse
+    than no check, since it also reports that the thing is covered."""
+    return "\n".join(re.sub(r"--.*$", "", line) for line in sql.splitlines())
+
+
+def test_the_retention_migration_skips_a_pg_cron_that_is_only_a_catalog_row() -> None:
+    """pg_extension is a catalog row. pg_available_extensions is what is on
+    disk. The migration gated its CREATE EXTENSION block on the second and its
+    cron.schedule block on the first, which is fine right up until the two
+    disagree.
+
+    They disagreed on the demo box. The restored production dump carried a
+    pg_cron row (and the cron schema, and cron.schedule) into a server whose
+    image had never shipped the library, so the first block correctly announced
+    that pg_cron was unavailable and skipped, and the second block then saw the
+    catalog row, resolved cron.schedule by name, and died calling it:
+    `could not access file "$libdir/pg_cron"`. The migration runs as a
+    superuser on the box, so its handler re-raised, the migration aborted, and
+    the deploy that would have supplied the library was skipped behind
+    `needs: migrate`.
+
+    Both blocks must ask the same question. The file's own NOTICE already
+    promises this file is a clean no-op where pg_cron is genuinely absent."""
+    migrations = sorted((ROOT / "supabase" / "migrations").glob("*.sql"))
+    schedulers = [
+        p for p in migrations
+        if "cron.schedule" in p.read_text() and RETENTION_JOB in p.read_text()
+    ]
+    assert schedulers, "no migration schedules the retention job at all"
+    latest = schedulers[-1]
+
+    blocks = [_strip_sql_comments(b) for b in _do_blocks(latest.read_text())]
+    calling = [b for b in blocks if "cron.schedule(" in b]
+    assert calling, (
+        f"{latest.name} names cron.schedule but not inside a DO block this "
+        "test can read; if the file was restructured, restate the guard "
+        "assertion below against the new shape rather than deleting it"
+    )
+    for block in calling:
+        guard = block[: block.index("cron.schedule(")]
+        assert "pg_available_extensions" in guard, (
+            f"{latest.name} calls cron.schedule guarded only by the catalog "
+            "row. A database that carries a pg_cron row from a restored dump "
+            "but has no pg_cron library on disk reaches the call and aborts "
+            "the migration, which is the 2026-08-22 deadlock."
+        )
+
+
 def main() -> int:
     # The parser guard runs FIRST, deliberately. Alphabetical order put it last,
     # so a silent parse failure would have been reported by whichever assertion
