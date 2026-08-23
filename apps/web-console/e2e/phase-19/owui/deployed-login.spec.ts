@@ -54,7 +54,22 @@ test("OIDC sign-in completes against the deployed origin", async ({ page }) => {
   const emailBox = page.getByRole("textbox", { name: /email/i });
   const passwordBox = page.getByRole("textbox", { name: /password/i });
   const approveButton = page.getByRole("button", { name: /approve/i });
-  const newChatButton = page.getByRole("button", { name: /new chat/i });
+  /*
+   * Either role, because the control is an <a>.
+   *
+   * Open WebUI renders both New Chat controls (the collapsed rail's icon and
+   * the expanded sidebar's row) as anchors with an aria-label, so their
+   * implicit role is `link` and a `button` query can never match. This
+   * readiness signal has therefore been failing since the control changed
+   * shape, taking every OWUI end-to-end run with it: the sign-in it guards
+   * actually succeeds, and the run fails 60 seconds later looking for an
+   * element that cannot exist. e2e/chat-coverage/surfaces.ts already matches
+   * both roles for exactly this reason; these two call sites were missed.
+   */
+  const newChatButton = page
+    .getByRole("button", { name: /new chat/i })
+    .or(page.getByRole("link", { name: /new chat/i }))
+    .first();
 
   // Consent renders first and only bounces to sign-in once its client-side
   // session check returns empty, so a URL check can observe the transient

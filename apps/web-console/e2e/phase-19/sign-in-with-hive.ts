@@ -49,6 +49,27 @@ export async function signInWithHive(
   // observe the transient consent pathname and wrongly decide login is
   // done. Wait on the DOM instead: either we need to sign in (email box
   // visible) or we're already on consent (Approve visible).
+  // Wait for the consent app to be serving before timing the login.
+  //
+  // The consent and sign-in pages are web-console's, on a different origin,
+  // and web-console runs in dev mode here (see the note below), so it compiles
+  // its routes on first request. Measured on run 32112158077: the first two
+  // attempts never left the Open WebUI origin and timed out at 30s, and the
+  // third completed the whole exchange in 21 seconds once the route was warm.
+  // That is a one-off compile at the start of a run, not a slow login.
+  //
+  // The budget here is deliberately NOT the login budget, and the login budget
+  // below is deliberately unchanged. Raising the 30s assertion would have
+  // buried a cold compile inside a per-login timeout and made every future slow
+  // login indistinguishable from this one, which is the failure that hides the
+  // next real regression.
+  //
+  // This adds no new failure mode: the assertion on the next line already
+  // requires a DOM that only exists on the consent origin, so requiring the
+  // browser to reach that origin first is strictly weaker than what was
+  // already being demanded.
+  await page.waitForURL((u) => u.origin !== owuiOrigin, { timeout: 120_000 });
+
   await expect(emailBox.or(approveButton)).toBeVisible({ timeout: 30_000 });
 
   // web-console runs in dev mode in CI; React hydration can remount the

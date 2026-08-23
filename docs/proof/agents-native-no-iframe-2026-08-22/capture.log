@@ -1,0 +1,47 @@
+local static server serving the rebased branch bundle at http://127.0.0.1:38693
+bundle: /tmp/claude-1001/-home-sakib-hive/47b1dc44-1a51-42c2-8e34-41475aa46c9d/scratchpad/rb951-build
+chat landing: password inputs=0, iframes=0, "sign in" in body text=false
+captured 01-chat-landing-signed-in.png at http://127.0.0.1:38693/ :: the chat shell, Agents in the sidebar
+sidebar entries pointing at /agents: 1
+links anywhere in the signed-in chat UI pointing at /agent-workspace: 0
+url after clicking Agents: http://127.0.0.1:38693/agents
+after clicking Agents: password inputs=0, iframes=0, "sign in" in body text=false
+captured 02-agents-native-no-credential-prompt.png at http://127.0.0.1:38693/agents :: reached by clicking the sidebar entry, password inputs=0, iframes=0
+captured 03-agents-composer-accepts-a-brief.png at http://127.0.0.1:38693/agents :: native composer, no second application
+
+api requests:
+  GET /api/config
+  GET /api/v1/auths/
+  GET /api/config
+  POST /api/v1/auths/update/timezone
+  GET /api/v1/folders/
+  GET /api/v1/folders/
+  GET /api/v1/chats/all/tags
+  GET /api/v1/chats/pinned
+  GET /api/v1/chats/?page=1
+  GET /api/v1/configs/banners
+  GET /api/v1/tools/
+  GET /api/v1/users/user/settings
+  GET /api/v1/users/11111111-2222-3333-4444-555555555555/profile/image
+  GET /api/v1/folders/shared
+  GET /api/v1/folders/shared
+  GET /api/models
+  GET /api/v1/terminals/
+  GET /api/v1/users/11111111-2222-3333-4444-555555555555/profile/image
+  GET /api/v1/models/model/profile/image?id=undefined&lang=en-US
+  GET /api/v1/functions/
+  GET /api/v1/models/model/profile/image?id=hive-auto&lang=en-US
+  GET /api/v1/chats/?page=2
+  GET /api/v1/skills/
+  GET /api/v1/hive/agent/tasks
+  GET /api/v1/hive/agent/tasks
+  GET /api/v1/hive/agent/tasks
+
+console transcript:
+  [error] WebSocket connection to 'ws://127.0.0.1:38693/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [pageerror] Pe is not iterable
+  [pageerror] Pe is not iterable
+  [pageerror] (l(...) ?? []).some is not a function
+  [error] WebSocket connection to 'ws://127.0.0.1:38693/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:38693/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200
+  [error] WebSocket connection to 'ws://127.0.0.1:38693/ws/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: Unexpected response code: 200

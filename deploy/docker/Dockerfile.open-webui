@@ -41,6 +41,17 @@ COPY vendor/open-webui ./
 
 ENV APP_BUILD_HASH=hive-fork
 ENV NODE_OPTIONS=--max-old-space-size=4096
+
+# The fork's own unit tests, run here because there is nowhere else they run.
+# ci.yml has vitest lanes for apps/desktop, apps/web-console and
+# apps/agent-console and none for vendor/open-webui, so every test written
+# under src/lib/hive was coverage on paper only. Running them in this stage
+# means they gate the nightly image build and the demo deploy, which is not the
+# same as gating a pull request and is not being claimed as such: a PR-time
+# lane for this tree is a follow-up. What it does buy is that a broken test
+# cannot reach the box.
+RUN npm run test:frontend -- --run
+
 RUN npm run build && test -f build/index.html
 #
 # Upstream Open WebUI hardcodes a license-enforcement suffix: any custom
@@ -316,6 +327,27 @@ COPY deploy/docker/owui-patches/apply_model_picker_patch.py /tmp/apply_model_pic
 RUN python3 /tmp/apply_model_picker_patch.py \
     && grep -q 'hive_model_picker' /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
+
+# The agent surface renders natively in the chat frontend now, so it needs a
+# server-side hop to /v1/agent/* that carries the signed-in user's own token.
+# It cannot be done from the browser: this frontend holds Open WebUI's session
+# token, which edge-api has never heard of, plus a Supabase OAuth-server token
+# that carries no tenant_id and that edge-api fails closed on by design
+# (.wolf/decisions.md D-023). That OAuth token is not in the browser either --
+# Open WebUI resolves it server side and refreshes it -- so handing it to page
+# JavaScript would be a downgrade rather than a fix.
+#
+# This router does for the agent-task calls exactly what the hive_jwt_forward
+# Function already does for chat completions: present the shim key, carry the
+# per-user token alongside it, and let edge-api's OWUIUnwrap middleware swap
+# the two. It adds no configuration, because OPENAI_API_BASE_URL and
+# OPENAI_API_KEY are already set on this container, so the shim key gains no
+# new home. Frontend counterpart: vendor/open-webui/src/lib/hive/agentTasks.ts.
+COPY deploy/docker/owui-patches/hive_agent_proxy.py /app/backend/open_webui/utils/hive_agent_proxy.py
+COPY deploy/docker/owui-patches/apply_agent_proxy_patch.py /tmp/apply_agent_proxy_patch.py
+RUN python3 /tmp/apply_agent_proxy_patch.py \
+    && grep -q 'hive_agent_router' /app/backend/open_webui/main.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_agent_proxy.py').read_text())"
 
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an

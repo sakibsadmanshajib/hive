@@ -40,6 +40,7 @@ test-scripts:
 	python3 scripts/test_caddy_console_auth_origin.py --self-check
 	python3 scripts/restore-storage-objects.py --self-check
 	python3 scripts/test_owui_oauth_client_auth.py
+	python3 scripts/test_owui_agent_proxy.py
 
 # Node, not python, and it downloads a pinned vitest, so it is deliberately not
 # folded into test-scripts, which is pure python with no network.
