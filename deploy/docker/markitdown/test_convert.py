@@ -162,6 +162,40 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(resp.status, 400)
         self.assertEqual(json.loads(data.decode())["error"]["class"], "bad_request")
 
+class SanitizationTests(unittest.TestCase):
+    def test_corrupt_docx_message_has_no_paths_or_classnames(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("[Content_Types].xml", "<Types></Types>")
+        try:
+            appmod.convert_bytes(buf.getvalue(), "broken.docx", "")
+            self.fail("expected ConversionError")
+        except ConversionError as exc:
+            msg = exc.message
+            self.assertNotIn("/tmp/", msg)
+            self.assertNotIn("Error", msg)
+            self.assertNotIn("Exception", msg)
+            self.assertNotIn("/", msg)
+
+    def test_timeout_is_loud(self):
+        import time as _time
+
+        class _Slow:
+            def convert_stream(self, *_a, **_k):
+                _time.sleep(5)
+
+        saved_conv, saved_to = appmod._converter, appmod.CONVERT_TIMEOUT_SECONDS
+        appmod._converter = _Slow()
+        appmod.CONVERT_TIMEOUT_SECONDS = 0.5
+        try:
+            with self.assertRaises(ConversionError) as cm:
+                appmod.convert_bytes(b"x" * 10, "slow.pdf", "application/pdf")
+            self.assertEqual(cm.exception.err_class, "conversion_failed")
+            self.assertIn("timed out", cm.exception.message)
+        finally:
+            appmod._converter = saved_conv
+            appmod.CONVERT_TIMEOUT_SECONDS = saved_to
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

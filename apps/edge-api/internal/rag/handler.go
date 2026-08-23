@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -396,9 +397,13 @@ func (h *Handler) convertForIngest(ctx context.Context, data []byte, filename, m
 	if err != nil {
 		var convErr *ConversionError
 		if errors.As(err, &convErr) && convErr.Rejected {
-			log.Printf("rag: conversion rejected file=%s class=%s: %s", filename, convErr.Class, convErr.Detail)
+			log.Printf("rag: conversion rejected file=%s class=%s", filename, convErr.Class)
+			status := http.StatusUnprocessableEntity
+			if convErr.Class == "payload_too_large" {
+				status = http.StatusRequestEntityTooLarge
+			}
 			return "", &uploadError{
-				status: http.StatusUnprocessableEntity,
+				status: status,
 				code:   apierrors.CodeInvalidRequest,
 				msg: fmt.Sprintf("document conversion failed (%s): %s",
 					truncate(convErr.Class, 64), truncate(convErr.Detail, 300)),
@@ -422,19 +427,78 @@ func (h *Handler) convertForIngest(ctx context.Context, data []byte, filename, m
 	return markdown, nil
 }
 
-// validateBinaryMeta enforces name + format rules shared by both binary shapes.
+// validateBinaryMeta enforces name + format rules shared by both binary
+// shapes. Format acceptance requires BOTH signals to agree when both are
+// present: a filename whose extension is allowed AND (when a specific mime
+// type is supplied) a mime consistent with that extension. An OR would admit
+// mismatched pairs like name=notes.txt with Content-Type application/pdf.
 func validateBinaryMeta(name, mimeType string) *uploadError {
 	if strings.TrimSpace(name) == "" {
 		return &uploadError{status: http.StatusBadRequest, msg: "name required"}
 	}
-	if !ExtensionAllowed(name) && !allowedContentTypes[mimeType] {
-		return &uploadError{
-			status: http.StatusUnprocessableEntity,
-			msg:    "unsupported document format",
-			class:  "unsupported_format",
+	for _, rr := range name {
+		if rr < 0x20 || rr == 0x7f {
+			return &uploadError{status: http.StatusBadRequest,
+				msg: "name contains control characters"}
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	mimeAllowed := allowedContentTypes[mimeType]
+	switch {
+	case ext == "" && !mimeAllowed:
+		return &uploadError{status: http.StatusUnprocessableEntity,
+			msg: "unsupported document format", class: "unsupported_format"}
+	case ext != "":
+		if !ExtensionAllowed(name) {
+			return &uploadError{status: http.StatusUnprocessableEntity,
+				msg: "unsupported document format", class: "unsupported_format"}
+		}
+		if mimeAllowed && !mimeConsistent(ext, mimeType) {
+			return &uploadError{status: http.StatusBadRequest,
+				msg: "mime_type does not match the filename extension"}
 		}
 	}
 	return nil
+}
+
+// extCanonicalType maps each allowed extension to its canonical mime type so
+// consistency checks never depend on the host's mime database (Go's
+// mime.TypeByExtension falls back to an OS table that is missing on Alpine).
+var extCanonicalType = map[string]string{
+	".pdf":  "application/pdf",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".doc":  "application/msword",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".ppt":  "application/vnd.ms-powerpoint",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".xls":  "application/vnd.ms-excel",
+	".csv":  "text/csv",
+	".json": "application/json",
+	".rtf":  "application/rtf",
+	".epub": "application/epub+zip",
+	".html": "text/html",
+	".htm":  "text/html",
+	// Multi-alias formats: any of these count as consistent.
+	".xml": "application/xml,text/xml",
+	".md":  "text/markdown,text/plain",
+	".txt": "text/plain",
+}
+
+// mimeConsistent reports whether the supplied mime type plausibly matches the
+// filename extension. Unknown extension mappings pass (the allowlist already
+// gated them); known mismatches fail closed.
+func mimeConsistent(ext, mimeType string) bool {
+	candidates, ok := extCanonicalType[ext]
+	if !ok {
+		return true
+	}
+	base := strings.TrimSpace(strings.Split(strings.ToLower(mimeType), ";")[0])
+	for _, candidate := range strings.Split(candidates, ",") {
+		if base == strings.TrimSpace(candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeUploadBase64 decodes standard base64, tolerating embedded whitespace.

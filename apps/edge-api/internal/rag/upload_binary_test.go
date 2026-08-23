@@ -434,3 +434,103 @@ func TestExtensionAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleUpload_MismatchedNameMime400 pins the consistency rule: an
+// allowed extension plus an ALLOWED but contradictory mime is a 400, not a
+// silent pass-through of whichever signal happened to be allowed.
+func TestHandleUpload_MismatchedNameMime400(t *testing.T) {
+	conv := &spyConverter{mdOut: "should not run"}
+	rec := &ingestRecorder{}
+	h, _ := newBinaryTestHandler(conv, rec)
+
+	body, _ := json.Marshal(UploadRequest{
+		Name:          "notes.txt",
+		MimeType:      "application/pdf",
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("x")),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/documents", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleUpload(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for mismatched name/mime pair, got %d", w.Code)
+	}
+	if conv.callCount() != 0 {
+		t.Error("mismatched metadata must never reach the converter")
+	}
+}
+
+// TestHandleUpload_ControlCharName400: control characters in a filename are a
+// client error, not a conversion outage.
+func TestHandleUpload_ControlCharName400(t *testing.T) {
+	conv := &spyConverter{}
+	rec := &ingestRecorder{}
+	h, _ := newBinaryTestHandler(conv, rec)
+
+	body, _ := json.Marshal(UploadRequest{
+		Name:          "bad\x07name.pdf",
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("x")),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/documents", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleUpload(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for control-char filename, got %d", w.Code)
+	}
+}
+
+// TestMarkitdownClient_SanitizesDetail: a hostile or buggy sidecar message
+// carrying temp paths or exception class names must not reach the 422 body.
+func TestMarkitdownClient_SanitizesDetail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":{"code":422,"class":"conversion_failed","message":"DocxConverter threw OSError with message: /tmp/tmpabc123/broken.docx is unreadable"}}`))
+	}))
+	defer srv.Close()
+	c := NewMarkitdownClient(srv.URL)
+	_, err := c.Convert(context.Background(), "a.docx", "", []byte("x"))
+	var ce *ConversionError
+	if !errors.As(err, &ce) || ce.Detail == "" {
+		t.Fatalf("want ConversionError with detail, got %v", err)
+	}
+	sanitized := sanitizeDetail(ce.Detail)
+	for _, leak := range []string{"/tmp/", ".docx", "OSError", "Exception"} {
+		if strings.Contains(strings.ToLower(sanitized), strings.ToLower(leak)) {
+			t.Errorf("sanitized detail leaks %q: %s", leak, sanitized)
+		}
+	}
+}
+
+// TestHandleUpload_OversizeResponse413: a truncated markdown response from
+// the sidecar classifies as too-large, not as an outage.
+func TestHandleUpload_OversizeResponse413(t *testing.T) {
+	big := strings.Repeat("m", int(maxConvertResponseBytes)+10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"markdown":"` + big + `"}`))
+	}))
+	defer srv.Close()
+
+	store := newFakeStore()
+	var audits []auditRecord
+	rec := &ingestRecorder{}
+	h := NewHandler(store, &fakeEmbedder{}, makeAuditCapture(&audits), rec.asIngestFunc(), context.Background()).
+		WithConverter(NewMarkitdownClient(srv.URL), DefaultMaxUploadBytes)
+
+	body, _ := json.Marshal(UploadRequest{
+		Name:          "huge.pdf",
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("%PDF fake")),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/documents", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleUpload(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized conversion output, got %d", w.Code)
+	}
+}

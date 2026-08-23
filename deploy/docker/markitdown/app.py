@@ -12,7 +12,8 @@ import io
 import json
 import mimetypes
 import os
-import tempfile
+import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import markitdown._exceptions as mdx
@@ -20,8 +21,29 @@ from markitdown import MarkItDown
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 PORT = int(os.environ.get("PORT", "8700"))
+# Bounded conversion pool: a conversion that hangs cannot grow threads without
+# limit. Workers that exceed CONVERT_TIMEOUT_SECONDS are abandoned (the thread
+# finishes eventually and is discarded); the caller gets a loud 422.
+CONVERT_TIMEOUT_SECONDS = float(os.environ.get("CONVERT_TIMEOUT_SECONDS", "120"))
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "2"))
+
+_convert_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 _converter = MarkItDown()
+
+# Anything shaped like an absolute path or a dotted filesystem reference gets
+# redacted before a converter message reaches the wire, along with exception
+# class names: converter exceptions can embed temp paths, host paths, internal
+# file names, and internal class names.
+_PATH_LIKE = re.compile(r"(?:[A-Za-z]:)?(?:/|\\)[^\s\"'<>]+")
+_EXC_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)\b")
+
+
+def _clean_message(message: str) -> str:
+    cleaned = _PATH_LIKE.sub("[path]", (message or ""))
+    cleaned = _EXC_TOKEN.sub("[converter]", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned[:300] if cleaned else "converter failed"
 
 
 class ConversionError(Exception):
@@ -45,7 +67,11 @@ def _resolve_extension(filename, content_type):
 
 
 def convert_bytes(data: bytes, filename: str, content_type: str) -> str:
-    """Convert raw file bytes to markdown. Raises ConversionError on failure."""
+    """Convert raw file bytes to markdown. Raises ConversionError on failure.
+
+    Runs inside the bounded pool with a hard timeout so a pathological
+    document cannot hold a thread (or the caller) forever.
+    """
     if not data:
         raise ConversionError(400, "bad_request", "empty request body")
 
@@ -57,33 +83,44 @@ def convert_bytes(data: bytes, filename: str, content_type: str) -> str:
             "no filename extension and no content type to infer one from",
         )
 
-    # Write to a suffixed temp file so markitdown's own extension-based
-    # converter dispatch picks the right reader; convert(path) works across
-    # every markitdown release line.
-    with tempfile.NamedTemporaryFile(suffix=ext) as tmp:
-        tmp.write(data)
-        tmp.flush()
-        try:
-            result = _converter.convert(tmp.name)
-        except mdx.UnsupportedFormatException as exc:
-            raise ConversionError(
-                422, "unsupported_format", str(exc) or f"no converter for {ext}"
-            ) from exc
-        except (mdx.FileConversionException, mdx.MissingDependencyException) as exc:
-            raise ConversionError(
-                422, "conversion_failed", str(exc) or f"converter failed for {ext}"
-            ) from exc
-        except Exception as exc:  # noqa: BLE001 loud-fail boundary
-            raise ConversionError(
-                500, "conversion_failed", f"{type(exc).__name__}: {exc}"
-            ) from exc
-
-    text = result.text_content or ""
-    if not text.strip():
+    future = _convert_pool.submit(_convert_stream, data, ext)
+    try:
+        return future.result(timeout=CONVERT_TIMEOUT_SECONDS)
+    except FutureTimeout:
+        future.cancel()
         raise ConversionError(
-            422, "empty_result", "converter produced no extractable text"
-        )
-    return text
+            422,
+            "conversion_failed",
+            f"conversion timed out after {int(CONVERT_TIMEOUT_SECONDS)}s",
+        ) from None
+
+
+def _convert_stream(data: bytes, ext: str) -> str:
+    """Run markitdown on an in-memory stream; no temp files, no host paths."""
+
+    def run() -> str:
+        result = _converter.convert_stream(io.BytesIO(data), file_extension=ext)
+        text = result.text_content or ""
+        if not text.strip():
+            raise ConversionError(
+                422, "empty_result", "converter produced no extractable text"
+            )
+        return text
+
+    try:
+        return run()
+    except ConversionError:
+        raise
+    except mdx.UnsupportedFormatException as exc:
+        raise ConversionError(
+            422, "unsupported_format", _clean_message(str(exc)) or f"no converter for {ext}"
+        ) from exc
+    except (mdx.FileConversionException, mdx.MissingDependencyException) as exc:
+        raise ConversionError(
+            422, "conversion_failed", _clean_message(str(exc)) or f"converter failed for {ext}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 loud-fail boundary
+        raise ConversionError(500, "conversion_failed", _clean_message(f"{type(exc).__name__}: {exc}")) from exc
 
 
 class Handler(BaseHTTPRequestHandler):

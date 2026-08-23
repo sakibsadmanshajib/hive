@@ -887,6 +887,26 @@ jobs:
             *.cache-to=type=gha,scope=docker-build,mode=max
 
   # ------------------------------------------------------------------
+  # markitdown-sidecar (PR #1077): builds the pinned conversion sidecar
+  # image and runs its committed container test suite (synthetic PDF +
+  # DOCX fixtures over the real HTTP surface) inside that image. Gated on
+  # the same run flag as the heavy jobs so it skips docs-only PRs.
+  # ------------------------------------------------------------------
+
+  markitdown-sidecar:
+    name: Markitdown sidecar (build + convert fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sidecar image
+        run: docker build -f deploy/docker/markitdown/Dockerfile -t hive-markitdown:ci .
+      - name: Run container test suite
+        run: docker run --rm hive-markitdown:ci python /app/test_convert.py
+
+  # ------------------------------------------------------------------
   # Live integration — builds images once with GHA cache, loads them
   # locally, starts stack against staging Supabase, runs all three SDK
   # suites in parallel.

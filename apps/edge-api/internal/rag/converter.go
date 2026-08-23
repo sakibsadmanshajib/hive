@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -148,15 +149,27 @@ func (c *MarkitdownClient) Convert(ctx context.Context, filename, contentType st
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConvertResponseBytes))
+	// Read one byte past the cap so a truncated body is distinguishable from
+	// an exact-fit one: truncation is a too-large response, not an outage.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConvertResponseBytes+1))
 	if err != nil {
 		return "", &ConversionError{Rejected: false, Detail: err.Error()}
+	}
+	if int64(len(body)) > maxConvertResponseBytes {
+		return "", &ConversionError{
+			Rejected: true, Class: "payload_too_large",
+			Detail: fmt.Sprintf("converted markdown exceeds %d bytes", maxConvertResponseBytes),
+		}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var eb markitdownErrorBody
 		if json.Unmarshal(body, &eb) == nil && eb.Error.Class != "" {
-			return "", &ConversionError{Rejected: true, Class: eb.Error.Class, Detail: eb.Error.Message}
+			return "", &ConversionError{
+				Rejected: true,
+				Class:    sanitizeClass(eb.Error.Class),
+				Detail:   sanitizeDetail(eb.Error.Message),
+			}
 		}
 		return "", &ConversionError{
 			Rejected: true, Class: "conversion_failed",
@@ -183,3 +196,44 @@ func (c *MarkitdownClient) Convert(ctx context.Context, filename, contentType st
 // back. A 25MB document converts to at most a few MB of text; anything
 // beyond this is a broken sidecar, not a real conversion.
 const maxConvertResponseBytes = 64 * 1024 * 1024
+
+// knownClasses whitelists the sidecar error classes this client will forward.
+// Anything else collapses to conversion_failed so an unexpected class string
+// from a future sidecar version can never smuggle arbitrary text through.
+var knownClasses = map[string]bool{
+	"bad_request":        true,
+	"payload_too_large":  true,
+	"unsupported_format": true,
+	"conversion_failed":  true,
+	"empty_result":       true,
+	"not_found":          true,
+}
+
+func sanitizeClass(class string) string {
+	if knownClasses[class] {
+		return class
+	}
+	return "conversion_failed"
+}
+
+var (
+	pathLikeRe = regexp.MustCompile(`(?:[A-Za-z]:)?(?:/|\\)[^\s"'<>]+`)
+	excClassRe = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception)\b`)
+)
+
+// sanitizeDetail strips anything that could leak host internals from a sidecar
+// error message before it reaches a customer response: path-shaped tokens and
+// Go/Python exception class names. The sidecar sanitizes too; this is the
+// boundary defense so a future sidecar regression cannot leak through.
+func sanitizeDetail(detail string) string {
+	cleaned := pathLikeRe.ReplaceAllString(detail, "[path]")
+	cleaned = excClassRe.ReplaceAllString(cleaned, "[converter]")
+	cleaned = strings.TrimSpace(cleaned)
+	if len(cleaned) > 300 {
+		cleaned = cleaned[:300]
+	}
+	if cleaned == "" {
+		return "conversion failed"
+	}
+	return cleaned
+}
