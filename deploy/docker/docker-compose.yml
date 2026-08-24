@@ -1146,6 +1146,9 @@ services:
       # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
       # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
+      # Serves rag.file.max_size to clients as file.max_size so MessageInput's
+      # size guard fires client-side instead of failing opaquely server-side (#1108 follow-up).
+      RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-}
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
       # first-boot-wins reason as the RAG keys above.
