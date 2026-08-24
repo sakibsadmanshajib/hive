@@ -9,6 +9,7 @@ import {
   Boxes,
   Users,
   Settings,
+  Server,
   Wallet,
   ToggleRight,
   Store,
@@ -50,6 +51,11 @@ const NAV_GROUPS: ReadonlyArray<{
   {
     labelKey: "groupAdmin",
     items: [
+      {
+        href: "/console/providers",
+        labelKey: "providers",
+        icon: <Server size={14} />,
+      },
       {
         href: "/console/feature-gates",
         labelKey: "featureGates",

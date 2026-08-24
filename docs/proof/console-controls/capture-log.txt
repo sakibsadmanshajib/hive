@@ -1,0 +1,48 @@
+Capture log for the console provider-controls PR, branch feat/console-provider-controls
+Captured 2026-08-24 against a local full stack built from this branch, not the
+demo box. No live service was touched. No credential appears in any captured
+URL; the fixture account was created for this run on a throwaway stack and
+thrown away with it.
+
+Stack under test
+----------------
+Throwaway Postgres (pgvector/pgvector:pg17) + scripts/ci-supabase-stack.sh
+(GoTrue v2.170.0 + PostgREST behind an nginx gateway on localhost:19000, the
+same throwaway surface the console Playwright suite uses), then the branch
+control-plane image (hive-control-plane:ci built from this branch) against
+that database with an in-network redis, and the branch web-console under
+`next dev` on 127.0.0.1:3100. Fixture identity seeded with the repo's own
+tests/e2e/support/e2e-auth-fixtures.mjs (run-scoped address, throwaway
+password); the fixture's account row was flagged is_platform_admin for the
+admin captures and temporarily unflagged for the non-admin capture, then
+restored. Everything is local and disposable.
+
+Browser transcript (Playwright Chromium, real clicks)
+------------------------------------------------------
+sign-in as e2e-verified+consoleprov-1787593719@scubed.com.bd -> http://localhost:3100/console
+registered provider together-ai via the UI form
+registered provider groq-inc via the UI form
+01-providers-list.png : providers page, two endpoints registered (7 rows total
+    including the five the migration chain seeds: openrouter, groq, nvidia_nim
+    disabled, groq-2, gemini)
+02-providers-edit-open.png : inline edit form open on together-ai
+edit saved: display name now Together AI (EU), PUT round-trip ok
+03-providers-edited.png : list after an edit round-trip
+04-providers-disabled.png : groq-inc toggled off, Disabled badge visible
+toggle round-trip ok: groq-inc re-enabled via PUT full record
+05-analytics-observability.png : analytics overview with observability tiles
+grafana tile state: GRAFANA_BASE_URL unset -> not-configured tiles
+06-providers-nonadmin.png : non-platform-admin sees managed-by-admin state
+07-logs-browser.png : request log browser (the tile's internal link target)
+
+Notes
+-----
+* The two Grafana tiles render as an explicit "Not configured on this
+  deployment (set GRAFANA_BASE_URL)" state here because the variable is unset
+  on this throwaway stack. On a deployment where Grafana is reachable (the
+  monitoring profile on the box), setting GRAFANA_BASE_URL turns both tiles
+  into dashboard links at /d/hive-platform-overview and /d/hive-rate-limit.
+  No fake URL was photographed.
+* Every mutation in the transcript went through the console's own proxy
+  routes to the control-plane's platform-admin provider CRUD; the browser
+  never spoke to the control-plane directly.
