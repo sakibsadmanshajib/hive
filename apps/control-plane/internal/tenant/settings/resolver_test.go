@@ -136,6 +136,64 @@ func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 	}
 }
 
+// TestResolver_GateDefaults_UnsetKeyReadsDeclaredDefault is the #1107 guard:
+// a workspace with no explicit tenant_settings row for a key whose registry
+// row declares default_enabled = true must resolve that gate as enabled. This
+// is what makes Cowork launchable on every workspace by default instead of
+// only on tenants hand-seeded by scripts/seed-demo-owner.py, and it must hold
+// through BOTH read surfaces (AllEnabled backs the admin console toggle UI,
+// ClientVisibleEnabled backs the featuregate endpoint edge-api gates /v1/agent
+// routes on).
+func TestResolver_GateDefaults_UnsetKeyReadsDeclaredDefault(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, teardown := newTestPool(t, ctx)
+	defer teardown()
+
+	r := settings.NewResolver(pool, 30*time.Second)
+	tid := mustTenant(t, ctx, pool, "t-fg-default-on", "HIVE_CLOUD")
+
+	clientVisible, err := r.ClientVisibleEnabled(ctx, tid)
+	require.NoError(t, err)
+	require.Truef(t, clientVisible[settings.EnableCowork],
+		"ENABLE_COWORK has default_enabled = true and no explicit row, so ClientVisibleEnabled must report it enabled")
+	require.Falsef(t, clientVisible[settings.EnableRAG],
+		"keys without a declared default keep opt-in behavior: ENABLE_RAG unset must stay false")
+
+	all, err := r.AllEnabled(ctx, tid)
+	require.NoError(t, err)
+	require.Truef(t, all[settings.EnableCowork],
+		"AllEnabled must apply the declared default so the admin toggle UI shows the real state")
+}
+
+// TestResolver_GateDefaults_ExplicitRowOverridesDefault proves the default is
+// only a fallback: an admin who turns the gate off per workspace writes an
+// enabled=false row through Resolver.Set, and that row must win over the
+// declared default on every read surface.
+func TestResolver_GateDefaults_ExplicitRowOverridesDefault(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, teardown := newTestPool(t, ctx)
+	defer teardown()
+
+	r := settings.NewResolver(pool, 30*time.Second)
+	tid := mustTenant(t, ctx, pool, "t-fg-default-off", "HIVE_CLOUD")
+
+	require.NoError(t, r.Set(ctx, tid, settings.EnableCowork, false, uuid.Nil))
+
+	clientVisible, err := r.ClientVisibleEnabled(ctx, tid)
+	require.NoError(t, err)
+	require.Falsef(t, clientVisible[settings.EnableCowork],
+		"an explicit enabled=false tenant_settings row must override the declared default")
+
+	all, err := r.AllEnabled(ctx, tid)
+	require.NoError(t, err)
+	require.Falsef(t, all[settings.EnableCowork],
+		"an explicit enabled=false tenant_settings row must override the declared default in the full set too")
+}
+
 func TestResolver_CacheInvalidatesOnNotify(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

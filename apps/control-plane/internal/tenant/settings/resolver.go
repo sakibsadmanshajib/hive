@@ -39,7 +39,10 @@ func NewResolver(pool *pgxpool.Pool, ttl time.Duration) *Resolver {
 
 // IsEnabled returns true only when the row exists and enabled = true.
 // An unset key returns false; callers that need to distinguish "off" from
-// "unset" should use ValueRaw.
+// "unset" should use ValueRaw. Note this per-key path does NOT apply the
+// feature_gate_keys.default_enabled fallback (issue #1107); the registry
+// reads AllEnabled and ClientVisibleEnabled do. No production caller gates a
+// registry key through IsEnabled today, so the two cannot disagree.
 func (r *Resolver) IsEnabled(ctx context.Context, tenantID uuid.UUID, key Key) bool {
 	e, ok := r.lookup(ctx, tenantID, key)
 	if !ok {
@@ -141,9 +144,15 @@ func (r *Resolver) ClientVisibleEnabled(ctx context.Context, tenantID uuid.UUID)
 // always issues one fresh, indexed (tenant_id) query and bypasses the per-key
 // cache (the edge-api Gate already caches the whole response per tenant for
 // 30s with singleflight dedup on cold misses).
+//
+// Unset keys read their registry-declared default (feature_gate_keys.
+// default_enabled, issue #1107): an explicit tenant_settings row still wins,
+// so an admin can turn a default-on key off per workspace by writing an
+// enabled=false row through Set. Keys whose registry row keeps the false
+// default behave exactly as before.
 func (r *Resolver) gateMap(ctx context.Context, tenantID uuid.UUID, categories []string) (map[Key]bool, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT k.key, COALESCE(s.enabled, false) AS enabled
+		SELECT k.key, COALESCE(s.enabled, k.default_enabled) AS enabled
 		  FROM public.feature_gate_keys k
 		  LEFT JOIN public.tenant_settings s
 		    ON s.tenant_id = $1 AND s.key = k.key
