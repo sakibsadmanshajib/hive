@@ -856,12 +856,13 @@ general_settings:
 
 	cfg := litellmconfig.Config{
 		Models: freePoolEntries(),
-		// route-other is deliberately ABSENT from this set: it models an
-		// operator-managed entry with no provider_routes row at all, which the
-		// merge must preserve verbatim alongside the pooled deployments. (A
-		// name that WERE in this set but generated no entry would be a retired
-		// DB route, and the merge would rightly drop it.)
-		KnownRouteIDs:      []string{"route-free-pool", "route-free-pool-groq", "route-free-pool-groq-2", "route-free-pool-free"},
+		// Exactly what SyncService.Sync produces for a four-member pool: the
+		// members' route_id values, not the shared group name. (route-other is
+		// deliberately ABSENT: it models an operator-managed entry with no
+		// provider_routes row at all, which the merge must preserve verbatim.
+		// A name that WERE in this set but generated no entry would be a
+		// retired DB route, and the merge would rightly drop it.)
+		KnownRouteIDs:      []string{"route-free-pool-free", "route-free-pool-gemini", "route-free-pool-groq", "route-free-pool-groq-2"},
 		GeneralSettings:    litellmconfig.GeneralSettings{MasterKey: "new"},
 		ExistingConfigPath: configPath,
 	}

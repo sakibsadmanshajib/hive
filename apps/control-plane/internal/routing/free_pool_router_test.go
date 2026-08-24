@@ -84,6 +84,24 @@ func TestFreePoolRoutesShareOneLitellmModelName(t *testing.T) {
 	if shared != len(freePoolMembers) {
 		t.Errorf("%d inserted rows share the group name %q, want exactly %d", shared, freePoolGroupName, len(freePoolMembers))
 	}
+
+	// Every member references the alias: provider_routes.alias_id is NOT NULL
+	// with a non-deferrable FK to model_aliases (20260331_02), so a NULL member
+	// would abort this migration on apply.
+	for routeID := range freePoolMembers {
+		if got := byRoute[routeID]["alias_id"]; got != "hive-free" {
+			t.Errorf("pool member %s carries alias_id %q; the column is NOT NULL and every member belongs to hive-free", routeID, got)
+		}
+	}
+
+	// Statement order: the alias row must be inserted BEFORE the routes that
+	// reference it. Index comparison over the comment-stripped SQL.
+	lower := strings.ToLower(freePoolMigrationSQL(t))
+	aliasAt := strings.Index(lower, "insert into public.model_aliases")
+	routesAt := strings.Index(lower, "insert into public.provider_routes")
+	if aliasAt < 0 || routesAt < 0 || aliasAt > routesAt {
+		t.Errorf("the hive-free alias insert must precede the provider_routes inserts (non-deferrable FK); alias at %d, routes at %d", aliasAt, routesAt)
+	}
 }
 
 // TestFreePoolUpstreamModelsAreTheVerifiedOnes pins each member's upstream so a

@@ -20,8 +20,7 @@
 --                        our own free provider keys.
 --   * Members, in emission order (ORDER BY route_id):
 --       route-free-pool-free    openrouter dots-studio/dots-3-note-preview:free
---                               (OPENROUTER_API_KEY) -- canonical row carrying
---                               alias_id 'hive-free'
+--                               (OPENROUTER_API_KEY)
 --       route-free-pool-gemini  gemini-flash-latest through LiteLLM's generic
 --                               openai/ adapter against Google's official
 --                               OpenAI-compatible endpoint (GEMINI_API_KEY).
@@ -70,6 +69,20 @@
 --   model_name. Rows that keep the columns equal are byte-for-byte unchanged;
 --   rows that diverge become additional deployments of a shared name. Adding
 --   the third Groq key later is one more row plus one env var, nothing else.
+--
+--   All four member rows carry alias_id 'hive-free'. provider_routes.alias_id
+--   is NOT NULL with a FK to model_aliases (20260331_02), so there was no
+--   NULL-member option, and multi-route-per-alias is an established shape
+--   here (hive-fast served two routes before 20260801_01). It is also
+--   behaviorally inert which member selection picks: every member dispatches
+--   the same litellm_model_name, so LiteLLM's router sees the same pool
+--   regardless, and all four carry identical capability flags, so no flag
+--   filter can split them. The pinned policy still names route-free-pool-free
+--   as the single fallback_order entry, matching the one-alias-one-route
+--   convention for anything that reads it.
+--
+--   STATEMENT ORDER: the alias row must exist before any route referencing it
+--   (non-deferrable FK), so step 2 inserts hive-free ahead of the routes.
 --
 -- PRICES (current credit unit: 1 USD = 1,000,000,000 credits,
 -- migration 20260823_40_credit_unit_rescale_billion.sql)
@@ -168,68 +181,9 @@ insert into public.custom_providers (
      'GEMINI_API_KEY', 'openai/', true)
 on conflict (slug) do nothing;
 
--- ─── 2. The free pool: four routes, one shared litellm_model_name ───────────
-
-insert into public.provider_routes (
-    route_id,
-    alias_id,
-    provider,
-    provider_model,
-    litellm_model_name,
-    price_class,
-    health_state,
-    priority
-) values
-    ('route-free-pool-free',   'hive-free', 'openrouter', 'openrouter/dots-studio/dots-3-note-preview:free', 'route-free-pool', 'standard', 'healthy', 10),
-    ('route-free-pool-gemini', null,        'gemini',     'openai/gemini-flash-latest',                      'route-free-pool', 'standard', 'healthy', 10),
-    ('route-free-pool-groq',   null,        'groq',       'groq/openai/gpt-oss-20b',                         'route-free-pool', 'standard', 'healthy', 10),
-    ('route-free-pool-groq-2', null,        'groq-2',     'groq/openai/gpt-oss-20b',                         'route-free-pool', 'standard', 'healthy', 10),
-    ('route-openrouter-auto-live', 'hive-auto', 'openrouter', 'openrouter/openrouter/auto',              'route-openrouter-auto-live', 'premium', 'healthy', 10),
-    ('route-deepseek-v4-flash-default', 'hive-default', 'openrouter', 'openrouter/~deepseek/deepseek-v4-flash-latest', 'route-deepseek-v4-flash-default', 'budget', 'healthy', 10)
-on conflict (route_id) do nothing;
-
--- The doubled openrouter/ prefix and trailing :free carry the same meaning
--- they do on every sibling row (see 20260823_20's note): LiteLLM strips the
--- leading prefix as its provider selector, and :free selects the zero-priced
--- variant. The tilde in ~deepseek/deepseek-v4-flash-latest is part of the real
--- model id (20260822_02).
-
--- ─── 3. Capabilities ────────────────────────────────────────────────────────
---
--- Pool members: tools_supported FALSE (cross-provider tool parity unverified;
--- see the header). Everything chat-shaped TRUE, embeddings and cache FALSE.
--- Media flags FALSE everywhere in the pool; their succession line runs through
--- route-openrouter-auto-live below.
-
-insert into public.provider_capabilities (
-    route_id,
-    supports_responses,
-    supports_chat_completions,
-    supports_completions,
-    supports_embeddings,
-    supports_streaming,
-    supports_reasoning,
-    supports_cache_read,
-    supports_cache_write,
-    tools_supported,
-    supports_batch,
-    supports_image_generation,
-    supports_image_edit
-) values
-    ('route-free-pool-free',   true, true, true, false, true, true, false, false, false, false, false, false),
-    ('route-free-pool-gemini', true, true, true, false, true, true, false, false, false, false, false, false),
-    ('route-free-pool-groq',   true, true, true, false, true, true, false, false, false, false, false, false),
-    ('route-free-pool-groq-2', true, true, true, false, true, true, false, false, false, false, false, false),
-    ('route-openrouter-auto-live', true, true, true, false, true, true, false, false, true, true, true, true),
-    ('route-deepseek-v4-flash-default', true, true, true, false, true, true, true, false, true, false, false, false)
-on conflict (route_id) do nothing;
-
--- route-deepseek-v4-flash-default mirrors its source row
--- (route-deepseek-v4-flash, 20260822_02 step 3): cache_read TRUE because
--- DeepSeek publishes a cache-read rate, tools TRUE because that is the parity
--- claim hive-default is being moved here to keep.
-
--- ─── 4. The hive-free alias ─────────────────────────────────────────────────
+-- ─── 2. The hive-free alias, FIRST: every pool member row references it via
+--        provider_routes.alias_id's non-deferrable FK, so the alias must exist
+--        before any route does. ─────────────────────────────────────────────
 
 insert into public.model_aliases (
     alias_id,
@@ -275,6 +229,72 @@ insert into public.model_policy_group_members (group_name, alias_id) values
     ('closed',  'hive-free')
 on conflict (group_name, alias_id) do nothing;
 
+-- ─── 3. The free pool: four routes, one shared litellm_model_name ───────────
+--
+-- Every member carries alias_id 'hive-free': the column is NOT NULL with a
+-- non-deferrable FK (20260331_02), and multi-route-per-alias is an established
+-- shape here. It is behaviorally inert which member selection picks -- all
+-- four dispatch the same litellm_model_name under identical capability flags.
+
+insert into public.provider_routes (
+    route_id,
+    alias_id,
+    provider,
+    provider_model,
+    litellm_model_name,
+    price_class,
+    health_state,
+    priority
+) values
+    ('route-free-pool-free',   'hive-free', 'openrouter', 'openrouter/dots-studio/dots-3-note-preview:free', 'route-free-pool', 'standard', 'healthy', 10),
+    ('route-free-pool-gemini', 'hive-free', 'gemini',     'openai/gemini-flash-latest',                      'route-free-pool', 'standard', 'healthy', 10),
+    ('route-free-pool-groq',   'hive-free', 'groq',       'groq/openai/gpt-oss-20b',                         'route-free-pool', 'standard', 'healthy', 10),
+    ('route-free-pool-groq-2', 'hive-free', 'groq-2',     'groq/openai/gpt-oss-20b',                         'route-free-pool', 'standard', 'healthy', 10),
+    ('route-openrouter-auto-live', 'hive-auto', 'openrouter', 'openrouter/openrouter/auto',              'route-openrouter-auto-live', 'premium', 'healthy', 10),
+    ('route-deepseek-v4-flash-default', 'hive-default', 'openrouter', 'openrouter/~deepseek/deepseek-v4-flash-latest', 'route-deepseek-v4-flash-default', 'budget', 'healthy', 10)
+on conflict (route_id) do nothing;
+
+-- The doubled openrouter/ prefix and trailing :free carry the same meaning
+-- they do on every sibling row (see 20260823_20's note): LiteLLM strips the
+-- leading prefix as its provider selector, and :free selects the zero-priced
+-- variant. The tilde in ~deepseek/deepseek-v4-flash-latest is part of the real
+-- model id (20260822_02).
+
+-- ─── 4. Capabilities ────────────────────────────────────────────────────────
+--
+-- Pool members: tools_supported FALSE (cross-provider tool parity unverified;
+-- see the header). Everything chat-shaped TRUE, embeddings and cache FALSE.
+-- Media flags FALSE everywhere in the pool; their succession line runs through
+-- route-openrouter-auto-live below.
+
+insert into public.provider_capabilities (
+    route_id,
+    supports_responses,
+    supports_chat_completions,
+    supports_completions,
+    supports_embeddings,
+    supports_streaming,
+    supports_reasoning,
+    supports_cache_read,
+    supports_cache_write,
+    tools_supported,
+    supports_batch,
+    supports_image_generation,
+    supports_image_edit
+) values
+    ('route-free-pool-free',   true, true, true, false, true, true, false, false, false, false, false, false),
+    ('route-free-pool-gemini', true, true, true, false, true, true, false, false, false, false, false, false),
+    ('route-free-pool-groq',   true, true, true, false, true, true, false, false, false, false, false, false),
+    ('route-free-pool-groq-2', true, true, true, false, true, true, false, false, false, false, false, false),
+    ('route-openrouter-auto-live', true, true, true, false, true, true, false, false, true, true, true, true),
+    ('route-deepseek-v4-flash-default', true, true, true, false, true, true, true, false, true, false, false, false)
+on conflict (route_id) do nothing;
+
+-- route-deepseek-v4-flash-default mirrors its source row
+-- (route-deepseek-v4-flash, 20260822_02 step 3): cache_read TRUE because
+-- DeepSeek publishes a cache-read rate, tools TRUE because that is the parity
+-- claim hive-default is being moved here to keep.
+
 -- ─── 5. hive-auto: the real Auto Router at actual cost ──────────────────────
 --
 -- One statement flips the whole pricing shape so the mode CHECK holds at its
@@ -289,12 +309,23 @@ UPDATE public.model_aliases
        output_price_credits         = null,
        cache_read_price_credits     = null,
        cache_write_price_credits    = null,
-       reservation_estimate_credits = 2000000000,
-       capability_badges            = '["stable","chat","responses","task-aware"]'::jsonb,
-       summary                      = 'Automatic routing: each request is answered by the OpenRouter Auto Router''s per-request model choice, billed at actual usage.',
-       updated_at                   = now()
+       reservation_estimate_credits = 2000000000
  WHERE alias_id = 'hive-auto'
    AND pricing_mode <> 'upstream_actual';
+
+-- Display metadata gets its OWN guarded statement, deliberately not gated on
+-- the pricing mode: on a database where the mode already flipped, a re-run of
+-- this file must still be able to land a corrected summary or badge set.
+-- provider-blind wording per the catalog convention (the deepseek-v4-*
+-- ALIAS IDS carry their vendor name by explicit owner decision; summaries do
+-- not name vendors).
+UPDATE public.model_aliases
+   SET summary           = 'Automatic routing: each request gets a per-request model choice and is billed at actual usage.',
+       capability_badges = '["stable","chat","responses","task-aware"]'::jsonb,
+       updated_at        = now()
+ WHERE alias_id = 'hive-auto'
+   AND (summary IS DISTINCT FROM 'Automatic routing: each request gets a per-request model choice and is billed at actual usage.'
+        OR capability_badges <> '["stable","chat","responses","task-aware"]'::jsonb);
 
 UPDATE public.alias_route_policies
    SET fallback_order = '["route-openrouter-auto-live"]'::jsonb
@@ -308,7 +339,7 @@ UPDATE public.model_aliases
        output_price_credits      = 178920000,
        cache_read_price_credits  = 17900000,
        cache_write_price_credits = 0,
-       summary                   = 'Default alias for requests that name no model. Serves DeepSeek V4 Flash with full tool-calling parity; this is the paid quality tier.',
+       summary                   = 'Default alias for requests that name no model. Full tool-calling parity on the paid quality tier.',
        updated_at                = now()
  WHERE alias_id = 'hive-default'
    AND (input_price_credits <> 89460000 OR output_price_credits <> 178920000
