@@ -351,13 +351,15 @@ export const createBoundChat = async (
  * and reading each chat blob for our marker key.
  *
  * ponytail: one fetch per candidate chat, no server-side filter exists on the
- * pinned image. Fine at demo scale (tens of chats); if it ever hurts, a real
- * projects table with a chat.project_id column is the documented upgrade path.
+ * pinned image, and the list endpoint serves 60 rows per page (the pageSize
+ * default matches it so the loop does not stop a page early). Fine at demo
+ * scale (tens of chats); if it ever hurts, a real projects table with a
+ * chat.project_id column is the documented upgrade path.
  */
 export const resolveProjectConversations = async (
 	token: string,
 	projectId: string,
-	pageSize = 100,
+	pageSize = 60,
 	apiBase: string = DEFAULT_API_BASE,
 	fetchImpl: typeof fetch = fetch
 ): Promise<HiveProjectConversation[]> => {
