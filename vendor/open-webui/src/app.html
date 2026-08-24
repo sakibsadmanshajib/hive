@@ -41,6 +41,72 @@
 		-->
 		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
 
+		<!-- Hive: signed-out fast exit (#945, #967). A visitor with no session used
+				 to pay this app's whole boot, about sixty modules plus /api/config plus
+				 socket setup, only for +layout.svelte's SSO decision then bounce them
+				 to the console sign-in. Measured cold, that put the sign-in form about
+				 five seconds behind an already slow HTML response. This runs at parse
+				 time instead and applies the same guards as sso-redirect.ts (the tested
+				 source of truth) with the layout's context. It fails closed: any
+				 surprise, including a failed attempt-stamp write, means do nothing and
+				 let the normal boot own the decision. Keep the guard list identical on
+				 both sides when either changes. -->
+		<script>
+			(() => {
+				try {
+					if (window.electronAPI) return;
+					if (location.pathname !== '/') return;
+					if (localStorage.getItem('token')) return;
+					const hasTokenCookie = document.cookie
+						.split('; ')
+						.some((cookie) => cookie.startsWith('token='));
+					if (hasTokenCookie) return;
+					try {
+						if (sessionStorage.getItem('hive:signed-out') === '1') return;
+						const stamp = Number.parseInt(sessionStorage.getItem('hive:sso-attempt-at'), 10);
+						if (
+							Number.isFinite(stamp) &&
+							Date.now() - stamp >= 0 &&
+							Date.now() - stamp < 15000
+						) {
+							return;
+						}
+					} catch (storageError) {}
+					if (/\.scubed\.co$/.test(location.hostname)) {
+						const link = document.createElement('link');
+						link.rel = 'preconnect';
+						link.href = 'https://console-hive.scubed.co';
+						document.head.appendChild(link);
+					}
+					fetch('/api/config', { credentials: 'same-origin' })
+						.then((res) => (res.ok ? res.json() : null))
+						.then((cfg) => {
+							try {
+								const providers =
+									cfg && cfg.oauth && cfg.oauth.providers ? Object.keys(cfg.oauth.providers) : [];
+								const features = (cfg && cfg.features) || {};
+								if (!cfg || !cfg.oauth || cfg.oauth.auto_redirect !== true) return;
+								if (providers.length !== 1) return;
+								if (
+									features.auth === false ||
+									features.enable_login_form !== false ||
+									features.enable_ldap ||
+									features.auth_trusted_header
+								) {
+									return;
+								}
+								if (cfg.onboarding) return;
+								const now = String(Date.now());
+								sessionStorage.setItem('hive:sso-attempt-at', now);
+								if (sessionStorage.getItem('hive:sso-attempt-at') !== now) return;
+								location.replace('/oauth/' + providers[0] + '/login');
+							} catch (configError) {}
+						})
+						.catch(() => {});
+				} catch (setupError) {}
+			})();
+		</script>
+
 		<script>
 			function resizeIframe(obj) {
 				obj.style.height = obj.contentWindow.document.documentElement.scrollHeight + 'px';
