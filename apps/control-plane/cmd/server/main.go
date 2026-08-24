@@ -1363,6 +1363,17 @@ func main() {
 	routerMux.Handle("/internal/license/entitlement", platformhttp.RequireInternalToken(cfg.InternalToken, licenseHandler))
 	log.Println("licensing entitlement route registered (issue #304)")
 
+	// Issue #1063: the chat composer's credits banner. Open WebUI's backend
+	// resolves its own signed-in user to an email server side and calls this
+	// internal route; the tenant->billing-account link stays behind the
+	// shared-secret gate and never reaches a browser.
+	if ledgerSvc != nil {
+		ledger.RegisterChatBalanceRoute(routerMux, ledgerSvc, func(h http.Handler) http.Handler {
+			return platformhttp.RequireInternalToken(cfg.InternalToken, h)
+		})
+		log.Println("chat credits balance route registered (issue #1063)")
+	}
+
 	// Phase 14 — register credit grant routes. Admin surface gated via
 	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
 	// surface gated via plain auth middleware.

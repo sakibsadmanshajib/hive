@@ -363,6 +363,18 @@ RUN python3 /tmp/apply_agent_proxy_patch.py \
     && grep -q 'hive_agent_router' /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_agent_proxy.py').read_text())"
 
+# #1063: the composer's credits banner. The chat backend resolves the signed-in
+# user to a balance server side (control-plane internal route behind its shared
+# secret); the browser only ever sees the trimmed numbers under Open WebUI's own
+# session. Deployments that do not carry the control-plane token (Hive
+# Enterprise posture) get a 404 and no banner: silent absence is the posture
+# gate.
+COPY deploy/docker/owui-patches/hive_credits.py /app/backend/open_webui/utils/hive_credits.py
+COPY deploy/docker/owui-patches/apply_credits_patch.py /tmp/apply_credits_patch.py
+RUN python3 /tmp/apply_credits_patch.py \
+    && grep -q 'hive_credits_router' /app/backend/open_webui/main.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_credits.py').read_text())"
+
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
 # auth credential. The tool servers added there are direct ones, called by the

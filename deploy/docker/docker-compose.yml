@@ -1079,6 +1079,13 @@ services:
       ENABLE_VERSION_UPDATE_CHECK: "false"
       DEFAULT_LOCALE: "en"
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
+      # Issue #1063 credits banner: lets the chat backend read the signed-in
+      # user's tenant balance from control-plane behind its internal token.
+      # Unset CONTROL_PLANE_INTERNAL_TOKEN (the Hive Enterprise posture) leaves
+      # the endpoint answering 404 and no banner rendering; silent absence is
+      # the intended gate, not a bug.
+      HIVE_CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control-plane:8081}
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-hive-local-internal-token}
       # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
       # edge-api OWUI unwrap middleware only fires when this value matches
       # exactly; an empty/unset value disables the middleware and OWUI

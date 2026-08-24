@@ -103,6 +103,9 @@
 
 	import Banner from '../common/Banner.svelte';
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
+	// hive (#1063): remaining-credits pill above the composer; self-fetching,
+	// renders nothing when the balance is unavailable.
+	import CreditsBanner from '$lib/hive/CreditsBanner.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -3285,6 +3288,8 @@
 								</div>
 							{:else}
 								<div class=" pb-2 {dragged ? 'z-0' : 'z-10'}">
+									<!-- hive (#1063): credits pill above the composer -->
+									<CreditsBanner />
 									<MessageInput
 										bind:this={messageInput}
 										{history}
