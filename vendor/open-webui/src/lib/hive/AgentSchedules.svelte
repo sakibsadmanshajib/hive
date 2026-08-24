@@ -1,6 +1,6 @@
 <script lang="ts">
 	/*
-	 * Scheduled agent tasks ("routines") panel, first slice.
+	 * Scheduled agent tasks ("routines") surface.
 	 *
 	 * The backend (control-plane scheduler + edge-api CRUD) is real and tested;
 	 * what is missing is the credential bridge. hive_agent_proxy.py forwards
@@ -8,6 +8,10 @@
 	 * /v1/agent/schedules from the browser yet. Until that bridge wave lands,
 	 * everything renders behind SCHEDULES_BRIDGE_READY=false with an explicit
 	 * notice, per the slice brief's "say so plainly" requirement.
+	 *
+	 * Empty state follows the Claude reference grammar (D-045): title, one
+	 * line explainer, New button. New opens the existing #1081 create form;
+	 * it never opens a templates gallery.
 	 */
 	import { getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
@@ -19,6 +23,7 @@
 		validateScheduleInput,
 		type AgentSchedule
 	} from './agentSchedules';
+	import ShellNavIcon from './ShellNavIcon.svelte';
 
 	const i18n: any = getContext('i18n');
 
@@ -28,6 +33,7 @@
 	let cadence = 'daily';
 	let busy = false;
 	let pendingDelete: AgentSchedule | null = null;
+	let createOpen = false;
 
 	async function load() {
 		try {
@@ -39,6 +45,14 @@
 			toast.error($i18n.t('Could not load schedules'));
 			console.log('agent schedules load failed', e);
 		}
+	}
+
+	function openCreate() {
+		if (!SCHEDULES_BRIDGE_READY) {
+			toast.error($i18n.t('Scheduling is not available on this deployment yet'));
+			return;
+		}
+		createOpen = true;
 	}
 
 	async function create() {
@@ -56,7 +70,8 @@
 			});
 			if (!res.ok) throw new Error(String(res.status));
 			name = '';
-				instructions = '';
+			instructions = '';
+			createOpen = false;
 			await load();
 		} catch {
 			toast.error($i18n.t('Could not create schedule'));
@@ -124,26 +139,21 @@
 <svelte:window on:keydown={(e) => pendingDelete && e.key === 'Escape' && (pendingDelete = null)} />
 
 <div class="hv-panel flex flex-col w-full h-screen max-h-[100dvh] max-w-full">
-	<div class="px-6 py-4 border-b border-gray-100 dark:border-gray-850">
-		<h2 class="text-lg font-medium">Scheduled tasks</h2>
+	<div class="px-6 py-4 border-b border-gray-100 dark:border-gray-850 flex items-center justify-between gap-3">
+		<h2 class="text-lg font-medium">{$i18n.t('Scheduled')}</h2>
+		<!-- Lives in the header, not only in the empty state: once one schedule
+			 exists the empty state is gone and this stays the only path to a
+			 second one. -->
+		<button class="px-3 py-1.5 text-sm rounded-full bg-black text-white dark:bg-white dark:text-black flex-none" on:click={openCreate}>
+			{$i18n.t('New')}
+		</button>
 	</div>
 
-	{#if !SCHEDULES_BRIDGE_READY}
-		<div class="flex-1 flex items-center items-center justify-center px-6">
-			<div class="max-w-md text-center space-y-2 text-sm text-gray-500 dark:text-gray-400">
-				<p class="font-medium text-gray-700 dark:text-gray-300">Not available yet</p>
-				<p>
-					Scheduled task management has not been bridged into the chat backend on this
-					deployment yet. The scheduling engine runs server side; this panel lights up once its
-					routes are reachable from here.
-				</p>
-			</div>
-		</div>
-	{:else}
-		<div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-			<!-- Create form -->
+	{#if SCHEDULES_BRIDGE_READY && createOpen}
+		<!-- Create form, revealed by New; hidden again once a schedule lands -->
+		<div class="px-6 pt-4">
 			<div class="rounded-xl border border-gray-100 dark:border-gray-850 p-4 space-y-3">
-				<input class="w-full rounded-lg px-3 py-2 text-sm bg-transparent border border-gray-200 dark:border-gray-800" bind:value={name} placeholder="Name" />
+				<input class="w-full rounded-lg px-3 py-2 text-sm bg-transparent border border-gray-200 dark:border-gray-800" bind:value={name} placeholder={$i18n.t('Name')} />
 				<textarea rows="4" class="w-full rounded-lg px-3 py-2 text-sm bg-transparent border border-gray-200 dark:border-gray-800" bind:value={instructions} placeholder={$i18n.t('Instructions (these become the prompt each run)')} />
 				<select class="w-full rounded-lg px-3 py-2 text-sm bg-transparent border border-gray-200 dark:border-gray-800" bind:value={cadence}>
 					<option value="daily">Daily</option>
@@ -151,11 +161,40 @@
 					<option value="interval:1">Every hour</option>
 					<option value="interval:6">Every 6 hours</option>
 				</select>
-				<button disabled={busy} class="px-3 py-1.5 text-sm rounded-lg bg-black text-white dark:bg-white dark:text-black" on:click={create}>
-					{$i18n.t('Create schedule')}
-				</button>
+				<div class="flex gap-2">
+					<button disabled={busy} class="px-3 py-1.5 text-sm rounded-full bg-black text-white dark:bg-white dark:text-black" on:click={create}>
+						{$i18n.t('Create schedule')}
+					</button>
+					<button disabled={busy} class="px-3 py-1.5 text-sm rounded-full border border-gray-200 dark:border-gray-800" on:click={() => (createOpen = false)}>
+						{$i18n.t('Cancel')}
+					</button>
+				</div>
 			</div>
+		</div>
+	{/if}
 
+	{#if schedules.length === 0}
+		<div class="flex-1 flex items-center justify-center px-6 pb-16">
+			<div class="max-w-md text-center space-y-3">
+				<ShellNavIcon name="scheduled" className="w-8 h-8 mx-auto text-gray-400 dark:text-gray-600" />
+				<h3 class="text-lg font-medium text-gray-800 dark:text-gray-200">{$i18n.t('Scheduled')}</h3>
+				<p class="text-sm text-gray-500 dark:text-gray-400">{$i18n.t('Templated runs kicked off on schedule.')}</p>
+				<div>
+					<button class="px-4 py-1.5 text-sm rounded-full bg-black text-white dark:bg-white dark:text-black" on:click={openCreate}>
+						{$i18n.t('New')}
+					</button>
+				</div>
+				{#if !SCHEDULES_BRIDGE_READY}
+					<p class="text-xs text-gray-400 dark:text-gray-600 pt-2 max-w-sm mx-auto">
+						{$i18n.t(
+							'Not available yet: scheduling runs server side, and lights up here once its routes are bridged into this deployment.'
+						)}
+					</p>
+				{/if}
+			</div>
+		</div>
+	{:else}
+		<div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 			<!-- List -->
 			{#each schedules as s (s.id)}
 				<div class="flex items-start justify-between rounded-xl border border-gray-100 dark:border-gray-850 p-3">
@@ -177,19 +216,19 @@
 				</div>
 			{/each}
 		</div>
+	{/if}
 
-		<!-- Delete confirmation (#866) -->
-		{#if pendingDelete}
-			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-				<div role="dialog" aria-modal="true" class="bg-white dark:bg-gray-900 rounded-xl p-5 max-w-sm space-y-3 mx-4">
-					<p class="font-medium">Delete "{pendingDelete.name}"?</p>
-					<p class="text-sm text-gray-500">Future runs stop immediately. Already created tasks stay.</p>
-					<div class="flex justify-end gap-2">
-						<button class="px-3 py-1.5 text-sm rounded-lg border" on:click={() => (pendingDelete = null)}>Cancel</button>
-						<button class="px-3 py-1.5 text-sm rounded-lg bg-red-600 text-white" on:click={doDelete}>Delete</button>
-					</div>
+	<!-- Delete confirmation (#866) -->
+	{#if pendingDelete}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+			<div role="dialog" aria-modal="true" class="bg-white dark:bg-gray-900 rounded-xl p-5 max-w-sm space-y-3 mx-4">
+				<p class="font-medium">Delete "{pendingDelete.name}"?</p>
+				<p class="text-sm text-gray-500">Future runs stop immediately. Already created tasks stay.</p>
+				<div class="flex justify-end gap-2">
+					<button class="px-3 py-1.5 text-sm rounded-lg border" on:click={() => (pendingDelete = null)}>Cancel</button>
+					<button class="px-3 py-1.5 text-sm rounded-lg bg-red-600 text-white" on:click={doDelete}>Delete</button>
 				</div>
 			</div>
-		{/if}
+		</div>
 	{/if}
 </div>

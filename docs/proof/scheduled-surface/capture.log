@@ -1,0 +1,11 @@
+target http://127.0.0.1:8123 (throwaway container schedproof-owui, image hive-open-webui:scheduled-proof built from this branch at 2f9aa197e, WEBUI_AUTH=False, OFFLINE_MODE=True, no provider keys)
+theme=light sidebar=expanded (localStorage seeded before boot)
+nav row label="Scheduled" href=/schedules (sidebar order on this branch: Agents, Knowledge, Scheduled; Projects and Artifacts land from their own builder branch)
+captured 01-sidebar-scheduled-row.png
+navigated to /schedules
+page title="Scheduled • Hive" heading="Scheduled" new_buttons=2 (panel header + empty state)
+explainer visible: "Templated runs kicked off on schedule."
+not-bridged notice visible: "Not available yet: scheduling runs server side, and lights up here once its routes are bridged into this deployment."
+sidebar Scheduled row active-highlighted on /schedules; Agents and Knowledge rows not lit
+captured 02-schedules-empty-state.png
+console_errors=0

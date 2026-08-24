@@ -38,5 +38,9 @@
 		<path
 			d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
 		/>
+	{:else if name === 'scheduled'}
+		<!-- Lucide "clock", same 24 grid and stroke as the other two glyphs. -->
+		<circle cx="12" cy="12" r="10" />
+		<polyline points="12 6 12 12 16 14" />
 	{/if}
 </svg>

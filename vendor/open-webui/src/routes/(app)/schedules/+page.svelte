@@ -1,10 +1,8 @@
 <script lang="ts">
 	/*
-	 * Scheduled tasks route, first slice.
-	 *
-	 * Its own route file per the slice brief: nav.ts is untouched, a later
-	 * wave owns adding the nav row. The panel is the same hv-panel shell the
-	 * agents page uses.
+	 * Scheduled route, the surface behind the Scheduled nav row (D-045
+	 * sidebar grammar). Top-level destination rather than /agents/schedules,
+	 * so the Agents row's /agents prefix never lights up beside it.
 	 */
 	import { getContext } from 'svelte';
 	import { WEBUI_NAME, showSidebar, mobile } from '$lib/stores';
@@ -17,9 +15,7 @@
 </script>
 
 <svelte:head>
-	<title>
-		{$i18n.t('Scheduled')} {$i18n.t('Tasks')} • {$WEBUI_NAME}
-	</title>
+	<title>{$i18n.t('Scheduled')} • {$WEBUI_NAME}</title>
 </svelte:head>
 
 <div
