@@ -96,6 +96,12 @@ RAG_CONFIG_ENV = {
     # and the database has outranked the environment ever since. Setting the
     # compose variable alone would have been another silent no-op.
     "ui.enable_login_form": "ENABLE_LOGIN_FORM",
+    # Added 2026-08-24 for web search in chat. The engine is a string key, so
+    # it rides the string dict: a blank WEB_SEARCH_ENGINE (what compose
+    # resolves on the enterprise profile and local dev, where the feature is
+    # off) yields no entry and never clobbers a persisted engine, while the
+    # demo's workflow env supplies "duckduckgo".
+    "web.search.engine": "WEB_SEARCH_ENGINE",
 }
 
 # Same idea, boolean-valued.
@@ -135,6 +141,22 @@ FEATURE_CONFIG_ENV = {
     # unambiguously SSO only, so this flag turns the behaviour on rather than
     # forcing it.
     "oauth.auto_redirect": "OAUTH_AUTO_REDIRECT",
+    # Added 2026-08-24 for web search in chat. Same first-boot-wins trap,
+    # confirmed against the demo box's own database before writing this: the
+    # box's config table has carried web.search.enable = false (and an empty
+    # engine) since its first boot, so the compose passthrough from #414 and
+    # the workflow-env flip in deploy-demo-box.yml would both have been silent
+    # no-ops in production. These three follow the container environment for
+    # the same reason the product-surface flags above do: the deployment's
+    # posture (search on or off, which engine) is a deployment decision, not
+    # an Open WebUI admin setting. The demo turns search on via workflow env;
+    # the enterprise profile keeps its compose defaults off, and its opt-in
+    # ruling stands.
+    "web.search.enable": "ENABLE_WEB_SEARCH",
+    "web.search.bypass_web_loader": "BYPASS_WEB_SEARCH_WEB_LOADER",
+    "web.search.bypass_embedding_and_retrieval": (
+        "BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL"
+    ),
 }
 
 # Keys Open WebUI stores as a JSON boolean rather than a string. The value has

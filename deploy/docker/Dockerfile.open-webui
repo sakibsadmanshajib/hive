@@ -214,6 +214,11 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
     && grep -q 'hive: reconciled Open WebUI config from env' /app/backend/open_webui/config.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/config.py').read_text())"
 
+COPY deploy/docker/owui-patches/apply_web_search_ratelimit_patch.py /tmp/apply_web_search_ratelimit_patch.py
+RUN python3 /tmp/apply_web_search_ratelimit_patch.py \
+    && grep -q 'a rate limit is an error, not an empty result set' /app/backend/open_webui/retrieval/web/duckduckgo.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/web/duckduckgo.py').read_text())"
+
 # #772: remove the stock Open WebUI surfaces that have no Hive counterpart --
 # Workspace > Models (a second, instance-wide model registry that duplicates
 # the Hive catalog), Workspace > Prompts, Workspace > Tools, the Playground,

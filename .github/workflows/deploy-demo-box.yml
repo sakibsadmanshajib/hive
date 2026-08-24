@@ -159,6 +159,20 @@ env:
     --profile chat
     --profile monitoring
     --profile selfhost
+  # Web search in chat, enabled for this deployment only. The compose
+  # passthrough (deploy/docker/docker-compose.yml open-webui service) keeps its
+  # opt-in defaults off because that file is shared with the enterprise
+  # profile, which must not silently inherit live outbound search calls; the
+  # box's own .env is untracked, so this workflow is the versioned place where
+  # the demo deployment turns the feature on. Shell env overrides --env-file
+  # during interpolation, so these four values win over anything the box's
+  # .env carries for them. duckduckgo needs no API key or account signup.
+  # Both bypass flags keep search snippet-only, decoupled from the RAG
+  # embedding path.
+  ENABLE_WEB_SEARCH: "true"
+  WEB_SEARCH_ENGINE: "duckduckgo"
+  BYPASS_WEB_SEARCH_WEB_LOADER: "true"
+  BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: "true"
 
 jobs:
   # ------------------------------------------------------------------
