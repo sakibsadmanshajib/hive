@@ -12,7 +12,8 @@
     "members": "সদস্য",
     "settings": "সেটিংস",
     "featureGates": "ফিচার গেট",
-    "marketplace": "মার্কেটপ্লেস"
+    "marketplace": "মার্কেটপ্লেস",
+    "providers": "প্রোভাইডার"
   },
   "Shell": {
     "workspace": "ওয়ার্কস্পেস",

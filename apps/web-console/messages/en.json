@@ -12,7 +12,8 @@
     "members": "Members",
     "settings": "Settings",
     "featureGates": "Feature gates",
-    "marketplace": "Marketplace"
+    "marketplace": "Marketplace",
+    "providers": "Providers"
   },
   "Shell": {
     "workspace": "Workspace",

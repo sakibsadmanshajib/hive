@@ -15,6 +15,7 @@ import type {
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
 import { AnalyticsControls } from "@/components/analytics/analytics-controls";
+import { ObservabilityTiles } from "@/components/analytics/observability-tiles";
 import { AnalyticsTable } from "@/components/analytics/analytics-table";
 import { ErrorChart } from "@/components/analytics/error-chart";
 import { SpendChart } from "@/components/analytics/spend-chart";
@@ -194,6 +195,10 @@ export default async function AnalyticsPage({
         currentWindow={timeWindow}
         activeTab={activeTab}
       />
+
+      <div className="mt-6">
+        <ObservabilityTiles />
+      </div>
 
       {fetchError ? (
         <div

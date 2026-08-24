@@ -943,6 +943,154 @@ export async function setMarketplaceEntryEnabled(
   return { id: outId, enabled: outEnabled };
 }
 
+// CustomProvider is one row of the platform provider registry (PR #199 era,
+// public.custom_providers). The backend model has no endpoint-type concept
+// (no azure/bedrock/vertex shapes): a provider is an OpenAI-compatible base
+// URL plus the NAME of the env var that carries its key (the secret itself is
+// provisioned in the environment, never stored or returned). The UI renders
+// exactly these fields and nothing invented on top of them.
+export interface CustomProvider {
+  id: string;
+  slug: string;
+  display_name: string;
+  base_url: string;
+  api_key_env: string;
+  litellm_prefix: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertProviderInput {
+  slug: string;
+  display_name: string;
+  base_url: string;
+  api_key_env: string;
+  litellm_prefix: string;
+  enabled: boolean;
+}
+
+function decodeProvider(value: JsonValue | null): CustomProvider | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const id = readStringField(value, "id");
+  const slug = readStringField(value, "slug");
+  const apiKeyEnv = readStringField(value, "api_key_env");
+  const enabled = readBooleanField(value, "enabled");
+  const createdAt = readStringField(value, "created_at");
+  const updatedAt = readStringField(value, "updated_at");
+  // display_name, base_url and litellm_prefix are optional upstream (the
+  // service validates only slug + api_key_env), so an absent key decodes to "".
+  const displayName = readStringField(value, "display_name") ?? "";
+  const baseUrl = readStringField(value, "base_url") ?? "";
+  const litellmPrefix = readStringField(value, "litellm_prefix") ?? "";
+  if (
+    id === null ||
+    slug === null ||
+    apiKeyEnv === null ||
+    enabled === null ||
+    createdAt === null ||
+    updatedAt === null
+  ) {
+    return null;
+  }
+  return {
+    id,
+    slug,
+    display_name: displayName,
+    base_url: baseUrl,
+    api_key_env: apiKeyEnv,
+    litellm_prefix: litellmPrefix,
+    enabled,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+// getProviders lists every registered custom provider. Server-only; the
+// control-plane gates /api/v1/admin/providers on the platform administrator
+// and returns 403 otherwise, surfaced as a ControlPlaneError so the caller can
+// render an access state.
+export async function getProviders(): Promise<CustomProvider[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/admin/providers`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to load providers");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!Array.isArray(payload)) {
+    throw new Error("Failed to parse providers response");
+  }
+
+  const providers: CustomProvider[] = [];
+  for (const item of payload) {
+    const decoded = decodeProvider(item);
+    if (!decoded) {
+      throw new Error("Failed to parse providers response");
+    }
+    providers.push(decoded);
+  }
+  return providers;
+}
+
+export async function createProvider(
+  input: UpsertProviderInput,
+): Promise<CustomProvider> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/admin/providers`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to create provider");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  const decoded = decodeProvider(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse provider response");
+  }
+  return decoded;
+}
+
+// updateProvider replaces the full record: the upstream PUT has no partial
+// update, so callers must echo back every field they do not intend to change.
+export async function updateProvider(
+  id: string,
+  input: UpsertProviderInput,
+): Promise<CustomProvider> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/admin/providers/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify(input),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update provider");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  const decoded = decodeProvider(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse provider response");
+  }
+  return decoded;
+}
+
 export async function getAccountProfile(): Promise<AccountProfile> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/profile`, {
