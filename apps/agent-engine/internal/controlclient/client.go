@@ -198,7 +198,36 @@ type StartConversationRequest struct {
 type AgentSettings struct {
 	AgentKind string      `json:"agent_kind"`
 	LLM       LLMSettings `json:"llm"`
+
+	// Tools optionally names the tool sets the agent should launch with.
+	// Omitted (nil), the sandbox's OpenHandsAgentSettings default applies:
+	// the exec set (terminal, file_editor, task_tracker), no browser. A
+	// non-empty list is used by create_agent exactly as given, so a launch
+	// that wants the browser must repeat the exec names too
+	// (openhands/sdk/tool/defaults.py DEFAULT_EXEC_TOOL_NAMES +
+	// BROWSER_TOOL_NAME). The serving layer still has the last word: on a
+	// runtime where chromium is unusable, conversation_service strips an
+	// unusable browser_tool_set spec instead of letting tool resolution die
+	// at init, degrading to the exec-only set exactly as its profile-path
+	// injection does. Existing tasks that leave this field unset are
+	// unaffected either way.
+	Tools []ToolSpec `json:"tools,omitempty"`
 }
+
+// ToolSpec is one entry of AgentSettings.Tools: a tool-set name from the
+// sandbox's tool registry (openhands/sdk/tool/registry.py), resolved to an
+// implementation only at agent init.
+type ToolSpec struct {
+	Name string `json:"name"`
+}
+
+// DefaultExecToolNames mirrors openhands/sdk/tool/defaults.py's
+// DEFAULT_EXEC_TOOL_NAMES. Any explicit Tools list must carry these, since a
+// non-empty list replaces the default set wholesale.
+var DefaultExecToolNames = []string{"terminal", "file_editor", "task_tracker"}
+
+// BrowserToolName mirrors openhands/sdk/tool/defaults.py's BROWSER_TOOL_NAME.
+const BrowserToolName = "browser_tool_set"
 
 // LLMSettings mirrors the LLM fields (openhands/sdk/llm/llm.py) an
 // OpenAI-compatible gateway needs. Every other field on that model has a

@@ -932,6 +932,38 @@ class ConversationService:
             )
             request = request.model_copy(update={"agent": resolved_agent})
 
+        # HIVE PATCH: mirror the profile-path browser injection in
+        # _resolve_agent_from_profile for the inline agent_settings path. A
+        # client that lists browser_tool_set in agent_settings.tools keeps it
+        # only when this runtime can actually run it; on a runtime without a
+        # usable chromium stack the spec is stripped here instead of being
+        # left to fail tool resolution at agent init, degrading to the
+        # exec-only set exactly as the profile path silently omits the tool
+        # there. A usable runtime is untouched: create_agent already used the
+        # explicit list as given.
+        if request.agent_settings is not None and request.agent is not None:
+            requested = {
+                tool.get("name")
+                for tool in (request.agent_settings.get("tools") or [])
+                if isinstance(tool, dict)
+            }
+            if BROWSER_TOOL_NAME in requested and not is_tool_usable(
+                BROWSER_TOOL_NAME
+            ):
+                request = request.model_copy(
+                    update={
+                        "agent": request.agent.model_copy(
+                            update={
+                                "tools": [
+                                    t
+                                    for t in request.agent.tools
+                                    if t.name != BROWSER_TOOL_NAME
+                                ]
+                            }
+                        )
+                    }
+                )
+
         additions = request.agent_launch_additions
         suffix = (
             additions.system_message_suffix_append.strip()
