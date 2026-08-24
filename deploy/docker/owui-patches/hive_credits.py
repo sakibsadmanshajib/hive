@@ -76,7 +76,9 @@ async def balance(user=Depends(get_verified_user)):
             async with session.post(
                 f'{base}/internal/chat/credits/balance',
                 json={'email': email},
-                headers={'Authorization': f'Bearer {token}'},
+                # RequireInternalToken reads X-Internal-Token
+                # (platform/http/internalauth.go), not a bearer header.
+                headers={'X-Internal-Token': token},
             ) as response:
                 if response.status != 200:
                     # One server-side line, no email in it. The browser stays
