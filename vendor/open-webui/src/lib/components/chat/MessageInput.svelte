@@ -631,6 +631,22 @@
 			return null;
 		}
 
+		// Enforce the configured size cap here rather than only in
+		// inputFilesHandler (#1108): large pasted text and drag-dropped files
+		// reach this handler directly, skipping that guard, and an oversized
+		// attachment used to land as a chip that could never send.
+		if (
+			($config?.file?.max_size ?? null) !== null &&
+			file.size > ($config?.file?.max_size ?? 0) * 1024 * 1024
+		) {
+			toast.error(
+				$i18n.t(`File size should not exceed {{maxSize}} MB.`, {
+					maxSize: $config?.file?.max_size
+				})
+			);
+			return null;
+		}
+
 		const tempItemId = uuidv4();
 		const fileItem = {
 			type: 'file',

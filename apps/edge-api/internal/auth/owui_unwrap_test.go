@@ -297,12 +297,52 @@ func TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects(t *testing.T) {
 func TestOWUIUnwrap_OverLimitBody_413(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, _ := newCaptureHandler()
-	big := bytes.Repeat([]byte("a"), (2<<20)+10) // 2 MiB + 10
+	big := bytes.Repeat([]byte("a"), (16<<20)+10) // 16 MiB + 10
 	req := wrap(t, big, "Bearer "+testShimKey)
 	rr := httptest.NewRecorder()
 	mw(next).ServeHTTP(rr, req)
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rr.Code)
+	}
+}
+
+// A chat body carrying inlined attachment text (#1108) is legitimately
+// multiple MiB. Just under the new cap it must flow through with the
+// per-user token still unwrapped from __metadata.
+func TestOWUIUnwrap_LargeInlinedBodyWithinCap_Unwraps(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	filler := string(bytes.Repeat([]byte("a"), (12<<20)-1024))
+	raw := `{"model":"hive-default","messages":[{"role":"user","content":"` + filler + `"}],"__metadata":{"upstream_auth":"user-jwt"}}`
+	req := wrap(t, []byte(raw), "Bearer "+testShimKey)
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rr.Code, rr.Body.String())
+	}
+	if captured.authorization != "Bearer user-jwt" {
+		t.Fatalf("expected per-user token on a ~12 MiB body, got %q", captured.authorization)
+	}
+}
+
+// A declared oversize Content-Length is refused before the body is read,
+// so the client learns immediately instead of uploading megabytes into a
+// request that was already doomed (#1108 silent-hang shape).
+func TestOWUIUnwrap_ContentLengthOverLimit_RejectedWithoutReading(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	body := strings.NewReader(`{"model":"hive-default"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Authorization", "Bearer "+testShimKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = (16 << 20) + 1
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", rr.Code)
+	}
+	if captured.authorization != "" {
+		t.Fatalf("handler must not run, got authorization %q", captured.authorization)
 	}
 }
 

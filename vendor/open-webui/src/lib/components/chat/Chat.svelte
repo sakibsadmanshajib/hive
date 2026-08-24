@@ -654,6 +654,18 @@
 					}, 100);
 				} else if (type === 'chat:message:error') {
 					message.error = data.error;
+					// A completion failure must be visible even when the failing
+					// message is scrolled off-screen (#1108): state alone read
+					// as a silently no-op send.
+					const errorContent =
+						data?.error?.content ?? data?.error?.message ?? data?.error ?? '';
+					if (errorContent) {
+						toast.error(
+							typeof errorContent === 'string'
+								? errorContent
+								: JSON.stringify(errorContent)
+						);
+					}
 				} else if (type === 'chat:message:follow_ups') {
 					message.followUps = data.follow_ups;
 
