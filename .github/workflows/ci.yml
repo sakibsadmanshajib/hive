@@ -1058,8 +1058,14 @@ jobs:
       # load-balanced pool of our own free provider keys, not on a paid tier or
       # on whichever single provider happens to serve the demo today.
       HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'hive-free' }}
+      # Capability-specific tests (tools, response_format) in the JS
+      # chat-completions suite cannot run on hive-free: its pool members are
+      # seeded tools_supported=false until cross-member parity is probed
+      # (#1115), so they point at a tools-capable alias instead (run
+      # 32736430913). Same override pattern as above.
+      HIVE_TOOLS_MODEL: ${{ vars.CI_LIVE_INTEGRATION_TOOLS_MODEL || 'deepseek-v4-flash' }}
       # The suites' own default, named here rather than left implicit, because
-      # the spend meter below asserts that no alias outside these two is ever
+      # the spend meter below asserts that no alias outside these is ever
       # billed by this job.
       HIVE_EMBEDDING_MODEL: hive-embedding-default
       # Nothing reads this. It is passed only because docker-compose.yml
@@ -1109,6 +1115,7 @@ jobs:
           set -euo pipefail
           echo "SDK suites will call alias: $HIVE_TEST_MODEL"
           echo "embedding suites will call: $HIVE_EMBEDDING_MODEL"
+          echo "capability tests will call: $HIVE_TOOLS_MODEL"
           if [ "$HIVE_TEST_MODEL" = "hive-free" ]; then
             echo "::notice::this run bills hive-free, the load-balanced pool of our own free provider keys. No customer-facing provider allowance is consumed. Pool-specific routing regressions (failover between keys) are covered only against the live box; a single-provider regression on any one pool member can still hide behind the other members."
           else
@@ -1448,10 +1455,12 @@ jobs:
             exit 1
           fi
 
-          # The alias assertion. Only two aliases can legitimately appear: the
-          # chat/completions/responses suites use HIVE_TEST_MODEL and the
-          # embedding suites use HIVE_EMBEDDING_MODEL. Anything else means the
-          # value this workflow sets is not the value being billed.
+          # The alias assertion. Only three aliases can legitimately appear:
+          # chat/completions/responses suites use HIVE_TEST_MODEL, capability
+          # tests use HIVE_TOOLS_MODEL (a tools-capable alias, since hive-free
+          # correctly refuses tools/response_format), and the embedding suites
+          # use HIVE_EMBEDDING_MODEL. Anything else means the value this
+          # workflow sets is not the value being billed.
           #
           # The query's own failure is checked, not just its result: a psql
           # error returns an EMPTY string here, which reads exactly like "no
@@ -1460,12 +1469,12 @@ jobs:
           if ! unexpected=$(q "select string_agg(distinct model_alias, ', ')
                                  from public.usage_events
                                 where event_type = 'completed'
-                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_EMBEDDING_MODEL}')"); then
+                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_TOOLS_MODEL}', '${HIVE_EMBEDDING_MODEL}')"); then
             echo "::error::the alias assertion query failed, so this run's billed alias is unverified"
             exit 1
           fi
           if [ -n "$unexpected" ]; then
-            echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}') or HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
+            echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}'), HIVE_TOOLS_MODEL ('${HIVE_TOOLS_MODEL}') or HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
             exit 1
           fi
 

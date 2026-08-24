@@ -4,6 +4,16 @@ import OpenAI from "openai";
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
+// Capability-specific tests (tools, response_format) need an alias whose
+// routes are seeded tools_supported=true. hive-free is the free pool of our
+// own keys with tools_supported=false on every member until cross-member
+// parity is probed (#1115), so the edge correctly 400s those parameters there
+// instead of silently dropping them (run 32736430913). deepseek-v4-flash's
+// source route has verified tool support, so capability coverage points there.
+// HIVE_TOOLS_MODEL exists so a deployment can repoint the tests without
+// editing them; the compose service forwards it like HIVE_TEST_MODEL.
+const TOOL_CAPABLE_MODEL =
+  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
 
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
@@ -49,11 +59,11 @@ describe("Chat Completions", () => {
   });
 
   it("passes tools through and returns a tool_calls completion", async () => {
-    // Phase 20 (#118): capability-based passthrough ships. Capable routes
-    // (openrouter, groq) have tools_supported=true seeded, so tool calls are
-    // forwarded rather than rejected. The edge must NOT 400 on tools.
+    // Phase 20 (#118): capability-based passthrough ships. Routes with
+    // tools_supported=true seeded have tool calls forwarded rather than
+    // rejected; the edge must NOT 400 on tools for a capable alias.
     const response = await client.chat.completions.create({
-      model: MODEL,
+      model: TOOL_CAPABLE_MODEL,
       messages: [
         { role: "user", content: "What is the weather like in London?" },
       ],
@@ -95,9 +105,13 @@ describe("Chat Completions", () => {
 
   it("passes response_format through and returns valid JSON", async () => {
     // Phase 20 (#118): response_format forwarded to capable routes.
-    // The edge must NOT 400 on response_format; content must be parseable JSON.
+    // The edge must NOT 400 on response_format for a capable alias. The
+    // assertions below are the OpenAI contract and stay strict: content is
+    // typed as string on the wire, so an alias whose provider returns it as a
+    // raw object fails here by design (do not loosen this to fit one route).
+    // If the default TOOL_CAPABLE_MODEL regresses, repoint HIVE_TOOLS_MODEL.
     const response = await client.chat.completions.create({
-      model: MODEL,
+      model: TOOL_CAPABLE_MODEL,
       messages: [
         {
           role: "user",
