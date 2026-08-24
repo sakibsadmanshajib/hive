@@ -17,7 +17,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Hive Platform observability — API health, upstream providers, billing, and rate-limit events",
+  "description": "Hive Overview: service/container health, request rate, error rate, p95 latency. Every query targets a metric verified present on this stack (hive_http_*, process_*, up). Credits consumed and active sessions are not yet exported as Prometheus metrics, so they have no panel here until instrumentation adds them.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -28,7 +28,84 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 1,
-      "title": "API Health & Latency",
+      "title": "Service Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "options": {
+                "0": { "color": "red", "index": 1, "text": "DOWN" },
+                "1": { "color": "green", "index": 0, "text": "UP" }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "max by (job) (up)",
+          "legendFormat": "{{ job }}",
+          "refId": "A"
+        }
+      ],
+      "title": "Service Status",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 16, "x": 8, "y": 1 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes{job=~\"control-plane|edge-api|alertmanager|prometheus\"}",
+          "legendFormat": "{{ job }} RSS",
+          "refId": "A"
+        }
+      ],
+      "title": "Process Memory (RSS)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 10,
+      "title": "API Traffic & Latency",
       "type": "row"
     },
     {
@@ -36,12 +113,13 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "reqps"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
-      "id": 2,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 7 },
+      "id": 11,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom" },
         "tooltip": { "mode": "single" }
@@ -75,8 +153,8 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
-      "id": 3,
+      "gridPos": { "h": 8, "w": 6, "x": 8, "y": 7 },
+      "id": 12,
       "options": {
         "orientation": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -98,218 +176,41 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
           "unit": "s"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
-      "id": 4,
+      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 7 },
+      "id": 13,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom" },
         "tooltip": { "mode": "multi" }
       },
       "targets": [
-        {
-          "expr": "histogram_quantile(0.50, sum(rate(hive_http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p50",
-          "refId": "A"
-        },
         {
           "expr": "histogram_quantile(0.95, sum(rate(hive_http_request_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(hive_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
           "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(hive_http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p99",
-          "refId": "C"
         }
       ],
-      "title": "Latency p50 / p95 / p99",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
-      "id": 10,
-      "title": "Upstream Provider Status",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
-      "id": 11,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(hive_upstream_requests_total[5m])) by (provider, status)",
-          "legendFormat": "{{ provider }} / {{ status }}",
-          "refId": "A"
-        }
-      ],
-      "title": "Provider Request Rate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
-      "id": 12,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(hive_upstream_request_duration_seconds_bucket[5m])) by (provider, le))",
-          "legendFormat": "{{ provider }} p95",
-          "refId": "A"
-        }
-      ],
-      "title": "Provider Latency p95",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
-      "id": 20,
-      "title": "Billing & Payment Events",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
-      "id": 21,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(hive_payment_events_total[5m])) by (rail, status)",
-          "legendFormat": "{{ rail }} / {{ status }}",
-          "refId": "A"
-        }
-      ],
-      "title": "Payment Events",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
-      "id": 22,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(hive_ledger_postings_total[5m])) by (entry_type)",
-          "legendFormat": "{{ entry_type }}",
-          "refId": "A"
-        }
-      ],
-      "title": "Ledger Postings",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
-      "id": 30,
-      "title": "Rate Limit & Auth Events",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
-      "id": 31,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(hive_rate_limit_hits_total[5m])) by (tier)",
-          "legendFormat": "{{ tier }}",
-          "refId": "A"
-        }
-      ],
-      "title": "Rate Limit Hits",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
-      "id": 32,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(hive_auth_failures_total[5m])) by (reason)",
-          "legendFormat": "{{ reason }}",
-          "refId": "A"
-        }
-      ],
-      "title": "Auth Failures",
+      "title": "Latency p95 / p50",
       "type": "timeseries"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 38,
-  "tags": ["hive", "platform"],
+  "tags": ["hive", "overview"],
   "templating": { "list": [] },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Hive Platform Overview",
+  "title": "Hive Overview",
   "uid": "hive-platform-overview",
-  "version": 1
+  "version": 2
 }
