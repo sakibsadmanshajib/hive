@@ -79,9 +79,14 @@ comment on index public.idx_credit_ledger_entries_account_type_cover is
 -- Partial on entry_type = 'usage_charge' because that is the only entry type
 -- this shape (and the per-account aggregate variant of it) ever filters on.
 --
--- Benchmark (same data, throwaway Postgres 16): 100.2 ms -> 2.4 ms.
+-- INCLUDE (account_id) so ListActiveWorkspaces is an index-only scan rather
+-- than a heap fetch per usage_charge just to read the account column; that
+-- heap fetch would dominate again once the ledger reaches millions of rows.
+--
+-- Benchmark (same data, throwaway Postgres 16): 100.2 ms -> 1.3 ms
+-- (Index Only Scan).
 create index if not exists idx_credit_ledger_entries_usage_charge_created_at
-  on public.credit_ledger_entries (created_at)
+  on public.credit_ledger_entries (created_at) include (account_id)
   where entry_type = 'usage_charge';
 
 comment on index public.idx_credit_ledger_entries_usage_charge_created_at is
