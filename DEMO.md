@@ -1,147 +1,75 @@
-# Hive Enterprise Demo Guide
+# Hive demo guide
 
-Operational guide for bringing up and demonstrating **Hive Enterprise**: the customer-hosted, data-sovereign, OpenAI-compatible AI gateway (Go control-plane + edge-api, Next.js web-console, Open WebUI chat, agent-engine Apptainer sandbox, Tauri desktop). One org equals one tenant, departments via RBAC.
+One page for bringing up and presenting the Hive demo. Audience: BD prospects and Enterprise buyers, presented by the owner, five concurrent users max on the box. Companions in the project vault: the Claude parity audit (`session-2026-08-24-claude-parity-audit.md`) and the walkthrough script (`walkthrough-demo-2026-08-24.md`).
 
-## Bring-up (enterprise profile)
+## Live surfaces
 
-The enterprise profile is the self-hosted single box: core services, in-stack Redis, Open WebUI, Caddy for OWUI, and Caddy for artifacts.
-
-```bash
-# 1. Latest + env
-git checkout main && git pull origin main
-cp .env.example .env
-# Fill: SUPABASE_* + NEXT_PUBLIC_SUPABASE_*, S3_* (buckets hive-files + hive-images
-# must exist), and at least one of OPENROUTER_API_KEY / GROQ_API_KEY.
-# RAG's embedding model and dimension are admin-selectable (packages/embedmodel)
-# and drive dynamic vector-column provisioning. .env.example already ships a
-# working demo default (qwen3-embedding-8b, MRL-reduced to 1024-dim), and RAG
-# works out of the box once OPENROUTER_API_KEY and LITELLM_MASTER_KEY are set.
-
-# 2. Migrations
-supabase db push        # or apply supabase/migrations/ in order
-
-# 3. Bring up
-cd deploy/docker
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.enterprise.yml \
-  --env-file ../../.env --profile enterprise up --build
-```
-
-Optional local inference: set `OLLAMA_BASE_URL=http://ollama:11434` in `.env` and uncomment the ollama entries in `deploy/litellm/config.yaml`.
-
-### Agent-engine runtime (required for agent/coding surfaces)
-
-The agent-engine runs each session inside an Apptainer SIF built from `deploy/apptainer/agent-engine.def`. It is `linux/amd64` only and cannot be built on WSL2.
-
-Control-plane never execs Apptainer itself. It hands each launch to an unprivileged host launcher over a Unix socket, so the SIF has to sit on the host beside that launcher, not inside a container.
-
-```bash
-# On the host, once per deploy, run from the repository root (the compose step
-# above leaves the shell in deploy/docker). Fetches the CI-built .sif if the
-# host has none, builds the launcher, and restarts its systemd user unit.
-# RUNTIME_DIR defaults to /home/sakib/agent-runtime inside the script, so set
-# it explicitly and reuse the same path in HIVE_AGENT_ENGINE_SOCKET_DIR below.
-cd "$(git rev-parse --show-toplevel)"
-RUNTIME_DIR="$HOME/agent-runtime" \
-HIVE_AGENT_ENGINE_LLM_MODEL=openai/hive-default \
-HIVE_AGENT_ENGINE_LLM_BASE_URL=https://api-hive.scubed.co/v1 \
-HIVE_AGENT_ENGINE_LLM_API_KEY=REPLACE_WITH_GATEWAY_KEY \
-CONTROL_PLANE_INTERNAL_TOKEN=REPLACE_WITH_INTERNAL_TOKEN \
-  bash scripts/install-agent-engine-host.sh
-```
-
-Then point control-plane at the socket in `.env`. A dotenv file does no shell
-expansion, so write the same absolute path the installer used, with `/run`
-appended (for example `/home/hive/agent-runtime/run`):
-
-```dotenv
-HIVE_AGENT_ENGINE_SOCKET_DIR=/home/REPLACE_WITH_HOST_USER/agent-runtime/run
-HIVE_AGENT_ENGINE_SOCKET=/run/hive-agent/engine.sock
-```
-
-`deploy-demo-box.yml` already does both on every deploy. `HIVE_AGENT_SIF_PATH` is a different variable that gates nothing here: it only feeds the standalone binary's `-sif` default and the compose smoke-test service. Full detail, including the in-process fallback arm and its five variables: `deploy/apptainer/README.md`.
-
-### Verify
-
-| Service | URL | Check |
+| Surface | URL | Role |
 |---|---|---|
-| Edge API | http://localhost:8080/health | 200 |
-| Control Plane | http://localhost:8081/health | 200 |
-| Web Console | http://localhost:3000 | loads |
-| Open WebUI | http://localhost:3003 | loads |
-| Caddy (OWUI proxy) | http://localhost:8090 | loads |
-| Artifacts | via caddy-artifacts | static served |
+| Chat | https://chat-hive.scubed.co | Product shell: chat, voice, code execution, knowledge, artifacts |
+| Console | https://console-hive.scubed.co | Operator and developer surface: API keys, billing, catalog, logs, analytics, members, feature gates, marketplace |
+| API | https://api-hive.scubed.co/v1 | OpenAI-compatible gateway base |
+| Control plane | https://control-hive.scubed.co | Tenant and admin control API |
 
-RAG needs more than a health check, because its failure modes are silent
-(a document lands with `status=error`, or search answers 503, while every
-service still reports healthy). Prove the whole path instead:
+The demo box deploys continuously from main. Anything merged is live minutes later; anything unmerged does not exist on stage.
 
-```bash
-export EDGE_API_URL=http://localhost:8080   # or the deployed edge origin
-python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env,
-                                            # plus RAG_VERIFY_PASSWORD once its
-                                            # member account exists (it will not
-                                            # rotate that account's password)
-```
+## The free pool (hive-free)
 
-It uploads a document with a unique marker, waits for embedding, then requires
-the marker back out of vector search and out of the grounded answer. Prints
-PASS or the first step that could not be proven. Note that the serverless
-embedding route is slow and uneven, so the script retries each step a few
-times and prints every attempt.
+`hive-free` is the free tier serving alias. One alias pinned to a route group of four provider routes that share a single LiteLLM deployment name, so LiteLLM's router balances load across them:
 
-The chat account you will present from needs one more check, because Open WebUI
-keeps "Enter Key Behavior" as a per-user setting and a shared account carries
-whatever the last automated run left on it. With that preference on, Enter
-inserts a newline instead of sending, the send arrow still works, and there is
-no error anywhere on screen (issue #855, found on the demo account on
-2026-08-11).
-
-```bash
-cd apps/web-console
-node scripts/demo-chat-settings.mjs <demo account email>            # exit 1 on drift
-node scripts/demo-chat-settings.mjs <demo account email> --repair   # correct it
-```
-
-Do not present until all are green.
-
-## Demo walkthrough (per surface)
-
-For each surface: what to show, what it proves, and the current limit to narrate around.
-
-- **Control panel** (`/console`): analytics, api-keys (create one live), billing + invoice PDF, catalog + provider manager, feature-gates, MCP marketplace, members + RBAC, budget/spend-alerts. Proves a full on-box operator surface. All wired.
-- **Chat** (Open WebUI, `:3003` or Caddy `:8090`): send a message routing through edge-api to `/v1/*`. Proves chat on the sovereign gateway. Limit: OWUI OIDC login not fully built (#269); use the seeded user.
-- **Cowork / Agents** (agent-console UI or `POST /internal/agent-tasks`): task launches inside the Apptainer sandbox. Proves on-box autonomous agents. Limit: pack routing not wired, always default pack (#311); no public agent API (#382).
-- **Coding agent** (coding-pack via OpenHands): coding task edits/runs code in the sandbox. Proves on-box coding. Limit: no CLI, no GitHub-native tooling (#389).
-- **Desktop app** (Tauri): show the Linux shell launching a sandbox. Proves sandbox hardening (Linux: bwrap + Landlock + seccomp + egress-proxy). **Limit (do not hit live): Linux runs a placeholder `/bin/echo`, not a real agent runtime; Windows launch disabled; authed-session/license handoff incomplete (#310).** Present as "hardening proven, runtime integration in progress."
-- **Connectors / MCP**: local admin-curated marketplace becomes OpenHands `mcpServers` JSON bind-mounted into the SIF. Proves operator-curated tools. Limit: remote/OAuth MCP out of scope (#309); no one-click install (#390).
-- **Policies / RBAC / Settings**: role assignment, policy toggles, sovereign posture. Proves departmental separation in one tenant. Limit: no SSO admin config (#388), no SCIM (#385).
-- **RAG** (`/v1/rag/chat`): ingest a doc, ask a grounded question. Proves retrieval over the customer's own docs. Embedding model and dimension are admin-selectable (`packages/embedmodel`), and the vector column plus HNSW index are provisioned dynamically to match. Demo default: qwen3-embedding-8b MRL-reduced to 1024-dim (`vector(1024)`, HNSW cosine), a native Matryoshka reduction, not truncation. Works with the `.env.example` defaults; no separate setup beyond the standard `OPENROUTER_API_KEY` / `LITELLM_MASTER_KEY` config.
-- **Knowledge** (chat, Workspace > Knowledge): create a collection, upload a document, then attach it to a chat with the `+` menu > Attach Knowledge and ask something only that document answers. Proves grounded answers over the customer's own documents in the chat surface itself, and the answer carries a source citation. This is Open WebUI's own store (pgvector `document_chunk`), which is a different store from the `/v1/rag/chat` API below. Limit: the answer takes roughly 30 seconds because a single gateway embedding call currently costs 7 to 17 seconds (#865), so narrate over the wait rather than hiding it. The empty create form is refused by the browser's own `required` validation, which is correct behaviour and not a broken button (#832).
-- **Voice** (`/v1/audio`): dictate into the chat composer with the microphone. The request goes to the gateway like every other model call, resolves the `hive-stt` alias, and is metered (43 credits for a dictation of ten seconds or less). Bengali works: real Bengali speech comes back in Bengali script. Proves speech-to-text on the same metered path as chat. Limits: below about five seconds of speech the model can guess the wrong language, and a user who dictates short phrases should set their language once under Settings > Audio; the sovereign on-box posture (Parakeet plus faster-whisper, compose `voice` profile) exists but is not what this demo runs, so do not describe the transcription as on-box.
-- **Artifacts** (`/v1/artifacts` + isolated caddy-artifacts): publish a static artifact, open it on the isolated host. Proves isolated static hosting. Limit: no persistent/API/live-data artifacts (#381).
-
-Not built, do not demo: Projects (#380), cross-chat Memory (#172), preset Environments.
-
-## Known limitations
-
-| Area | State | Issue |
+| Member | Upstream | Provider key env var |
 |---|---|---|
-| Projects | not built | #380 |
-| Artifacts (persistent / API / live-data) | static only | #381 |
-| Managed Agents API (public) | not built | #382 |
-| Background / async agents + resume | not built | #383 |
-| Destructive / prompt-injection classifier | not built | #384 |
-| SCIM provisioning | not built | #385 |
-| Audit SIEM / OTEL export | not built | #386 |
-| Compliance API | not built | #387 |
-| SSO admin config | enum-keys only | #388 |
-| GitHub-native coding tools | not built | #389 |
-| One-click MCP install | not built | #390 |
-| OWUI OIDC login | not fully built | #269 |
-| Desktop runtime (real agent) | placeholder/echo, Windows disabled | #310, #312, #319 |
-| Agent pack routing | always default pack | #311 |
-| Remote / OAuth MCP | out of scope | #309 |
+| route-free-pool-free | OpenRouter dots-3-note-preview:free | `OPENROUTER_API_KEY` |
+| route-free-pool-gemini | gemini-flash-latest via Google's OpenAI-compatible endpoint | `GEMINI_API_KEY` |
+| route-free-pool-groq | Groq gpt-oss-20b | `GROQ_API_KEY` |
+| route-free-pool-groq-2 | Groq gpt-oss-20b | `GROQ_API_KEY_2` |
 
-Business/compliance certifications (SOC2, ISO, GDPR, HIPAA) are a separate sovereign track (#219-227).
+Automatic failover: an exhausted or failing key is cooled down by the router (3 failures, 30 second cooldown) and traffic moves to the surviving members, so one dead key never takes the alias down. Every upstream costs nothing; the alias is priced as a service at 0.001 USD input and 0.004 USD output per million tokens.
+
+Two repoints shipped alongside the pool (PR #1115): `hive-auto` is now the real OpenRouter Auto Router billed at actual upstream cost, and `hive-default` moved to deepseek-v4-flash as the paid quality tier with verified tool support. CI and daily automated consumption run on `hive-free`, so testing never spends the demo budget (#1097).
+
+Stated honestly: `hive-free` rejects tool bearing requests at selection time (tools_supported is false until cross member parity is probed). Tools and structured output belong to `hive-default` and `hive-auto`. Reasoning works on the pool.
+
+## The 30 minute script
+
+| Min | Beat | Notes |
+|---|---|---|
+| 0 to 3 | Sign in via OIDC, land on one shell | The OAuth consent round trip works end to end |
+| 3 to 8 | Chat: strong model, Bengali plus English, voice dictation | Streaming works; dictation is metered like every other call; picker labels are still opaque aliases (#941) |
+| 8 to 14 | Retrieval: grounded question over your own document | The chat Knowledge surface is dead today (#1109), so demonstrate `/v1/rag/chat` with curl against api-hive instead |
+| 14 to 20 | Artifacts: generated content opened on its hosted link | The chat artifacts index spins forever (#1110), so fall back to an API published static artifact |
+| 20 to 26 | Developer story: mint an API key in the console, call api-hive with an OpenAI SDK, show usage in analytics | A freshly minted key can 403 on first use outside the fixture account (#798); rehearse with the demo fixture key |
+| 26 to 30 | Money story: prepaid credits, ledger, spend caps | Look only: credits and caps are viewable, live checkout stays off stage while #917 and #928 are open, pre made slide as fallback |
+
+Cowork: the agent service gate now defaults on for every workspace (#1107 closed by PR #1111) and code interpreter genuinely executes inside chat. If a live sandbox launch misbehaves on the day, show the code interpreter beat and move on.
+
+## What works
+
+- Sign in through console OAuth consent into one chat shell
+- Streaming chat including Bengali, voice dictation and read aloud on the metered gateway path (read aloud wired by PR #1079)
+- Code interpreter inside chat: sandboxed execution rendered as inline tool cards
+- Uploads with visible size caps and honest inline errors (#1108 and #1113 fixed)
+- Full console: keys, catalog, logs, analytics, members invites, feature gates, MCP marketplace. Credits are viewable in billing (balance plus ledger); the live top up flow is shown only if #917 and #928 close by demo day, otherwise a pre made slide stands in
+- Free pool with automatic cross provider failover
+- RAG over the API (`/v1/rag/chat`) with admin selectable embedding model and dimension
+
+## Known rough edges (open issues)
+
+- Knowledge nav item dead on chat (#1109)
+- Artifacts index renders an eternal loading shell (#1110)
+- Model picker offers opaque aliases with no purpose subtitles (#941)
+- Sidebar still carries Agents, Knowledge and Folders pending the D-045 rebuild (#944); Scheduled just landed behind its own surface (PR #1118)
+- No credits or usage visibility anywhere in chat (#1063)
+- Freshly console minted keys can 403 on first real use (#798)
+- Streamed turn settlement edge cases make live checkout undemoable (#917, #928)
+- Verification tooling can leave admin grants on the demo account (#752) and conversations accumulate on it (#916)
+
+Not demoable: multi user isolation claims (#947, #948, #949 family), Enterprise sovereignty claims, live checkout.
+
+## T-1 day checklist
+
+1. Confirm deploy-demo-box is green on main and the box serves the merge SHA. Post-deploy verification gates the deploy since PR #1061; presenting against an undeployed main is the classic silent failure.
+2. Confirm the OWUI nightly e2e ran within the last 24 hours; trigger it manually otherwise.
+3. Run `scripts/post-deploy-verify.py` against the box and confirm backend specific health for all four hosts (for chat that means `/api/config` reporting status true with the OIDC provider configured). A bare root HTTP 200 from chat-hive, console-hive, api-hive or control-hive .scubed.co is not readiness evidence.
+4. Clean the demo account: no leftover admin grants (#752), conversations pruned (#916), credits topped up, and the account's Enter key behavior verified with `node apps/web-console/scripts/demo-chat-settings.mjs <demo account email>` (add `--repair` if it drifts).
+5. Confirm last night's backup set verified. Never demo the day backups are red.
