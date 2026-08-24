@@ -13,7 +13,10 @@
 // lives in this package, only the door.
 package engineapi
 
-import "github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/engine"
+import (
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/engine"
+)
 
 type (
 	// Task is engine.Task.
@@ -41,3 +44,9 @@ var ErrUnknownSession = engine.ErrUnknownSession
 func New(cfg Config) *SandboxEngine {
 	return engine.New(cfg)
 }
+
+// Event is engine's normalized sandbox event (controlclient.Event).
+type Event = controlclient.Event
+
+// WorkspaceFile is engine's workspace listing entry.
+type WorkspaceFile = controlclient.WorkspaceFile

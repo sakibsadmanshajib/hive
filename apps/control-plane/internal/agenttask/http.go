@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,16 +88,23 @@ func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleGet(w, r, tenantID, userID, taskID)
 	case 4:
-		if r.Method != http.MethodPost || parts[3] != "cancel" {
-			writeJSON(w, http.StatusNotFound, errBody("not found"))
-			return
-		}
 		taskID, err := uuid.Parse(parts[2])
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errBody("invalid task id"))
 			return
 		}
-		h.handleCancel(w, r, tenantID, userID, taskID)
+		switch {
+		case parts[3] == "cancel" && r.Method == http.MethodPost:
+			h.handleCancel(w, r, tenantID, userID, taskID)
+		case parts[3] == "events" && r.Method == http.MethodGet:
+			h.handleEvents(w, r, tenantID, userID, taskID)
+		case parts[3] == "files" && r.Method == http.MethodGet:
+			h.handleFiles(w, r, tenantID, userID, taskID)
+		case parts[3] == "cancel" || parts[3] == "events" || parts[3] == "files":
+			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		default:
+			writeJSON(w, http.StatusNotFound, errBody("not found"))
+		}
 	default:
 		writeJSON(w, http.StatusNotFound, errBody("not found"))
 	}
@@ -149,12 +157,71 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request, tenantID, us
 }
 
 func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request, tenantID, userID, taskID uuid.UUID) {
-	task, err := h.svc.Cancel(r.Context(), tenantID, userID, taskID)
+	task, callerErr := h.svc.Cancel(r.Context(), tenantID, userID, taskID)
+	if callerErr != nil {
+		writeTaskError(w, callerErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, newTaskWire(task))
+}
+
+// defaultEventsLimit / maxEventsLimit are the cursor read's bounds. The same
+// numbers apply on the customer surface (edge-api caps at 500 too); the cap
+// is a clamp rather than a 400 so a client asking for "everything" gets the
+// newest window instead of an error to special-case.
+const (
+	defaultEventsLimit = 100
+	maxEventsLimit     = 500
+)
+
+// handleEvents serves GET .../{task_id}/events?after_seq=N&limit=M.
+// A non-numeric or negative after_seq is a 400 (ErrCursor), never silently
+// zero — acceptance item 3.
+func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, tenantID, userID, taskID uuid.UUID) {
+	q := r.URL.Query()
+	var afterSeq int64
+	var err error
+	if raw := q.Get("after_seq"); raw != "" {
+		if afterSeq, err = strconv.ParseInt(raw, 10, 64); err != nil || afterSeq < 0 {
+			writeJSON(w, http.StatusBadRequest, errBody(ErrCursor.Error()))
+			return
+		}
+	}
+	limit := defaultEventsLimit
+	if raw := q.Get("limit"); raw != "" {
+		var n int
+		if n, err = strconv.Atoi(raw); err != nil || n < 1 {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid limit"))
+			return
+		}
+		limit = n
+	}
+	if limit > maxEventsLimit {
+		limit = maxEventsLimit
+	}
+	events, err := h.svc.Events(r.Context(), tenantID, userID, taskID, afterSeq, limit)
 	if err != nil {
 		writeTaskError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newTaskWire(task))
+	if events == nil {
+		events = []TaskEvent{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// handleFiles serves GET .../{task_id}/files: the running session's workspace
+// listing, best-effort.
+func (h *Handler) handleFiles(w http.ResponseWriter, r *http.Request, tenantID, userID, taskID uuid.UUID) {
+	files, err := h.svc.Files(r.Context(), tenantID, userID, taskID)
+	if err != nil {
+		writeTaskError(w, err)
+		return
+	}
+	if files == nil {
+		files = []WorkspaceFile{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
 func writeTaskError(w http.ResponseWriter, err error) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -22,6 +23,8 @@ type fakeClient struct {
 	// lastBearerJWT records what handleCreate passed through, so a test can
 	// assert on it without a real control-plane.
 	lastBearerJWT string
+	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
 func newFakeClient() *fakeClient {
@@ -237,27 +240,181 @@ func TestHandleCancel_TerminalStateReturns409(t *testing.T) {
 
 func TestExtractTaskPath_Valid(t *testing.T) {
 	id := uuid.New()
-	gotID, cancel, err := extractTaskPath("/v1/agent/tasks/" + id.String())
-	if err != nil || gotID != id || cancel {
-		t.Errorf("extractTaskPath failed: id=%v cancel=%v err=%v", gotID, cancel, err)
+	gotID, suffix, ok := extractTaskPath("/v1/agent/tasks/" + id.String())
+	if !ok || gotID != id || suffix != "" {
+		t.Errorf("extractTaskPath failed: id=%v suffix=%q ok=%v", gotID, suffix, ok)
 	}
 }
 
 func TestExtractTaskPath_Cancel(t *testing.T) {
 	id := uuid.New()
-	gotID, cancel, err := extractTaskPath("/v1/agent/tasks/" + id.String() + "/cancel")
-	if err != nil || gotID != id || !cancel {
-		t.Errorf("extractTaskPath cancel failed: id=%v cancel=%v err=%v", gotID, cancel, err)
+	gotID, suffix, ok := extractTaskPath("/v1/agent/tasks/" + id.String() + "/cancel")
+	if !ok || gotID != id || suffix != "cancel" {
+		t.Errorf("extractTaskPath cancel failed: id=%v suffix=%q ok=%v", gotID, suffix, ok)
+	}
+}
+
+func TestExtractTaskPath_EventsFilesSuffixes(t *testing.T) {
+	id := uuid.New()
+	for _, want := range []string{"events", "files"} {
+		gotID, suffix, ok := extractTaskPath("/v1/agent/tasks/" + id.String() + "/" + want)
+		if !ok || gotID != id || suffix != want {
+			t.Errorf("%s: id=%v suffix=%q ok=%v", want, gotID, suffix, ok)
+		}
 	}
 }
 
 func TestExtractTaskPath_Invalid(t *testing.T) {
-	if _, _, err := extractTaskPath("/v1/agent/tasks/not-a-uuid"); err == nil {
-		t.Error("expected error for invalid UUID")
+	for _, path := range []string{
+		"/v1/agent/tasks/not-a-uuid",
+		"/v1/agent/tasks/not-a-uuid/cancel",
+		"/v1/agent/tasks//cancel",
+		"/v1/agent/tasks/" + uuid.NewString() + "/unknown",
+		"/v1/agent/tasks/" + uuid.NewString() + "/cancel/extra",
+	} {
+		if _, _, ok := extractTaskPath(path); ok {
+			t.Errorf("path %q must not parse", path)
+		}
 	}
 }
 
 func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func (f *fakeClient) Events(_ context.Context, _, _ uuid.UUID, taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error) {
+	if f.eventsFn != nil {
+		return f.eventsFn(taskID, afterSeq, limit)
+	}
+	if f.tasks[taskID].ID == "" {
+		return nil, ErrNotFound
+	}
+	if afterSeq < 0 {
+		return nil, ErrCursor
+	}
+	return []Event{
+		{Seq: 1, SourceEventID: "status:queued", Kind: "status", Payload: json.RawMessage(`{"status":"queued"}`)},
+		{Seq: 2, SourceEventID: "s1", Kind: "tool_call", Payload: json.RawMessage(`{"tool_name":"bash"}`)},
+	}, nil
+}
+
+func (f *fakeClient) Files(_ context.Context, _, _ uuid.UUID, taskID uuid.UUID) ([]WorkspaceFile, error) {
+	if f.filesFn != nil {
+		return f.filesFn(taskID)
+	}
+	if f.tasks[taskID].ID == "" {
+		return nil, ErrNotFound
+	}
+	return []WorkspaceFile{{Name: "out.txt", Size: 9, ModTime: time.Now()}}, nil
+}
+
+func TestHandleEvents_HappyPath(t *testing.T) {
+	h := NewHandler(newFakeClient())
+	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	fc := h.client.(*fakeClient)
+	fc.tasks[taskID] = Task{ID: taskID.String()}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events?after_seq=1&limit=10", nil).
+		WithContext(userCtx(uuid.MustParse("22222222-2222-4222-8222-222222222222")))
+	rec := httptest.NewRecorder()
+	h.routeTaskByID(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Events []Event `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Events) != 2 || got.Events[0].Kind != "status" {
+		t.Fatalf("events = %+v", got.Events)
+	}
+}
+
+func TestHandleEvents_BadCursorIs400(t *testing.T) {
+	h := NewHandler(newFakeClient())
+	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	h.client.(*fakeClient).tasks[taskID] = Task{ID: taskID.String()}
+	tenant := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+
+	for _, q := range []string{"after_seq=-3", "after_seq=abc", "after_seq=1.5", "limit=0", "limit=-2"} {
+		req := httptest.NewRequest(http.MethodGet,
+			"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events?"+q, nil).
+			WithContext(userCtx(tenant))
+		rec := httptest.NewRecorder()
+		h.routeTaskByID(rec, req)
+		if rec.Code != 400 {
+			t.Errorf("%s: status = %d, want 400", q, rec.Code)
+		}
+	}
+}
+
+func TestHandleEvents_LimitClampedTo500(t *testing.T) {
+	tenant := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	var gotLimit int
+	fc := newFakeClient()
+	fc.tasks[taskID] = Task{ID: taskID.String()}
+	fc.eventsFn = func(_ uuid.UUID, _ int64, limit int) ([]Event, error) {
+		gotLimit = limit
+		return []Event{}, nil
+	}
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events?limit=99999", nil).
+		WithContext(userCtx(tenant))
+	rec := httptest.NewRecorder()
+	NewHandler(fc).routeTaskByID(rec, req)
+	if rec.Code != 200 || gotLimit != 500 {
+		t.Fatalf("status=%d limit=%d, want 200/500", rec.Code, gotLimit)
+	}
+}
+
+func TestHandleEvents_Unauthenticated(t *testing.T) {
+	h := NewHandler(newFakeClient())
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events", nil)
+	rec := httptest.NewRecorder()
+	h.routeTaskByID(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandleFiles_HappyPath(t *testing.T) {
+	tenant := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	fc := newFakeClient()
+	fc.tasks[taskID] = Task{ID: taskID.String()}
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/files", nil).
+		WithContext(userCtx(tenant))
+	rec := httptest.NewRecorder()
+	NewHandler(fc).routeTaskByID(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Files []WorkspaceFile `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Files) != 1 || got.Files[0].Name != "out.txt" {
+		t.Fatalf("files = %.200s (%v)", rec.Body.String(), err)
+	}
+}
+
+func TestHandleEvents_FilesNotFoundIs404(t *testing.T) {
+	h := NewHandler(newFakeClient())
+	for _, suffix := range []string{"events", "files"} {
+		req := httptest.NewRequest(http.MethodGet,
+			"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/"+suffix, nil).
+			WithContext(userCtx(uuid.MustParse("22222222-2222-4222-8222-222222222222")))
+		rec := httptest.NewRecorder()
+		h.routeTaskByID(rec, req)
+		if rec.Code != 404 {
+			t.Errorf("%s for unknown task: status %d, want 404", suffix, rec.Code)
+		}
+	}
 }

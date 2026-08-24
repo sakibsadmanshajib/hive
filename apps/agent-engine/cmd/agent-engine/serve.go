@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/artifactsclient"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
 )
 
@@ -48,6 +50,14 @@ import (
 // mirrors the header control-plane's own internal endpoints already expect
 // from this binary's egressclient calls.
 const InternalTokenHeader = "X-Internal-Token"
+
+// eventsPageSize bounds one /events page; Remote.Events follows next_offset
+// until -1. 100 events per page with each raw dump capped keeps a page far
+// under the client's read bound.
+const eventsPageSize = 100
+
+// maxRawTransportBytes caps one event's raw dump on the /events wire.
+const maxRawTransportBytes = 32 << 10 // 32 KiB
 
 type launchRequest struct {
 	ID           uuid.UUID `json:"id"`
@@ -244,6 +254,62 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		}
 		writeJSON(w, http.StatusOK, struct{}{})
 	})
+	mux.HandleFunc("POST /events", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req struct {
+			SessionRef string `json:"session_ref"`
+			Offset     int    `json:"offset"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		events, err := engine.Events(r.Context(), req.SessionRef)
+		if err != nil {
+			writeSessionErr(w, err)
+			return
+		}
+		if req.Offset < 0 || req.Offset >= len(events) {
+			writeJSON(w, http.StatusOK, map[string]any{"events": []controlclient.Event{}, "next_offset": -1})
+			return
+		}
+		end := req.Offset + eventsPageSize
+		next := -1
+		if end < len(events) {
+			next = end
+		} else {
+			end = len(events)
+		}
+		page := events[req.Offset:end]
+		for i := range page {
+			// Bound the raw dump so one runaway sandbox event cannot balloon a
+			// page past Remote's read limit. The syncer caps stored payloads at
+			// 64 KiB anyway; this keeps transport bounded too.
+			if len(page[i].Raw) > maxRawTransportBytes {
+				page[i].Raw = json.RawMessage(fmt.Sprintf(`{"truncated":true,"size":%d}`, len(page[i].Raw)))
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": page, "next_offset": next})
+	})
+	mux.HandleFunc("POST /files", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req sessionRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		files, err := engine.Files(r.Context(), req.SessionRef)
+		if err != nil {
+			writeSessionErr(w, err)
+			return
+		}
+		if files == nil {
+			files = []controlclient.WorkspaceFile{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -282,6 +348,9 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		_ = srv.Shutdown(ctx)
 	}()
 
+	if controlPlaneToken == "" {
+		log.Printf("agent-engine: WARN no internal token configured; every request will be refused (fail-closed). Set CONTROL_PLANE_INTERNAL_TOKEN for the launcher unit.")
+	}
 	log.Printf("agent-engine: serving on %s (sif=%s, packs=%s)", socketPath, sifPath, packsDir)
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -310,13 +379,36 @@ func hostOf(rawURL string) (string, error) {
 	return u.Hostname(), nil
 }
 
-// authorized enforces the shared internal token when one is configured.
+// authorized enforces the shared internal token, fail-closed: an empty
+// configured token authorizes NOTHING (previously an unset token let every
+// request through). Comparison is constant-time.
 func authorized(w http.ResponseWriter, r *http.Request, token string) bool {
-	if token == "" || r.Header.Get(InternalTokenHeader) == token {
-		return true
+	if token == "" {
+		log.Printf("agent-engine: refusing request: no internal token is configured")
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "launcher has no internal token configured"})
+		return false
 	}
-	writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
-	return false
+	given := r.Header.Get(InternalTokenHeader)
+	if subtle.ConstantTimeCompare([]byte(given), []byte(token)) != 1 {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return false
+	}
+	return true
+}
+
+// writeSessionErr maps an engine error onto the same status contract /status
+// and /cancel use: unknown session 404, everything else 502 with the detail
+// logged server-side only (the body carries the daemon's own text, which is
+// fine here because the only caller is control-plane over a root-owned Unix
+// socket; Remote.post logs it rather than surfacing it onward).
+func writeSessionErr(w http.ResponseWriter, err error) {
+	code := http.StatusBadGateway
+	if errors.Is(err, engineapi.ErrUnknownSession) {
+		code = http.StatusNotFound
+	}
+	log.Printf("agent-engine: session call failed: %v", err)
+	writeJSON(w, code, errorResponse{Error: err.Error()})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

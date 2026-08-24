@@ -17,6 +17,9 @@ import (
 type Service struct {
 	repo   Repository
 	engine Engine
+	// src is the optional event/files surface (nil when no engine arm is
+	// wired). See WithEventSource.
+	src EventSource
 
 	// launches counts the background launch goroutines CreateTask starts.
 	// Nothing on the request path waits on it; see WaitIdle.
@@ -26,11 +29,29 @@ type Service struct {
 // NewService constructs a Service. repo must not be nil. A nil engine
 // defaults to NotConfiguredEngine{} so callers that have not wired the
 // agent-engine control channel yet still get well-defined (queued) behavior.
-func NewService(repo Repository, engine Engine) *Service {
+//
+// WithEventSource is the only option today; see its doc comment.
+func NewService(repo Repository, engine Engine, opts ...ServiceOption) *Service {
 	if engine == nil {
 		engine = NotConfiguredEngine{}
 	}
-	return &Service{repo: repo, engine: engine}
+	s := &Service{repo: repo, engine: engine}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// ServiceOption configures optional Service wiring.
+type ServiceOption func(*Service)
+
+// WithEventSource attaches the engine's event/files surface. Nil (the
+// default, and what every deployment without a configured agent-engine gets)
+// makes Files answer an empty listing rather than fail: the read route exists
+// wherever the task routes exist, and "no events source" is a deployment
+// posture, not a caller error.
+func WithEventSource(src EventSource) ServiceOption {
+	return func(s *Service) { s.src = src }
 }
 
 // engineUnavailableMessage is the customer-visible error_message persisted
@@ -343,6 +364,41 @@ func (s *Service) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Task
 // another web session for the same user.
 func (s *Service) List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error) {
 	return s.repo.List(ctx, tenantID, userID)
+}
+
+// Events returns one task's event rows strictly newer than afterSeq. Scoped
+// exactly like Get: a task belonging to a different user is ErrNotFound, so
+// cross-user reads 404 instead of leaking existence. The cursor was validated
+// by the HTTP layer; this method trusts its inputs the way Get does.
+func (s *Service) Events(ctx context.Context, tenantID, userID, id uuid.UUID, afterSeq int64, limit int) ([]TaskEvent, error) {
+	if _, err := s.repo.Get(ctx, tenantID, userID, id); err != nil {
+		return nil, err
+	}
+	return s.repo.ListEvents(ctx, tenantID, userID, id, afterSeq, limit)
+}
+
+// Files lists the running session's workspace directory (name, size, mtime).
+// Same scoping as Events. A task that never launched, or whose session is
+// gone, answers an empty listing rather than an error: the files route is
+// best-effort by nature and the caller's real signal about liveness is the
+// task's status.
+func (s *Service) Files(ctx context.Context, tenantID, userID, id uuid.UUID) ([]WorkspaceFile, error) {
+	t, err := s.repo.Get(ctx, tenantID, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.src == nil || t.EngineSessionRef == "" {
+		return []WorkspaceFile{}, nil
+	}
+	files, err := s.src.Files(ctx, t.EngineSessionRef)
+	if err != nil {
+		// The launcher being down or the session having been reaped is not a
+		// customer-visible failure mode: log server-side, answer empty.
+		slog.Default().WarnContext(ctx, "agenttask: workspace listing unavailable",
+			"task_id", t.ID, "error", err)
+		return []WorkspaceFile{}, nil
+	}
+	return files, nil
 }
 
 // Cancel transitions a task to StatusCancelled and stops the launcher

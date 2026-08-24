@@ -10,6 +10,7 @@
 package agenttask
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -41,8 +42,30 @@ var (
 	// a terminal status and cannot be cancelled again.
 	ErrTerminalState = errors.New("agenttask: task already reached a terminal state")
 
+	// ErrCursor mirrors control-plane's 400 for a non-numeric or negative
+	// events cursor. Never silently zeroed.
+	ErrCursor = errors.New("agenttask: cursor must be a non-negative integer")
+
 	// ErrRequestFailed is the provider-blind catch-all for any other
 	// non-2xx response or transport failure — the real cause is logged
 	// server-side, never surfaced to the customer.
 	ErrRequestFailed = errors.New("agenttask: request failed")
 )
+
+// Event mirrors one control-plane agent_task_events row on the customer wire.
+// Payload is whatever JSONB the syncer stored; this layer never parses its
+// inner shape.
+type Event struct {
+	Seq           int64           `json:"seq"`
+	SourceEventID string          `json:"source_event_id"`
+	Kind          string          `json:"kind"`
+	Payload       json.RawMessage `json:"payload"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// WorkspaceFile mirrors one control-plane workspace listing entry.
+type WorkspaceFile struct {
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mtime"`
+}

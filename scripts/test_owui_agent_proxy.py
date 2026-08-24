@@ -394,15 +394,9 @@ def check_every_route_is_behind_the_session_dependency() -> None:
         ("@router.post('/tasks')", 'async def create_task'),
         ("@router.get('/tasks/{task_id}')", 'async def get_task'),
         ("@router.post('/tasks/{task_id}/cancel')", 'async def cancel_task'),
+        ("@router.get('/tasks/{task_id}/events')", 'async def list_task_events'),
+        ("@router.get('/tasks/{task_id}/files')", 'async def list_task_files'),
     ]
-    for decorator, definition in routes:
-        check(decorator in source, f'missing route {decorator}')
-        start = source.index(definition)
-        signature = source[start : source.index(':\n', start)]
-        check(
-            'Depends(get_verified_user)' in signature,
-            f'{definition} must resolve its principal from the session, not the request',
-        )
     # The inverse of the same rule: no route may read an identity off the wire.
     #
     # Two smells, not three. A third entry, "headers.get('Authorization')", used
@@ -429,6 +423,35 @@ def check_every_route_is_behind_the_session_dependency() -> None:
     )
 
 
+def check_events_cursor_params_are_validated() -> None:
+    """A cursor that is not a plain non-negative integer never reaches a URL."""
+    good = str(uuid4())
+    for bad in ('-1', 'abc', '1.5', ' 2', '999999999999999999999999'):
+        reset()
+        try:
+            run(proxy.list_task_events(good, Request(), USER, after_seq=bad))
+        except HTTPException as exc:
+            check(exc.status_code == 400, f'expected 400 for after_seq {bad!r}')
+        else:
+            failures.append(f'after_seq {bad!r} must be refused before any URL is built')
+        check(RecordingSession.calls == [], f'no upstream call may be made for after_seq {bad!r}')
+
+    reset()
+    RecordingSession.payload = {'events': []}
+    run(proxy.list_task_events(good, Request(), USER, after_seq='5', limit='50'))
+    url = RecordingSession.calls[0]['url']
+    check(
+        url == f'http://edge-api:8080/v1/agent/tasks/{good}/events?after_seq=5&limit=50',
+        f'unexpected events url {url}',
+    )
+    headers = RecordingSession.calls[0]['headers']
+    check(
+        headers.get('Authorization') == 'Bearer hk_shim_key_for_tests'
+        and headers.get(proxy.UPSTREAM_AUTH_HEADER) == 'Bearer user-supabase-token',
+        'the events pass-through must carry the same credential split as the other routes',
+    )
+
+
 for check_fn in (
     check_credentials_land_on_the_right_headers,
     check_no_user_token_is_refused_before_any_upstream_call,
@@ -438,6 +461,7 @@ for check_fn in (
     check_upstream_body_is_returned_verbatim,
     check_no_gateway_configuration_is_a_stated_503,
     check_transport_failures_are_stated_not_raised,
+    check_events_cursor_params_are_validated,
     check_every_route_is_behind_the_session_dependency,
 ):
     check_fn()

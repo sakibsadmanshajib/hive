@@ -116,6 +116,19 @@ func (r *Remote) Health(ctx context.Context) error {
 }
 
 func (r *Remote) post(ctx context.Context, path string, body any, out any) error {
+	return r.postLimit(ctx, path, body, out, 1<<20)
+}
+
+// postLimit is post with an explicit response-body cap. /events uses 8 MiB:
+// one page is at most eventsPageSize events whose raw dumps the launcher caps
+// at 32 KiB each, so ~3.3 MiB worst case, comfortably inside this bound —
+// the old single 1 MiB reader silently truncated whole transcripts for
+// sessions that grew past it.
+func (r *Remote) postLarge(ctx context.Context, path string, body any, out any) error {
+	return r.postLimit(ctx, path, body, out, 8<<20)
+}
+
+func (r *Remote) postLimit(ctx context.Context, path string, body any, out any, maxBytes int64) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("agentengine: encode %s request: %w", path, err)
@@ -133,7 +146,7 @@ func (r *Remote) post(ctx context.Context, path string, body any, out any) error
 		return fmt.Errorf("agentengine: %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
 		return fmt.Errorf("agentengine: read %s response: %w", path, err)
 	}
