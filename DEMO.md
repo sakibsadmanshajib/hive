@@ -39,7 +39,7 @@ Stated honestly: `hive-free` rejects tool bearing requests at selection time (to
 | 8 to 14 | Retrieval: grounded question over your own document | The chat Knowledge surface is dead today (#1109), so demonstrate `/v1/rag/chat` with curl against api-hive instead |
 | 14 to 20 | Artifacts: generated content opened on its hosted link | The chat artifacts index spins forever (#1110), so fall back to an API published static artifact |
 | 20 to 26 | Developer story: mint an API key in the console, call api-hive with an OpenAI SDK, show usage in analytics | A freshly minted key can 403 on first use outside the fixture account (#798); rehearse with the demo fixture key |
-| 26 to 30 | Money story: prepaid credits, ledger, spend caps | Do not show live checkout while #917 and #928 are open |
+| 26 to 30 | Money story: prepaid credits, ledger, spend caps | Look only: credits and caps are viewable, live checkout stays off stage while #917 and #928 are open, pre made slide as fallback |
 
 Cowork: the agent service gate now defaults on for every workspace (#1107 closed by PR #1111) and code interpreter genuinely executes inside chat. If a live sandbox launch misbehaves on the day, show the code interpreter beat and move on.
 
@@ -49,7 +49,7 @@ Cowork: the agent service gate now defaults on for every workspace (#1107 closed
 - Streaming chat including Bengali, voice dictation and read aloud on the metered gateway path (read aloud wired by PR #1079)
 - Code interpreter inside chat: sandboxed execution rendered as inline tool cards
 - Uploads with visible size caps and honest inline errors (#1108 and #1113 fixed)
-- Full console: keys, billing and top up, catalog, logs, analytics, members invites, feature gates, MCP marketplace
+- Full console: keys, catalog, logs, analytics, members invites, feature gates, MCP marketplace. Credits are viewable in billing (balance plus ledger); the live top up flow is shown only if #917 and #928 close by demo day, otherwise a pre made slide stands in
 - Free pool with automatic cross provider failover
 - RAG over the API (`/v1/rag/chat`) with admin selectable embedding model and dimension
 
@@ -70,6 +70,6 @@ Not demoable: multi user isolation claims (#947, #948, #949 family), Enterprise 
 
 1. Confirm deploy-demo-box is green on main and the box serves the merge SHA. Post-deploy verification gates the deploy since PR #1061; presenting against an undeployed main is the classic silent failure.
 2. Confirm the OWUI nightly e2e ran within the last 24 hours; trigger it manually otherwise.
-3. Probe all four hosts for 200: chat-hive, console-hive, api-hive, control-hive .scubed.co.
+3. Run `scripts/post-deploy-verify.py` against the box and confirm backend specific health for all four hosts (for chat that means `/api/config` reporting status true with the OIDC provider configured). A bare root HTTP 200 from chat-hive, console-hive, api-hive or control-hive .scubed.co is not readiness evidence.
 4. Clean the demo account: no leftover admin grants (#752), conversations pruned (#916), credits topped up, and the account's Enter key behavior verified with `node apps/web-console/scripts/demo-chat-settings.mjs <demo account email>` (add `--repair` if it drifts).
 5. Confirm last night's backup set verified. Never demo the day backups are red.
