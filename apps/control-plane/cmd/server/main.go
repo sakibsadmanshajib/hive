@@ -57,6 +57,7 @@ import (
 	platformdb "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/http"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
@@ -365,7 +366,22 @@ func main() {
 		accountsSvc = accountsSvc.WithBillingPool(pool)
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
-		catalogRepo := catalog.NewPgxRepository(pool)
+		// Hot-path read cache (Redis): wraps the repositories behind
+		// /internal/routing/select and /v1/models so each request's catalog,
+		// pricing and entitlement reads hit Redis instead of Postgres for 30s
+		// at a time. Enabled only when REDIS_URL was reachable at startup;
+		// without Redis both repos run uncached exactly as before. Money state
+		// (balances, reservations, ledger entries, billing state) is never
+		// cached; see rcache.Cache's boundary note.
+		var hotCache *rcache.Cache
+		if redisClient != nil {
+			hotCache = rcache.New(redisClient, "hivecp:v1", rcache.DefaultTTL)
+			log.Println("redis hot-path read cache enabled for routing/catalog")
+		} else {
+			log.Println("REDIS_URL unavailable: routing/catalog reads run uncached")
+		}
+
+		catalogRepo := catalog.NewCachedRepository(catalog.NewPgxRepository(pool), hotCache)
 		catalogSvc = catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
 
@@ -396,7 +412,7 @@ func main() {
 		}
 		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
-		routingRepo := routing.NewPgxRepository(pool)
+		routingRepo := routing.NewCachedRepository(routing.NewPgxRepository(pool), hotCache)
 		// catalogSvc is the per-tenant entitlement source: route selection and
 		// the catalog listing resolve visibility through the same predicate, so
 		// a tenant cannot invoke a model an admin hid from it.
