@@ -340,6 +340,7 @@ function ProviderRow({ provider, status, onToggle, onEdit }: ProviderRowProps) {
           type="button"
           onClick={onEdit}
           disabled={status === "saving"}
+          aria-label={`Edit ${provider.display_name || provider.slug}`}
           className="rounded border border-[var(--color-border)] px-2 py-1 text-2xs text-[var(--color-ink-2)] transition-colors hover:bg-[var(--color-surface-inset)] hover:text-[var(--color-ink)] cursor-pointer disabled:cursor-wait disabled:opacity-60"
         >
           Edit
