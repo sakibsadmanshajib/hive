@@ -5,15 +5,20 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 // Capability-specific tests (tools, response_format) need an alias whose
-// routes are seeded tools_supported=true. hive-free is the free pool of our
-// own keys with tools_supported=false on every member until cross-member
-// parity is probed (#1115), so the edge correctly 400s those parameters there
-// instead of silently dropping them (run 32736430913). deepseek-v4-flash's
-// source route has verified tool support, so capability coverage points there.
-// HIVE_TOOLS_MODEL exists so a deployment can repoint the tests without
-// editing them; the compose service forwards it like HIVE_TEST_MODEL.
+// route is seeded tools_supported=true AND whose provider honors the OpenAI
+// response contract. hive-free fails the first bar (free pool members are
+// seeded tools_supported=false until cross-member parity is probed, #1115),
+// and the edge correctly 400s tools/response_format there (run 32736430913).
+// deepseek-v4-flash passes the first bar but not the second: its unpinned
+// `-latest` router slug returned message.content as a parsed JSON object
+// (run 32665985618), as null, and as string on different probes, which no
+// strict assertion can survive. deepseek-v4-pro is date-pinned (-0813),
+// returns content as a string every time, and answers forced tool_choice
+// with a real tool_calls shape (probed live through the box's LiteLLM,
+// recorded in ci.yml). HIVE_TOOLS_MODEL lets a deployment repoint these
+// tests without editing them; compose forwards it like HIVE_TEST_MODEL.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-pro";
 
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
@@ -108,8 +113,10 @@ describe("Chat Completions", () => {
     // The edge must NOT 400 on response_format for a capable alias. The
     // assertions below are the OpenAI contract and stay strict: content is
     // typed as string on the wire, so an alias whose provider returns it as a
-    // raw object fails here by design (do not loosen this to fit one route).
-    // If the default TOOL_CAPABLE_MODEL regresses, repoint HIVE_TOOLS_MODEL.
+    // raw object or null fails here by design. That is exactly what the
+    // unpinned deepseek-v4-flash router did (run 32665985618), which is why
+    // the default is the pinned deepseek-v4-pro instead. Do not loosen this
+    // to fit one route; repoint HIVE_TOOLS_MODEL if the default regresses.
     const response = await client.chat.completions.create({
       model: TOOL_CAPABLE_MODEL,
       messages: [

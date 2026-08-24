@@ -1840,8 +1840,10 @@ jobs:
       # Capability tests (tools/response_format) cannot run on hive-free: its
       # pool members are seeded tools_supported=false until cross-member parity
       # is probed (#1115), and the edge correctly 400s those parameters there
-      # (run 32736430913). deepseek-v4-flash has verified tool support.
-      HIVE_TOOLS_MODEL: deepseek-v4-flash
+      # (run 32736430913). deepseek-v4-pro is tools-capable with a pinned,
+      # contract-stable route; the flash variant returned message.content as
+      # object/null/string across probes (run 32665985618).
+      HIVE_TOOLS_MODEL: deepseek-v4-pro
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v7

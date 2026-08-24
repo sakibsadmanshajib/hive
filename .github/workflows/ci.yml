@@ -1061,9 +1061,12 @@ jobs:
       # Capability-specific tests (tools, response_format) in the JS
       # chat-completions suite cannot run on hive-free: its pool members are
       # seeded tools_supported=false until cross-member parity is probed
-      # (#1115), so they point at a tools-capable alias instead (run
-      # 32736430913). Same override pattern as above.
-      HIVE_TOOLS_MODEL: ${{ vars.CI_LIVE_INTEGRATION_TOOLS_MODEL || 'deepseek-v4-flash' }}
+      # (#1115), so the edge correctly 400s those parameters there (run
+      # 32736430913). deepseek-v4-pro is the alias whose route is tools-
+      # capable AND contract-stable; see the deepseek note below for why the
+      # flash variant was rejected on evidence. Same override pattern as
+      # HIVE_TEST_MODEL above.
+      HIVE_TOOLS_MODEL: ${{ vars.CI_LIVE_INTEGRATION_TOOLS_MODEL || 'deepseek-v4-pro' }}
       # The suites' own default, named here rather than left implicit, because
       # the spend meter below asserts that no alias outside these is ever
       # billed by this job.

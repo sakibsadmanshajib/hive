@@ -325,9 +325,12 @@ services:
       HIVE_TEST_MODEL: ${HIVE_TEST_MODEL:-hive-default}
       HIVE_EMBEDDING_MODEL: ${HIVE_EMBEDDING_MODEL:-hive-embedding-default}
       # Capability tests in chat-completions.test.ts read this one (run
-      # 32736430913): tools/response_format need a tools_supported alias, not
-      # the plain-chat alias above.
-      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-deepseek-v4-flash}
+      # 32736430913): tools/response_format need an alias whose route is
+      # tools_supported AND whose provider honors the response contract, not
+      # the plain-chat alias above. deepseek-v4-flash is tools-capable but its
+      # unpinned `-latest` router returned message.content as object/null/
+      # string across probes (run 32665985618), so the pinned deepseek-v4-pro.
+      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-deepseek-v4-pro}
 
   sdk-tests-py:
     image: hive-sdk-tests-py:ci
