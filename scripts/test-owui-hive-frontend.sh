@@ -27,6 +27,10 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/lib/hive"
+# The app template too: early-redirect.test.ts executes the shipped bytes of
+# the inline signed-out fast-exit script by reading src/app.html out of the
+# mirrored tree, so the template must travel with the sources it pins.
+cp "$ROOT/vendor/open-webui/src/app.html" "$WORK"/app.html
 # The whole Hive directory, recursively, rather than a glob per extension. A
 # glob covers only what sits at the top of it today and would silently stop
 # covering a component the day someone put one in a subdirectory, which is the

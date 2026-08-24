@@ -41,6 +41,98 @@
 		-->
 		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
 
+		<!-- Hive: signed-out fast exit (#945, #967). A visitor with no session used
+				 to pay this app's whole boot, about sixty modules plus /api/config plus
+				 socket setup, only for +layout.svelte's SSO decision then bounce them
+				 to the console sign-in. Measured cold, that put the sign-in form about
+				 five seconds behind an already slow HTML response. This runs at parse
+				 time instead and applies the same guards as sso-redirect.ts (the tested
+				 source of truth) with the layout's context. It fails closed: any
+				 surprise, including a failed attempt-stamp write, means do nothing and
+				 let the normal boot own the decision. Keep the guard list identical on
+				 both sides when either changes. -->
+		<script>
+			(() => {
+				// Every storage access is individually guarded: a browser that denies
+				// storage must not silence the whole fast exit, only the guard that
+				// needed the value. Reads degrade to "absent"; the attempt-stamp write
+				// is still verified and still fails closed, exactly like
+				// sso-redirect.ts's writeStorage.
+				let readLocalToken = null;
+				try {
+					readLocalToken = window.localStorage.getItem('token');
+				} catch (localError) {}
+				if (readLocalToken) return;
+				let hasTokenCookie = false;
+				try {
+					hasTokenCookie = window.document.cookie
+						.split('; ')
+						.some((cookie) => cookie.startsWith('token='));
+				} catch (cookieError) {}
+				if (hasTokenCookie) return;
+				const readSession = (key) => {
+					try {
+						return window.sessionStorage.getItem(key);
+					} catch (sessionError) {
+						return null;
+					}
+				};
+				const writeSession = (key, value) => {
+					try {
+						window.sessionStorage.setItem(key, value);
+						return window.sessionStorage.getItem(key) === value;
+					} catch (writeError) {
+						return false;
+					}
+				};
+				try {
+					if (window.electronAPI) return;
+					if (location.pathname !== '/') return;
+					if (readSession('hive:signed-out') === '1') return;
+					const stamp = Number.parseInt(readSession('hive:sso-attempt-at'), 10);
+					if (
+						Number.isFinite(stamp) &&
+						Date.now() - stamp >= 0 &&
+						Date.now() - stamp < 15000
+					) {
+						return;
+					}
+					try {
+						if (/\.scubed\.co$/.test(location.hostname)) {
+							const link = window.document.createElement('link');
+							link.rel = 'preconnect';
+							link.href = 'https://console-hive.scubed.co';
+							window.document.head.appendChild(link);
+						}
+					} catch (preconnectError) {}
+					window
+						.fetch('/api/config', { credentials: 'same-origin' })
+						.then((res) => (res.ok ? res.json() : null))
+						.then((cfg) => {
+							try {
+								const providers =
+									cfg && cfg.oauth && cfg.oauth.providers ? Object.keys(cfg.oauth.providers) : [];
+								const features = (cfg && cfg.features) || {};
+								if (!cfg || !cfg.oauth || cfg.oauth.auto_redirect !== true) return;
+								if (providers.length !== 1) return;
+								if (
+									features.auth === false ||
+									features.enable_login_form !== false ||
+									features.enable_ldap ||
+									features.auth_trusted_header
+								) {
+									return;
+								}
+								if (cfg.onboarding) return;
+								if (!writeSession('hive:sso-attempt-at', String(Date.now()))) return;
+								location.replace('/oauth/' + providers[0] + '/login');
+							} catch (configError) {}
+						})
+						.catch(() => {});
+				} catch (setupError) {}
+			})();
+		</script>
+
 		<script>
 			function resizeIframe(obj) {
 				obj.style.height = obj.contentWindow.document.documentElement.scrollHeight + 'px';
