@@ -1,54 +1,146 @@
 {
-  "_doc": "Fleet registry. Update on EVERY dispatch, completion, failure (state failed, reason, relaunched_as). Sweep ground truth every turn agents fly; >20min wait-state silence = dead. Subagent briefs FORBID git clean anywhere. Backup .wolf/ to ~/.hive-wolf-backup.tar after writes. Rebuilt 2026-06-12 after .wolf wipe incident.",
+  "_doc": "Fleet registry. Update on EVERY dispatch, completion, failure (state failed, reason, relaunched_as). Sweep ground truth every turn agents fly; >20min wait-state silence = dead. Subagent briefs FORBID git clean anywhere. Backup .wolf/ to ~/.hive-wolf-backup.tar after writes. Rebuilt 2026-06-12 after .wolf wipe incident. Swept 2026-08-24 against origin/main git log: pre-August dead-stale June lanes (PRs 204/205/209 and siblings) cleared as long-resolved; states cite merge SHAs where verified, unverified lanes marked active-unverified.",
+  "last_swept": "2026-08-24",
   "agents": [
     {
-      "task": "finish PR 204",
-      "agent": "af41279fb379f0239",
-      "expected": "PR 204 merged",
-      "state": "dead-stale",
-      "note": "resolving threads now | swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+      "task": "free pool router #1115",
+      "agent": "freepool adv-pool-1115 sec-pool-1115",
+      "expected": "#1115 merged: LB failover over four Hive-owned free keys, hive-free pricing, CI + daily consumption",
+      "state": "done",
+      "note": "merged 2ff32e0d3 2026-08-24"
     },
     {
-      "task": "finish PR 209",
-      "agent": "ae3a9f54fc43cff29",
-      "expected": "PR 209 merged",
-      "state": "dead-stale",
-      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+      "task": "credit unit rescale to 1e9/USD #1106",
+      "agent": "creditscale db-1106 go-1106 pdvmodel sec-1106 usagecomposer",
+      "expected": "#1106 merged across catalog, metering, display",
+      "state": "done",
+      "note": "merged fc7446f7f 2026-08-23"
     },
     {
-      "task": "phase 25 chat staging audit",
-      "agent": "af8ff2af7432ee3a0",
-      "expected": "PR docs/phase-25-staging-audit, chat URL live",
-      "state": "dead-stale",
-      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+      "task": "scheduled encrypted backups #1101",
+      "agent": "boxbackup2 sec-review-1101 keyrotate",
+      "expected": "#1101 merged, all four demo-box data stores backed up off-box",
+      "state": "done",
+      "note": "merged 530b2fb9c 2026-08-23; keyrotate outcome not verified in this sweep"
     },
     {
-      "task": "investor demo script",
-      "agent": "a9fcaf6a318022c37",
-      "expected": "PR docs/investor-demo-script",
-      "state": "dead-stale",
-      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+      "task": "deploy gate + balance preflight #1061/#1105",
+      "agent": "pr1061b pr1105fix",
+      "expected": "#1061 post-deploy verification gates deploys; #1105 workspace-balance preflight before billed completion",
+      "state": "done",
+      "note": "merged b3f4730ed and c2d3fff53 2026-08-23"
     },
     {
-      "task": "finish PR 205 (attempt 3)",
-      "agent": "tbd",
-      "expected": "PR 205 merged",
-      "state": "needs-ground-truth-check",
-      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+      "task": "chat-origin admin lockdown #1091",
+      "agent": "(lane name not recorded)",
+      "expected": "#1091 merged closing #736/#948/#949",
+      "state": "done",
+      "note": "merged 1dc32b985 2026-08-23"
     },
     {
-      "task": "deploy hive.scubed.co (attempt 3)",
-      "agent": "tbd",
-      "expected": "hive.scubed.co 200",
-      "state": "needs-ground-truth-check",
-      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+      "task": "instance-admin decoupling #1096 (#748 P0)",
+      "agent": "(lane name not recorded)",
+      "expected": "#1096 merged, admin resolves only from is_platform_admin plus active owner membership",
+      "state": "done",
+      "note": "merged efd507ac2 2026-08-23"
     },
     {
-      "task": "seed tools_supported + smoke (attempt 2)",
-      "agent": "tbd",
-      "expected": "rows true, tools smoke not-400",
-      "state": "needs-ground-truth-check",
-      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+      "task": "file size cap served to chat #1113",
+      "agent": "filesizecap",
+      "expected": "#1113 merged",
+      "state": "done",
+      "note": "merged b0630ca52"
+    },
+    {
+      "task": "composer paste no-op #1108",
+      "agent": "p1108fix p1108fix2",
+      "expected": "#1112 closes #1108",
+      "state": "done",
+      "note": "merged a73e68910"
+    },
+    {
+      "task": "Cowork launch gate default #1107",
+      "agent": "p1107fix",
+      "expected": "#1111 closes #1107",
+      "state": "done",
+      "note": "merged 4477c0896"
+    },
+    {
+      "task": "Knowledge nav / artifacts spinner #1109/#1110",
+      "agent": "p1109fix",
+      "expected": "fix PRs for #1109 and #1110",
+      "state": "active-unverified",
+      "note": "no matching merge found this sweep; verify gh pr list before relaunch"
+    },
+    {
+      "task": "parity audit session doc + issues #1107-#1110",
+      "agent": "parityaudit parityaudit2 parityaudit3 parityaudit4 consoleparity",
+      "expected": "session-2026-08-24-claude-parity-audit.md in vault, four issues filed",
+      "state": "done",
+      "note": "doc present in vault 2026-08-24; issues confirmed filed"
+    },
+    {
+      "task": "spinifex AWS deployment plan",
+      "agent": "spinifexplan",
+      "expected": "plan-2026-08-24-spinifex-aws-deployment.md in vault",
+      "state": "done",
+      "note": "doc present in vault 2026-08-24"
+    },
+    {
+      "task": "demo walkthrough docs",
+      "agent": "demowalk2 demodata demodoc",
+      "expected": "walkthrough-demo-2026-08-24 in vault",
+      "state": "active-unverified",
+      "note": "walkthrough-demo-2026-08-24 NOT yet in vault at sweep time; verify before re-dispatch"
+    },
+    {
+      "task": "browser slice lane",
+      "agent": "browserbuild browserprobe adv-browser-slice sec-browser-slice",
+      "expected": "browser slice feature PR (number unknown)",
+      "state": "active-unverified",
+      "note": "no matching merge identified this sweep; verify gh pr list"
+    },
+    {
+      "task": "scheduled agent tasks surface",
+      "agent": "scheduledbuild rev1118",
+      "expected": "#1081 then #1118 sidebar schedules surface",
+      "state": "done",
+      "note": "merged e77fbf49e and f75c3fec1"
+    },
+    {
+      "task": "read-aloud TTS to gateway #1079",
+      "agent": "rev1079",
+      "expected": "#1079 merged",
+      "state": "done",
+      "note": "merged 062dcd37d"
+    },
+    {
+      "task": "runtime base image bump #1070",
+      "agent": "p1070fix",
+      "expected": "#1070 merged",
+      "state": "done",
+      "note": "merged 54bf0a8a6"
+    },
+    {
+      "task": "agent task event pipeline #1073",
+      "agent": "p1073fix p1073fix2",
+      "expected": "#1073 merged sandbox-to-API events",
+      "state": "done",
+      "note": "merged 51bba6454"
+    },
+    {
+      "task": "required-check budget guard #1097",
+      "agent": "pr1097fix",
+      "expected": "#1097 merged, required checks off live provider budget",
+      "state": "done",
+      "note": "merged a673b619b"
+    },
+    {
+      "task": "unmapped lanes",
+      "agent": "chorehooks coldload grafanademo p1060fix projectsbuild quota429 sdkcapfix voiceverify websearchbuild rev2pr main",
+      "expected": "per-lane outcomes unknown",
+      "state": "active-unverified",
+      "note": "names only at sweep time; verify each against gh pr list / vault before acting on any of them"
     }
   ],
   "failed_history": [
