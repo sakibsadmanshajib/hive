@@ -163,6 +163,9 @@
 			on:submit|preventDefault={submitCreate}
 		>
 			<h2 class="text-base font-semibold text-gray-850 dark:text-gray-100">{$i18n.t('New project')}</h2>
+			{#if error}
+				<p role="alert" class="text-sm text-red-500">{error}</p>
+			{/if}
 			<label class="flex flex-col gap-1">
 				<span class="text-xs font-medium text-gray-500">{$i18n.t('Name')}</span>
 				<input
