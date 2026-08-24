@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'agents' | 'knowledge';
+export type HiveNavIcon = 'agents' | 'knowledge' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -41,6 +41,13 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 		href: '/workspace/knowledge',
 		icon: 'knowledge',
 		activePaths: ['/workspace/knowledge']
+	},
+	{
+		id: 'scheduled',
+		label: 'Scheduled',
+		href: '/schedules',
+		icon: 'scheduled',
+		activePaths: ['/schedules']
 	}
 ];
 

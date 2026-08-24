@@ -11,10 +11,10 @@ const byId = (id: string): HiveNavItem => {
 };
 
 describe('HIVE_NAV', () => {
-	it('names the two destinations the shell ships', () => {
+	it('names the destinations the shell ships', () => {
 		// 'chats' was dropped: its href ('/') duplicated New Chat and no list
 		// view was ever built behind it (PR #938 added it for row parity only).
-		expect(HIVE_NAV.map((item) => item.id)).toEqual(['agents', 'knowledge']);
+		expect(HIVE_NAV.map((item) => item.id)).toEqual(['agents', 'knowledge', 'scheduled']);
 	});
 
 	it('points the agent destination at a route inside this application', () => {
@@ -23,6 +23,13 @@ describe('HIVE_NAV', () => {
 		// separate page with no sidebar.
 		expect(byId('agents').href).toBe('/agents');
 		expect(byId('agents').href.startsWith('http')).toBe(false);
+	});
+
+	it('points Scheduled at the schedules surface inside this application', () => {
+		// The schedules route is a top-level destination (D-045 sidebar grammar:
+		// New, Projects, Artifacts, Scheduled), not a child of /agents, so it
+		// never lights up the Agents row's prefix.
+		expect(byId('scheduled').href).toBe('/schedules');
 	});
 
 	it('gives every row a unique id, a label and an in-app href', () => {
@@ -58,7 +65,7 @@ describe('isNavItemActive', () => {
 	});
 
 	it('marks exactly one row current on each row\'s own destination', () => {
-		for (const route of ['/agents', '/workspace/knowledge']) {
+		for (const route of ['/agents', '/workspace/knowledge', '/schedules']) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));
 			expect(active.length).toBe(1);
 		}
