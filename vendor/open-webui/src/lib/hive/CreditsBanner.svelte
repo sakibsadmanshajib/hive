@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { getContext, onMount } from 'svelte';
 
 	import {
 		creditState,
@@ -10,6 +10,8 @@
 		type CreditBalance
 	} from './credits';
 
+	const i18n: any = getContext('i18n');
+
 	/*
 	 * The composer banner (#1063): remaining credits, Claude-style phrasing,
 	 * one line above the composer. Self-fetching so the only edit chat's own
@@ -17,7 +19,10 @@
 	 */
 
 	let balance: CreditBalance | null = null;
-	let creditsDismissedFlag = false;
+	// Initialized from storage, not left false: dismissal must survive SPA
+	// navigation that remounts this component within the same browsing
+	// session, or the dismiss button lies.
+	let creditsDismissedFlag = creditsDismissed();
 
 	$: state = balance === null ? null : creditState(balance.available_credits);
 	$: visible = balance !== null && !creditsDismissedFlag;
@@ -53,19 +58,21 @@
 			role="status"
 		>
 			{#if state === 'empty'}
-				<span>You're out of credits.</span>
+				<span>{$i18n.t("You're out of credits.")}</span>
 				<a
 					href="https://console-hive.scubed.co/console/billing"
 					target="_blank"
 					rel="noreferrer"
 					class="font-medium underline underline-offset-2"
 				>
-					Top up
+					{$i18n.t('Top up')}
 				</a>
 			{:else}
 				<span>
-					You've used {formatCredits(balance?.usage_today_credits ?? 0)} credits today
-					&middot; {formatCredits(balance?.available_credits ?? 0)} remaining
+					{$i18n.t("You've used {{used}} credits today · {{remaining}} remaining", {
+						used: formatCredits(balance?.usage_today_credits ?? 0),
+						remaining: formatCredits(balance?.available_credits ?? 0)
+					})}
 				</span>
 			{/if}
 			<button

@@ -34,11 +34,14 @@ under its own session, the ledger stays in the Go service that owns money.
 
 from __future__ import annotations
 
+import logging
 import os
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException
 from open_webui.utils.auth import get_verified_user
+
+log = logging.getLogger('open_webui.utils.hive_credits')
 
 router = APIRouter()
 
@@ -76,14 +79,22 @@ async def balance(user=Depends(get_verified_user)):
                 headers={'Authorization': f'Bearer {token}'},
             ) as response:
                 if response.status != 200:
+                    # One server-side line, no email in it. The browser stays
+                    # quiet; an operator reading container logs still learns
+                    # the surface is down rather than silently absent.
+                    log.warning('hive credits: upstream answered %s', response.status)
                     raise HTTPException(status_code=404, detail='Credits are unavailable.')
                 data = await response.json(content_type=None)
+        # Coerced inside the try on purpose: a malformed payload must land in
+        # the same quiet failure path, not a 500 traceback.
+        balance = {
+            'available_credits': int(data.get('available_credits') or 0),
+            'usage_today_credits': int(data.get('usage_today_credits') or 0),
+        }
     except HTTPException:
         raise
     except Exception:
         # Never echo upstream detail across the customer boundary.
+        log.warning('hive credits: upstream call failed')
         raise HTTPException(status_code=404, detail='Credits are unavailable.')
-    return {
-        'available_credits': int(data.get('available_credits') or 0),
-        'usage_today_credits': int(data.get('usage_today_credits') or 0),
-    }
+    return balance
