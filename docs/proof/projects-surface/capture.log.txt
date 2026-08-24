@@ -1,0 +1,16 @@
+url after goto auth: http://127.0.0.1:8093/auth
+signed in, url: http://127.0.0.1:8093/
+shot 01-home-sidebar-projects-row url=http://127.0.0.1:8093/
+shot 02-projects-index-empty url=http://127.0.0.1:8093/projects
+shot 03-create-dialog url=http://127.0.0.1:8093/projects
+created project, url=http://127.0.0.1:8093/projects/6e7f2b66-1295-42af-a07c-364438a69b50
+shot 05-file-added url=http://127.0.0.1:8093/projects/6e7f2b66-1295-42af-a07c-364438a69b50
+PAGEERROR e is not iterable
+after new chat, url=http://127.0.0.1:8093/c/13ed241e-56d7-4e67-ad5c-865ce1e5cf90
+shot 06-bound-new-chat url=http://127.0.0.1:8093/c/13ed241e-56d7-4e67-ad5c-865ce1e5cf90
+index cards: 1
+shot 07-detail-conversation-bound url=http://127.0.0.1:8093/projects/6e7f2b66-1295-42af-a07c-364438a69b50
+shot 08-link-existing-picker url=http://127.0.0.1:8093/projects/6e7f2b66-1295-42af-a07c-364438a69b50
+shot 09-renamed url=http://127.0.0.1:8093/projects/6e7f2b66-1295-42af-a07c-364438a69b50
+seed second project status: 200
+shot 10-second-project-grid url=http://127.0.0.1:8093/projects
