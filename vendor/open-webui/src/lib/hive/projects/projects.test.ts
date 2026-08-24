@@ -95,7 +95,7 @@ describe('projects data layer', () => {
 		expect(url).toContain('/api/v1/knowledge/k1/delete');
 	});
 
-	it('maps detail files and returns null on a missing project', async () => {
+	it('loads detail files from the per-collection listing endpoint, null on a missing project', async () => {
 		const okFetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
 			if (url.endsWith('/knowledge/k1')) {
@@ -104,10 +104,17 @@ describe('projects data layer', () => {
 					name: 'P',
 					description: '',
 					updated_at: 9,
-					files: [
+					files: null,
+					write_access: true
+				});
+			}
+			if (url.includes('/knowledge/k1/files')) {
+				return json({
+					items: [
 						{ id: 'f1', meta: { name: 'resume.pdf' } },
 						{ id: 'f2', filename: 'notes.txt' }
-					]
+					],
+					total: 2
 				});
 			}
 			return new Response('{}', { status: 404 });
@@ -118,6 +125,7 @@ describe('projects data layer', () => {
 			{ id: 'f1', name: 'resume.pdf' },
 			{ id: 'f2', name: 'notes.txt' }
 		]);
+		expect(project?.writeAccess).toBe(true);
 
 		const missing = await getProject('tok', 'gone', '/api/v1', okFetch);
 		expect(missing).toBeNull();

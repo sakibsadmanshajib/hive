@@ -142,7 +142,7 @@ export const getProject = async (
 	try {
 		const row = await requestJson<
 			RawKnowledgeRow & {
-				files?: Array<Record<string, unknown>>;
+				files?: Array<Record<string, unknown>> | null;
 				write_access?: boolean;
 			}
 		>(
@@ -151,9 +151,20 @@ export const getProject = async (
 			apiBase,
 			fetchImpl
 		);
+		// The pinned image's detail response leaves `files` null even when the
+		// collection has them; the per-collection listing endpoint is where the
+		// real rows live.
+		const fileList = await requestJson<{
+			items?: Array<{ id: string; meta?: { name?: string } | null; filename?: string | null }>;
+		}>(
+			`/knowledge/${id}/files?page=1`,
+			{ method: 'GET', headers: headers(token) },
+			apiBase,
+			fetchImpl
+		);
 		return {
 			...toProject(row),
-			files: (row.files ?? []).map((f) => ({
+			files: (fileList.items ?? []).map((f) => ({
 				id: String(f.id),
 				name: String(f.meta?.name ?? f.filename ?? f.id)
 			})),
