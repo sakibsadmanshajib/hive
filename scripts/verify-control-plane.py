@@ -185,7 +185,7 @@ def main() -> None:
         key_auth = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
         check("GET", "/v1/models", key_auth, (200,), base=EDGE)
         check("POST", "/v1/chat/completions", key_auth, (200,),
-              {"model": "hive-default", "messages": [{"role": "user", "content": "say pong"}],
+              {"model": "hive-free", "messages": [{"role": "user", "content": "say pong"}],
                "max_tokens": 16}, base=EDGE)
     else:
         failures.append("api-key create returned no secret, key auth chain not exercised")

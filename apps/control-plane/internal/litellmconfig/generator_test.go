@@ -747,3 +747,173 @@ general_settings:
 	assert.Equal(t, false, provider["allow_fallbacks"], "extra_body.provider.allow_fallbacks must survive a sync")
 	assert.Equal(t, "throughput", provider["sort"], "extra_body.provider.sort must survive a sync")
 }
+
+// --- Free pool router (multi-deployment) tests ---
+//
+// A route group is N provider_routes rows sharing one litellm_model_name. The
+// config sync emits one model_list entry per row, so LiteLLM sees several
+// deployments under one model_name and its router load-balances and cools down
+// failing deployments across them. These tests pin that emission and its merge
+// behaviour across repeated syncs.
+
+func freePoolEntries() []litellmconfig.ModelEntry {
+	return []litellmconfig.ModelEntry{
+		{
+			ModelName:   "route-free-pool",
+			LiteLLMName: "openrouter/dots-studio/dots-3-note-preview:free",
+			APIBase:     "https://openrouter.ai/api/v1",
+			APIKeyEnv:   "OPENROUTER_API_KEY",
+		},
+		{
+			ModelName:   "route-free-pool",
+			LiteLLMName: "groq/openai/gpt-oss-20b",
+			APIBase:     "https://api.groq.com/openai/v1",
+			APIKeyEnv:   "GROQ_API_KEY",
+		},
+		{
+			ModelName:   "route-free-pool",
+			LiteLLMName: "groq/openai/gpt-oss-20b",
+			APIBase:     "https://api.groq.com/openai/v1",
+			APIKeyEnv:   "GROQ_API_KEY_2",
+		},
+	}
+}
+
+// TestGenerateEmitsMultipleDeploymentsUnderOneModelName proves one shared
+// model_name produces N independent model_list entries with per-deployment
+// model strings and env-keyed credentials. That is exactly the shape LiteLLM's
+// documented load balancing consumes, and it is what makes an exhausted key
+// fail over to the other pool members instead of taking the alias down.
+func TestGenerateEmitsMultipleDeploymentsUnderOneModelName(t *testing.T) {
+	cfg := litellmconfig.Config{
+		Models:          freePoolEntries(),
+		GeneralSettings: litellmconfig.GeneralSettings{MasterKey: "k"},
+	}
+
+	out, err := litellmconfig.Generate(cfg)
+	require.NoError(t, err)
+
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	rawList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, rawList, 3)
+
+	type deployment struct {
+		model   string
+		apiKey  string
+		apiBase string
+	}
+	got := map[deployment]bool{}
+	for _, item := range rawList {
+		entry, ok := item.(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "route-free-pool", entry["model_name"])
+		params, ok := entry["litellm_params"].(map[string]interface{})
+		require.True(t, ok)
+		got[deployment{
+			model:   params["model"].(string),
+			apiKey:  params["api_key"].(string),
+			apiBase: params["api_base"].(string),
+		}] = true
+	}
+
+	want := map[deployment]bool{
+		{"openrouter/dots-studio/dots-3-note-preview:free", "os.environ/OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"}: true,
+		{"groq/openai/gpt-oss-20b", "os.environ/GROQ_API_KEY", "https://api.groq.com/openai/v1"}:                             true,
+		{"groq/openai/gpt-oss-20b", "os.environ/GROQ_API_KEY_2", "https://api.groq.com/openai/v1"}:                           true,
+	}
+	assert.Equal(t, want, got, "each pool member must appear as its own deployment with its own env key")
+}
+
+// TestWriteAndRestartKeepsPoolDeploymentsDistinctAcrossSyncs covers the merge:
+// an existing config that already carries pool entries must keep every
+// deployment distinct after another sync, and a hand-tuned litellm_params key
+// on one pooled entry must survive onto each generated deployment of that name.
+func TestWriteAndRestartKeepsPoolDeploymentsDistinctAcrossSyncs(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	existing := `model_list:
+  - model_name: route-free-pool
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_base: https://api.groq.com/openai/v1
+      api_key: os.environ/GROQ_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+  - model_name: route-other
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_base: https://openrouter.ai/api/v1
+      api_key: os.environ/OPENROUTER_API_KEY
+general_settings:
+  master_key: old
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
+
+	cfg := litellmconfig.Config{
+		Models: freePoolEntries(),
+		// route-other is deliberately ABSENT from this set: it models an
+		// operator-managed entry with no provider_routes row at all, which the
+		// merge must preserve verbatim alongside the pooled deployments. (A
+		// name that WERE in this set but generated no entry would be a retired
+		// DB route, and the merge would rightly drop it.)
+		KnownRouteIDs:      []string{"route-free-pool", "route-free-pool-groq", "route-free-pool-groq-2", "route-free-pool-free"},
+		GeneralSettings:    litellmconfig.GeneralSettings{MasterKey: "new"},
+		ExistingConfigPath: configPath,
+	}
+	restarter := &mockRestarter{}
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, restarter))
+	assert.Equal(t, 1, restarter.calls)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+	rawList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok)
+
+	poolParams := []map[string]interface{}{}
+	others := 0
+	for _, item := range rawList {
+		entry, _ := item.(map[string]interface{})
+		switch entry["model_name"] {
+		case "route-free-pool":
+			params, ok := entry["litellm_params"].(map[string]interface{})
+			require.True(t, ok)
+			poolParams = append(poolParams, params)
+		case "route-other":
+			others++
+		}
+	}
+	require.Len(t, poolParams, 3, "all three pool deployments must survive the merge")
+	assert.Equal(t, 1, others)
+
+	seenKeys := map[string]bool{}
+	for _, params := range poolParams {
+		key, _ := params["api_key"].(string)
+		seenKeys[key] = true
+
+		// The hand-tuned extra_body block from the pre-existing entry survives
+		// onto every generated deployment of the same name (mergeParams).
+		extra, ok := params["extra_body"].(map[string]interface{})
+		require.True(t, ok, "hand-tuned extra_body must survive on each pooled deployment")
+		provider, ok := extra["provider"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, false, provider["allow_fallbacks"])
+	}
+	assert.Equal(t, map[string]bool{
+		"os.environ/GROQ_API_KEY":       true,
+		"os.environ/GROQ_API_KEY_2":     true,
+		"os.environ/OPENROUTER_API_KEY": true,
+	}, seenKeys, "each pooled deployment keeps its own credential after the merge")
+
+	// The master key overlay still applies on top of the pooled entries.
+	gs, ok := parsed["general_settings"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "new", gs["master_key"])
+}

@@ -3,7 +3,7 @@ import OpenAI from "openai";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
-const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-default";
+const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 
 describe("Streaming Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

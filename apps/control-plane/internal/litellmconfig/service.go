@@ -16,6 +16,13 @@ type SyncRunner interface {
 // routeRow is a join of provider_routes, custom_providers and
 // provider_capabilities for active routes.
 type routeRow struct {
+	RouteID string
+	// ModelName is provider_routes.litellm_model_name, the model_name key the
+	// generator emits into config.yaml and the only string LiteLLM is
+	// addressed by. Today nearly every row keeps it equal to route_id; rows
+	// that diverge form route groups: N rows sharing one litellm_model_name
+	// emit N deployments under one model_name, which LiteLLM's router
+	// load-balances across with per-deployment cooldown.
 	ModelName   string
 	LiteLLMName string // provider_routes.provider_model — already carries its provider prefix, e.g. "openrouter/openai/gpt-4o-mini"
 	BaseURL     string
@@ -61,7 +68,8 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	// made before supports_embeddings was read at all.
 	rows, err := s.pool.Query(ctx, `
 		SELECT
-			pr.route_id       AS model_name,
+			pr.route_id       AS route_id,
+			pr.litellm_model_name AS model_name,
 			pr.provider_model AS litellm_name,
 			cp.base_url       AS base_url,
 			cp.api_key_env    AS api_key_env,
@@ -82,11 +90,11 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	for rows.Next() {
 		var r routeRow
 		var active bool
-		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv, &r.SupportsEmbeddings, &active); err != nil {
+		if err := rows.Scan(&r.RouteID, &r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv, &r.SupportsEmbeddings, &active); err != nil {
 			return fmt.Errorf("litellmconfig: sync: scan route: %w", err)
 		}
 
-		knownRouteIDs = append(knownRouteIDs, r.ModelName)
+		knownRouteIDs = append(knownRouteIDs, r.RouteID)
 		if !active {
 			continue
 		}

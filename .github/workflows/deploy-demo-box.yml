@@ -1690,26 +1690,34 @@ jobs:
           fail=0
           while IFS='|' read -r route_id litellm_name db_model; do
             [ -z "$route_id" ] && continue
-            live_model=$(echo "$resolved" | jq -r --arg id "$litellm_name" \
-              '.data[] | select(.model_name == $id) | .litellm_params.model' | head -1)
-            live_base=$(echo "$resolved" | jq -r --arg id "$litellm_name" \
-              '.data[] | select(.model_name == $id) | (.litellm_params.api_base // "")' | head -1)
-            if [ -z "$live_model" ] || [ "$live_model" = "null" ]; then
-              echo "::error::$route_id ($litellm_name): priced route is not in LiteLLM's live /model/info at all"
-              fail=1
-              continue
-            fi
-            # LiteLLM's generic openai/ adapter pointed at OpenRouter IS the
-            # openrouter provider, and only then. Canonicalize rather than
-            # discard, so the provider segment stays part of the comparison.
-            case "$live_model|$live_base" in
-              openai/*"openrouter.ai"*) live_model="openrouter/${live_model#openai/}" ;;
-            esac
-            if [ "$db_model" != "$live_model" ]; then
-              echo "::error::$route_id: catalog prices $db_model but LiteLLM will call $live_model"
+            # A model_name can carry MULTIPLE deployments (the free pool route
+            # group: N provider_routes rows share one litellm_model_name, and
+            # the config sync emits one deployment each so LiteLLM's router can
+            # load-balance across them). The priced alias's provider_model must
+            # be found among THAT SET of deployments, not at position 1, which
+            # is whichever member sorted first. Emit model+api_base pairs and
+            # match on membership.
+            matched=""
+            while IFS=$'\t' read -r entry_model entry_base; do
+              [ -z "$entry_model" ] && continue
+              # LiteLLM's generic openai/ adapter pointed at OpenRouter IS the
+              # openrouter provider, and only then. Canonicalize rather than
+              # discard, so the provider segment stays part of the comparison.
+              case "$entry_model|$entry_base" in
+                openai/*"openrouter.ai"*) entry_model="openrouter/${entry_model#openai/}" ;;
+              esac
+              if [ "$entry_model" = "$db_model" ]; then
+                matched="$entry_model"
+                break
+              fi
+            done < <(echo "$resolved" | jq -r --arg id "$litellm_name" \
+              '.data[] | select(.model_name == $id) | [.litellm_params.model, (.litellm_params.api_base // "")] | @tsv')
+
+            if [ -z "$matched" ]; then
+              echo "::error::$route_id ($litellm_name): catalog prices $db_model but no deployment under that model_name serves it"
               fail=1
             else
-              echo "$route_id: OK ($db_model <-> $live_model)"
+              echo "$route_id: OK ($db_model served by $litellm_name)"
             fi
           done <<< "$rows"
 
@@ -1812,7 +1820,9 @@ jobs:
     env:
       HIVE_BASE_URL: https://api-hive.scubed.co/v1
       HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
-      HIVE_TEST_MODEL: hive-default
+      # Daily automated consumption belongs on the free pool alias, not on a
+      # paid tier (migration 20260824_02_free_pool_router.sql).
+      HIVE_TEST_MODEL: hive-free
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v7
