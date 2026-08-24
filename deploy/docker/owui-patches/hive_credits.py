@@ -90,6 +90,9 @@ async def balance(user=Depends(get_verified_user)):
         balance = {
             'available_credits': int(data.get('available_credits') or 0),
             'usage_today_credits': int(data.get('usage_today_credits') or 0),
+            # Deployment-configured top-up destination, passed through verbatim
+            # or empty. Never derived from the request.
+            'top_up_url': (os.environ.get('HIVE_CONSOLE_BILLING_URL') or '').strip(),
         }
     except HTTPException:
         raise

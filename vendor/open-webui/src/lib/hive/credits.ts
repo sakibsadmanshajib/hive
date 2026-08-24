@@ -9,6 +9,11 @@ export interface CreditBalance {
 	available_credits: number;
 	/** Usage charges posted since midnight UTC today. */
 	usage_today_credits: number;
+	/**
+	 * Deployment-configured top-up destination; empty means the deployment
+	 * named none and the banner shows the warning without a link.
+	 */
+	top_up_url?: string;
 }
 
 export type CreditState = 'healthy' | 'low' | 'empty';
@@ -43,9 +48,11 @@ export async function fetchCreditBalance(
 		const available = Number(data?.available_credits);
 		if (!Number.isFinite(available)) return null;
 		const usageToday = Number(data?.usage_today_credits);
+		const topUpUrl = typeof data?.top_up_url === 'string' ? data.top_up_url : '';
 		return {
 			available_credits: available,
-			usage_today_credits: Number.isFinite(usageToday) ? usageToday : 0
+			usage_today_credits: Number.isFinite(usageToday) ? usageToday : 0,
+			top_up_url: topUpUrl || undefined
 		};
 	} catch {
 		// Network failure, offline, session expired: degrade to no banner.

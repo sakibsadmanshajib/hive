@@ -1366,8 +1366,11 @@ func main() {
 	// Issue #1063: the chat composer's credits banner. Open WebUI's backend
 	// resolves its own signed-in user to an email server side and calls this
 	// internal route; the tenant->billing-account link stays behind the
-	// shared-secret gate and never reaches a browser.
-	if ledgerSvc != nil {
+	// shared-secret gate and never reaches a browser. The route is not mounted
+	// at all without a configured token: RequireInternalToken already fails
+	// closed on an empty token, and skipping the mount makes a misconfigured
+	// deployment read as silent absence rather than a live surface.
+	if ledgerSvc != nil && cfg.InternalToken != "" {
 		ledger.RegisterChatBalanceRoute(routerMux, ledgerSvc, func(h http.Handler) http.Handler {
 			return platformhttp.RequireInternalToken(cfg.InternalToken, h)
 		})

@@ -3375,7 +3375,10 @@
 							{/if}
 						{:else}
 							<div class="flex items-center h-full">
-								<Placeholder
+								<div class="w-full">
+									<!-- hive (#1063): credits pill above the landing composer too -->
+									<CreditsBanner />
+									<Placeholder
 									{history}
 									{selectedModels}
 									bind:messageInput
@@ -3410,6 +3413,7 @@
 										}
 									}}
 								/>
+								</div>
 							</div>
 						{/if}
 					</div>

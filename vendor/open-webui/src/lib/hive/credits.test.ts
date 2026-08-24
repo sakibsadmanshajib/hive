@@ -55,6 +55,33 @@ describe('fetchCreditBalance', () => {
 		vi.unstubAllGlobals();
 	});
 
+	it('passes through a configured top-up URL and drops empty ones', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				Response.json({
+					available_credits: 5,
+					usage_today_credits: 0,
+					top_up_url: 'https://console.example/console/billing'
+				})
+			)
+		);
+		await expect(fetchCreditBalance('http://x')).resolves.toEqual({
+			available_credits: 5,
+			usage_today_credits: 0,
+			top_up_url: 'https://console.example/console/billing'
+		});
+		vi.unstubAllGlobals();
+
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => Response.json({ available_credits: 5, usage_today_credits: 0 }))
+		);
+		const without = await fetchCreditBalance('http://x');
+		expect(without?.top_up_url).toBeUndefined();
+		vi.unstubAllGlobals();
+	});
+
 	it('returns null on any non-200, never throwing', async () => {
 		for (const status of [401, 404, 500]) {
 			vi.stubGlobal(

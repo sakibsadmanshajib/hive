@@ -59,14 +59,16 @@
 		>
 			{#if state === 'empty'}
 				<span>{$i18n.t("You're out of credits.")}</span>
-				<a
-					href="https://console-hive.scubed.co/console/billing"
-					target="_blank"
-					rel="noreferrer"
-					class="font-medium underline underline-offset-2"
-				>
-					{$i18n.t('Top up')}
-				</a>
+				{#if balance?.top_up_url}
+					<a
+						href={balance.top_up_url}
+						target="_blank"
+						rel="noreferrer"
+						class="font-medium underline underline-offset-2"
+					>
+						{$i18n.t('Top up')}
+					</a>
+				{/if}
 			{:else}
 				<span>
 					{$i18n.t("You've used {{used}} credits today · {{remaining}} remaining", {

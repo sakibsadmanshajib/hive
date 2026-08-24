@@ -447,19 +447,22 @@ func isUniqueViolation(err error) bool {
 }
 
 // ResolveAccountIDForEmail maps a signed-in chat user's email to the billing
-// account behind that user's tenant (issue #1063). The chat session carries
-// only the Open WebUI identity; the tenant->account link lives in
+// account behind that user's CURRENT tenant (issue #1063). The chat session
+// carries only the Open WebUI identity; the tenant->account link lives in
 // public.tenant_billing_accounts and must never reach the browser, which is
 // why this hop exists server side.
+//
+// "Current" is the tenant the user selected in the product (/v1/tenants/switch
+// writes raw_user_meta_data->>'selected_tenant_id'), not an arbitrary newest
+// membership: showing another tenant's balance than the one this user chats
+// under would be wrong in both directions. When the selection names a tenant
+// this email is actively billed for, it wins outright. Without any selection,
+// the most recently joined membership answers, which matches the signup flow
+// where a fresh personal tenant is both the newest and the only one.
 //
 // Returns uuid.Nil, nil when the email has no active membership on a billed,
 // non-archived tenant. That is an expected state (a pending invite, an
 // unbilled enterprise posture), not an error.
-//
-// ponytail: when one login belongs to several active tenants this picks the
-// most recently joined membership, so the number shown is that tenant's
-// balance. Multi-tenant balance switching is a product decision nobody has
-// made yet; revisit if tenants-per-user stops being rare.
 func (r *pgxRepository) ResolveAccountIDForEmail(ctx context.Context, email string) (uuid.UUID, error) {
 	var accountID uuid.UUID
 	err := r.pool.QueryRow(ctx, `
@@ -469,7 +472,11 @@ func (r *pgxRepository) ResolveAccountIDForEmail(ctx context.Context, email stri
 		JOIN public.tenants t ON t.id = tu.tenant_id AND t.archived_at IS NULL
 		JOIN public.tenant_billing_accounts tba ON tba.tenant_id = t.id
 		WHERE lower(u.email) = lower($1)
-		ORDER BY tu.joined_at DESC
+		ORDER BY
+			-- Text comparison, never a cast: selected_tenant_id is free-form JSON
+			-- and a malformed value must degrade to the fallback order, not 22P02.
+			(t.id::text = COALESCE(u.raw_user_meta_data->>'selected_tenant_id', '')) DESC,
+			tu.joined_at DESC
 		LIMIT 1
 	`, strings.TrimSpace(strings.ToLower(email))).Scan(&accountID)
 	switch {
