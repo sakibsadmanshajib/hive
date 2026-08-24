@@ -1002,6 +1002,13 @@ jobs:
       # container.
       GROQ_API_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # The internal token control-plane requires on POST /internal/litellm/sync,
+      # which the step below calls to derive LiteLLM's serving config from the
+      # migration-seeded catalog exactly the way a deploy does. This job sets no
+      # other value and compose defaults the variable to this same literal, so
+      # pinning it here keeps the sync call and the container in agreement
+      # without introducing a new secret.
+      CONTROL_PLANE_INTERNAL_TOKEN: hive-local-internal-token
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
       # Which alias the token-consuming SDK suites call, and therefore which
       # provider account this job bills. Issue #1088.
@@ -1340,6 +1347,77 @@ jobs:
           echo "/v1/models lists hive-default"
           jq -r '.data[0:3] | .[] | .id' /tmp/models.json
 
+      - name: Sync LiteLLM model list from the DB catalog
+        # The seam this job was missing: a deploy derives LiteLLM's serving
+        # config from the database via POST /internal/litellm/sync
+        # (deploy-demo-box.yml), but this job never called it, so LiteLLM kept
+        # serving the static seed file deploy/litellm/config.yaml. The seed
+        # predates the free pool: it has no route-free-pool group, so every
+        # alias resolving into the pool (hive-free, this job's default
+        # HIVE_TEST_MODEL) failed with Invalid model name while /v1/models,
+        # which reads the DB catalog, listed it happily. Calling the same
+        # endpoint production calls makes the migration chain the single source
+        # of truth for what CI's gateway serves, exactly as on the box. The
+        # assertion at the bottom is the regression guard: if anyone breaks
+        # this wiring again, the gateway itself reports no pool and the job
+        # fails before the suites run.
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Same call shape as deploy-demo-box.yml's sync step: internal-token
+          # auth, 35s max-time (the endpoint's own work includes a bounded
+          # Docker restart), retried past cold-start blips, never swallowed.
+          status=""
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+          for i in 1 2 3; do
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              --connect-timeout 2 --max-time 35 \
+              -X POST -H "X-Internal-Token: $CONTROL_PLANE_INTERNAL_TOKEN" \
+              http://localhost:8081/internal/litellm/sync) || status="000"
+            if [ "$status" = "200" ]; then
+              break
+            fi
+            echo "attempt $i: sync returned $status, retry in 5s"
+            sleep 5
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::litellm config sync failed after 3 attempts, last status $status"
+            cat "$response_file" 2>/dev/null || true
+            exit 1
+          fi
+          echo "LiteLLM config synced from provider_routes"
+
+          # Sync restarts the litellm container as its last act, so the gateway
+          # is briefly down here. Wait for it to answer again rather than let
+          # the suites race the boot.
+          master_key="${LITELLM_MASTER_KEY:-litellm-dev-key}"
+          deadline=$(( $(date +%s) + 90 ))
+          : > /tmp/litellm-models.json
+          while :; do
+            if body=$(curl -sS --max-time 5 \
+                 -H "Authorization: Bearer $master_key" \
+                 http://localhost:4000/v1/models 2>/dev/null); then
+              printf '%s' "$body" > /tmp/litellm-models.json
+              break
+            fi
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::litellm did not come back up within 90s of the config sync"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # The regression assertion: LiteLLM must now serve the route-free-pool
+          # group that migration 20260824_02_free_pool_router.sql seeds, or
+          # every plain-chat suite call would 400 with an Invalid model error.
+          if ! jq -e '.data | map(.id) | index("route-free-pool") != null' /tmp/litellm-models.json >/dev/null; then
+            echo "::error::litellm does not serve route-free-pool after syncing from the DB catalog, so HIVE_TEST_MODEL=hive-free cannot resolve. Gateway models: $(jq -r '[.data[].id] | join(", ")' /tmp/litellm-models.json)"
+            exit 1
+          fi
+          echo "gateway serves route-free-pool; models: $(jq -r '[.data[].id] | join(", ")' /tmp/litellm-models.json)"
+
       - name: Run SDK suites in parallel (JS + Python + Java)
         # id, because the spend meter below runs on always() and needs to tell
         # "the suites failed, so the database may not exist" from "the suites
@@ -1452,7 +1530,7 @@ jobs:
               ;;
           esac
 
-          echo "::notice::live-integration metered ${total} tokens on alias '${HIVE_TEST_MODEL}' (ceiling ${RUN_TOKEN_CEILING})"
+          echo "::notice::live-integration metered ${total} tokens across the configured aliases (ceiling ${RUN_TOKEN_CEILING}); see the per-alias breakdown above"
 
           if [ "$total" -gt "$RUN_TOKEN_CEILING" ]; then
             echo "::error::this run metered ${total} tokens, over the ${RUN_TOKEN_CEILING} ceiling. Something is generating far more than the suites should. Find it before raising the ceiling: a provider allowance is shared with the live demo."
