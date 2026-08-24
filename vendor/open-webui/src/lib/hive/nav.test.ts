@@ -11,10 +11,22 @@ const byId = (id: string): HiveNavItem => {
 };
 
 describe('HIVE_NAV', () => {
-	it('names the destinations the shell ships', () => {
+	it('names the destinations the shell ships, Projects first per D-045', () => {
 		// 'chats' was dropped: its href ('/') duplicated New Chat and no list
 		// view was ever built behind it (PR #938 added it for row parity only).
-		expect(HIVE_NAV.map((item) => item.id)).toEqual(['agents', 'knowledge', 'scheduled']);
+		expect(HIVE_NAV.map((item) => item.id)).toEqual([
+			'projects',
+			'agents',
+			'knowledge',
+			'scheduled'
+		]);
+	});
+
+	it('points the projects destination at its own route inside this application', () => {
+		// D-045 ruling 2: Knowledge is replaced by Projects; context brought in
+		// lives here. Same in-shell rule as Agents: no link out of the shell.
+		expect(byId('projects').href).toBe('/projects');
+		expect(byId('projects').href.startsWith('http')).toBe(false);
 	});
 
 	it('points the agent destination at a route inside this application', () => {
@@ -65,7 +77,13 @@ describe('isNavItemActive', () => {
 	});
 
 	it('marks exactly one row current on each row\'s own destination', () => {
-		for (const route of ['/agents', '/workspace/knowledge', '/schedules']) {
+		for (const route of [
+			'/projects',
+			'/projects/abc',
+			'/agents',
+			'/workspace/knowledge',
+			'/schedules'
+		]) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));
 			expect(active.length).toBe(1);
 		}
