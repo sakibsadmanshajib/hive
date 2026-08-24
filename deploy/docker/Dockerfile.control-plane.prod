@@ -51,7 +51,7 @@ RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} \
 
 # Runtime stage: no --platform needed here; buildx selects the correct
 # arch image automatically for the target platform.
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 app
 
