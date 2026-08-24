@@ -45,6 +45,15 @@ type Config struct {
 	// provider_routes row at all still survives. Empty means "unknown", which
 	// preserves every unmatched entry exactly as before.
 	KnownRouteIDs []string
+	// KnownGroupNames is every provider_routes.litellm_model_name value,
+	// active or not: the names route GROUPS share. A group whose members all
+	// go inactive generates no model_list entry at all, so generatedNames
+	// never contains it and KnownRouteIDs does not either (it holds route_ids,
+	// not the shared gateway name); without this set a fully retired group's
+	// stale entry would survive as "operator-managed" forever. The merge drops
+	// an unmatched entry whose model_name appears here, exactly as it does for
+	// KnownRouteIDs. Empty means "unknown", preserving every unmatched entry.
+	KnownGroupNames []string
 	// ExistingConfigPath is the path of the on-disk config to merge from.
 	// WriteAndRestart reads this file to preserve non-generated keys.
 	// If the file does not exist, the config is written from scratch.
@@ -169,7 +178,7 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 			return fmt.Errorf("litellmconfig: parse existing config: %w", parseErr)
 		}
 		if existingMap != nil {
-			merged = mergeConfig(existingMap, newMap, cfg.KnownRouteIDs)
+			merged = mergeConfig(existingMap, newMap, cfg.KnownRouteIDs, cfg.KnownGroupNames)
 		}
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return fmt.Errorf("litellmconfig: read existing config: %w", readErr)
@@ -284,8 +293,12 @@ func mergeParams(existing, generated interface{}) interface{} {
 //   - All other top-level keys from existing are preserved unchanged.
 //
 // An empty knownRouteIDs means the caller does not know the route set, and every
-// unmatched entry is preserved (the pre-knownRouteIDs behaviour).
-func mergeConfig(existing, generated map[string]interface{}, knownRouteIDs []string) map[string]interface{} {
+// unmatched entry is preserved (the pre-knownRouteIDs behaviour). knownGroupNames
+// works identically for route GROUPS: names several rows share as their
+// litellm_model_name. A group whose members are all retired generates no entry,
+// so generatedNames cannot cover it and only this set can retire its stale
+// config block.
+func mergeConfig(existing, generated map[string]interface{}, knownRouteIDs []string, knownGroupNames []string) map[string]interface{} {
 	result := make(map[string]interface{}, len(existing))
 	for k, v := range existing {
 		result[k] = v
@@ -310,6 +323,10 @@ func mergeConfig(existing, generated map[string]interface{}, knownRouteIDs []str
 	knownRoutes := make(map[string]bool, len(knownRouteIDs))
 	for _, id := range knownRouteIDs {
 		knownRoutes[id] = true
+	}
+	knownGroups := make(map[string]bool, len(knownGroupNames))
+	for _, name := range knownGroupNames {
+		knownGroups[name] = true
 	}
 
 	// Build a lookup of the existing entries keyed by model_name, so a
@@ -357,8 +374,12 @@ func mergeConfig(existing, generated map[string]interface{}, knownRouteIDs []str
 		if name == "" || generatedNames[name] {
 			continue
 		}
-		if knownRoutes[name] {
-			slog.Info("litellmconfig: sync: dropping model_list entry for a provider_routes route that is no longer active", "model_name", name)
+		if knownRoutes[name] || knownGroups[name] {
+			if !knownRoutes[name] {
+				slog.Info("litellmconfig: sync: dropping model_list entry for a route group whose members are all inactive", "model_name", name)
+			} else {
+				slog.Info("litellmconfig: sync: dropping model_list entry for a provider_routes route that is no longer active", "model_name", name)
+			}
 			continue
 		}
 		slog.Info("litellmconfig: sync: preserving operator-managed model_list entry with no provider_routes row", "model_name", name)

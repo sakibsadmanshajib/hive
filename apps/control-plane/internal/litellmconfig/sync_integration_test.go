@@ -181,13 +181,14 @@ func TestSyncServiceIntegration(t *testing.T) {
 
 	// -------------------------------------------------------------------------
 	// Step 3b: Assert every seeded active route actually made it into the
-	// generated config, keyed on model_name (route_id) with the exact
-	// litellm_params.model the route was seeded with (provider_model). A
-	// future rename of either source column (the defect this test guards
-	// against, issue #701) makes this fail loudly — either the query errors
-	// before reaching this point, or the seeded route_id/provider_model pair
-	// goes missing/wrong here — instead of silently shipping an empty or
-	// mismatched model_list.
+	// generated config under its litellm_model_name with the exact
+	// litellm_params.model the route was seeded with (provider_model). The
+	// sync emits provider_routes.litellm_model_name as the config's
+	// model_name key; rows where it equals route_id behave exactly as before,
+	// and divergent rows form multi-deployment route groups (see the route
+	// group test below). A future rename of either source column (the defect
+	// this test guards against, issue #701) makes this fail loudly instead of
+	// silently shipping an empty or mismatched model_list.
 	// -------------------------------------------------------------------------
 	byModelName := map[string]map[string]interface{}{}
 	for _, item := range modelList {
@@ -202,22 +203,22 @@ func TestSyncServiceIntegration(t *testing.T) {
 		byModelName[name] = entry
 	}
 
-	wantRoutes := map[string]string{
-		routeID1: providerSlug + "/model-alpha",
-		routeID2: providerSlug + "/model-beta",
+	wantModels := []string{
+		providerSlug + "/model-alpha",
+		providerSlug + "/model-beta",
 	}
-	for routeID, wantProviderModel := range wantRoutes {
-		entry, ok := byModelName[routeID]
+	for _, wantModelName := range wantModels {
+		entry, ok := byModelName[wantModelName]
 		if !ok {
-			t.Fatalf("seeded route %q missing from generated model_list; got model_names: %v", routeID, mapKeys(byModelName))
+			t.Fatalf("seeded route %q missing from generated model_list; got model_names: %v", wantModelName, mapKeys(byModelName))
 		}
 		params, ok := entry["litellm_params"].(map[string]interface{})
 		if !ok {
-			t.Fatalf("route %q: litellm_params missing or wrong type: %#v", routeID, entry["litellm_params"])
+			t.Fatalf("route %q: litellm_params missing or wrong type: %#v", wantModelName, entry["litellm_params"])
 		}
 		gotModel, _ := params["model"].(string)
-		if gotModel != wantProviderModel {
-			t.Errorf("route %q: litellm_params.model = %q, want %q (provider_model)", routeID, gotModel, wantProviderModel)
+		if gotModel != wantModelName {
+			t.Errorf("route %q: litellm_params.model = %q, want %q (provider_model)", wantModelName, gotModel, wantModelName)
 		}
 	}
 
@@ -242,6 +243,82 @@ func TestSyncServiceIntegration(t *testing.T) {
 
 	t.Logf("TestSyncServiceIntegration: YAML written to %s, %d model entries, restarter called %d time(s)",
 		configPath, len(modelList), restarter.calls)
+}
+
+// TestSyncServiceRouteGroupEmitsMultipleDeployments proves the route group
+// shape against a real database: N provider_routes rows that share one
+// litellm_model_name produce N model_list entries under that single
+// model_name, each with its own env-keyed credential. This is the mechanism
+// behind the free pool router (migration 20260824_02): an exhausted key cools
+// down one deployment while LiteLLM's router serves the others.
+func TestSyncServiceRouteGroupEmitsMultipleDeployments(t *testing.T) {
+	pool := connectLiteLLMTestDB(t)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	groupName := "integ-pool-" + suffix
+
+	seedSyncProvider(t, pool, "integ-provider-"+suffix+"-a")
+	seedSyncProvider(t, pool, "integ-provider-"+suffix+"-b")
+
+	// Two routes, different providers, same litellm_model_name. seedSyncRoute
+	// sets litellm_model_name = provider/model, so override it to the shared
+	// group name afterwards; the column is exactly the divergence point the
+	// sync reads.
+	seedSyncRoute(t, pool, "integ-pool-a-"+suffix, "integ-pool-alias-a-"+suffix, "integ-provider-"+suffix+"-a", "model-one")
+	seedSyncRoute(t, pool, "integ-pool-b-"+suffix, "integ-pool-alias-b-"+suffix, "integ-provider-"+suffix+"-b", "model-two")
+	for _, routeID := range []string{"integ-pool-a-" + suffix, "integ-pool-b-" + suffix} {
+		if _, err := pool.Exec(ctx,
+			`UPDATE public.provider_routes SET litellm_model_name = $1 WHERE route_id = $2`,
+			groupName, routeID); err != nil {
+			t.Fatalf("repoint %s to group name: %v", routeID, err)
+		}
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	svc := litellmconfig.NewSyncService(pool, configPath, "test-master-key", &integMockRestarter{})
+	if err := svc.Sync(ctx); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile config: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("YAML parse error: %v", err)
+	}
+
+	type deployment struct{ model, apiKey string }
+	got := map[deployment]bool{}
+	for _, item := range parsed["model_list"].([]interface{}) {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, _ := entry["model_name"].(string); name != groupName {
+			continue
+		}
+		params, _ := entry["litellm_params"].(map[string]interface{})
+		model, _ := params["model"].(string)
+		apiKey, _ := params["api_key"].(string)
+		got[deployment{model, apiKey}] = true
+	}
+
+	want := map[deployment]bool{
+		{"integ-provider-" + suffix + "-a/model-one", "os.environ/INTEG_TEST_KEY"}: true,
+		{"integ-provider-" + suffix + "-b/model-two", "os.environ/INTEG_TEST_KEY"}: true,
+	}
+	if len(got) != 2 {
+		t.Errorf("route group %q emitted %d distinct deployments (%v), want 2", groupName, len(got), got)
+	}
+	for d := range want {
+		if !got[d] {
+			t.Errorf("route group %q missing deployment %+v", groupName, d)
+		}
+	}
 }
 
 // TestSyncRemovesRetiredRouteFromExistingConfig is the live-DB half of the

@@ -5,7 +5,7 @@ from openai import OpenAI
 
 BASE_URL = os.getenv("HIVE_BASE_URL", "http://localhost:8080/v1")
 API_KEY = os.getenv("HIVE_API_KEY", "test-key")
-MODEL = os.getenv("HIVE_TEST_MODEL", "hive-default")
+MODEL = os.getenv("HIVE_TEST_MODEL", "hive-free")
 
 
 @pytest.fixture

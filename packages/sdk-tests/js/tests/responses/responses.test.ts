@@ -3,22 +3,24 @@ import OpenAI from "openai";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
-const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-default";
+const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 
 // Known reasoning model identifiers — skip the reasoning-parameter rejection
 // test for these, because the edge routes that parameter on
 // provider_capabilities.supports_reasoning and these aliases have it true, so
 // there is no rejection to assert.
 //
-// The Groq gpt-oss aliases (`hive-default`, `hive-auto`, `hive-small`,
-// `hive-medium`, and the deprecated `hive-fast`) accept reasoning parameters
-// natively, and every one of them is seeded supports_reasoning true. Listing
-// all five rather than the two this suite is usually pointed at, because
-// HIVE_TEST_MODEL is a knob and a run pointed at any of them would otherwise
-// assert a rejection that cannot happen. (An older comment here explained the
-// first two by a LiteLLM fallback cascade; those chat fallbacks were removed
-// from deploy/litellm/config.yaml by the 2026-08-22 catalog restructure, and
-// the flag on the route is the actual reason.)
+// The free pool alias (`hive-free`, migration
+// 20260824_02_free_pool_router.sql) is seeded supports_reasoning true: every
+// member of its load-balanced pool accepts reasoning parameters without
+// failing, even where the knob modulates little.
+//
+// `hive-default` and `hive-auto` are listed because HIVE_TEST_MODEL is a knob
+// and an override run pointed at either would otherwise assert a rejection
+// that cannot happen: hive-default now serves deepseek-v4-flash and hive-auto
+// serves the OpenRouter Auto Router (both seeded supports_reasoning true),
+// which retires the old "Groq gpt-oss aliases" explanation those five entries
+// carried.
 //
 // `deepseek` covers deepseek-v4-flash and deepseek-v4-pro. Not an accommodation
 // for CI: supabase/migrations/20260822_02_catalog_alias_restructure.sql seeds
@@ -28,6 +30,7 @@ const REASONING_MODEL_PATTERNS = [
   "o1",
   "o3",
   "reasoning",
+  "hive-free",
   "hive-default",
   "hive-auto",
   "hive-small",

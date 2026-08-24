@@ -60,10 +60,14 @@ Required env for the `signin` and `ledger` checks only:
     whole gate going dark on a missing credential.
 
 Optional env:
-    HIVE_VERIFY_MODEL          default hive-default. post-deploy-verify.yml
-                               passes it through from the box .env when set
-                               there, so the gate's billed completion can use
-                               a paid alias instead of hive-default
+    HIVE_VERIFY_MODEL          default hive-free, the free-pool alias: daily
+                               automated consumption belongs there, not on a
+                               paid tier (migration
+                               20260824_02_free_pool_router.sql).
+                               post-deploy-verify.yml passes it through from
+                               the box .env when set there, so the gate's
+                               billed completion can be pointed anywhere else
+                               without touching this file
     HIVE_VERIFY_LEDGER_TIMEOUT default 90 (seconds to step-poll for the charge)
     HIVE_VERIFY_LEDGER_PAGES   default 20 (page cap on the ledger scan)
     HIVE_VERIFY_COMPLETION_ATTEMPTS  default 3 (upstream 429/5xx retries on the
@@ -114,7 +118,7 @@ USER_AGENT = "hive-post-deploy-verify/1 (+https://github.com/sakibsadmanshajib/h
 # else, before any request is sent: see the Required env note in the module
 # docstring for why none of these carries a default.
 CHAT = CP = EDGE = ""
-MODEL = os.environ.get("HIVE_VERIFY_MODEL", "hive-default").strip() or "hive-default"
+MODEL = os.environ.get("HIVE_VERIFY_MODEL", "hive-free").strip() or "hive-free"
 LEDGER_TIMEOUT = float(os.environ.get("HIVE_VERIFY_LEDGER_TIMEOUT", "90"))
 LEDGER_PAGES = int(os.environ.get("HIVE_VERIFY_LEDGER_PAGES", "20"))
 LEDGER_PAGE_SIZE = 500
