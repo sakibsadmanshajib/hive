@@ -120,9 +120,10 @@ var everyRescaledColumn = []rescaleStmt{
 	{"llm_traces", []string{"cost_credits"}},
 }
 
-// stmtForTable returns the SQL text between `UPDATE public.<table>` and the
-// next UPDATE, so assertions stay scoped to their own statement instead of
-// passing because some other table multiplied the right name.
+// stmtForTable returns the SQL text from the chosen `UPDATE public.<table>`
+// up to the NEXT `UPDATE public.` of ANY table (or EOF), so assertions stay
+// scoped to their own statement instead of passing because some later
+// statement multiplied the right column name.
 func stmtForTable(t *testing.T, raw, table string, occurrence int) string {
 	t.Helper()
 	re := regexp.MustCompile(`(?s)UPDATE public\.` + regexp.QuoteMeta(table) + `\b`)
@@ -132,8 +133,9 @@ func stmtForTable(t *testing.T, raw, table string, occurrence int) string {
 	}
 	start := locs[occurrence][0]
 	end := len(raw)
-	if occurrence+1 < len(locs) {
-		end = locs[occurrence+1][0]
+	nextAny := regexp.MustCompile(`(?s)UPDATE public\.`).FindStringIndex(raw[start+len("UPDATE public."):])
+	if nextAny != nil {
+		end = start + len("UPDATE public.") + nextAny[0]
 	}
 	return raw[start:end]
 }
@@ -224,7 +226,7 @@ func TestRescaledChargeKeepsRealUSDParity(t *testing.T) {
 		// round half up over 1e6, mirroring metering.ChargeCredits
 		q, r := new(big.Int).QuoRem(total, big.NewInt(1_000_000), new(big.Int))
 		if new(big.Int).Mul(r, big.NewInt(2)).Cmp(big.NewInt(1_000_000)) >= 0 {
-			q.Add(q, big.NewInt(1))
+			q = new(big.Int).Add(q, big.NewInt(1))
 		}
 		return q.Int64()
 	}

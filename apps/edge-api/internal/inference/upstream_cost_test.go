@@ -137,9 +137,9 @@ func TestCreditsForUpstreamCostMagnitude(t *testing.T) {
 	}{
 		{
 			// The figure measured from a real OpenRouter usage block.
-			// 0.0123456 x 1.4 x 1e9 = 17,283,840 exactly (the same $0.02-ish
-			// real money the pre-rescale unit charged as 1728 old credits;
-			// every expectation here is the pre-rescale figure times 10,000).
+			// Exact product: 0.0123456 x 1.4 x 1e9 = 17,283,840 with no
+			// remainder, so no rounding applies. Same real money as the
+			// pre-rescale unit's 1728 old credits.
 			name: "measured cost, exact product",
 			cost: "0.0123456",
 			want: 17_283_840,
@@ -166,16 +166,18 @@ func TestCreditsForUpstreamCostMagnitude(t *testing.T) {
 			want: 172_839_505,
 		},
 		{
-			// 0.0000001 x 1.4e9 = 140 exactly (pre-rescale it floored from
-			// 0.014 to 1): a request that cost us real money is never
-			// settled free either way.
+			// Exact product this time: 0.0000001 x 1.4e9 = 140 credits with
+			// no rounding involved (the pre-rescale unit floored its 0.014-credit
+			// product to 1; that comparison is era trivia, not arithmetic).
 			name: "a tiny but real cost floors at one credit, never zero",
 			cost: "0.0000001",
 			want: 140,
 		},
 		{
 			// 1e-12 USD x 1.4e9 = 0.0014 floors to 1: at the finer new unit
-			// the floor still catches costs far below one credit.
+			// the floor still catches costs far below one credit. This case
+			// is a FLOORING case, not a scaled one: the product is far below
+			// one credit in both units.
 			name: "a sub-floor cost still charges one credit",
 			cost: "0.000000000001",
 			want: 1,

@@ -425,7 +425,9 @@ func stampCreditUnit(metadata map[string]any) map[string]any {
 	if _, ok := metadata["credit_unit"]; ok {
 		return metadata
 	}
-	stamped := make(map[string]any, len(metadata)+1)
+	// No capacity hint: len+1 in a make() is the shape CodeQL's
+	// allocation-overflow rule flags, and the hint buys nothing at this size.
+	stamped := make(map[string]any)
 	for k, v := range metadata {
 		stamped[k] = v
 	}

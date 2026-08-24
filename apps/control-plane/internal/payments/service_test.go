@@ -432,10 +432,10 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 // was checked for sign and for the 1000 multiple only, so the advertised maximum
 // was decoration: a caller that skipped the console could post any int64.
 //
-// The last case is the one that motivated the bound. 9007199300000000 is past
-// 2^53, so a JSON encoder backed by float64 has already rounded it before it is
-// sent, yet it is positive, a whole one-cent step, and decodes cleanly into
-// int64.
+// The last case is the one that motivated the bound. 9007199260000000 is the
+// first whole-cent multiple past 2^53, so a JSON encoder backed by float64 has
+// already rounded it before it is sent, yet it is positive and decodes cleanly
+// into int64.
 // Every earlier check passes and the customer is billed for a quantity nobody
 // asked for.
 func TestInitiateCheckout_RejectsCreditsAboveRailMaximum(t *testing.T) {
@@ -448,7 +448,7 @@ func TestInitiateCheckout_RejectsCreditsAboveRailMaximum(t *testing.T) {
 		{"stripe above its maximum", "US", RailStripe, MaxPurchaseCreditsStripe + CreditIncrement},
 		{"bkash above its maximum", "BD", RailBkash, MaxPurchaseCreditsBkash + CreditIncrement},
 		{"sslcommerz above its maximum", "BD", RailSSLCommerz, MaxPurchaseCreditsSSLCommerz + CreditIncrement},
-		{"rounded past 2^53", "US", RailStripe, 9_007_199_300_000_000}, // first whole-cent step above 2^53
+		{"rounded past 2^53", "US", RailStripe, 9_007_199_260_000_000}, // first whole-cent step above 2^53
 	}
 
 	for _, tc := range cases {

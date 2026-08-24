@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { formatCurrency as formatPrice } from "@/lib/format/money";
+import { computeBlockSplitAmountMinor } from "./checkout-modal";
 
 describe("CheckoutModal price formatting", () => {
   it("formats BDT price", () => {
@@ -25,13 +26,15 @@ describe("CheckoutModal price formatting", () => {
 // Locked-in invariants below catch the regression that codex-rescue
 // flagged: prior code computed `credits * price_per_credit_minor`,
 // inflating non-BD totals by 100,000×.
+// The test cases call the PRODUCTION helper (argument order adapted), not a
+// copy of its math: a copy would keep passing after the component's real
+// computation regressed.
 function computeAmountMinor(
   credits: number,
   pricePerBlockMinor: number,
   creditBlockSize: number,
 ): number {
-  if (creditBlockSize <= 0) return 0;
-  return Math.floor((credits * pricePerBlockMinor) / creditBlockSize);
+  return computeBlockSplitAmountMinor(credits, creditBlockSize, pricePerBlockMinor);
 }
 
 describe("computeAmountMinor (FX-17-04 post-review per-block contract)", () => {
@@ -68,12 +71,22 @@ describe("computeAmountMinor (FX-17-04 post-review per-block contract)", () => {
     expect(formatPrice(got, "BDT")).toContain("115.50");
   });
 
-  it("magnitude: a max-size purchase stays exact past 2^53 raw product", () => {
+  it("magnitude: max-size purchase stays exact past 2^53 raw product", () => {
     // 5e12 credits x 15000 paisa would be 7.5e16 if multiplied naively,
     // which is past Number.MAX_SAFE_INTEGER. The block-split computation
     // must still return the exact floor.
     const got = computeAmountMinor(5_000_000_000_000, 15_000, CREDITS_PER_USD);
     expect(got).toBe(75_000_000); // BDT 500K in paisa
+  });
+
+  it("magnitude: non-aligned input matches a BigInt reference exactly", () => {
+    const credits = 5_000_775_014_999;
+    const price = 15_001;
+    const blockSize = CREDITS_PER_USD;
+    const reference =
+      Number((BigInt(credits) * BigInt(price)) / BigInt(blockSize));
+    expect(Number.isSafeInteger(reference)).toBe(true);
+    expect(computeBlockSplitAmountMinor(credits, blockSize, price)).toBe(reference);
   });
 
   it("regression: NEVER returns per-credit inflation (the pre-review bug)", () => {

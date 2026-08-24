@@ -32,6 +32,36 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
   return Array.isArray(value.rails);
 }
 
+// computeBlockSplitAmountMinor prices `credits` at `pricePerBlockMinor`
+// minor units per `creditBlockSize` credits, floor-rounded, WITHOUT forming
+// the raw product: at the current unit a max-size purchase would multiply to
+// ~7.5e16, past Number.MAX_SAFE_INTEGER. Whole blocks are priced as an exact
+// Number product (block quotient x price stays far below 2^53 for every real
+// currency rate); the sub-block remainder goes through BigInt, whose floor
+// division is exact for any inputs. Exported so tests exercise THIS code
+// rather than a copy of it.
+export function computeBlockSplitAmountMinor(
+  credits: number,
+  creditBlockSize: number,
+  pricePerBlockMinor: number,
+): number {
+  if (
+    !Number.isFinite(credits) ||
+    !Number.isFinite(creditBlockSize) ||
+    creditBlockSize <= 0 ||
+    !Number.isFinite(pricePerBlockMinor)
+  ) {
+    // NaN comparisons return false for `<= 0`, so a pathological upstream
+    // value would otherwise reach the division and render as NaN.
+    return 0;
+  }
+  const wholeBlocks = Math.trunc(credits / creditBlockSize);
+  const remainderMinor =
+    (BigInt(credits - wholeBlocks * creditBlockSize) * BigInt(pricePerBlockMinor)) /
+    BigInt(creditBlockSize);
+  return wholeBlocks * pricePerBlockMinor + Number(remainderMinor);
+}
+
 export function CheckoutModal({
   accountCountryCode,
   onClose,
@@ -95,17 +125,7 @@ export function CheckoutModal({
   // arbitrary credit count we integer-divide by the block size, matching the
   // server-side math/big truncation.
   //
-  // Magnitude safety at the new unit: the raw product
-  // `5e12 credits * 15000 paisa = 7.5e16` EXCEEDS Number.MAX_SAFE_INTEGER,
-  // so the computation never forms that product. Whole blocks are priced as
-  // an exact Number product (block quotient x price stays far below 2^53 for
-  // every real currency rate); the sub-block remainder goes through BigInt,
-  // whose floor division is exact for any inputs. The sum is the floor of
-  // the true total with no magnitude assumption left to drift.
   function computeAmountMinor(): number {
-    // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
-    // block size. NaN comparisons return false for `<= 0`, so a pathological
-    // upstream value would otherwise reach the division and render as NaN.
     if (
       !options ||
       !Number.isFinite(options.credit_block_size) ||
@@ -114,13 +134,11 @@ export function CheckoutModal({
     ) {
       return 0;
     }
-    const blockSize = options.credit_block_size;
-    const pricePerBlock = options.price_per_block_minor;
-    const wholeBlocks = Math.trunc(creditAmount / blockSize);
-    const remainderMinor =
-      (BigInt(creditAmount - wholeBlocks * blockSize) * BigInt(pricePerBlock)) /
-      BigInt(blockSize);
-    return wholeBlocks * pricePerBlock + Number(remainderMinor);
+    return computeBlockSplitAmountMinor(
+      creditAmount,
+      options.credit_block_size,
+      options.price_per_block_minor,
+    );
   }
 
   async function handleCheckout() {
