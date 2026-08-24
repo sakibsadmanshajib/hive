@@ -918,3 +918,64 @@ general_settings:
 	require.True(t, ok)
 	assert.Equal(t, "new", gs["master_key"])
 }
+
+// TestWriteAndRestartRemovesRetiredRouteGroup is the group-shaped twin of
+// TestWriteAndRestartRemovesRetiredDBManagedRoute: when every member of a
+// route group goes inactive, the sync generates no entry for the shared
+// model_name at all. generatedNames then cannot cover it, and without
+// KnownGroupNames the stale block would survive as "operator-managed" with no
+// path that could ever remove it.
+func TestWriteAndRestartRemovesRetiredRouteGroup(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	existing := `model_list:
+  - model_name: route-free-pool
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_base: https://api.groq.com/openai/v1
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: integ-operator-managed-entry
+    litellm_params:
+      model: openai/some-local-model
+      api_base: http://localhost:11434/v1
+      api_key: "none"
+general_settings:
+  master_key: old-key
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
+
+	cfg := litellmconfig.Config{
+		// One unrelated active route; nothing generates the pool name any more.
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:   "route-some-other-route",
+				LiteLLMName: "openrouter/openai/gpt-4o",
+				APIBase:     "https://openrouter.ai/api/v1",
+				APIKeyEnv:   "OPENROUTER_API_KEY",
+			},
+		},
+		KnownRouteIDs:      []string{"route-free-pool-free", "route-free-pool-gemini", "route-free-pool-groq", "route-free-pool-groq-2"},
+		KnownGroupNames:    []string{"route-free-pool"},
+		GeneralSettings:    litellmconfig.GeneralSettings{MasterKey: "k"},
+		ExistingConfigPath: configPath,
+	}
+	restarter := &mockRestarter{}
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, restarter))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+	names := map[string]bool{}
+	for _, item := range parsed["model_list"].([]interface{}) {
+		if entry, ok := item.(map[string]interface{}); ok {
+			name, _ := entry["model_name"].(string)
+			names[name] = true
+		}
+	}
+	assert.False(t, names["route-free-pool"], "a fully retired route group's entry must be dropped from the config")
+	assert.True(t, names["integ-operator-managed-entry"], "an entry with no provider_routes row at all must survive")
+	assert.True(t, names["route-some-other-route"])
+}

@@ -87,6 +87,7 @@ func (s *SyncService) Sync(ctx context.Context) error {
 
 	var entries []ModelEntry
 	var knownRouteIDs []string
+	var knownGroupNames []string
 	for rows.Next() {
 		var r routeRow
 		var active bool
@@ -95,6 +96,14 @@ func (s *SyncService) Sync(ctx context.Context) error {
 		}
 
 		knownRouteIDs = append(knownRouteIDs, r.RouteID)
+		// Every litellm_model_name in the table is a DB-owned gateway name even
+		// when its row is inactive; without this set, a route GROUP whose
+		// members all go inactive would leave its shared model_list entry
+		// unreclaimable (generatedNames never contains it and neither does
+		// KnownRouteIDs, which holds route_ids).
+		if !knownGroupNamesContains(knownGroupNames, r.ModelName) {
+			knownGroupNames = append(knownGroupNames, r.ModelName)
+		}
 		if !active {
 			continue
 		}
@@ -129,8 +138,9 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	}
 
 	cfg := Config{
-		Models:        entries,
-		KnownRouteIDs: knownRouteIDs,
+		Models:          entries,
+		KnownRouteIDs:   knownRouteIDs,
+		KnownGroupNames: knownGroupNames,
 		GeneralSettings: GeneralSettings{
 			MasterKey: s.masterKey,
 		},
@@ -138,4 +148,16 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	}
 
 	return WriteAndRestart(ctx, s.configPath, cfg, s.restarter)
+}
+
+// knownGroupNamesContains reports whether names already holds name. Group
+// members repeat one shared litellm_model_name across rows, so the list stays
+// tiny; a linear scan beats a map for single-digit sizes.
+func knownGroupNamesContains(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }

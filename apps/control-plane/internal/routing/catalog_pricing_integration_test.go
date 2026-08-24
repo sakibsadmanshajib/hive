@@ -69,15 +69,19 @@ func connectCatalogDB(t *testing.T) *pgxpool.Pool {
 // lands. Anything NOT listed here is held to the rule.
 var pendingMultiRouteAliases = map[string]string{
 	"hive-embedding-default": "issue #617 follow-up: embedding route choice is coupled to the provisioned vector width (D-001)",
-	// The free pool (20260824_02_free_pool_router.sql) is multi-route BY
-	// DESIGN, not pending a fix: its four member rows share one
-	// litellm_model_name, so whichever member selection picks dispatches the
-	// same load-balanced LiteLLM group at the alias's single price. The D-032
-	// ambiguity this test guards (one price, unclear upstream cost) does not
-	// arise when every member serves under one gateway name. Listed here so
-	// the count is reported rather than failed; if the pool ever collapses to
-	// one row, this entry must be removed.
-	"hive-free": "free pool router: four deployments share litellm_model_name 'route-free-pool' by design",
+}
+
+// expectedMultiRouteAliases are aliases that legitimately carry MORE than one
+// enabled route, with the EXACT count required. The free pool
+// (20260824_02_free_pool_router.sql) puts four deployments behind one alias on
+// purpose: all four rows share litellm_model_name 'route-free-pool', so
+// whichever member SelectRoute picks dispatches the same load-balanced gateway
+// group at the alias's single fixed price. The D-032 ambiguity this file guards
+// (one price, unclear upstream cost) cannot arise when every member serves
+// under one gateway name at one catalog price. A member added or removed
+// without updating the expected count fails here loudly.
+var expectedMultiRouteAliases = map[string]int{
+	"hive-free": 4,
 }
 
 // TestSeededAliasHasExactlyOneEnabledRoute enforces the owner's rule: one
@@ -117,6 +121,12 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 		if reason, pending := pendingMultiRouteAliases[aliasID]; pending {
 			if enabled == 1 {
 				t.Errorf("alias %s now has exactly 1 enabled route; drop it from pendingMultiRouteAliases (%s)", aliasID, reason)
+			}
+			continue
+		}
+		if want, multi := expectedMultiRouteAliases[aliasID]; multi {
+			if enabled != want {
+				t.Errorf("alias %s has %d enabled routes, want exactly %d (the free pool's member rows; update expectedMultiRouteAliases if the pool changed)", aliasID, enabled, want)
 			}
 			continue
 		}
