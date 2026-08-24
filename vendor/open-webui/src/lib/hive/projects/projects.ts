@@ -363,7 +363,10 @@ export const resolveProjectConversations = async (
 	apiBase: string = DEFAULT_API_BASE,
 	fetchImpl: typeof fetch = fetch
 ): Promise<HiveProjectConversation[]> => {
-	const out: HiveProjectConversation[] = [];
+	// Walk every list page first (a short page ends the walk), then read the
+	// candidate blobs with bounded concurrency so the detail page does not wait
+	// on one serial request per chat.
+	const candidates: RawChatListRow[] = [];
 	for (let page = 1; page <= 50; page++) {
 		const params = new URLSearchParams();
 		params.append('page', String(page));
@@ -373,25 +376,39 @@ export const resolveProjectConversations = async (
 			apiBase,
 			fetchImpl
 		);
-		for (const row of rows) {
-			try {
-				const full = await requestJson<{
-					chat?: { [key: string]: unknown };
-					title?: string;
-					updated_at?: number;
-				}>(`/chats/${row.id}`, { method: 'GET', headers: headers(token) }, apiBase, fetchImpl);
-				if (full?.chat?.[PROJECT_CHAT_KEY] === projectId) {
-					out.push({
-						id: row.id,
-						title: full.title || row.title || 'Untitled',
-						updatedAt: Number(full.updated_at ?? row.updated_at ?? 0)
-					});
-				}
-			} catch {
-				// Deleted between listing and read: skip, do not fail the page.
-			}
-		}
+		candidates.push(...rows);
 		if (rows.length < pageSize) break;
+	}
+
+	const out: HiveProjectConversation[] = [];
+	const CONCURRENCY = 8;
+	for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+		const batch = candidates.slice(i, i + CONCURRENCY);
+		const settled = await Promise.all(
+			batch.map(async (row) => {
+				try {
+					const full = await requestJson<{
+						chat?: { [key: string]: unknown };
+						title?: string;
+						updated_at?: number;
+					}>(`/chats/${row.id}`, { method: 'GET', headers: headers(token) }, apiBase, fetchImpl);
+					if (full?.chat?.[PROJECT_CHAT_KEY] === projectId) {
+						return {
+							id: row.id,
+							title: full.title || row.title || 'Untitled',
+							updatedAt: Number(full.updated_at ?? row.updated_at ?? 0)
+						};
+					}
+					return null;
+				} catch {
+					// Deleted between listing and read: skip, do not fail the page.
+					return null;
+				}
+			})
+		);
+		for (const convo of settled) {
+			if (convo) out.push(convo);
+		}
 	}
 	out.sort((a, b) => b.updatedAt - a.updatedAt);
 	return out;
