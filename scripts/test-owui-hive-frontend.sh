@@ -44,7 +44,9 @@ for rel in \
 	chat/SettingsModal.svelte \
 	chat/ModelSelector/Selector.svelte \
 	chat/Settings/Account.svelte \
-	chat/Settings/Advanced/AdvancedParams.svelte
+	chat/Settings/Advanced/AdvancedParams.svelte \
+	chat/MessageInput.svelte \
+	chat/Chat.svelte
 do
 	mkdir -p "$WORK/lib/components/${rel%/*}"
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"

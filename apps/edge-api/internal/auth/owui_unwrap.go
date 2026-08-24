@@ -52,10 +52,13 @@ func IsOWUIUnwrapped(ctx context.Context) bool {
 }
 
 // maxOWUIUnwrapBody caps the body we buffer for metadata extraction.
-// OWUI chat-completions bodies are typically small (~kilobytes); a 2 MiB
-// ceiling is well past the largest realistic prompt + attachments
-// without giving an attacker a memory-amplification primitive.
-const maxOWUIUnwrapBody = 2 << 20 // 2 MiB
+// Chat messages carry inlined attachment text (#1108): a pasted document
+// or extracted file content lands whole inside the JSON completion body,
+// so realistic signed-in-user sends reach multiple MiB. A 16 MiB ceiling
+// keeps that traffic flowing while staying far below anything that could
+// act as a memory-amplification primitive. Over-limit requests with a
+// declared Content-Length are rejected before a byte is buffered.
+const maxOWUIUnwrapBody = 16 << 20 // 16 MiB
 
 // maxOWUIBearerToken caps the token length extracted from
 // `__metadata.upstream_auth`. A Supabase JWT is typically ~1 KB; 8 KiB
@@ -113,7 +116,8 @@ type OWUIUnwrapConfig struct {
 //     such a request can never be legitimate, and passing it
 //     through would be a way around the fail-closed check below.
 //   - Body unreadable                                          → 400 (fail closed).
-//   - Body > maxOWUIUnwrapBody                                 → 413.
+//   - Body > maxOWUIUnwrapBody (declared Content-Length or
+//     buffered read)                                          → 413.
 //   - Body is JSON but missing __metadata.upstream_auth        → 401 on a
 //     path requiring a per-user token, otherwise pass through
 //     with shim Authorization intact. Either way emit a
@@ -200,6 +204,16 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				// Non-JSON shim requests (multipart uploads for audio
 				// or images) cannot carry __metadata; pass through.
 				next.ServeHTTP(w, r)
+				return
+			}
+			// Reject a declared oversize body before reading anything.
+			// Buffering first then answering 413 makes the client upload
+			// megabytes we already know we will refuse (#1108): the
+			// stalled-upload shape users reported as a silent hang.
+			// ContentLength is -1 when unknown (chunked), which fails this
+			// comparison and falls through to the LimitReader below.
+			if r.ContentLength > maxOWUIUnwrapBody {
+				writeAuthError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "request body too large")
 				return
 			}
 			// Cap the read at maxOWUIUnwrapBody+1 so we can detect

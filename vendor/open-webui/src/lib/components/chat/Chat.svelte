@@ -654,6 +654,21 @@
 					}, 100);
 				} else if (type === 'chat:message:error') {
 					message.error = data.error;
+					// A completion failure must be visible even when the failing
+					// message is scrolled off-screen (#1108): state alone read
+					// as a silently no-op send. The bubble keeps the full detail;
+					// the toast carries a bounded version, and anything that is
+					// not already a display string falls back to the generic
+					// completion-failure wording rather than dumping an object.
+					const errorContent =
+						data?.error?.content ?? data?.error?.message ?? data?.error ?? '';
+					if (errorContent) {
+						toast.error(
+							typeof errorContent === 'string'
+								? errorContent.slice(0, 300)
+								: $i18n.t('Uh-oh! There was an issue with the response.')
+						);
+					}
 				} else if (type === 'chat:message:follow_ups') {
 					message.followUps = data.follow_ups;
 
