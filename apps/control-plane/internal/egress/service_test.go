@@ -201,7 +201,7 @@ func TestService_SetTenantDefault_AcceptsConcreteHostnamesAndIPs(t *testing.T) {
 		t.Fatalf("expected concrete hosts/IPs to be accepted, got %v", err)
 	}
 	if len(p.AllowedHosts) != 4 {
-		t.Fatalf("expected 3 hosts, got %v", p.AllowedHosts)
+		t.Fatalf("expected 4 hosts, got %v", p.AllowedHosts)
 	}
 }
 

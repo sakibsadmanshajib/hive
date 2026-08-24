@@ -51,7 +51,12 @@ from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.git.exceptions import GitCommandError, GitRepositoryError
 from openhands.sdk.git.utils import run_git_command, validate_git_repository
 from openhands.sdk.mcp.utils import MCPToolProvider
-from openhands.sdk.tool import BROWSER_TOOL_NAME, Tool, is_tool_usable
+from openhands.sdk.tool import (
+    BROWSER_TOOL_NAME,
+    DEFAULT_EXEC_TOOL_NAMES,
+    Tool,
+    is_tool_usable,
+)
 from openhands.sdk.tool.client_tool import register_client_tools
 from openhands.sdk.utils.cipher import Cipher
 from openhands.sdk.workspace import LocalWorkspace
@@ -950,16 +955,22 @@ class ConversationService:
             if BROWSER_TOOL_NAME in requested and not is_tool_usable(
                 BROWSER_TOOL_NAME
             ):
+                remaining = [
+                    t
+                    for t in request.agent.tools
+                    if t.name != BROWSER_TOOL_NAME
+                ]
+                if not remaining:
+                    # A browser-only explicit list must not degrade to a bare
+                    # agent: an empty tools list means no execution tools at
+                    # all, so restore the canonical exec set instead.
+                    remaining = [
+                        Tool(name=name) for name in DEFAULT_EXEC_TOOL_NAMES
+                    ]
                 request = request.model_copy(
                     update={
                         "agent": request.agent.model_copy(
-                            update={
-                                "tools": [
-                                    t
-                                    for t in request.agent.tools
-                                    if t.name != BROWSER_TOOL_NAME
-                                ]
-                            }
+                            update={"tools": remaining}
                         )
                     }
                 )
