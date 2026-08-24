@@ -139,8 +139,14 @@
 <svelte:window on:keydown={(e) => pendingDelete && e.key === 'Escape' && (pendingDelete = null)} />
 
 <div class="hv-panel flex flex-col w-full h-screen max-h-[100dvh] max-w-full">
-	<div class="px-6 py-4 border-b border-gray-100 dark:border-gray-850">
+	<div class="px-6 py-4 border-b border-gray-100 dark:border-gray-850 flex items-center justify-between gap-3">
 		<h2 class="text-lg font-medium">{$i18n.t('Scheduled')}</h2>
+		<!-- Lives in the header, not only in the empty state: once one schedule
+			 exists the empty state is gone and this stays the only path to a
+			 second one. -->
+		<button class="px-3 py-1.5 text-sm rounded-full bg-black text-white dark:bg-white dark:text-black flex-none" on:click={openCreate}>
+			{$i18n.t('New')}
+		</button>
 	</div>
 
 	{#if SCHEDULES_BRIDGE_READY && createOpen}
@@ -170,7 +176,7 @@
 	{#if schedules.length === 0}
 		<div class="flex-1 flex items-center justify-center px-6 pb-16">
 			<div class="max-w-md text-center space-y-3">
-				<ShellNavIcon name="scheduled" className="hv-nav-icon w-8 h-8 mx-auto text-gray-400 dark:text-gray-600" />
+				<ShellNavIcon name="scheduled" className="w-8 h-8 mx-auto text-gray-400 dark:text-gray-600" />
 				<h3 class="text-lg font-medium text-gray-800 dark:text-gray-200">{$i18n.t('Scheduled')}</h3>
 				<p class="text-sm text-gray-500 dark:text-gray-400">{$i18n.t('Templated runs kicked off on schedule.')}</p>
 				<div>
