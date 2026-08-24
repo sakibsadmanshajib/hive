@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'agents' | 'knowledge' | 'scheduled';
+export type HiveNavIcon = 'projects' | 'agents' | 'knowledge' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -28,6 +28,16 @@ export interface HiveNavItem {
 }
 
 export const HIVE_NAV: readonly HiveNavItem[] = [
+	{
+		// D-045 ruling 2: Projects is a first class destination, the home of
+		// context brought in (RAG documents live here). It sits at the top of
+		// the row list until the full D-045 sidebar grammar lands.
+		id: 'projects',
+		label: 'Projects',
+		href: '/projects',
+		icon: 'projects',
+		activePaths: ['/projects']
+	},
 	{
 		id: 'agents',
 		label: 'Agents',
