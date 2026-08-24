@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,11 @@ type Repository interface {
 	ListEntriesWithCursor(ctx context.Context, filter ListEntriesFilter) ([]LedgerEntry, error)
 	ListInvoices(ctx context.Context, accountID uuid.UUID) ([]InvoiceRow, error)
 	GetInvoice(ctx context.Context, accountID uuid.UUID, invoiceID uuid.UUID) (*InvoiceRow, error)
+
+	// Chat balance surface (#1063): resolve the billing account behind a
+	// signed-in chat user's tenant, and read today's usage for one.
+	ResolveAccountIDForEmail(ctx context.Context, email string) (uuid.UUID, error)
+	GetUsageSince(ctx context.Context, accountID uuid.UUID, since time.Time) (int64, error)
 }
 
 type pgxRepository struct {
@@ -438,4 +444,64 @@ func stampCreditUnit(metadata map[string]any) map[string]any {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ResolveAccountIDForEmail maps a signed-in chat user's email to the billing
+// account behind that user's CURRENT tenant (issue #1063). The chat session
+// carries only the Open WebUI identity; the tenant->account link lives in
+// public.tenant_billing_accounts and must never reach the browser, which is
+// why this hop exists server side.
+//
+// "Current" is the tenant the user selected in the product (/v1/tenants/switch
+// writes raw_user_meta_data->>'selected_tenant_id'), not an arbitrary newest
+// membership: showing another tenant's balance than the one this user chats
+// under would be wrong in both directions. When the selection names a tenant
+// this email is actively billed for, it wins outright. Without any selection,
+// the most recently joined membership answers, which matches the signup flow
+// where a fresh personal tenant is both the newest and the only one.
+//
+// Returns uuid.Nil, nil when the email has no active membership on a billed,
+// non-archived tenant. That is an expected state (a pending invite, an
+// unbilled enterprise posture), not an error.
+func (r *pgxRepository) ResolveAccountIDForEmail(ctx context.Context, email string) (uuid.UUID, error) {
+	var accountID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT tba.account_id
+		FROM auth.users u
+		JOIN public.tenant_users tu ON tu.user_id = u.id AND tu.status = 'ACTIVE'
+		JOIN public.tenants t ON t.id = tu.tenant_id AND t.archived_at IS NULL
+		JOIN public.tenant_billing_accounts tba ON tba.tenant_id = t.id
+		WHERE lower(u.email) = lower($1)
+		ORDER BY
+			-- Text comparison, never a cast: selected_tenant_id is free-form JSON
+			-- and a malformed value must degrade to the fallback order, not 22P02.
+			(t.id::text = COALESCE(u.raw_user_meta_data->>'selected_tenant_id', '')) DESC,
+			tu.joined_at DESC
+		LIMIT 1
+	`, strings.TrimSpace(strings.ToLower(email))).Scan(&accountID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return uuid.Nil, nil
+	case err != nil:
+		return uuid.Nil, fmt.Errorf("ledger: resolve account for email: %w", err)
+	}
+	return accountID, nil
+}
+
+// GetUsageSince sums usage charges posted since the given instant. It feeds
+// the "used today" figure on the composer banner; a missing sum is zero, not
+// an error, matching how GetBalance treats empty history.
+func (r *pgxRepository) GetUsageSince(ctx context.Context, accountID uuid.UUID, since time.Time) (int64, error) {
+	var used int64
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(-credits_delta), 0)
+		FROM public.credit_ledger_entries
+		WHERE account_id = $1
+		  AND entry_type = 'usage_charge'
+		  AND created_at >= $2
+	`, accountID, since).Scan(&used)
+	if err != nil {
+		return 0, fmt.Errorf("ledger: usage since: %w", err)
+	}
+	return used, nil
 }

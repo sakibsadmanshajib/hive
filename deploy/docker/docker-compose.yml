@@ -1084,6 +1084,17 @@ services:
       ENABLE_VERSION_UPDATE_CHECK: "false"
       DEFAULT_LOCALE: "en"
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
+      # Issue #1063 credits banner: lets the chat backend read the signed-in
+      # user's tenant balance from control-plane behind its internal token.
+      # No committed fallback here on purpose: with the token unset (the Hive
+      # Enterprise posture, or any billing-less deployment) control-plane does
+      # not mount the route and the shim answers 404, so no banner renders.
+      # Silent absence is the intended gate, not a bug. Set
+      # HIVE_CONSOLE_BILLING_URL to point the empty-balance top-up link at the
+      # right deployment's console; unset hides the link but keeps the warning.
+      HIVE_CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control-plane:8081}
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-}
+      HIVE_CONSOLE_BILLING_URL: ${HIVE_CONSOLE_BILLING_URL:-}
       # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
       # edge-api OWUI unwrap middleware only fires when this value matches
       # exactly; an empty/unset value disables the middleware and OWUI

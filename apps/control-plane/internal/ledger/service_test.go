@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ type stubRepo struct {
 	memberships       []accounts.Membership
 	invitations       map[string]*accounts.Invitation
 	entries           map[uuid.UUID][]LedgerEntry
+	emailAccounts     map[string]uuid.UUID
+	usageSince        int64
 	lastListLimit     int
 	lastListRequestID string
 	postErr           error
@@ -24,9 +27,10 @@ type stubRepo struct {
 
 func newStubRepo() *stubRepo {
 	return &stubRepo{
-		accountsMap: make(map[uuid.UUID]*accounts.Account),
-		invitations: make(map[string]*accounts.Invitation),
-		entries:     make(map[uuid.UUID][]LedgerEntry),
+		accountsMap:   make(map[uuid.UUID]*accounts.Account),
+		invitations:   make(map[string]*accounts.Invitation),
+		entries:       make(map[uuid.UUID][]LedgerEntry),
+		emailAccounts: make(map[string]uuid.UUID),
 	}
 }
 
@@ -84,6 +88,18 @@ func (s *stubRepo) GetBalance(_ context.Context, accountID uuid.UUID) (BalanceSu
 		ReservedCredits:  reserved,
 		AvailableCredits: posted - reserved,
 	}, nil
+}
+
+func (s *stubRepo) ResolveAccountIDForEmail(_ context.Context, email string) (uuid.UUID, error) {
+	id, ok := s.emailAccounts[strings.ToLower(email)]
+	if !ok {
+		return uuid.Nil, nil
+	}
+	return id, nil
+}
+
+func (s *stubRepo) GetUsageSince(_ context.Context, _ uuid.UUID, _ time.Time) (int64, error) {
+	return s.usageSince, nil
 }
 
 func (s *stubRepo) ListEntries(_ context.Context, accountID uuid.UUID, limit int) ([]LedgerEntry, error) {
