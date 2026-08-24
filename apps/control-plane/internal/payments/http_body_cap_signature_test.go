@@ -178,7 +178,7 @@ func newSignatureFixture(t *testing.T) *signatureFixture {
 		AccountID:        uuid.New(),
 		Rail:             payments.RailStripe,
 		Status:           payments.IntentStatusPendingRedirect,
-		Credits:          100_000,
+		Credits:          payments.CreditsPerUSD,
 		ProviderIntentID: "cs_test_640",
 		Metadata:         map[string]any{},
 	})

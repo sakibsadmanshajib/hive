@@ -165,7 +165,8 @@ func NewStubService(ledger LedgerGranter, countries AccountCountryReader) *StubS
 // credits) pair is safe — the ledger's ON CONFLICT idempotency guard prevents
 // double-crediting.
 //
-// credits validation mirrors production rules (must be positive, multiple of 1000).
+// credits validation mirrors production rules (must be positive, a whole
+// one-cent step at the current credit unit).
 func (s *StubService) InitiateCheckout(
 	ctx context.Context,
 	accountID uuid.UUID,
@@ -289,7 +290,7 @@ func (s *StubService) GetCheckoutOptions(
 	return &payments.CheckoutOptions{
 		Rails:              railOptions,
 		PredefinedTiers:    payments.PredefinedTiers,
-		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX)
+		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX); the block itself scales with CreditsPerUSD
 		CreditBlockSize:    payments.CreditsPerUSD,
 		Currency:           currencyForCountry(countryCode),
 	}, nil

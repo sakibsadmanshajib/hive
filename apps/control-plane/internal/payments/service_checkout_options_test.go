@@ -20,7 +20,8 @@ import (
 // USD → BDT paisa via FX snapshot using math/big.
 //
 // Effective rate fixture: 115.500000 (mid 110.00 + 5% fee).
-// Expected paisa per CreditsPerUSD-block (= per 1 USD-equiv 100,000 credits):
+// Expected paisa per CreditsPerUSD-block (= per 1 USD-equivalent of credits;
+// the block itself is CreditsPerUSD, 1e9 since the 2026-08-23 rescale):
 //
 //	paisa_per_block = floor(effectiveRate * 100)
 //	                = floor(115.500000 * 100)

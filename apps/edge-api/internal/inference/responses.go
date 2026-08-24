@@ -47,7 +47,7 @@ func handleResponses(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		o.executeResponsesStreaming(r.Context(), w, r, chatBody, req, req.Model, needFlags, 10000)
+		o.executeResponsesStreaming(r.Context(), w, r, chatBody, req, req.Model, needFlags, DefaultHoldText)
 		return
 	}
 
@@ -55,7 +55,7 @@ func handleResponses(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
 	aliasID := req.Model
 	o.executeSync(
 		r.Context(), w, r,
-		EndpointResponses, chatBody, req.Model, needFlags, 10000,
+		EndpointResponses, chatBody, req.Model, needFlags, DefaultHoldText,
 		o.litellm.ChatCompletion,
 		func(respBody []byte, _ string) ([]byte, *UsageResponse, error) {
 			return normalizeResponsesSync(respBody, aliasID, req)

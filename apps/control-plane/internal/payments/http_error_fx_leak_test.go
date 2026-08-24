@@ -96,13 +96,13 @@ func TestClassifyInitiateError_SafeCategoriesPreserved(t *testing.T) {
 		},
 		{
 			name:     "credits_multiple_of_1000",
-			err:      errors.New("payments: credits must be a multiple of 1000, got 1500"),
+			err:      errors.New(fmt.Sprintf("payments: credits must be a multiple of %d, got %d", CreditIncrement, 15_000_000)),
 			wantCode: 400,
-			wantMsg:  "credits must be a multiple of 1000",
+			wantMsg:  fmt.Sprintf("credits must be a multiple of %d", CreditIncrement),
 		},
 		{
 			name:     "credits_above_rail_maximum",
-			err:      errors.New("payments: credits must be at most 10000000 for the selected payment method, got 9007199254741000"),
+			err:      errors.New(fmt.Sprintf("payments: credits must be at most %d for the selected payment method, got %d", MaxPurchaseCreditsStripe, 9_007_199_254_741_000)),
 			wantCode: 400,
 			wantMsg:  "credits exceed the maximum for the selected payment method",
 		},

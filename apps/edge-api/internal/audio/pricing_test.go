@@ -24,10 +24,13 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
 )
 
-// The two catalog prices under test, in credits per million metered units.
-// Both are the values supabase/migrations/20260801_13_alias_price_unit.sql
-// writes to public.model_aliases, derived from the provider's published rate
-// (Groq, fetched 2026-08-01) times the 1.4 margin times CreditsPerUSD:
+// The two catalog prices under test, in credits per million metered units,
+// as written by supabase/migrations/20260801_13_alias_price_unit.sql in the
+// PRE-RESCALE credit unit (migration 20260823_40 later multiplied every
+// stored price by 10,000; these fixtures are hand-built routes for the
+// arithmetic contract, so their absolute size is arbitrary). Derived from the
+// provider's published rate (Groq, fetched 2026-08-01) times the 1.4 margin
+// times the then-current CreditsPerUSD:
 //
 //	TTS  $22.00 per 1M characters      -> 22.00      * 1.4 * 100000 = 3080000
 //	STT  $0.111 per hour transcribed   -> 30.8333... * 1.4 * 100000 = 4316667

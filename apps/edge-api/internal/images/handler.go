@@ -25,6 +25,14 @@ const (
 	NeedImageEdit = true
 )
 
+// imageReservationCredits is the flat pre-dispatch hold both image endpoints
+// take: $0.05 equivalent at the current credit unit (1 USD = 1e9 credits
+// since migration 20260823_40_credit_unit_rescale_billion.sql; previously
+// 5,000 credits at 100k per USD, the same real money). It is an
+// authorization floor, never a charge: settlement replaces it with the
+// catalog-priced cost.
+const imageReservationCredits int64 = 50_000_000
+
 // Authorizer validates incoming API keys and returns account context.
 type Authorizer interface {
 	AuthorizeRequest(r *http.Request) (AuthResult, error)
@@ -209,7 +217,7 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 		RequestID:        requestID,
 		Endpoint:         "/v1/images/generations",
 		ModelAlias:       route.AliasID,
-		EstimatedCredits: 5000,
+		EstimatedCredits: imageReservationCredits,
 	})
 	if err != nil {
 		code := "insufficient_quota"
@@ -274,7 +282,7 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
-	h.settleReservation(ctx, auth.AccountID, reservationID, 5000, "/v1/images/generations")
+	h.settleReservation(ctx, auth.AccountID, reservationID, imageReservationCredits, "/v1/images/generations")
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {
@@ -349,7 +357,7 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 		RequestID:        requestID,
 		Endpoint:         "/v1/images/edits",
 		ModelAlias:       route.AliasID,
-		EstimatedCredits: 5000,
+		EstimatedCredits: imageReservationCredits,
 	})
 	if err != nil {
 		code := "insufficient_quota"
@@ -451,7 +459,7 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
-	h.settleReservation(ctx, auth.AccountID, reservationID, 5000, "/v1/images/edits")
+	h.settleReservation(ctx, auth.AccountID, reservationID, imageReservationCredits, "/v1/images/edits")
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {

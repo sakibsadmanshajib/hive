@@ -28,7 +28,8 @@ type scriptCase struct {
 
 // scriptRepeat pushes every case into the thousands of characters. Small
 // inputs prove nothing here: estimateCompletionTokens floors at 1 credit, and
-// at CreditsPerUSD = 100_000 that floor hides any amount of under-pricing.
+// at the current unit of 1e9 credits per USD that floor hides even more
+// under-pricing than it did at the pre-rescale 100,000 per USD.
 const scriptRepeat = 60
 
 var scriptCases = []scriptCase{

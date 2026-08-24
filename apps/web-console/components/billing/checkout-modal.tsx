@@ -32,6 +32,36 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
   return Array.isArray(value.rails);
 }
 
+// computeBlockSplitAmountMinor prices `credits` at `pricePerBlockMinor`
+// minor units per `creditBlockSize` credits, floor-rounded, WITHOUT forming
+// the raw product: at the current unit a max-size purchase would multiply to
+// ~7.5e16, past Number.MAX_SAFE_INTEGER. Whole blocks are priced as an exact
+// Number product (block quotient x price stays far below 2^53 for every real
+// currency rate); the sub-block remainder goes through BigInt, whose floor
+// division is exact for any inputs. Exported so tests exercise THIS code
+// rather than a copy of it.
+export function computeBlockSplitAmountMinor(
+  credits: number,
+  creditBlockSize: number,
+  pricePerBlockMinor: number,
+): number {
+  if (
+    !Number.isFinite(credits) ||
+    !Number.isFinite(creditBlockSize) ||
+    creditBlockSize <= 0 ||
+    !Number.isFinite(pricePerBlockMinor)
+  ) {
+    // NaN comparisons return false for `<= 0`, so a pathological upstream
+    // value would otherwise reach the division and render as NaN.
+    return 0;
+  }
+  const wholeBlocks = Math.trunc(credits / creditBlockSize);
+  const remainderMinor =
+    (BigInt(credits - wholeBlocks * creditBlockSize) * BigInt(pricePerBlockMinor)) /
+    BigInt(creditBlockSize);
+  return wholeBlocks * pricePerBlockMinor + Number(remainderMinor);
+}
+
 export function CheckoutModal({
   accountCountryCode,
   onClose,
@@ -90,19 +120,12 @@ export function CheckoutModal({
   const isBdAccount = accountCountryCode === "BD";
 
   // FX-17-04 (post-review): the server prices in minor units per
-  // `credit_block_size` credits (= CreditsPerUSD = 100,000). To get the
-  // localised total for an arbitrary credit count we integer-divide by
-  // the block size. Order of operations is `(credits * price) / size`
-  // so the multiplication happens at full int64 precision before the
-  // truncating division, matching the server-side math/big truncation.
+  // `credit_block_size` credits (= CreditsPerUSD = 1,000,000,000 since the
+  // 2026-08-23 credit unit rescale). To get the localised total for an
+  // arbitrary credit count we integer-divide by the block size, matching the
+  // server-side math/big truncation.
   //
-  // Worst-case magnitude: 500_000_000 credits * ~15_000 paisa ≈ 7.5e12,
-  // well inside Number.MAX_SAFE_INTEGER (9.0e15), so plain Number math
-  // is safe — no BigInt needed.
   function computeAmountMinor(): number {
-    // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
-    // block size. NaN comparisons return false for `<= 0`, so a pathological
-    // upstream value would otherwise reach the division and render as NaN.
     if (
       !options ||
       !Number.isFinite(options.credit_block_size) ||
@@ -111,8 +134,10 @@ export function CheckoutModal({
     ) {
       return 0;
     }
-    return Math.floor(
-      (creditAmount * options.price_per_block_minor) / options.credit_block_size,
+    return computeBlockSplitAmountMinor(
+      creditAmount,
+      options.credit_block_size,
+      options.price_per_block_minor,
     );
   }
 
@@ -170,9 +195,12 @@ export function CheckoutModal({
     }
   }
 
-  const increment = options?.credit_increment ?? 1000;
-  const minCredits = options?.min_credits ?? 1000;
-  const maxCredits = options?.max_credits ?? 100_000;
+  // Fallbacks are whole one-cent steps at the current credit unit
+  // (1 USD = 1e9 credits since the 2026-08-23 rescale); the server normally
+  // supplies all three.
+  const increment = options?.credit_increment ?? 10_000_000;
+  const minCredits = options?.min_credits ?? 10_000_000;
+  const maxCredits = options?.max_credits ?? 1_000_000_000;
 
   function decrementAmount() {
     setCreditAmount((prev) => Math.max(minCredits, prev - increment));

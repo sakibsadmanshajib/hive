@@ -13,14 +13,14 @@ import (
 type IntentStatus string
 
 const (
-	IntentStatusCreated             IntentStatus = "created"
-	IntentStatusPendingRedirect     IntentStatus = "pending_redirect"
-	IntentStatusProviderProcessing  IntentStatus = "provider_processing"
-	IntentStatusConfirming          IntentStatus = "confirming"
-	IntentStatusCompleted           IntentStatus = "completed"
-	IntentStatusFailed              IntentStatus = "failed"
-	IntentStatusExpired             IntentStatus = "expired"
-	IntentStatusCancelled           IntentStatus = "cancelled"
+	IntentStatusCreated            IntentStatus = "created"
+	IntentStatusPendingRedirect    IntentStatus = "pending_redirect"
+	IntentStatusProviderProcessing IntentStatus = "provider_processing"
+	IntentStatusConfirming         IntentStatus = "confirming"
+	IntentStatusCompleted          IntentStatus = "completed"
+	IntentStatusFailed             IntentStatus = "failed"
+	IntentStatusExpired            IntentStatus = "expired"
+	IntentStatusCancelled          IntentStatus = "cancelled"
 )
 
 // Rail identifies a payment rail provider.
@@ -32,36 +32,55 @@ const (
 	RailSSLCommerz Rail = "sslcommerz"
 )
 
-// Monetary constants. All amounts are int64 micro-units.
+// Monetary constants. All credit figures are int64 and denominated in the
+// CURRENT credit unit: 1 USD = 1,000,000,000 Hive Credits (owner directive,
+// 2026-08-23; rescaled from the historical 1 USD = 100,000 by a factor of
+// 10,000). Stored balances and history were rescaled to match by migration
+// 20260823_40_credit_unit_rescale_billion.sql, so every figure in the ledger,
+// the catalog and this file speaks the same unit. A credit is now one
+// billionth of a USD-equivalent.
 const (
-	// CreditsPerUSD: 1 USD = 100,000 Hive Credits.
-	CreditsPerUSD int64 = 100_000
+	// CreditsPerUSD: 1 USD = 1,000,000,000 Hive Credits.
+	CreditsPerUSD int64 = 1_000_000_000
 
 	// FXFeeRate is the markup applied to the mid-rate for BDT conversions.
 	FXFeeRate = "0.05"
 
-	// MinPurchaseCredits is the minimum credits purchasable in a single transaction.
-	MinPurchaseCredits int64 = 1_000
+	// CreditIncrement is the smallest purchasable credit step: one USD cent
+	// (ValidatePurchaseAmount rejects quantities that are not a whole
+	// multiple of it).
+	CreditIncrement int64 = CreditsPerUSD / 100
 
-	// MaxPurchaseCreditsStripe: 100 USD equiv (100 * 100,000 credits).
-	MaxPurchaseCreditsStripe int64 = 10_000_000
+	// MinPurchaseCredits is the minimum credits purchasable in a single
+	// transaction: one cent.
+	MinPurchaseCredits int64 = CreditIncrement // 10,000,000
+
+	// MaxPurchaseCreditsStripe: 100 USD equiv (100 * CreditsPerUSD).
+	MaxPurchaseCreditsStripe int64 = 100 * CreditsPerUSD
 
 	// MaxPurchaseCreditsSSLCommerz: based on BDT 500K limit.
-	MaxPurchaseCreditsSSLCommerz int64 = 500_000_000
+	MaxPurchaseCreditsSSLCommerz int64 = 5_000_000_000_000
 
 	// MaxPurchaseCreditsBkash: based on BDT 30K limit.
-	MaxPurchaseCreditsBkash int64 = 30_000_000
+	MaxPurchaseCreditsBkash int64 = 300_000_000_000
 )
 
-// PredefinedTiers are the suggested credit purchase amounts.
-var PredefinedTiers = []int64{1_000, 5_000, 10_000, 50_000, 100_000}
+// PredefinedTiers are the suggested credit purchase amounts:
+// $0.01, $0.05, $0.10, $0.50 and $1.00 equivalents.
+var PredefinedTiers = []int64{
+	10_000_000,    // $0.01
+	50_000_000,    // $0.05
+	100_000_000,   // $0.10
+	500_000_000,   // $0.50
+	1_000_000_000, // $1.00
+}
 
 // Sentinel errors for the payments domain.
 var (
-	ErrInvalidTransition     = errors.New("payments: invalid status transition")
-	ErrIntentNotFound        = errors.New("payments: payment intent not found")
+	ErrInvalidTransition      = errors.New("payments: invalid status transition")
+	ErrIntentNotFound         = errors.New("payments: payment intent not found")
 	ErrBillingProfileRequired = errors.New("payments: billing profile required to initiate checkout")
-	ErrFXUnavailable         = errors.New("payments: FX rate unavailable")
+	ErrFXUnavailable          = errors.New("payments: FX rate unavailable")
 
 	// ErrEventRejected marks a webhook delivery the provider must NOT retry:
 	// the payload failed signature verification, or is not a payload this rail
@@ -73,18 +92,18 @@ var (
 
 // PaymentIntent is the core payment state machine record.
 type PaymentIntent struct {
-	ID               uuid.UUID      `json:"id"`
-	AccountID        uuid.UUID      `json:"account_id"`
-	Rail             Rail           `json:"rail"`
-	Status           IntentStatus   `json:"status"`
-	Credits          int64          `json:"credits"`
+	ID        uuid.UUID    `json:"id"`
+	AccountID uuid.UUID    `json:"account_id"`
+	Rail      Rail         `json:"rail"`
+	Status    IntentStatus `json:"status"`
+	Credits   int64        `json:"credits"`
 	// AmountUSD is internal accounting only — never serialised to customer
 	// surface. Phase 17 FX/USD zero-leak (FX-17-01). Server→Stripe USD
 	// payload (apps/control-plane/internal/payments/stripe/rail.go) reads
 	// this field via the Go struct, NOT via JSON.
-	AmountUSD        int64          `json:"-"`
-	AmountLocal      int64          `json:"amount_local"`
-	LocalCurrency    string         `json:"local_currency"`
+	AmountUSD     int64  `json:"-"`
+	AmountLocal   int64  `json:"amount_local"`
+	LocalCurrency string `json:"local_currency"`
 	// FXSnapshotID — internal-only audit handle. PHASE-17-INTERNAL-ONLY:
 	// PaymentIntent is the internal state record; customer-facing checkout/
 	// invoice DTOs (FX-17-01..04) omit FX/USD entirely. `json:"-"` guarantees
@@ -106,13 +125,13 @@ type PaymentIntent struct {
 
 // PaymentEvent records a provider webhook event associated with an intent.
 type PaymentEvent struct {
-	ID               uuid.UUID       `json:"id"`
-	PaymentIntentID  uuid.UUID       `json:"payment_intent_id"`
-	EventType        string          `json:"event_type"`
-	Rail             Rail            `json:"rail"`
-	ProviderEventID  string          `json:"provider_event_id"`
-	RawPayload       json.RawMessage `json:"raw_payload"`
-	CreatedAt        time.Time       `json:"created_at"`
+	ID              uuid.UUID       `json:"id"`
+	PaymentIntentID uuid.UUID       `json:"payment_intent_id"`
+	EventType       string          `json:"event_type"`
+	Rail            Rail            `json:"rail"`
+	ProviderEventID string          `json:"provider_event_id"`
+	RawPayload      json.RawMessage `json:"raw_payload"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 // DeliveryStatus is the lifecycle status of one inbound webhook delivery.
@@ -165,10 +184,10 @@ type FXSnapshot struct {
 
 // TaxResult holds the tax treatment decision for a checkout.
 type TaxResult struct {
-	TaxRate      string `json:"tax_rate"`
-	TaxTreatment string `json:"tax_treatment"`
-	TaxIncluded  bool   `json:"tax_included"`
-	ReverseCharge bool  `json:"reverse_charge"`
+	TaxRate       string `json:"tax_rate"`
+	TaxTreatment  string `json:"tax_treatment"`
+	TaxIncluded   bool   `json:"tax_included"`
+	ReverseCharge bool   `json:"reverse_charge"`
 }
 
 // InitiateInput is passed to a PaymentRail to start a payment.
@@ -185,9 +204,9 @@ type InitiateInput struct {
 	Credits         int64     `json:"credits"`
 	// AmountUSD: PHASE-17-INTERNAL-ONLY — Stripe USD RPC reads this via the
 	// Go struct, never JSON. `json:"-"` is defense-in-depth (FX-17 review).
-	AmountUSD       int64     `json:"-"`
-	AmountLocal     int64     `json:"amount_local"`
-	Currency        string    `json:"currency"`
+	AmountUSD   int64  `json:"-"`
+	AmountLocal int64  `json:"amount_local"`
+	Currency    string `json:"currency"`
 	// CallbackBaseURL is the control-plane origin a provider posts its
 	// server-to-server webhook or IPN to. Settlement is driven from there and
 	// nowhere else.
@@ -215,9 +234,9 @@ type RailEvent struct {
 	RawPayload       []byte `json:"raw_payload"`
 }
 
-// ValidatePurchaseAmount verifies credits are positive, a multiple of 1000, and
-// no larger than the ceiling this rail already advertises through
-// GetCheckoutOptions.
+// ValidatePurchaseAmount verifies credits are positive, a whole number of
+// one-cent steps (CreditIncrement), and no larger than the ceiling this rail
+// already advertises through GetCheckoutOptions.
 //
 // The ceiling is enforced here rather than only in a client, because a caller
 // that skips the console reaches InitiateCheckout directly. Credits is an int64
@@ -230,8 +249,8 @@ func ValidatePurchaseAmount(credits int64, rail Rail) error {
 	if credits <= 0 {
 		return fmt.Errorf("payments: credits must be positive, got %d", credits)
 	}
-	if credits%1000 != 0 {
-		return fmt.Errorf("payments: credits must be a multiple of 1000, got %d", credits)
+	if credits%CreditIncrement != 0 {
+		return fmt.Errorf("payments: credits must be a multiple of %d, got %d", CreditIncrement, credits)
 	}
 	if maxCredits := maxCreditsForRail(rail); credits > maxCredits {
 		return fmt.Errorf("payments: credits must be at most %d for the selected payment method, got %d", maxCredits, credits)

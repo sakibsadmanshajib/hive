@@ -426,7 +426,7 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // body -- the raw body also carries field names, sampling params, tool schemas,
 // and base64 image data, and counting those as tokens is issue #602's
 // over-charge root cause (a request body under the 10MiB limit could estimate
-// ~2.6M credits against a 10000 credit hold). The control-plane hard clamp in
+// ~2.6M pre-rescale credits against the then-10000-credit hold). The control-plane hard clamp in
 // finalizeLocked is the backstop that keeps any residual overcount here from
 // ever exceeding the reserved hold, but this function should still return a
 // realistic number.

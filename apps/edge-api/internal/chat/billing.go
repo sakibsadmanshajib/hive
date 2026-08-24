@@ -46,7 +46,7 @@ import (
 // same figure the API-key chat path reserves. It is an authorization floor
 // picked before the request runs, never a charge: settlement replaces it with
 // the catalog price of the tokens actually metered.
-const sessionHoldCredits = 10_000
+const sessionHoldCredits = inference.DefaultHoldText
 
 // settlementTimeout bounds one control-plane accounting call made after the
 // response has already been streamed. A var so tests can shrink it.

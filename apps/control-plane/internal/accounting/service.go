@@ -294,11 +294,12 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	// The hold is an authorization floor, not a ceiling on truth: when
 	// TerminalUsageConfirmed is true the upstream itself reported the token
 	// count, so it must be billed in full even past the hold -- edge-api's
-	// reservation is a flat, never-expanded estimate (10000 for chat/
-	// completions/responses, 1000 for embeddings; ExpandReservation exists
-	// but no caller ever invokes it), so any request whose real usage
-	// legitimately exceeds that floor (long context, RAG, coding-agent
-	// traffic) would otherwise be silently undercharged with no
+	// reservation is a flat, never-expanded estimate (DefaultHoldText for
+	// chat/completions/responses, DefaultHoldEmbeddings for embeddings, in
+	// the current credit unit; ExpandReservation exists but no caller ever
+	// invokes it), so any request whose real usage legitimately exceeds that
+	// floor (long context, RAG, coding-agent traffic) would otherwise be
+	// silently undercharged with no
 	// reconciliation job, since TerminalUsageConfirmed=true skips
 	// reconciliation entirely. Clamping a confirmed fact was the bug the
 	// PR #602 review caught in the previous version of this fix.

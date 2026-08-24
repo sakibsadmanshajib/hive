@@ -46,8 +46,9 @@ token_hash="$(printf '%s' "$raw_secret" | sha256sum | awk '{print $1}')"
 redacted_suffix="${raw_secret: -6}"
 
 # A grant large enough that no suite can exhaust it, and small enough to stay
-# an obviously synthetic number. Credits are integer subunits.
-grant_credits="${HIVE_CI_SEED_CREDITS:-100000000}"
+# an obviously synthetic number. Credits are integer subunits at the current
+# unit of 1e9 per USD (since 2026-08-23): this is a $1000 equivalent.
+grant_credits="${HIVE_CI_SEED_CREDITS:-1000000000000}"
 
 slug="${HIVE_CI_SEED_SLUG:-ci-throwaway}"
 

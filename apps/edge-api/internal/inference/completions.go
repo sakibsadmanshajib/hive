@@ -37,11 +37,11 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		o.executeStreaming(r.Context(), w, r, EndpointCompletions, body, req.Model, req.Model, needFlags, 10000, includeUsage, nil, o.litellm.Completion)
+		o.executeStreaming(r.Context(), w, r, EndpointCompletions, body, req.Model, req.Model, needFlags, DefaultHoldText, includeUsage, nil, o.litellm.Completion)
 		return
 	}
 
-	o.executeSync(r.Context(), w, r, EndpointCompletions, body, req.Model, needFlags, 10000,
+	o.executeSync(r.Context(), w, r, EndpointCompletions, body, req.Model, needFlags, DefaultHoldText,
 		o.litellm.Completion, normalizeCompletion)
 }
 

@@ -137,36 +137,49 @@ func TestCreditsForUpstreamCostMagnitude(t *testing.T) {
 	}{
 		{
 			// The figure measured from a real OpenRouter usage block.
-			// 0.0123456 x 1.4 x 100000 = 1728.384 -> 1728
-			name: "measured cost, rounds down",
+			// Exact product: 0.0123456 x 1.4 x 1e9 = 17,283,840 with no
+			// remainder, so no rounding applies. Same real money as the
+			// pre-rescale unit's 1728 old credits.
+			name: "measured cost, exact product",
 			cost: "0.0123456",
-			want: 1728,
+			want: 17_283_840,
 		},
 		{
-			// 1.00 x 1.4 x 100000 = 140000 exactly. If the margin were dropped
-			// this reads 100000; if it were applied twice, 196000.
+			// 1.00 x 1.4 x 1e9 = 1,400,000,000 exactly. If the margin were
+			// dropped this reads 1e9; if it were applied twice, 1.96e9.
 			name: "one dollar is exactly the margin times the credit rate",
 			cost: "1.00",
-			want: 140000,
+			want: 1_400_000_000,
 		},
 		{
-			// 0.000025 x 140000 = 3.5 exactly: the half-up boundary. Round
-			// half DOWN gives 3, truncation gives 3, only half-up gives 4.
+			// 0.0000000025 x 1.4e9 = 3.5 exactly: the half-up boundary.
+			// Round half DOWN gives 3, truncation gives 3, only half-up
+			// gives 4. (Pre-rescale this boundary sat at 0.000025.)
 			name: "exact half rounds up",
-			cost: "0.000025",
+			cost: "0.0000000025",
 			want: 4,
 		},
 		{
-			// 0.123456789 x 140000 = 17283.95046 -> 17284
+			// 0.123456789 x 1.4e9 = 172,839,504.6 -> 172,839,505
 			name: "long decimal rounds up",
 			cost: "0.123456789",
-			want: 17284,
+			want: 172_839_505,
 		},
 		{
-			// 0.0000001 x 140000 = 0.014, which floors to 1: a request that
-			// cost us real money is never settled free.
+			// Exact product this time: 0.0000001 x 1.4e9 = 140 credits with
+			// no rounding involved (the pre-rescale unit floored its 0.014-credit
+			// product to 1; that comparison is era trivia, not arithmetic).
 			name: "a tiny but real cost floors at one credit, never zero",
 			cost: "0.0000001",
+			want: 140,
+		},
+		{
+			// 1e-12 USD x 1.4e9 = 0.0014 floors to 1: at the finer new unit
+			// the floor still catches costs far below one credit. This case
+			// is a FLOORING case, not a scaled one: the product is far below
+			// one credit in both units.
+			name: "a sub-floor cost still charges one credit",
+			cost: "0.000000000001",
 			want: 1,
 		},
 	}
@@ -297,8 +310,8 @@ func TestUpstreamActualSettlementChargesTheReportedCost(t *testing.T) {
 	// 0.0123456 x 1.4 x 100000 = 1728.384 -> 1728. Compared against the KNOWN
 	// upstream cost, not against the hold and not against zero. If settlement
 	// ever fell back to the hold on a readable cost this reads 200000.
-	if credits != 1728 {
-		t.Fatalf("expected 1728 credits for a reported cost of 0.0123456, got %d", credits)
+	if credits != 17_283_840 {
+		t.Fatalf("expected 17283840 credits for a reported cost of 0.0123456, got %d", credits)
 	}
 	if reason != "upstream_cost" {
 		t.Fatalf("expected reason upstream_cost, got %q", reason)
@@ -320,20 +333,21 @@ func TestUpstreamActualSettlementReleasesWhenNothingWasDelivered(t *testing.T) {
 // --- The reservation cannot under-reserve ----------------------------------
 
 func TestReservationCreditsCannotUnderReserve(t *testing.T) {
-	const endpointDefault = 10_000
+	const endpointDefault = DefaultHoldText
 
 	fixed := SelectRouteResult{Pricing: FixedPricing(10_500, 42_000)}
 	if got := ReservationCredits(fixed, endpointDefault); got != endpointDefault {
 		t.Fatalf("a fixed-price alias must keep the endpoint default, got %d", got)
 	}
 
-	// The real case: the catalog row for openrouter-auto holds 200000, twenty
-	// times the flat default. If the catalog figure were ignored this reads
-	// 10000, and a router request that resolved to an expensive model would be
-	// held against a hold far too small to cover it.
-	variable := SelectRouteResult{Pricing: UpstreamActualPricing(200_000)}
-	if got := ReservationCredits(variable, endpointDefault); got != 200_000 {
-		t.Fatalf("a variable-price alias must hold its catalog figure 200000, got %d", got)
+	// The real case: the catalog row for openrouter-auto holds 2e9 (its
+	// $2.00-equivalent after the 2026-08-23 rescale), twenty times the flat
+	// default. If the catalog figure were ignored this reads the flat
+	// default, and a router request that resolved to an expensive model would
+	// be held against a hold far too small to cover it.
+	variable := SelectRouteResult{Pricing: UpstreamActualPricing(2_000_000_000)}
+	if got := ReservationCredits(variable, endpointDefault); got != 2_000_000_000 {
+		t.Fatalf("a variable-price alias must hold its catalog figure 2000000000, got %d", got)
 	}
 
 	// The endpoint default is a FLOOR, never a ceiling: a catalog row that

@@ -127,13 +127,17 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 // data level: hive-fast has exactly one enabled route, and its price is the
 // figure the catalog derived for it.
 //
-// The price figures are unchanged from when this test was written, and that is
-// now the load-bearing half. They were derived from Groq's published rate for
-// openai/gpt-oss-20b
+// The price figures below are the 20260818-era derivation rescaled to the
+// current credit unit by migration 20260823_40 (factor 10,000, owner
+// directive 2026-08-23: 1 USD is now 1e9 credits). Originally they came from
+// Groq's published rate for openai/gpt-oss-20b
 // (20260818_01_revert_hive_fast_groq_model_decommissioned.sql):
 //
 //	input:  0.075 USD/M * 1.4 = 0.105 USD/M * 100_000 credits/USD = 10_500
 //	output: 0.300 USD/M * 1.4 = 0.420 USD/M * 100_000 credits/USD = 42_000
+//
+// and the rescale multiplied every stored figure by 10,000 without changing
+// any real USD amount:
 //
 // The ROUTE moved on 2026-08-23
 // (20260823_21_groq_text_routes_to_openrouter_free.sql): hive-fast, hive-small
@@ -177,11 +181,12 @@ func TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice(t *testing.T) {
 	`).Scan(&input, &output); err != nil {
 		t.Fatalf("read hive-fast pricing: %v", err)
 	}
-	if input != 10_500 {
-		t.Errorf("hive-fast input_price_credits = %d, want 10500", input)
+	const hiveFastRescaleFactor = 10_000 // migration 20260823_40
+	if input != 10_500*hiveFastRescaleFactor {
+		t.Errorf("hive-fast input_price_credits = %d, want %d", input, 10_500*hiveFastRescaleFactor)
 	}
-	if output != 42_000 {
-		t.Errorf("hive-fast output_price_credits = %d, want 42000", output)
+	if output != 42_000*hiveFastRescaleFactor {
+		t.Errorf("hive-fast output_price_credits = %d, want %d", output, 42_000*hiveFastRescaleFactor)
 	}
 }
 

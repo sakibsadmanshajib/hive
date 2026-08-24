@@ -1657,9 +1657,12 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
     }
   }
 
-  const creditIncrement = readNumberField(payload, "credit_increment") ?? 1000;
-  const minCredits = readNumberField(payload, "min_credits") ?? 1000;
-  const maxCredits = readNumberField(payload, "max_credits") ?? 100000;
+  // Fallbacks are one-cent steps at the current credit unit (1 USD = 1e9
+  // credits since the 2026-08-23 rescale); the server normally supplies all
+  // three.
+  const creditIncrement = readNumberField(payload, "credit_increment") ?? 10_000_000;
+  const minCredits = readNumberField(payload, "min_credits") ?? 10_000_000;
+  const maxCredits = readNumberField(payload, "max_credits") ?? 1_000_000_000;
   // FX-17-04 regulatory: pricing primitive must be in minor units of a
   // declared currency, priced per `credit_block_size` credits. Reject
   // payload without these fields rather than defaulting to a USD

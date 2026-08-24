@@ -116,7 +116,8 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	taxResult := CalculateTax(billingProfile)
 
 	// 5. Compute amounts.
-	// amountUSD is in USD cents: credits / (CreditsPerUSD / 100)
+	// amountUSD is in USD cents: credits / (CreditIncrement), where one
+	// CreditIncrement is exactly one cent (CreditsPerUSD / 100).
 	amountUSD := credits / (CreditsPerUSD / 100)
 
 	var amountLocal int64
@@ -157,7 +158,10 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		TaxRate:        taxResult.TaxRate,
 		TaxAmountLocal: taxAmountLocal,
 		IdempotencyKey: idempotencyKey,
-		Metadata:       map[string]any{},
+		// Credit-unit stamp (see ledger.CreditUnitV2): lets the post-deploy
+		// straggler detector tell a pre-rescale intent that missed the
+		// migration from a native new-unit one.
+		Metadata:       map[string]any{"credit_unit": "v2-1usd-1e9"},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -463,7 +467,8 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 //   - PricePerBlockMinor: minor units of resolved currency per
 //     `CreditBlockSize` credits (paisa for BDT, cents for USD).
 //   - CreditBlockSize: number of credits that one block of `PricePerBlockMinor`
-//     pays for. Mirrors `CreditsPerUSD` (100,000 credits = 1 USD-equivalent).
+//     pays for. Mirrors `CreditsPerUSD` (1,000,000,000 credits =
+//     1 USD-equivalent since the 2026-08-23 credit unit rescale).
 //   - Currency: ISO 4217 code of the resolved currency. "BDT" for BD
 //     accounts, "USD" otherwise.
 //
@@ -602,7 +607,8 @@ func localCurrencyFor(r Rail) string {
 // using the effective FX rate, entirely in exact rational arithmetic.
 //
 // amountPaisa = amountUSDcents/100 (dollars) * rate (BDT/USD) * 100 (paisa)
-//             = amountUSDcents * rate
+//
+//	= amountUSDcents * rate
 //
 // The result is truncated to an integer via big.Int division on the
 // numerator/denominator (truncates toward zero — correct for the

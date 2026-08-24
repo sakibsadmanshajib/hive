@@ -178,8 +178,8 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": "credits must be positive"})
 		return
 	}
-	if req.Credits%1000 != 0 {
-		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("credits must be a multiple of 1000, got %d", req.Credits)})
+	if req.Credits%CreditIncrement != 0 {
+		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("credits must be a multiple of %d, got %d", CreditIncrement, req.Credits)})
 		return
 	}
 	if req.IdempotencyKey == "" {
@@ -469,8 +469,8 @@ func classifyInitiateError(err error) (int, string) {
 	switch {
 	case strings.Contains(msg, "credits must be positive"):
 		return http.StatusBadRequest, "credits must be positive"
-	case strings.Contains(msg, "credits must be a multiple of 1000"):
-		return http.StatusBadRequest, "credits must be a multiple of 1000"
+	case strings.Contains(msg, "credits must be a multiple of"):
+		return http.StatusBadRequest, fmt.Sprintf("credits must be a multiple of %d", CreditIncrement)
 	case strings.Contains(msg, "credits must be at most"):
 		return http.StatusBadRequest, "credits exceed the maximum for the selected payment method"
 	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):

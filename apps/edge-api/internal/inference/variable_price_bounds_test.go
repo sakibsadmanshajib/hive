@@ -216,7 +216,8 @@ func matchRat(t *testing.T, block, pattern, label string) *big.Rat {
 }
 
 // readReservationEstimate pulls the hold out of the migration that seeds the
-// alias, so the guard reads the shipped value rather than a copy of it.
+// alias, then applies any later rescale migrations on top, so the guard reads
+// the value as shipped rather than a copy of it.
 func readReservationEstimate(t *testing.T) int64 {
 	t.Helper()
 	const path = "../../../../supabase/migrations/20260822_30_openrouter_auto_variable_pricing.sql"
@@ -233,6 +234,33 @@ func readReservationEstimate(t *testing.T) int64 {
 	if err != nil {
 		t.Fatalf("hold %q is not a number: %v", m[1], err)
 	}
+
+	// The credit unit rescale (2026-08-23) multiplied every stored credit
+	// figure by a fixed factor, including this hold. Parse the factor out of
+	// that migration rather than hardcoding it, so the guard tracks whatever
+	// the database actually holds.
+	const rescalePath = "../../../../supabase/migrations/20260823_40_credit_unit_rescale_billion.sql"
+	rescaleRaw, err := os.ReadFile(rescalePath)
+	if err != nil {
+		t.Fatalf("cannot read %s, which this guard depends on: %v", rescalePath, err)
+	}
+	f := regexp.MustCompile(`factor\s+CONSTANT\s+bigint\s*:=\s*([0-9]+)`).FindSubmatch(rescaleRaw)
+	mul := regexp.MustCompile(`reservation_estimate_credits\s*=\s*reservation_estimate_credits \* factor`).Match(rescaleRaw)
+	if f == nil || !mul {
+		t.Fatal("the rescale migration no longer multiplies reservation_estimate_credits by its declared factor; if it rescales the hold differently, update this guard to match")
+	}
+	factor, err := strconv.ParseInt(string(f[1]), 10, 64)
+	if err != nil || factor <= 0 {
+		t.Fatalf("rescale factor %q is not a positive number", f[1])
+	}
+	// Multiply exactly and refuse overflow rather than wrapping: a wrapped
+	// hold here would silently pass the coverage proof it feeds.
+	product := new(big.Int).Mul(big.NewInt(held), big.NewInt(factor))
+	if !product.IsInt64() {
+		t.Fatalf("seed hold %d times rescale factor %d does not fit in int64", held, factor)
+	}
+	held = product.Int64()
+
 	if held <= 0 {
 		t.Fatalf("hold must be positive, got %d", held)
 	}

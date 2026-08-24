@@ -46,9 +46,13 @@ const (
 	pricingMigrationRelPath = "supabase/migrations/20260822_02_catalog_alias_restructure.sql"
 	providerRatesRelPath    = "testdata/provider_rates_2026-08-22.json"
 
-	// creditsPerUSD mirrors apps/control-plane/internal/payments/types.go.
-	// marginNum/marginDen express 1.4 exactly. Integers only, fed to math/big,
-	// so no float64 touches a money figure.
+	// creditsPerUSD is the value in force for the migration this file guards,
+	// which predates the 2026-08-23 rescale to 1e9 (migration
+	// 20260823_40_credit_unit_rescale_billion.sql multiplied every stored
+	// price by 10,000 afterwards). This file pins HISTORICAL figures, so it
+	// deliberately stays on the old unit; payments.CreditsPerUSD itself now
+	// reads 1_000_000_000. marginNum/marginDen express 1.4 exactly. Integers
+	// only, fed to math/big, so no float64 touches a money figure.
 	creditsPerUSD = 100000
 	marginNum     = 14
 	marginDen     = 10

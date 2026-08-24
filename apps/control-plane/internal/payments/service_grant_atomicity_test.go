@@ -23,7 +23,7 @@ func seedSettlementIntent(t *testing.T, repo *stubRepository, rail Rail, provide
 		AccountID:        uuid.New(),
 		Rail:             rail,
 		Status:           IntentStatusPendingRedirect,
-		Credits:          100_000,
+		Credits:          CreditsPerUSD,
 		AmountUSD:        100,
 		IdempotencyKey:   "idem-" + providerIntentID,
 		ProviderIntentID: providerIntentID,

@@ -182,9 +182,9 @@ func (r *stubRepository) GetFXSnapshot(_ context.Context, id uuid.UUID) (FXSnaps
 
 // stubRail implements PaymentRail returning fixed values.
 type stubRail struct {
-	rail      Rail
-	initResult InitiateResult
-	initErr    error
+	rail        Rail
+	initResult  InitiateResult
+	initErr     error
 	eventResult RailEvent
 	eventErr    error
 }
@@ -212,8 +212,8 @@ func (s *stubRail) ProcessEvent(_ context.Context, _ []byte, _ map[string]string
 
 // stubLedger implements LedgerGranter.
 type stubLedger struct {
-	mu       sync.Mutex
-	calls    []ledgerCall
+	mu        sync.Mutex
+	calls     []ledgerCall
 	returnErr error
 }
 
@@ -250,9 +250,9 @@ func (l *stubLedger) callCount() int {
 
 // stubProfiles implements ProfileReader.
 type stubProfiles struct {
-	accountProfile  profiles.AccountProfile
-	billingProfile  profiles.BillingProfile
-	billingErr      error
+	accountProfile profiles.AccountProfile
+	billingProfile profiles.BillingProfile
+	billingErr     error
 }
 
 func (p *stubProfiles) GetBillingProfile(_ context.Context, _ uuid.UUID) (profiles.BillingProfile, error) {
@@ -312,12 +312,12 @@ func TestInitiateCheckout_HappyPath_Stripe(t *testing.T) {
 	stripeRail := newStubRail(RailStripe)
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: stripeRail})
 
-	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-001")
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, CreditsPerUSD, "https://cp.example.com", "https://console.example.com", "idem-001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 100,000 credits / (100,000/100) = 100 cents = $1.00
+	// CreditsPerUSD credits / (CreditsPerUSD/100) = 100 cents = $1.00
 	if intent.AmountUSD != 100 {
 		t.Errorf("expected AmountUSD=100 cents, got %d", intent.AmountUSD)
 	}
@@ -358,7 +358,7 @@ func TestInitiateCheckout_BDRail_CreatesFXSnapshot(t *testing.T) {
 	bkashRail := newStubRail(RailBkash)
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailBkash: bkashRail})
 
-	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://cp.example.com", "https://console.example.com", "idem-bd-001")
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, CreditsPerUSD, "https://cp.example.com", "https://console.example.com", "idem-bd-001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestInitiateCheckout_RejectsMissingBillingProfile(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-002")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, CreditsPerUSD, "https://cp.example.com", "https://console.example.com", "idem-002")
 	if !errors.Is(err, ErrBillingProfileRequired) {
 		t.Errorf("expected ErrBillingProfileRequired, got %v", err)
 	}
@@ -405,7 +405,7 @@ func TestInitiateCheckout_RejectsEmptyBillingContactName(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-003")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, CreditsPerUSD, "https://cp.example.com", "https://console.example.com", "idem-003")
 	if !errors.Is(err, ErrBillingProfileRequired) {
 		t.Errorf("expected ErrBillingProfileRequired, got %v", err)
 	}
@@ -423,7 +423,7 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 
 	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 500, "https://cp.example.com", "https://console.example.com", "idem-004")
 	if err == nil {
-		t.Error("expected error for non-multiple-of-1000 credits, got nil")
+		t.Error("expected error for a quantity that is not a whole one-cent step, got nil")
 	}
 }
 
@@ -432,9 +432,10 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 // was checked for sign and for the 1000 multiple only, so the advertised maximum
 // was decoration: a caller that skipped the console could post any int64.
 //
-// The last case is the one that motivated the bound. 9007199254741000 is past
-// 2^53, so a JSON encoder backed by float64 has already rounded it before it is
-// sent, yet it is positive, a multiple of 1000, and decodes cleanly into int64.
+// The last case is the one that motivated the bound. 9007199260000000 is the
+// first whole-cent multiple past 2^53, so a JSON encoder backed by float64 has
+// already rounded it before it is sent, yet it is positive and decodes cleanly
+// into int64.
 // Every earlier check passes and the customer is billed for a quantity nobody
 // asked for.
 func TestInitiateCheckout_RejectsCreditsAboveRailMaximum(t *testing.T) {
@@ -444,10 +445,10 @@ func TestInitiateCheckout_RejectsCreditsAboveRailMaximum(t *testing.T) {
 		rail    Rail
 		credits int64
 	}{
-		{"stripe above its maximum", "US", RailStripe, MaxPurchaseCreditsStripe + 1000},
-		{"bkash above its maximum", "BD", RailBkash, MaxPurchaseCreditsBkash + 1000},
-		{"sslcommerz above its maximum", "BD", RailSSLCommerz, MaxPurchaseCreditsSSLCommerz + 1000},
-		{"rounded past 2^53", "US", RailStripe, 9007199254741000},
+		{"stripe above its maximum", "US", RailStripe, MaxPurchaseCreditsStripe + CreditIncrement},
+		{"bkash above its maximum", "BD", RailBkash, MaxPurchaseCreditsBkash + CreditIncrement},
+		{"sslcommerz above its maximum", "BD", RailSSLCommerz, MaxPurchaseCreditsSSLCommerz + CreditIncrement},
+		{"rounded past 2^53", "US", RailStripe, 9_007_199_260_000_000}, // first whole-cent step above 2^53
 	}
 
 	for _, tc := range cases {
@@ -519,7 +520,7 @@ func TestInitiateCheckout_RejectsUnavailableRail(t *testing.T) {
 		RailBkash:  newStubRail(RailBkash),
 	})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://cp.example.com", "https://console.example.com", "idem-005")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, CreditsPerUSD, "https://cp.example.com", "https://console.example.com", "idem-005")
 	if err == nil {
 		t.Error("expected error for unavailable rail (bkash for US account), got nil")
 	}
@@ -544,7 +545,7 @@ func TestHandleProviderEvent_StripeSuccess_PostsGrant(t *testing.T) {
 		AccountID:        accountID,
 		Rail:             RailStripe,
 		Status:           IntentStatusPendingRedirect,
-		Credits:          100_000,
+		Credits:          CreditsPerUSD,
 		AmountUSD:        100,
 		IdempotencyKey:   "idem-stripe-001",
 		ProviderIntentID: providerIntentID,
@@ -736,7 +737,7 @@ func TestPostPurchaseGrant_IdempotentOnDuplicate(t *testing.T) {
 	intent := PaymentIntent{
 		ID:        uuid.New(),
 		AccountID: uuid.New(),
-		Credits:   100_000,
+		Credits:   CreditsPerUSD,
 		Metadata:  map[string]any{},
 	}
 

@@ -5,7 +5,8 @@ package inference
 // Chat completions, legacy completions, the Responses API and embeddings all
 // used to settle at one credit per token: settlementCredits returned the
 // provider's total_tokens and the settlement calls passed that figure straight
-// through as ActualCredits. At 100000 credits per USD that is 10.00 USD per
+// through as ActualCredits. At the pre-rescale unit (100000 credits per
+// USD) that is 10.00 USD per
 // million tokens on every alias, more than two orders of magnitude above
 // hive-fast's published input price, and it consulted model_aliases nowhere. Every charge now comes from
 // the resolved alias's catalog row instead, the same way the audio path has
@@ -241,11 +242,26 @@ func clampCompletionLimit(raw []byte, fields []string) ([]byte, error) {
 	return json.Marshal(decoded)
 }
 
+// Flat per-endpoint pre-dispatch credit holds, in the current credit unit
+// (1 USD = 1e9 credits since the 2026-08-23 rescale; migration
+// 20260823_40_credit_unit_rescale_billion.sql). These are authorization
+// floors picked before dispatch, never charges; settlement replaces them with
+// the catalog price of what was actually metered.
+const (
+	// DefaultHoldText is the hold taken by /v1/chat/completions,
+	// /v1/completions and /v1/responses: $0.10 equivalent.
+	DefaultHoldText int64 = 100_000_000
+	// DefaultHoldEmbeddings is the hold taken by /v1/embeddings:
+	// $0.01 equivalent.
+	DefaultHoldEmbeddings int64 = 10_000_000
+)
+
 // ReservationCredits sizes the up-front credit hold for a request.
 //
 // For an ordinary fixed-price alias this is unchanged: the flat per-endpoint
-// figure the caller already passed (10000 for chat, completions and responses,
-// 1000 for embeddings).
+// figure the caller already passed (DefaultHoldText for chat, completions and
+// responses, DefaultHoldEmbeddings for embeddings), scaled to the current
+// credit unit.
 //
 // A variable-price alias cannot use that. Its cost is bounded by the
 // provider-side price ceiling configured on the route, not by a catalog price,
