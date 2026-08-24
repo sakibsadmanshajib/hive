@@ -221,6 +221,11 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       GROQ_API_KEY: ${GROQ_API_KEY}
+      # Free pool key slots (migration 20260824_02_free_pool_router.sql): the
+      # config's os.environ/ references resolve inside THIS container, so each
+      # slot must be forwarded here or its deployment fails at request time.
+      GROQ_API_KEY_2: ${GROQ_API_KEY_2}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
       OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL}
       OPENROUTER_AUTO_MODEL: ${OPENROUTER_AUTO_MODEL}
       OPENROUTER_FAST_FALLBACK_MODEL: ${OPENROUTER_FAST_FALLBACK_MODEL}
