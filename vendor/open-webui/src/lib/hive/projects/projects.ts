@@ -81,14 +81,11 @@ async function requestJson<T>(
 		throw new ProjectError(err instanceof Error ? err.message : 'Network error');
 	}
 	if (!res.ok) {
-		let detail = res.statusText;
-		try {
-			const body = await res.json();
-			detail = body?.detail ?? detail;
-		} catch {
-			// Non-JSON error body: fall back to the status text.
-		}
-		throw new ProjectError(typeof detail === 'string' ? detail : 'Request failed', res.status);
+		// The backend's detail text never reaches a customer-bound string:
+		// provider names and internal wording ride in `detail`, so it is kept
+		// off the rendered message (provider-blind errors convention) and the
+		// HTTP status is the stable code the UI classifies on.
+		throw new ProjectError(`Request failed (${res.status})`, res.status);
 	}
 	return (await res.json()) as T;
 }
@@ -396,13 +393,22 @@ export const resolveProjectConversations = async (
 						return {
 							id: row.id,
 							title: full.title || row.title || 'Untitled',
-							updatedAt: Number(full.updated_at ?? row.updated_at ?? 0)
+							updatedAt: Number(full.updated_at ?? row.updated_at ?? 0),
+							hiveProjectId: projectId
 						};
 					}
 					return null;
-				} catch {
-					// Deleted between listing and read: skip, do not fail the page.
-					return null;
+				} catch (err) {
+					// Gone or inaccessible between listing and read: skip. Anything
+					// else (a 5xx, a network failure) propagates rather than
+					// silently shrinking the conversation list.
+					if (
+						err instanceof ProjectError &&
+						(err.status === 404 || err.status === 403)
+					) {
+						return null;
+					}
+					throw err;
 				}
 			})
 		);

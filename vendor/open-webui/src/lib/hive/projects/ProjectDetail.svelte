@@ -57,7 +57,8 @@
 		try {
 			project = await getProject(token, id);
 			if (!project) {
-				error = $i18n.t('This project does not exist.');
+				// The null branch below renders its own line; a second message
+				// here would say the same thing twice.
 				return;
 			}
 			conversations = await resolveProjectConversations(token, id);
@@ -131,16 +132,33 @@
 		if (!project || chosen.length === 0 || busy) return;
 		busy = true;
 		error = '';
+		const attached: string[] = [];
 		try {
 			for (const file of chosen) {
 				const uploaded = await uploadFile(token, file);
 				if (!uploaded?.id) throw new ProjectError($i18n.t('The file could not be uploaded.'));
 				await addFileToProject(token, id, uploaded.id);
+				attached.push(uploaded.id);
 			}
 			project = await getProject(token, id);
 		} catch (err) {
+			// A mid-batch failure would otherwise leave earlier files attached
+			// while the UI reports total failure. Roll back what landed, best
+			// effort, then reload so the list matches the server.
+			for (const fileId of attached) {
+				try {
+					await removeFileFromProject(token, id, fileId);
+				} catch {
+					// Best effort: the reload below still shows the truth.
+				}
+			}
 			error =
 				err instanceof ProjectError ? err.message : $i18n.t('The file could not be added.');
+			try {
+				project = await getProject(token, id);
+			} catch {
+				// The error line above already says what failed.
+			}
 		} finally {
 			busy = false;
 		}

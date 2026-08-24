@@ -204,17 +204,49 @@ describe('projects data layer', () => {
 		expect(convos[0].title).toBe('T3');
 	});
 
-	it('surfaces error details and keeps the status code', async () => {
+	it('keeps the status code but never renders backend detail text', async () => {
 		const fetchImpl = (async () =>
-			new Response(JSON.stringify({ detail: 'Knowledge not found' }), {
+			new Response(JSON.stringify({ detail: 'Knowledge not found: provider groq said x' }), {
 				status: 404,
 				headers: { 'Content-Type': 'application/json' }
 			})) as unknown as typeof fetch;
 
-		await expect(listProjects('tok', '/api/v1', fetchImpl)).rejects.toMatchObject({
-			name: 'ProjectError',
-			status: 404
+		await expect(listProjects('tok', '/api/v1', fetchImpl)).rejects.toSatisfy((err: ProjectError) => {
+			expect(err.name).toBe('ProjectError');
+			expect(err.status).toBe(404);
+			expect(err.message).not.toContain('groq');
+			expect(err.message).not.toContain('Knowledge not found');
+			return true;
 		});
+	});
+
+	it('propagates a detail-read failure that is not a deletion', async () => {
+		const chatsById: Record<string, unknown> = {
+			c1: { id: 'c1', title: 'T1', chat: { [PROJECT_CHAT_KEY]: 'k1' }, updated_at: 10 }
+		};
+		let c1Reads = 0;
+		const fetchImpl = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.startsWith('/api/v1/chats/list')) {
+				return json([{ id: 'c1', title: 'T1', updated_at: 10 }]);
+			}
+			const id = url.split('/chats/')[1];
+			if (id === 'c1') {
+				c1Reads++;
+				if (c1Reads === 1) {
+					return new Response('{}', { status: 500 });
+				}
+				return json(chatsById[id]);
+			}
+			return new Response('{}', { status: 404 });
+		}) as unknown as typeof fetch;
+
+		// First read 500s: the scan must reject rather than silently shrink.
+		await expect(resolveProjectConversations('tok', 'k1', 60, '/api/v1', fetchImpl)).rejects.toMatchObject({
+			status: 500
+		});
+		// Second read succeeds (404s and 403s stay skipped, not thrown).
+		await expect(resolveProjectConversations('tok', 'k1', 60, '/api/v1', fetchImpl)).resolves.toHaveLength(1);
 	});
 
 	it('exposes PROJECT_CHAT_KEY namespaced for blob safety', () => {
