@@ -17,10 +17,12 @@ This module is spliced into that startup path by
 apply_rag_env_config_patch.py. The environment wins for the four keys that
 point Open WebUI's embedder at the Hive gateway, the four that point its
 speech-to-text at the same gateway (the Bengali dictation fix, see their entry
-below), plus `ui.enable_login_form` (same mechanism, different symptom) and the
-three product-surface feature flags below (#772), and for nothing else: an
-administrator's other Open WebUI settings still persist normally, which is
-why this is a per-key reconcile rather than `ENABLE_PERSISTENT_CONFIG=false`.
+below), the five that point its text-to-speech there too (#997, see their
+entry below), plus `ui.enable_login_form` (same mechanism, different symptom)
+and the three product-surface feature flags below (#772), and for nothing
+else: an administrator's other Open WebUI settings still persist normally,
+which is why this is a per-key reconcile rather than
+`ENABLE_PERSISTENT_CONFIG=false`.
 
 The embedding model itself is never hardcoded here. It comes from
 `RAG_EMBEDDING_MODEL` (compose derives it from `OWUI_RAG_EMBEDDING_ALIAS`), so
@@ -66,6 +68,20 @@ RAG_CONFIG_ENV = {
     "audio.stt.model": "AUDIO_STT_MODEL",
     "audio.stt.openai.api_base_url": "AUDIO_STT_OPENAI_API_BASE_URL",
     "audio.stt.openai.api_key": "AUDIO_STT_OPENAI_API_KEY",
+    # Text-to-speech, the read-aloud speaker button (#997). Same trap as STT
+    # directly above: all five keys are in DEFAULT_CONFIG, so a first boot
+    # seeded `engine=""` (Open WebUI's own bundled speech synthesis), a base
+    # URL of api.openai.com, an empty key, model tts-1 and voice alloy, and no
+    # compose change could reach any already-booted volume after that. The
+    # gateway's hive-tts alias (groq/orpheus) accepts none of those defaults:
+    # alloy is rejected upstream and api.openai.com is not served by anyone.
+    # The voice default must name one the provider actually has; the list the
+    # UI offers comes from GET /v1/audio/voices on edge-api (see its handler).
+    "audio.tts.engine": "AUDIO_TTS_ENGINE",
+    "audio.tts.model": "AUDIO_TTS_MODEL",
+    "audio.tts.openai.api_base_url": "AUDIO_TTS_OPENAI_API_BASE_URL",
+    "audio.tts.openai.api_key": "AUDIO_TTS_OPENAI_API_KEY",
+    "audio.tts.voice": "AUDIO_TTS_VOICE",
     # Not a RAG key, and the only non-RAG one here. ponytail: reusing this
     # reconcile rather than minting a second identical module, because the
     # failure is identical to #722, right down to the mechanism. Every account
@@ -135,7 +151,9 @@ BOOLEAN_KEYS = frozenset({"ui.enable_login_form"})
 # this failure mode never produced anywhere: Open WebUI logs only aiohttp's
 # bare "404, message='Not Found'" for it, having discarded the response body
 # that names the model.
-SECRET_KEYS = frozenset({"rag.openai.api_key", "audio.stt.openai.api_key"})
+SECRET_KEYS = frozenset(
+    {"rag.openai.api_key", "audio.stt.openai.api_key", "audio.tts.openai.api_key"}
+)
 
 # Destination keys that must never be written without their credential, and the
 # environment variables an operator has to fix when one is missing. Open WebUI
@@ -149,6 +167,11 @@ PAIRED_DESTINATIONS = (
         "audio.stt.openai.api_base_url",
         "audio.stt.openai.api_key",
         "Open WebUI's speech-to-text",
+    ),
+    (
+        "audio.tts.openai.api_base_url",
+        "audio.tts.openai.api_key",
+        "Open WebUI's text-to-speech",
     ),
 )
 

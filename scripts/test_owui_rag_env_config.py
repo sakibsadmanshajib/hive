@@ -358,6 +358,121 @@ def test_no_deployment_wide_speech_language_is_configured() -> None:
     )
 
 
+def test_text_to_speech_is_pointed_at_the_gateway() -> None:
+    """Issue #997. Open WebUI ships audio.tts.engine as "" (its bundled browser
+    speech synthesis), api_base_url api.openai.com, an empty key, model tts-1
+    and voice alloy, and seeds all five on first boot. The gateway's hive-tts
+    alias accepts none of those: alloy is rejected upstream (#996) and
+    api.openai.com is not served by anyone, so read-aloud was dead."""
+    config = FakeConfig(
+        {
+            "audio.tts.engine": "",
+            "audio.tts.model": "tts-1",
+            "audio.tts.voice": "alloy",
+            "audio.tts.openai.api_base_url": "https://api.openai.com/v1",
+            "audio.tts.openai.api_key": "",
+        }
+    )
+    applied = reconcile(
+        config,
+        {
+            "AUDIO_TTS_ENGINE": "openai",
+            "AUDIO_TTS_MODEL": "hive-tts",
+            "AUDIO_TTS_VOICE": "autumn",
+            "AUDIO_TTS_OPENAI_API_BASE_URL": "http://edge-api:8080/v1",
+            "AUDIO_TTS_OPENAI_API_KEY": "hk_example",
+        },
+    )
+    assert config.stored["audio.tts.engine"] == "openai", config.stored
+    assert config.stored["audio.tts.model"] == "hive-tts", config.stored
+    assert config.stored["audio.tts.voice"] == "autumn", config.stored
+    assert config.stored["audio.tts.openai.api_base_url"] == "http://edge-api:8080/v1", config.stored
+    assert config.stored["audio.tts.openai.api_key"] == "hk_example", config.stored
+    assert applied["audio.tts.voice"] == "autumn", applied
+
+
+def test_tts_base_url_without_a_key_is_refused() -> None:
+    """Same rule as the RAG and STT pairs: a credential must not outlive the
+    destination it was issued for. Only the supplied keys are written, so a
+    base URL on its own would repoint read-aloud while Open WebUI kept sending
+    the key persisted for the previous destination."""
+    for key_value in (None, "", "   "):
+        environ = {
+            "AUDIO_TTS_ENGINE": "openai",
+            "AUDIO_TTS_OPENAI_API_BASE_URL": "http://somewhere-else:8080/v1",
+        }
+        if key_value is not None:
+            environ["AUDIO_TTS_OPENAI_API_KEY"] = key_value
+
+        config = FakeConfig(
+            {
+                "audio.tts.openai.api_base_url": "http://edge-api:8080/v1",
+                "audio.tts.openai.api_key": "hk_issued_for_edge_api",
+            }
+        )
+        try:
+            reconcile(config, environ)
+        except RuntimeError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"expected a refusal for key_value={key_value!r}")
+
+        assert "AUDIO_TTS_OPENAI_API_BASE_URL" in message, message
+        assert "AUDIO_TTS_OPENAI_API_KEY" in message, message
+        assert "hk_issued_for_edge_api" not in message, message
+        assert config.upsert_calls == 0
+        assert config.stored["audio.tts.openai.api_base_url"] == "http://edge-api:8080/v1"
+        assert config.stored["audio.tts.openai.api_key"] == "hk_issued_for_edge_api"
+
+
+def test_unset_tts_env_leaves_the_persisted_voice_alone() -> None:
+    """An Enterprise box running the sovereign `voice` profile configures Open
+    WebUI's text-to-speech itself. An unset variable must never clobber that
+    back to the gateway."""
+    config = FakeConfig({"audio.tts.engine": "openai", "audio.tts.model": "sovereign-tts", "audio.tts.voice": "daniel"})
+    applied = reconcile(config, {"AUDIO_TTS_ENGINE": "  "})
+    assert applied == {}, applied
+    assert config.upsert_calls == 0
+    assert config.stored["audio.tts.model"] == "sovereign-tts"
+    assert config.stored["audio.tts.voice"] == "daniel"
+
+
+def test_compose_routes_chat_read_aloud_through_the_gateway() -> None:
+    """The reconcile only helps if compose names the values. Asserted against
+    the file because the whole defect (#997) was an unset variable set letting
+    upstream's own defaults win by omission, and the voice default has to name
+    a voice the provider actually has (#996)."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    for line in (
+        'AUDIO_TTS_ENGINE: "openai"',
+        'AUDIO_TTS_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"',
+        "AUDIO_TTS_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}",
+        "AUDIO_TTS_MODEL: ${OWUI_TTS_ALIAS:-hive-tts}",
+        "AUDIO_TTS_VOICE: ${OWUI_TTS_VOICE:-autumn}",
+    ):
+        assert line in compose, f"docker-compose.yml must set {line}"
+
+
+def test_gateway_serves_the_voice_roster_the_ui_offers() -> None:
+    """Issue #996 via the UI. Open WebUI's get_available_voices, for an openai
+    engine on a non-OpenAI base URL, fetches GET {base_url}/audio/voices and
+    falls back to Open WebUI's hardcoded alloy-style list when that fetch
+    fails. edge-api now serves that endpoint with the provider's real roster,
+    so the Settings > Audio dropdowns can only offer voices hive-tts accepts.
+    Asserted against main.go because a dropped registration line would send
+    every dropdown silently back to the alloy fallback."""
+    main_go = (
+        Path(__file__).resolve().parents[1]
+        / "apps" / "edge-api" / "cmd" / "server" / "main.go"
+    ).read_text(encoding="utf-8")
+    assert 'mux.Handle("/v1/audio/voices", audio.VoicesHandler())' in main_go, (
+        "edge-api must serve GET /v1/audio/voices or Open WebUI's voice "
+        "dropdowns fall back to OpenAI's alloy-style list (#996)"
+    )
+
+
 def test_compose_routes_chat_transcription_through_the_gateway() -> None:
     """The reconcile only helps if compose names the values. Asserted against
     the file because the whole defect was an unset variable letting upstream's
@@ -402,14 +517,19 @@ def test_reconciled_keys_are_loggable_without_the_secret() -> None:
             "rag.openai.api_key": "hk_secret",
             "audio.stt.model": "hive-stt",
             "audio.stt.openai.api_key": "hk_secret",
+            "audio.tts.model": "hive-tts",
+            "audio.tts.openai.api_key": "hk_secret",
         }
     )
     assert ALIAS in summary, summary
     assert "hk_secret" not in summary, summary
     assert "rag.openai.api_key" in summary, summary
-    # Same for the transcription pair: the alias is the signal, the key is not.
+    # Same for the transcription and read-aloud pairs: the alias is the
+    # signal, the key is not.
     assert "hive-stt" in summary, summary
     assert "audio.stt.openai.api_key" in summary, summary
+    assert "hive-tts" in summary, summary
+    assert "audio.tts.openai.api_key" in summary, summary
 
 
 def main() -> None:

@@ -1188,6 +1188,27 @@ services:
       AUDIO_STT_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       AUDIO_STT_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       AUDIO_STT_MODEL: ${OWUI_STT_ALIAS:-hive-stt}
+      # Read-aloud (issue #997). Same first-boot-wins trap as STT directly
+      # above: all five audio.tts.* keys are in Open WebUI's DEFAULT_CONFIG,
+      # so a volume seeded `engine=""` (bundled browser speech synthesis),
+      # api.openai.com, an empty key, model tts-1 and voice alloy on its first
+      # boot and compose alone could never move any of them afterwards. The
+      # defaults here name what the gateway actually serves: hive-tts resolves
+      # to groq/orpheus, which rejects alloy (#996), so the deployment-wide
+      # default voice is one Orpheus actually has. The list the Settings >
+      # Audio voice dropdowns offer comes from GET /v1/audio/voices on
+      # edge-api, which answers without credentials because Open WebUI's own
+      # voices fetch sends none.
+      #
+      # An Enterprise box running the sovereign `voice` profile points
+      # OWUI_TTS_ALIAS at its own catalog alias, or clears AUDIO_TTS_ENGINE to
+      # keep whatever its administrator configured; a blank value never
+      # clobbers a persisted one.
+      AUDIO_TTS_ENGINE: "openai"
+      AUDIO_TTS_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
+      AUDIO_TTS_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
+      AUDIO_TTS_MODEL: ${OWUI_TTS_ALIAS:-hive-tts}
+      AUDIO_TTS_VOICE: ${OWUI_TTS_VOICE:-autumn}
       VECTOR_DB: "pgvector"
       # TRANSACTION-mode pooler when one is configured. This is the connection
       # that has actually been failing: a recreated open-webui could not get a
