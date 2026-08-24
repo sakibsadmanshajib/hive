@@ -53,32 +53,60 @@
 				 both sides when either changes. -->
 		<script>
 			(() => {
+				// Every storage access is individually guarded: a browser that denies
+				// storage must not silence the whole fast exit, only the guard that
+				// needed the value. Reads degrade to "absent"; the attempt-stamp write
+				// is still verified and still fails closed, exactly like
+				// sso-redirect.ts's writeStorage.
+				let readLocalToken = null;
+				try {
+					readLocalToken = window.localStorage.getItem('token');
+				} catch (localError) {}
+				if (readLocalToken) return;
+				let hasTokenCookie = false;
+				try {
+					hasTokenCookie = window.document.cookie
+						.split('; ')
+						.some((cookie) => cookie.startsWith('token='));
+				} catch (cookieError) {}
+				if (hasTokenCookie) return;
+				const readSession = (key) => {
+					try {
+						return window.sessionStorage.getItem(key);
+					} catch (sessionError) {
+						return null;
+					}
+				};
+				const writeSession = (key, value) => {
+					try {
+						window.sessionStorage.setItem(key, value);
+						return window.sessionStorage.getItem(key) === value;
+					} catch (writeError) {
+						return false;
+					}
+				};
 				try {
 					if (window.electronAPI) return;
 					if (location.pathname !== '/') return;
-					if (localStorage.getItem('token')) return;
-					const hasTokenCookie = document.cookie
-						.split('; ')
-						.some((cookie) => cookie.startsWith('token='));
-					if (hasTokenCookie) return;
-					try {
-						if (sessionStorage.getItem('hive:signed-out') === '1') return;
-						const stamp = Number.parseInt(sessionStorage.getItem('hive:sso-attempt-at'), 10);
-						if (
-							Number.isFinite(stamp) &&
-							Date.now() - stamp >= 0 &&
-							Date.now() - stamp < 15000
-						) {
-							return;
-						}
-					} catch (storageError) {}
-					if (/\.scubed\.co$/.test(location.hostname)) {
-						const link = document.createElement('link');
-						link.rel = 'preconnect';
-						link.href = 'https://console-hive.scubed.co';
-						document.head.appendChild(link);
+					if (readSession('hive:signed-out') === '1') return;
+					const stamp = Number.parseInt(readSession('hive:sso-attempt-at'), 10);
+					if (
+						Number.isFinite(stamp) &&
+						Date.now() - stamp >= 0 &&
+						Date.now() - stamp < 15000
+					) {
+						return;
 					}
-					fetch('/api/config', { credentials: 'same-origin' })
+					try {
+						if (/\.scubed\.co$/.test(location.hostname)) {
+							const link = window.document.createElement('link');
+							link.rel = 'preconnect';
+							link.href = 'https://console-hive.scubed.co';
+							window.document.head.appendChild(link);
+						}
+					} catch (preconnectError) {}
+					window
+						.fetch('/api/config', { credentials: 'same-origin' })
 						.then((res) => (res.ok ? res.json() : null))
 						.then((cfg) => {
 							try {
@@ -96,9 +124,7 @@
 									return;
 								}
 								if (cfg.onboarding) return;
-								const now = String(Date.now());
-								sessionStorage.setItem('hive:sso-attempt-at', now);
-								if (sessionStorage.getItem('hive:sso-attempt-at') !== now) return;
+								if (!writeSession('hive:sso-attempt-at', String(Date.now()))) return;
 								location.replace('/oauth/' + providers[0] + '/login');
 							} catch (configError) {}
 						})

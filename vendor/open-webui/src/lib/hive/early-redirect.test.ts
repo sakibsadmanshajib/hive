@@ -34,6 +34,7 @@ describe('app.html signed-out fast exit', () => {
 	let localStorageStore: Store;
 	let sessionStorageStore: Store;
 	let sessionStorageBroken: boolean;
+	let localStorageBroken: boolean;
 	let headChildren: Array<{ rel?: string; href?: string }>;
 	let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -57,7 +58,9 @@ describe('app.html signed-out fast exit', () => {
 		tokenCookie = null,
 		session = {},
 		cfg = config(),
-		fetchImpl
+		fetchImpl,
+		localStorageThrows = false,
+		sessionStorageThrows = false
 	}: {
 		pathname?: string;
 		hostname?: string;
@@ -66,6 +69,8 @@ describe('app.html signed-out fast exit', () => {
 		session?: Record<string, string>;
 		cfg?: Record<string, unknown> | 'reject' | 'http500';
 		fetchImpl?: ReturnType<typeof vi.fn>;
+		localStorageThrows?: boolean;
+		sessionStorageThrows?: boolean;
 	} = {}) => {
 		location = {
 			pathname,
@@ -77,46 +82,54 @@ describe('app.html signed-out fast exit', () => {
 			localStorageStore.set('token', localStorageToken);
 		}
 		sessionStorageStore = new Map(Object.entries(session));
-		sessionStorageBroken = false;
+		sessionStorageBroken = sessionStorageThrows;
+		localStorageBroken = localStorageThrows;
 		headChildren = [];
 		fetchMock = fetchImpl ?? vi.fn().mockResolvedValue({
 			ok: true,
 			json: () => Promise.resolve(cfg)
 		});
 
-		const globals = {
-			window: {} as Record<string, unknown>,
-			location,
-			document: {
-				cookie: tokenCookie ?? '',
-				head: {
-					appendChild: (node: { rel?: string; href?: string }) => {
-						headChildren.push(node);
-					}
-				},
-				createElement: () => ({}) as { rel?: string; href?: string }
+		const makeStorage = (broken: () => boolean, store: Store) => ({
+			getItem: (key: string) => {
+				if (broken()) throw new Error('storage unavailable');
+				return store.get(key) ?? null;
 			},
+			setItem: (key: string, value: string) => {
+				if (broken()) throw new Error('storage unavailable');
+				void store.set(key, value);
+			},
+			removeItem: (key: string) => {
+				if (broken()) throw new Error('storage unavailable');
+				void store.delete(key);
+			}
+		});
+		const sessionStub = makeStorage(() => sessionStorageBroken, sessionStorageStore);
+		const localStub = makeStorage(() => localStorageBroken, localStorageStore);
+
+		const documentStub = {
+			cookie: tokenCookie ?? '',
+			head: {
+				appendChild: (node: { rel?: string; href?: string }) => {
+					headChildren.push(node);
+				}
+			},
+			createElement: () => ({}) as { rel?: string; href?: string }
+		};
+
+		const globals = {
+			window: {
+				document: documentStub,
+				localStorage: localStub,
+				sessionStorage: sessionStub,
+				fetch: fetchMock
+			} as Record<string, unknown>,
+			location,
+			document: documentStub,
 			fetch: fetchMock,
 			Date,
-			localStorage: {
-				getItem: (key: string) => localStorageStore.get(key) ?? null,
-				setItem: (key: string, value: string) => void localStorageStore.set(key, value),
-				removeItem: (key: string) => void localStorageStore.delete(key)
-			},
-			sessionStorage: {
-				getItem: (key: string) => {
-					if (sessionStorageBroken) throw new Error('storage unavailable');
-					return sessionStorageStore.get(key) ?? null;
-				},
-				setItem: (key: string, value: string) => {
-					if (sessionStorageBroken) throw new Error('storage unavailable');
-					void sessionStorageStore.set(key, value);
-				},
-				removeItem: (key: string) => {
-					if (sessionStorageBroken) throw new Error('storage unavailable');
-					void sessionStorageStore.delete(key);
-				}
-			}
+			localStorage: localStub,
+			sessionStorage: sessionStub
 		};
 		for (const [name, value] of Object.entries(globals)) {
 			(globalThis as Record<string, unknown>)[name] = value;
@@ -241,6 +254,19 @@ describe('app.html signed-out fast exit', () => {
 		await runScript({
 			fetchImpl: vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) })
 		});
+		expect(location.replace).not.toHaveBeenCalled();
+	});
+
+	it('keeps going when localStorage denies access', async () => {
+		await runScript({ localStorageThrows: true });
+		expect(fetchMock).toHaveBeenCalled();
+		expect(location.replace).toHaveBeenCalledWith('/oauth/oidc/login');
+	});
+
+	it('fails closed when sessionStorage denies access entirely', async () => {
+		await runScript({ sessionStorageThrows: true });
+		// reads degrade to absent, so the decision path runs, but the
+		// attempt-stamp write cannot be verified, which must block navigation.
 		expect(location.replace).not.toHaveBeenCalled();
 	});
 });
