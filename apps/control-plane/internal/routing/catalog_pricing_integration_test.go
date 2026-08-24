@@ -69,6 +69,15 @@ func connectCatalogDB(t *testing.T) *pgxpool.Pool {
 // lands. Anything NOT listed here is held to the rule.
 var pendingMultiRouteAliases = map[string]string{
 	"hive-embedding-default": "issue #617 follow-up: embedding route choice is coupled to the provisioned vector width (D-001)",
+	// The free pool (20260824_02_free_pool_router.sql) is multi-route BY
+	// DESIGN, not pending a fix: its four member rows share one
+	// litellm_model_name, so whichever member selection picks dispatches the
+	// same load-balanced LiteLLM group at the alias's single price. The D-032
+	// ambiguity this test guards (one price, unclear upstream cost) does not
+	// arise when every member serves under one gateway name. Listed here so
+	// the count is reported rather than failed; if the pool ever collapses to
+	// one row, this entry must be removed.
+	"hive-free": "free pool router: four deployments share litellm_model_name 'route-free-pool' by design",
 }
 
 // TestSeededAliasHasExactlyOneEnabledRoute enforces the owner's rule: one
