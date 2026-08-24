@@ -997,14 +997,6 @@ jobs:
       LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      # Free pool key slots (#1115): compose forwards these into the litellm
-      # container, whose config resolves them via os.environ/ at request time.
-      # Unset here, every hive-free deployment fails and the alias reads as
-      # invalid to LiteLLM ("Invalid model name passed in model=hive-free"),
-      # which is the same knob-set-but-never-forwarded defect class as
-      # issue #1088. Both exist as repository secrets.
-      GROQ_API_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       # Free pool key slots; hive-free (the default HIVE_TEST_MODEL) fails over
       # across all four deployments, so each slot must reach the litellm
       # container.
