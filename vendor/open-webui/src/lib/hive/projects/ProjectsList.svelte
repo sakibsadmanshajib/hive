@@ -138,16 +138,16 @@
 				<li>
 					<a
 						href={`/projects/${project.id}`}
-						class="block h-full p-4 rounded-2xl border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900 transition"
+						class="flex h-full flex-col p-4 rounded-2xl border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900 transition"
 					>
-						<p class="text-sm font-medium text-gray-850 dark:text-gray-100 truncate">
+						<div class="text-sm font-medium text-gray-850 dark:text-gray-100 truncate">
 							{project.name}
-						</p>
+						</div>
 						<!-- Subtitle row per the Claude reference: description first, then recency -->
-						<p class="mt-1 text-xs text-gray-500 line-clamp-2 min-h-[2rem]">
+						<div class="mt-1 text-xs text-gray-500 line-clamp-2 min-h-[2rem]">
 							{project.description || $i18n.t('No description')}
-						</p>
-						<p class="mt-2 text-[11px] text-gray-400">{relativeDate(project.updatedAt)}</p>
+						</div>
+						<div class="mt-auto pt-2 text-[11px] text-gray-400">{relativeDate(project.updatedAt)}</div>
 					</a>
 				</li>
 			{/each}
