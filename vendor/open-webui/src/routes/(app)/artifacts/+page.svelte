@@ -15,7 +15,7 @@
 	import { getContext, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { WEBUI_NAME, config, showSidebar, mobile } from '$lib/stores';
-	import { getAllChats } from '$lib/apis/chats';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { getCodeBlockContents, removeAllDetails } from '$lib/utils';
 	import { getOutputText } from '$lib/components/chat/Messages/structuredOutput';
 	import { injectCsp } from '$lib/utils/csp';
@@ -48,8 +48,7 @@
 					entries.push({
 						chatId: chat.id,
 						chatTitle: chat.title,
-						updatedAt: chat.updated_at,
-						type: 'iframe',
+						artifactType: 'iframe',
 						content: buildIframeDoc(group)
 					});
 				}
@@ -59,8 +58,7 @@
 						entries.push({
 							chatId: chat.id,
 							chatTitle: chat.title,
-							updatedAt: chat.updated_at,
-							type: 'svg',
+							artifactType: 'svg',
 							content: block.code
 						});
 					}
@@ -81,29 +79,67 @@
 		errorMsg = '';
 		const myToken = ++scanToken;
 		try {
-			// One NDJSON stream of every chat, with full message content. Bounded
-			// by withTimeout so a slow or dead backend becomes a visible error
-			// after a bounded wait instead of an unexplained eternal spinner.
-			const chats = await withTimeout(getAllChats(token), 20000);
+			// The NDJSON export endpoint streams every chat with full message
+			// content, one request. Parsed incrementally and stopped at the
+			// artifact cap, so a large history costs only what the cap needs,
+			// and the whole load is bounded by withTimeout so a slow or dead
+			// backend becomes a visible error instead of an eternal spinner.
+			const found = await withTimeout(
+				(async () => {
+					const res = await fetch(`${WEBUI_API_BASE_URL}/chats/all`, {
+						headers: { Accept: 'application/x-ndjson', authorization: `Bearer ${token}` }
+					});
+					if (!res.ok || !res.body) {
+						throw new Error(`HTTP ${res.status}`);
+					}
+					const reader = res.body.getReader();
+					const decoder = new TextDecoder();
+					const found: ArtifactEntry[] = [];
+					let buffer = '';
+					stream: while (true) {
+						const { done, value } = await reader.read();
+						if (done) {
+							break;
+						}
+						buffer += decoder.decode(value, { stream: true });
+						const lines = buffer.split('\n');
+						buffer = lines.pop() ?? '';
+						for (const line of lines) {
+							if (!line.trim()) {
+								continue;
+							}
+							found.push(...extractArtifacts(JSON.parse(line)));
+							if (found.length >= 50) {
+								break stream;
+							}
+						}
+					}
+					try {
+						await reader.cancel();
+					} catch {
+						// the body may already be closed when the cap ended the loop
+					}
+					return found;
+				})(),
+				20000
+			);
 			if (myToken !== scanToken) {
 				return;
-			}
-			const found: ArtifactEntry[] = [];
-			for (const chat of chats) {
-				if (found.length >= 50) {
-					break;
-				}
-				found.push(...extractArtifacts(chat));
 			}
 			artifacts = found;
 			selectedIdx = null;
 			status = 'ready';
 		} catch (e: any) {
 			if (myToken === scanToken) {
+				if (e?.message !== 'timeout') {
+					// Provider names and internal detail never reach the customer:
+					// log the real error, show a fixed message.
+					console.error('Failed to load artifacts:', e);
+				}
 				errorMsg =
 					e?.message === 'timeout'
 						? $i18n.t('Loading your artifacts took too long. Try again.')
-						: String(e?.message ?? e);
+						: $i18n.t('Please try again.');
 				status = 'error';
 			}
 		}
@@ -224,7 +260,7 @@
 					</button>
 				</div>
 				<div class="flex-1 w-full h-full">
-					{#if artifacts[selectedIdx].type === 'iframe'}
+					{#if artifacts[selectedIdx].artifactType === 'iframe'}
 						<iframe
 							title="Artifact preview"
 							srcdoc={injectCsp(artifacts[selectedIdx].content, $config?.ui?.iframe_csp ?? '')}
@@ -262,7 +298,9 @@
 									{artifact.chatTitle}
 								</div>
 								<div class="text-xs text-gray-500 dark:text-gray-400">
-									{artifact.type === 'iframe' ? $i18n.t('Web page') : $i18n.t('SVG')}
+									{artifact.artifactType === 'iframe'
+										? $i18n.t('Web page')
+										: $i18n.t('SVG')}
 								</div>
 							</div>
 							<div class="text-xs font-medium text-gray-500 dark:text-gray-400 shrink-0">
