@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// maxSessionIDLen is OpenRouter's documented ceiling for the sticky-routing
+// session_id passthrough (see MessagesRequest.SessionID). Truncated rather
+// than rejected: it is a routing hint, not a correctness-bearing field.
+const maxSessionIDLen = 256
+
 // ToOAIRequest lowers an Anthropic MessagesRequest to an internal OpenAI-shaped
 // OAIRequest that can be forwarded through the existing LiteLLM dispatch path.
 // It never leaks provider names; the model alias is passed through as-is so the
@@ -13,10 +18,10 @@ import (
 func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	var msgs []OAIMessage
 
-	if req.System.Text != "" {
+	if req.System.Text != "" || len(req.System.Blocks) > 0 {
 		msgs = append(msgs, OAIMessage{
 			Role:    "system",
-			Content: OAIMessageContent{Text: req.System.Text},
+			Content: systemContent(req.System),
 		})
 	}
 
@@ -29,11 +34,20 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	out := OAIRequest{
-		Model:       req.Model,
-		Messages:    msgs,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stream:      req.Stream,
+		Model:        req.Model,
+		Messages:     msgs,
+		Temperature:  req.Temperature,
+		TopP:         req.TopP,
+		Stream:       req.Stream,
+		CacheControl: req.CacheControl,
+	}
+
+	if req.SessionID != "" {
+		id := req.SessionID
+		if len(id) > maxSessionIDLen {
+			id = id[:maxSessionIDLen]
+		}
+		out.SessionID = id
 	}
 
 	if req.MaxTokens > 0 {
@@ -58,6 +72,43 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	return out, nil
+}
+
+// systemContent lowers a SystemField to an OAIMessageContent. When no block
+// carries a cache breakpoint it reproduces the exact plain-string output this
+// function always emitted (the regression guard: an uncached system prompt
+// must serialize identically to before this change), because collapsing to a
+// flat string cannot represent a per-block cache_control -- a request that
+// does use one gets the block-array form instead, each block's own
+// CacheControl carried onto its OAIContentPart.
+func systemContent(sf SystemField) OAIMessageContent {
+	needsBlocks := false
+	for _, bl := range sf.Blocks {
+		if bl.CacheControl != nil {
+			needsBlocks = true
+			break
+		}
+	}
+	if !needsBlocks {
+		return OAIMessageContent{Text: sf.Text}
+	}
+
+	parts := make([]OAIContentPart, 0, len(sf.Blocks))
+	for _, bl := range sf.Blocks {
+		if bl.Type != "text" {
+			// Anthropic's system field only ever carries text blocks; a
+			// non-text block here would already have been silently ignored
+			// by SystemField.UnmarshalJSON's Text concatenation, so dropping
+			// it here too is not a new gap this change introduces.
+			continue
+		}
+		parts = append(parts, OAIContentPart{
+			Type:         "text",
+			Text:         bl.Text,
+			CacheControl: bl.CacheControl,
+		})
+	}
+	return OAIMessageContent{Parts: parts}
 }
 
 // convertMessage converts a single Anthropic message to one or more OAIMessages.
@@ -89,9 +140,10 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 			}
 			content := toolResultText(bl)
 			toolResults = append(toolResults, OAIMessage{
-				Role:       "tool",
-				Content:    OAIMessageContent{Text: content},
-				ToolCallID: bl.ToolUseID,
+				Role:         "tool",
+				Content:      OAIMessageContent{Text: content},
+				ToolCallID:   bl.ToolUseID,
+				CacheControl: bl.CacheControl,
 			})
 		} else if len(toolResults) > 0 {
 			// tool_result blocks were already seen; a non-tool_result block after them is invalid.
@@ -113,7 +165,7 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 	for _, bl := range m.Content.Blocks {
 		switch bl.Type {
 		case "text":
-			parts = append(parts, OAIContentPart{Type: "text", Text: bl.Text})
+			parts = append(parts, OAIContentPart{Type: "text", Text: bl.Text, CacheControl: bl.CacheControl})
 
 		case "image":
 			if bl.Source == nil {
@@ -126,8 +178,9 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 				dataURI = bl.Source.URL
 			}
 			parts = append(parts, OAIContentPart{
-				Type:     "image_url",
-				ImageURL: &OAIImageURL{URL: dataURI},
+				Type:         "image_url",
+				ImageURL:     &OAIImageURL{URL: dataURI},
+				CacheControl: bl.CacheControl,
 			})
 
 		case "tool_use":
@@ -142,6 +195,7 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 					Name:      bl.Name,
 					Arguments: args,
 				},
+				CacheControl: bl.CacheControl,
 			})
 		}
 	}
@@ -150,8 +204,22 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 	if len(toolCalls) > 0 && len(parts) == 0 {
 		return []OAIMessage{{Role: m.Role, ToolCalls: toolCalls}}, nil
 	}
-	// Tool calls plus text content.
+	// Tool calls plus text/image content. A part with a cache breakpoint
+	// keeps the block-array form so it is not lost; otherwise this
+	// reproduces the exact flat-string concatenation this function always
+	// emitted (including its pre-existing wart of silently dropping any
+	// image part mixed with tool calls -- see the PR body's dropped-field
+	// audit; fixing that is a separate, non-cache_control change and out of
+	// this fix's surgical scope), which is the regression guard for the
+	// overwhelmingly common no-cache-control case.
 	if len(toolCalls) > 0 {
+		if partsNeedArrayForm(parts) {
+			return []OAIMessage{{
+				Role:      m.Role,
+				Content:   OAIMessageContent{Parts: parts},
+				ToolCalls: toolCalls,
+			}}, nil
+		}
 		var contentStr string
 		for _, p := range parts {
 			if p.Type == "text" {
@@ -165,11 +233,24 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 		}}, nil
 	}
 
-	// Pure text/image parts: use array form for vision, string for text-only.
-	if len(parts) == 1 && parts[0].Type == "text" {
+	// Pure text/image parts: use array form for vision or a cache breakpoint,
+	// string for a lone uncached text block.
+	if len(parts) == 1 && parts[0].Type == "text" && parts[0].CacheControl == nil {
 		return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Text: parts[0].Text}}}, nil
 	}
 	return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Parts: parts}}}, nil
+}
+
+// partsNeedArrayForm reports whether a set of content parts must keep the
+// block-array form rather than collapse to a flat string: true if any part
+// carries a cache breakpoint, which a flat string cannot address.
+func partsNeedArrayForm(parts []OAIContentPart) bool {
+	for _, p := range parts {
+		if p.CacheControl != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // toolResultText extracts the text content from a tool_result block.
@@ -204,6 +285,7 @@ func convertTools(tools []Tool) ([]OAITool, error) {
 				Description: t.Description,
 				Parameters:  params,
 			},
+			CacheControl: t.CacheControl,
 		})
 	}
 	return out, nil
@@ -223,7 +305,7 @@ func convertToolChoice(tc *ToolChoice) OAIToolChoice {
 	case "tool":
 		return OAIToolChoice{
 			Named: &OAINamedToolChoice{
-				Type: "function",
+				Type:     "function",
 				Function: OAINamedToolChoiceFunction{Name: tc.Name},
 			},
 		}

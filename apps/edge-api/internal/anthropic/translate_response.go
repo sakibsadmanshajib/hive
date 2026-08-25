@@ -25,10 +25,7 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
-		Usage: ResponseUsage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
+		Usage: anthropicUsage(resp.Usage),
 	}
 
 	if len(resp.Choices) == 0 {
@@ -63,6 +60,46 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 
 	out.Content = blocks
 	return out
+}
+
+// anthropicUsage converts an inclusive OpenAI/OpenRouter usage object into the
+// exclusive shape Anthropic clients (Claude Code included) read cache savings
+// from. See freshInputTokens for why this is a subtraction, never an
+// addition, and ResponseUsage's doc comment for the shape itself.
+func anthropicUsage(u OAIUsage) ResponseUsage {
+	cacheRead, cacheWrite := 0, 0
+	if u.PromptTokensDetails != nil {
+		cacheRead = u.PromptTokensDetails.CachedTokens
+		cacheWrite = u.PromptTokensDetails.CacheWriteTokens
+	}
+	return ResponseUsage{
+		InputTokens:              freshInputTokens(u.PromptTokens, cacheRead, cacheWrite),
+		OutputTokens:             u.CompletionTokens,
+		CacheCreationInputTokens: cacheWrite,
+		CacheReadInputTokens:     cacheRead,
+	}
+}
+
+// freshInputTokens recovers the Anthropic-exclusive "fresh, uncached" input
+// count from OpenRouter's inclusive prompt_tokens, which already contains
+// both the cache read and cache write tokens: fresh = prompt - read - write,
+// SUBTRACT never ADD (Anthropic-native reporting, which this gateway never
+// actually receives since every route goes through OpenRouter, is the
+// opposite ADD convention -- getting these swapped either nearly doubles
+// billed input on every warm turn or, subtracting on top of an
+// already-exclusive number, drives it negative).
+//
+// A negative result here is clamped to zero rather than surfaced to the
+// client: it means the upstream inclusive-shape assumption broke, which is a
+// billing-accuracy alarm for the settlement path (apps/edge-api/internal/inference),
+// not something this wire-shape projection can diagnose or repair. This
+// function only decides what the client sees, never what gets billed.
+func freshInputTokens(promptTokens, cacheRead, cacheWrite int) int {
+	fresh := promptTokens - cacheRead - cacheWrite
+	if fresh < 0 {
+		return 0
+	}
+	return fresh
 }
 
 // mapFinishReason converts an OpenAI finish_reason to an Anthropic stop_reason.
