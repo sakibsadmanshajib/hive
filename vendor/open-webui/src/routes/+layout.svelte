@@ -821,7 +821,7 @@
 			theme.set(newTheme);
 
 			// Apply theme classes (mirrors logic from chat/Settings/General.svelte)
-			const themes = ['dark', 'light', 'oled-dark'];
+			const themes = ['dark', 'light'];
 			let themeToApply =
 				newTheme === 'oled-dark' ? 'dark' : newTheme === 'her' ? 'light' : newTheme;
 			if (newTheme === 'system') {
@@ -833,6 +833,10 @@
 					e.split(' ').forEach((cls) => document.documentElement.classList.remove(cls));
 				});
 			themeToApply.split(' ').forEach((cls) => document.documentElement.classList.add(cls));
+			// Same reason as chat/Settings/General.svelte: the Hive token layer
+			// keys its dark register off data-theme, upstream's utilities key off
+			// the class, and both halves have to move together.
+			document.documentElement.dataset.theme = themeToApply;
 			return;
 		}
 		if (event.type === 'models:refresh') {
