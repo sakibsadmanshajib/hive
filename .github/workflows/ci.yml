@@ -1802,7 +1802,12 @@ jobs:
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
       EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
-      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      # LITELLM_MASTER_KEY is deliberately absent, and its absence is not a
+      # gap. docker-compose.yml defaults it to litellm-dev-key for the litellm
+      # container and for both Go services, so all three agree on a throwaway
+      # value and this job never handles the production one. Naming the secret
+      # is also half of what made a Dependabot-triggered run behave differently
+      # from every other run: see the S3 block below.
       # Live provider keys are NOT supplied to web-e2e. The Playwright
       # specs run here (unauth, auth-shell, profile-completion) exercise
       # only the UI layer and Supabase auth flows; they make no LLM
@@ -1821,13 +1826,38 @@ jobs:
       GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
       GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
       NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
-      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
-      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
-      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-      S3_REGION: ${{ secrets.S3_REGION }}
-      S3_USE_SSL: 'true'
-      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
-      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      # The object store is stubbed here, not supplied, for the same reason
+      # the provider keys above are: no spec in the chromium project uploads
+      # or downloads an object. control-plane and edge-api only require these
+      # names to be non-empty at boot (loadStorageConfigFromEnv in
+      # apps/control-plane/cmd/server/main.go, NewS3Client in
+      # packages/storage/s3.go), and neither dials anything at startup, so a
+      # stub boots the stack. Port 9 is discard: a spec that starts touching
+      # storage gets connection refused and fails loudly, instead of quietly
+      # reading and writing the live Supabase bucket the way this job did
+      # while these were secrets.
+      #
+      # THIS IS WHAT WEDGED THE DEPENDENCY QUEUE. A workflow run triggered by
+      # Dependabot is handed the Dependabot secret store, not the Actions one,
+      # so every `secrets.S3_*` above resolved to the empty string, and
+      # control-plane exited at boot with `storage unavailable: missing
+      # S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION`. The stack never
+      # came up, this required check failed on ten open dependency pull
+      # requests at once (#1013, #1015, #1016, #1018, #1036, #1037, #1039,
+      # #1132, #1134, #1140), and not one of them could have caused it. The
+      # fix is not to copy the secrets into the Dependabot store: this job
+      # boots its own Postgres, GoTrue, PostgREST, Redis and LiteLLM, and a
+      # job that stands up everything it needs should need no credential at
+      # all. It now needs none, and the unit test
+      # `apps/web-console/tests/unit/ci-web-e2e-secret-free.test.ts` fails the
+      # next pull request that puts one back. See issues #820 and #821.
+      S3_ENDPOINT: 'http://127.0.0.1:9'
+      S3_ACCESS_KEY: 'ci-stub-not-used'
+      S3_SECRET_KEY: 'ci-stub-not-used'
+      S3_REGION: 'us-east-1'
+      S3_USE_SSL: 'false'
+      S3_BUCKET_FILES: 'ci-stub-files'
+      S3_BUCKET_IMAGES: 'ci-stub-images'
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       # HIVE_API_KEY is gone with the shared project. It only ever fed
       # openai-sdk.spec.ts, which skips on `!HIVE_API_KEY || !EDGE_BASE_URL`
@@ -2051,21 +2081,41 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
-      - name: Generate the fixture invitation token
-        # Random per job, and masked, because the seeder stores its sha256 as a
-        # live pending invitation. A value anybody can derive from the public
-        # run page is a published credential for as long as the run lasts.
+      - name: Generate the fixture credentials
+        # Random per job, and masked, because the seeder stores the token's
+        # sha256 as a live pending invitation. A value anybody can derive from
+        # the public run page is a published credential for as long as the run
+        # lasts.
         #
         # 24 bytes gives 48 hex characters. The floor it has to clear is
         # minTokenLength in tests/e2e/support/e2e-auth-defaults.json, which
         # requiredSecretEnv enforces at 16, so do not shorten this below that
         # without moving both: the failure would otherwise surface far from
         # here, naming a variable this step does not mention.
+        #
+        # The two fixture passwords are generated the same way, and used to be
+        # repository secrets. Generating them is strictly stronger than reading
+        # them: the accounts they belong to are created by this run's own
+        # seeder, in a throwaway GoTrue that is destroyed with the job, at
+        # addresses already namespaced by run id and attempt, so a value shared
+        # across runs bought nothing. It cost something, though. A run
+        # triggered by Dependabot never receives an Actions secret, so both
+        # passwords arrived empty and requiredSecretEnv threw by name; that was
+        # the second wall behind the S3 one documented in this job's env block.
+        # This does not weaken the rule these secrets were introduced to
+        # enforce, which is that no credential has a committed default: nothing
+        # is committed here either, and a caller that neither sets nor
+        # generates one still fails by name.
         run: |
           set -euo pipefail
           token="$(openssl rand -hex 24)"
           echo "::add-mask::$token"
           echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
+          for var in E2E_VERIFIED_PASSWORD E2E_UNVERIFIED_PASSWORD; do
+            secret="$(openssl rand -hex 24)"
+            echo "::add-mask::$secret"
+            echo "$var=$secret" >> "$GITHUB_ENV"
+          done
 
       - name: Run UI Playwright suite (unauth + credentialed)
         working-directory: apps/web-console
@@ -2098,19 +2148,22 @@ jobs:
           # reassign rows out from under this job's own reads mid-test.
           # github.run_attempt makes a manual re-run of a flake get a fresh
           # identity too, not the one the previous attempt already consumed.
-          # The passwords come from secrets and have no fallback. They used to
-          # fall back to plaintext values committed in
+          # The passwords are generated per run by the step above and have no
+          # fallback. They used to fall back to plaintext values committed in
           # e2e-auth-defaults.json, in a public repository, for live accounts
           # holding a tenant OWNER role; the seeder then wrote those values
-          # back onto the accounts. The fallback is gone and an unset secret
-          # now fails this job by name. They need not be unique per run:
-          # nothing looks a user up by password, and the addresses above are
-          # already run-scoped.
+          # back onto the accounts. That fallback is gone and is not coming
+          # back. They were then repository secrets, which failed by name when
+          # unset, and which a Dependabot-triggered run never receives at all.
+          # Generating them removes the last reason this job needs a secret,
+          # and costs nothing: nothing looks a user up by password, the
+          # addresses above are already run-scoped, and the GoTrue holding
+          # these accounts is torn down with the job.
           E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
-          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_VERIFIED_PASSWORD: ${{ env.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
-          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_PASSWORD: ${{ env.E2E_UNVERIFIED_PASSWORD }}
           # Generated in the step above, not derived here. It used to be a
           # committed literal concatenated with the run id and attempt, both
           # of which are public on the run page, and e2e-fixture-seed.mjs
@@ -2134,7 +2187,7 @@ jobs:
           # fail: a silent hole inside a green check. Pointing it at the
           # fixture user means the spec now always runs.
           E2E_WORKSPACE_OWNER_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
-          E2E_WORKSPACE_OWNER_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_WORKSPACE_OWNER_PASSWORD: ${{ env.E2E_VERIFIED_PASSWORD }}
         # Selects by PROJECT, never by file path (issue #813). The
         # `chromium` project's testDir is apps/web-console/tests/e2e, so a
         # spec added to that directory runs here the day it lands with no
@@ -2312,7 +2365,10 @@ jobs:
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
       EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
-      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      # LITELLM_MASTER_KEY is deliberately absent, for the reason Web E2E
+      # states at its own env block: compose defaults it to litellm-dev-key for
+      # every service that reads it, and naming the secret made a
+      # Dependabot-triggered run differ from every other run.
       # The gate drives the UI only. It never asks for a completion, so
       # stub provider keys satisfy LiteLLM startup without exposing paid
       # credentials to a job that has no use for them.
@@ -2327,13 +2383,20 @@ jobs:
       GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
       GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
       NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
-      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
-      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
-      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-      S3_REGION: ${{ secrets.S3_REGION }}
-      S3_USE_SSL: 'true'
-      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
-      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      # Stubbed, not supplied, for the reason Web E2E documents in full at its
+      # own env block: the gate touches no object, the two Go services only
+      # require these names to be non-empty at boot, and a Dependabot-triggered
+      # run receives no Actions secret, so as secrets these resolved empty and
+      # control-plane exited at boot with `storage unavailable`. Port 9 is
+      # discard, so a spec that starts touching storage fails loudly rather
+      # than reaching the live bucket.
+      S3_ENDPOINT: 'http://127.0.0.1:9'
+      S3_ACCESS_KEY: 'ci-stub-not-used'
+      S3_SECRET_KEY: 'ci-stub-not-used'
+      S3_REGION: 'us-east-1'
+      S3_USE_SSL: 'false'
+      S3_BUCKET_FILES: 'ci-stub-files'
+      S3_BUCKET_IMAGES: 'ci-stub-images'
       NEXT_PUBLIC_APP_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v7
@@ -2548,6 +2611,16 @@ jobs:
           token="$(openssl rand -hex 24)"
           echo "::add-mask::$token"
           echo "E2E_INVITATION_TOKEN=$token" >> "$GITHUB_ENV"
+          # The two fixture passwords are generated here for the reason Web
+          # E2E states at its own generation step: the accounts are created by
+          # this run's seeder in a throwaway GoTrue at run-scoped addresses, so
+          # a value shared across runs bought nothing, and as a repository
+          # secret it arrived empty on every Dependabot-triggered run.
+          for var in E2E_VERIFIED_PASSWORD E2E_UNVERIFIED_PASSWORD; do
+            secret="$(openssl rand -hex 24)"
+            echo "::add-mask::$secret"
+            echo "$var=$secret" >> "$GITHUB_ENV"
+          done
 
       - name: Seed the fixture identity the gate signs in as
         working-directory: apps/web-console
@@ -2559,9 +2632,9 @@ jobs:
           # exactly that failure in run 32266955684.
           E2E_RUN_KEY: ${{ env.INTERACTION_RUN_KEY }}
           E2E_VERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL }}
-          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_VERIFIED_PASSWORD: ${{ env.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: ${{ env.INTERACTION_FIXTURE_EMAIL_UNVERIFIED }}
-          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_PASSWORD: ${{ env.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: ${{ env.E2E_INVITATION_TOKEN }}
           # Prints the summary of what it actually seeded, which the next line
           # checks. Without it the seeder is silent on success, and a run that
