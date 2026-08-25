@@ -307,15 +307,13 @@
 			</div>
 		{:else}
 			<div class="flex flex-col w-full h-full overflow-y-auto">
-				<div class="px-6 pt-6 pb-3">
-					<div class="hv-display text-2xl text-gray-900 dark:text-white">
-						{$i18n.t('Artifacts')}
-					</div>
-					<div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-						{$i18n.t('Web pages, charts and snippets the model built in your recent chats.')}
-					</div>
-				</div>
-				<div class="px-6 pb-8 flex flex-col gap-2">
+				<!--
+					hive: no second heading here. hv-panel-head above already titles
+					the page in both the empty and populated states; a second
+					"Artifacts" title inside this branch rendered a duplicate the
+					moment the list was non-empty.
+				-->
+				<div class="px-6 pt-6 pb-3 flex flex-col gap-2">
 					{#each artifacts as artifact, idx}
 						<button
 							class="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-850 transition text-left"

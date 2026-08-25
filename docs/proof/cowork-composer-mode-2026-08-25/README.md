@@ -107,7 +107,7 @@ One heading, zero date buckets, the run interleaved with ordinary chats.
 The captured run ends in a service refusal rendered in the transcript rather
 than in a result, and that is an environment fact rather than a defect in this
 branch. `deploy/docker/owui-patches/hive_agent_proxy.py` resolves the caller's
-Supabase OAuth token server side through `get_system_oauth_token`, and there is
+Supabase OAuth token server-side through `get_system_oauth_token`, and there is
 currently no live `oauth_session` row on the box for any account: the demo
 account's row was present and working earlier in the same session (a live
 `GET /v1/agent/tasks` returned a task list including a `succeeded` run whose
