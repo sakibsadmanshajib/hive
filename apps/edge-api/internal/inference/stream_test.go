@@ -28,7 +28,7 @@ func TestUsageAccumulatorAccumulate(t *testing.T) {
 				},
 			},
 		}
-		acc.Accumulate(chunk)
+		acc.Accumulate(chunk, "hive-fast")
 
 		if !acc.HasUsage {
 			t.Error("expected HasUsage = true")
@@ -48,12 +48,76 @@ func TestUsageAccumulatorAccumulate(t *testing.T) {
 		if acc.CachedTokens != 10 {
 			t.Errorf("expected CachedTokens=10, got %d", acc.CachedTokens)
 		}
+		// Inclusive shape (OpenAI/OpenRouter): fresh = prompt_tokens -
+		// cached_tokens - cache_write_tokens = 100 - 10 - 0 = 90.
+		if acc.FreshInputTokens != 90 {
+			t.Errorf("expected FreshInputTokens=90, got %d", acc.FreshInputTokens)
+		}
+		if acc.CacheWriteTokens != 0 {
+			t.Errorf("expected CacheWriteTokens=0, got %d", acc.CacheWriteTokens)
+		}
+	})
+
+	t.Run("accumulates a cache write alongside a cache read, inclusive shape", func(t *testing.T) {
+		acc := &UsageAccumulator{}
+		chunk := ChatCompletionChunk{
+			Usage: &UsageResponse{
+				PromptTokens:     205_000,
+				CompletionTokens: 2_000,
+				TotalTokens:      207_000,
+				PromptTokensDetails: &PromptTokensDetails{
+					CachedTokens:     200_000,
+					CacheWriteTokens: 3_000,
+				},
+			},
+		}
+		acc.Accumulate(chunk, "hive-fast")
+
+		if acc.FreshInputTokens != 2_000 {
+			t.Errorf("expected FreshInputTokens=2000 (205000 - 200000 - 3000), got %d", acc.FreshInputTokens)
+		}
+		if acc.CachedTokens != 200_000 {
+			t.Errorf("expected CachedTokens=200000, got %d", acc.CachedTokens)
+		}
+		if acc.CacheWriteTokens != 3_000 {
+			t.Errorf("expected CacheWriteTokens=3000, got %d", acc.CacheWriteTokens)
+		}
+		if acc.FreshInputTokens+acc.CachedTokens+acc.CacheWriteTokens != acc.InputTokens {
+			t.Errorf("fresh + cache read + cache write = %d, want exactly InputTokens = %d",
+				acc.FreshInputTokens+acc.CachedTokens+acc.CacheWriteTokens, acc.InputTokens)
+		}
+	})
+
+	t.Run("accumulates the exclusive Anthropic-native shape by adding, not subtracting", func(t *testing.T) {
+		acc := &UsageAccumulator{}
+		cacheRead := int64(200_000)
+		cacheWrite := int64(3_000)
+		chunk := ChatCompletionChunk{
+			Usage: &UsageResponse{
+				// EXCLUSIVE shape: prompt_tokens is the fresh count alone.
+				PromptTokens:             5_000,
+				CompletionTokens:         2_000,
+				CacheReadInputTokens:     &cacheRead,
+				CacheCreationInputTokens: &cacheWrite,
+			},
+		}
+		acc.Accumulate(chunk, "claude-direct")
+
+		if acc.FreshInputTokens != 5_000 {
+			t.Errorf("expected FreshInputTokens=5000 (unchanged, exclusive shape), got %d", acc.FreshInputTokens)
+		}
+		if acc.CachedTokens != 200_000 {
+			t.Errorf("expected CachedTokens=200000, got %d", acc.CachedTokens)
+		}
+		if acc.CacheWriteTokens != 3_000 {
+			t.Errorf("expected CacheWriteTokens=3000, got %d", acc.CacheWriteTokens)
+		}
 	})
 
 	t.Run("no-op when chunk has no usage", func(t *testing.T) {
 		acc := &UsageAccumulator{}
 		chunk := ChatCompletionChunk{}
-		acc.Accumulate(chunk)
+		acc.Accumulate(chunk, "hive-fast")
 		if acc.HasUsage {
 			t.Error("expected HasUsage = false for chunk without usage")
 		}
@@ -62,12 +126,13 @@ func TestUsageAccumulatorAccumulate(t *testing.T) {
 
 func TestUsageAccumulatorToUsageResponse(t *testing.T) {
 	acc := &UsageAccumulator{
-		InputTokens:     100,
-		OutputTokens:    200,
-		ReasoningTokens: 50,
-		CachedTokens:    10,
-		TotalTokens:     300,
-		HasUsage:        true,
+		InputTokens:      100,
+		OutputTokens:     200,
+		ReasoningTokens:  50,
+		CachedTokens:     10,
+		CacheWriteTokens: 4,
+		TotalTokens:      300,
+		HasUsage:         true,
 	}
 	u := acc.ToUsageResponse()
 
@@ -91,6 +156,14 @@ func TestUsageAccumulatorToUsageResponse(t *testing.T) {
 	}
 	if u.PromptTokensDetails.CachedTokens != 10 {
 		t.Errorf("expected CachedTokens=10, got %d", u.PromptTokensDetails.CachedTokens)
+	}
+	if u.PromptTokensDetails.CacheWriteTokens != 4 {
+		t.Errorf("expected CacheWriteTokens=4, got %d", u.PromptTokensDetails.CacheWriteTokens)
+	}
+	// Echo contract: the two Anthropic-native pointer fields must never leak
+	// into this gateway's own OpenAI-compatible customer response.
+	if u.CacheReadInputTokens != nil || u.CacheCreationInputTokens != nil {
+		t.Error("ToUsageResponse must never set the Anthropic-native pointer fields on the customer-facing response")
 	}
 }
 
@@ -232,7 +305,7 @@ func TestStreamTerminalUsageChunkSynthesis(t *testing.T) {
 		if strings.HasPrefix(line, "data: ") {
 			var chunk ChatCompletionChunk
 			if err := json.Unmarshal([]byte(line[6:]), &chunk); err == nil {
-				acc.Accumulate(chunk)
+				acc.Accumulate(chunk, "gpt-4o")
 			}
 		}
 	}

@@ -343,7 +343,7 @@ func TestResponsesStreamingLifecycleEvents(t *testing.T) {
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			continue
 		}
-		acc.Accumulate(chunk)
+		acc.Accumulate(chunk, "gpt-4o")
 
 		if !translator.started {
 			translator.started = true

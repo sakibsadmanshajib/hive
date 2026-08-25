@@ -256,7 +256,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 		}
 
 		// Accumulate usage if present.
-		acc.Accumulate(chunk)
+		acc.Accumulate(chunk, model)
 
 		// Emit response.created on first chunk.
 		if !translator.started {

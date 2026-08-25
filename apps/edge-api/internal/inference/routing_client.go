@@ -131,6 +131,19 @@ const (
 type SelectRoutePricing struct {
 	InputPriceCredits  *int64 `json:"input_price_credits"`
 	OutputPriceCredits *int64 `json:"output_price_credits"`
+	// CacheReadPriceCredits and CacheWritePriceCredits are the alias's own
+	// per-million rate for a cache-read and a cache-write token,
+	// respectively. NULL (nil), not just unpopulated: control-plane's
+	// catalog.CatalogPricing already carries these two columns end to end
+	// (routing/repository.go's LoadAliasPricing, served over this same
+	// /internal/routing/select JSON body), and until this field existed here
+	// to receive them, encoding/json silently dropped both on decode -- the
+	// root cause of the flat-rate cache overcharge (#688 follow-up). A
+	// caller must go through CreditsForTokens rather than read these
+	// directly: a nil pointer here does not mean "free", it means "resolve
+	// the documented fallback multiplier and say so loudly" (D-034).
+	CacheReadPriceCredits  *int64 `json:"cache_read_price_credits,omitempty"`
+	CacheWritePriceCredits *int64 `json:"cache_write_price_credits,omitempty"`
 	// PricingMode distinguishes "variable by design" from "the lookup came
 	// back empty". An empty string is treated as fixed, so a control-plane
 	// that predates this field keeps its old meaning rather than silently

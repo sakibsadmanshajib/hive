@@ -164,6 +164,29 @@ func pricedRouting(t *testing.T, litellmModel string, inPrice, outPrice int64) *
 	return inference.NewRoutingClient(srv.URL)
 }
 
+// pricedRoutingWithCache is pricedRouting's cache-aware sibling: the alias
+// resolves with an explicit cache-read and cache-write rate alongside the
+// flat input/output price.
+func pricedRoutingWithCache(t *testing.T, litellmModel string, inPrice, outPrice, cacheReadPrice, cacheWritePrice int64) *inference.RoutingClient {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in inference.SelectRouteInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		pricing := inference.FixedPricing(inPrice, outPrice)
+		pricing.CacheReadPriceCredits = &cacheReadPrice
+		pricing.CacheWritePriceCredits = &cacheWritePrice
+		_ = json.NewEncoder(w).Encode(inference.SelectRouteResult{
+			AliasID:          in.AliasID,
+			LiteLLMModelName: litellmModel,
+			Provider:         "test-provider",
+			Pricing:          pricing,
+			PriceUnit:        inference.PriceUnitTokens,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return inference.NewRoutingClient(srv.URL)
+}
+
 // usageUpstream is a fake LiteLLM that answers with one content chunk and one
 // terminal usage frame carrying the supplied token counts.
 type usageUpstream struct {
@@ -171,6 +194,8 @@ type usageUpstream struct {
 	status       int
 	promptTokens int
 	outputTokens int
+	cacheRead    int
+	cacheWrite   int
 	servedModel  string
 	// refusalOnly streams the answer as delta.refusal rather than
 	// delta.content, which is what a provider sends when it declines. It is
@@ -189,6 +214,7 @@ func (u *usageUpstream) server(t *testing.T) *httptest.Server {
 		u.calls++
 		u.bodies = append(u.bodies, string(raw))
 		status, in, out, model := u.status, u.promptTokens, u.outputTokens, u.servedModel
+		cacheRead, cacheWrite := u.cacheRead, u.cacheWrite
 		refusal := u.refusalOnly
 		u.mu.Unlock()
 
@@ -210,8 +236,8 @@ func (u *usageUpstream) server(t *testing.T) *httptest.Server {
 		}
 		if in+out > 0 {
 			_, _ = fmt.Fprintf(w,
-				"data: {\"model\":%q,\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}}\n\n",
-				model, in, out, in+out)
+				"data: {\"model\":%q,\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,\"prompt_tokens_details\":{\"cached_tokens\":%d,\"cache_write_tokens\":%d}}}\n\n",
+				model, in, out, in+out, cacheRead, cacheWrite)
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -319,6 +345,50 @@ func TestSessionChatSettlesAtTheCatalogMagnitude(t *testing.T) {
 			require.Equal(t, "completed", finalized[0].Status)
 		})
 	}
+}
+
+// TestSessionChatSettlesCacheAwarePrice is the session-chat surface's own
+// version of the audit's headline scenario: 200,000 cache-read + 5,000 fresh
+// + 2,000 output must settle at the cache-aware price, never at the flat
+// per-token rate every prior settlement test on this path used.
+func TestSessionChatSettlesCacheAwarePrice(t *testing.T) {
+	accounting := &fakeAccounting{}
+	cp := accounting.server(t)
+	upstream := &usageUpstream{
+		promptTokens: 205_000, outputTokens: 2_000,
+		cacheRead: 200_000, servedModel: "route-test-cache",
+	}
+	ll := upstream.server(t)
+
+	tenantID, accountID := uuid.New(), uuid.New()
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    pricedRoutingWithCache(t, "route-test-cache", 3_000_000, 15_000_000, 300_000, 3_750_000),
+		Accounting: inference.NewAccountingClient(cp.URL),
+		Billing: stubBilling{state: metering.TenantBillingState{
+			AccountID: accountID, Found: true, Deployment: metering.DeploymentHiveCloud,
+		}},
+		LiteLLMURL: ll.URL,
+		Env:        "test",
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, sessionChatRequest(t, tenantID, uuid.New(),
+		`{"model":"hive-claude-cache-demo","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	_, finalized, released := accounting.calls()
+	require.Len(t, finalized, 1, "a served completion must settle exactly once")
+	require.Empty(t, released, "a settled request must not also release its hold")
+
+	// fresh(5000)*3,000,000 + cacheRead(200000)*300,000 + output(2000)*15,000,000
+	// = 15e9 + 60e9 + 30e9 = 105e9 / 1e6 = 105,000.
+	require.Equal(t, int64(105_000), finalized[0].ActualCredits,
+		"settled credits must equal the cache-aware catalog price")
+	// The pre-fix flat-rate charge for the same request: (205000)*3,000,000 +
+	// 2000*15,000,000 = 615e9+30e9 = 645e9 / 1e6 = 645,000.
+	require.NotEqual(t, int64(645_000), finalized[0].ActualCredits,
+		"must not settle at the flat-rate price that ignores the cache-read discount")
+	require.True(t, finalized[0].TerminalUsageConfirmed)
 }
 
 // TestSessionChatRequestsTheUsageEnvelope is the #746 root cause in one
