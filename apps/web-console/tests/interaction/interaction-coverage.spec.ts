@@ -1024,13 +1024,32 @@ function findInstance(pattern: string, hrefs: Set<string>): string | null {
   // were compiled to `([^/]+)`, so `/docs/[...slug]` never matched the
   // `/docs/guide/setup` the app rendered, and the route was reported as having
   // no reachable instance while a link to it sat on the page.
-  const regex = new RegExp(
-    `^${pattern
-      .replace(/\[(\.\.\.)?[^\]]+\]/g, (_match, spread: string | undefined) =>
-        spread === undefined ? "([^/]+)" : "(.+)",
-      )
-      .replace(/\//g, "\\/")}$`,
-  );
+  //
+  // Compiled segment by segment rather than by escaping characters in the
+  // joined pattern. No escape sequence is produced at all: `new RegExp`
+  // needs no escaped slash, and each literal segment is validated against an
+  // allow-list instead of being passed through an escaper that could miss
+  // one character class.
+  const body = pattern
+    .split("/")
+    .map((segment): string | null => {
+      if (/^\[\.\.\..+\]$/.test(segment)) {
+        return "(.+)";
+      }
+      if (/^\[.+\]$/.test(segment)) {
+        return "([^/]+)";
+      }
+      if (!/^[A-Za-z0-9_.@~-]*$/.test(segment)) {
+        // An empty segment is a leading or trailing slash; anything else
+        // outside this set would interpolate as raw regex metacharacters.
+        return null;
+      }
+      return segment;
+    });
+  if (body.some((segment) => segment === null)) {
+    return null;
+  }
+  const regex = new RegExp(`^${body.join("/")}$`);
   for (const href of hrefs) {
     const path = href.split("?")[0];
     if (regex.test(path)) {
