@@ -123,14 +123,60 @@ def check_retrieval() -> int:
     return report(checks)
 
 
+def check_router_family() -> int:
+    """#1186 family sweep: every router gate rewritten to the #960 predicate."""
+    routers = VENDORED / "routers"
+    patch = PATCHES / "apply_router_authz_family_patch.py"
+    # Negative controls: each file must still contain an unflagged pattern
+    # pre-patch, otherwise this test can no longer go red on vendor drift.
+    unflagged = {
+        "knowledge.py": "and user.role != 'admin'",
+        "files.py": "or user.role == 'admin' or await has_access_to_file(",
+        "evaluations.py": "if user.role == 'admin':\n        feedback = await Feedbacks.",
+        "folders.py": "is_admin = user.role == 'admin'",
+        "calendar.py": "if cal.user_id == user.id or user.role == 'admin':",
+        "chats.py": "if chat.user_id != user.id and user.role != 'admin':",
+        "prompts.py": "and user.role != 'admin'\n    ):",
+        "notes.py": "if user.role != 'admin' and (\n        user.id != note.user_id",
+        "tools.py": "and user.role != 'admin'\n    ):",
+        "models.py": "if not knowledge_items or user.role == 'admin':",
+    }
+    checks = {}
+    tmp = Path(tempfile.mkdtemp())
+    for name, frag in unflagged.items():
+        src_text = (routers / name).read_text()
+        checks[f"{name}: vendored still has unflagged pattern (negative control)"] = (
+            frag in src_text
+        )
+        shutil.copy(routers / name, tmp / name)
+    env = dict(os.environ)
+    env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
+    r = subprocess.run(
+        [sys.executable, str(patch)], env=env, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print("FAIL: router family patch failed:", r.stdout + r.stderr)
+        return 1
+    for name, expected in FAMILY_MARKERS.items():
+        text = (tmp / name).read_text()
+        checks[f"{name}: {expected} markers after patch"] = (
+            text.count("# hive (#1186)") == expected
+        )
+        checks[f"{name}: patched source compiles"] = isinstance(
+            ast.parse(text), ast.Module
+        )
+    return report(checks)
+
 
 def main() -> int:
-    rc = check_knowledge() + check_retrieval()
+    rc = check_knowledge()
+    rc += check_retrieval()
+    rc += check_router_family()
     if rc:
         print("FAIL: owui authz patch self-check failed")
         return 1
-    print("ok: knowledge by-id ownership (#1056) and retrieval filter")
-    print("ok: flag-gating (#1186 HIGH slice) enforced")
+    print("ok: knowledge by-id ownership (#1056), retrieval filter and")
+    print("ok: router family flag-gating (#1186) all enforced")
     return 0
 
 

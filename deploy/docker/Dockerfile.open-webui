@@ -419,7 +419,107 @@ RUN python3 /tmp/apply_knowledge_authz_patch.py \
 # model read+write gates, and response metadata. The two patches below apply
 # the #960 predicate everywhere; docker-compose.yml sets both flags false.
 COPY deploy/docker/owui-patches/apply_retrieval_authz_patch.py /tmp/apply_retrieval_authz_patch.py
-RUN python3 /tmp/apply_retrieval_authz.patch_placeholder \
-    && true
+COPY deploy/docker/owui-patches/apply_router_authz_family_patch.py /tmp/apply_router_authz_family_patch.py
+RUN python3 /tmp/apply_retrieval_authz_patch.py \
+    && python3 /tmp/apply_router_authz_family_patch.py
 
-RUN B=/app/backend/open_webui; test "$(grep -c '# hive (#1186)' $B/retrieval/utils.py)" -eq 2
+# Consolidated drift guard for ALL owui authz patches (#1056 + #1186): assert
+# the exact expected marker count in every patched file so a vendor bump that
+# silently drops any single fix fails the image build instead of reopening a
+# cross-tenant hole (same failure mode class as #1162).
+RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/knowledge.py)" = 4 \
+    && test "$(grep -c '# hive (#1186)' $B/retrieval/utils.py)" -eq 2 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/knowledge.py)" -eq 12 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/files.py)" -eq 10 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/evaluations.py)" -eq 4 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/folders.py)" -eq 7 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/calendar.py)" -eq 2 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/chats.py)" -eq 7 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/prompts.py)" -eq 11 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/notes.py)" -eq 6 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/tools.py)" -eq 10 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/models.py)" -eq 5
+# #771: drop the Settings > Integrations tab, the chat UI's only entry point to
+# "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
+# auth credential. The tool servers added there are direct ones, called by the
+# browser itself, so they bypass the Hive gateway entirely and no rule on the
+# chat origin can reach them; removing the form is the only control that does.
+# Caddyfile.owui blocks the server-side half (#770, the /api/v1/terminals proxy
+# and the tool and terminal server registration endpoints), and this removes the
+# UI so nothing left in the interface points at a path that now 404s.
+#
+# The patch asserts its own effect and fails the build otherwise, same posture
+# as the patches above. The read-back grep is a second, independent check that
+# the descriptor is gone from the emitted bundle.
+COPY deploy/docker/owui-patches/remove_integrations_tab.py /tmp/remove_integrations_tab.py
+RUN python3 /tmp/remove_integrations_tab.py \
+    && ! grep -rq 'id:"tools",title:"Integrations"' /app/build/_app/immutable
+
+# The Hive frontend replaces the prebuilt one, and it goes last on purpose.
+#
+# Every bundle rewrite above still runs, against the bundle it was written for,
+# and this step then throws that bundle away. That reads as waste and it is
+# deliberate for exactly one release. Those rewrites are exact literals over
+# minified output; the identifiers inside them are allocated per chunk, so any
+# edit to our own source renames them, and running them over our own build
+# fails on three of nineteen entries that name surfaces which have not actually
+# come back. Measured, not assumed: the first build of this stage failed on
+# sidebar-playground-item, changelog-modal and about-vendor-social-badges, and
+# an identifier-tolerant pattern for the last two matched sibling components
+# that must not be touched.
+#
+# Every surface those rewrites removed is removed in the vendored source
+# instead (see docs/owui-fork.md), so nothing regresses. What the steps above
+# still buy is the digest-drift guard: they fail the build if a future image
+# bump moves upstream's own bundle out from under the source we track. Retiring
+# them is a follow-up, deliberately not in this change, because a separate
+# change was in flight against hive_ui_surfaces.py and two edits to that file
+# from different directions is how a surface silently returns.
+#
+# The version assertion below is the load-bearing half of this step. This
+# image's Python backend serves whatever is in /app/build, and a frontend built
+# from a different upstream release would call endpoints that moved, so a
+# digest bump without a matching `git subtree pull` fails here rather than in a
+# browser.
+COPY --from=frontend /build/vendor/open-webui/package.json /tmp/hive-frontend-package.json
+RUN set -eu; \
+    vendored=$(python3 -c "import json;print(json.load(open('/tmp/hive-frontend-package.json'))['version'])"); \
+    pinned=$(python3 -c "import json;print(json.load(open('/app/package.json'))['version'])"); \
+    test "$vendored" = "$pinned" || { \
+      echo "vendor/open-webui is $vendored but this image's backend is $pinned" >&2; \
+      echo "run: git subtree pull --prefix vendor/open-webui <remote> v$pinned --squash" >&2; \
+      exit 1; }; \
+    rm /tmp/hive-frontend-package.json; \
+    echo "hive: frontend and backend agree on $pinned"
+
+RUN rm -rf /app/build
+COPY --from=frontend /build/vendor/open-webui/build /app/build
+
+# The Hive shell has to be in what actually ships, and the surfaces removed in
+# source have to be absent from it. Cheap, and it is the one check that fails
+# if the frontend stage silently built a tree without our changes in it.
+#
+# The admin-panel line is #949. Its removal is a source deletion, of the
+# /admin route tree and of the Settings dialog's link into it, and the bundle
+# rewrite that used to cover the link runs against a bundle this stage then
+# discards, so nothing was checking the output. The string is a route from
+# lib/components/admin/Settings.svelte's own tab table, which reaches the
+# built output only through an import chain that starts at those routes: with
+# them gone the component has no importer and the bundler drops it, and the
+# check fails if either half comes back. Verified in both directions against
+# two images built from the same digest, before and after the deletion, rather
+# than assumed.
+RUN set -eu; \
+    grep -rqF 'data-hive-nav' /app/build/_app/immutable || { \
+      echo "the built bundle carries no Hive navigation" >&2; exit 1; }; \
+    grep -rqF 'HankenGrotesk-Variable' /app/build/_app/immutable || { \
+      echo "the built bundle does not load the brand typeface" >&2; exit 1; }; \
+    grep -rqF 'SourceSerif4-Variable' /app/build/_app/immutable || { \
+      echo "the built bundle does not load the document typeface" >&2; exit 1; }; \
+    ! grep -rqF '"/workspace/models"' /app/build/_app/immutable || { \
+      echo "Workspace > Models came back in the built bundle" >&2; exit 1; }; \
+    ! grep -rqF 'discord.gg/5rJgQTnV4s' /app/build/_app/immutable || { \
+      echo "the vendor social badges came back in the built bundle" >&2; exit 1; }; \
+    ! grep -rqF '/admin/settings/code-execution' /app/build/_app/immutable || { \
+      echo "the Open WebUI admin panel came back in the built bundle (#949)" >&2; exit 1; }; \
+    echo "hive: shell present, removed surfaces absent"
