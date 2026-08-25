@@ -63,8 +63,8 @@ test-owui-frontend:
 go-cover:
 	cd deploy/docker && docker compose $(COMPOSE_ENV_ARG) --profile tools run --rm toolchain \
 	  "rm -rf /tmp/hive-go-cover && mkdir -p /tmp/hive-go-cover/control-plane /tmp/hive-go-cover/edge-api && \
-	   cd /workspace/apps/control-plane && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/control-plane > /dev/null && \
-	   cd ../edge-api && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/edge-api > /dev/null && \
+	   cd /workspace/apps/control-plane && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/control-plane && \
+	   cd ../edge-api && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/edge-api && \
 	   go tool covdata textfmt -i=/tmp/hive-go-cover/control-plane -o=/tmp/hive-go-cover/control-plane.out && \
 	   go tool covdata textfmt -i=/tmp/hive-go-cover/edge-api -o=/tmp/hive-go-cover/edge-api.out && \
 	   go tool covdata textfmt -i=/tmp/hive-go-cover/control-plane,/tmp/hive-go-cover/edge-api -o=/tmp/hive-go-cover/umbrella.out && \
