@@ -28,7 +28,24 @@ WORKDIR /build/vendor/open-webui
 RUN apk add --no-cache git
 
 COPY vendor/open-webui/package.json vendor/open-webui/package-lock.json ./
-RUN npm ci --force
+# CYPRESS_INSTALL_BINARY=0 keeps the deploy off download.cypress.io.
+#
+# cypress@13.17.0 is a devDependency of the vendored tree, and its postinstall
+# fetches a ~120 MB desktop app from download.cypress.io at IMAGE BUILD time.
+# Nothing in this stage runs Cypress: the stage runs `npm run test:frontend`
+# (vitest) and `npm run build`, and the final image ships only build/. So the
+# download buys nothing and costs the whole deploy whenever it fails, which it
+# does on this target more than anywhere else: the demo box builds over home
+# broadband behind a Cloudflare Tunnel. It took the 2026-08-24 21:44 deploy
+# down outright with "The Cypress App could not be downloaded ...
+# URL: https://download.cypress.io/desktop/13.17.0 ... AggregateError", which
+# failed `npm ci --force`, failed the build, and stopped the deploy before a
+# single container was recreated.
+#
+# The variable makes the postinstall a no-op rather than removing the package,
+# so package-lock.json is untouched and the vendored tree stays a clean subtree
+# of upstream.
+RUN CYPRESS_INSTALL_BINARY=0 npm ci --force
 
 # The design tokens live outside the vendored tree on purpose: they are plain
 # CSS custom properties shared with the React applications, and keeping Hive's

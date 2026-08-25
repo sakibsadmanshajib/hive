@@ -690,6 +690,16 @@ jobs:
       # because it needs nothing but node and must fire on every PR.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:sync-child-process
+      # Issues #1084, #1103. deploy-demo-box.yml is the whole of DEMO.md's
+      # promise that a merge to main reaches the box within minutes, and it
+      # broke in ways the run itself could not explain: the only diagnostic
+      # step sat mid-list so six later steps failed blind, `up -d --build`
+      # reported success without anything asserting what the box now serves,
+      # and the smoke test threw away the status codes that would have told a
+      # 503 apart from a dead host. Guarded here because a required check is
+      # the only place a workflow-only change cannot route around.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:deploy-diagnosability
       # Drive-by, found while checking the wiring above: this lint existed in
       # package.json but no workflow ran it, so it was coverage on paper only.
       # It passes on main today.

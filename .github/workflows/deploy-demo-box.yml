@@ -795,6 +795,144 @@ jobs:
           set -euo pipefail
           docker compose $HIVE_COMPOSE_FLAGS up -d --build --remove-orphans
 
+      - name: Assert the running containers are on the images just built
+        # Issue #1103: a compose deploy reports success while serving old
+        # images. The step above prints `Image hive-edge-api:ci Built` followed
+        # by `Container hive-edge-api-1 Running`, and that pair is ambiguous by
+        # construction: it is what a fully cached rebuild of an unchanged
+        # service looks like, and it is also what a service compose declined to
+        # recreate looks like. `up -d` exits 0 either way, so nothing
+        # downstream can tell "nothing changed" from "the change did not
+        # land", and the workflow has never asserted which one happened.
+        #
+        # The check is the one comparison that answers it. A container records
+        # the image ID it was created from (.Image) alongside the reference it
+        # was created from (.Config.Image, e.g. `hive-edge-api:ci`). Resolving
+        # that reference NOW gives the ID the tag points at after the build. If
+        # the two disagree, the tag moved and the container did not: the box is
+        # serving code older than the commit this run deployed, which is
+        # precisely the silent false green. Equal IDs prove the container is on
+        # the image this deploy produced, whether or not it was recreated.
+        #
+        # This is not theoretical. Dispatch run 32845200901 (2026-08-25) built
+        # seven images -- supabase-db, control-plane, edge-api, open-webui,
+        # web-console-prod, agent-console, markitdown -- printed `Running`
+        # rather than `Recreated` for every single container in the project,
+        # and exited 0. All seven were left on the previous images. The step
+        # below is what caught it, and it now repairs it as well as reporting
+        # it, because detection alone would leave this deploy red forever with
+        # nothing in the run able to clear it.
+        #
+        # Deliberately not `--force-recreate` with no arguments on every
+        # deploy instead: that restarts the whole stack including chat and the
+        # gateway on every merge, a real outage traded for a check that costs
+        # nothing. Only the services that actually drifted are recreated, and
+        # the assertion is re-run afterwards so a repair that did not work
+        # still fails the deploy.
+        #
+        # The ancestry check is the other half of "merged is not deployed".
+        # The box's clone is advanced by `git pull --ff-only origin main` in
+        # the migrate job, so it lands on main's tip, which may be NEWER than
+        # the commit that triggered this run (the concurrency group serializes
+        # runs, so pushes queue behind each other). Newer is fine and is not
+        # failed here. What is not fine is the box's HEAD not containing this
+        # run's commit at all, because then this run reports success over a
+        # deployment that does not include the change it was triggered by.
+        # Guarded on main: a workflow_dispatch from a branch has a github.sha
+        # main does not contain, and that is expected rather than a fault.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            head=$(git -C /home/sakib/hive rev-parse HEAD)
+            if git -C /home/sakib/hive merge-base --is-ancestor "$GITHUB_SHA" HEAD; then
+              echo "box HEAD $head contains this run's commit $GITHUB_SHA"
+            else
+              echo "::error::the box's checkout at /home/sakib/hive is on $head, which does not contain this run's commit $GITHUB_SHA. Whatever was just built is not this change, so a green result here would be a lie. Check the migrate job's Pull latest main step." >&2
+              exit 1
+            fi
+          fi
+
+          # Sets `drift` (space-separated service names) and `checked`. Called
+          # once to find the drift and once more to prove the recreate cleared
+          # it, so it is a function rather than a copied loop.
+          scan() {
+          drift=""
+          checked=0
+          for service in $("${COMPOSE[@]}" ps --services); do
+            cid=$("${COMPOSE[@]}" ps -q "$service" 2>/dev/null | head -1)
+            [ -n "$cid" ] || continue
+            running=$(docker inspect -f '{{.Image}}' "$cid")
+            ref=$(docker inspect -f '{{.Config.Image}}' "$cid")
+            # An image reference that no longer resolves means the tag was
+            # pruned out from under a running container. That is not the drift
+            # this step is looking for and must not be reported as it, but it
+            # is worth saying out loud rather than swallowing.
+            tagged=$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)
+            if [ -z "$tagged" ]; then
+              echo "note: $service runs $ref, which no longer resolves locally; cannot compare"
+              continue
+            fi
+            checked=$((checked + 1))
+            if [ "$running" = "$tagged" ]; then
+              short=${running#sha256:}
+              echo "ok   $service is on $ref (${short:0:12})"
+            else
+              echo "DRIFT $service runs an image the tag $ref no longer points at"
+              drift="$drift $service"
+            fi
+          done
+          }
+
+          scan
+
+          # Zero comparable services means the loop found nothing, which would
+          # make this step green without having checked anything at all.
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no running service could be compared against its image tag, so this check verified nothing. The compose project resolved by HIVE_COMPOSE_FLAGS is probably empty or wrong." >&2
+            exit 1
+          fi
+
+          # Detecting the drift and stopping would leave this deploy red
+          # forever, since nothing else in the run recreates anything. So
+          # recreate exactly the services that drifted, and nothing else.
+          #
+          # This is narrower than `--force-recreate` with no arguments, which
+          # restarts the entire stack including chat and the gateway on every
+          # merge. A service only appears here because its image moved and its
+          # container did not, which is the recreate `up -d` was supposed to
+          # have performed a moment ago; a service whose image genuinely did
+          # not change never enters this list and is never touched.
+          #
+          # `--no-deps` because every dependency is already up and healthy by
+          # this point, and without it compose cascades into recreating them
+          # too, which is the stack-wide restart this is avoiding.
+          if [ -n "$drift" ]; then
+            echo "::warning::compose left these services on an older image than it had just built:${drift}. That is issue #1103: \`up -d --build\` rebuilt the image, did not recreate the container, and exited 0. Recreating them now."
+            # `--wait` is load bearing, not tidiness. Without it `up -d`
+            # returns as soon as the containers are started, and the steps
+            # after this one talk to those services immediately: dispatch run
+            # 32846121196 recreated open-webui here and the very next step
+            # died with "GET /api/v1/functions/id/hive_jwt_forward could not
+            # reach http://127.0.0.1:8080: <urlopen error [Errno 111]
+            # Connection refused>" because the container was still booting.
+            # The recreate is new behaviour, so the race it opens has to be
+            # closed here rather than left for each later step to rediscover.
+            # --wait-timeout keeps a service that never goes healthy from
+            # sitting here until the job's own 30 minute ceiling.
+            # shellcheck disable=SC2086
+            "${COMPOSE[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 300 $drift
+            scan
+            if [ -n "$drift" ]; then
+              echo "::error::these services are STILL running an older image than the one this deploy built after an explicit --force-recreate:${drift}. The box is serving code older than this commit and the deploy could not fix it automatically. Investigate on the box before trusting anything this run reported." >&2
+              exit 1
+            fi
+            echo "recreate cleared the drift"
+          fi
+          echo "$checked running services are on the images this deploy built"
+
       - name: Apply the bind-mounted Caddy configs
         # Every Caddyfile in this stack is bind-mounted into its container, so
         # editing the file's CONTENTS changes nothing about the container
@@ -1370,20 +1508,6 @@ jobs:
           done
           exit "$failed"
 
-      - name: Dump container status + logs on failure
-        if: failure()
-        working-directory: /home/sakib/hive/deploy/docker
-        run: |
-          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
-          echo "::group::docker compose ps"
-          "${COMPOSE[@]}" ps || true
-          echo "::endgroup::"
-          for svc in edge-api control-plane agent-console open-webui litellm redis prometheus grafana alertmanager; do
-            echo "::group::logs ($svc)"
-            "${COMPOSE[@]}" logs --tail=200 --no-color "$svc" 2>&1 || true
-            echo "::endgroup::"
-          done
-
       - name: Prune dangling images
         if: always()
         run: docker image prune -f
@@ -1402,20 +1526,75 @@ jobs:
         # deploy/cloudflare/tunnel-ingress.json is now the source of truth for
         # which hostnames are public, and `npm run cloudflare:check` fails on
         # any -hive.scubed.co record with no ingress rule behind it.
+        #
+        # Every attempt records the HTTP status, and the last one records the
+        # body and the same probe against the box's own loopback port, because
+        # `api=0` on its own is not a diagnosis. Run 32842676794 (2026-08-25)
+        # failed here twelve times with `api=0, control-plane=1, chat=1` and
+        # left no way to tell three very different faults apart:
+        #
+        #   * edge-api answering 503 `{"status":"degraded"}`, which it does
+        #     whenever it cannot reach control-plane to resolve a key (see
+        #     handleHealth in apps/edge-api/cmd/server/main.go). `curl -f`
+        #     turns that into the same exit status as a dead host, and this is
+        #     a runtime dependency state, not a bad deploy.
+        #   * edge-api down or not listening on the host port.
+        #   * the Cloudflare Tunnel ingress for that one hostname being broken
+        #     while the service behind it is fine.
+        #
+        # The loopback probe separates them: public down plus loopback up is
+        # the tunnel, both down is the service, and a 503 body names itself.
+        # The ports come from deploy/cloudflare/tunnel-ingress.json, which is
+        # the source of truth for what each hostname reaches.
         run: |
+          probe() {
+            # Prints "<status> <body-first-line>"; status is 000 when the
+            # request never completed. Never fails the step by itself: the
+            # verdict is the caller's, after all three have been read.
+            local url="$1" body status
+            body=$(curl -sS --max-time 15 -o /dev/stdout -w '\n%{http_code}' "$url" 2>&1 || true)
+            status=$(printf '%s' "$body" | tail -n1)
+            case "$status" in
+              ''|*[!0-9]*) status=000 ;;
+            esac
+            # `sed '$d'` drops the status line -w appended, so the printed
+            # body is the response and nothing else. Command substitution
+            # already stripped the trailing newline, so the status is
+            # unambiguously the last line.
+            printf '%s %s' "$status" "$(printf '%s\n' "$body" | sed '$d' | head -c 200 | tr '\n' ' ')"
+          }
+
+          # 2xx and 3xx, not 200: this replaced `curl -fsS`, which fails only
+          # at 400 and above and follows no redirect, so a hostname that
+          # answers 302 passed before this change and must keep passing.
+          # Tightening the bar here would be an unrelated behaviour change
+          # smuggled into a diagnostics fix.
+          is_ok() { case "$1" in 2??|3??) return 0 ;; *) return 1 ;; esac; }
+
+          api_status=000; cp_status=000; chat_status=000
+          api_last=""; cp_last=""; chat_last=""
           for i in $(seq 1 12); do
-            api_ok=0; cp_ok=0; chat_ok=0
-            curl -fsS https://api-hive.scubed.co/health >/dev/null && api_ok=1 || true
-            curl -fsS https://control-hive.scubed.co/health >/dev/null && cp_ok=1 || true
-            curl -fsS https://chat-hive.scubed.co/ >/dev/null && chat_ok=1 || true
-            if [ "$api_ok" = 1 ] && [ "$cp_ok" = 1 ] && [ "$chat_ok" = 1 ]; then
+            api_last=$(probe https://api-hive.scubed.co/health);      api_status=${api_last%% *}
+            cp_last=$(probe https://control-hive.scubed.co/health);   cp_status=${cp_last%% *}
+            chat_last=$(probe https://chat-hive.scubed.co/);          chat_status=${chat_last%% *}
+            if is_ok "$api_status" && is_ok "$cp_status" && is_ok "$chat_status"; then
               echo "SMOKE OK"
               exit 0
             fi
-            echo "attempt $i failed (api=$api_ok, control-plane=$cp_ok, chat=$chat_ok), retry in 10s"
+            echo "attempt $i failed (api=$api_status, control-plane=$cp_status, chat=$chat_status), retry in 10s"
             sleep 10
           done
-          echo "SMOKE FAIL"
+
+          echo "::group::last response from each hostname"
+          echo "api-hive.scubed.co/health      -> $api_last"
+          echo "control-hive.scubed.co/health  -> $cp_last"
+          echo "chat-hive.scubed.co/           -> $chat_last"
+          echo "::endgroup::"
+          echo "::group::same services over loopback, bypassing the tunnel"
+          echo "localhost:8080/health (edge-api)      -> $(probe http://localhost:8080/health)"
+          echo "localhost:8081/health (control-plane) -> $(probe http://localhost:8081/health)"
+          echo "::endgroup::"
+          echo "::error::SMOKE FAIL after 12 attempts: api=$api_status, control-plane=$cp_status, chat=$chat_status. Read the two groups above before anything else. A hostname that is down publicly but answers over loopback is a Cloudflare Tunnel ingress fault, not a bad deploy; a 503 with a \"degraded\" body is the service reporting a dependency it cannot reach." >&2
           exit 1
 
       - name: Reconcile LiteLLM's config volume with the repo seed
@@ -1835,6 +2014,48 @@ jobs:
         # build is exactly when unused cache layers pile up the fastest.
         if: always()
         run: docker builder prune -f --filter until=24h
+
+      - name: Dump container status + logs on failure
+        # LAST in this job, and that position is the whole point.
+        #
+        # This step used to sit between "Assert the public chat origin refuses
+        # the admin surface" and "Smoke test public hostnames". `if: failure()`
+        # runs a step no matter where it sits, but it can only report on what
+        # has already happened, so a failure in any of the six steps that
+        # followed it produced no `compose ps`, no container logs and no disk
+        # figures at all. That is not hypothetical: run 32842676794
+        # (2026-08-25) failed in "Smoke test public hostnames" with
+        # `api=0, control-plane=1, chat=1` on all twelve attempts and left
+        # nothing behind to say whether edge-api was down, degraded, or simply
+        # unreachable through the tunnel. Moving the dump to the end costs
+        # nothing and makes every step in the job diagnosable.
+        #
+        # `df -h` and `docker system df` are here because disk exhaustion on
+        # this 12 GB-RAM box with a shared 98 GB partition is a recurring cause
+        # of a recreate dying partway (see the build-cache prune step above,
+        # which exists because that cache reached 40.87 GB), and a build that
+        # dies for want of space says so in a way that is easy to miss inside
+        # several thousand lines of BuildKit output.
+        #
+        # `ps -a` rather than `ps`: a container that exited during the recreate
+        # is invisible to plain `ps`, and it is exactly the container whose
+        # logs are wanted.
+        if: failure()
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+          echo "::group::disk"
+          df -h / /var/lib/docker 2>&1 || true
+          docker system df 2>&1 || true
+          echo "::endgroup::"
+          echo "::group::docker compose ps -a"
+          "${COMPOSE[@]}" ps -a || true
+          echo "::endgroup::"
+          for svc in edge-api control-plane agent-console web-console-prod open-webui litellm redis prometheus grafana alertmanager caddy-owui; do
+            echo "::group::logs ($svc)"
+            "${COMPOSE[@]}" logs --tail=200 --no-color "$svc" 2>&1 || true
+            echo "::endgroup::"
+          done
 
   sdk-replay:
     name: SDK replay against the demo box
