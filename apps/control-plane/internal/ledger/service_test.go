@@ -18,6 +18,8 @@ type stubRepo struct {
 	entries           map[uuid.UUID][]LedgerEntry
 	emailAccounts     map[string]uuid.UUID
 	usageSince        int64
+	invoices          []InvoiceRow
+	invoiceErr        error
 	lastListLimit     int
 	lastListRequestID string
 	postErr           error
@@ -139,10 +141,24 @@ func (s *stubRepo) ListEntriesWithCursor(_ context.Context, filter ListEntriesFi
 }
 
 func (s *stubRepo) ListInvoices(_ context.Context, _ uuid.UUID) ([]InvoiceRow, error) {
-	return nil, nil
+	if s.invoiceErr != nil {
+		return nil, s.invoiceErr
+	}
+	out := make([]InvoiceRow, len(s.invoices))
+	copy(out, s.invoices)
+	return out, nil
 }
 
-func (s *stubRepo) GetInvoice(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*InvoiceRow, error) {
+func (s *stubRepo) GetInvoice(_ context.Context, accountID, invoiceID uuid.UUID) (*InvoiceRow, error) {
+	if s.invoiceErr != nil {
+		return nil, s.invoiceErr
+	}
+	for i := range s.invoices {
+		if s.invoices[i].ID == invoiceID && s.invoices[i].AccountID == accountID {
+			cp := s.invoices[i]
+			return &cp, nil
+		}
+	}
 	return nil, ErrNotFound
 }
 

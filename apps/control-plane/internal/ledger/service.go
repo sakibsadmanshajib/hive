@@ -133,18 +133,30 @@ func (s *Service) AdjustCredits(ctx context.Context, accountID uuid.UUID, idempo
 }
 
 func (s *Service) ReserveCredits(ctx context.Context, accountID uuid.UUID, requestID string, attemptID, reservationID *uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (LedgerEntry, error) {
+	if credits <= 0 {
+		return LedgerEntry{}, &ValidationError{Field: "credits", Message: "credits must be greater than zero"}
+	}
 	return s.postUsageEntry(ctx, accountID, EntryTypeReservationHold, requestID, attemptID, reservationID, idempotencyKey, -credits, metadata)
 }
 
 func (s *Service) ReleaseReservedCredits(ctx context.Context, accountID uuid.UUID, requestID string, attemptID, reservationID *uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (LedgerEntry, error) {
+	if credits <= 0 {
+		return LedgerEntry{}, &ValidationError{Field: "credits", Message: "credits must be greater than zero"}
+	}
 	return s.postUsageEntry(ctx, accountID, EntryTypeReservationRelease, requestID, attemptID, reservationID, idempotencyKey, credits, metadata)
 }
 
 func (s *Service) ChargeUsage(ctx context.Context, accountID uuid.UUID, requestID string, attemptID, reservationID *uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (LedgerEntry, error) {
+	if credits <= 0 {
+		return LedgerEntry{}, &ValidationError{Field: "credits", Message: "credits must be greater than zero"}
+	}
 	return s.postUsageEntry(ctx, accountID, EntryTypeUsageCharge, requestID, attemptID, reservationID, idempotencyKey, -credits, metadata)
 }
 
 func (s *Service) RefundCredits(ctx context.Context, accountID uuid.UUID, requestID string, attemptID, reservationID *uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (LedgerEntry, error) {
+	if credits <= 0 {
+		return LedgerEntry{}, &ValidationError{Field: "credits", Message: "credits must be greater than zero"}
+	}
 	return s.postUsageEntry(ctx, accountID, EntryTypeRefund, requestID, attemptID, reservationID, idempotencyKey, credits, metadata)
 }
 
