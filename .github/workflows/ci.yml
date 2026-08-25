@@ -457,7 +457,17 @@ jobs:
             # read its DSN through a const rather than a bare
             # os.Getenv("HIVE_TEST_DB_URL"); the literal is back, so dropping
             # the package from this list now fails that guard.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
+            # ./internal/marketplace/..., ./internal/usage/... and
+            # ./internal/tenant/... join with issue #708: all three were
+            # `#797 backlog, never executed` in tools/lint-go-db-test-wiring.mjs's
+            # KNOWN_DARK map (usage carries the request-attempt idempotency
+            # proof; marketplace carries its CRUD, RLS and FK-violation
+            # suite; tenant/settings' entire package reported 0.0% coverage
+            # because every one of its resolver tests goes through the one
+            # helper this wiring turns on). Removed from KNOWN_DARK in the
+            # same change, since the lint fails if a package both runs and
+            # stays listed as debt.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/... ./internal/marketplace/... ./internal/usage/... ./internal/tenant/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),

@@ -103,10 +103,18 @@ func TestRunner_Start_DoubleCallIsNoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r.Start(ctx)
-	r.Start(ctx) // should be ignored
+	r.Start(ctx) // should be ignored: a second loop would double the eager pass below
 	time.Sleep(10 * time.Millisecond)
 	r.Stop()
 	r.Stop() // double-stop also safe
+
+	// loop() fires one eager RunOnce immediately on Start, before the first
+	// 50ms tick. If the second Start call were not a no-op, it would have
+	// spawned a second loop and doubled that eager pass to 2 within this
+	// 10ms window.
+	if calls := stub.Calls(); calls != 1 {
+		t.Fatalf("second Start call was not a no-op: got %d eager evaluator calls, want 1", calls)
+	}
 }
 
 // =============================================================================

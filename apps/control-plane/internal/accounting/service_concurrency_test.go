@@ -24,8 +24,20 @@ type serializingLedger struct {
 
 func (l *serializingLedger) GetBalance(_ context.Context, _ uuid.UUID) (ledger.BalanceSummary, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	return ledger.BalanceSummary{PostedCredits: l.available, AvailableCredits: l.available}, nil
+	available := l.available
+	l.mu.Unlock()
+	// ponytail: widen the TOCTOU window on purpose. Without this, whether the
+	// noop-locker negative control (TestNoopLockerOverReserves below) actually
+	// reproduces the double-spend depends on how the goroutine scheduler
+	// happens to interleave 100 goroutines that only contend on this one
+	// mutex, which is exactly the kind of race that passes on a quiet CI
+	// runner and fails on a busy one. Releasing the lock before sleeping lets
+	// every goroutine's balance read land before any of their reserves do, so
+	// the over-reservation this test exists to catch reproduces every run,
+	// not just the unlucky ones. Upgrade path: none needed, this sleep is the
+	// test's actual job, not a shortcut around it.
+	time.Sleep(2 * time.Millisecond)
+	return ledger.BalanceSummary{PostedCredits: available, AvailableCredits: available}, nil
 }
 
 func (l *serializingLedger) ReserveCredits(_ context.Context, _ uuid.UUID, _ string, _, _ *uuid.UUID, _ string, credits int64, _ map[string]any) (ledger.LedgerEntry, error) {
@@ -156,11 +168,18 @@ func TestCreateReservationSerializesConcurrentReservations(t *testing.T) {
 }
 
 // TestNoopLockerOverReserves proves the acceptance test discriminates: without
-// per-account serialization the same workload double-spends.
+// per-account serialization the same workload double-spends. serializingLedger
+// widens the balance-check-to-reserve window on purpose (see GetBalance
+// above), so this reproduces every run rather than passing by luck when the
+// scheduler happens not to interleave: a negative control that can pass by
+// doing nothing contributes no coverage at all.
 func TestNoopLockerOverReserves(t *testing.T) {
-	success, _ := runConcurrentReservations(t, noopAccountLocker{}, 1000, 50, 100)
+	success, ledgerSvc := runConcurrentReservations(t, noopAccountLocker{}, 1000, 50, 100)
 	if success <= 20 {
-		t.Skipf("noop locker did not reproduce the race this run (%d succeeded); timing-dependent", success)
+		t.Fatalf("noop locker failed to reproduce the double-spend it exists to prove: only %d of 100 concurrent reservations succeeded (want >20 without per-account locking)", success)
+	}
+	if ledgerSvc.available >= 0 {
+		t.Fatalf("expected the noop locker to over-reserve the ledger into negative available credits, got %d", ledgerSvc.available)
 	}
 }
 

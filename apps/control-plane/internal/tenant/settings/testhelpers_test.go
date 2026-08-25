@@ -2,27 +2,21 @@ package settings_test
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sakibsadmanshajib/hive/packages/dbtest"
 )
 
+// newTestPool's DSN resolution (skip locally, fail in CI if unset, refuse a
+// DSN without a "test" marker) is dbtest.RequireURL: teardown below performs
+// a broad DELETE against public.tenants, so that marker check is a hard
+// safety requirement, not a convenience.
 func newTestPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, func()) {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	// Hard safety check: teardown performs a broad DELETE against
-	// public.tenants. Require the DSN's database name to contain a
-	// "test" marker so a misconfigured env var pointing at staging or
-	// production cannot wipe real tenant rows.
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := dbtest.RequireURL(t, "HIVE_TEST_DB_URL")
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	teardown := func() {

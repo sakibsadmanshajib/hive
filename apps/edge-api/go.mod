@@ -59,4 +59,6 @@ replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/sto
 
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
 
+replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
+
 replace github.com/sakibsadmanshajib/hive/packages/embedmodel => ../../packages/embedmodel

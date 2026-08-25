@@ -64,9 +64,13 @@ func TestStripeRailName(t *testing.T) {
 	}
 }
 
-func TestStripeRailSatisfiesPaymentRail(t *testing.T) {
-	var _ payments.PaymentRail = stripeRail.NewRail("sk_test_key", "whsec_test")
-}
+// stripeRail.NewRail satisfying payments.PaymentRail is a compile-time
+// property, not a runtime behaviour: a test function whose body is only
+// `var _ Interface = X` passes unconditionally regardless of what NewRail
+// does, so it asserted nothing that go build wasn't already checking every
+// time this package compiles. Declared here at package scope instead, where
+// the compiler still enforces it but it no longer counts as a passing test.
+var _ payments.PaymentRail = stripeRail.NewRail("sk_test_key", "whsec_test")
 
 // TestStripeProcessEvent_PaymentIntentEventsAreNotASettlementPath documents the
 // rail contract after the move to hosted Checkout Sessions: the session is the

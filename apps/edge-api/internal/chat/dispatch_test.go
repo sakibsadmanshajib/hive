@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/packages/dbtest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -349,19 +349,7 @@ func TestDispatchUnentitledModelReturns403(t *testing.T) {
 
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		// CI wires HIVE_TEST_DB_URL at the job level (issue #708), but only
-		// for the RLS step, which does not pass -short. The plain `go test
-		// ./... -short` step compiles this package too and runs first,
-		// before that DSN ever exists, so testing.Short() is required here
-		// to tell "the RLS step forgot the DSN" (real bug) apart from "this
-		// is the earlier -short step, which never has it" (expected).
-		if os.Getenv("CI") != "" && !testing.Short() {
-			t.Fatal("HIVE_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
-		}
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	dsn := dbtest.RequireURL(t, "HIVE_TEST_DB_URL")
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool

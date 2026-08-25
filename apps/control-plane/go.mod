@@ -19,7 +19,7 @@ require (
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -29,7 +29,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/testify v1.11.1
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -60,6 +60,8 @@ require (
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
 
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
+
+replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 
 replace github.com/sakibsadmanshajib/hive/packages/embedmodel => ../../packages/embedmodel
 
