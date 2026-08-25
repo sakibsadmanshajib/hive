@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -128,12 +129,15 @@ func (s *Service) Revoke(ctx context.Context, accountID, id, actor uuid.UUID) (K
 }
 
 // emitAudit writes one security-tier audit event. Metadata carries only
-// customer-safe fields: label and masked suffix, never key material.
+// customer-safe fields: label and masked suffix, never key material. A failed
+// audit write is logged loudly rather than silently discarded: the mutation is
+// already committed at that point, so the operator gets a red log line to act
+// on instead of an invisible loss.
 func (s *Service) emitAudit(ctx context.Context, action string, accountID, actor uuid.UUID, k Key) {
 	if s.audit == nil {
 		return
 	}
-	_ = s.audit.Log(ctx, audit.Event{
+	if err := s.audit.Log(ctx, audit.Event{
 		TenantID:     accountID,
 		Actor:        audit.Actor{ID: actor, Type: audit.ActorUser},
 		Action:       action,
@@ -144,7 +148,15 @@ func (s *Service) emitAudit(ctx context.Context, action string, accountID, actor
 			"label":     k.Label,
 			"key_last4": k.KeyLast4,
 		},
-	})
+	}); err != nil {
+		// Identifiers only. No label, no mask, no key material: this line goes
+		// to the process log, which has a wider audience than the audit table.
+		slog.ErrorContext(ctx, "byok audit write failed, credential mutation already committed",
+			"action", action,
+			"account_id", accountID.String(),
+			"resource_id", k.ID.String(),
+			"error", err)
+	}
 }
 
 // validateRegisterInput enforces the storage-boundary rules mirrored by the
@@ -172,6 +184,12 @@ func validateRegisterInput(in RegisterInput) error {
 		}
 		if u.Host == "" {
 			return fmt.Errorf("%w: base_url must include a host", ErrValidation)
+		}
+		// Credentials, query strings and fragments in the URL would be stored
+		// in plaintext outside encrypted_api_key and echoed by list views;
+		// reject them so the credential column stays the only secret channel.
+		if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%w: base_url must not embed credentials, a query string or a fragment", ErrValidation)
 		}
 	}
 	// A real provider credential fits in a few hundred bytes; 4096 is a hard

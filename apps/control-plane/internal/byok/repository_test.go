@@ -15,18 +15,25 @@ import (
 // They exist because the fakeRepo unit suite re-implements the account filter
 // itself, so only real SQL can catch a dropped WHERE account_id predicate or
 // a swapped scanTarget column mapping.
-const repoTestDSNEnv = "HIVE_TEST_DB_URL"
-
+// The DSN is read as a bare literal on purpose. tools/lint-go-db-test-wiring.mjs
+// matches os.Getenv("<NAME>_TEST_DB_URL") textually to pair a gated suite with
+// the workflow step that names its package; reading the same variable through a
+// const hid this file from that guard, which is how the package came to be
+// absent from ci.yml's integration list while looking wired.
 func requireRepoTestDSN(t *testing.T) string {
 	t.Helper()
-	dsn := os.Getenv(repoTestDSNEnv)
+	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
-		t.Skip(repoTestDSNEnv + " not set")
+		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	return dsn
 }
 
-func seedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tag string) uuid.UUID {
+// seedAccount inserts one auth.users row and one public.accounts row and
+// returns both ids. The user id is not optional bookkeeping: tenant_provider_keys
+// .created_by_user_id is NOT NULL REFERENCES auth.users(id), so a key built with
+// an unrelated random UUID fails the foreign key on insert.
+func seedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tag string) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	userID := uuid.Must(uuid.NewV7())
 	accountID := uuid.Must(uuid.NewV7())
@@ -47,7 +54,7 @@ func seedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tag stri
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM public.accounts WHERE id = $1`, accountID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM auth.users WHERE id = $1`, userID)
 	})
-	return accountID
+	return accountID, userID
 }
 
 func repoTestCipher(t *testing.T) *Cipher {
@@ -70,8 +77,8 @@ func TestRepositoryIsolationAgainstRealSQL(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPgxRepository(pool).(*pgxRepository)
-	accountA := seedAccount(t, ctx, pool, "a")
-	accountB := seedAccount(t, ctx, pool, "b")
+	accountA, userA := seedAccount(t, ctx, pool, "a")
+	accountB, _ := seedAccount(t, ctx, pool, "b")
 
 	blob := []byte("ciphertext-bytes-for-isolation-test")
 	created, err := repo.Create(ctx, Key{
@@ -82,7 +89,7 @@ func TestRepositoryIsolationAgainstRealSQL(t *testing.T) {
 		EncryptedAPIKey: blob,
 		KeyLast4:        "st4t",
 		Status:          StatusActive,
-		CreatedBy:       uuid.Must(uuid.NewV7()),
+		CreatedBy:       userA,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -141,7 +148,7 @@ func TestRepositoryUniqueConstraintsAgainstRealSQL(t *testing.T) {
 	defer pool.Close()
 
 	repo := NewPgxRepository(pool).(*pgxRepository)
-	accountA := seedAccount(t, ctx, pool, "u")
+	accountA, userA := seedAccount(t, ctx, pool, "u")
 
 	mk := func(label string) Key {
 		return Key{
@@ -151,7 +158,7 @@ func TestRepositoryUniqueConstraintsAgainstRealSQL(t *testing.T) {
 			EncryptedAPIKey: []byte("ct"),
 			KeyLast4:        "st4t",
 			Status:          StatusActive,
-			CreatedBy:       uuid.Must(uuid.NewV7()),
+			CreatedBy:       userA,
 		}
 	}
 
@@ -178,7 +185,7 @@ func TestRepositoryUniqueConstraintsAgainstRealSQL(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate active base_url = %v, want ErrConflict", err)
 	}
-	if dupURL.ID == uuid.Nil {
+	if dupURL.ID != uuid.Nil {
 		t.Fatal("conflict path must not return a row")
 	}
 	_ = urlOne

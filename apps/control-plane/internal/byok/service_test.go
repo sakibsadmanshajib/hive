@@ -155,6 +155,18 @@ func TestRegisterValidation(t *testing.T) {
 		{"bad url", RegisterInput{Label: "l", APIKey: base.APIKey, BaseURL: strPtr("not a url")}},
 		{"non http url", RegisterInput{Label: "l", APIKey: base.APIKey, BaseURL: strPtr("ftp://x.example")}},
 		{"short api key", RegisterInput{Label: "l", BaseURL: base.BaseURL, APIKey: tooShort}},
+		// base_url is stored and echoed in plaintext, so anything that can
+		// carry a secret in it has to be refused at the boundary. Otherwise
+		// encrypted_api_key stops being the only channel a credential travels
+		// on, and every list view leaks the second one.
+		{"url with embedded credentials", RegisterInput{Label: "l", APIKey: base.APIKey,
+			BaseURL: strPtr("https://" + FAKE_KEY_SHORT + "@x.example/v1")}},
+		{"url with userinfo pair", RegisterInput{Label: "l", APIKey: base.APIKey,
+			BaseURL: strPtr("https://user:" + FAKE_KEY_SHORT + "@x.example/v1")}},
+		{"url with query string", RegisterInput{Label: "l", APIKey: base.APIKey,
+			BaseURL: strPtr("https://x.example/v1?access_token=" + FAKE_KEY_SHORT)}},
+		{"url with fragment", RegisterInput{Label: "l", APIKey: base.APIKey,
+			BaseURL: strPtr("https://x.example/v1#" + FAKE_KEY_SHORT)}},
 		{"empty model map value", RegisterInput{Label: "l", APIKey: base.APIKey,
 			BaseURL: base.BaseURL, ModelMap: map[string]string{"hive-fast": ""}}},
 	}
@@ -212,6 +224,45 @@ func TestRevealRoundTripThroughService(t *testing.T) {
 	}
 	if got != secret {
 		t.Fatalf("Reveal = %q, want original secret", got)
+	}
+}
+
+// failingAudit rejects every write, standing in for Postgres being unreachable
+// on the security tier (audit.Logger routes BYOK actions to the fail-closed
+// Sync writer, so its error is real and reaches us).
+type failingAudit struct{ calls int }
+
+func (f *failingAudit) Log(_ context.Context, _ audit.Event) error {
+	f.calls++
+	return errors.New("audit backend unavailable")
+}
+
+// A failed audit write must not be reported to the caller as a failed mutation.
+// The row is already committed by the time emitAudit runs, so returning an
+// error here would invite a retry that registers a second credential. The
+// failure is surfaced on the process log instead, and this test pins the
+// contract that the mutation itself still succeeds and still happened.
+func TestAuditWriteFailureDoesNotFailTheMutation(t *testing.T) {
+	repo := &fakeRepo{}
+	aud := &failingAudit{}
+	svc := newTestService(repo, testCipher(t), aud)
+	ctx := context.Background()
+	account, user := mustUUID(t, testAccount), mustUUID(t, testUser)
+
+	key, err := svc.Register(ctx, account, user,
+		RegisterInput{Label: "l", BaseURL: strPtr("https://x.example/v1"), APIKey: FAKE_KEY_SHORT})
+	if err != nil {
+		t.Fatalf("Register with a failing audit logger = %v, want success", err)
+	}
+	revoked, err := svc.Revoke(ctx, account, key.ID, user)
+	if err != nil {
+		t.Fatalf("Revoke with a failing audit logger = %v, want success", err)
+	}
+	if revoked.Status != StatusRevoked {
+		t.Fatalf("revoked status = %q, want %q", revoked.Status, StatusRevoked)
+	}
+	if aud.calls != 2 {
+		t.Fatalf("audit attempts = %d, want 2 (one per mutation)", aud.calls)
 	}
 }
 

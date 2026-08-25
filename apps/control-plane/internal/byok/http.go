@@ -17,7 +17,6 @@ import (
 )
 
 // Handler serves the BYOK surfaces.
-// Handler serves the BYOK surfaces.
 type Handler struct {
 	svc        *Service
 	accountSvc *accounts.Service
@@ -79,6 +78,19 @@ func (h *Handler) TenantMux() http.Handler {
 func (h *Handler) AdminMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(adminPrefix, h.handleAdminList)
+	// The router hands this mux the whole /api/v1/admin/provider-keys/ subtree,
+	// so the exact trailing-slash form has to be served here; registering only
+	// the bare prefix made the nested mux answer 404 for a path the outer one
+	// had already accepted. Anything deeper is not a route (there is no
+	// single-item admin endpoint), and it must not quietly return the full
+	// cross-tenant list under a URL shaped like one.
+	mux.HandleFunc(adminPrefix+"/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != adminPrefix+"/" {
+			writeError(w, http.StatusNotFound, "not_found", "unknown route")
+			return
+		}
+		h.handleAdminList(w, r)
+	})
 	return mux
 }
 

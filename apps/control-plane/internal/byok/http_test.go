@@ -278,6 +278,43 @@ func TestAdminListFiltersByAccount(t *testing.T) {
 	}
 }
 
+// The outer router registers both /api/v1/admin/provider-keys and its
+// trailing-slash subtree against AdminMux, so a request that keeps the slash
+// reaches this nested mux and has to be served rather than 404'd by it.
+func TestAdminListServesTrailingSlash(t *testing.T) {
+	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true, isAdmin: true}.install(h)
+
+	rec := doJSON(t, h.AdminMux(), http.MethodGet, "/api/v1/admin/provider-keys/", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trailing-slash admin list = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("trailing-slash admin list returned %d keys, want the same 2 as the bare path", len(resp.Items))
+	}
+}
+
+// The trailing-slash registration is a subtree pattern, so it also catches
+// deeper paths. Those are not routes and must not silently serve the whole
+// cross-tenant list under a URL that looks like a single-item fetch.
+func TestAdminUnknownSubpathIs404(t *testing.T) {
+	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true, isAdmin: true}.install(h)
+
+	rec := doJSON(t, h.AdminMux(), http.MethodGet, "/api/v1/admin/provider-keys/"+accountB, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown admin subpath = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAdminListNonAdminIs403(t *testing.T) {
 	h, _, _ := seededHandler(t)
 	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
