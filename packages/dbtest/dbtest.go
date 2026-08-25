@@ -34,9 +34,14 @@ import (
 // testing.Short() is what tells that leg apart from a live-suite step that
 // simply forgot to wire the DSN.
 //
-// The DSN's database name must contain "test" (case-insensitive): a blunt
-// guard against a misconfigured env var pointing a suite that deletes rows
-// at a staging or production database.
+// The DSN's parsed database name (not the raw DSN string) must contain
+// "test" (case-insensitive): a blunt guard against a misconfigured env var
+// pointing a suite that deletes rows at a staging or production database.
+// Checking the whole DSN string instead of the parsed name would let a
+// production DSN through by accident whenever some unrelated parameter
+// happened to contain "test" (e.g. application_name=test-runner-3), and
+// would just as wrongly refuse a legitimately-named test database whose
+// host or user happens not to say "test" anywhere.
 func RequireURL(t *testing.T, envVar string) string {
 	t.Helper()
 	dsn := os.Getenv(envVar)
@@ -46,8 +51,12 @@ func RequireURL(t *testing.T, envVar string) string {
 		}
 		t.Skipf("%s not set; skipping (set CI=true, unset -short, to make this fail instead of skip)", envVar)
 	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: %s must point at a test database (DSN missing 'test' marker)", envVar)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("dbtest: %s is not a valid Postgres DSN: %v", envVar, err)
+	}
+	if !strings.Contains(strings.ToLower(cfg.ConnConfig.Database), "test") {
+		t.Fatalf("refusing to run: %s database name %q must contain 'test'", envVar, cfg.ConnConfig.Database)
 	}
 	return dsn
 }

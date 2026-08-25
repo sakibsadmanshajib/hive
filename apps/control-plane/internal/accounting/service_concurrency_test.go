@@ -20,27 +20,39 @@ type serializingLedger struct {
 	mu        sync.Mutex
 	available int64
 	holds     int64
+	// Barrier state for the negative control: GetBalance counts reads under
+	// mu; once reads reaches barrierTarget the channel closes, and every
+	// ReserveCredits blocks on it until then. This makes "all balance reads
+	// land before any reserve" deterministic instead of scheduler-dependent,
+	// which is what the fixed sleep approximated.
+	readBarrierTarget int64
+	reads             int64
+	barrier           chan struct{}
 }
 
 func (l *serializingLedger) GetBalance(_ context.Context, _ uuid.UUID) (ledger.BalanceSummary, error) {
 	l.mu.Lock()
 	available := l.available
+	l.reads++
+	if l.readBarrierTarget > 0 && l.reads == l.readBarrierTarget && l.barrier != nil {
+		close(l.barrier)
+		l.barrier = nil // idempotent against extra GetBalance calls past the target
+	}
 	l.mu.Unlock()
-	// ponytail: widen the TOCTOU window on purpose. Without this, whether the
-	// noop-locker negative control (TestNoopLockerOverReserves below) actually
-	// reproduces the double-spend depends on how the goroutine scheduler
-	// happens to interleave 100 goroutines that only contend on this one
-	// mutex, which is exactly the kind of race that passes on a quiet CI
-	// runner and fails on a busy one. Releasing the lock before sleeping lets
-	// every goroutine's balance read land before any of their reserves do, so
-	// the over-reservation this test exists to catch reproduces every run,
-	// not just the unlucky ones. Upgrade path: none needed, this sleep is the
-	// test's actual job, not a shortcut around it.
-	time.Sleep(2 * time.Millisecond)
 	return ledger.BalanceSummary{PostedCredits: available, AvailableCredits: available}, nil
 }
 
 func (l *serializingLedger) ReserveCredits(_ context.Context, _ uuid.UUID, _ string, _, _ *uuid.UUID, _ string, credits int64, _ map[string]any) (ledger.LedgerEntry, error) {
+	// Wait for every goroutine's balance read to land before the first hold
+	// posts, so the over-reservation reproduces deterministically. The
+	// bounded fallback exists so a broken barrier can never hang CI; if it
+	// ever fires, the assertions below fail loudly instead.
+	if l.barrier != nil {
+		select {
+		case <-l.barrier:
+		case <-time.After(5 * time.Second):
+		}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.available -= credits
@@ -122,10 +134,15 @@ func (concurrentUsage) ListAttempts(context.Context, uuid.UUID, string, int) ([]
 
 // runConcurrentReservations fires n concurrent strict reservations of `each`
 // credits against a single account starting with `balance` available credits,
-// using the supplied account locker, and returns how many succeeded.
-func runConcurrentReservations(t *testing.T, locker AccountLocker, balance, each int64, n int) (int, *serializingLedger) {
+// using the supplied account locker, and returns how many succeeded. Optional
+// ledger prep hooks run after construction but before the goroutines launch,
+// so a test can arm the read barrier without racing the workers.
+func runConcurrentReservations(t *testing.T, locker AccountLocker, balance, each int64, n int, prep ...func(*serializingLedger)) (int, *serializingLedger) {
 	t.Helper()
 	ledgerSvc := &serializingLedger{available: balance}
+	for _, p := range prep {
+		p(ledgerSvc)
+	}
 	repo := &concurrentRepo{ledger: ledgerSvc}
 	svc := NewService(repo, ledgerSvc, concurrentUsage{}).WithAccountLocker(locker)
 
@@ -169,12 +186,16 @@ func TestCreateReservationSerializesConcurrentReservations(t *testing.T) {
 
 // TestNoopLockerOverReserves proves the acceptance test discriminates: without
 // per-account serialization the same workload double-spends. serializingLedger
-// widens the balance-check-to-reserve window on purpose (see GetBalance
-// above), so this reproduces every run rather than passing by luck when the
-// scheduler happens not to interleave: a negative control that can pass by
+// holds every reserve until all 100 balance reads have landed (the read
+// barrier armed below), so this reproduces deterministically rather than
+// depending on scheduler interleaving: a negative control that can pass by
 // doing nothing contributes no coverage at all.
 func TestNoopLockerOverReserves(t *testing.T) {
-	success, ledgerSvc := runConcurrentReservations(t, noopAccountLocker{}, 1000, 50, 100)
+	success, ledgerSvc := runConcurrentReservations(t, noopAccountLocker{}, 1000, 50, 100,
+		func(l *serializingLedger) {
+			l.readBarrierTarget = 100
+			l.barrier = make(chan struct{})
+		})
 	if success <= 20 {
 		t.Fatalf("noop locker failed to reproduce the double-spend it exists to prove: only %d of 100 concurrent reservations succeeded (want >20 without per-account locking)", success)
 	}

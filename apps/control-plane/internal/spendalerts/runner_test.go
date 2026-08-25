@@ -97,21 +97,38 @@ func TestRunner_StartStop_TicksAtInterval(t *testing.T) {
 
 func TestRunner_Start_DoubleCallIsNoop(t *testing.T) {
 	t.Parallel()
-	stub := &stubEval{}
+	// loop() runs on its own goroutine (Start only spawns it), so the eager
+	// RunOnce pass lands at an unpredictable time after Start returns. A
+	// fixed sleep here would either flake under load (Calls() read before
+	// the eager pass lands) or hide a real regression (some slower CI runner
+	// where a doubled eager pass from a non-no-op second Start also hasn't
+	// landed yet). Signal on the actual event instead of guessing its timing.
+	calledCh := make(chan struct{}, 1)
+	stub := &stubEval{onCall: func(time.Time) {
+		select {
+		case calledCh <- struct{}{}:
+		default:
+		}
+	}}
 	r := NewRunner(stub, Config{Interval: 50 * time.Millisecond, Logger: quietLogger()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r.Start(ctx)
 	r.Start(ctx) // should be ignored: a second loop would double the eager pass below
-	time.Sleep(10 * time.Millisecond)
+
+	select {
+	case <-calledCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the eager RunOnce pass")
+	}
 	r.Stop()
 	r.Stop() // double-stop also safe
 
 	// loop() fires one eager RunOnce immediately on Start, before the first
 	// 50ms tick. If the second Start call were not a no-op, it would have
-	// spawned a second loop and doubled that eager pass to 2 within this
-	// 10ms window.
+	// spawned a second loop and doubled that eager pass to 2 by the time the
+	// first one signals calledCh.
 	if calls := stub.Calls(); calls != 1 {
 		t.Fatalf("second Start call was not a no-op: got %d eager evaluator calls, want 1", calls)
 	}
