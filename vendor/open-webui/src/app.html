@@ -149,24 +149,31 @@
 					localStorage.theme = 'system';
 				}
 
+				// Three themes and no more: system, light, dark. The retired
+				// oled-dark branch used to overwrite four --color-gray-* values
+				// with raw hex, which is the half of the brand ramp the dark
+				// surfaces are drawn from; the retired `her` branch set a maroon
+				// that appears nowhere in the token layer. A stored value of
+				// either now falls through to the final else and resolves to
+				// dark, so an account that picked one before this change still
+				// boots into a real theme.
+				//
+				// data-theme travels with the class because the Hive token layer
+				// defines its dark register under [data-theme="dark"] while
+				// upstream's utilities read the class. Set here, in the same
+				// inline head script that sets the class, so the two never
+				// disagree during first paint.
 				if (localStorage.theme === 'system') {
 					document.documentElement.classList.add(prefersDarkTheme ? 'dark' : 'light');
+					document.documentElement.dataset.theme = prefersDarkTheme ? 'dark' : 'light';
 					metaThemeColorTag.setAttribute('content', prefersDarkTheme ? '#171717' : '#ffffff');
-				} else if (localStorage.theme === 'oled-dark') {
-					document.documentElement.style.setProperty('--color-gray-800', '#101010');
-					document.documentElement.style.setProperty('--color-gray-850', '#050505');
-					document.documentElement.style.setProperty('--color-gray-900', '#000000');
-					document.documentElement.style.setProperty('--color-gray-950', '#000000');
-					document.documentElement.classList.add('dark');
-					metaThemeColorTag.setAttribute('content', '#000000');
-				} else if (localStorage.theme === 'light') {
+				} else if (localStorage.theme === 'light' || localStorage.theme === 'her') {
 					document.documentElement.classList.add('light');
+					document.documentElement.dataset.theme = 'light';
 					metaThemeColorTag.setAttribute('content', '#ffffff');
-				} else if (localStorage.theme === 'her') {
-					document.documentElement.classList.add('her');
-					metaThemeColorTag.setAttribute('content', '#983724');
 				} else {
 					document.documentElement.classList.add('dark');
+					document.documentElement.dataset.theme = 'dark';
 					metaThemeColorTag.setAttribute('content', '#171717');
 				}
 
@@ -185,10 +192,12 @@
 						if (e.matches) {
 							document.documentElement.classList.add('dark');
 							document.documentElement.classList.remove('light');
+							document.documentElement.dataset.theme = 'dark';
 							metaThemeColorTag.setAttribute('content', '#171717');
 						} else {
 							document.documentElement.classList.add('light');
 							document.documentElement.classList.remove('dark');
+							document.documentElement.dataset.theme = 'light';
 							metaThemeColorTag.setAttribute('content', '#ffffff');
 						}
 					}

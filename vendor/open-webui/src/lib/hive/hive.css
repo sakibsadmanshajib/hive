@@ -51,6 +51,51 @@
 		U+2C60-2C7F, U+A720-A7FF;
 }
 
+/*
+ * Source Serif 4 carries the document half of the type system: the chat
+ * greeting, page titles, and assistant prose in the transcript. Added
+ * 2026-08-25; see the type block in packages/hive-tokens/tokens.css for why a
+ * second family exists at all and why this face rather than another.
+ *
+ * Three files rather than the sans's two. The extra one is the italic: a
+ * synthetic oblique on a serif is visibly a slanted roman, and emphasis inside
+ * a reply is common enough that it would be seen constantly. Latin only for the
+ * italic, because an italic run outside Latin is rare enough to be worth a
+ * synthetic fallback rather than another 130 kB on every page load. Each file is
+ * fetched only when its unicode-range is actually needed, so a Latin page
+ * downloads one of the three.
+ */
+@font-face {
+	font-family: 'Source Serif 4';
+	font-style: normal;
+	font-weight: 200 900;
+	font-display: swap;
+	src: url('/assets/fonts/SourceSerif4-Variable-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Source Serif 4';
+	font-style: normal;
+	font-weight: 200 900;
+	font-display: swap;
+	src: url('/assets/fonts/SourceSerif4-Variable-latin-ext.woff2') format('woff2');
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+		U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+		U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Source Serif 4';
+	font-style: italic;
+	font-weight: 200 900;
+	font-display: swap;
+	src: url('/assets/fonts/SourceSerif4-Variable-italic-latin.woff2') format('woff2');
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+		U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @font-face {
 	font-family: 'Geist Mono';
 	font-style: normal;
@@ -62,9 +107,10 @@
 }
 
 /*
- * Point upstream's three font hooks at the one Hive family. `.font-secondary`
- * was a display serif; the brand has no serif at all, so hierarchy is carried
- * by weight rather than by a contrast of families.
+ * Point upstream's three font hooks at the Hive families. `.font-primary` and
+ * the document default are the grotesque, which is every control surface in the
+ * product. `.font-secondary` is upstream's own display hook and was a serif
+ * before the fork; it is a serif again.
  */
 html,
 pre {
@@ -84,6 +130,277 @@ kbd,
 samp,
 .tiptap pre {
 	font-family: var(--hv-font-mono);
+}
+
+/* ------------------------------------------------------------------ *
+ * The document register
+ *
+ * Three places carry the serif: the chat greeting, a destination's page
+ * title, and assistant prose in the transcript. Everything else in the
+ * product stays in the grotesque, which is the whole point of having two
+ * families rather than one.
+ * ------------------------------------------------------------------ */
+
+.hv-display {
+	font-family: var(--hv-font-display);
+	/* The serif carries its own weight; the grotesque's 600 heading weight
+	 * on a text serif reads as a mistake rather than as emphasis. */
+	font-weight: var(--hv-weight-body);
+	letter-spacing: -0.01em;
+}
+
+.hv-greeting {
+	font-family: var(--hv-font-display);
+	font-weight: var(--hv-weight-body);
+	font-size: var(--hv-display-md);
+	line-height: var(--hv-leading-display-md);
+	letter-spacing: -0.015em;
+}
+
+/* ------------------------------------------------------------------ *
+ * The transcript
+ *
+ * Assistant prose is set in the serif at reading size on a fixed measure,
+ * because full-pane-width body text is the single thing that makes a chat
+ * read as a dashboard rather than as a document.
+ *
+ * Scoped to `.chat-assistant` and then narrowed again to the prose elements
+ * inside it. A blanket rule on the container would put the serif into code
+ * blocks, tables, tool-call summaries and every button that happens to be
+ * nested in a reply, which is the opposite of a two-family system.
+ * ------------------------------------------------------------------ */
+
+.chat-assistant {
+	font-family: var(--hv-font-display);
+	font-size: var(--hv-text-prose);
+	line-height: var(--hv-leading-prose);
+}
+
+/*
+ * Machine output and interface furniture inside a reply stay where they were.
+ * `.chat-assistant` sets the family on the subtree, so each of these has to
+ * take it back explicitly rather than simply not inheriting it.
+ */
+.chat-assistant :is(pre, code, kbd, samp) {
+	font-family: var(--hv-font-mono);
+}
+
+.chat-assistant :is(button, input, select, textarea, table, .buttons) {
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-base);
+	line-height: var(--hv-leading-base);
+}
+
+/*
+ * Code inside prose keeps the prose's own size rather than the interface's,
+ * so an inline identifier does not punch a hole in the line.
+ */
+.chat-assistant :not(pre) > code {
+	font-size: 0.875em;
+}
+
+/*
+ * The composer shares the transcript's column. It was 72rem while the
+ * transcript was 64rem, so neither edge lined up with the other and the
+ * conversation read as two stacked widths rather than as one document.
+ */
+.hv-composer-column {
+	max-width: var(--hv-measure);
+}
+
+/*
+ * The reading measure, applied to the whole message row rather than to the
+ * prose alone, so the user's turn, the assistant's turn, the turn separator
+ * and the composer all share one column edge.
+ *
+ * Widescreen mode is upstream's own escape hatch and is left alone: someone
+ * who turned it on asked for the full pane.
+ */
+.message-listitem:not(.max-w-full) {
+	max-width: var(--hv-measure);
+}
+
+/*
+ * Turns separated by a hairline rather than by white space alone. `+` rather
+ * than a top border on every row, so the first turn in a conversation does not
+ * get a rule hanging above it with nothing on the other side.
+ */
+.message-listitem + .message-listitem {
+	border-top: 1px solid var(--hv-border);
+	padding-top: var(--hv-space-6);
+}
+
+/*
+ * The message toolbar reveals on hover, as the reference does, instead of
+ * standing eight icons under the newest reply permanently.
+ *
+ * Opacity rather than `visibility`, which is what upstream uses for the same
+ * job on older messages. A `visibility: hidden` control is removed from the
+ * tab order outright, so a keyboard user could never reach copy, edit or
+ * regenerate at all; at zero opacity the buttons stay focusable and
+ * `:focus-within` brings the row back, which is the whole reason this is done
+ * here rather than by flipping upstream's classes.
+ */
+.hv-msg-toolbar {
+	opacity: 0;
+	transition: opacity var(--hv-duration-fast) linear;
+}
+
+.group:hover .hv-msg-toolbar,
+.hv-msg-toolbar:focus-within,
+.hv-msg-toolbar:hover {
+	opacity: 1;
+}
+
+/* No hover on a touch screen, so there is nothing to reveal with. */
+@media (pointer: coarse) {
+	.hv-msg-toolbar {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hv-msg-toolbar {
+		transition: none;
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * Quick-start chips
+ *
+ * Four suggestions under the composer on the chat home. Static by design:
+ * they are recognition, not personalisation, and a ranked or remembered set
+ * would need a store, a write path and a decision about what happens on a
+ * fresh account.
+ * ------------------------------------------------------------------ */
+
+.hv-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--hv-space-2);
+	margin-top: var(--hv-space-4);
+}
+
+.hv-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--hv-space-2);
+	min-height: 36px;
+	padding-inline: var(--hv-space-3);
+	border: 1px solid var(--hv-border);
+	border-radius: var(--hv-radius-pill);
+	background: var(--hv-surface);
+	color: var(--hv-ink-secondary);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+	font-weight: var(--hv-weight-label);
+	cursor: pointer;
+	transition: background-color var(--hv-duration-fast) linear;
+}
+
+.hv-chip:hover {
+	background: var(--hv-surface-raised);
+	color: var(--hv-ink);
+}
+
+.hv-chip:focus-visible {
+	outline: none;
+	box-shadow:
+		0 0 0 2px var(--hv-canvas),
+		0 0 0 4px var(--hv-focus-ring);
+}
+
+.hv-chip-icon {
+	width: 16px;
+	height: 16px;
+	flex: none;
+}
+
+@media (pointer: coarse) {
+	.hv-chip {
+		min-height: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hv-chip {
+		transition: none;
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * Not found, inside the shell
+ *
+ * Same shape as the agent surface's empty state, which is the one good empty
+ * state already in the product: a bordered card, a short title, one sentence,
+ * and a way onward.
+ * ------------------------------------------------------------------ */
+
+.hv-notfound {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--hv-space-2);
+	max-width: 34rem;
+	margin: var(--hv-space-12) auto;
+	border: 1px solid var(--hv-border);
+	border-radius: var(--hv-radius-md);
+	background: var(--hv-surface);
+	padding: var(--hv-space-12) var(--hv-space-6);
+	text-align: center;
+}
+
+.hv-notfound-code {
+	font-family: var(--hv-font-mono);
+	font-size: var(--hv-text-xs);
+	line-height: var(--hv-leading-xs);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--hv-ink-muted);
+}
+
+.hv-notfound-title {
+	margin: 0;
+	font-family: var(--hv-font-display);
+	font-weight: var(--hv-weight-body);
+	font-size: var(--hv-display-sm);
+	line-height: var(--hv-leading-display-sm);
+	color: var(--hv-ink);
+}
+
+.hv-notfound-body {
+	margin: 0;
+	max-width: 26rem;
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+	color: var(--hv-ink-secondary);
+}
+
+.hv-notfound-action {
+	display: inline-flex;
+	align-items: center;
+	min-height: 36px;
+	margin-top: var(--hv-space-4);
+	padding-inline: var(--hv-space-4);
+	border-radius: var(--hv-radius-pill);
+	background: var(--hv-accent);
+	color: var(--hv-on-accent);
+	font-size: var(--hv-text-sm);
+	font-weight: var(--hv-weight-label);
+	text-decoration: none;
+}
+
+.hv-notfound-action:hover {
+	background: var(--hv-accent-hover);
+}
+
+.hv-notfound-action:focus-visible {
+	outline: none;
+	box-shadow:
+		0 0 0 2px var(--hv-canvas),
+		0 0 0 4px var(--hv-focus-ring);
 }
 
 /* ------------------------------------------------------------------ *

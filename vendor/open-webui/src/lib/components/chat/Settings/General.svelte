@@ -14,7 +14,23 @@
 	export let getModels: Function;
 
 	// General
-	let themes = ['dark', 'light', 'oled-dark'];
+	/*
+	 * Three states, and they are the whole set: System, Light, Dark.
+	 *
+	 * Upstream also shipped `oled-dark` and an easter-egg `her`. Neither is
+	 * Hive's to offer. `oled-dark` overwrites four `--color-gray-*` custom
+	 * properties with raw hex at runtime, which is precisely the twelve-value
+	 * ramp the brand palette is applied through (vendor/open-webui/src/tailwind.css),
+	 * so choosing it silently discarded the warm neutral ramp for a pure-black
+	 * one nobody designed and nothing measured for contrast. `her` set the meta
+	 * theme colour to a maroon that appears nowhere in the token layer.
+	 *
+	 * A stored value of either still resolves: applyTheme maps an unknown or
+	 * legacy theme onto dark or light below, so an account that picked one
+	 * before this change lands on the nearest real theme rather than on a blank
+	 * select.
+	 */
+	let themes = ['dark', 'light'];
 	let selectedTheme = 'system';
 
 	let languages: Awaited<ReturnType<typeof getLanguages>> = [];
@@ -135,18 +151,36 @@
 	});
 
 	const applyTheme = (_theme: string) => {
+		// Legacy values are folded onto the theme they most resembled, so an
+		// account that stored one before the control was reduced still resolves
+		// to something real.
 		let themeToApply = _theme === 'oled-dark' ? 'dark' : _theme === 'her' ? 'light' : _theme;
 
 		if (_theme === 'system') {
 			themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 		}
 
-		if (themeToApply === 'dark' && !_theme.includes('oled')) {
-			document.documentElement.style.setProperty('--color-gray-800', '#333');
-			document.documentElement.style.setProperty('--color-gray-850', '#262626');
-			document.documentElement.style.setProperty('--color-gray-900', '#171717');
-			document.documentElement.style.setProperty('--color-gray-950', '#0d0d0d');
-		}
+		/*
+		 * Upstream wrote four neutral hex values onto --color-gray-800, -850,
+		 * -900 and -950 as INLINE styles on the root element every time dark was
+		 * applied. Those four are the entire dark half of the ramp the brand
+		 * palette is defined in (vendor/open-webui/src/tailwind.css), and an
+		 * inline style beats any stylesheet, so choosing Dark silently threw the
+		 * warm charcoal away and rendered a neutral grey product nobody
+		 * designed. That is why the dark register looked unimplemented rather
+		 * than wrong: it was implemented, and then overwritten at runtime.
+		 *
+		 * Deleted rather than re-pointed at the tokens, because the tokens
+		 * already hold these values and the stylesheet already applies them.
+		 *
+		 * `data-theme` is set alongside the class because the two halves of the
+		 * product key off different things: upstream's own utilities read the
+		 * `dark` class, and the Hive token layer defines its dark register under
+		 * `[data-theme="dark"]` and `prefers-color-scheme`. Without this line, a
+		 * person on a light operating system who chooses Dark gets upstream's
+		 * dark surfaces with Hive's light navigation sitting on top of them.
+		 */
+		document.documentElement.dataset.theme = themeToApply;
 
 		themes
 			.filter((e) => e !== themeToApply)
@@ -170,29 +204,12 @@
 				metaThemeColor.setAttribute('content', systemTheme === 'light' ? '#ffffff' : '#171717');
 			} else {
 				console.log('Setting meta theme color: ' + _theme);
-				metaThemeColor.setAttribute(
-					'content',
-					_theme === 'dark'
-						? '#171717'
-						: _theme === 'oled-dark'
-							? '#000000'
-							: _theme === 'her'
-								? '#983724'
-								: '#ffffff'
-				);
+				metaThemeColor.setAttribute('content', themeToApply === 'dark' ? '#171717' : '#ffffff');
 			}
 		}
 
 		if (typeof window !== 'undefined' && window.applyTheme) {
 			window.applyTheme();
-		}
-
-		if (_theme.includes('oled')) {
-			document.documentElement.style.setProperty('--color-gray-800', '#101010');
-			document.documentElement.style.setProperty('--color-gray-850', '#050505');
-			document.documentElement.style.setProperty('--color-gray-900', '#000000');
-			document.documentElement.style.setProperty('--color-gray-950', '#000000');
-			document.documentElement.classList.add('dark');
 		}
 
 		console.log(_theme);
@@ -222,12 +239,8 @@
 						on:change={() => themeChangeHandler(selectedTheme)}
 					>
 						<option value="system">⚙️ {$i18n.t('System')}</option>
-						<option value="dark">🌑 {$i18n.t('Dark')}</option>
-						<option value="oled-dark">🌃 {$i18n.t('OLED Dark')}</option>
 						<option value="light">☀️ {$i18n.t('Light')}</option>
-						{#if $config?.features?.enable_easter_eggs}
-							<option value="her">🌷 Her</option>
-						{/if}
+						<option value="dark">🌑 {$i18n.t('Dark')}</option>
 					</select>
 				</div>
 			</div>

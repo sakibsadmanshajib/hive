@@ -99,7 +99,7 @@
 
 <div class="w-full flex flex-col px-4 md:px-10 py-6 gap-6 max-w-5xl mx-auto">
 	<div class="flex items-center justify-between gap-3">
-		<h1 class="text-2xl font-semibold text-gray-850 dark:text-gray-100">{$i18n.t('Projects')}</h1>
+		<h1 class="hv-display text-2xl text-gray-850 dark:text-gray-100">{$i18n.t('Projects')}</h1>
 		<Tooltip content={$i18n.t('Create a project')} placement="bottom">
 			<button
 				id="projects-new-button"

@@ -13,11 +13,22 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
+// Model mirrors control-plane's catalog.PublicModel across the HTTP boundary
+// and is re-serialised verbatim as one entry of GET /v1/models.
+//
+// Name and Description are the alias's display name and one-sentence summary.
+// They are additive fields outside the OpenAI contract, carried so the chat
+// model picker can show what each alias is for instead of a bare slug; see the
+// control-plane type for the full reasoning. Both are `omitempty` in both
+// directions, so an alias with neither produces the exact payload this endpoint
+// served before they existed.
 type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	Created     int64  `json:"created"`
+	OwnedBy     string `json:"owned_by"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CatalogPricing mirrors control-plane's catalog.CatalogPricing across the

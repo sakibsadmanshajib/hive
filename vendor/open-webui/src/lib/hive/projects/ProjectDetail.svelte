@@ -260,7 +260,7 @@
 	{:else}
 		<header class="flex items-start justify-between gap-3">
 			<div class="min-w-0">
-				<h1 class="text-2xl font-semibold text-gray-850 dark:text-gray-100 truncate">{project.name}</h1>
+				<h1 class="hv-display text-2xl text-gray-850 dark:text-gray-100 truncate">{project.name}</h1>
 				<p class="mt-1 text-sm text-gray-500">{project.description}</p>
 				<p class="mt-1 text-[11px] text-gray-400">
 					{$i18n.t('Updated')} {relativeDate(project.updatedAt)}

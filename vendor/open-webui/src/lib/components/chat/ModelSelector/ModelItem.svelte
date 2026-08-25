@@ -1,14 +1,11 @@
 <script lang="ts">
-	import { marked } from 'marked';
-
 	import { getContext, tick } from 'svelte';
 	import dayjs from '$lib/dayjs';
 
 	import { mobile, settings, user } from '$lib/stores';
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { copyToClipboard, sanitizeResponseContent } from '$lib/utils';
+	import { copyToClipboard } from '$lib/utils';
 	import ArrowUpTray from '$lib/components/icons/ArrowUpTray.svelte';
 	import Check from '$lib/components/icons/Check.svelte';
 	import ModelItemMenu from './ModelItemMenu.svelte';
@@ -77,20 +74,6 @@
 		{/if} -->
 
 		<div class="flex items-center gap-2">
-			<div class="flex items-center min-w-fit">
-				<Tooltip content={$user?.role === 'admin' ? (item?.value ?? '') : ''} placement="top-start">
-					<img
-						src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${item.model.id}&lang=${$i18n.language}`}
-						alt={$i18n.t('{{modelName}} profile image', { modelName: item.label })}
-						class="rounded-full size-5 flex items-center"
-						loading="lazy"
-						on:error={(e) => {
-							e.currentTarget.src = '/favicon.png';
-						}}
-					/>
-				</Tooltip>
-			</div>
-
 			<div class="flex items-center">
 				<Tooltip content={`${item.label} (${item.value})`} placement="top-start">
 					<div class="line-clamp-1">
@@ -208,33 +191,26 @@
 						</div>
 					</Tooltip>
 				{/if}
-
-				{#if item.model?.info?.meta?.description}
-					<Tooltip
-						content={`${marked.parse(
-							sanitizeResponseContent(item.model?.info?.meta?.description).replaceAll('\n', '<br>')
-						)}`}
-					>
-						<div class=" translate-y-[1px]">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke-width="1.5"
-								stroke="currentColor"
-								class="w-4 h-4"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
-								/>
-							</svg>
-						</div>
-					</Tooltip>
-				{/if}
 			</div>
 		</div>
+
+		<!--
+			The purpose line. `model.description` is the catalog's own `summary`
+			column, the one-sentence plain-language copy the developer console has
+			always shown next to each alias; it reaches this list because
+			edge-api's /v1/models now carries it and Open WebUI passes unknown
+			fields through untouched. `info.meta.description` is the fallback for a
+			model whose text was set inside Open WebUI instead.
+
+			It was previously reachable only by hovering an information icon, which
+			is why the picker read as a list of slugs: the copy existed the whole
+			time and nothing rendered it.
+		-->
+		{#if item.model?.description || item.model?.info?.meta?.description}
+			<div class="text-xs font-normal text-gray-500 dark:text-gray-400 line-clamp-2 pr-2">
+				{item.model?.description || item.model?.info?.meta?.description}
+			</div>
+		{/if}
 	</div>
 
 	<div class="ml-auto pl-2 pr-1 flex items-center gap-1.5 shrink-0">
