@@ -1,0 +1,28 @@
+{
+  "$comment": "How to reach routes that need more than a bare path: a query string, a dynamic segment value, a specific session, or an expected redirect. Routes come from app/**/page.tsx and never from this file, so an entry here can only describe a route, never add or hide one. An entry naming a route that no longer exists fails the gate. Anything that takes a route out of the measured set, a skip or an expectRedirect, must also say who owns it and when it ends: an issue number, which expires the entry the moment that issue closes, or permanent true for a standing decision that never does.",
+  "routes": {
+    "/": {
+      "expectRedirect": "/auth/sign-in",
+      "auth": "anon",
+      "owner": "@sakibsadmanshajib",
+      "permanent": true
+    },
+    "/oauth/consent": {
+      "skip": "renders only for a live OAuth authorization request, so reaching it means holding a client id, a redirect uri and a state parameter for a real client; the gate synthesizes no credentials and puts none in a URL it logs",
+      "auth": "anon",
+      "owner": "@sakibsadmanshajib",
+      "permanent": true
+    },
+    "/invitations/accept": {
+      "skip": "renders only for a live invitation token carried in the query string; the gate holds no such token and must never write one into a report or a screenshot (PR #578 leaked four real ones that way)",
+      "auth": "anon",
+      "owner": "@sakibsadmanshajib",
+      "permanent": true
+    },
+    "/console/api-keys/[id]/limits": {
+      "skip": "needs an API key to exist in the signed-in workspace, and the gate refuses to create one: it blocks every state-changing request whose values it supplied",
+      "owner": "@sakibsadmanshajib",
+      "issue": 885
+    }
+  }
+}

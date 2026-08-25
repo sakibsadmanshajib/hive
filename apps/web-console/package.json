@@ -12,6 +12,7 @@
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:interaction": "playwright test --project=interaction",
     "e2e:phase-19": "playwright test --project=phase-19",
     "e2e:agent-workspace": "playwright test --project=agent-workspace --reporter=list,json,./tests/e2e/support/flake-reporter.ts",
     "e2e:verify-collection": "node scripts/verify-spec-collection.mjs",

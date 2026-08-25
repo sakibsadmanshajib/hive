@@ -1,0 +1,421 @@
+{
+  "generatedAt": "2026-08-10T22:16:38.867Z",
+  "baseUrl": "https://console-hive.scubed.co",
+  "partial": true,
+  "totals": {
+    "routesDiscovered": 24,
+    "routesVisited": 1,
+    "enumerated": 28,
+    "proven": 24,
+    "declared": 1,
+    "unproven": 3,
+    "coverage": 0.8571
+  },
+  "proofTypes": {
+    "network": 20,
+    "unproven": 3,
+    "dom": 3,
+    "declared:inert": 1,
+    "navigation": 1
+  },
+  "routes": [
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "visited": true,
+      "note": "",
+      "enumerated": 28,
+      "proven": 24,
+      "declared": 1,
+      "unproven": 3,
+      "coverage": 0.8571
+    }
+  ],
+  "controls": [
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Hive",
+      "kind": "link",
+      "name": "Hive",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console?_rsc=xvp3f"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Overview",
+      "kind": "link",
+      "name": "Overview",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "activation produced no request, no navigation, and no change to the rendered output"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|API keys",
+      "kind": "link",
+      "name": "API keys",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/api-keys?_rsc=1tm0w"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Model catalog",
+      "kind": "link",
+      "name": "Model catalog",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/catalog?_rsc=18boo"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Analytics",
+      "kind": "link",
+      "name": "Analytics",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?_rsc=scems"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Billing",
+      "kind": "link",
+      "name": "Billing",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/billing?_rsc=j028j"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Members",
+      "kind": "link",
+      "name": "Members",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/members?_rsc=cbnfe"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Settings",
+      "kind": "link",
+      "name": "Settings",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/settings/profile?_rsc=1jqc7"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Feature gates",
+      "kind": "link",
+      "name": "Feature gates",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/feature-gates?_rsc=ucpas"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Marketplace",
+      "kind": "link",
+      "name": "Marketplace",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/marketplace?_rsc=1ry6w"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Documentation",
+      "kind": "link",
+      "name": "Documentation",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "external destination https://hivegpt.io is unreachable: TimeoutError: apiRequestContext.get: Timeout 15000ms exceeded."
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Overview",
+      "kind": "link",
+      "name": "Overview",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console?_rsc=xvp3f"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Usage",
+      "kind": "link",
+      "name": "Usage",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=usage&group_by=model&window=7d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Spend",
+      "kind": "link",
+      "name": "Spend",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=spend&group_by=model&window=7d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Errors",
+      "kind": "link",
+      "name": "Errors",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=errors&group_by=model&window=7d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "select|#group-by",
+      "kind": "select",
+      "name": "Model API key Endpoint",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=overview&group_by=api_key&window=7d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|24h",
+      "kind": "button",
+      "name": "24h",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=overview&group_by=model&window=24h&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|7d",
+      "kind": "button",
+      "name": "7d",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=overview&group_by=model&window=7d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|30d",
+      "kind": "button",
+      "name": "30d",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=overview&group_by=model&window=30d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|90d",
+      "kind": "button",
+      "name": "90d",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "GET https://console-hive.scubed.co/console/analytics?tab=overview&group_by=model&window=90d&_rsc=1wv2a"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Custom",
+      "kind": "button",
+      "name": "Custom",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "dom",
+      "detail": "rendered output changed"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "svg[role=application]|(unnamed)",
+      "kind": "other",
+      "name": "",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "declared",
+      "proofType": "declared:inert",
+      "detail": "Recharts renders its chart surface focusable with role application, but the chart itself has no activation behaviour: every control that changes it is a sibling that this gate proves separately",
+      "declaredKind": "inert",
+      "owner": "@sakibsadmanshajib"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "input|#window-from",
+      "kind": "textfield",
+      "name": "",
+      "matchedBy": "selector",
+      "revealPath": [
+        "button|Custom"
+      ],
+      "status": "proven",
+      "proofType": "dom",
+      "detail": "rendered output changed"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "input|#window-to~1",
+      "kind": "textfield",
+      "name": "",
+      "matchedBy": "selector",
+      "revealPath": [
+        "button|Custom"
+      ],
+      "status": "proven",
+      "proofType": "dom",
+      "detail": "rendered output changed"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Apply",
+      "kind": "button",
+      "name": "Apply",
+      "matchedBy": "selector",
+      "revealPath": [
+        "button|Custom"
+      ],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "disabled with no reason exposed to the user (no title, no aria-describedby)"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Switch to EN",
+      "kind": "submit",
+      "name": "Switch to EN",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "POST https://console-hive.scubed.co/console/locale, GET https://console-hive.scubed.co/console/analytics, GET https://console-hive.scubed.co/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Switch to বাংলা",
+      "kind": "submit",
+      "name": "Switch to বাংলা",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "network",
+      "detail": "POST https://console-hive.scubed.co/console/locale, GET https://console-hive.scubed.co/console/analytics, GET https://console-hive.scubed.co/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Sign out",
+      "kind": "submit",
+      "name": "Sign out",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "proven",
+      "proofType": "navigation",
+      "detail": "https://console-hive.scubed.co/console/analytics -> https://console-hive.scubed.co/auth/sign-in"
+    }
+  ],
+  "unprovenControls": [
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Overview",
+      "kind": "link",
+      "name": "Overview",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "activation produced no request, no navigation, and no change to the rendered output"
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "a|Documentation",
+      "kind": "link",
+      "name": "Documentation",
+      "matchedBy": "selector",
+      "revealPath": [],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "external destination https://hivegpt.io is unreachable: TimeoutError: apiRequestContext.get: Timeout 15000ms exceeded."
+    },
+    {
+      "route": "/console/analytics",
+      "url": "https://console-hive.scubed.co/console/analytics",
+      "key": "button|Apply",
+      "kind": "button",
+      "name": "Apply",
+      "matchedBy": "selector",
+      "revealPath": [
+        "button|Custom"
+      ],
+      "status": "unproven",
+      "proofType": "unproven",
+      "detail": "disabled with no reason exposed to the user (no title, no aria-describedby)"
+    }
+  ],
+  "problems": []
+}
