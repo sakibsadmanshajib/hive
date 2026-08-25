@@ -112,6 +112,14 @@ if (driftAt !== -1) {
       `${WORKFLOW}: "${DRIFT_STEP}" must compare each container's created-from image ID (\`docker inspect -f '{{.Image}}'\`) against the ID its tag resolves to now (\`docker image inspect\`). Anything weaker cannot tell a cached no-op rebuild from a deploy that never landed.`,
     );
   }
+  // Detection without repair leaves the deploy permanently red, because
+  // nothing else in the job recreates anything. The repair has to stay
+  // scoped to the drifted services and has to be re-verified.
+  if (!drift.includes("--force-recreate")) {
+    errors.push(
+      `${WORKFLOW}: "${DRIFT_STEP}" must recreate the services it found drifted (\`up -d --force-recreate --no-deps <services>\`) and re-check. Reporting the drift without clearing it leaves every subsequent deploy red with no step able to fix it.`,
+    );
+  }
 }
 
 // 3. The smoke test records what it saw.

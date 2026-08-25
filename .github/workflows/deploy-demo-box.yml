@@ -814,11 +814,21 @@ jobs:
         # precisely the silent false green. Equal IDs prove the container is on
         # the image this deploy produced, whether or not it was recreated.
         #
-        # Deliberately not `--force-recreate` on every deploy instead: that
-        # restarts the whole stack including chat and the gateway on every
-        # merge, which is a real outage traded for a check that costs nothing.
-        # Detect the drift, name the service, and let the operator recreate
-        # just that one.
+        # This is not theoretical. Dispatch run 32845200901 (2026-08-25) built
+        # seven images -- supabase-db, control-plane, edge-api, open-webui,
+        # web-console-prod, agent-console, markitdown -- printed `Running`
+        # rather than `Recreated` for every single container in the project,
+        # and exited 0. All seven were left on the previous images. The step
+        # below is what caught it, and it now repairs it as well as reporting
+        # it, because detection alone would leave this deploy red forever with
+        # nothing in the run able to clear it.
+        #
+        # Deliberately not `--force-recreate` with no arguments on every
+        # deploy instead: that restarts the whole stack including chat and the
+        # gateway on every merge, a real outage traded for a check that costs
+        # nothing. Only the services that actually drifted are recreated, and
+        # the assertion is re-run afterwards so a repair that did not work
+        # still fails the deploy.
         #
         # The ancestry check is the other half of "merged is not deployed".
         # The box's clone is advanced by `git pull --ff-only origin main` in
@@ -845,6 +855,10 @@ jobs:
             fi
           fi
 
+          # Sets `drift` (space-separated service names) and `checked`. Called
+          # once to find the drift and once more to prove the recreate cleared
+          # it, so it is a function rather than a copied loop.
+          scan() {
           drift=""
           checked=0
           for service in $("${COMPOSE[@]}" ps --services); do
@@ -870,6 +884,9 @@ jobs:
               drift="$drift $service"
             fi
           done
+          }
+
+          scan
 
           # Zero comparable services means the loop found nothing, which would
           # make this step green without having checked anything at all.
@@ -878,9 +895,30 @@ jobs:
             exit 1
           fi
 
+          # Detecting the drift and stopping would leave this deploy red
+          # forever, since nothing else in the run recreates anything. So
+          # recreate exactly the services that drifted, and nothing else.
+          #
+          # This is narrower than `--force-recreate` with no arguments, which
+          # restarts the entire stack including chat and the gateway on every
+          # merge. A service only appears here because its image moved and its
+          # container did not, which is the recreate `up -d` was supposed to
+          # have performed a moment ago; a service whose image genuinely did
+          # not change never enters this list and is never touched.
+          #
+          # `--no-deps` because every dependency is already up and healthy by
+          # this point, and without it compose cascades into recreating them
+          # too, which is the stack-wide restart this is avoiding.
           if [ -n "$drift" ]; then
-            echo "::error::these services are still running an older image than the one this deploy built:${drift}. The deploy did NOT reach them (issue #1103). Recreate them on the box with: cd /home/sakib/hive/deploy/docker && docker compose \$HIVE_COMPOSE_FLAGS up -d --force-recreate${drift}" >&2
-            exit 1
+            echo "::warning::compose left these services on an older image than it had just built:${drift}. That is issue #1103: \`up -d --build\` rebuilt the image, did not recreate the container, and exited 0. Recreating them now."
+            # shellcheck disable=SC2086
+            "${COMPOSE[@]}" up -d --force-recreate --no-deps $drift
+            scan
+            if [ -n "$drift" ]; then
+              echo "::error::these services are STILL running an older image than the one this deploy built after an explicit --force-recreate:${drift}. The box is serving code older than this commit and the deploy could not fix it automatically. Investigate on the box before trusting anything this run reported." >&2
+              exit 1
+            fi
+            echo "recreate cleared the drift"
           fi
           echo "$checked running services are on the images this deploy built"
 
