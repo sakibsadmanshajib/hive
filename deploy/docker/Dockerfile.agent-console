@@ -8,7 +8,7 @@
 # build args here, supplied by docker-compose.yml's build.args block,
 # rather than plain `environment:` entries like the dev-mode
 # Dockerfile.web-console gets away with.
-FROM node:24-slim
+FROM node:25-slim
 
 WORKDIR /app/apps/agent-console
 

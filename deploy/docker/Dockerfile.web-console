@@ -3,7 +3,7 @@
 # `initOpenNextCloudflareForDev()` in next.config.ts can run.
 # Alpine ships musl libc which is incompatible with workerd's
 # pre-built glibc binary, producing ENOENT on `next dev`.
-FROM node:24-slim
+FROM node:25-slim
 
 WORKDIR /app/apps/web-console
 

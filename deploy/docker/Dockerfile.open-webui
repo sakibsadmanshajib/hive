@@ -20,7 +20,7 @@
 # untouched, both layers are cache hits and cost nothing. NODE_OPTIONS raises
 # the heap because the deploy target is the 12 GB demo box, where this build
 # runs alongside the live stack.
-FROM node:24-alpine3.24 AS frontend
+FROM node:26-alpine3.24 AS frontend
 
 WORKDIR /build/vendor/open-webui
 
