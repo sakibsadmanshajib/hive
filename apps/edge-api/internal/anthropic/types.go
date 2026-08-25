@@ -62,12 +62,16 @@ type RequestMetadata struct {
 type ThinkingConfig struct {
 	Type         string `json:"type"` // "enabled" | "disabled"
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
-	// Display controls whether thinking content is surfaced to the caller.
-	// Anthropic-documented sub-field on the thinking config; this struct is a
-	// pure carry-through (see MessagesRequest.Thinking), so dropping it here
-	// would have been the identical bug class this PR exists to fix, just one
-	// struct deeper.
-	Display *bool `json:"display,omitempty"`
+	// Display controls whether thinking content is redacted in the response
+	// while still returning a signature for multi-turn continuity. String
+	// enum, not boolean: Anthropic documents "summarized" and "omitted" as
+	// the two values (ThinkingConfigEnabledParam.display in
+	// anthropic-sdk-python). A *bool here would fail to unmarshal any real
+	// request that sets this field at all -- caught by CodeRabbit review on
+	// #1163 before merge. This struct is a pure carry-through (see
+	// MessagesRequest.Thinking), so dropping or mistyping this field would be
+	// the identical bug class this PR exists to fix, just one struct deeper.
+	Display *string `json:"display,omitempty"`
 }
 
 // CacheControl marks an Anthropic prompt-caching breakpoint. It is valid on a

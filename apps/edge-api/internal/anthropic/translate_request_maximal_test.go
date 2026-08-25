@@ -50,7 +50,7 @@ func TestToOAIRequest_MaximalRequest_NoFieldLost(t *testing.T) {
 		"metadata": {"user_id": "end-user-789"},
 		"cache_control": {"type": "ephemeral", "ttl": "1h"},
 		"session_id": "sess-abc-123",
-		"thinking": {"type": "enabled", "budget_tokens": 8192}
+		"thinking": {"type": "enabled", "budget_tokens": 8192, "display": "summarized"}
 	}`
 
 	var req anthropic.MessagesRequest
@@ -97,6 +97,9 @@ func TestToOAIRequest_MaximalRequest_NoFieldLost(t *testing.T) {
 	}
 	if got.Thinking == nil || got.Thinking.Type != "enabled" || got.Thinking.BudgetTokens != 8192 {
 		t.Errorf("thinking (request field): got %+v (issue #1153 item 5a)", got.Thinking)
+	}
+	if got.Thinking == nil || got.Thinking.Display == nil || *got.Thinking.Display != "summarized" {
+		t.Errorf("thinking.display: got %+v (CodeRabbit review on #1163: dropped sub-field on the very struct added to fix dropped fields)", got.Thinking)
 	}
 
 	// --- tool_choice + disable_parallel_tool_use ---

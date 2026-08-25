@@ -129,6 +129,27 @@ func TestToolChoice_EveryFieldHasADisposition(t *testing.T) {
 	assertEveryFieldDispositioned(t, anthropic.ToolChoice{}, toolChoiceDispositions)
 }
 
+// thinkingConfigDispositions covers ThinkingConfig's own sub-fields.
+// Added per CodeRabbit review on #1163: the top-level MessagesRequest guard
+// above sees "thinking" as one opaque field and cannot see inside it, which
+// is exactly how ThinkingConfig.Display was typed *bool instead of *string
+// and shipped in this PR's own first review round without being caught by
+// any of the reflection or round-trip tests. This is a second, separate
+// reflection pass one level deeper, not something the top-level guard does
+// automatically -- MessagesRequest, ContentBlock, Tool, and ToolChoice are
+// still the only types walked automatically; every other nested struct
+// (ImageSource, RequestMetadata, CacheControl) remains uncovered by
+// reflection and depends on review, same as before.
+var thinkingConfigDispositions = map[string]string{
+	"type":          "carried: OAIRequest.Thinking.Type, unchanged (ThinkingConfig is shared verbatim between MessagesRequest and OAIRequest)",
+	"budget_tokens": "carried: OAIRequest.Thinking.BudgetTokens, unchanged",
+	"display":       "carried: OAIRequest.Thinking.Display, unchanged (string enum \"summarized\"|\"omitted\", not boolean -- see field doc comment)",
+}
+
+func TestThinkingConfig_EveryFieldHasADisposition(t *testing.T) {
+	assertEveryFieldDispositioned(t, anthropic.ThinkingConfig{}, thinkingConfigDispositions)
+}
+
 // TestStructuralGuard_CatchesAnUndispositionedField is the demonstration the
 // review asked for: the guard above must actually fail, not just exist, when
 // a field is added without a disposition. reflect.StructOf builds a type
