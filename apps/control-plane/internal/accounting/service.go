@@ -443,7 +443,13 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -heldCredits, actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
-		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, 0, 0, 0, 0, actualCredits, at); err != nil {
+		// Cache read/write token counts are not yet threaded into
+		// FinalizeReservationInput from either finalize HTTP path (see
+		// finalizeReservationRequest / internalFinalizeReservationRequest);
+		// they stay zero here until a caller can actually supply them. Input
+		// and output tokens ARE available on input (used two calls above, for
+		// the completed usage event) and must not be dropped the same way.
+		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, max(input.InputTokens, 0), max(input.OutputTokens, 0), 0, 0, actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: record usage finalization: %w", err)
 		}
 		if err := s.apiKeySvc.MarkLastUsed(ctx, *attempt.APIKeyID, at); err != nil {
