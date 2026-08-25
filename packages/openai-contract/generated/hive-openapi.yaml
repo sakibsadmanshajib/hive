@@ -456,7 +456,7 @@ paths:
               \    text: \"The quick brown fox jumped over the lazy dog.\",\n    voice:\
               \ GeneratedSpeechVoice.Alloy\n);\n\nusing FileStream stream = File.OpenWrite(\"\
               speech.mp3\");\nspeech.ToStream().CopyTo(stream);\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Text-to-speech
   /audio/transcriptions:
@@ -777,7 +777,7 @@ paths:
             \      ],\n      \"temperature\": 0.0,\n      \"avg_logprob\": -0.2860786020755768,\n\
             \      \"compression_ratio\": 1.2363636493682861,\n      \"no_speech_prob\"\
             : 0.00985979475080967\n    },\n    ...\n  ]\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Speech-to-text
   /audio/translations:
@@ -825,7 +825,7 @@ paths:
               \nConsole.WriteLine($\"{transcription.Text}\");\n"
           response: "{\n  \"text\": \"Hello, my name is Wolfgang and I come from Germany.\
             \ Where are you heading today?\"\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Audio translation to English
   /batches:
@@ -916,7 +916,7 @@ paths:
             : 0,\n    \"failed\": 0\n  },\n  \"metadata\": {\n    \"customer_id\"\
             : \"user_123456789\",\n    \"batch_description\": \"Nightly eval job\"\
             ,\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 7
       x-hive-notes: Create batch
     get:
@@ -988,7 +988,7 @@ paths:
             ,\n        \"batch_description\": \"Nightly job\",\n      }\n    },\n\
             \    { ... },\n  ],\n  \"first_id\": \"batch_abc123\",\n  \"last_id\"\
             : \"batch_abc456\",\n  \"has_more\": true\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 7
       x-hive-notes: List batches
   /batches/{batch_id}:
@@ -1042,7 +1042,7 @@ paths:
             : {\n    \"total\": 100,\n    \"completed\": 95,\n    \"failed\": 5\n\
             \  },\n  \"metadata\": {\n    \"customer_id\": \"user_123456789\",\n \
             \   \"batch_description\": \"Nightly eval job\",\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 7
       x-hive-notes: Retrieve batch
   /batches/{batch_id}/cancel:
@@ -1099,7 +1099,7 @@ paths:
             \  \"total\": 100,\n    \"completed\": 23,\n    \"failed\": 1\n  },\n\
             \  \"metadata\": {\n    \"customer_id\": \"user_123456789\",\n    \"batch_description\"\
             : \"Nightly eval job\",\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 7
       x-hive-notes: Cancel batch
   /chat/completions:
@@ -1560,9 +1560,13 @@ paths:
             \      \"reasoning_tokens\": 0,\n      \"accepted_prediction_tokens\"\
             : 0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"system_fingerprint\"\
             : null\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
-      x-hive-notes: Chat completion inference
+      x-hive-notes: 'Chat completion inference. tools, tool_choice, response_format,
+        parallel_tool_calls, functions, function_call are conditionally supported
+        (Phase 20): passed through when the alias has at least one route with provider_capabilities.tools_supported=true;
+        returns 400 unsupported_parameter (with param field) when no capable route
+        exists for the alias.'
   /chat/completions/{completion_id}:
     get:
       operationId: getChatCompletion
@@ -1921,7 +1925,7 @@ paths:
             \    {\n      \"text\": \"This\",\n      \"index\": 0,\n      \"logprobs\"\
             : null,\n      \"finish_reason\": null\n    }\n  ],\n  \"model\": \"gpt-3.5-turbo-instruct\"\
             \n  \"system_fingerprint\": \"fp_44709d6fcb\",\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Legacy completion inference
   /embeddings:
@@ -1974,7 +1978,7 @@ paths:
             \     -0.0028842222,\n      ],\n      \"index\": 0\n    }\n  ],\n  \"\
             model\": \"text-embedding-ada-002\",\n  \"usage\": {\n    \"prompt_tokens\"\
             : 8,\n    \"total_tokens\": 8\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Text embeddings
   /evals:
@@ -3175,7 +3179,7 @@ paths:
             \   \"object\": \"file\",\n      \"bytes\": 140,\n      \"created_at\"\
             : 1613779121,\n      \"filename\": \"puppy.jsonl\",\n      \"purpose\"\
             : \"fine-tune\",\n    }\n  ],\n  \"object\": \"list\"\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: List files
     post:
@@ -3235,7 +3239,7 @@ paths:
           response: "{\n  \"id\": \"file-abc123\",\n  \"object\": \"file\",\n  \"\
             bytes\": 120000,\n  \"created_at\": 1677610602,\n  \"filename\": \"mydata.jsonl\"\
             ,\n  \"purpose\": \"fine-tune\",\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Upload a file
   /files/{file_id}:
@@ -3279,7 +3283,7 @@ paths:
               file-abc123\");\n\n  console.log(file);\n}\n\nmain();"
           response: "{\n  \"id\": \"file-abc123\",\n  \"object\": \"file\",\n  \"\
             deleted\": true\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Delete a file
     get:
@@ -3324,7 +3328,7 @@ paths:
           response: "{\n  \"id\": \"file-abc123\",\n  \"object\": \"file\",\n  \"\
             bytes\": 120000,\n  \"created_at\": 1677610602,\n  \"filename\": \"mydata.jsonl\"\
             ,\n  \"purpose\": \"fine-tune\",\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Retrieve file metadata
   /files/{file_id}/content:
@@ -3366,7 +3370,7 @@ paths:
             node.js: "import OpenAI from \"openai\";\n\nconst openai = new OpenAI();\n\
               \nasync function main() {\n  const file = await openai.files.content(\"\
               file-abc123\");\n\n  console.log(file);\n}\n\nmain();\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Download file content
   /fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions:
@@ -4083,7 +4087,7 @@ paths:
             : 100,\n    \"input_tokens\": 50,\n    \"output_tokens\": 50,\n    \"\
             input_tokens_details\": {\n      \"text_tokens\": 10,\n      \"image_tokens\"\
             : 40\n    }\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Image editing
   /images/generations:
@@ -4133,7 +4137,7 @@ paths:
             : 100,\n    \"input_tokens\": 50,\n    \"output_tokens\": 50,\n    \"\
             input_tokens_details\": {\n      \"text_tokens\": 10,\n      \"image_tokens\"\
             : 40\n    }\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Image generation
   /images/variations:
@@ -5052,7 +5056,7 @@ paths:
             cached_tokens\": 0\n    },\n    \"output_tokens\": 1035,\n    \"output_tokens_details\"\
             : {\n      \"reasoning_tokens\": 832\n    },\n    \"total_tokens\": 1116\n\
             \  },\n  \"user\": null,\n  \"metadata\": {}\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 6
       x-hive-notes: Responses API inference
   /responses/{response_id}:
@@ -7164,7 +7168,7 @@ paths:
             \  \"bytes\": 2147483648,\n  \"created_at\": 1719184911,\n  \"filename\"\
             : \"training_examples.jsonl\",\n  \"purpose\": \"fine-tune\",\n  \"status\"\
             : \"pending\",\n  \"expires_at\": 1719127296\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Create upload
   /uploads/{upload_id}/cancel:
@@ -7206,7 +7210,7 @@ paths:
             \  \"bytes\": 2147483648,\n  \"created_at\": 1719184911,\n  \"filename\"\
             : \"training_examples.jsonl\",\n  \"purpose\": \"fine-tune\",\n  \"status\"\
             : \"cancelled\",\n  \"expires_at\": 1719127296\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Cancel upload
   /uploads/{upload_id}/complete:
@@ -7261,7 +7265,7 @@ paths:
             id\": \"file-xyz321\",\n    \"object\": \"file\",\n    \"bytes\": 2147483648,\n\
             \    \"created_at\": 1719186911,\n    \"filename\": \"training_examples.jsonl\"\
             ,\n    \"purpose\": \"fine-tune\",\n  }\n}\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Complete upload
   /uploads/{upload_id}/parts:
@@ -7309,7 +7313,7 @@ paths:
           response: "{\n  \"id\": \"part_def456\",\n  \"object\": \"upload.part\"\
             ,\n  \"created_at\": 1719185911,\n  \"upload_id\": \"upload_abc123\"\n\
             }\n"
-      x-hive-status: planned_for_launch
+      x-hive-status: supported_now
       x-hive-phase: 5
       x-hive-notes: Add upload part
   /vector_stores:
