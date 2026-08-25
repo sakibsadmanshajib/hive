@@ -157,10 +157,14 @@ type apiKeyDeltaCall struct {
 }
 
 type apiKeyUsageCall struct {
-	apiKeyID        uuid.UUID
-	modelAlias      string
-	consumedCredits int64
-	at              time.Time
+	apiKeyID         uuid.UUID
+	modelAlias       string
+	inputTokens      int64
+	outputTokens     int64
+	cacheReadTokens  int64
+	cacheWriteTokens int64
+	consumedCredits  int64
+	at               time.Time
 }
 
 type apiKeyStub struct {
@@ -190,10 +194,14 @@ func (a *apiKeyStub) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID
 
 func (a *apiKeyStub) RecordUsageFinalization(_ context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error {
 	a.finalizationCalls = append(a.finalizationCalls, apiKeyUsageCall{
-		apiKeyID:        apiKeyID,
-		modelAlias:      modelAlias,
-		consumedCredits: consumedCredits,
-		at:              at,
+		apiKeyID:         apiKeyID,
+		modelAlias:       modelAlias,
+		inputTokens:      inputTokens,
+		outputTokens:     outputTokens,
+		cacheReadTokens:  cacheReadTokens,
+		cacheWriteTokens: cacheWriteTokens,
+		consumedCredits:  consumedCredits,
+		at:               at,
 	})
 	return nil
 }
@@ -807,6 +815,65 @@ func TestFinalizeReservationUpdatesBudgetWindowAndUsageRollup(t *testing.T) {
 	}
 	if apiKeySvc.finalizationCalls[0].modelAlias != "hive-fast" || apiKeySvc.finalizationCalls[0].consumedCredits != 70 {
 		t.Fatalf("expected finalization rollup to record model and consumed credits, got %#v", apiKeySvc.finalizationCalls[0])
+	}
+}
+
+// TestFinalizeReservationUsageRollupCarriesMeteredTokens guards the
+// api_key_usage_rollups write against the hardcoded-zero gap found in an
+// audit of accounting/service.go: RecordUsageFinalization was called with
+// literal 0s for input/output tokens even though FinalizeReservationInput
+// carries the real metered counts (used two lines above, in the same
+// function, to build the completed usage event). The rollup table therefore
+// recorded real consumed_credits beside permanently-zero token counts for
+// every finalize, forever, silently, because no test asserted the pass-through
+// (the stub itself discarded the arguments before this test).
+func TestFinalizeReservationUsageRollupCarriesMeteredTokens(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
+	usageSvc := &usageStub{}
+	apiKeyID := uuid.New()
+	apiKeySvc := &apiKeyStub{
+		budgetKindByKey: map[uuid.UUID]string{apiKeyID: "lifetime"},
+	}
+	svc := NewService(repo, ledgerSvc, usageSvc, apiKeySvc)
+
+	accountID := uuid.New()
+	reservation, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_rollup_tokens",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/responses",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 100,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+
+	_, err = svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          70,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+		InputTokens:            420,
+		OutputTokens:           133,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if len(apiKeySvc.finalizationCalls) != 1 {
+		t.Fatalf("expected one usage rollup update, got %#v", apiKeySvc.finalizationCalls)
+	}
+	got := apiKeySvc.finalizationCalls[0]
+	if got.inputTokens != 420 {
+		t.Fatalf("expected the rollup to carry the metered input tokens (420), got %d: the count silently dropped to zero", got.inputTokens)
+	}
+	if got.outputTokens != 133 {
+		t.Fatalf("expected the rollup to carry the metered output tokens (133), got %d: the count silently dropped to zero", got.outputTokens)
 	}
 }
 
