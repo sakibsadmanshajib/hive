@@ -17,7 +17,23 @@ FROM node:24-slim
 WORKDIR /app/apps/web-console
 
 COPY apps/web-console/package.json apps/web-console/package-lock.json* ./
-RUN npm install
+# npm treats a failure to install an optional dependency as nonfatal and logs
+# it only at verbose level (arborist reify.js), so one transient network blip
+# while fetching the 137 MB @next/swc-linux-x64-gnu tarball silently yields a
+# node_modules without the binary. `next build` then falls back to its runtime
+# swc downloader, which probes `pnpm config get registry` first and dies with
+# an unhandledRejection because pnpm does not exist in this image. Install
+# deterministically from the lockfile, retry on failure, and fail the layer
+# loudly if the binary is still missing instead of deferring the crash to
+# `npm run build`.
+RUN set -eux; \
+    swc=node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node; \
+    for attempt in 1 2 3; do \
+        if npm ci --include=optional && test -f "$swc"; then break; fi; \
+        echo "install attempt $attempt produced no Next.js SWC binary, retrying"; \
+        sleep 10; \
+    done; \
+    test -f "$swc"
 
 COPY apps/web-console/ ./
 

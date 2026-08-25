@@ -13,7 +13,21 @@ FROM node:24-slim
 WORKDIR /app/apps/agent-console
 
 COPY apps/agent-console/package.json apps/agent-console/package-lock.json* ./
-RUN npm install
+# Same guard as Dockerfile.web-console.prod: npm treats a failed install of an
+# optional dependency as nonfatal and logs it only at verbose level, so one
+# transient network blip while fetching the @next/swc-linux-x64-gnu tarball
+# silently yields a node_modules without the binary and `next build` falls
+# back to a runtime downloader that crashes without pnpm. Install
+# deterministically from the lockfile with retries and fail loudly if the
+# binary is still missing.
+RUN set -eux; \
+    swc=node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node; \
+    for attempt in 1 2 3; do \
+        if npm ci --include=optional && test -f "$swc"; then break; fi; \
+        echo "install attempt $attempt produced no Next.js SWC binary, retrying"; \
+        sleep 10; \
+    done; \
+    test -f "$swc"
 
 COPY apps/agent-console/ ./
 
