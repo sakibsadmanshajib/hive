@@ -37,16 +37,18 @@ var embeddingRoute = SelectRouteResult{
 // hides a wrong conversion at small counts.
 func TestSettlementCredits(t *testing.T) {
 	tests := []struct {
-		name          string
-		route         SelectRouteResult
-		hasUsage      bool
-		inputTokens   int64
-		outputTokens  int64
-		promptBody    string
-		content       string
-		wantCredits   int64
-		wantConfirmed bool
-		wantDelivered bool
+		name             string
+		route            SelectRouteResult
+		hasUsage         bool
+		inputTokens      int64
+		cacheReadTokens  int64
+		cacheWriteTokens int64
+		outputTokens     int64
+		promptBody       string
+		content          string
+		wantCredits      int64
+		wantConfirmed    bool
+		wantDelivered    bool
 	}{
 		{
 			name:         "confirmed usage is priced from the catalog, not counted as credits",
@@ -148,7 +150,7 @@ func TestSettlementCredits(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			credits, confirmed, delivered := settlementCredits(
-				tt.route, tt.hasUsage, tt.inputTokens, tt.outputTokens, tt.promptBody, tt.content)
+				tt.route, tt.hasUsage, tt.inputTokens, tt.cacheReadTokens, tt.cacheWriteTokens, tt.outputTokens, tt.promptBody, tt.content)
 			if credits != tt.wantCredits {
 				t.Errorf("credits = %d, want %d", credits, tt.wantCredits)
 			}

@@ -27,6 +27,31 @@ type StageMetrics struct {
 	duration *prometheus.HistogramVec
 }
 
+// cacheBillingMagnitudeGuardTrips and cacheBillingFallbackRateUsed are
+// package-level rather than fields on StageMetrics: assertCacheBillingMagnitude
+// and resolveCacheRate (pricing.go) are plain functions reached from both the
+// API-key orchestrator (which carries a *StageMetrics) and the session-chat
+// package (apps/edge-api/internal/chat, which does not), so a field would
+// need threading through every call site on the settlement path in two
+// packages for a metrics-only feature. A package-level *prometheus.CounterVec
+// is safe here: it is one Go object regardless of who increments it,
+// registration happens once at startup (NewStageMetrics, below) on the same
+// registry apps/edge-api/internal/proxy.NewEdgeMetrics already serves at
+// /metrics, and a test that never calls NewStageMetrics simply never
+// registers them -- WithLabelValues(...).Inc() on an unregistered CounterVec
+// is a normal, harmless no-op observation, the same nil-safety principle
+// StageMetrics.observe already relies on for the duration histogram.
+var (
+	cacheBillingMagnitudeGuardTrips = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_cache_billing_magnitude_guard_trips_total",
+		Help: "Times the cache-aware billing magnitude guard fired: a charge exceeded 2x the highest-rate bound (the highest of the input, cache-read and cache-write rates), the signature of a cache semantics inversion (vault spec-2026-08-25-cache-aware-billing.md).",
+	}, []string{"alias", "provider"})
+	cacheBillingFallbackRateUsed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_cache_billing_fallback_rate_used_total",
+		Help: "Times a cache charge fell back to the documented default multiplier because the alias's catalog cache price was unset (NULL, not a deliberate zero), by alias, provider and side (read/write).",
+	}, []string{"alias", "provider", "side"})
+)
+
 // Stage names. Fixed set, so the label stays low cardinality and a dashboard
 // can name the series it wants.
 const (
@@ -56,7 +81,7 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 			Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
 		}, []string{"stage", "endpoint"}),
 	}
-	reg.MustRegister(m.duration)
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed)
 	return m
 }
 

@@ -290,8 +290,10 @@ func (o *Orchestrator) executeSync(
 		// usable token count to price: the normal path pays for neither parse.
 		hasUsage := usage != nil
 		var inputTokens, outputTokens int64
+		cache := CacheUsage{}
 		if hasUsage {
 			inputTokens, outputTokens = usage.PromptTokens, usage.CompletionTokens
+			cache = NormalizeCacheUsage(usage, model, route.Provider)
 		}
 		var prompt, content string
 		if inputTokens+outputTokens <= 0 {
@@ -316,7 +318,8 @@ func (o *Orchestrator) executeSync(
 					settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 			}
 		} else {
-			actualCredits, confirmed, billable = settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
+			actualCredits, confirmed, billable = settlementCredits(route, hasUsage,
+				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content)
 		}
 		if !billable {
 			// Nothing measured and nothing produced: there is no quantity to
@@ -427,9 +430,9 @@ func (o *Orchestrator) recordCompletedEvent(ctx context.Context, snapshot authz.
 	if usage != nil {
 		input.InputTokens = usage.PromptTokens
 		input.OutputTokens = usage.CompletionTokens
-		if usage.PromptTokensDetails != nil {
-			input.CacheReadTokens = usage.PromptTokensDetails.CachedTokens
-		}
+		cache := NormalizeCacheUsage(usage, model, "")
+		input.CacheReadTokens = cache.CacheReadTokens
+		input.CacheWriteTokens = cache.CacheWriteTokens
 		input.HiveCreditDelta = usage.TotalTokens
 	}
 	// Logged, not discarded, for the same reason as recordErrorEvent above.

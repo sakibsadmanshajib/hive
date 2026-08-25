@@ -16,7 +16,7 @@ type NeedFlags struct {
 	NeedCompletions     bool
 	NeedResponses       bool
 	NeedEmbeddings      bool
-	NeedStreaming        bool
+	NeedStreaming       bool
 	NeedReasoning       bool
 	// RequireToolCapable restricts route selection to routes where
 	// provider_capabilities.tools_supported = true. Set when the request
@@ -128,12 +128,38 @@ type CompletionChoice struct {
 // --- Shared Usage ---
 
 // UsageResponse is the OpenAI-compatible usage object.
+//
+// CacheReadInputTokens and CacheCreationInputTokens are Anthropic's own
+// native field spellings, POINTERS rather than plain int64 so a present
+// wire value of zero stays distinguishable from the field being absent
+// entirely. That presence, not the model name, is what NormalizeCacheUsage
+// uses to tell Anthropic's EXCLUSIVE prompt-token convention apart from
+// OpenAI's (and OpenRouter's, even for an Anthropic-backed model -- OpenRouter
+// normalizes to OpenAI's shape before Hive ever sees the response)
+// INCLUSIVE one. Today's dispatch path (LiteLLM -> OpenRouter/Groq) never
+// sets these two fields at all, since LiteLLM always answers in the
+// inclusive shape regardless of the backing provider; they exist for a
+// future direct (non-LiteLLM) provider dispatch, and NormalizeCacheUsage's
+// own tests cover that branch now so that future path does not have to
+// re-derive the arithmetic (vault spec-2026-08-25-cache-aware-billing.md).
+//
+// Because ChatCompletionResponse.Usage and ChatCompletionChunk.Usage both
+// reuse this same struct for Hive's own OpenAI-compatible customer response,
+// anything that re-marshals a decoded UsageResponse back to a customer (see
+// normalizeChatCompletion, UsageAccumulator.ToUsageResponse) must never let
+// these two fields leak into that response: an OpenAI-compatible client
+// should see only prompt_tokens_details, never these Anthropic-native
+// siblings. They stay nil on every path reachable today, so this is inert
+// rather than enforced, but it is the reason ToUsageResponse and
+// normalizeChatCompletion never copy them forward.
 type UsageResponse struct {
-	PromptTokens            int64                    `json:"prompt_tokens"`
-	CompletionTokens        int64                    `json:"completion_tokens"`
-	TotalTokens             int64                    `json:"total_tokens"`
-	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
-	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	PromptTokens             int64                    `json:"prompt_tokens"`
+	CompletionTokens         int64                    `json:"completion_tokens"`
+	TotalTokens              int64                    `json:"total_tokens"`
+	CompletionTokensDetails  *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails      *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CacheReadInputTokens     *int64                   `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens *int64                   `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // CompletionTokensDetails is the breakdown of completion tokens.
@@ -143,9 +169,16 @@ type CompletionTokensDetails struct {
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens"`
 }
 
-// PromptTokensDetails is the breakdown of prompt tokens.
+// PromptTokensDetails is the breakdown of prompt tokens under the INCLUSIVE
+// (OpenAI / OpenRouter) convention: prompt_tokens already counts both
+// CachedTokens (a cache READ) and CacheWriteTokens (a cache WRITE) as a
+// subset of itself. CacheWriteTokens has no omitempty: the echo contract
+// this alias's customer-facing response follows says to emit an explicit 0
+// rather than drop the key, so a client can tell "no writes this turn" apart
+// from "this gateway does not report writes at all".
 type PromptTokensDetails struct {
-	CachedTokens int64 `json:"cached_tokens"`
+	CachedTokens     int64 `json:"cached_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
 }
 
 // --- Embeddings ---
@@ -161,10 +194,10 @@ type EmbeddingsRequest struct {
 
 // EmbeddingsResponse is the OpenAI-compatible embeddings response.
 type EmbeddingsResponse struct {
-	Object string           `json:"object"`
+	Object string            `json:"object"`
 	Data   []EmbeddingObject `json:"data"`
-	Model  string           `json:"model"`
-	Usage  *EmbeddingsUsage `json:"usage"`
+	Model  string            `json:"model"`
+	Usage  *EmbeddingsUsage  `json:"usage"`
 }
 
 // EmbeddingObject is a single embedding in the response.
@@ -204,24 +237,24 @@ type ResponsesRequest struct {
 
 // ResponseObject is the OpenAI Responses API response object.
 type ResponseObject struct {
-	ID                string              `json:"id"`
-	Object            string              `json:"object"`
-	CreatedAt         int64               `json:"created_at"`
-	Model             string              `json:"model"`
-	Status            string              `json:"status"`
+	ID                string               `json:"id"`
+	Object            string               `json:"object"`
+	CreatedAt         int64                `json:"created_at"`
+	Model             string               `json:"model"`
+	Status            string               `json:"status"`
 	Output            []ResponseOutputItem `json:"output"`
-	Usage             *ResponsesUsage     `json:"usage,omitempty"`
-	Text              json.RawMessage     `json:"text,omitempty"`
-	Reasoning         json.RawMessage     `json:"reasoning"`
-	Metadata          json.RawMessage     `json:"metadata"`
-	Temperature       *float64            `json:"temperature,omitempty"`
-	TopP              *float64            `json:"top_p,omitempty"`
-	MaxOutputTokens   *int                `json:"max_output_tokens"`
-	Truncation        *string             `json:"truncation,omitempty"`
-	ToolChoice        json.RawMessage     `json:"tool_choice,omitempty"`
-	Tools             json.RawMessage     `json:"tools"`
-	IncompleteDetails json.RawMessage     `json:"incomplete_details"`
-	Error             json.RawMessage     `json:"error"`
+	Usage             *ResponsesUsage      `json:"usage,omitempty"`
+	Text              json.RawMessage      `json:"text,omitempty"`
+	Reasoning         json.RawMessage      `json:"reasoning"`
+	Metadata          json.RawMessage      `json:"metadata"`
+	Temperature       *float64             `json:"temperature,omitempty"`
+	TopP              *float64             `json:"top_p,omitempty"`
+	MaxOutputTokens   *int                 `json:"max_output_tokens"`
+	Truncation        *string              `json:"truncation,omitempty"`
+	ToolChoice        json.RawMessage      `json:"tool_choice,omitempty"`
+	Tools             json.RawMessage      `json:"tools"`
+	IncompleteDetails json.RawMessage      `json:"incomplete_details"`
+	Error             json.RawMessage      `json:"error"`
 }
 
 // ResponseOutputItem is a single output item in a Responses API response.

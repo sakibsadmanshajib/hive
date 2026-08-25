@@ -248,6 +248,165 @@ func TestExecuteSync_SettlesFromCatalogPrice(t *testing.T) {
 	}
 }
 
+// usageSSEServerWithCache is usageSSEServer's cache-bearing sibling: the
+// terminal usage chunk additionally reports a cache-read and cache-write
+// split, INCLUSIVE shape (prompt_tokens counts both).
+func usageSSEServerWithCache(promptTokens, completionTokens, cacheRead, cacheWrite int64) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		stop := "stop"
+		fmt.Fprintln(w, buildChunkLine("chunk-1", "route", "hello there", nil))
+		flusher.Flush()
+		fmt.Fprintln(w, buildChunkLine("chunk-2", "route", "", &stop))
+		flusher.Flush()
+		usageChunk := ChatCompletionChunk{
+			ID:      "chunk-3",
+			Object:  "chat.completion.chunk",
+			Created: 1700000000,
+			Model:   "route",
+			Choices: []ChunkChoice{},
+			Usage: &UsageResponse{
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				TotalTokens:      promptTokens + completionTokens,
+				PromptTokensDetails: &PromptTokensDetails{
+					CachedTokens:     cacheRead,
+					CacheWriteTokens: cacheWrite,
+				},
+			},
+		}
+		b, _ := json.Marshal(usageChunk)
+		fmt.Fprintln(w, "data: "+string(b))
+		flusher.Flush()
+		fmt.Fprintln(w, "data: [DONE]")
+		flusher.Flush()
+	}))
+}
+
+// usageJSONServerWithCache is usageJSONServer's cache-bearing sibling for the
+// non-streaming path.
+func usageJSONServerWithCache(promptTokens, completionTokens, cacheRead, cacheWrite int64) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(ChatCompletionResponse{
+			ID:     "chatcmpl-test-1",
+			Object: "chat.completion",
+			Model:  "route",
+			Usage: &UsageResponse{
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				TotalTokens:      promptTokens + completionTokens,
+				PromptTokensDetails: &PromptTokensDetails{
+					CachedTokens:     cacheRead,
+					CacheWriteTokens: cacheWrite,
+				},
+			},
+		})
+	}))
+}
+
+// catalogHiveCacheDemo is an illustrative fixture carrying its own cache
+// rates: 3,000,000 input / 15,000,000 output / 300,000 cache-read (0.1x) /
+// 3,750,000 cache-write (1.25x) credits per million, the same figures the
+// audit's worked example uses.
+func catalogHiveCacheDemo() SelectRoutePricing {
+	return cachePricing(3_000_000, 15_000_000, 300_000, 3_750_000)
+}
+
+// TestExecuteStreaming_SettlesCacheAwarePrice is the audit's headline
+// scenario end to end, through the real streaming settlement path: 200,000
+// cache-read + 5,000 fresh + 2,000 output must settle at the cache-aware
+// price (105,000 credits), not the pre-fix flat-rate price (645,000).
+func TestExecuteStreaming_SettlesCacheAwarePrice(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+	// promptTokens is the INCLUSIVE-shape total: fresh (5000) + cache read
+	// (200000). Cache write is 0 on this read-heavy turn.
+	litellmSrv := usageSSEServerWithCache(205_000, 2_000, 200_000, 0)
+	defer litellmSrv.Close()
+	routingSrv := newRoutingMockPriced(catalogHiveCacheDemo(), "tokens")
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+	done, _ := runExecuteStreaming(orch, context.Background())
+	waitDone(t, done)
+
+	body, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected FinalizeReservation on a normal completion; calls seen: %+v", rec.calls)
+	}
+	actual, _ := body["actual_credits"].(float64)
+	if int64(actual) != 105_000 {
+		t.Errorf("actual_credits = %v, want 105000 (cache-aware price for 5000 fresh + 200000 cache-read + 2000 output)", body["actual_credits"])
+	}
+	if int64(actual) == 645_000 {
+		t.Error("actual_credits = 645000: still the flat-rate price, cache pricing was not applied on the streaming path")
+	}
+	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
+		t.Error("terminal_usage_confirmed must stay true: the upstream reported a real usage block")
+	}
+}
+
+// TestExecuteSync_SettlesCacheAwarePrice is the same scenario through the
+// non-streaming settlement path.
+func TestExecuteSync_SettlesCacheAwarePrice(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+	providerSrv := usageJSONServerWithCache(205_000, 2_000, 200_000, 0)
+	defer providerSrv.Close()
+	routingSrv := newRoutingMockPriced(catalogHiveCacheDemo(), "tokens")
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, providerSrv.URL)
+	callSyncCtx(orch, context.Background())
+
+	body, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected FinalizeReservation; calls seen: %+v", rec.calls)
+	}
+	actual, _ := body["actual_credits"].(float64)
+	if int64(actual) != 105_000 {
+		t.Errorf("actual_credits = %v, want 105000 (cache-aware price)", body["actual_credits"])
+	}
+	if int64(actual) == 645_000 {
+		t.Error("actual_credits = 645000: still the flat-rate price, cache pricing was not applied on the sync path")
+	}
+}
+
+// TestExecuteSync_SettlesCacheWritePrice covers the write side on the sync
+// path: a cache-populating first turn must price the write premium
+// (3,750,000/M here), never the flat input rate.
+func TestExecuteSync_SettlesCacheWritePrice(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+	// promptTokens = fresh(0) + cache write(200000), inclusive shape.
+	providerSrv := usageJSONServerWithCache(200_000, 2_000, 0, 200_000)
+	defer providerSrv.Close()
+	routingSrv := newRoutingMockPriced(catalogHiveCacheDemo(), "tokens")
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, providerSrv.URL)
+	callSyncCtx(orch, context.Background())
+
+	body, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected FinalizeReservation; calls seen: %+v", rec.calls)
+	}
+	actual, _ := body["actual_credits"].(float64)
+	if int64(actual) != 780_000 {
+		t.Errorf("actual_credits = %v, want 780000 (200000 cache-write * 3,750,000/M + 2000 output * 15,000,000/M)", body["actual_credits"])
+	}
+	if int64(actual) == 630_000 {
+		t.Error("actual_credits = 630000: the pre-fix flat-rate undercharge for cache-write tokens")
+	}
+}
+
 // TestExecuteStreaming_NonTokenPricedAlias_RefusesBeforeReserving is the
 // fail-closed half (D-034): an alias priced in a unit this endpoint cannot
 // meter must be refused before any hold is taken and before the request ever

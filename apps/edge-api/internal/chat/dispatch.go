@@ -60,18 +60,21 @@ type chatRequest struct {
 	Stream   bool             `json:"stream,omitempty"`
 }
 
-type usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
 type sseEnvelope struct {
 	// Model is the upstream's own name for what served the request. It is
 	// read for the cross-alias fallback check (#743) and logged, never
 	// forwarded to audit_log, which fans out to third-party sinks.
-	Model   string `json:"model,omitempty"`
-	Usage   *usage `json:"usage,omitempty"`
+	Model string `json:"model,omitempty"`
+	// Usage reuses inference.UsageResponse (the same OpenAI-compatible shape
+	// the API-key path decodes) rather than a second, narrower local type, so
+	// this surface prices cache-read and cache-write tokens through the same
+	// inference.NormalizeCacheUsage this package already imports for
+	// everything else on this path, instead of growing a copy that could
+	// drift out of sync with it (#688 cache-pricing follow-up: this local
+	// type used to declare only prompt_tokens/completion_tokens/total_tokens,
+	// which silently dropped every cache field at decode time, before any
+	// downstream code had a chance to price them).
+	Usage   *inference.UsageResponse `json:"usage,omitempty"`
 	Choices []struct {
 		FinishReason string `json:"finish_reason,omitempty"`
 		Delta        struct {
@@ -232,8 +235,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
-	var inTokens, outTokens int
+	var inTokens, outTokens int64
 	var hasUsage bool
+	var cacheUsage inference.CacheUsage
 	var servedModel string
 	// Verbatim bytes of the terminal usage frame, populated only for a
 	// variable-price alias. See the capture site below.
@@ -306,6 +310,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			hasUsage = true
 			inTokens = envelope.Usage.PromptTokens
 			outTokens = envelope.Usage.CompletionTokens
+			cacheUsage = inference.NormalizeCacheUsage(envelope.Usage, clientModel, route.Provider)
 			// For a variable-price alias the charge comes from the cost the
 			// upstream reports, and sseEnvelope does not declare that field, so
 			// unmarshalling has already dropped it. Keep the untouched payload
@@ -352,7 +357,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// damage.
 		settled := inference.UpstreamActualSettlement(
 			rawUsagePayload, settle.held(), hasUsage,
-			int64(inTokens), int64(outTokens), completion.String())
+			inTokens, outTokens, completion.String())
 		costCredits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
 		if delivered {
 			// generation_id is the audit handle for this charge. Operator log
@@ -365,7 +370,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		costCredits, confirmed, delivered = inference.ChatSettlementCredits(
-			route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+			route, hasUsage, cacheUsage.FreshInputTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens, outTokens, raw, completion.String())
 	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
@@ -396,7 +401,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			releaseReason = "client_disconnect"
 		}
 		costCredits = 0
-	case settle.finalize(costCredits, confirmed, int64(inTokens), int64(outTokens)):
+	case settle.finalize(costCredits, confirmed, inTokens, outTokens):
 		settled = true
 	default:
 		// The charge did not land. Leaving settled false hands the reservation
@@ -411,8 +416,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestID:      requestID,
 		Model:          clientModel,
 		Provider:       route.Provider,
-		InTokens:       inTokens,
-		OutTokens:      outTokens,
+		InTokens:       int(inTokens),
+		OutTokens:      int(outTokens),
 		LatencyMs:      latency,
 		CostCredits:    costCredits,
 		FinishReason:   finishReason,

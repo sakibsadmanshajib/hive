@@ -66,11 +66,125 @@ func CanPriceTokens(route SelectRouteResult) bool {
 	return route.Pricing.InputCredits() > 0 || route.Pricing.OutputCredits() > 0
 }
 
+// DefaultCacheReadRateNum/Denom and DefaultCacheWriteRateNum/Denom are the
+// FALLBACK multipliers applied, relative to a route's own input price, when
+// the catalog carries no cache price for an alias that is actually reporting
+// cache token usage. They are a safety net for a NEW alias the seeding
+// migration has not caught up to yet, never the normal path: a real,
+// per-model rate belongs in model_aliases.cache_read_price_credits /
+// cache_write_price_credits, because the true multiplier varies by provider
+// and model (Anthropic and GPT-5-class: 0.1x read / 1.25x write; OpenAI o3:
+// 0.25x / free; gpt-4o and o1: 0.5x / free; Groq: 0.5x / free; DeepSeek:
+// 0.1x / 1.0x -- vault spec-2026-08-25-cache-aware-billing.md). Falling back
+// to the flat input rate instead (treating cache read as ordinary input) is
+// exactly the bug this feature fixes, and falling back to zero is revenue
+// loss D-034 forbids, so this fallback is the third option, not either of
+// those two.
+//
+// An explicit stored value of zero is NOT "unpopulated": model_aliases rows
+// that deliberately record a model as having no published cache rate (e.g.
+// hive-small's Groq route, 20260822_02_catalog_alias_restructure.sql) use an
+// explicit 0, and that is a real, considered price, honoured as-is with no
+// fallback and no WARN -- the same "one priced side may legitimately be
+// zero" rule CanPriceTokens already applies to the input/output columns.
+// Only a NULL pointer (never configured at all) triggers the fallback.
+const (
+	DefaultCacheReadRateNum    = 1
+	DefaultCacheReadRateDenom  = 10
+	DefaultCacheWriteRateNum   = 5
+	DefaultCacheWriteRateDenom = 4
+)
+
+// resolveCacheRate prices one cache component (side is "read" or "write") as
+// a metering.UnitCharge: the alias's own catalog rate when the catalog
+// carries one (including a deliberate zero), or the documented fallback
+// multiplier of inputRate when it does not.
+//
+// The fallback is carried as an EXACT FRACTION (numerator folded into
+// Quantity, denominator into RateDivisor) instead of being pre-scaled into a
+// whole credits-per-million integer: 1/10x of an input rate below 5 credits
+// per million is a fraction of one credit per million, and pre-rounding it
+// to a whole number would collapse it to zero, dropping a request full of
+// cache-read tokens all the way down to the 1-credit floor no matter how
+// many tokens it consumed (PR #1157 review finding; regression test
+// TestCreditsForTokensFractionalFallbackSurvivesChargeArithmetic).
+//
+// It logs a WARN and increments cacheBillingFallbackRateUsed, naming the
+// alias and which side fell back, only when quantity is actually nonzero: a
+// route that has never once seen a cache token should not spam a WARN (or a
+// counter increment) every request just because its cache columns happen to
+// be unset.
+func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, quantity int64, aliasID, provider, side string) metering.UnitCharge {
+	if priceCredits != nil {
+		return metering.UnitCharge{Quantity: quantity, CreditsPerMillion: *priceCredits}
+	}
+	if quantity > 0 {
+		log.Printf("inference: WARN falling back to default cache-%s rate %d/%d x input_rate=%d alias=%s provider=%s tokens=%d: "+
+			"catalog has no %s cache price for this alias, see the seeding migration and model_aliases.cache_%s_price_credits",
+			side, numerator, denominator, inputRate, aliasID, provider, quantity, side, side)
+		cacheBillingFallbackRateUsed.WithLabelValues(aliasID, provider, side).Inc()
+	}
+	return metering.UnitCharge{
+		Quantity:          quantity * numerator,
+		CreditsPerMillion: inputRate,
+		RateDivisor:       denominator,
+	}
+}
+
+// assertCacheBillingMagnitude is the runtime half of the cache-billing
+// contract's self-check (vault spec-2026-08-25-cache-aware-billing.md
+// section 5): a semantics inversion in NormalizeCacheUsage (adding where the
+// inclusive shape should have subtracted, or the reverse) does not produce a
+// small error, it roughly doubles or nearly-frees the charge. This catches
+// that CLASS of bug in production, not just in a table test, by comparing the
+// real charge against twice the highest-rate bound: two times what pricing
+// every prompt token at the HIGHEST of the input, cache-read and cache-write
+// rates would have produced. It never blocks, alters, or refuses the charge: a
+// ceiling breach is loud evidence to investigate, not grounds to fail a
+// request that has already been served (D-034 is about never charging zero
+// for delivered work, not about refusing a suspicious charge after the fact).
+func assertCacheBillingMagnitude(route SelectRouteResult, fresh, cacheRead, cacheWrite, output, credits int64) {
+	totalPrompt := fresh + cacheRead + cacheWrite
+	// The ceiling scales off the HIGHEST of the three input-side rates, not
+	// the flat input rate alone: a catalog row whose cache rate is priced
+	// above the input rate (a real, sourced case -- Anthropic's 1h cache
+	// write TTL reaches 2.0x) would otherwise make this guard false-positive
+	// on a perfectly correct charge, degrading a real signal into noise on
+	// exactly the rows that need it working. Using the max of all three
+	// keeps the guard a true upper bound under any catalog configuration,
+	// not just the ones seeded today.
+	inputSideRate := route.Pricing.InputCredits()
+	if r := derefPrice(route.Pricing.CacheReadPriceCredits); r > inputSideRate {
+		inputSideRate = r
+	}
+	if r := derefPrice(route.Pricing.CacheWritePriceCredits); r > inputSideRate {
+		inputSideRate = r
+	}
+	ceiling := metering.ChargeCredits(
+		metering.UnitCharge{Quantity: totalPrompt * 2, CreditsPerMillion: inputSideRate},
+		metering.UnitCharge{Quantity: output, CreditsPerMillion: route.Pricing.OutputCredits()},
+	)
+	// The same 1-credit floor CreditsForTokens applies to a nonzero-but-cheap
+	// request also applies here: without it, a tiny request (e.g. a single
+	// output token on a low per-million rate) has a raw proportional ceiling
+	// of 0, and the floor alone would trip this guard on every such request,
+	// exactly the noisy-false-positive shape that gets a real WARN ignored.
+	if totalPrompt+output > 0 && ceiling < 1 {
+		ceiling = 1
+	}
+	if credits > ceiling {
+		log.Printf("inference: BUG: cache billing magnitude guard tripped alias=%s provider=%s credits=%d ceiling=%d fresh=%d cache_read=%d cache_write=%d output=%d: "+
+			"charge exceeds 2x the highest-of-rates bound, which usually means a cache semantics inversion",
+			route.AliasID, route.Provider, credits, ceiling, fresh, cacheRead, cacheWrite, output)
+		cacheBillingMagnitudeGuardTrips.WithLabelValues(route.AliasID, route.Provider).Inc()
+	}
+}
+
 // CreditsForTokens converts metered token counts into whole credits at the
-// alias's catalog price, flooring a nonzero quantity at one credit so a request
-// that consumed real work is never served free. Identical shape to
-// audio.creditsForQuantity, one modality wider: text meters two quantities at
-// two prices instead of one.
+// alias's catalog price, pricing fresh input, cache-read input, cache-write
+// input and output at four independent rates rather than one flat input
+// rate. It floors a nonzero total quantity at one credit so a request that
+// consumed real work is never served free (D-034).
 //
 // Token counts come from a provider response, so they are external input on a
 // money path: a negative count is clamped away rather than allowed to subtract
@@ -81,7 +195,7 @@ func CanPriceTokens(route SelectRouteResult) bool {
 // request that may have cost dollars. The guard below makes that a loud
 // programming error instead of a silent near-free settlement; callers are
 // expected to branch on IsUpstreamActual before they get here.
-func CreditsForTokens(route SelectRouteResult, inputTokens, outputTokens int64) int64 {
+func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64) int64 {
 	if route.Pricing.IsUpstreamActual() {
 		// Not a panic. The reachable chain is settleStream, called from a defer
 		// in executeStreaming, so a panic here would fire during deferred
@@ -96,19 +210,30 @@ func CreditsForTokens(route SelectRouteResult, inputTokens, outputTokens int64) 
 			route.AliasID)
 		return 0
 	}
-	if inputTokens < 0 {
-		inputTokens = 0
-	}
-	if outputTokens < 0 {
-		outputTokens = 0
-	}
+	// Loud, not silent: matches the clamp-and-alarm shape NormalizeCacheUsage
+	// already uses one frame up. A negative count reaching this far means
+	// either a caller that bypassed NormalizeCacheUsage, or a corrupted
+	// component NormalizeCacheUsage's own boundary clamp did not fully
+	// absorb; either way it is worth a trace, not a silent zero (review
+	// finding on PR #1157).
+	freshInputTokens = clampNonNegative(freshInputTokens, route.AliasID, route.Provider, "fresh_input_tokens")
+	cacheReadTokens = clampNonNegative(cacheReadTokens, route.AliasID, route.Provider, "cache_read_tokens")
+	cacheWriteTokens = clampNonNegative(cacheWriteTokens, route.AliasID, route.Provider, "cache_write_tokens")
+	outputTokens = clampNonNegative(outputTokens, route.AliasID, route.Provider, "output_tokens")
+
+	inputRate := route.Pricing.InputCredits()
 	credits := metering.ChargeCredits(
-		metering.UnitCharge{Quantity: inputTokens, CreditsPerMillion: route.Pricing.InputCredits()},
+		metering.UnitCharge{Quantity: freshInputTokens, CreditsPerMillion: inputRate},
+		resolveCacheRate(route.Pricing.CacheReadPriceCredits, inputRate,
+			DefaultCacheReadRateNum, DefaultCacheReadRateDenom, cacheReadTokens, route.AliasID, route.Provider, "read"),
+		resolveCacheRate(route.Pricing.CacheWritePriceCredits, inputRate,
+			DefaultCacheWriteRateNum, DefaultCacheWriteRateDenom, cacheWriteTokens, route.AliasID, route.Provider, "write"),
 		metering.UnitCharge{Quantity: outputTokens, CreditsPerMillion: route.Pricing.OutputCredits()},
 	)
-	if inputTokens+outputTokens > 0 && credits < 1 {
+	if freshInputTokens+cacheReadTokens+cacheWriteTokens+outputTokens > 0 && credits < 1 {
 		credits = 1
 	}
+	assertCacheBillingMagnitude(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, credits)
 	return credits
 }
 
@@ -125,9 +250,9 @@ func CreditsForTokens(route SelectRouteResult, inputTokens, outputTokens int64) 
 // reported token counts. delivered is false only when nothing was produced at
 // all, in which case the caller must release its hold in full rather than
 // charge anything.
-func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, inputTokens, outputTokens int64,
+func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64,
 	requestBody []byte, content string) (credits int64, confirmed bool, delivered bool) {
-	return settlementCredits(route, hasUsage, inputTokens, outputTokens,
+	return settlementCredits(route, hasUsage, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
 		promptText(EndpointChatCompletions, requestBody), content)
 }
 

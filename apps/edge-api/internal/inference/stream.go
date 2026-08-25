@@ -21,13 +21,27 @@ import (
 // Content is recorded so the usage clamp can recompute completion_tokens when
 // the upstream terminal usage chunk reports 0 on a non-empty response.
 type UsageAccumulator struct {
+	// InputTokens is the RAW prompt_tokens figure the upstream reported,
+	// unchanged meaning from before this feature: the total prompt tokens
+	// delivered, cache subset included, for the ledger and for display. It is
+	// NOT what billing prices -- see FreshInputTokens for that.
 	InputTokens     int64
 	OutputTokens    int64
 	ReasoningTokens int64
-	CachedTokens    int64
-	TotalTokens     int64
-	HasUsage        bool
-	Content         strings.Builder
+	// CachedTokens is the cache-READ subset of InputTokens.
+	CachedTokens int64
+	// CacheWriteTokens is the cache-WRITE quantity this turn created. Never
+	// populated before this feature (usage_events.cache_write_tokens always
+	// stored 0); now carries the real figure NormalizeCacheUsage derives.
+	CacheWriteTokens int64
+	// FreshInputTokens is InputTokens with both cache components removed
+	// (INCLUSIVE shape) or InputTokens unchanged (EXCLUSIVE shape) -- see
+	// NormalizeCacheUsage. This, not InputTokens, is what CreditsForTokens
+	// prices as the input component.
+	FreshInputTokens int64
+	TotalTokens      int64
+	HasUsage         bool
+	Content          strings.Builder
 	// RawUsageChunk is the VERBATIM bytes of the last streamed chunk that
 	// carried a usage object. It exists because ChatCompletionChunk is a typed
 	// struct and unmarshalling into it silently discards every field we did
@@ -41,8 +55,9 @@ type UsageAccumulator struct {
 	RawUsageChunk []byte
 }
 
-// Accumulate copies usage fields from a chunk if present.
-func (a *UsageAccumulator) Accumulate(chunk ChatCompletionChunk) {
+// Accumulate copies usage fields from a chunk if present. aliasID is passed
+// through to NormalizeCacheUsage for its WARN log line only.
+func (a *UsageAccumulator) Accumulate(chunk ChatCompletionChunk, aliasID string) {
 	if chunk.Usage == nil {
 		return
 	}
@@ -53,9 +68,10 @@ func (a *UsageAccumulator) Accumulate(chunk ChatCompletionChunk) {
 	if chunk.Usage.CompletionTokensDetails != nil {
 		a.ReasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
 	}
-	if chunk.Usage.PromptTokensDetails != nil {
-		a.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
-	}
+	cache := NormalizeCacheUsage(chunk.Usage, aliasID, "")
+	a.FreshInputTokens = cache.FreshInputTokens
+	a.CachedTokens = cache.CacheReadTokens
+	a.CacheWriteTokens = cache.CacheWriteTokens
 }
 
 // AccumulateContent appends all delta content + refusal text carried by a
@@ -81,7 +97,12 @@ func (a *UsageAccumulator) ClampUsage(u *UsageResponse, upstreamID, aliasID, end
 	clampZeroCompletionUsage(u, []string{a.Content.String()}, upstreamID, aliasID, endpoint)
 }
 
-// ToUsageResponse constructs a UsageResponse from accumulated values.
+// ToUsageResponse constructs a UsageResponse from accumulated values, for
+// this gateway's own customer-facing response (the synthesized terminal
+// chunk, and recordCompletedEvent's usage argument). It deliberately emits
+// only the INCLUSIVE-shape fields (PromptTokensDetails): the two
+// Anthropic-native pointer fields on UsageResponse must never be set here,
+// per the echo contract -- see the comment on UsageResponse itself.
 func (a *UsageAccumulator) ToUsageResponse() *UsageResponse {
 	u := &UsageResponse{
 		PromptTokens:     a.InputTokens,
@@ -91,7 +112,8 @@ func (a *UsageAccumulator) ToUsageResponse() *UsageResponse {
 			ReasoningTokens: a.ReasoningTokens,
 		},
 		PromptTokensDetails: &PromptTokensDetails{
-			CachedTokens: a.CachedTokens,
+			CachedTokens:     a.CachedTokens,
+			CacheWriteTokens: a.CacheWriteTokens,
 		},
 	}
 	return u
@@ -306,7 +328,7 @@ func (o *Orchestrator) executeStreaming(
 					}
 				}
 				// Accumulate usage if present
-				accumulator.Accumulate(chunk)
+				accumulator.Accumulate(chunk, aliasID)
 				// Re-marshal sanitized chunk
 				sanitized, marshalErr := json.Marshal(chunk)
 				if marshalErr == nil {
@@ -439,15 +461,19 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // reason the figure is defensible. The catalog conversion here does not change
 // that: it only turns the estimated token count into the alias's price, so an
 // under-counted estimate stays under-counted in credits too.
-func settlementCredits(route SelectRouteResult, hasUsage bool, inputTokens, outputTokens int64, prompt, content string) (credits int64, confirmed bool, delivered bool) {
-	if hasUsage && inputTokens+outputTokens > 0 {
-		return CreditsForTokens(route, inputTokens, outputTokens), true, true
+func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64, prompt, content string) (credits int64, confirmed bool, delivered bool) {
+	if hasUsage && freshInputTokens+cacheReadTokens+cacheWriteTokens+outputTokens > 0 {
+		return CreditsForTokens(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens), true, true
 	}
 	completion := estimateCompletionTokens(content)
 	if completion == 0 {
 		return 0, false, false
 	}
-	return CreditsForTokens(route, estimateCompletionTokens(prompt), completion), false, true
+	// A content-based estimate carries no cache breakdown at all: nothing
+	// downstream of a byte-length guess can tell a cache token apart from a
+	// fresh one, so it prices every estimated prompt byte as fresh input,
+	// same as before this feature existed.
+	return CreditsForTokens(route, estimateCompletionTokens(prompt), 0, 0, completion), false, true
 }
 
 // settleStream is the single settlement point for an ended streaming
@@ -497,7 +523,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
-		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
 	}
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
@@ -634,6 +660,7 @@ func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot auth
 		input.OutputTokens = acc.OutputTokens
 		input.HiveCreditDelta = acc.TotalTokens
 		input.CacheReadTokens = acc.CachedTokens
+		input.CacheWriteTokens = acc.CacheWriteTokens
 	}
 	// Do not discard this error: event_type values here (upstream_error,
 	// finalize_failed, interrupted) previously were not in the usage_events
