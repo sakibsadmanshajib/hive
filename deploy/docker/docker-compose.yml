@@ -984,18 +984,15 @@ services:
       # thing. Chats are closed: every route that can read another user's
       # chat is gated on ENABLE_ADMIN_CHAT_ACCESS (chats.py:611, :1056,
       # :1063, :1174, :1592), and the bulk route at :890 was already behind
-      # ENABLE_ADMIN_EXPORT above. Knowledge is closed for DISCOVERY only:
-      # the listing routes honour BYPASS_ADMIN_ACCESS_CONTROL, so an admin no
-      # longer sees another tenant's collections, but three by-id routes
-      # short-circuit on `user.role == 'admin'` without consulting either
-      # flag -- knowledge.py:1039 (GET /{id}), :1289 (GET /{id}/files, which
-      # takes include_content) and :2096 (GET /{id}/export, which checks not
-      # even ENABLE_ADMIN_EXPORT). The export route is blocked at the proxy
-      # instead, in Caddyfile.owui, since a backend edit here would be inert:
-      # Dockerfile.open-webui builds only the frontend from vendor/. The
-      # other two need a real ownership check through owui-patches and are
-      # tracked separately; they are reachable only by someone who already
-      # knows a collection id.
+      # ENABLE_ADMIN_EXPORT above. Knowledge is fully closed: the listing
+      # routes honour BYPASS_ADMIN_ACCESS_CONTROL (PR #960), and the by-id
+      # read routes enforce ownership through Dockerfile.open-webui's
+      # owui-patches/apply_knowledge_authz_patch.py (#1056): GET /{id},
+      # GET /{id}/files, GET /{id}/files/pending and GET /{id}/export now use
+      # the same predicate as the listings (owner, AccessGrants read grant,
+      # or admin when BYPASS_ADMIN_ACCESS_CONTROL is set). Export is also
+      # still blocked at the proxy in Caddyfile.owui as defence in depth,
+      # since this product has no legitimate caller for it.
       #
       # Scope: this does not change who holds the admin role (#748) or the
       # proxy write-verb gap (#949).

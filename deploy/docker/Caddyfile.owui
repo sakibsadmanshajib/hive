@@ -144,10 +144,10 @@
   # and ENABLE_ADMIN_EXPORT is already false for the routes that honour it.
   #
   # Deliberately NOT blocking `GET /api/v1/knowledge/<id>` or its `/files`
-  # child, which have the same admin short-circuit but ARE the routes an owner
-  # uses to open their own collection. Those need a real ownership check in
-  # Python through owui-patches, tracked separately; blocking them here would
-  # be an outage, not a fix.
+  # children, which an owner uses to open their own collection: those now
+  # enforce ownership in the backend itself through owui-patches'
+  # apply_knowledge_authz_patch.py (#1056). This block stays scoped to the
+  # export route, which has no legitimate caller in this product at all.
   @blocked {
     path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|notes|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|import|namespace|terminal_servers|tool_servers)|knowledge/[^/]+/export))/?(?:/.*)?$
   }

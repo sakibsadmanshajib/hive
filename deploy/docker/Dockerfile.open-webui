@@ -397,6 +397,19 @@ RUN python3 /tmp/apply_credits_patch.py \
     && grep -q 'hive_credits_router' /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_credits.py').read_text())"
 
+# issue #1056: ownership enforcement on the Knowledge by-id read routes. The
+# listing routes honour BYPASS_ADMIN_ACCESS_CONTROL (PR #960), but GET /{id},
+# GET /{id}/files (which takes include_content), GET /{id}/files/pending and
+# GET /{id}/export short-circuited on user.role == 'admin', so an instance
+# admin -- which every tenant OWNER is on this shared instance -- could read
+# another tenant's collection given only its id. The patch applies the same
+# predicate as the listings: owner, AccessGrants read grant, or admin when
+# BYPASS_ADMIN_ACCESS_CONTROL is set. docker-compose.yml sets it false.
+COPY deploy/docker/owui-patches/apply_knowledge_authz_patch.py /tmp/apply_knowledge_authz_patch.py
+RUN python3 /tmp/apply_knowledge_authz_patch.py \
+    && test "$(grep -c '# hive (#1056)' /app/backend/open_webui/routers/knowledge.py)" -eq 4 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/knowledge.py').read_text())"
+
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
 # auth credential. The tool servers added there are direct ones, called by the
