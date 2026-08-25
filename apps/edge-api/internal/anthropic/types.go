@@ -62,6 +62,12 @@ type RequestMetadata struct {
 type ThinkingConfig struct {
 	Type         string `json:"type"` // "enabled" | "disabled"
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	// Display controls whether thinking content is surfaced to the caller.
+	// Anthropic-documented sub-field on the thinking config; this struct is a
+	// pure carry-through (see MessagesRequest.Thinking), so dropping it here
+	// would have been the identical bug class this PR exists to fix, just one
+	// struct deeper.
+	Display *bool `json:"display,omitempty"`
 }
 
 // CacheControl marks an Anthropic prompt-caching breakpoint. It is valid on a

@@ -76,7 +76,10 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	if req.ToolChoice != nil {
-		tc := convertToolChoice(req.ToolChoice)
+		tc, err := convertToolChoice(req.ToolChoice)
+		if err != nil {
+			return OAIRequest{}, fmt.Errorf("tool_choice: %w", err)
+		}
 		out.ToolChoice = &tc
 		if req.ToolChoice.DisableParallelToolUse != nil && *req.ToolChoice.DisableParallelToolUse {
 			no := false
@@ -335,23 +338,34 @@ func convertTools(tools []Tool) ([]OAITool, error) {
 // sentinel for the identical meaning. Before this fix, "none" fell through to
 // the default branch below and came out as "auto" -- the opposite of what the
 // caller asked for, not merely a dropped field.
-func convertToolChoice(tc *ToolChoice) OAIToolChoice {
+//
+// An unrecognized type is rejected with an error rather than silently mapped
+// to "auto". Anthropic documents exactly these four values, so every one of
+// them is now an explicit case above; a fifth value existing at all means
+// either a client bug or a future Anthropic addition Hive doesn't understand
+// yet, and defaulting either of those to "auto" is the identical inversion
+// shape as the tool_choice:"none" bug this file exists to fix -- silently
+// enabling tool use nobody asked for is worse than a clear 400.
+func convertToolChoice(tc *ToolChoice) (OAIToolChoice, error) {
 	switch tc.Type {
 	case "auto":
-		return OAIToolChoice{Sentinel: "auto"}
+		return OAIToolChoice{Sentinel: "auto"}, nil
 	case "any":
-		return OAIToolChoice{Sentinel: "required"}
+		return OAIToolChoice{Sentinel: "required"}, nil
 	case "none":
-		return OAIToolChoice{Sentinel: "none"}
+		return OAIToolChoice{Sentinel: "none"}, nil
 	case "tool":
 		return OAIToolChoice{
 			Named: &OAINamedToolChoice{
 				Type:     "function",
 				Function: OAINamedToolChoiceFunction{Name: tc.Name},
 			},
-		}
+		}, nil
 	default:
-		return OAIToolChoice{Sentinel: "auto"}
+		return OAIToolChoice{}, fmt.Errorf(
+			"tool_choice.type %q is not a supported Anthropic value (want one of auto, any, tool, none)",
+			tc.Type,
+		)
 	}
 }
 

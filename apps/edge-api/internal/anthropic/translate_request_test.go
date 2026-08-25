@@ -408,6 +408,25 @@ func TestToOAIRequest_ToolChoice_None(t *testing.T) {
 	}
 }
 
+// LOW item from review of #1163: an unrecognized tool_choice.type used to
+// silently map to "auto" via convertToolChoice's default branch -- the
+// identical inversion shape as the tool_choice:"none" bug, just waiting for
+// Anthropic to document a fifth value. Now rejected with a translation error
+// (handler.go turns that into a plain 400), never silently re-enabling tool
+// use nobody asked for.
+func TestToOAIRequest_ToolChoice_UnknownType_Rejected(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:      "m",
+		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens:  5,
+		ToolChoice: &anthropic.ToolChoice{Type: "some_future_type"},
+	}
+	_, err := anthropic.ToOAIRequest(req)
+	if err == nil {
+		t.Fatal("expected error for unrecognized tool_choice.type, got nil (silently defaulted to auto)")
+	}
+}
+
 // Issue #1153 item 2: metadata.user_id is parsed but was never read by
 // ToOAIRequest. It lands on OAIRequest.User, OpenAI's own end-user tracking
 // field -- same purpose, different name.
