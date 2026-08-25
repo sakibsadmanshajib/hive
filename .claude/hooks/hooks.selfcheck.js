@@ -23,6 +23,7 @@ const HOOKS_DIR = __dirname;
 // Synthetic, never a real credential. Assembled at runtime so the literal
 // never appears in this file, which the secrets scanner reads on write.
 const FAKE_AWS_KEY = 'AKIA' + 'A'.repeat(16);
+const FAKE_GENERIC_KEY = 'k'.repeat(20);
 
 function run(hook, payload) {
   const res = spawnSync(process.execPath, [path.join(HOOKS_DIR, hook)], {
@@ -58,11 +59,13 @@ for (const shape of ['claude', 'cursor']) {
     { name: `commit-guard warn on commit (${shape})`, hook: 'commit-guard.js',
       payload: shell(shape, "git commit -m 'stuff happened'"), code: 0, present: ['COMMIT GUARD'] },
 
-    // secrets-scanner: clean first, then the hard block.
+    // secrets-scanner: clean first, then the hard block, then a warning.
     { name: `secrets-scanner clean (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'src/example.ts', 'export const count = 1;\n'), code: 0, absent: ['BLOCKED', 'WARNING'] },
     { name: `secrets-scanner block aws key (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'src/example.ts', `const k = "${FAKE_AWS_KEY}";\n`), code: 2, present: ['BLOCKED', 'AWS access key'] },
+    { name: `secrets-scanner warn api_key assignment (${shape})`, hook: 'secrets-scanner.js',
+      payload: edit(shape, 'src/example.ts', `const apiKey = "${FAKE_GENERIC_KEY}";\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
   );
 }
 
