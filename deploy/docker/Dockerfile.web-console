@@ -28,6 +28,18 @@ RUN set -eux; \
 
 COPY apps/web-console/ ./
 
+# Repo-root fixtures a handful of unit tests read directly (control-plane-host,
+# chat-coverage-lib, model-catalog-table): the build context is the repo root
+# but only apps/web-console/ is copied above, so anything a test reads outside
+# that tree is otherwise an ENOENT inside the image, or (model-catalog-table)
+# an `existsSync` false that lets the test go quiet via `skipIf` instead.
+# Copy exactly the paths those tests use, not the whole repo, to keep the
+# image small.
+COPY .env.example /app/.env.example
+COPY deploy/ /app/deploy/
+COPY docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json /app/docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json
+COPY supabase/migrations/ /app/supabase/migrations/
+
 EXPOSE 3000
 
 CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
