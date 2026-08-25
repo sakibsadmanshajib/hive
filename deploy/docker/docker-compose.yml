@@ -984,15 +984,18 @@ services:
       # thing. Chats are closed: every route that can read another user's
       # chat is gated on ENABLE_ADMIN_CHAT_ACCESS (chats.py:611, :1056,
       # :1063, :1174, :1592), and the bulk route at :890 was already behind
-      # ENABLE_ADMIN_EXPORT above. Knowledge is fully closed: the listing
-      # routes honour BYPASS_ADMIN_ACCESS_CONTROL (PR #960), and the by-id
-      # read routes enforce ownership through Dockerfile.open-webui's
-      # owui-patches/apply_knowledge_authz_patch.py (#1056): GET /{id},
-      # GET /{id}/files, GET /{id}/files/pending and GET /{id}/export now use
-      # the same predicate as the listings (owner, AccessGrants read grant,
-      # or admin when BYPASS_ADMIN_ACCESS_CONTROL is set). Export is also
-      # still blocked at the proxy in Caddyfile.owui as defence in depth,
-      # since this product has no legitimate caller for it.
+      # ENABLE_ADMIN_EXPORT above; PR #1186's router patch flag-gates the
+      # remaining chats.py branches (delete-by-id, message edit/delete,
+      # shared-chat access grant management). Knowledge reads are closed:
+      # the listing routes honour BYPASS_ADMIN_ACCESS_CONTROL (PR #960), and
+      # the by-id read routes enforce ownership through
+      # owui-patches/apply_knowledge_authz_patch.py (#1056); PR #1186 closes
+      # the rest of the family (knowledge writes, the RAG collection query
+      # choke point in retrieval/utils.py, and the feedback/folder/calendar/
+      # prompt/note/tool/model routers) with the same predicate: owner,
+      # AccessGrants grant, or admin when BYPASS_ADMIN_ACCESS_CONTROL is set.
+      # Export is also still blocked at the proxy in Caddyfile.owui as
+      # defence in depth, since this product has no legitimate caller for it.
       #
       # Scope: this does not change who holds the admin role (#748) or the
       # proxy write-verb gap (#949).

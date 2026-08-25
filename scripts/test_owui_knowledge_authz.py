@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Self-check for Knowledge by-id ownership enforcement (issue #1056).
+"""Self-check for the owui authz patches (#1056 knowledge reads, #1186 family).
 
-Runs the real build-time patch against a copy of the vendored knowledge.py and
-asserts the result. Structural, no framework, no network.
+Runs the real build-time patch scripts against copies of the vendored backend
+source and asserts the result. Structural, no framework, no network.
 Run: python3 scripts/test_owui_knowledge_authz.py
 """
 
@@ -15,46 +15,168 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PATCH = REPO_ROOT / "deploy/docker/owui-patches/apply_knowledge_authz_patch.py"
-VENDORED = REPO_ROOT / "vendor/open-webui/backend/open_webui/routers/knowledge.py"
+PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
+VENDORED = REPO_ROOT / "vendor/open-webui/backend/open_webui"
 
-def main() -> int:
-    vendored = VENDORED.read_text()
-    if "user.role == 'admin'\n            or knowledge.user_id == user.id" not in vendored:
-        print("FAIL: vendored source drifted; update this check")
-        return 1
-    dest = Path(tempfile.mkdtemp()) / "knowledge.py"
-    shutil.copy(VENDORED, dest)
+# Per-file marker totals that must hold after patching. Mirrors the Dockerfile
+# consolidated drift guard and EXPECTED_MARKERS inside
+# apply_router_authz_family_patch.py.
+FAMILY_MARKERS = {
+    "knowledge.py": 12,
+    "files.py": 10,
+    "evaluations.py": 4,
+    "folders.py": 7,
+    "calendar.py": 2,
+    "chats.py": 7,
+    "prompts.py": 11,
+    "notes.py": 6,
+    "tools.py": 10,
+    "models.py": 5,
+}
+
+
+def run_patch(patch_path: Path, env_key: str, src_path: Path, dest_dir: Path):
+    dest = dest_dir / src_path.name
+    shutil.copy(src_path, dest)
     env = dict(os.environ)
-    env["HIVE_OWUI_KNOWLEDGE_PY"] = str(dest)
-    r = subprocess.run([sys.executable, str(PATCH)], env=env,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        print("FAIL: patch failed:", r.stdout + r.stderr)
-        return 1
-    patched = dest.read_text()
-    checks = {
-        "four markers": patched.count("# hive (#1056)") == 4,
-        "GET gate flag-gated":
-            "(user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL)\n            or knowledge.user_id == user.id" in patched,
-        "/files gates flag-gated x2":
-            patched.count("(user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL)\n        or knowledge.user_id == user.id") == 2,
-        "export uses get_verified_user":
-            "Depends(get_verified_user), db: AsyncSession" in patched,
-        "old short-circuits gone":
-            "user.role == 'admin'\n            or knowledge.user_id == user.id" not in patched
-            and "user.role == 'admin'\n        or knowledge.user_id == user.id" not in patched,
-        "patched source compiles": isinstance(ast.parse(patched), ast.Module),
-        "negative control intact":
-            "user.role == 'admin'\n            or knowledge.user_id == user.id" in vendored,
-    }
-    failed = [k for k, v in checks.items() if not v]
-    for k, v in checks.items():
+    env[env_key] = str(dest)
+    r = subprocess.run(
+        [sys.executable, str(patch_path)], env=env, capture_output=True, text=True
+    )
+    return r, dest
+
+
+def report(checks):
+    failed = []
+    for k in sorted(checks):
+        v = checks[k]
         print(("PASS " if v else "FAIL ") + k)
+        if not v:
+            failed.append(k)
     if failed:
         print("FAIL: " + ", ".join(failed))
+    return 1 if failed else 0
+
+
+def check_knowledge() -> int:
+    """#1056 (PR #1183): knowledge by-id read routes enforce ownership."""
+    vendored = VENDORED / "routers/knowledge.py"
+    src = vendored.read_text()
+    checks = {
+        "knowledge: vendored still has unflagged read gate (negative control)": (
+            "user.role == 'admin'\n            or knowledge.user_id == user.id" in src
+        ),
+    }
+    tmp = Path(tempfile.mkdtemp())
+    r, dest = run_patch(
+        PATCHES / "apply_knowledge_authz_patch.py",
+        "HIVE_OWUI_KNOWLEDGE_PY", vendored, tmp,
+    )
+    if r.returncode != 0:
+        print("FAIL: knowledge patch failed:", r.stdout + r.stderr)
         return 1
-    print("ok: knowledge by-id routes enforce ownership (#1056)")
+    patched = dest.read_text()
+    checks.update({
+        "knowledge: four #1056 markers": patched.count("# hive (#1056)") == 4,
+        "knowledge: GET gate flag-gated":
+            "(user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL)\n"
+            "            or knowledge.user_id == user.id" in patched,
+        "knowledge: export uses get_verified_user":
+            "Depends(get_verified_user), db: AsyncSession" in patched,
+        "knowledge: old short-circuits gone":
+            "user.role == 'admin'\n            or knowledge.user_id == user.id" not in patched
+            and "user.role == 'admin'\n        or knowledge.user_id == user.id" not in patched,
+        "knowledge: patched source compiles":
+            isinstance(ast.parse(patched), ast.Module),
+    })
+    return report(checks)
+
+
+def check_retrieval() -> int:
+    """#1186 HIGH slice: filter_accessible_collections admin bypass."""
+    utils_path = VENDORED / "retrieval/utils.py"
+    src = utils_path.read_text()
+    checks = {
+        "retrieval: vendored still has unflagged bypass (negative control)": (
+            "    if user.role == 'admin':\n        return safe_names" in src
+        ),
+    }
+    tmp = Path(tempfile.mkdtemp())
+    r, dest = run_patch(
+        PATCHES / "apply_retrieval_authz_patch.py",
+        "HIVE_OWUI_RETRIEVAL_UTILS_PY", utils_path, tmp,
+    )
+    if r.returncode != 0:
+        print("FAIL: retrieval patch failed:", r.stdout + r.stderr)
+        return 1
+    patched = dest.read_text()
+    checks.update({
+        "retrieval: two markers": patched.count("# hive (#1186)") == 2,
+        "retrieval: choke point flag-gated":
+            "user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL:\n"
+            "        return safe_names" in patched,
+        "retrieval: old bypass gone":
+            "    if user.role == 'admin':\n        return safe_names" not in patched,
+        "retrieval: patched source compiles":
+            isinstance(ast.parse(patched), ast.Module),
+    })
+    return report(checks)
+
+
+def check_router_family() -> int:
+    """#1186 family sweep: every router gate rewritten to the #960 predicate."""
+    routers = VENDORED / "routers"
+    patch = PATCHES / "apply_router_authz_family_patch.py"
+    # Negative controls: each file must still contain an unflagged pattern
+    # pre-patch, otherwise this test can no longer go red on vendor drift.
+    unflagged = {
+        "knowledge.py": "and user.role != 'admin'",
+        "files.py": "or user.role == 'admin' or await has_access_to_file(",
+        "evaluations.py": "if user.role == 'admin':\n        feedback = await Feedbacks.",
+        "folders.py": "is_admin = user.role == 'admin'",
+        "calendar.py": "if cal.user_id == user.id or user.role == 'admin':",
+        "chats.py": "if chat.user_id != user.id and user.role != 'admin':",
+        "prompts.py": "and user.role != 'admin'\n    ):",
+        "notes.py": "if user.role != 'admin' and (\n        user.id != note.user_id",
+        "tools.py": "and user.role != 'admin'\n    ):",
+        "models.py": "if not knowledge_items or user.role == 'admin':",
+    }
+    checks = {}
+    tmp = Path(tempfile.mkdtemp())
+    for name, frag in unflagged.items():
+        src_text = (routers / name).read_text()
+        checks[f"{name}: vendored still has unflagged pattern (negative control)"] = (
+            frag in src_text
+        )
+        shutil.copy(routers / name, tmp / name)
+    env = dict(os.environ)
+    env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
+    r = subprocess.run(
+        [sys.executable, str(patch)], env=env, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print("FAIL: router family patch failed:", r.stdout + r.stderr)
+        return 1
+    for name, expected in FAMILY_MARKERS.items():
+        text = (tmp / name).read_text()
+        checks[f"{name}: {expected} markers after patch"] = (
+            text.count("# hive (#1186)") == expected
+        )
+        checks[f"{name}: patched source compiles"] = isinstance(
+            ast.parse(text), ast.Module
+        )
+    return report(checks)
+
+
+def main() -> int:
+    rc = check_knowledge()
+    rc += check_retrieval()
+    rc += check_router_family()
+    if rc:
+        print("FAIL: owui authz patch self-check failed")
+        return 1
+    print("ok: knowledge by-id ownership (#1056), retrieval filter and")
+    print("ok: router family flag-gating (#1186) all enforced")
     return 0
 
 
