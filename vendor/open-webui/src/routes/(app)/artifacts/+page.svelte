@@ -199,7 +199,22 @@
 		</nav>
 	{/if}
 
-	<div class="hv-panel-region">
+	<!--
+		hive: the page had no title of its own, so the empty state was the first
+		thing on the surface and sat flush against the top of the pane. The head
+		below is the same shape the Knowledge index uses, in the serif display
+		register, and `flex flex-col` is what lets the `m-auto` states beneath it
+		centre at all: hv-panel-region is a plain block, and `m-auto` in a block
+		centres horizontally and nothing else.
+	-->
+	<div class="hv-panel-head">
+		<h1 class="hv-panel-title">{$i18n.t('Artifacts')}</h1>
+		<p class="hv-panel-subtitle">
+			{$i18n.t('Pages, charts and snippets the model built for you.')}
+		</p>
+	</div>
+
+	<div class="hv-panel-region flex flex-col">
 		{#if status === 'loading'}
 			<div class="m-auto flex flex-col items-center gap-3 text-center">
 				<Spinner className="size-5" />
@@ -292,15 +307,13 @@
 			</div>
 		{:else}
 			<div class="flex flex-col w-full h-full overflow-y-auto">
-				<div class="px-6 pt-6 pb-3">
-					<div class="hv-display text-2xl text-gray-900 dark:text-white">
-						{$i18n.t('Artifacts')}
-					</div>
-					<div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-						{$i18n.t('Web pages, charts and snippets the model built in your recent chats.')}
-					</div>
-				</div>
-				<div class="px-6 pb-8 flex flex-col gap-2">
+				<!--
+					hive: no second heading here. hv-panel-head above already titles
+					the page in both the empty and populated states; a second
+					"Artifacts" title inside this branch rendered a duplicate the
+					moment the list was non-empty.
+				-->
+				<div class="px-6 pt-6 pb-3 flex flex-col gap-2">
 					{#each artifacts as artifact, idx}
 						<button
 							class="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-850 transition text-left"

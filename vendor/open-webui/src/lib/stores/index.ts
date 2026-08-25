@@ -52,6 +52,18 @@ export const shortCodesToEmojis = writable(
 
 export const TTSWorker = writable(null);
 
+/*
+ * hive (#944, D-045): which mode the composer is in. `chat` sends an ordinary
+ * completion, `cowork` starts an agent run. It lives here rather than in
+ * lib/hive because lib/hive is unit tested by a runner that installs vitest and
+ * nothing else, so a `svelte/store` import there would be untestable; the
+ * decisions that go with this value are in lib/hive/coworkMode.ts.
+ *
+ * Session scoped on purpose, not persisted: a mode that survives a reload would
+ * silently turn the next ordinary question into a sandboxed run.
+ */
+export const composerMode: Writable<'chat' | 'cowork'> = writable('chat');
+
 export const chatId = writable('');
 export const chatTitle = writable('');
 

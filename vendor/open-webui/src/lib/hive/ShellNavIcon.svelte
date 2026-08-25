@@ -7,7 +7,7 @@
 	/*
 	 * Lucide, ISC licensed, drawn on the 24 unit grid at stroke width 1.5.
 	 *
-	 * Inlined rather than pulled in as a dependency: three glyphs do not
+	 * Inlined rather than pulled in as a dependency: a handful of glyphs do not
 	 * justify an icon package in a frontend we now build ourselves, and 1.5 is
 	 * the stroke the upstream header icons already use, so a Hive icon and an
 	 * upstream icon sit in the same row without one looking heavier.
@@ -28,13 +28,15 @@
 >
 	{#if name === 'projects'}
 		<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-	{:else if name === 'agents'}
-		<path d="M12 8V4H8" />
-		<rect width="16" height="12" x="4" y="8" rx="2" />
-		<path d="M2 14h2" />
-		<path d="M20 14h2" />
-		<path d="M15 13v2" />
-		<path d="M9 13v2" />
+	{:else if name === 'artifacts'}
+		<!-- Lucide "waypoints": connected nodes, the reference's own Artifacts glyph. -->
+		<circle cx="12" cy="4.5" r="2.5" />
+		<path d="m10.2 6.3-3.9 3.9" />
+		<circle cx="4.5" cy="12" r="2.5" />
+		<path d="M7 12h10" />
+		<circle cx="19.5" cy="12" r="2.5" />
+		<path d="m13.8 17.7 3.9-3.9" />
+		<circle cx="12" cy="19.5" r="2.5" />
 	{:else if name === 'knowledge'}
 		<path d="M12 7v14" />
 		<path

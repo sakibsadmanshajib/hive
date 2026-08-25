@@ -26,6 +26,7 @@
 		models,
 		config,
 		showCallOverlay,
+		composerMode,
 		tools,
 		skills,
 		toolServers,
@@ -67,6 +68,8 @@
 	import { createNoteHandler } from '../notes/utils';
 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 
+	import ComposerModeToggle from '$lib/hive/ComposerModeToggle.svelte';
+	import ComposerCoworkRow from '$lib/hive/ComposerCoworkRow.svelte';
 	import InputMenu from './MessageInput/InputMenu.svelte';
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 
@@ -1766,6 +1769,14 @@
 										</button>
 									</InputMenu>
 
+									<!--
+										hive (#944, D-045): Cowork is a mode of this composer, not a
+										destination. The control sits immediately right of the plus
+										and in the same pill row as the model selector, and changing
+										it changes what the next message does without navigating.
+									-->
+									<ComposerModeToggle />
+
 									{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || showSkillsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
 											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50 shrink-0"
@@ -2139,7 +2150,13 @@
 											{/if}
 										{/if}
 
-										{#if prompt === '' && files.length === 0 && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.call ?? true))}
+										<!--
+											hive (#944): the voice-mode button is a Chat affordance. A
+											run is not a conversation you hold out loud, and the
+											reference drops it in Cowork for the same reason. Dictation
+											above stays in both modes: a task brief is still typed.
+										-->
+										{#if $composerMode !== 'cowork' && prompt === '' && files.length === 0 && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.call ?? true))}
 											<div class=" flex items-center">
 												<!-- {$i18n.t('Call')} -->
 												<Tooltip content={$i18n.t('Voice mode')}>
@@ -2220,6 +2237,10 @@
 									{/if}
 								</div>
 							</div>
+
+							{#if $composerMode === 'cowork'}
+								<ComposerCoworkRow />
+							{/if}
 						</ComposerShell>
 
 						{#if $config?.license_metadata?.input_footer}

@@ -50,7 +50,9 @@ for rel in \
 	chat/Settings/Account.svelte \
 	chat/Settings/Advanced/AdvancedParams.svelte \
 	chat/MessageInput.svelte \
-	chat/Chat.svelte
+	chat/Chat.svelte \
+	chat/Placeholder.svelte \
+	chat/Settings/Interface.svelte
 do
 	mkdir -p "$WORK/lib/components/${rel%/*}"
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"
