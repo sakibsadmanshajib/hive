@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -25,10 +26,7 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
-		Usage: ResponseUsage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
+		Usage: anthropicUsage(resp.Usage, model, resp.Model),
 	}
 
 	if len(resp.Choices) == 0 {
@@ -63,6 +61,54 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 
 	out.Content = blocks
 	return out
+}
+
+// anthropicUsage converts an inclusive OpenAI/OpenRouter usage object into the
+// exclusive shape Anthropic clients (Claude Code included) read cache savings
+// from. clientAlias and upstreamModel exist only to name the alarm in
+// freshInputTokens; see its doc comment for why this is a subtraction, never
+// an addition, and ResponseUsage's doc comment for the shape itself.
+func anthropicUsage(u OAIUsage, clientAlias, upstreamModel string) ResponseUsage {
+	cacheRead, cacheWrite := 0, 0
+	if u.PromptTokensDetails != nil {
+		cacheRead = u.PromptTokensDetails.CachedTokens
+		cacheWrite = u.PromptTokensDetails.CacheWriteTokens
+	}
+	return ResponseUsage{
+		InputTokens:              freshInputTokens(u.PromptTokens, cacheRead, cacheWrite, clientAlias, upstreamModel),
+		OutputTokens:             u.CompletionTokens,
+		CacheCreationInputTokens: cacheWrite,
+		CacheReadInputTokens:     cacheRead,
+	}
+}
+
+// freshInputTokens recovers the Anthropic-exclusive "fresh, uncached" input
+// count from OpenRouter's inclusive prompt_tokens, which already contains
+// both the cache read and cache write tokens: fresh = prompt - read - write,
+// SUBTRACT never ADD (Anthropic-native reporting, which this gateway never
+// actually receives since every route goes through OpenRouter, is the
+// opposite ADD convention -- getting these swapped either nearly doubles
+// billed input on every warm turn or, subtracting on top of an
+// already-exclusive number, drives it negative).
+//
+// A negative result is CLAMPED to zero for the client-facing wire (never a
+// negative token count) AND ALARMED via slog.Warn naming clientAlias and
+// upstreamModel: per the cache-pricing research doc's section 5, a negative
+// here means the upstream inclusive/exclusive shape assumption broke, and
+// this is the one place in the request lifecycle that already has the
+// numbers in hand to catch it. The equivalent alarm for the actual BILLED
+// amount belongs to inference/pricing.go's CreditsForTokens
+// (feat/cache-aware-billing, out of this package's scope) -- this function
+// only ever decides what the client sees, never what gets billed.
+func freshInputTokens(promptTokens, cacheRead, cacheWrite int, clientAlias, upstreamModel string) int {
+	fresh := promptTokens - cacheRead - cacheWrite
+	if fresh < 0 {
+		slog.Warn("anthropic cache usage: fresh input tokens went negative, clamped to zero",
+			"alias", clientAlias, "upstream_model", upstreamModel,
+			"prompt_tokens", promptTokens, "cache_read_tokens", cacheRead, "cache_write_tokens", cacheWrite)
+		return 0
+	}
+	return fresh
 }
 
 // mapFinishReason converts an OpenAI finish_reason to an Anthropic stop_reason.

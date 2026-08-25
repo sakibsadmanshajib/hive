@@ -38,10 +38,12 @@ type SSETranslator struct {
 	clientAlias string
 
 	// state
-	messageID    string
-	inputTokens  int
-	outputTokens int
-	stopReason   string
+	messageID           string
+	inputTokens         int
+	outputTokens        int
+	cacheCreationTokens int
+	cacheReadTokens     int
+	stopReason          string
 
 	openBlockIndex int  // index of the currently open content block
 	hasOpenBlock   bool // whether a content_block_start has been emitted without stop
@@ -158,8 +160,17 @@ func (t *SSETranslator) FeedLine(line []byte) bool {
 	}
 
 	if chunk.Usage != nil {
-		t.inputTokens = chunk.Usage.PromptTokens
+		cacheRead, cacheWrite := 0, 0
+		if chunk.Usage.PromptTokensDetails != nil {
+			cacheRead = chunk.Usage.PromptTokensDetails.CachedTokens
+			cacheWrite = chunk.Usage.PromptTokensDetails.CacheWriteTokens
+		}
+		// Overwrite, never accumulate: a usage-bearing chunk reports its own
+		// totals to date, not a delta to add to the last one.
+		t.inputTokens = freshInputTokens(chunk.Usage.PromptTokens, cacheRead, cacheWrite, t.clientAlias, chunk.Model)
 		t.outputTokens = chunk.Usage.CompletionTokens
+		t.cacheCreationTokens = cacheWrite
+		t.cacheReadTokens = cacheRead
 	}
 
 	if len(chunk.Choices) == 0 {
@@ -208,6 +219,15 @@ func (t *SSETranslator) WriteErr() error { return t.writeErr }
 
 // --- emitters ---
 
+// emitMessageStart fires on the first upstream chunk, which is always before
+// any usage-bearing chunk arrives in this gateway's relay (usage is a
+// terminal SSE frame from stream_options.include_usage). So unlike the real
+// Anthropic API, which knows input and cache counts before generation even
+// starts, t.inputTokens/cacheCreationTokens/cacheReadTokens here are always
+// still zero at this point -- a pre-existing limitation of relaying rather
+// than natively serving the stream, not something introduced by adding the
+// two cache fields. The authoritative values land in message_delta below,
+// same as output_tokens already only becomes accurate there.
 func (t *SSETranslator) emitMessageStart() {
 	ev := StreamEvent{
 		Type: "message_start",
@@ -219,7 +239,11 @@ func (t *SSETranslator) emitMessageStart() {
 			Content:      []string{},
 			StopReason:   nil,
 			StopSequence: nil,
-			Usage:        StreamUsage{InputTokens: t.inputTokens},
+			Usage: StreamUsage{
+				InputTokens:              t.inputTokens,
+				CacheCreationInputTokens: t.cacheCreationTokens,
+				CacheReadInputTokens:     t.cacheReadTokens,
+			},
 		},
 	}
 	t.writeEvent("message_start", ev)
@@ -330,7 +354,13 @@ func (t *SSETranslator) emitMessageDelta() {
 			Type:       "message_delta",
 			StopReason: t.stopReason,
 		},
-		Usage: &StreamUsage{OutputTokens: t.outputTokens},
+		// Cumulative final totals -- see the overwrite-never-accumulate note
+		// in FeedLine's usage capture above.
+		Usage: &StreamUsage{
+			OutputTokens:             t.outputTokens,
+			CacheCreationInputTokens: t.cacheCreationTokens,
+			CacheReadInputTokens:     t.cacheReadTokens,
+		},
 	})
 }
 
