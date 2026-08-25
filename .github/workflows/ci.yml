@@ -446,7 +446,10 @@ jobs:
             # query is the only place an over-released reservation can be caught,
             # and the proof that it no longer renders one as a hold has to run
             # against real Postgres.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
+            # ./internal/budgets/... joins with this PR: its spend aggregation,
+            # threshold re-arm, tenant-isolation and cron retry suites are
+            # DB-gated and would otherwise never execute in CI.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/ledger/... ./internal/budgets/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
