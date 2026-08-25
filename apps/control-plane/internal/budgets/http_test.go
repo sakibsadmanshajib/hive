@@ -425,3 +425,64 @@ func TestWorkspaceBudgetGET_PlatformAdminOverlayGrantsAccess(t *testing.T) {
 		t.Fatalf("expected 200 for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// -----------------------------------------------------------------------------
+// GET /internal/budgets/{workspace_id}/hard-cap — the edge-api gate's
+// read-through fallback. This is the one place that must distinguish "no
+// budget row exists" (nil, gate stays pass-through) from "a budget row exists
+// with hard_cap = 0" (a legitimate, deliberate spend-everything-blocked
+// config): the JSON body renders null in the first case and the string "0"
+// in the second. edge-api's fetchHardCap (apps/edge-api/internal/limits/
+// budget_gate.go) treats an empty/missing value as pass-through and a parsed
+// "0" as an immediate hard block, so collapsing these two cases here would
+// silently disable every zero-cap workspace's gate.
+// -----------------------------------------------------------------------------
+
+// hardCapRepoStub is a minimal WorkspaceBudgetRepository whose GetBudget
+// answer is set per test, so both branches (nil budget vs. a budget with
+// hard_cap = 0) can be exercised through the same handler.
+type hardCapRepoStub struct {
+	workspaceRepoStub
+	budget *Budget
+}
+
+func (s *hardCapRepoStub) GetBudget(_ context.Context, _ uuid.UUID) (*Budget, error) {
+	return s.budget, nil
+}
+
+// The "no budget renders null" branch is already covered by
+// TestInternalHardCapEndpoint (http_spend_alerts_test.go). The gap that test
+// left open, and this one closes, is the zero-cap branch: a budget row that
+// exists with hard_cap = 0 must still render as "0", not null.
+func TestInternalHardCap_ZeroCapSet_RendersZeroStringNotNull(t *testing.T) {
+	wsID := uuid.New()
+	repo := &hardCapRepoStub{budget: &Budget{
+		WorkspaceID: wsID,
+		SoftCap:     big.NewInt(0),
+		HardCap:     big.NewInt(0),
+		Currency:    "BDT",
+	}}
+	svc := NewServiceWithWorkspace(&httpRepoStub{}, &notifierStub{}, repo, nil, nil)
+	handler := NewHandler(svc, accounts.NewService(newAccountsRepoStub()))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/budgets/"+wsID.String()+"/hard-cap", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		HardCap *string `json:"hard_cap_bdt_subunits"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.HardCap == nil {
+		t.Fatal("expected hard_cap_bdt_subunits to be the string \"0\" for a workspace with an explicit zero cap, got JSON null " +
+			"(this is indistinguishable from no-budget-set to edge-api's gate and would disable the block)")
+	}
+	if *body.HardCap != "0" {
+		t.Fatalf("expected hard_cap_bdt_subunits = \"0\", got %q", *body.HardCap)
+	}
+}
