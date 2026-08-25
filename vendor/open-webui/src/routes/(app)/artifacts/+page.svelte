@@ -199,7 +199,22 @@
 		</nav>
 	{/if}
 
-	<div class="hv-panel-region">
+	<!--
+		hive: the page had no title of its own, so the empty state was the first
+		thing on the surface and sat flush against the top of the pane. The head
+		below is the same shape the Knowledge index uses, in the serif display
+		register, and `flex flex-col` is what lets the `m-auto` states beneath it
+		centre at all: hv-panel-region is a plain block, and `m-auto` in a block
+		centres horizontally and nothing else.
+	-->
+	<div class="hv-panel-head">
+		<h1 class="hv-panel-title">{$i18n.t('Artifacts')}</h1>
+		<p class="hv-panel-subtitle">
+			{$i18n.t('Pages, charts and snippets the model built for you.')}
+		</p>
+	</div>
+
+	<div class="hv-panel-region flex flex-col">
 		{#if status === 'loading'}
 			<div class="m-auto flex flex-col items-center gap-3 text-center">
 				<Spinner className="size-5" />

@@ -60,7 +60,6 @@
 	let regenerateMenu = true;
 	let enableMessageQueue = true;
 
-	let landingPageMode = '';
 	let chatBubble = true;
 	let chatDirection: 'LTR' | 'RTL' | 'auto' = 'auto';
 	let ctrlEnterToSend = false;
@@ -105,11 +104,6 @@
 	let showManageImageCompressionModal = false;
 
 	let textScale = null;
-
-	const toggleLandingPageMode = async () => {
-		landingPageMode = landingPageMode === '' ? 'chat' : '';
-		saveSettings({ landingPageMode: landingPageMode });
-	};
 
 	const toggleUserLocation = async () => {
 		if (userLocation) {
@@ -238,7 +232,6 @@
 		expandDetails = $settings?.expandDetails ?? false;
 		renderMarkdownInPreviews = $settings?.renderMarkdownInPreviews ?? true;
 
-		landingPageMode = $settings?.landingPageMode ?? '';
 		chatBubble = $settings?.chatBubble ?? true;
 		widescreenMode = $settings?.widescreenMode ?? false;
 		splitLargeChunks = $settings?.splitLargeChunks ?? false;
@@ -634,26 +627,13 @@
 				</div>
 			</div>
 
-			<div>
-				<div class=" py-0.5 flex w-full justify-between">
-					<div id="landing-page-mode-label" class=" self-center text-xs">
-						{$i18n.t('Landing Page Mode')}
-					</div>
-
-					<button
-						aria-labelledby="landing-page-mode-label notification-sound-state"
-						class="p-1 px-3 text-xs flex rounded-sm transition"
-						on:click={() => {
-							toggleLandingPageMode();
-						}}
-						type="button"
-					>
-						<span class="ml-2 self-center" id="notification-sound-state"
-							>{landingPageMode === '' ? $i18n.t('Default') : $i18n.t('Chat')}</span
-						>
-					</button>
-				</div>
-			</div>
+			<!--
+				hive: the Landing Page Mode row is gone with the branch it drove.
+				Hive has one home, so the control had nothing left to switch, and a
+				control that changes nothing is worse than no control: the last one
+				here silently removed the greeting and the quick-start chips for
+				every account that had ever touched it.
+			-->
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">

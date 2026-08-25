@@ -766,3 +766,37 @@ samp,
 	outline: 2px solid var(--hv-focus-ring);
 	outline-offset: 2px;
 }
+
+/* ------------------------------------------------------------------ *
+ * Page head for the in-shell destinations
+ *
+ * Artifacts had no title of its own, so its empty state was the first
+ * thing on the surface and sat flush against the top of the pane. Named
+ * hv-panel-* rather than reusing the Knowledge index's hv-kb-* classes,
+ * because the next destination that needs a title is not a knowledge
+ * base either.
+ * ------------------------------------------------------------------ */
+
+.hv-panel-head {
+	flex-shrink: 0;
+	padding: var(--hv-space-8) var(--hv-space-6) var(--hv-space-4);
+	max-width: var(--hv-measure);
+	width: 100%;
+	margin-inline: auto;
+}
+
+.hv-panel-title {
+	font-family: var(--hv-font-display);
+	font-size: var(--hv-display-sm);
+	line-height: var(--hv-leading-display-sm);
+	letter-spacing: -0.015em;
+	color: var(--hv-ink);
+}
+
+.hv-panel-subtitle {
+	margin-top: var(--hv-space-2);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-base);
+	line-height: var(--hv-leading-base);
+	color: var(--hv-ink-secondary);
+}

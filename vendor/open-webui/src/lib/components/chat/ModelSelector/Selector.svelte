@@ -67,7 +67,15 @@
 	let show = false;
 	let triggerElement: HTMLElement | null = null;
 	let contentElement: HTMLElement | null = null;
-	let dropdownPosition = { top: 0, bottom: 0, left: 0, width: 0, flip: false };
+	let dropdownPosition = {
+		top: 0,
+		bottom: 0,
+		left: 0,
+		right: 0,
+		width: 0,
+		flip: false,
+		anchorRight: false
+	};
 
 	/*
 	 * Below this much free space under the trigger, the menu opens upward
@@ -101,10 +109,27 @@
 		 * whatever height its contents turn out to be.
 		 */
 		const spaceBelow = window.innerHeight - rect.bottom;
+		/*
+		 * Anchored by whichever edge keeps the menu on screen.
+		 *
+		 * `left: rect.left` alone put the menu's left edge under the trigger and
+		 * let its own width run off the right of the window, which is what the
+		 * model chip in the composer's control row does on a normal desktop
+		 * width: the chip sits far right, so a left-anchored menu overflows. The
+		 * `max-width` on the panel clamps how wide it can be and cannot move it
+		 * back inside.
+		 *
+		 * Anchoring the right edges together instead, when the trigger is in the
+		 * right half of the window, is what the reference does and needs no
+		 * measurement of the menu, so there is still no render-then-move jump.
+		 */
+		const anchorRight = !$mobile && rect.left > window.innerWidth / 2;
 		dropdownPosition = {
 			top: rect.bottom + 2,
 			bottom: window.innerHeight - rect.top + 2,
 			flip: spaceBelow < DROPDOWN_MIN_SPACE && rect.top > spaceBelow,
+			anchorRight,
+			right: Math.max(8, window.innerWidth - rect.right),
 			left: $mobile ? 8 : rect.left,
 			width: $mobile ? window.innerWidth - 16 : 0
 		};
@@ -562,7 +587,9 @@
 			bind:this={contentElement}
 			style="position: fixed; z-index: 9999; {dropdownPosition.flip
 				? `bottom: ${dropdownPosition.bottom}px;`
-				: `top: ${dropdownPosition.top}px;`} left: {dropdownPosition.left}px;{$mobile
+				: `top: ${dropdownPosition.top}px;`} {dropdownPosition.anchorRight
+				? `right: ${dropdownPosition.right}px;`
+				: `left: ${dropdownPosition.left}px;`}{$mobile
 				? ` width: ${dropdownPosition.width}px;`
 				: ''}"
 		>
