@@ -76,3 +76,25 @@ export function formatShortDate(
     timeZone: DISPLAY_TIME_ZONE,
   }).format(date);
 }
+
+/**
+ * Format a 0..1 ratio as a percentage with one decimal place ("96.0%").
+ *
+ * Takes `number | null` because the rates this renders are genuinely absent
+ * on an empty sample, and a null that silently became "0.0%" would assert a
+ * measured zero-percent cache hit rate where nothing was measured at all.
+ * Callers render the em-dash as the visible absence.
+ */
+export function formatPercent(
+  value: number | null,
+  locale: AppLocale = DEFAULT_LOCALE,
+): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "—";
+  }
+  return new Intl.NumberFormat(intlTag(locale, "number"), {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value);
+}

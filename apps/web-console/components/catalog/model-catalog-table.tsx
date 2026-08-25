@@ -23,6 +23,20 @@ function formatPrice(credits: number | null, pricingMode: string): string {
   return formatCredits(credits);
 }
 
+// Cache prices carry a third kind of absence the input and output columns do
+// not have. A fixed-price alias that publishes no cache rate is neither broken
+// nor variable, it simply has no cache rate to charge, and OpenRouter renders
+// exactly that case as a dash in its own `Cache read /M` column. Rendering 0
+// instead would say the alias caches for free, which is the expensive kind of
+// wrong on a pricing screen. A variable-price alias still reads "Variable",
+// because its cache component is variable for the same reason its input is.
+function formatCachePrice(credits: number | null, pricingMode: string): string {
+  if (credits === null) {
+    return pricingMode === "upstream_actual" ? "Variable" : "—";
+  }
+  return formatCredits(credits);
+}
+
 type ToneName = "neutral" | "accent" | "success" | "warning" | "danger";
 
 function capabilityTone(badge: string): ToneName {
@@ -120,6 +134,28 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
       numeric: true,
       align: "right",
       cell: (row) => formatPrice(row.pricing.output_price_credits, row.pricing.pricing_mode),
+    },
+    {
+      key: "cache_read",
+      header: "Cache read / 1M",
+      numeric: true,
+      align: "right",
+      cell: (row) =>
+        formatCachePrice(
+          row.pricing.cache_read_price_credits,
+          row.pricing.pricing_mode,
+        ),
+    },
+    {
+      key: "cache_write",
+      header: "Cache write / 1M",
+      numeric: true,
+      align: "right",
+      cell: (row) =>
+        formatCachePrice(
+          row.pricing.cache_write_price_credits,
+          row.pricing.pricing_mode,
+        ),
     },
     {
       key: "status",

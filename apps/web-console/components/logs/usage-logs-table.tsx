@@ -35,6 +35,22 @@ function lifecycleLabel(entryType: string): string {
   }
 }
 
+// Cache token counts are rendered as an em-dash when the field is absent,
+// never as 0.
+//
+// The control-plane omits cache_read_tokens and cache_write_tokens from the
+// event payload whenever they are zero (handleListEvents in
+// apps/control-plane/internal/usage/http.go), so a missing field and a real
+// measured zero arrive here as the identical `undefined`. On top of that,
+// decision D-056 records that every cache_write_tokens value written before
+// PR #1157 deployed is a bug artifact rather than a measured zero, and a
+// stored row carries no marker saying which side of that deploy it fell on.
+// Printing "0" would assert a verified zero this column cannot verify, so it
+// prints the absence instead.
+function formatCacheTokens(value: number | undefined): string {
+  return value === undefined ? "—" : formatTokens(value);
+}
+
 interface LifecycleState {
   loading: boolean;
   entries: LedgerEntry[] | null;
@@ -129,6 +145,20 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
       numeric: true,
       align: "right",
       cell: (row) => formatTokens(row.output_tokens),
+    },
+    {
+      key: "cache_read",
+      header: "Cached in",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatCacheTokens(row.cache_read_tokens),
+    },
+    {
+      key: "cache_write",
+      header: "Cache write",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatCacheTokens(row.cache_write_tokens),
     },
     {
       key: "credits",
