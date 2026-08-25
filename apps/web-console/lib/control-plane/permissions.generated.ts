@@ -12,6 +12,8 @@ export const PERMISSIONS = [
   "members.invite",
   "members.manage",
   "platform.admin",
+  "provider_keys.read",
+  "provider_keys.write",
   "workspace.settings",
 ] as const;
 
