@@ -175,7 +175,7 @@ CREATE TEMP TABLE _usage_events_completed_ranked ON COMMIT DROP AS
 SELECT id, account_id, request_attempt_id, input_tokens, output_tokens,
        cache_read_tokens, cache_write_tokens, provider_request_id,
        row_number() OVER (
-         PARTITION BY account_id, request_attempt_id ORDER BY created_at ASC
+         PARTITION BY account_id, request_attempt_id ORDER BY created_at ASC, id ASC
        ) AS rn
 FROM public.usage_events
 WHERE event_type = 'completed';
