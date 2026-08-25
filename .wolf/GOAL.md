@@ -1,9 +1,11 @@
 # Hive North Star Goal (owner-set, orchestrator-executed)
 
+**STATUS 2026-08-25: This file targets 2026-06-20 milestones and is out of date. Planning ground truth (current milestone state, timeline, requirements traceability, UAT results) lives in the Obsidian vault (hive/ MOCs and timeline). Do not use this file as a readiness signal; check the vault instead.**
+
 ## Mission
 Be the AI platform of Bangladesh: chat workstation plus OpenAI-compatible developer API, prepaid BDT, one product in two SKUs (Hive Cloud hosted, EnterpriseEdge self-hosted one-liner), built to investor-demo quality on <$50/month.
 
-## Current goal: MVP DEMO-READY by 2026-06-20
+## Goal history (archived): MVP DEMO-READY by 2026-06-20
 
 Definition of done, every box checkable by a command or URL:
 
