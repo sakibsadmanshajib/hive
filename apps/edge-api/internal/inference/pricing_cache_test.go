@@ -208,7 +208,7 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 
 // TestAssertCacheBillingMagnitudeGuard is the runtime half of the
 // magnitude-guard self-check (contract section 5): a charge within twice the
-// flat-rate bound is silent, and a charge that exceeds it -- the signature of
+// highest-rate bound is silent, and a charge that exceeds it -- the signature of
 // a semantics inversion -- logs a loud BUG line naming the alias.
 func TestAssertCacheBillingMagnitudeGuard(t *testing.T) {
 	t.Run("a correctly cache-aware charge never trips the guard", func(t *testing.T) {
@@ -223,7 +223,7 @@ func TestAssertCacheBillingMagnitudeGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("a charge exceeding 2x the flat-rate bound trips the guard loudly", func(t *testing.T) {
+	t.Run("a charge exceeding 2x the highest-rate bound trips the guard loudly", func(t *testing.T) {
 		var buf bytes.Buffer
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
