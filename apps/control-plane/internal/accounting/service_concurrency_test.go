@@ -34,9 +34,12 @@ func (l *serializingLedger) GetBalance(_ context.Context, _ uuid.UUID) (ledger.B
 	l.mu.Lock()
 	available := l.available
 	l.reads++
+	// Close exactly once: reads only grows and the comparison is equality,
+	// so later calls land strictly past the target. The channel is never
+	// mutated after construction, so ReserveCredits may read it without the
+	// lock.
 	if l.readBarrierTarget > 0 && l.reads == l.readBarrierTarget && l.barrier != nil {
 		close(l.barrier)
-		l.barrier = nil // idempotent against extra GetBalance calls past the target
 	}
 	l.mu.Unlock()
 	return ledger.BalanceSummary{PostedCredits: available, AvailableCredits: available}, nil
