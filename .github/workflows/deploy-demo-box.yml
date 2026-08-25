@@ -911,8 +911,19 @@ jobs:
           # too, which is the stack-wide restart this is avoiding.
           if [ -n "$drift" ]; then
             echo "::warning::compose left these services on an older image than it had just built:${drift}. That is issue #1103: \`up -d --build\` rebuilt the image, did not recreate the container, and exited 0. Recreating them now."
+            # `--wait` is load bearing, not tidiness. Without it `up -d`
+            # returns as soon as the containers are started, and the steps
+            # after this one talk to those services immediately: dispatch run
+            # 32846121196 recreated open-webui here and the very next step
+            # died with "GET /api/v1/functions/id/hive_jwt_forward could not
+            # reach http://127.0.0.1:8080: <urlopen error [Errno 111]
+            # Connection refused>" because the container was still booting.
+            # The recreate is new behaviour, so the race it opens has to be
+            # closed here rather than left for each later step to rediscover.
+            # --wait-timeout keeps a service that never goes healthy from
+            # sitting here until the job's own 30 minute ceiling.
             # shellcheck disable=SC2086
-            "${COMPOSE[@]}" up -d --force-recreate --no-deps $drift
+            "${COMPOSE[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 300 $drift
             scan
             if [ -n "$drift" ]; then
               echo "::error::these services are STILL running an older image than the one this deploy built after an explicit --force-recreate:${drift}. The box is serving code older than this commit and the deploy could not fix it automatically. Investigate on the box before trusting anything this run reported." >&2
