@@ -1,5 +1,6 @@
 -- =============================================================================
--- usage_events 'completed' dedup + credit-unit rescale backfill (issue #1180).
+-- usage_events 'completed' dedup + ledger-reconciled rescale backfill
+-- (issue #1180, review round 2).
 --
 -- WHAT WAS FOUND
 --   Every request that goes through a reservation writes TWO usage_events
@@ -41,31 +42,70 @@
 --   20260823_40_credit_unit_rescale_billion.sql (D-046, factor 10000, 1 USD
 --   1,000,000 -> 1,000,000,000 credits). credit_ledger_entries.credits_delta
 --   was backfilled by that migration; usage_events.hive_credit_delta was
---   not. Every authoritative row written before that migration's boundary is
---   therefore off from its matching ledger entry by exactly 10000x (a stale
---   unit, not a wrong rate) -- confirmed live: 018658cd.. reads -12 in
---   usage_events against -120000 in the ledger for the identical attempt,
---   and -12 * 10000 = -120000 exactly, same pattern on every pre-boundary
---   row checked.
+--   not. Every authoritative row written in the OLD unit is therefore off
+--   from its matching ledger entry by exactly 10000x (a stale unit, not a
+--   wrong rate) -- confirmed live: 018658cd.. reads -12 in usage_events
+--   against -120000 in the ledger for the identical attempt, and
+--   -12 * 10000 = -120000 exactly, same pattern on every stale-unit row
+--   checked.
 --
--- WHAT THIS FILE DOES (order matters: dedup first, THEN rescale, so the
--- rescale sees each attempt exactly once)
+-- REVIEW ROUND 2: WHY THIS FILE NO LONGER USES created_at < applied_at
+--   The first version of this migration bounded the rescale backfill on
+--   usage_events.created_at < credit_unit_rescale.applied_at, mirroring
+--   20260823_40's own straggler-detection language. That bound
+--   UNDER-APPLIES: 20260823_40 itself documents a deploy-gap race where the
+--   OLD binary keeps writing OLD-unit rows for some seconds-to-minutes
+--   AFTER the migration's COMMIT (between COMMIT and the container
+--   recreate), so a straggler row can carry created_at > applied_at while
+--   still being an old-unit value. A created_at bound skips exactly those
+--   rows, permanently: usage_events carries no positive new-unit stamp of
+--   its own, so nothing could later tell a missed straggler apart from a
+--   genuinely small, correctly-scaled delta.
+--
+--   Fix: stop inferring the unit from a timestamp and reconcile directly
+--   against credit_ledger_entries instead, which 20260823_40 DID correctly
+--   backfill and which this migration's own header already establishes as
+--   the authoritative surface (finalizeLocked charges the ledger with the
+--   same actualCredits value it mirrors onto usage_events). For every
+--   surviving 'completed' row, if its hive_credit_delta disagrees with the
+--   matching credit_ledger_entries.credits_delta (same account_id,
+--   same attempt_id, entry_type = 'usage_charge') by EXACTLY a factor of
+--   10000, it is unambiguously the stale-unit case and gets overwritten
+--   with the ledger's value -- not multiplied, copied, so the result is
+--   the true figure regardless of which direction any rounding went. A
+--   disagreement that is NOT exactly 10000x is left untouched: that would
+--   be a different, unknown mismatch this migration has no evidence about,
+--   and silently "fixing" it would be a guess, not a correction. This
+--   covers every stale-unit row there is or ever was, including the
+--   deploy-gap stragglers a timestamp bound could never see, with no
+--   dependency on created_at or on credit_unit_rescale.applied_at at all.
+--
+-- WHAT THIS FILE DOES (order matters: guard, then dedup, then reconcile, so
+-- reconciliation sees each attempt exactly once)
+--   0. Refuse to run if any (account_id, request_attempt_id) has THREE OR
+--      MORE 'completed' rows. The merge in step 1 is a pairwise
+--      keep-earliest/fold-latest operation; live evidence supports at most
+--      two (576 pairs, 0 triples, 2026-08-25), and a many-to-one UPDATE on
+--      an unexpected triple would let Postgres pick an arbitrary source row
+--      for the folded token columns rather than a deliberate one. A triple
+--      is a different, unexplained shape that a human should look at, not
+--      an assumption this migration should make silently. Raises and rolls
+--      back the whole transaction; changes nothing.
 --   1. For every (account_id, request_attempt_id) with more than one
 --      event_type = 'completed' row, keep the earliest (the authoritative,
 --      ledger-matching one), fold the token/provider columns from the
---      later row(s) into it via GREATEST/COALESCE (never destructive: the
+--      later row into it via GREATEST/COALESCE (never destructive: the
 --      authoritative row's own columns are 0 in every case measured), stamp
---      which duplicate id(s) were merged into internal_metadata for
---      forensics, and delete the later row(s). hive_credit_delta and
---      event_type on the keeper are untouched.
---   2. Backfill the credit-unit rescale that 20260823_40 missed: multiply
---      hive_credit_delta by 10000 for every usage_events row with a nonzero
---      delta, created before the rescale marker's applied_at boundary, not
---      already flagged. Flag key/value ('credit_unit',
---      'legacy-1usd-100k-credits') is the exact one 20260823_40 already
---      uses on credit_ledger_entries and credit_reservation_events, so a
---      row is now identifiable as pre-rescale the same way across all three
---      tables.
+--      which duplicate id was merged into internal_metadata for forensics,
+--      and delete the later row. hive_credit_delta and event_type on the
+--      keeper are untouched.
+--   2. Reconcile stale-unit rows against the ledger (see above): copy
+--      credit_ledger_entries.credits_delta onto any surviving row whose
+--      hive_credit_delta is exactly 1/10000th of it. Flag key/value
+--      ('credit_unit', 'legacy-1usd-100k-credits') is the exact one
+--      20260823_40 already uses on credit_ledger_entries and
+--      credit_reservation_events, so a corrected row is identifiable the
+--      same way across all three tables.
 --   3. Add a partial unique index so a future duplicate 'completed' POST
 --      (edge-api is unchanged by this fix; it will keep sending one) folds
 --      into the existing row instead of inserting a second one. This is the
@@ -81,18 +121,51 @@
 --   ACCESS EXCLUSIVE hazard it would be on a table with real volume.
 --
 -- IDEMPOTENCY
+--   Step 0 only reads; nothing to replay.
 --   Step 1 is naturally idempotent: after the first run no (account_id,
 --   request_attempt_id) has more than one 'completed' row, so the dedup CTE
 --   selects nothing on replay.
---   Step 2 guards on the same jsonb flag 20260823_40 already established
---   (`NOT (internal_metadata ? 'credit_unit')`), so a replay scales nothing
---   a prior run (or this run) already touched.
+--   Step 2 is naturally idempotent too, independent of the credit_unit flag:
+--   once a row is corrected it agrees with the ledger, so the "disagrees by
+--   exactly 10000x" predicate no longer matches it on replay. The flag is
+--   set for forensic identifiability, not for idempotency.
 --   Step 3 uses IF NOT EXISTS.
+--
+-- ROLLBACK ASYMMETRY (documented, not fixed here; see PR body)
+--   This migration has no down-migration. Rolling it back while
+--   control-plane's binary stays on the version that assumes
+--   ux_usage_events_completed_attempt exists (the ON CONFLICT target in
+--   usage/repository.go's RecordEvent) breaks every 'completed' usage_events
+--   write: Postgres rejects an ON CONFLICT clause naming an index that does
+--   not exist. That is a loud error on every completed request, not a silent
+--   money defect, which is why it is acceptable -- but a migration-only
+--   rollback must never be attempted without rolling the binary back first.
 -- =============================================================================
 
 BEGIN;
 
 SET LOCAL lock_timeout = '5s';
+
+-- ---------------------------------------------------------------------------
+-- Step 0: refuse to guess on a shape this migration has no evidence for.
+-- ---------------------------------------------------------------------------
+DO $triple_guard$
+DECLARE
+    triple_count integer;
+BEGIN
+    SELECT count(*) INTO triple_count FROM (
+        SELECT 1
+        FROM public.usage_events
+        WHERE event_type = 'completed'
+        GROUP BY account_id, request_attempt_id
+        HAVING count(*) > 2
+    ) t;
+
+    IF triple_count > 0 THEN
+        RAISE EXCEPTION 'usage_events has % attempt(s) with 3+ completed rows; the pairwise dedup in this migration assumes at most 2 (live shape measured 2026-08-25: 576 pairs, 0 triples). A triple needs a human to pick the right row, not an automatic GREATEST/COALESCE guess across an unplanned third writer. Resolve manually (identify the extra row(s), decide which to keep), then re-run this migration.', triple_count;
+    END IF;
+END
+$triple_guard$;
 
 -- ---------------------------------------------------------------------------
 -- Step 1: fold duplicate 'completed' rows into the earliest (authoritative)
@@ -135,26 +208,23 @@ USING _usage_events_completed_dupes d
 WHERE ue.id = d.id;
 
 -- ---------------------------------------------------------------------------
--- Step 2: rescale backfill 20260823_40 omitted for this table.
+-- Step 2: reconcile stale-unit rows against the ledger (see header for why
+-- this replaced a created_at boundary). No dependency on
+-- credit_unit_rescale.applied_at, so it catches deploy-gap stragglers a
+-- timestamp bound structurally cannot.
 -- ---------------------------------------------------------------------------
-DO $backfill$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.credit_unit_rescale) THEN
-        -- Rescale never ran on this database (e.g. a fresh CI throwaway
-        -- seeded straight from HEAD) -- nothing pre-dates a boundary that
-        -- does not exist, so there is nothing to backfill.
-        RETURN;
-    END IF;
-
-    UPDATE public.usage_events
-       SET hive_credit_delta = hive_credit_delta * 10000,
-           internal_metadata = internal_metadata || jsonb_build_object(
-               'credit_unit', 'legacy-1usd-100k-credits')
-     WHERE hive_credit_delta <> 0
-       AND created_at < (SELECT applied_at FROM public.credit_unit_rescale)
-       AND NOT (internal_metadata ? 'credit_unit');
-END
-$backfill$;
+UPDATE public.usage_events ue
+   SET hive_credit_delta = cle.credits_delta,
+       internal_metadata = ue.internal_metadata || jsonb_build_object(
+           'credit_unit', 'legacy-1usd-100k-credits',
+           'ledger_reconciled_from', ue.hive_credit_delta)
+  FROM public.credit_ledger_entries cle
+ WHERE cle.entry_type = 'usage_charge'
+   AND cle.account_id = ue.account_id
+   AND cle.attempt_id = ue.request_attempt_id
+   AND ue.hive_credit_delta <> 0
+   AND ue.hive_credit_delta <> cle.credits_delta
+   AND ue.hive_credit_delta * 10000 = cle.credits_delta;
 
 -- ---------------------------------------------------------------------------
 -- Step 3: prevent future duplicates. ON CONFLICT target for
