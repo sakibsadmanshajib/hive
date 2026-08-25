@@ -48,9 +48,15 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	{
 		id: 'knowledge',
 		label: 'Knowledge',
-		href: '/workspace/knowledge',
+		// '/knowledge', not '/workspace/knowledge': the workspace layout's
+		// permission guard bounces a non-admin without the workspace.knowledge
+		// permission straight home (#1109), which made this row highlight and do
+		// nothing on the demo box. The /knowledge route sits outside that guard
+		// and renders a read-only index of the caller's own bases; an admin or a
+		// permitted account is forwarded to the full workspace surface.
+		href: '/knowledge',
 		icon: 'knowledge',
-		activePaths: ['/workspace/knowledge']
+		activePaths: ['/knowledge']
 	},
 	{
 		id: 'scheduled',

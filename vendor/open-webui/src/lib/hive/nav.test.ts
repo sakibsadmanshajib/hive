@@ -44,6 +44,14 @@ describe('HIVE_NAV', () => {
 		expect(byId('scheduled').href).toBe('/schedules');
 	});
 
+	it('points Knowledge at its own top-level route, outside the workspace permission guard (#1109)', () => {
+		// /workspace/knowledge sits behind the workspace layout's permission
+		// guard and bounced a non-admin straight home, which is what made this
+		// row read as dead on the demo box. The top-level route renders the
+		// read-only index instead.
+		expect(byId('knowledge').href).toBe('/knowledge');
+	});
+
 	it('gives every row a unique id, a label and an in-app href', () => {
 		const ids = HIVE_NAV.map((item) => item.id);
 		expect(new Set(ids).size).toBe(ids.length);
@@ -68,7 +76,7 @@ describe('isNavItemActive', () => {
 
 	it('does not match a route that merely starts with the same characters', () => {
 		expect(isNavItemActive(agents, '/agents-archive')).toBe(false);
-		expect(isNavItemActive(knowledge, '/workspace/knowledgebase')).toBe(false);
+		expect(isNavItemActive(knowledge, '/knowledgebase')).toBe(false);
 	});
 
 	it('treats an empty or missing pathname as no match, since no row links to it', () => {
@@ -81,7 +89,7 @@ describe('isNavItemActive', () => {
 			'/projects',
 			'/projects/abc',
 			'/agents',
-			'/workspace/knowledge',
+			'/knowledge',
 			'/schedules'
 		]) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));

@@ -565,3 +565,74 @@ samp,
 	min-height: 0;
 	overflow-y: auto;
 }
+
+/* ------------------------------------------------------------------ *
+ * Knowledge index (#1109)
+ *
+ * The read-only list a non-admin lands on from the sidebar row. Styled
+ * like the 404 card and the agent panel: one bordered column on the
+ * canvas, tokens only.
+ * ------------------------------------------------------------------ */
+.hv-kb {
+	max-width: var(--hv-measure);
+	margin: var(--hv-space-12) auto;
+	padding: 0 var(--hv-space-6);
+}
+
+.hv-kb-title {
+	font-family: var(--hv-font-display);
+	font-size: var(--hv-display-sm);
+	line-height: var(--hv-leading-display-sm);
+	letter-spacing: -0.015em;
+	color: var(--hv-ink);
+}
+
+.hv-kb-subtitle {
+	margin-top: var(--hv-space-2);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-base);
+	line-height: var(--hv-leading-base);
+	color: var(--hv-ink-secondary);
+}
+
+.hv-kb-status {
+	margin-top: var(--hv-space-8);
+	font-family: var(--hv-font-sans);
+	color: var(--hv-ink-muted);
+}
+
+.hv-kb-list {
+	margin-top: var(--hv-space-6);
+	border-top: 1px solid var(--hv-border);
+}
+
+.hv-kb-item {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--hv-space-4);
+	padding: var(--hv-space-4) 0;
+	border-bottom: 1px solid var(--hv-border);
+}
+
+.hv-kb-name {
+	font-family: var(--hv-font-sans);
+	font-weight: var(--hv-weight-label);
+	color: var(--hv-ink);
+}
+
+.hv-kb-description {
+	margin-top: var(--hv-space-1);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+	color: var(--hv-ink-secondary);
+}
+
+.hv-kb-updated {
+	flex-shrink: 0;
+	font-family: var(--hv-font-mono);
+	font-size: var(--hv-text-xs);
+	line-height: var(--hv-leading-xs);
+	color: var(--hv-ink-muted);
+}
