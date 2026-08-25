@@ -91,6 +91,11 @@ func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {
 			Object:  "model",
 			Created: alias.CreatedAt.UTC().Unix(),
 			OwnedBy: ownedBy,
+			// Trimmed, and empty when the column is empty, so an alias with no
+			// curated copy contributes no key at all rather than an empty
+			// string the picker would render as a blank subtitle line.
+			Name:        strings.TrimSpace(alias.DisplayName),
+			Description: strings.TrimSpace(alias.Summary),
 		})
 		snapshot.Catalog = append(snapshot.Catalog, PublicCatalogModel{
 			ID:               alias.AliasID,

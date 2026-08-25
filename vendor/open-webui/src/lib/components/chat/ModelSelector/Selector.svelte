@@ -67,7 +67,15 @@
 	let show = false;
 	let triggerElement: HTMLElement | null = null;
 	let contentElement: HTMLElement | null = null;
-	let dropdownPosition = { top: 0, left: 0, width: 0 };
+	let dropdownPosition = { top: 0, bottom: 0, left: 0, width: 0, flip: false };
+
+	/*
+	 * Below this much free space under the trigger, the menu opens upward
+	 * instead. Deliberately not the menu's real height: measuring that means
+	 * rendering it first and then moving it, which is a visible jump. The menu
+	 * is capped around 24rem plus its chrome, so 400px is "would not fit".
+	 */
+	const DROPDOWN_MIN_SPACE = 400;
 
 	const portal = (node: HTMLElement) => {
 		document.body.appendChild(node);
@@ -81,8 +89,22 @@
 	const updatePosition = () => {
 		if (!show || !triggerElement) return;
 		const rect = triggerElement.getBoundingClientRect();
+		/*
+		 * The menu used to be anchored to the trigger's bottom edge and nowhere
+		 * else, which was fine while its only trigger was in the page header.
+		 * The model chip sits in the composer's control row now, a few dozen
+		 * pixels off the bottom of the window, so a downward menu would render
+		 * almost entirely off screen.
+		 *
+		 * Flipping by anchoring `bottom` rather than `top` avoids measuring the
+		 * menu at all: the browser lays it out upward from a fixed lower edge,
+		 * whatever height its contents turn out to be.
+		 */
+		const spaceBelow = window.innerHeight - rect.bottom;
 		dropdownPosition = {
 			top: rect.bottom + 2,
+			bottom: window.innerHeight - rect.top + 2,
+			flip: spaceBelow < DROPDOWN_MIN_SPACE && rect.top > spaceBelow,
 			left: $mobile ? 8 : rect.left,
 			width: $mobile ? window.innerWidth - 16 : 0
 		};
@@ -538,7 +560,9 @@
 		<div
 			use:portal
 			bind:this={contentElement}
-			style="position: fixed; z-index: 9999; top: {dropdownPosition.top}px; left: {dropdownPosition.left}px;{$mobile
+			style="position: fixed; z-index: 9999; {dropdownPosition.flip
+				? `bottom: ${dropdownPosition.bottom}px;`
+				: `top: ${dropdownPosition.top}px;`} left: {dropdownPosition.left}px;{$mobile
 				? ` width: ${dropdownPosition.width}px;`
 				: ''}"
 		>

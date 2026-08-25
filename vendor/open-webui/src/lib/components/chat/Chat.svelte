@@ -3294,7 +3294,7 @@
 										bind:this={messageInput}
 										{history}
 										{taskIds}
-										{selectedModels}
+										bind:selectedModels
 										bind:files
 										bind:prompt
 										bind:autoScroll
@@ -3380,7 +3380,7 @@
 									<CreditsBanner />
 									<Placeholder
 									{history}
-									{selectedModels}
+									bind:selectedModels
 									bind:messageInput
 									bind:files
 									bind:prompt

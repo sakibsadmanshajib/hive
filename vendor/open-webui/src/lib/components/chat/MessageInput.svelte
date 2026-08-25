@@ -82,6 +82,7 @@
 	// each other. Presentational only; nothing below this line changed.
 	import ComposerShell from '$lib/hive/ComposerShell.svelte';
 	import ComposerSendButton from '$lib/hive/ComposerSendButton.svelte';
+	import ModelSelector from './ModelSelector.svelte';
 
 	import XMark from '../icons/XMark.svelte';
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
@@ -1257,7 +1258,7 @@
 			<div
 				class="flex flex-col px-3 {($settings?.widescreenMode ?? null)
 					? 'max-w-full'
-					: 'max-w-6xl'} w-full"
+					: 'hv-composer-column'} w-full"
 			>
 				<div class="relative">
 					{#if autoScroll === false && history?.currentId}
@@ -1294,7 +1295,7 @@
 			<div
 				class="{($settings?.widescreenMode ?? null)
 					? 'max-w-full'
-					: 'max-w-6xl'} px-2.5 mx-auto inset-x-0"
+					: 'hv-composer-column'} px-2.5 mx-auto inset-x-0"
 			>
 				<div class="">
 					<input
@@ -2017,6 +2018,22 @@
 											{/each}
 										</div>
 									</div>
+								</div>
+
+								<!--
+									The model chip lives in the composer's control row, not in the page
+									header. Two reasons, and neither is decoration. It is a property of
+									the message about to be sent, so it belongs on the thing that sends
+									it; and while it was a page header on the chat home it was ALSO the
+									headline of the empty state, which is why the first frame of every
+									demo opened with a model slug instead of a greeting.
+
+									`bind:selectedModels` runs all the way up through Placeholder and
+									Chat, which is what makes a selection made here stick to the
+									conversation rather than to this component.
+								-->
+								<div class="self-end flex items-center shrink-0 max-w-[45%] mr-1">
+									<ModelSelector bind:selectedModels showSetDefault={false} />
 								</div>
 
 								<div class="self-end flex space-x-1 mr-1 shrink-0 gap-[0.5px]">

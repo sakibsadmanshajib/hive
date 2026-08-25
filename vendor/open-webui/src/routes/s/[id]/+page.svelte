@@ -27,7 +27,6 @@
 	let messagesContainerElement: HTMLDivElement;
 
 	// let chatId = $page.params.id;
-	let showModelSelector = false;
 	let selectedModels = [''];
 
 	let chat = null;

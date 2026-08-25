@@ -66,11 +66,29 @@ type AliasPolicySnapshot struct {
 	FallbackOrder           []string
 }
 
+// PublicModel is one entry of the OpenAI-shaped model list served by
+// edge-api's GET /v1/models.
+//
+// Name and Description are additive fields outside the OpenAI contract, and
+// they are here for one reason: the chat model picker had no source of
+// human-readable copy and therefore listed raw alias slugs with no explanation
+// of what any of them is for. The same two strings have always existed in
+// public.model_aliases (display_name, summary) and have always been rendered by
+// the developer console's catalog table; they simply never travelled on the
+// listing the picker reads.
+//
+// Both are `omitempty`, so an alias with neither serialises exactly the payload
+// this endpoint served before, and a strict OpenAI client sees no new keys at
+// all. Open WebUI merges unknown fields from an upstream model listing straight
+// through (backend/open_webui/routers/openai.py builds `{**model, ...}`), which
+// is what carries them to the picker without a second endpoint or a proxy.
 type PublicModel struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	Created     int64  `json:"created"`
+	OwnedBy     string `json:"owned_by"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // Pricing modes, mirroring public.model_aliases.pricing_mode's CHECK
