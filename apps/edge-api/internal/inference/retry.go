@@ -1,10 +1,12 @@
 package inference
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -15,6 +17,70 @@ var retryableStatuses = map[int]bool{
 	http.StatusBadGateway:          true, // 502
 	http.StatusServiceUnavailable:  true, // 503
 	http.StatusGatewayTimeout:      true, // 504
+}
+
+// litellmRouterExhaustionMarker is LiteLLM's own wording when its router gives
+// up on a model group WITHOUT trying that group's remaining healthy
+// deployments. It is the reason a load-balanced pool does not actually fail
+// over, and it is why this file retries a status that is otherwise terminal.
+//
+// The mechanism, read out of the pinned image's source (v1.98.0) rather than
+// inferred:
+//
+//   - litellm/router.py::should_retry_this_error re-raises immediately for
+//     NotFoundError, and again for any status where litellm._should_retry() is
+//     false. 404 is both. It is called from async_function_with_retries AND
+//     from async_function_with_fallbacks, so neither the in-group retry nor the
+//     cross-group fallback ever runs.
+//   - litellm/types/router.py::RetryPolicy has no NotFoundErrorRetries field,
+//     so no configuration lifts this. The only per-class knob this repo sets,
+//     RateLimitErrorRetries, cannot reach it.
+//   - The request therefore dies on the FIRST deployment that answers 404,
+//     with the other members of the group untouched and healthy. That is what
+//     took the hive-free alias down in CI run 32830060362 while three of its
+//     four pool members were fine.
+//
+// What makes retrying here correct rather than hopeful: before raising, LiteLLM
+// has already put the offending deployment into cooldown.
+// router_utils/cooldown_handlers.py::_should_cooldown_deployment returns true
+// on the first failure when litellm._should_retry(status) is false, so a 404
+// member is excluded from selection immediately, not after allowed_fails. The
+// next attempt therefore picks a DIFFERENT member. The whole retry ladder below
+// finishes inside 2.9s, well inside the 5s DEFAULT_COOLDOWN_TIME_SECONDS the
+// router actually applies, so the dead member cannot be re-picked mid-ladder.
+//
+// Scope: this matches on the message, not on a bare 404, so a genuine "that
+// model does not exist" stays an immediate 404 and costs no retries.
+const litellmRouterExhaustionMarker = "no fallback model group found"
+
+// maxRetryPeekBytes bounds how much of a 404 body is read to classify it.
+// Upstream error envelopes are small; anything past this is not a marker this
+// function would recognise anyway.
+const maxRetryPeekBytes = 8 << 10
+
+// isRouterExhaustion404 reports whether resp is LiteLLM's router-exhaustion
+// answer rather than a genuine "no such model".
+//
+// The body is always spliced back together before returning, so the caller sees
+// a complete, unread response either way. That matters: this runs on the path
+// that hands the upstream error to the customer, and a half-consumed body would
+// silently truncate the error they see.
+func isRouterExhaustion404(resp *http.Response) bool {
+	if resp == nil || resp.StatusCode != http.StatusNotFound || resp.Body == nil {
+		return false
+	}
+
+	orig := resp.Body
+	head, err := io.ReadAll(io.LimitReader(orig, maxRetryPeekBytes))
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{Reader: io.MultiReader(bytes.NewReader(head), orig), Closer: orig}
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(string(head)), litellmRouterExhaustionMarker)
 }
 
 // retryDelays is the progressive backoff between attempts.
@@ -78,7 +144,13 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 		}
 
 		// Success or non-retryable status → return immediately.
-		if !retryableStatuses[resp.StatusCode] {
+		//
+		// isRouterExhaustion404 is only consulted for statuses the table does
+		// not already cover, so the common 429/5xx path never pays to read a
+		// body. See its doc comment for why a 404 is worth another attempt at
+		// all: for a pooled alias it means "this one member is dead", and the
+		// member is already in cooldown, so the next attempt gets a live one.
+		if !retryableStatuses[resp.StatusCode] && !isRouterExhaustion404(resp) {
 			return resp, nil
 		}
 
