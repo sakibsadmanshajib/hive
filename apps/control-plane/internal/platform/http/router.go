@@ -186,6 +186,17 @@ type RouterConfig struct {
 	// /v1/agent/schedules routes call into. When nil the route is not
 	// registered.
 	AgentScheduleHandler *agentsched.Handler
+
+	// BYOKHandler serves tenant BYOK (bring your own key) credentials: the
+	// JWT-gated tenant register/list/revoke surface at
+	// /api/v1/accounts/current/provider-keys and the platform-admin masked
+	// list at /api/v1/admin/provider-keys. A narrow interface avoids an import
+	// cycle between platform/http and byok. When nil (or AuthMiddleware or
+	// RoleSvc is) the routes are not registered.
+	BYOKHandler interface {
+		TenantMux() http.Handler
+		AdminMux() http.Handler
+	}
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -428,6 +439,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// internal store they call into.
 	if cfg.AgentScheduleHandler != nil {
 		mux.Handle("/internal/agent-schedules/", internal(cfg.AgentScheduleHandler.InternalMux()))
+	}
+
+	// Tenant BYOK (bring your own key) credentials. The tenant surface rides
+	// the same JWT path as api-keys; the admin list rides the platform-admin
+	// gate, mirroring /api/v1/admin/providers. When nil (or its middleware is)
+	// neither route is registered.
+	if cfg.BYOKHandler != nil && cfg.AuthMiddleware != nil {
+		protectedBYOK := cfg.AuthMiddleware.Require(cfg.BYOKHandler.TenantMux())
+		mux.Handle("/api/v1/accounts/current/provider-keys", protectedBYOK)
+		mux.Handle("/api/v1/accounts/current/provider-keys/", protectedBYOK)
+
+		if cfg.RoleSvc != nil {
+			adminBYOK := cfg.AuthMiddleware.Require(
+				cfg.RoleSvc.RequirePlatformAdmin(cfg.BYOKHandler.AdminMux()))
+			mux.Handle("/api/v1/admin/provider-keys", adminBYOK)
+			mux.Handle("/api/v1/admin/provider-keys/", adminBYOK)
+		}
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.

@@ -25,6 +25,11 @@ const (
 	ActionOWUIGroupAddFailure       = "OWUI_GROUP_ADD_FAILURE"
 	ActionAPIKeyIssue               = "API_KEY_ISSUE"
 	ActionAPIKeyRevoke              = "API_KEY_REVOKE"
+	// Tenant BYOK (bring your own key) lifecycle. Security tier: a credential
+	// registration or revocation is a security-relevant account event, and the
+	// write must not be lost to WAL buffering.
+	ActionBYOKKeyRegister           = "BYOK_KEY_REGISTER"
+	ActionBYOKKeyRevoke             = "BYOK_KEY_REVOKE"
 	ActionCryptoKeyRotate           = "CRYPTO_KEY_ROTATE"
 	ActionTLSCertRotate             = "TLS_CERT_ROTATE"
 	ActionJWKSFetchFailure          = "JWKS_FETCH_FAILURE"
@@ -90,6 +95,8 @@ func IsSecurityAction(action string) bool {
 		ActionOWUIGroupAddFailure,
 		ActionAPIKeyIssue,
 		ActionAPIKeyRevoke,
+		ActionBYOKKeyRegister,
+		ActionBYOKKeyRevoke,
 		ActionCryptoKeyRotate,
 		ActionTLSCertRotate,
 		ActionJWKSFetchFailure,

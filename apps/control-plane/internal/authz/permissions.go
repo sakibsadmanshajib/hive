@@ -15,6 +15,8 @@ const (
 	PermBillingWrite      Permission = "billing.write"
 	PermAPIKeysRead       Permission = "api_keys.read"
 	PermAPIKeysWrite      Permission = "api_keys.write"
+	PermProviderKeysRead  Permission = "provider_keys.read"
+	PermProviderKeysWrite Permission = "provider_keys.write"
 	PermAnalyticsView     Permission = "analytics.view"
 	PermMembersInvite     Permission = "members.invite"
 	PermMembersManage     Permission = "members.manage"
@@ -42,6 +44,8 @@ var registry = map[Permission]entry{
 	PermBillingWrite:      {RequiresVerified: true},
 	PermAPIKeysRead:       {RequiresVerified: false},
 	PermAPIKeysWrite:      {RequiresVerified: true},
+	PermProviderKeysRead:  {RequiresVerified: false},
+	PermProviderKeysWrite: {RequiresVerified: true},
 	PermAnalyticsView:     {RequiresVerified: true},
 	PermMembersInvite:     {RequiresVerified: true},
 	PermMembersManage:     {RequiresVerified: true},

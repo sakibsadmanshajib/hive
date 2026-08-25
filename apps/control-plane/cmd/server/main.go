@@ -24,6 +24,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentengine"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentsched"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/byok"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditarchive"
@@ -298,6 +299,7 @@ func main() {
 	var accountsHandler *accounts.Handler
 	var accountingHandler *accounting.Handler
 	var apikeysHandler *apikeys.Handler
+	var byokHandler *byok.Handler
 	var budgetsHandler *budgets.Handler
 	var invoicesHandler *invoices.Handler
 	var grantsHandler *grants.Handler
@@ -707,6 +709,25 @@ func main() {
 		}
 
 		tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
+
+		// Tenant BYOK (bring your own key): register/list/revoke of tenant
+		// provider credentials, encrypted at rest with HIVE_BYOK_ENC_KEY
+		// (AES-256-GCM). Locked mode when unset: registration fails closed
+		// with 503 byok_not_configured and nothing plaintext is ever written,
+		// so the feature degrades to "absent" rather than "insecure". A set
+		// but malformed value is a config error and dies here at boot.
+		if encodedKey := os.Getenv(byok.EnvVarName); encodedKey != "" {
+			cipher, err := byok.LoadCipher(encodedKey)
+			if err != nil {
+				log.Fatalf("control-plane: %s is set but invalid: %v", byok.EnvVarName, err)
+			}
+			byokHandler = byok.NewHandler(
+				byok.NewService(byok.NewPgxRepository(pool), cipher, auditLogger),
+			).WithAccountService(accountsSvc).WithRoleService(roleSvc)
+			log.Println("byok module ready (tenant provider keys encrypted at rest)")
+		} else {
+			log.Println("byok locked mode: HIVE_BYOK_ENC_KEY unset; provider-key routes unmounted")
+		}
 
 		// Tenant model visibility admin routes. The handler type shipped with
 		// Phase 20 Plan 04 but was never constructed here, so
@@ -1149,6 +1170,7 @@ func main() {
 		AgentTaskHandler:         agentTaskHandler,
 		AgentScheduleHandler:     agentScheduleHandler,
 		UserMemoriesHandler:      userMemoriesHandler,
+		BYOKHandler:              byokHandler,
 		RoutingHandler:           routingHandler,
 		UsageHandler:             usageHandler,
 		MetricsRegistry:          metricsRegistry,
