@@ -49,6 +49,9 @@ services:
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
       OWUI_SHIM_KEY: ${OWUI_SHIM_KEY:-}
+      # Tenant BYOK credential encryption (AES-256-GCM at rest). Unset keeps
+      # the module in locked mode: register answers 503 byok_not_configured.
+      HIVE_BYOK_ENC_KEY: ${HIVE_BYOK_ENC_KEY:-}
       # RAG query embeddings (#232). Without these the query embedder is nil and
       # POST /v1/rag/search + /v1/rag/chat return a provider-blind 503. The demo
       # uses SERVERLESS embeddings only (no local embedding model runs): point at

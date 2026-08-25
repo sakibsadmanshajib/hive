@@ -163,12 +163,25 @@ func validateRegisterInput(in RegisterInput) error {
 	}
 	if hasURL {
 		u, err := url.Parse(*in.BaseURL)
+		// http is allowed deliberately: self-hosted OpenAI-compatible
+		// endpoints on a private network are a legitimate Enterprise posture.
+		// Dial-time egress restrictions (SSRF denylist) are the routing
+		// integration's job and are pinned in issue #1139.
 		if err != nil || u.Scheme != "https" && u.Scheme != "http" {
-			return fmt.Errorf("%w: base_url must be an absolute http(s) URL", ErrValidation)
+			return fmt.Errorf("%w: base_url must be an absolute http(s) URL with a host", ErrValidation)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("%w: base_url must include a host", ErrValidation)
 		}
 	}
+	// A real provider credential fits in a few hundred bytes; 4096 is a hard
+	// ceiling so an oversized blob cannot be encrypted and persisted as-is.
+	const maxAPIKeyLen = 4096
 	if len(in.APIKey) < 8 {
 		return fmt.Errorf("%w: api_key must be at least 8 characters", ErrValidation)
+	}
+	if len(in.APIKey) > maxAPIKeyLen {
+		return fmt.Errorf("%w: api_key must be at most %d characters", ErrValidation, maxAPIKeyLen)
 	}
 	if len(in.ModelMap) > 50 {
 		return fmt.Errorf("%w: model_map supports at most 50 entries", ErrValidation)

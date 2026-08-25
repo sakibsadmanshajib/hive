@@ -49,16 +49,22 @@ CREATE TABLE public.tenant_provider_keys (
 );
 
 -- One active credential per provider per account: re-registering replaces
--- nothing silently, the caller must revoke first.
+-- nothing silently, the caller must revoke first. The same rule holds for
+-- freeform targets: one active credential per base_url per account, so
+-- duplicate active rows differ by nothing but a label.
 CREATE UNIQUE INDEX tenant_provider_keys_account_slug_active_idx
   ON public.tenant_provider_keys (account_id, provider_slug)
   WHERE status = 'active' AND provider_slug IS NOT NULL;
+
+CREATE UNIQUE INDEX tenant_provider_keys_account_base_url_active_idx
+  ON public.tenant_provider_keys (account_id, base_url)
+  WHERE status = 'active' AND base_url IS NOT NULL;
 
 CREATE INDEX tenant_provider_keys_account_created_idx
   ON public.tenant_provider_keys (account_id, created_at DESC);
 
 COMMENT ON TABLE public.tenant_provider_keys IS
-  'Tenant BYOK credentials (bring your own key). encrypted_api_key holds AES-256-GCM ciphertext produced by the control plane with HIVE_BYOK_ENC_KEY; plaintext never reaches the database. key_last4 is the only secret remnant, for display masks. Exactly one target per row via tenant_provider_keys_target_check: a custom_providers slug reference or a freeform https(s) base_url, plus an optional model_map of requested alias to upstream model name. Account isolation is enforced in internal/byok/repository.go (every query filters account_id); RLS keeps every role except hive_app fully locked out.';
+  'Tenant BYOK credentials (bring your own key). encrypted_api_key holds AES-256-GCM ciphertext produced by the control plane with HIVE_BYOK_ENC_KEY; plaintext never reaches the database. key_last4 is the only secret remnant, for registration display masks. Exactly one target per row via tenant_provider_keys_target_check: a custom_providers slug reference or a freeform http(s) base_url, plus an optional model_map of requested alias to upstream model name. Account isolation is enforced in internal/byok/repository.go (every query filters account_id); RLS keeps every role except hive_app fully locked out. Dial-time SSRF restrictions on tenant-supplied base_url are enforced at the routing integration, not here (issue #1139).';
 
 ALTER TABLE public.tenant_provider_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenant_provider_keys FORCE ROW LEVEL SECURITY;

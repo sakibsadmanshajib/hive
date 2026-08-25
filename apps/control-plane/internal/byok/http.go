@@ -51,6 +51,11 @@ func (h *Handler) WithRoleService(r *platform.RoleService) *Handler {
 const tenantPrefix = "/api/v1/accounts/current/provider-keys"
 const adminPrefix = "/api/v1/admin/provider-keys"
 
+// maxRegisterBodyBytes caps the register body decode. A credential is a few
+// hundred bytes; 64 KiB is generous headroom and matches the payments
+// handler's cap posture for untrusted bodies.
+const maxRegisterBodyBytes = 64 << 10
+
 // TenantMux routes the tenant-facing surface:
 //
 //	POST   /api/v1/accounts/current/provider-keys            register
@@ -120,8 +125,9 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		APIKey       string            `json:"api_key"`
 		ModelMap     map[string]string `json:"model_map"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be valid JSON")
+		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be valid JSON under 64 KiB")
 		return
 	}
 
@@ -172,6 +178,13 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request, keyID uui
 func (h *Handler) handleAdminList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
+	// Defense in depth: the router wraps AdminMux with RequirePlatformAdmin,
+	// but this handler enforces the same permission itself so a future mount
+	// that skips the middleware cannot expose every tenant's key metadata.
+	if _, ok := h.resolveViewerContext(w, r, authz.PermPlatformAdmin); !ok {
 		return
 	}
 

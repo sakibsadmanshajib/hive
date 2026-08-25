@@ -1,7 +1,9 @@
 package byok
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +18,8 @@ import (
 )
 
 const (
-	accountA = "3f6c1d9e-2b7a-4c53-9f21-8a4d6e0b7c11"
-	accountB = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	accountA  = "3f6c1d9e-2b7a-4c53-9f21-8a4d6e0b7c11"
+	accountB  = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	userOwner = "11111111-2222-4333-8444-555555555555"
 	userOther = "99999999-8888-4777-8666-555555555555"
 )
@@ -234,6 +236,8 @@ func TestMemberCannotWrite(t *testing.T) {
 
 func TestAdminListSeesAllAccounts(t *testing.T) {
 	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true, isAdmin: true}.install(h)
 
 	rec := doJSON(t, h.AdminMux(), http.MethodGet, "/api/v1/admin/provider-keys", "")
 	if rec.Code != http.StatusOK {
@@ -257,6 +261,8 @@ func TestAdminListSeesAllAccounts(t *testing.T) {
 
 func TestAdminListFiltersByAccount(t *testing.T) {
 	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true, isAdmin: true}.install(h)
 
 	path := "/api/v1/admin/provider-keys?account_id=" + accountB
 	rec := doJSON(t, h.AdminMux(), http.MethodGet, path, "")
@@ -269,5 +275,41 @@ func TestAdminListFiltersByAccount(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if len(resp.Items) != 1 || resp.Items[0]["account_id"] != accountB {
 		t.Fatalf("account filter returned %+v", resp.Items)
+	}
+}
+
+func TestAdminListNonAdminIs403(t *testing.T) {
+	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true, isAdmin: false}.install(h)
+
+	rec := doJSON(t, h.AdminMux(), http.MethodGet, "/api/v1/admin/provider-keys", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin admin-list = %d, want 403", rec.Code)
+	}
+}
+
+func TestOversizedRegisterBodyIsRejected(t *testing.T) {
+	h, _, _ := seededHandler(t)
+	principal{accountID: idPtr(accountA), userID: idPtr(userOwner),
+		role: platform.RoleOwner, verified: true}.install(h)
+
+	big := strings.Repeat("x", 70*1024)
+	body := fmt.Sprintf(`{"label":"big","base_url":"https://x.example/v1","api_key":%q}`, big)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/provider-keys", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.TenantMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d, want 400", rec.Code)
+	}
+}
+
+func TestOversizedAPIKeyIs400(t *testing.T) {
+	svc := NewService(&fakeRepo{}, testCipher(t), nil)
+	longKey := strings.Repeat("k", 5000)
+	_, err := svc.Register(context.Background(), uuid.MustParse(testAccount), uuid.MustParse(testUser),
+		RegisterInput{Label: "l", BaseURL: strPtr("https://x.example/v1"), APIKey: longKey})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("oversized api_key must be ErrValidation, got %v", err)
 	}
 }

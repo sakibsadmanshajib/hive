@@ -24,19 +24,19 @@ const (
 // serialized into any HTTP response or log line; the JSON view builder in
 // http.go deliberately omits it.
 type Key struct {
-	ID            uuid.UUID
-	AccountID     uuid.UUID
-	Label         string
-	ProviderSlug  *string // non-nil: credential targets a registered custom_providers slug
-	BaseURL       *string // non-nil: freeform OpenAI-compatible endpoint (mutually exclusive with ProviderSlug)
-	ModelMap      map[string]string
+	ID              uuid.UUID
+	AccountID       uuid.UUID
+	Label           string
+	ProviderSlug    *string // non-nil: credential targets a registered custom_providers slug
+	BaseURL         *string // non-nil: freeform OpenAI-compatible endpoint (mutually exclusive with ProviderSlug)
+	ModelMap        map[string]string
 	EncryptedAPIKey []byte
-	KeyLast4      string
-	Status        string
-	CreatedBy     uuid.UUID
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	RevokedAt     *time.Time
+	KeyLast4        string
+	Status          string
+	CreatedBy       uuid.UUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	RevokedAt       *time.Time
 }
 
 // RegisterInput is the validated request to store a new credential.
