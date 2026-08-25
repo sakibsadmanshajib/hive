@@ -439,6 +439,28 @@ litellm_settings:
   # above names.
   num_retries: 3
   request_timeout: 45
+  # DO NOT "TIDY" allowed_fails / cooldown_time INTO router_settings.
+  #
+  # They look misplaced, and in the narrow sense they are: both are Router
+  # constructor params (litellm/types/router.py::UpdateRouterConfig lists them),
+  # so sitting under litellm_settings they never reach the Router. The effective
+  # cooldown is therefore DEFAULT_COOLDOWN_TIME_SECONDS (5), not the 30 written
+  # here -- confirmed at runtime, not inferred: CI run 32830060362's litellm log
+  # prints `'cooldown_time': 5` in its Cooldown Deployments line.
+  #
+  # Moving allowed_fails would BREAK the free pool. With it unset on the Router,
+  # router_utils/cooldown_handlers.py::_should_cooldown_deployment takes its
+  # BASE CASE branch, whose last test is `litellm._should_retry(status) is False
+  # -> return True`: a 404 member is cooled down on its FIRST failure. Set
+  # allowed_fails on the Router and that branch is skipped for
+  # should_cooldown_based_on_allowed_fails_policy, which needs `fails >
+  # allowed_fails` -- four failures before a dead member is taken out of
+  # rotation. The edge's failover retry (apps/edge-api/internal/inference/
+  # retry.go) depends on the immediate cooldown to land its next attempt on a
+  # different member, so that change would quietly restore issue #1064.
+  #
+  # Left as-is deliberately, with the reason written down, rather than "fixed"
+  # into a regression. Revisit only alongside that retry ladder.
   allowed_fails: 3
   cooldown_time: 30
   drop_params: true

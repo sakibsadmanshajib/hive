@@ -1458,6 +1458,43 @@ jobs:
           fi
           echo "gateway serves route-free-pool; models: $(jq -r '[.data[].id] | join(", ")' /tmp/litellm-models.json)"
 
+      # Name the dead pool member, if there is one, BEFORE the suites run.
+      #
+      # Serving route-free-pool (asserted above) only proves the group exists,
+      # not that its four members answer. Free model ids churn constantly on
+      # every provider in the pool, and a retired one answers 404 -- which is
+      # exactly the error LiteLLM refuses to fail over (issue #1064). Without
+      # this step that shows up as a generic "hive-free is not available." with
+      # nothing anywhere naming which of the four models went away.
+      #
+      # `/health?model=` is LiteLLM's own per-group probe: it runs one tiny
+      # request against each deployment in that group and reports them
+      # individually, so this costs four small completions on free keys and
+      # nothing on any paid alias.
+      #
+      # Deliberately NOT a hard gate on a single dead member. Surviving one is
+      # the pool's entire purpose, so failing the job on it would make the
+      # resilience worthless; the suites below are the real gate, and they now
+      # pass through a degraded pool. It IS a hard failure when every member is
+      # down, because then hive-free genuinely serves nothing.
+      - name: Probe each free pool member and name any that is gone
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=$(curl -sS -o /tmp/pool-health.json -w '%{http_code}' --max-time 120 \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "http://localhost:4000/health?model=route-free-pool") || code="000"
+
+          if [ "$code" != "200" ]; then
+            echo "::warning::could not probe the free pool (HTTP ${code}), so this run cannot say whether all four members are alive"
+            exit 0
+          fi
+
+          # python3 rather than jq purely so the reporting and the credential
+          # redaction are the same language and the same process; the redactor
+          # is already a python module this repo ships.
+          python3 scripts/report-free-pool-health.py /tmp/pool-health.json
+
       - name: Run SDK suites in parallel (JS + Python + Java)
         # id, because the spend meter below runs on always() and needs to tell
         # "the suites failed, so the database may not exist" from "the suites
@@ -1647,12 +1684,16 @@ jobs:
             class="the provider rate limited us (429). Check whether the window is per minute (transient, so a rerun may pass) or per day (an allowance that is spent)."
           elif grep -qiE 'insufficient.?credit|402 Payment Required' /tmp/upstream.log; then
             class="the provider account is out of credit (402). No retry fixes this; it needs funding."
+          elif grep -qiE 'No fallback model group found' /tmp/upstream.log; then
+            # Last, on purpose: the three refusals above are more specific about
+            # spend and should win when both signatures are present.
+            class="a POOL MEMBER IS DEAD, not the whole provider. LiteLLM answered 'No fallback model group found', which is what it says when one deployment in a load-balanced group returns 404 and the group has no fallback group configured. A 404 is what a RETIRED free model returns, and LiteLLM will not fail over on it (litellm/router.py::should_retry_this_error re-raises NotFoundError, and RetryPolicy has no NotFoundErrorRetries knob). The edge now retries this so the pool routes around the dead member; seeing it here means the retry ladder was also exhausted, so more than one member is down. The 'Probe each free pool member' step earlier in this job names them."
           fi
 
           if [ -n "$class" ]; then
             echo "::error::UPSTREAM REFUSAL, not a performance regression: $class"
             echo "matching lines (redacted, first 5):"
-            grep -iE 'tokens per day|rate.?limit|RateLimitError|rate_limit_exceeded|insufficient.?credit|402 Payment Required' \
+            grep -iE 'tokens per day|rate.?limit|RateLimitError|rate_limit_exceeded|insufficient.?credit|402 Payment Required|No fallback model group found' \
               /tmp/upstream.log | head -5
             echo "UPSTREAM_FAILURE_CLASS=$class" >> "$GITHUB_ENV"
           else
