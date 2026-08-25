@@ -37,6 +37,7 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/cn";
 import { formatCredits, formatPercent } from "@/lib/format/credits";
+import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 interface AnalyticsPageProps {
   searchParams: Promise<{
@@ -314,16 +315,16 @@ export default async function AnalyticsPage({
                   testId="cache-hit-rate"
                 />
                 <SummaryCard
-                  label="Blended credits / 1M"
+                  label="Blended price / 1M"
                   value={
                     blendedCreditsPerMillion === null
                       ? "—"
-                      : formatCredits(blendedCreditsPerMillion)
+                      : formatUsdFromCredits(blendedCreditsPerMillion)
                   }
                   note={
                     blendedCreditsPerMillion === null
                       ? "No tokens served in this window."
-                      : "Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in."
+                      : `${formatCredits(blendedCreditsPerMillion)} credits. Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in.`
                   }
                   testId="blended-credits-per-million"
                 />
