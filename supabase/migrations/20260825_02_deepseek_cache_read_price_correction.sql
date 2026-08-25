@@ -1,0 +1,98 @@
+-- =============================================================================
+-- Correct the DeepSeek cache_read_price_credits multiplier (issue #1176).
+--
+-- GROUND TRUTH, established from DeepSeek's own current pricing page, not
+-- from memory and not from OpenRouter's aggregator table (independently
+-- observed to lag vendor pricing): https://api-docs.deepseek.com/quick_start/
+-- pricing, "Models & Pricing", fetched 2026-08-25. The page publishes a
+-- CACHE HIT and a CACHE MISS price per model rather than a bare multiplier,
+-- so the multiplier is derived here from those two published dollar figures:
+--
+--   deepseek-v4-pro  : $0.022 (cache hit) / $0.66 (cache miss)  = 1/30 exactly
+--   deepseek-v4-flash: $0.007 (cache hit) / $0.22 (cache miss)  = 0.03182,
+--                       which is $0.22 / 30 = $0.0073(3), rounding down to
+--                       the page's 3-decimal display precision.
+--
+-- Both figures resolve to the SAME underlying multiplier, 1/30 (~0.0333x),
+-- once the flash row's display rounding is accounted for. That is the real,
+-- current DeepSeek cache-read rate for both models: not the 0.1x this
+-- codebase's pricing.go comment claimed (a copy-paste of the unrelated
+-- Anthropic/GPT-5-class row above it, corrected in the same PR as this
+-- migration), and not the ~0.2x vault spec-2026-08-25-cache-aware-billing.md
+-- described as "sourced, already in the catalog" (it was in the catalog, but
+-- it was never actually sourced from DeepSeek; see below).
+--
+-- WHAT WAS ACTUALLY WRONG, AND WHAT WAS NOT
+--   20260822_02_catalog_alias_restructure.sql's DERIVE block seeded BOTH
+--   DeepSeek aliases' cache_read_price_credits from an OpenRouter-quoted
+--   per-model USD figure, then rescaled x10000 by
+--   20260823_40_credit_unit_rescale_billion.sql. The rescale is a pure unit
+--   change (it multiplies numerator and denominator alike), so it cannot be
+--   the source of a ratio error, and it is not: recomputing the ratio from
+--   today's live (post-rescale) column values reproduces exactly the same
+--   two ratios the original USD figures did. This is a RATE error from the
+--   original derivation, not a stale unit-factor error.
+--
+--   deepseek-v4-pro:   cache_read 52360000 / input 1570800000 = 1/30 exactly.
+--                       This already matches DeepSeek's real rate above.
+--                       NOT TOUCHED by this migration.
+--   deepseek-v4-flash: cache_read 17900000 / input 89460000   = 0.2 exactly.
+--                       Six times the real 1/30 rate. This is the bug: every
+--                       cache-hit token billed against deepseek-v4-flash (or
+--                       any alias repriced to match it, see below) has been
+--                       overcharged 6x, not the 2x the issue that opened this
+--                       investigation suspected before the vendor page was
+--                       actually checked.
+--
+-- SCOPE, deliberately narrow. Two rows carry the bad 17900000 figure today:
+--
+--   1. deepseek-v4-flash itself.
+--   2. hive-default. 20260824_02_free_pool_router.sql repriced hive-default
+--      to "the deepseek-v4-flash rates ALREADY in the catalog" by copying
+--      the same literal cache_read_price_credits = 17900000 into a second
+--      row rather than referencing deepseek-v4-flash's own price, so the
+--      root-cause fix has to reach both rows or hive-default (the alias
+--      served to any request that names no model) keeps the 6x overcharge
+--      after this migration. hive-default's cache_write_price_credits stays
+--      an explicit 0, untouched here: this migration corrects cache_read
+--      only, and an explicit stored zero is a considered price, never
+--      overwritten by this kind of fix.
+--
+--   deepseek-v4-pro is not touched: its seeded value already matches the
+--   real vendor rate, see above. The Groq gpt-oss aliases' explicit 0/0 is
+--   not touched either, for the reason already on record in
+--   20260825_01_deepseek_cache_write_price.sql's header.
+--
+-- DERIVATION, self-referential rather than a literal, matching the pattern
+-- 20260825_01_deepseek_cache_write_price.sql and
+-- 20260823_40_credit_unit_rescale_billion.sql already use: each row's new
+-- cache_read_price_credits is computed from that SAME row's own current
+-- input_price_credits at UPDATE time (CEIL(input_price_credits / 30), never
+-- rounding a money figure down), so this migration stays correct if a future
+-- migration reprices either alias's input rate before this one runs, and
+-- reruns as a no-op once applied.
+--
+--   deepseek-v4-flash: CEIL(89460000 / 30) = 2982000 (exact, no remainder).
+--   hive-default:      CEIL(89460000 / 30) = 2982000 (same input price,
+--                       same underlying deepseek-v4-flash upstream model).
+--
+-- IDEMPOTENT: each UPDATE's WHERE clause only matches a row that still
+-- carries the specific known-wrong value (17900000), so re-running this
+-- file, or running it after some future repricing migration has already
+-- moved either alias's cache_read_price_credits to a new, deliberate value,
+-- is a no-op rather than a second write or a clobber of that later decision.
+--
+-- CUSTOMER IMPACT: see this migration's pull request body. This file cannot
+-- determine it (read-only against any live database, per this task's
+-- constraints); it states what is knowable from the code and migration
+-- history alone.
+-- =============================================================================
+
+BEGIN;
+
+UPDATE public.model_aliases
+   SET cache_read_price_credits = CEIL(input_price_credits::numeric / 30)::bigint
+ WHERE alias_id IN ('deepseek-v4-flash', 'hive-default')
+   AND cache_read_price_credits = 17900000;
+
+COMMIT;
