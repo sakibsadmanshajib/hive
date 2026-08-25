@@ -83,7 +83,7 @@ cd "$WORK"
 # check, and the node version cannot drift between a laptop and CI. Pinned
 # vitest major on top, so neither a node release nor a vitest release can change
 # the meaning of a green run. The scratch directory is the only mount, and the
-# container is given the caller's uid so the npx cache it writes there is not
+# container is given the caller's uid so the npm cache it writes there is not
 # left root owned on the host.
 # Two passes in one container: the unit tests, then a Svelte compile of every
 # component under lib/hive. The compile pass is what stops a component that does
@@ -102,7 +102,19 @@ docker run --rm \
   -e HOME=/work \
   node:22-alpine3.20 \
   sh -c 'set -eu
-    npx --yes vitest@2 run
+    # Coverage provider pinned to the same major as vitest so the pair cannot
+    # drift. Both are installed into the scratch tree rather than pulled
+    # through npx: vitest resolves @vitest/coverage-v8 relative to the project
+    # root it runs from, and packages fetched through separate npx prefixes are
+    # invisible to that lookup. Same pattern as the svelte install below.
+    # The text reporter prints the per-file table plus an All files total line:
+    # advisory measurement for this scratch-tree run, no thresholds.
+    # Scoped to lib/hive, not all of lib: the upstream components and routes
+    # copied in above are text fixtures the declutter guard reads, not code
+    # this suite executes, so including them would drag the total down with
+    # permanently-zero rows.
+    npm install --no-save --no-audit --no-fund --loglevel=error vitest@2 @vitest/coverage-v8@2
+    npx vitest run --coverage --coverage.include="lib/hive/**" --coverage.reporter=text
     svelte_version=$(node -e "
       const lock = require(\"/work/owui-package-lock.json\");
       const entry = lock.packages && lock.packages[\"node_modules/svelte\"];
