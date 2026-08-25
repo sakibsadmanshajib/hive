@@ -131,3 +131,33 @@ export const runTurnIsDone = (task: RunLike): boolean =>
 	task.status === 'failed' ||
 	task.status === 'cancelled' ||
 	task.status === 'unknown';
+
+export interface PendingCoworkTurn {
+	id: string;
+	hive_agent_task_id: string;
+}
+
+/**
+ * Every assistant turn in a conversation that still carries a run id.
+ *
+ * A conversation can hold more than one run: the user can submit again in
+ * Cowork mode once the first settles. loadChat also stamps every mid-flight
+ * assistant turn `done = true` on reload, so a turn's local `done` flag
+ * cannot be trusted to say whether its run actually finished; the caller has
+ * to re-read every one of these from the server rather than picking the
+ * first and assuming the rest are either absent or already done.
+ */
+export const selectPendingCoworkTurns = (
+	messages: Record<string, unknown> | null | undefined
+): PendingCoworkTurn[] =>
+	Object.values(messages ?? {})
+		.filter(
+			(message): message is { id: string; role: string; hive_agent_task_id: string } =>
+				typeof message === 'object' &&
+				message !== null &&
+				(message as { role?: unknown }).role === 'assistant' &&
+				typeof (message as { hive_agent_task_id?: unknown }).hive_agent_task_id === 'string' &&
+				(message as { hive_agent_task_id: string }).hive_agent_task_id !== '' &&
+				typeof (message as { id?: unknown }).id === 'string'
+		)
+		.map((message) => ({ id: message.id, hive_agent_task_id: message.hive_agent_task_id }));

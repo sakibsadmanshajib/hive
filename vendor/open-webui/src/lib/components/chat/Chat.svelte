@@ -108,7 +108,12 @@
 	// renders nothing when the balance is unavailable.
 	import CreditsBanner from '$lib/hive/CreditsBanner.svelte';
 	import { createTask, describeRefusal, listTasks, TERMINAL_STATUSES } from '$lib/hive/agentTasks';
-	import { packForMode, renderRun, runTurnIsDone } from '$lib/hive/coworkMode';
+	import {
+		packForMode,
+		renderRun,
+		runTurnIsDone,
+		selectPendingCoworkTurns
+	} from '$lib/hive/coworkMode';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -2227,7 +2232,7 @@
 			}
 		}
 
-		await applyCoworkRun($chatId, messageId, {
+		await applyCoworkRun(_chatId, messageId, {
 			status: 'unknown',
 			error_message: ''
 		});
@@ -2242,30 +2247,36 @@
 	 * server, and following resumes if it is still going.
 	 */
 	const resumeCoworkRun = async (_chatId) => {
-		const pending = Object.values(history.messages ?? {}).find(
-			(message: any) => message?.role === 'assistant' && message?.hive_agent_task_id
-		) as any;
-		if (!pending) {
+		// selectPendingCoworkTurns is the tested half of this: see
+		// coworkMode.test.ts for why it returns every carrying turn rather than
+		// the first. Every one gets re-read from the server here; only the ones
+		// that come back non-terminal get followed.
+		const pendingTurns = selectPendingCoworkTurns(history.messages);
+		if (pendingTurns.length === 0) {
 			return;
 		}
-		const taskId = pending.hive_agent_task_id;
 
-		let task;
+		let tasks;
 		try {
-			task = (await listTasks(localStorage.token)).find((row) => row.id === taskId);
+			tasks = await listTasks(localStorage.token);
 		} catch (error) {
-			// Leave the stored turn exactly as it was rather than overwriting a
+			// Leave every stored turn exactly as it was rather than overwriting a
 			// real result with a transport failure.
 			return;
 		}
-		if (!task) {
-			return;
-		}
-		if (!(await applyCoworkRun(_chatId, pending.id, task))) {
-			return;
-		}
-		if (!TERMINAL_STATUSES.has(task.status) && task.status !== 'unknown') {
-			void followCoworkRun(_chatId, pending.id, taskId);
+
+		for (const pending of pendingTurns) {
+			const taskId = pending.hive_agent_task_id;
+			const task = tasks.find((row) => row.id === taskId);
+			if (!task) {
+				continue;
+			}
+			if (!(await applyCoworkRun(_chatId, pending.id, task))) {
+				return;
+			}
+			if (!TERMINAL_STATUSES.has(task.status) && task.status !== 'unknown') {
+				void followCoworkRun(_chatId, pending.id, taskId);
+			}
 		}
 	};
 
@@ -2368,6 +2379,26 @@
 		if (selectedModels.includes('')) {
 			toast.error($i18n.t('Model not selected'));
 			return;
+		}
+
+		// hive (#944, thread 3): the run backend accepts only pack + instructions
+		// today, so an attachment has nowhere to go. Refusing clearly here beats
+		// the alternative of silently dropping the file from both the run and
+		// the transcript. A blank instructions field is refused for the same
+		// reason: cowork mode has no image-only submission to fall back to.
+		if ($composerMode === 'cowork') {
+			if (files.length > 0) {
+				toast.error(
+					$i18n.t(
+						'Attachments are not supported in Cowork mode yet. Remove the file, or switch to Chat mode to send it.'
+					)
+				);
+				return;
+			}
+			if (userPrompt.trim() === '') {
+				toast.error($i18n.t('Please enter instructions for Cowork'));
+				return;
+			}
 		}
 
 		if (

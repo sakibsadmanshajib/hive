@@ -10,7 +10,8 @@ import {
 	nextMode,
 	packForMode,
 	renderRun,
-	runTurnIsDone
+	runTurnIsDone,
+	selectPendingCoworkTurns
 } from './coworkMode';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -97,6 +98,53 @@ describe('runTurnIsDone', () => {
 		for (const status of ['succeeded', 'failed', 'cancelled', 'unknown']) {
 			expect(runTurnIsDone({ status })).toBe(true);
 		}
+	});
+});
+
+describe('selectPendingCoworkTurns', () => {
+	// A conversation can hold more than one run: the user can submit again in
+	// Cowork mode once the first settles. A reload leaves BOTH assistant turns
+	// carrying a hive_agent_task_id, and loadChat has already stamped both
+	// `done: true` regardless of whether their runs actually finished, so the
+	// selector must return every carrying turn rather than the oldest one.
+	// Picking only the first (what `Object.values(...).find(...)` did before
+	// this fix) is exactly the bug this test catches: it would return an array
+	// with the older run only, silently dropping the second.
+	const messages = {
+		older: {
+			id: 'older',
+			role: 'assistant',
+			done: true,
+			hive_agent_task_id: 'task-1-settled'
+		},
+		newer: {
+			id: 'newer',
+			role: 'assistant',
+			done: true, // stamped by loadChat; the run is still running server side
+			hive_agent_task_id: 'task-2-still-running'
+		},
+		userTurn: {
+			id: 'userTurn',
+			role: 'user',
+			content: 'go again'
+		}
+	};
+
+	it('returns every assistant turn carrying a run id, not just the first', () => {
+		const pending = selectPendingCoworkTurns(messages);
+		const ids = pending.map((turn) => turn.hive_agent_task_id).sort();
+		expect(ids).toEqual(['task-1-settled', 'task-2-still-running']);
+	});
+
+	it('never selects a plain user or assistant turn with no run id', () => {
+		const pending = selectPendingCoworkTurns(messages);
+		expect(pending.find((turn) => turn.id === 'userTurn')).toBeUndefined();
+	});
+
+	it('handles an empty or missing history without throwing', () => {
+		expect(selectPendingCoworkTurns({})).toEqual([]);
+		expect(selectPendingCoworkTurns(null)).toEqual([]);
+		expect(selectPendingCoworkTurns(undefined)).toEqual([]);
 	});
 });
 
