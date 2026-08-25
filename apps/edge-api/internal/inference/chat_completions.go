@@ -70,6 +70,21 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 	resp.Model = aliasID
 	resp.Object = "chat.completion"
 
+	// Every OpenAI SDK generates message.content as a plain string type and
+	// dereferences it unconditionally; content is nullable ONLY when the
+	// message carries a tool call (OpenAI's own contract). A reasoning-heavy
+	// upstream that spends its whole token budget on hidden reasoning and
+	// returns finish_reason=length with content omitted otherwise leaks a
+	// bare `null` straight through to every client. Caught live on the
+	// hive-free pool (deploy run 32879931588, PR #1115/#1155): one of its
+	// four load-balanced members returned null content on a plain, tool-free
+	// "Say hello" prompt. This gateway is provider-blind by design (no pool
+	// member's shape should leak to the client), so the fix belongs at this
+	// normalization boundary, not in any one provider's route config.
+	for i := range resp.Choices {
+		coerceNullContent(&resp.Choices[i].Message)
+	}
+
 	clampZeroCompletionUsage(resp.Usage, chatChoiceTexts(resp.Choices), resp.ID, aliasID, EndpointChatCompletions)
 
 	normalized, err := json.Marshal(resp)
@@ -78,6 +93,29 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 	}
 
 	return normalized, resp.Usage, nil
+}
+
+// coerceNullContent enforces the OpenAI contract that message.content is a
+// string whenever the message carries no tool call and no legacy function
+// call. content is nullable ONLY alongside tool_calls or function_call; every
+// other shape must be a string, per the SDKs this gateway's clients actually
+// use. Leaves the message untouched otherwise, since a genuine tool-call
+// message with null content is spec-correct and must not be rewritten.
+func coerceNullContent(msg *ChatCompletionMessage) {
+	if msg.Content != nil {
+		return
+	}
+	if rawFieldPresent(msg.ToolCalls) || rawFieldPresent(msg.FunctionCall) {
+		return
+	}
+	empty := ""
+	msg.Content = &empty
+}
+
+// rawFieldPresent reports whether a json.RawMessage field is present and not
+// the JSON literal "null".
+func rawFieldPresent(f json.RawMessage) bool {
+	return len(f) > 0 && string(f) != "null"
 }
 
 // firstToolParam returns the name of the first tool-calling or structured-output
