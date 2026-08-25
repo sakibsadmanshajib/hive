@@ -79,6 +79,14 @@ jobs:
           # deploy/cloudflare/tunnel-ingress.json declares public. Keep this
           # list in step with that file: a public hostname absent here is a
           # surface that can go down without anyone being told.
+          #
+          # Every expectation here is the status AFTER redirects are
+          # followed, which is why curl runs with -L below. console-hive
+          # answers its root with a 307 to /auth/sign-in and only then a 200,
+          # so a probe that refused to follow redirects would report that
+          # surface as broken on every single run. A monitor that cries wolf
+          # on a fifteen minute cadence gets muted within a day, and a muted
+          # monitor is worse than none because it still reads as coverage.
           targets=(
             "chat-hive.scubed.co|/api/config|200"
             "console-hive.scubed.co|/|200"
@@ -96,15 +104,17 @@ jobs:
             # dumps response bodies into a public log is one endpoint change
             # away from leaking something, and nothing here needs the body.
             headers="$(mktemp)"
-            code="$(curl -sS -o /dev/null -D "${headers}" \
+            code="$(curl -sSL -o /dev/null -D "${headers}" \
                       --max-time 20 \
                       -w '%{http_code}' \
                       "${url}" 2>/dev/null || echo '000')"
 
             # cf-ray proves the response came through the Cloudflare edge
             # rather than from somewhere in between. Its absence on a 200 is
-            # itself worth seeing.
-            ray="$(grep -i '^cf-ray:' "${headers}" | tr -d '\r' | awk '{print $2}' || true)"
+            # itself worth seeing. With -L the header dump holds one block
+            # per hop, so take the last: that is the ray of the response the
+            # status code above actually describes.
+            ray="$(grep -i '^cf-ray:' "${headers}" | tr -d '\r' | awk '{print $2}' | tail -1 || true)"
             rm -f "${headers}"
             [ -n "${ray}" ] || ray='(none)'
 
