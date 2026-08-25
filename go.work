@@ -12,4 +12,6 @@ use ./packages/audit-canonical
 
 use ./packages/embedmodel
 
+use ./packages/dbtest
+
 use ./apps/agent-engine

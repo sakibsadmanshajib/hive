@@ -46,10 +46,10 @@ const KNOWN_DARK = new Map([
   ["apps/control-plane/./internal/auditverifier", "#797 backlog, never executed"],
   ["apps/control-plane/./internal/auditworker", "#797 backlog, never executed"],
   ["apps/control-plane/./internal/licensing", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/marketplace", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/tenant/settings", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/usage", "#797 backlog, never executed"],
   ["apps/control-plane/./tests/compliance", "#797 backlog, outside ./internal, never executed"],
+  // marketplace, tenant/settings and usage wired into the go-tests job's
+  // live-Postgres step by issue #708: removed here because the lint fails
+  // if a package both runs and is still declared as debt.
 ]);
 
 const errors = [];

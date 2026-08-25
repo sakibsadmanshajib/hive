@@ -2,12 +2,11 @@ package ledger
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sakibsadmanshajib/hive/packages/dbtest"
 )
 
 // Issue #918, the reader half. GetBalance used to compute
@@ -95,19 +94,7 @@ func post(t *testing.T, svc *Service, accountID, reservationID uuid.UUID, action
 // Same gating convention as accounting's live suites.
 func newLedgerTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return dbtest.Pool(t, "HIVE_TEST_DB_URL")
 }
 
 func seedLedgerAccount(t *testing.T, pool *pgxpool.Pool) uuid.UUID {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
+	"github.com/sakibsadmanshajib/hive/packages/dbtest"
 )
 
 // newRLSTestPool connects as the hive_app role — NOT BYPASSRLS in production
@@ -20,30 +20,13 @@ import (
 // helper of the same name; see there for the full MaxConns=1 rationale.
 func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
-
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("parse HIVE_TEST_DB_URL: %v", err)
-	}
-	cfg.MaxConns = 1
-
-	ctx := context.Background()
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if _, err := pool.Exec(ctx, "SET ROLE hive_app"); err != nil {
+	pool := dbtest.PoolWithConfig(t, "HIVE_TEST_DB_URL", func(cfg *pgxpool.Config) {
+		cfg.MaxConns = 1
+	})
+	if _, err := pool.Exec(context.Background(), "SET ROLE hive_app"); err != nil {
 		pool.Close()
 		t.Skipf("SET ROLE hive_app failed (is hive_app provisioned + migrations applied on this test DB?): %v", err)
 	}
-	t.Cleanup(pool.Close)
 	return pool
 }
 
@@ -75,6 +58,43 @@ func seedTenant(t *testing.T, id uuid.UUID) {
 		defer cleanup.Close()
 		_, _ = cleanup.Exec(context.Background(), `DELETE FROM public.tenants WHERE id = $1`, id)
 	})
+}
+
+// seedActor mirrors seedTenant: a short-lived, unscoped connection inserts
+// the auth.users row marketplace_tenant_entries.enabled_by FKs to. Issue
+// #958's live finding: this suite had never run in CI, and enabled_by is
+// nullable but NOT unconstrained -- passing an unseeded uuid.New() as actorID
+// (as the test originally did) trips
+// marketplace_tenant_entries_enabled_by_fkey, not the entry_id FK the test
+// exists to prove; SetEnabled's isForeignKeyViolation check collapses both
+// into the same ErrNotFound, so the failure read as "entry not found" and hid
+// the real cause.
+func seedActor(t *testing.T) uuid.UUID {
+	t.Helper()
+	dsn := os.Getenv("HIVE_TEST_DB_URL")
+	ctx := context.Background()
+	setup, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("seed pool: %v", err)
+	}
+	defer setup.Close()
+	var id uuid.UUID
+	if err := setup.QueryRow(ctx,
+		`INSERT INTO auth.users (id, email, raw_user_meta_data)
+		 VALUES (gen_random_uuid(), $1, '{}'::jsonb) RETURNING id`,
+		"marketplace-actor-"+uuid.NewString()+"@test.local",
+	).Scan(&id); err != nil {
+		t.Fatalf("seed actor: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanup, err := pgxpool.New(context.Background(), dsn)
+		if err != nil {
+			return
+		}
+		defer cleanup.Close()
+		_, _ = cleanup.Exec(context.Background(), `DELETE FROM auth.users WHERE id = $1`, id)
+	})
+	return id
 }
 
 func TestRepository_CatalogCRUD_RoundTrip(t *testing.T) {
@@ -135,7 +155,7 @@ func TestRepository_TenantEnablement_RLSIsolation(t *testing.T) {
 	tenantA, tenantB := uuid.New(), uuid.New()
 	seedTenant(t, tenantA)
 	seedTenant(t, tenantB)
-	actor := uuid.New()
+	actor := seedActor(t)
 
 	if err := repo.SetEnabled(ctx, tenantA, entry.ID, true, actor); err != nil {
 		t.Fatalf("SetEnabled(tenantA): %v", err)

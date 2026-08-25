@@ -50,6 +50,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/redis/go-redis/v9 v9.18.0
+	github.com/sakibsadmanshajib/hive/packages/dbtest v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/storage v0.0.0
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
@@ -58,5 +59,7 @@ require (
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
 
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
+
+replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 
 replace github.com/sakibsadmanshajib/hive/packages/embedmodel => ../../packages/embedmodel

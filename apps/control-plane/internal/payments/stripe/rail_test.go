@@ -64,9 +64,16 @@ func TestStripeRailName(t *testing.T) {
 	}
 }
 
-func TestStripeRailSatisfiesPaymentRail(t *testing.T) {
-	var _ payments.PaymentRail = stripeRail.NewRail("sk_test_key", "whsec_test")
-}
+// stripeRail satisfying payments.PaymentRail is a compile-time
+// property, not a runtime behaviour: a test function whose body is only
+// `var _ Interface = X` passes unconditionally regardless of what NewRail
+// does, so it asserted nothing that go build wasn't already checking every
+// time this package compiles. Declared here at package scope as a type-only
+// assertion on a nil *Rail, where the compiler still enforces it, it no
+// longer counts as a passing test, and package initialization no longer
+// calls NewRail (which would mutate the global stripego.Key before any
+// test runs and could leak that state into later tests).
+var _ payments.PaymentRail = (*stripeRail.Rail)(nil)
 
 // TestStripeProcessEvent_PaymentIntentEventsAreNotASettlementPath documents the
 // rail contract after the move to hosted Checkout Sessions: the session is the

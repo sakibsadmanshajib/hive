@@ -8,6 +8,7 @@ COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
 COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
 COPY packages/audit-canonical/go.mod packages/audit-canonical/go.sum* ./packages/audit-canonical/
 COPY packages/embedmodel/go.mod packages/embedmodel/go.sum* ./packages/embedmodel/
+COPY packages/dbtest/go.mod packages/dbtest/go.sum* ./packages/dbtest/
 RUN cd apps/agent-engine && go mod download
 COPY apps/agent-engine/ ./apps/agent-engine/
 RUN cd apps/agent-engine && go build -o /usr/local/bin/agent-engine ./cmd/agent-engine

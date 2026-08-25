@@ -25,6 +25,7 @@ COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
 COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
 COPY packages/audit-canonical/go.mod packages/audit-canonical/go.sum* ./packages/audit-canonical/
 COPY packages/embedmodel/go.mod packages/embedmodel/go.sum* ./packages/embedmodel/
+COPY packages/dbtest/go.mod packages/dbtest/go.sum* ./packages/dbtest/
 COPY apps/agent-engine/go.mod apps/agent-engine/go.sum* ./apps/agent-engine/
 RUN cd apps/edge-api && go mod download
 
@@ -32,6 +33,7 @@ COPY apps/edge-api/ ./apps/edge-api/
 COPY packages/storage/ ./packages/storage/
 COPY packages/audit-canonical/ ./packages/audit-canonical/
 COPY packages/embedmodel/ ./packages/embedmodel/
+COPY packages/dbtest/ ./packages/dbtest/
 COPY packages/openai-contract/matrix/support-matrix.json \
      ./packages/openai-contract/matrix/support-matrix.json
 COPY packages/openai-contract/generated/hive-openapi.yaml \
