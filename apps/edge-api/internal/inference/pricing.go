@@ -75,7 +75,17 @@ func CanPriceTokens(route SelectRouteResult) bool {
 // cache_write_price_credits, because the true multiplier varies by provider
 // and model (Anthropic and GPT-5-class: 0.1x read / 1.25x write; OpenAI o3:
 // 0.25x / free; gpt-4o and o1: 0.5x / free; Groq: 0.5x / free; DeepSeek:
-// 0.1x / 1.0x -- vault spec-2026-08-25-cache-aware-billing.md). Falling back
+// ~0.033x (1/30) read / 1.0x write, per DeepSeek's own Models & Pricing page
+// (https://api-docs.deepseek.com/quick_start/pricing, cache-hit vs
+// cache-miss input columns, fetched 2026-08-25). deepseek-v4-pro's published
+// rate is an exact $0.022 / $0.66 = 1/30; deepseek-v4-flash's $0.007 / $0.22
+// rounds to the same 1/30 at the page's 3-decimal display precision. This
+// comment corrects two earlier, mutually-inconsistent figures: it previously
+// said 0.1x here (a copy of the Anthropic/GPT-5-class row above it, not
+// actually sourced from DeepSeek), and vault
+// spec-2026-08-25-cache-aware-billing.md separately said ~0.2x. Both were
+// wrong. See supabase/migrations/20260825_02_deepseek_cache_read_price_correction.sql
+// for the full reconciliation and issue #1176 for the investigation. Falling back
 // to the flat input rate instead (treating cache read as ordinary input) is
 // exactly the bug this feature fixes, and falling back to zero is revenue
 // loss D-034 forbids, so this fallback is the third option, not either of
