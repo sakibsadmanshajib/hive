@@ -52,6 +52,14 @@ for (const shape of ['claude', 'cursor']) {
       payload: shell(shape, 'killall node'), code: 2, present: ['BLOCKED'] },
     { name: `bash-safety warn force push (${shape})`, hook: 'bash-safety.js',
       payload: shell(shape, 'git push --force origin main'), code: 0, present: ['WARNING: Force push'] },
+    // Regression guard: a read-only search that merely mentions the blocked
+    // words as quoted TEXT (not an invocation) must not trip the hard block.
+    // Was blocking `grep -rn "pkill -f node" src/` before the fix, which is
+    // exactly the kind of command this hook's own maintenance work runs.
+    { name: `bash-safety allow grep mentioning killall as text (${shape})`, hook: 'bash-safety.js',
+      payload: shell(shape, 'grep -rn "killall node" docs/'), code: 0, absent: ['BLOCKED'] },
+    { name: `bash-safety allow grep mentioning pkill as text (${shape})`, hook: 'bash-safety.js',
+      payload: shell(shape, 'grep -rn "pkill -f node" src/'), code: 0, absent: ['BLOCKED'] },
 
     // commit-guard: warn only, never blocks.
     { name: `commit-guard clean (${shape})`, hook: 'commit-guard.js',
@@ -66,6 +74,14 @@ for (const shape of ['claude', 'cursor']) {
       payload: edit(shape, 'src/example.ts', `const k = "${FAKE_AWS_KEY}";\n`), code: 2, present: ['BLOCKED', 'AWS access key'] },
     { name: `secrets-scanner warn api_key assignment (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'src/example.ts', `const apiKey = "${FAKE_GENERIC_KEY}";\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
+    // Regression guard: Go's `:=` short variable declaration is the idiomatic
+    // assignment form in this (Go-majority) repo. A bare [:=] character class
+    // matches only one of its two characters, so `password := "..."` passed
+    // through both the block and warn patterns unscanned before the fix.
+    { name: `secrets-scanner block go-style password assignment (${shape})`, hook: 'secrets-scanner.js',
+      payload: edit(shape, 'main.go', `password := "${FAKE_GENERIC_KEY}"\n`), code: 2, present: ['BLOCKED', 'Hardcoded password'] },
+    { name: `secrets-scanner warn go-style api_key assignment (${shape})`, hook: 'secrets-scanner.js',
+      payload: edit(shape, 'main.go', `apiKey := "${FAKE_GENERIC_KEY}"\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
   );
 }
 
