@@ -83,6 +83,20 @@ BEGIN
       USING (true)
       WITH CHECK (true);
   END IF;
+  -- auditor_ro reads everything it holds a grant on (SOC-2 auditor identity,
+  -- same pattern as audit_log in 20260518_04). Without this policy the SELECT
+  -- grant below is dead under enabled RLS: no policy for the role means deny.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename  = 'tenant_provider_keys'
+      AND policyname = 'tenant_provider_keys_auditor_select'
+  ) THEN
+    CREATE POLICY tenant_provider_keys_auditor_select
+      ON public.tenant_provider_keys
+      AS PERMISSIVE FOR SELECT TO auditor_ro
+      USING (true);
+  END IF;
 END$$;
 
 GRANT SELECT, INSERT, UPDATE ON public.tenant_provider_keys TO hive_app;
