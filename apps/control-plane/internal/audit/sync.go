@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgerrcode"
@@ -33,6 +34,54 @@ func NewSyncWriter(pool *pgxpool.Pool, cfg WriterConfig) *SyncWriter {
 	return &SyncWriter{pool: pool, cfg: cfg}
 }
 
+// MonthLockKey derives the audit-writer advisory lock key for ts's
+// absolute instant, bucketed by UTC calendar month. Exported so #1182's
+// regression test can pin known values without reaching into the
+// package, and so the derivation is a pure, directly-testable function
+// rather than inline arithmetic duplicated across the lock and unlock
+// call sites.
+//
+// ts is forced to UTC here regardless of the Location it arrives with.
+// writeOnce's ts is already UTC (canonical.TruncateTS calls .UTC()),
+// but this function does not trust that: it is the single source of
+// truth for "which month does this instant belong to", and it must
+// give the same answer for the same instant no matter what Location
+// happened to be attached to the caller's time.Time. That is also why
+// it is pure Go arithmetic rather than a `SELECT date_trunc('month',
+// $1::timestamptz)` round trip: a SQL date_trunc on a timestamptz
+// buckets by the session's TimeZone GUC, not by UTC, so the old
+// pg_advisory_xact_lock version of this file computed a DIFFERENT key
+// for the same event on any session whose TimeZone wasn't UTC. See
+// assertUTCSession below for the other half of closing that gap:
+// making today's "Supabase defaults to UTC" assumption true by
+// construction instead of true by luck (#1188 review thread).
+func MonthLockKey(ts time.Time) int64 {
+	ts = ts.UTC()
+	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return monthStart.Unix()
+}
+
+// assertUTCSession fails loudly, instead of silently computing a
+// mismatched lock key, if this connection's session TimeZone GUC is
+// ever not UTC. Nothing in apps/control-plane/internal/platform/db/
+// pool.go sets TimeZone explicitly today, so it is UTC only because
+// Supabase's default happens to be UTC — unasserted, true by luck. Run
+// on every write (not cached past the first check): the risk this
+// guards is a config drift making the assumption false at some point
+// in this process's lifetime, not only at startup, and the added round
+// trip is one cheap query on a connection already checked out for the
+// advisory lock.
+func assertUTCSession(ctx context.Context, conn *pgxpool.Conn) error {
+	var tz string
+	if err := conn.QueryRow(ctx, `SHOW TimeZone`).Scan(&tz); err != nil {
+		return fmt.Errorf("audit: check session timezone: %w", err)
+	}
+	if !strings.EqualFold(tz, "UTC") && !strings.EqualFold(tz, "Etc/UTC") {
+		return fmt.Errorf("audit: session TimeZone is %q, not UTC; refusing to write because MonthLockKey is computed in UTC and would silently diverge from a SQL date_trunc-based reading of the same month under any other session timezone (#1188)", tz)
+	}
+	return nil
+}
+
 // Write inserts a single audit row and chains it off the last row in
 // the same tenant's chain under SERIALIZABLE isolation.
 //
@@ -54,7 +103,12 @@ func NewSyncWriter(pool *pgxpool.Pool, cfg WriterConfig) *SyncWriter {
 // with serialisation_failure (40001). We retry the entire transaction
 // up to maxSerializationRetries because each attempt is short and
 // retrying with a fresh `ts` keeps the row attributable to its true
-// commit time, not its first attempt.
+// commit time, not its first attempt. As of #1182 the advisory lock
+// is held from before BeginTx through the explicit unlock (see
+// writeOnce), so two SyncWriter.Write calls racing each other no
+// longer produce 40001 at all — the retry loop is defense-in-depth
+// against a conflict from something else entirely serializable on
+// public.audit_log, not the writer's own concurrency.
 func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 	if e.Action == "" {
 		return errors.New("audit: action required")
@@ -84,32 +138,66 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 }
 
 func (w *SyncWriter) writeOnce(ctx context.Context, e Event, before, after []byte) error {
-	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return fmt.Errorf("audit: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	// Truncate to microseconds so the canonical hash, the canonical
 	// timestamp string, and the value Postgres stores are identical.
 	// Re-captured per attempt so a retried row carries its actual
 	// commit time, not the first attempt's stale time.
 	ts := canonical.TruncateTS(time.Now())
-
-	// Advisory lock keyed on the month's epoch as bigint. ::int was
-	// 32-bit and would silently overflow in January 2038; ::bigint is
-	// 64-bit and matches pg_advisory_xact_lock(bigint) so the lock
-	// namespace is unambiguous.
-	if _, err := tx.Exec(
-		ctx,
-		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::bigint)`,
-		ts,
-	); err != nil {
-		return fmt.Errorf("audit: advisory lock: %w", err)
-	}
-
 	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, 0)
+	lockKey := MonthLockKey(ts)
+
+	conn, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("audit: acquire conn: %w", err)
+	}
+	defer conn.Release()
+
+	if err := assertUTCSession(ctx, conn); err != nil {
+		return err
+	}
+
+	// Session-scoped advisory lock, acquired BEFORE the SERIALIZABLE
+	// transaction opens, held until the explicit unlock below.
+	//
+	// Postgres takes a SERIALIZABLE transaction's snapshot at the
+	// first statement inside it, not at BEGIN. The previous version of
+	// this writer took the lock with pg_advisory_xact_lock as that
+	// first statement: every concurrent writer's snapshot was formed
+	// the instant it started waiting on the lock, not the instant it
+	// actually got its turn, so each one committed against a MAX(seq)
+	// read that was already stale by the time it ran — the textbook
+	// SSI write-skew shape, and exactly why 6 of 10 fully-simultaneous
+	// writers failed with SQLSTATE 40001 (#1182). Acquiring the lock
+	// on the plain session first, before BEGIN, means the transaction
+	// below can only take its snapshot once this writer already has
+	// exclusive possession of the month, so nothing downstream of
+	// BEGIN can observe a stale one.
+	//
+	// Session- not transaction-scoped deliberately: it must survive
+	// past BeginTx to Commit. If the connection drops mid-hold,
+	// Postgres releases the session lock when the backend terminates,
+	// so the failure mode is one orphaned physical connection (which
+	// the pool detects and evicts on the next health check), never a
+	// permanently stuck lock. Same acquire/exec/defer-release shape as
+	// accounting.PgxAccountLocker (internal/accounting/pglock.go); no
+	// in-process gate is needed here the way that locker needs one,
+	// because this critical section never asks the pool for a second
+	// connection while holding the first.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey); err != nil {
+		return fmt.Errorf("audit: advisory lock: %w", err)
+	}
+	defer func() {
+		// Background context: unlock must run even if ctx was cancelled.
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, lockKey)
+	}()
+
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return fmt.Errorf("audit: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	tenantArg := nullableUUID(e.TenantID)
 
 	var maxSeq int64
