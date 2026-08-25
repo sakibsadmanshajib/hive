@@ -2333,13 +2333,15 @@ jobs:
       S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
       NEXT_PUBLIC_APP_URL: http://localhost:3000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: actions/setup-node@v4
+      # Node 24, matching Web E2E. Node 20's npm rejects the current esbuild
+      # optional-dependency set with EBADPLATFORM before a single test runs.
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
@@ -2415,7 +2417,7 @@ jobs:
           echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: Build stack images
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
           workdir: .
           files: |
@@ -2473,7 +2475,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -2600,7 +2602,7 @@ jobs:
       # query parameters replaced before it was written.
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: interaction-coverage
           path: apps/web-console/interaction-coverage/
@@ -2617,7 +2619,7 @@ jobs:
 
       - name: Upload compose logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-logs-interaction
           path: /tmp/compose-interaction.log
