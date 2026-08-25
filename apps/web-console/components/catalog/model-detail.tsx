@@ -36,10 +36,16 @@ interface PriceRow {
   note: string;
 }
 
-// Every figure on this page is credits per one million metered tokens, the
+// Every figure on this page is a rate per one million metered tokens, the
 // same unit the catalog list prints, so the unit is stated once per section
 // rather than repeated in every cell.
-const CREDITS_PER_MILLION = "Credits per 1M tokens";
+//
+// Both units are shown, and deliberately. Dollars lead because that is the
+// figure a customer comparing gateways reads, and the raw credit integer is
+// kept alongside it because credits are the unit the ledger actually moves:
+// an account reconciling a bill against its usage needs the exact integer,
+// which a dollar figure rounded for legibility cannot give back.
+const PER_MILLION = "Per 1M tokens";
 
 /**
  * A capability Hive's control plane does not publish per model today. Rendered
@@ -147,11 +153,22 @@ export function ModelDetail({
       ),
     },
     {
-      key: "credits",
-      header: CREDITS_PER_MILLION,
+      key: "price",
+      header: "Price / 1M",
       numeric: true,
       align: "right",
       cell: (row) => formatModelPrice(row.credits, model.pricing.pricing_mode),
+    },
+    {
+      key: "credits",
+      header: "Credits / 1M",
+      numeric: true,
+      align: "right",
+      cell: (row) => (
+        <span className="text-xs text-[var(--color-ink-3)]">
+          {formatModelPrice(row.credits, model.pricing.pricing_mode, "credits")}
+        </span>
+      ),
     },
     {
       key: "note",
@@ -183,7 +200,8 @@ export function ModelDetail({
               {formatInOutPrice(model.pricing)}
             </span>
             <span className="block text-2xs text-[var(--color-ink-3)]">
-              {CREDITS_PER_MILLION.toLowerCase()}
+              {formatInOutPrice(model.pricing, "credits")} credits,{" "}
+              {PER_MILLION.toLowerCase()}
             </span>
           </Tile>
           <Tile label="Cache read / write">
@@ -199,7 +217,18 @@ export function ModelDetail({
               )}
             </span>
             <span className="block text-2xs text-[var(--color-ink-3)]">
-              {CREDITS_PER_MILLION.toLowerCase()}
+              {formatModelPrice(
+                model.pricing.cache_read_price_credits,
+                model.pricing.pricing_mode,
+                "credits",
+              )}
+              {" / "}
+              {formatModelPrice(
+                model.pricing.cache_write_price_credits,
+                model.pricing.pricing_mode,
+                "credits",
+              )}{" "}
+              credits, {PER_MILLION.toLowerCase()}
             </span>
           </Tile>
           <Tile label="Context">
@@ -225,7 +254,7 @@ export function ModelDetail({
           <CardDescription>
             {variablePriced
               ? "This alias is priced from the actual cost of each generation, so it publishes no per-million rate. The charge is derived per request, not from a table."
-              : "Every rate Hive charges for this model, in credits per one million metered tokens. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free."}
+              : "Every rate Hive charges for this model, per one million metered tokens, in US dollars and in the credits the ledger moves. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free."}
           </CardDescription>
         </CardHeader>
         <CardContent>
