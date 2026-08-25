@@ -86,7 +86,8 @@ groups:
           description: "More than 3 payment webhook errors in the last 10 minutes for rail {{ $labels.rail }}"
 
       # Cache-aware billing (PR #1157, vault spec-2026-08-25-cache-aware-billing.md).
-      # A trip means a charge exceeded 2x the flat-rate bound for its metered
+      # A trip means a charge exceeded 2x the highest-rate bound (the highest
+      # of the input, cache-read and cache-write rates) for its metered
       # tokens, the signature of a cache semantics inversion (the same class
       # of bug the audit found: prompt tokens billed at the wrong rate).
       # increase(), not the raw counter, so this alert clears once the
@@ -102,7 +103,7 @@ groups:
           severity: critical
         annotations:
           summary: "Cache-aware billing magnitude guard fired for {{ $labels.alias }}"
-          description: "{{ $value }} charge(s) on alias {{ $labels.alias }} (provider {{ $labels.provider }}) exceeded 2x the flat-rate bound in the last 15 minutes. Usually a cache semantics inversion (cache tokens billed in the wrong direction); check recent provider/LiteLLM shape changes for this alias before assuming it is a one-off."
+          description: "{{ $value }} charge(s) on alias {{ $labels.alias }} (provider {{ $labels.provider }}) exceeded 2x the highest-rate bound in the last 15 minutes. Usually a cache semantics inversion (cache tokens billed in the wrong direction); check recent provider/LiteLLM shape changes for this alias before assuming it is a one-off."
 
       # Lower severity than the trip above: this is billing continuing
       # correctly at a documented fallback rate, not a wrong charge, so it

@@ -44,7 +44,7 @@ type StageMetrics struct {
 var (
 	cacheBillingMagnitudeGuardTrips = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_cache_billing_magnitude_guard_trips_total",
-		Help: "Times the cache-aware billing magnitude guard fired: a charge exceeded 2x the flat-rate bound, the signature of a cache semantics inversion (vault spec-2026-08-25-cache-aware-billing.md).",
+		Help: "Times the cache-aware billing magnitude guard fired: a charge exceeded 2x the highest-rate bound (the highest of the input, cache-read and cache-write rates), the signature of a cache semantics inversion (vault spec-2026-08-25-cache-aware-billing.md).",
 	}, []string{"alias", "provider"})
 	cacheBillingFallbackRateUsed = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_cache_billing_fallback_rate_used_total",

@@ -225,6 +225,15 @@ var creditsPerMillion = big.NewInt(1_000_000)
 type UnitCharge struct {
 	Quantity          int64
 	CreditsPerMillion int64
+	// RateDivisor optionally divides this component's rate: it prices at
+	// CreditsPerMillion/RateDivisor credits per million units. Zero or one
+	// means an undivided rate. It carries a FRACTIONAL fallback rate through
+	// the charge arithmetic exactly: pre-scaling a multiplier like the
+	// default 1/10x cache-read fallback into a whole credits-per-million
+	// integer collapses to zero on any alias priced below 5 credits per
+	// million, dropping such a request to the 1-credit floor no matter how
+	// many cache tokens it consumed (PR #1157 review finding).
+	RateDivisor int64
 }
 
 // ChargeCredits converts priced quantities into whole credits: every
@@ -232,27 +241,68 @@ type UnitCharge struct {
 // then divided once by a million and rounded half up. One division, not one
 // per component, so two halves can never round independently and drift.
 //
+// A component with RateDivisor > 1 prices at CreditsPerMillion/RateDivisor
+// credits per million units. Fractional rates are folded onto the least
+// common multiple of all divisors before summing, a ratio-preserving integer
+// rewrite, so the exact rational total still gets its single final round and
+// a fallback rate can never be pre-rounded away (see UnitCharge.RateDivisor).
+//
 // This is the only implementation of that arithmetic in the tree (D-031,
 // credits are per million units). math/big throughout, per repo convention:
 // no float64 anywhere near a charge. Exported so the non-token modalities
 // (edge-api internal/audio, which meters characters and seconds) reuse it
 // rather than growing a second copy that could round differently.
 func ChargeCredits(charges ...UnitCharge) int64 {
-	numerator := new(big.Int)
+	// ponytail: lcm over int64; divisors are small compile-time constants,
+	// big.Int rates make overflow unreachable for any real catalog.
+	lcmDenom := int64(1)
 	for _, charge := range charges {
-		numerator.Add(numerator, new(big.Int).Mul(
-			big.NewInt(charge.Quantity),
-			big.NewInt(charge.CreditsPerMillion),
-		))
+		divisor := charge.RateDivisor
+		if divisor < 1 {
+			divisor = 1
+		}
+		lcmDenom = lcmInt64(lcmDenom, divisor)
 	}
 
-	quotient, remainder := new(big.Int).QuoRem(numerator, creditsPerMillion, new(big.Int))
-	// Round half up: a remainder at least half of creditsPerMillion bumps
+	numerator := new(big.Int)
+	for _, charge := range charges {
+		divisor := charge.RateDivisor
+		if divisor < 1 {
+			divisor = 1
+		}
+		component := new(big.Int).Mul(
+			big.NewInt(charge.Quantity),
+			big.NewInt(charge.CreditsPerMillion),
+		)
+		component.Mul(component, big.NewInt(lcmDenom/divisor))
+		numerator.Add(numerator, component)
+	}
+
+	// The fold multiplies every component by L/d, so the summed numerator is
+	// L times the true rational total: divide the single final round's
+	// denominator by that same L or every undivided charge comes out L times
+	// too large.
+	denominator := new(big.Int).Mul(creditsPerMillion, big.NewInt(lcmDenom))
+	quotient, remainder := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	// Round half up: a remainder at least half of the denominator bumps
 	// the quotient by one.
-	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(creditsPerMillion) >= 0 {
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(denominator) >= 0 {
 		quotient.Add(quotient, big.NewInt(1))
 	}
 	return quotient.Int64()
+}
+
+// gcdInt64/lcmInt64 serve ChargeCredits's fractional-rate folding. Both take
+// strictly positive inputs.
+func gcdInt64(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func lcmInt64(a, b int64) int64 {
+	return a / gcdInt64(a, b) * b
 }
 
 // priceEstimate computes both credit figures the design brief (section 3.5)

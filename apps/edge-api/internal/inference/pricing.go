@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"strconv"
 
@@ -96,38 +95,40 @@ const (
 	DefaultCacheWriteRateDenom = 4
 )
 
-// scaleRate multiplies a per-million rate by numerator/denominator, rounding
-// half up via math/big, the same convention metering.ChargeCredits uses so a
-// fallback rate never rounds differently than the charge it will feed.
-func scaleRate(rate, numerator, denominator int64) int64 {
-	product := new(big.Int).Mul(big.NewInt(rate), big.NewInt(numerator))
-	denom := big.NewInt(denominator)
-	quotient, remainder := new(big.Int).QuoRem(product, denom, new(big.Int))
-	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(denom) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	return quotient.Int64()
-}
-
-// resolveCacheRate returns the alias's own cache rate when the catalog carries
-// one (including a deliberate zero), or the documented fallback multiplier of
-// inputRate when it does not. It logs a WARN and increments
-// cacheBillingFallbackRateUsed, naming the alias and which side fell back,
-// only when quantity is actually nonzero: a route that has never once seen a
-// cache token should not spam a WARN (or a counter increment) every request
-// just because its cache columns happen to be unset.
-func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, quantity int64, aliasID, provider, side string) int64 {
+// resolveCacheRate prices one cache component (side is "read" or "write") as
+// a metering.UnitCharge: the alias's own catalog rate when the catalog
+// carries one (including a deliberate zero), or the documented fallback
+// multiplier of inputRate when it does not.
+//
+// The fallback is carried as an EXACT FRACTION (numerator folded into
+// Quantity, denominator into RateDivisor) instead of being pre-scaled into a
+// whole credits-per-million integer: 1/10x of an input rate below 5 credits
+// per million is a fraction of one credit per million, and pre-rounding it
+// to a whole number would collapse it to zero, dropping a request full of
+// cache-read tokens all the way down to the 1-credit floor no matter how
+// many tokens it consumed (PR #1157 review finding; regression test
+// TestCreditsForTokensFractionalFallbackSurvivesChargeArithmetic).
+//
+// It logs a WARN and increments cacheBillingFallbackRateUsed, naming the
+// alias and which side fell back, only when quantity is actually nonzero: a
+// route that has never once seen a cache token should not spam a WARN (or a
+// counter increment) every request just because its cache columns happen to
+// be unset.
+func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, quantity int64, aliasID, provider, side string) metering.UnitCharge {
 	if priceCredits != nil {
-		return *priceCredits
+		return metering.UnitCharge{Quantity: quantity, CreditsPerMillion: *priceCredits}
 	}
-	fallback := scaleRate(inputRate, numerator, denominator)
 	if quantity > 0 {
-		log.Printf("inference: WARN falling back to default cache-%s rate alias=%s provider=%s input_rate=%d fallback_rate=%d tokens=%d: "+
+		log.Printf("inference: WARN falling back to default cache-%s rate %d/%d x input_rate=%d alias=%s provider=%s tokens=%d: "+
 			"catalog has no %s cache price for this alias, see the seeding migration and model_aliases.cache_%s_price_credits",
-			side, aliasID, provider, inputRate, fallback, quantity, side, side)
+			side, numerator, denominator, inputRate, aliasID, provider, quantity, side, side)
 		cacheBillingFallbackRateUsed.WithLabelValues(aliasID, provider, side).Inc()
 	}
-	return fallback
+	return metering.UnitCharge{
+		Quantity:          quantity * numerator,
+		CreditsPerMillion: inputRate,
+		RateDivisor:       denominator,
+	}
 }
 
 // assertCacheBillingMagnitude is the runtime half of the cache-billing
@@ -136,8 +137,9 @@ func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, qu
 // inclusive shape should have subtracted, or the reverse) does not produce a
 // small error, it roughly doubles or nearly-frees the charge. This catches
 // that CLASS of bug in production, not just in a table test, by comparing the
-// real charge against twice the flat-rate bound a non-cache-aware charge
-// would have produced. It never blocks, alters, or refuses the charge: a
+// real charge against twice the highest-rate bound: two times what pricing
+// every prompt token at the HIGHEST of the input, cache-read and cache-write
+// rates would have produced. It never blocks, alters, or refuses the charge: a
 // ceiling breach is loud evidence to investigate, not grounds to fail a
 // request that has already been served (D-034 is about never charging zero
 // for delivered work, not about refusing a suspicious charge after the fact).
@@ -172,7 +174,7 @@ func assertCacheBillingMagnitude(route SelectRouteResult, fresh, cacheRead, cach
 	}
 	if credits > ceiling {
 		log.Printf("inference: BUG: cache billing magnitude guard tripped alias=%s provider=%s credits=%d ceiling=%d fresh=%d cache_read=%d cache_write=%d output=%d: "+
-			"charge exceeds 2x the flat-rate bound, which usually means a cache semantics inversion",
+			"charge exceeds 2x the highest-of-rates bound, which usually means a cache semantics inversion",
 			route.AliasID, route.Provider, credits, ceiling, fresh, cacheRead, cacheWrite, output)
 		cacheBillingMagnitudeGuardTrips.WithLabelValues(route.AliasID, route.Provider).Inc()
 	}
@@ -220,15 +222,12 @@ func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens
 	outputTokens = clampNonNegative(outputTokens, route.AliasID, route.Provider, "output_tokens")
 
 	inputRate := route.Pricing.InputCredits()
-	cacheReadRate := resolveCacheRate(route.Pricing.CacheReadPriceCredits, inputRate,
-		DefaultCacheReadRateNum, DefaultCacheReadRateDenom, cacheReadTokens, route.AliasID, route.Provider, "read")
-	cacheWriteRate := resolveCacheRate(route.Pricing.CacheWritePriceCredits, inputRate,
-		DefaultCacheWriteRateNum, DefaultCacheWriteRateDenom, cacheWriteTokens, route.AliasID, route.Provider, "write")
-
 	credits := metering.ChargeCredits(
 		metering.UnitCharge{Quantity: freshInputTokens, CreditsPerMillion: inputRate},
-		metering.UnitCharge{Quantity: cacheReadTokens, CreditsPerMillion: cacheReadRate},
-		metering.UnitCharge{Quantity: cacheWriteTokens, CreditsPerMillion: cacheWriteRate},
+		resolveCacheRate(route.Pricing.CacheReadPriceCredits, inputRate,
+			DefaultCacheReadRateNum, DefaultCacheReadRateDenom, cacheReadTokens, route.AliasID, route.Provider, "read"),
+		resolveCacheRate(route.Pricing.CacheWritePriceCredits, inputRate,
+			DefaultCacheWriteRateNum, DefaultCacheWriteRateDenom, cacheWriteTokens, route.AliasID, route.Provider, "write"),
 		metering.UnitCharge{Quantity: outputTokens, CreditsPerMillion: route.Pricing.OutputCredits()},
 	)
 	if freshInputTokens+cacheReadTokens+cacheWriteTokens+outputTokens > 0 && credits < 1 {

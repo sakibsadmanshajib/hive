@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
 // hiveClaudeCacheRoute is an illustrative Anthropic-Sonnet-class fixture (no
@@ -159,15 +161,15 @@ func TestCreditsForTokensNeverChargesZeroForNonzeroCacheUsage(t *testing.T) {
 // cache premium, e.g. a "free cache write" provider) is honoured as the real
 // rate, no fallback, no warning.
 func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
-	t.Run("nil price falls back to the default multiplier and warns", func(t *testing.T) {
+	t.Run("nil price falls back to an exact fractional UnitCharge and warns", func(t *testing.T) {
 		var buf bytes.Buffer
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 
 		got := resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "groq", "read")
-		want := scaleRate(10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom)
+		want := metering.UnitCharge{Quantity: 500 * DefaultCacheReadRateNum, CreditsPerMillion: 10_000, RateDivisor: DefaultCacheReadRateDenom}
 		if got != want {
-			t.Errorf("resolveCacheRate = %d, want fallback %d", got, want)
+			t.Errorf("resolveCacheRate = %+v, want fallback %+v (exact fraction, not pre-rounded)", got, want)
 		}
 		if !bytes.Contains(buf.Bytes(), []byte("WARN")) || !bytes.Contains(buf.Bytes(), []byte("hive-test")) {
 			t.Errorf("expected a WARN naming the alias when falling back, got: %q", buf.String())
@@ -181,8 +183,8 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 
 		zero := int64(0)
 		got := resolveCacheRate(&zero, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "groq", "write")
-		if got != 0 {
-			t.Errorf("resolveCacheRate = %d, want 0 (the deliberate stored rate, not the fallback)", got)
+		if got != (metering.UnitCharge{Quantity: 500, CreditsPerMillion: 0}) {
+			t.Errorf("resolveCacheRate = %+v, want the deliberate stored zero rate as an undivided charge", got)
 		}
 		if buf.Len() != 0 {
 			t.Errorf("a deliberate zero price must not warn, got: %q", buf.String())
@@ -194,7 +196,10 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 
-		resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 0, "hive-test", "groq", "read")
+		got := resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 0, "hive-test", "groq", "read")
+		if got.Quantity != 0 {
+			t.Errorf("zero-quantity fallback must contribute no quantity, got %+v", got)
+		}
 		if buf.Len() != 0 {
 			t.Errorf("a route that metered zero cache tokens must not warn just because its price is unset, got: %q", buf.String())
 		}
@@ -317,4 +322,46 @@ func TestResolveCacheRateCounterOnFallback(t *testing.T) {
 	if after != before+1 {
 		t.Errorf("cacheBillingFallbackRateUsed = %v after a fallback, want %v", after, before+1)
 	}
+}
+
+// TestCreditsForTokensFractionalFallbackSurvivesChargeArithmetic is the PR
+// #1157 review regression: a fractional FALLBACK cache rate (the default
+// multipliers of an alias with a NULL catalog cache price) must survive the
+// charge arithmetic exactly. Pre-scaling "1/10 x input" into a whole
+// credits-per-million integer collapses to zero for any alias priced below 5
+// credits per million, dropping a request full of cache-read tokens to the
+// 1-credit floor no matter how many tokens it consumed. The exact fraction
+// must reach ChargeCredits instead, which folds fractional components onto a
+// common denominator and keeps its single final round.
+func TestCreditsForTokensFractionalFallbackSurvivesChargeArithmetic(t *testing.T) {
+	route := SelectRouteResult{
+		AliasID:   "hive-cheap-fallback-demo",
+		Pricing:   FixedPricing(1, 2), // input 1 credit/million: below the 5/M collapse threshold
+		PriceUnit: PriceUnitTokens,
+	}
+
+	t.Run("100M cache-read tokens on an unpriced alias charge 10 credits, not the floor", func(t *testing.T) {
+		got := CreditsForTokens(route, 0, 100_000_000, 0, 0)
+		if want := int64(10); got != want { // 100e6 * (1/10) / 1e6
+			t.Fatalf("credits = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("100M cache-write tokens charge their exact 5/4x figure", func(t *testing.T) {
+		got := CreditsForTokens(route, 0, 0, 100_000_000, 0)
+		if want := int64(125); got != want { // 100e6 * 5/4 / 1e6
+			t.Fatalf("credits = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("fractional parts sum before the single round", func(t *testing.T) {
+		// fresh: 500_000 tokens at 1 credit/M = 0.5 credits; cache-read:
+		// 15_000_000 tokens at 1/10 credit/M = 1.5 credits. Sum FIRST gives
+		// exactly 2.0 -> 2 credits. Rounding each component independently
+		// would give 1 + 2 = 3.
+		got := CreditsForTokens(route, 500_000, 15_000_000, 0, 0)
+		if want := int64(2); got != want {
+			t.Fatalf("credits = %d, want %d (components must sum before rounding)", got, want)
+		}
+	})
 }
