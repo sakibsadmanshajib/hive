@@ -43,10 +43,10 @@ func NewPolicy() Policy { return Policy{} }
 //  2. perm == PermPlatformAdmin or PermGrantsCreate -> only IsAdmin actors.
 //  3. IsAdmin overlay -> grants all remaining permissions regardless of role/verified.
 //  4. RequiresVerified(perm) && !actor.Verified -> deny.
-//  5. billing.view, api_keys.read -> owner only (RequiresVerified=false, owner-scoped).
+//  5. billing.view, api_keys.read, provider_keys.read -> owner only (RequiresVerified=false, owner-scoped).
 //  6. analytics.view, ledger.view -> any verified actor (owner OR member).
-//  7. billing.write, api_keys.write, members.invite, members.manage,
-//     workspace.settings -> owner only (verification gate already passed).
+//  7. billing.write, api_keys.write, provider_keys.write, members.invite,
+//     members.manage, workspace.settings -> owner only (verification gate already passed).
 //  8. Default -> deny (any registry entry not explicitly handled above).
 func (p Policy) Can(actor Actor, perm Permission) bool {
 	// Default-deny for unknown permissions: anything not in the registry
@@ -71,7 +71,7 @@ func (p Policy) Can(actor Actor, perm Permission) bool {
 	}
 
 	switch perm {
-	case PermBillingView, PermAPIKeysRead:
+	case PermBillingView, PermAPIKeysRead, PermProviderKeysRead:
 		// Read-only billing/key perms: RequiresVerified=false, owner-scoped.
 		return actor.Role == platform.RoleOwner
 
@@ -80,7 +80,7 @@ func (p Policy) Can(actor Actor, perm Permission) bool {
 		// all gate on !EmailVerified only — no role check. Any verified actor may view.
 		return actor.Role == platform.RoleOwner || actor.Role == platform.RoleMember
 
-	case PermBillingWrite, PermAPIKeysWrite, PermMembersInvite,
+	case PermBillingWrite, PermAPIKeysWrite, PermProviderKeysWrite, PermMembersInvite,
 		PermMembersManage, PermWorkspaceSettings:
 		// Owner-only write perms (verification gate already passed above).
 		return actor.Role == platform.RoleOwner

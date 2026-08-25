@@ -58,6 +58,8 @@ const MATRIX: ActorFixture[] = [
       "ledger.view",
       "members.invite",
       "members.manage",
+      "provider_keys.read",
+      "provider_keys.write",
       "workspace.settings",
     ],
   },
@@ -67,6 +69,8 @@ const MATRIX: ActorFixture[] = [
   // billing.write: N (RequiresVerified=true)
   // api_keys.read: Y (RequiresVerified=false)
   // api_keys.write: N (RequiresVerified=true)
+  // provider_keys.read: Y (RequiresVerified=false)
+  // provider_keys.write: N (RequiresVerified=true)
   // analytics.view: N (RequiresVerified=true)
   // members.invite: N (RequiresVerified=true)
   // members.manage: N (RequiresVerified=true)
@@ -82,6 +86,7 @@ const MATRIX: ActorFixture[] = [
     granted: [
       "api_keys.read",
       "billing.view",
+      "provider_keys.read",
     ],
   },
 
@@ -111,7 +116,7 @@ const MATRIX: ActorFixture[] = [
   },
 
   // --- admin (isAdmin=true, any role/verified) ---
-  // admin gets all 11 permissions
+  // admin gets all 13 permissions
   {
     label: "admin",
     role: "",
@@ -128,6 +133,8 @@ const MATRIX: ActorFixture[] = [
       "members.invite",
       "members.manage",
       "platform.admin",
+      "provider_keys.read",
+      "provider_keys.write",
       "workspace.settings",
     ],
   },
@@ -138,8 +145,8 @@ const MATRIX: ActorFixture[] = [
 // ---------------------------------------------------------------------------
 
 describe("PERMISSIONS registry size guard", () => {
-  it("has exactly 11 entries — fails on registry expansion without fixture update", () => {
-    expect(PERMISSIONS.length).toBe(11);
+  it("has exactly 13 entries — fails on registry expansion without fixture update", () => {
+    expect(PERMISSIONS.length).toBe(13);
   });
 });
 
@@ -177,6 +184,8 @@ const EXPECTED: ExpectedMatrix = {
     "members.invite": true,
     "members.manage": true,
     "platform.admin": false,
+    "provider_keys.read": true,
+    "provider_keys.write": true,
     "workspace.settings": true,
   },
   "owner+unverified": {
@@ -190,6 +199,8 @@ const EXPECTED: ExpectedMatrix = {
     "members.invite": false,
     "members.manage": false,
     "platform.admin": false,
+    "provider_keys.read": true,
+    "provider_keys.write": false,
     "workspace.settings": false,
   },
   "member+verified": {
@@ -203,6 +214,8 @@ const EXPECTED: ExpectedMatrix = {
     "members.invite": false,
     "members.manage": false,
     "platform.admin": false,
+    "provider_keys.read": false,
+    "provider_keys.write": false,
     "workspace.settings": false,
   },
   "member+unverified": {
@@ -216,6 +229,8 @@ const EXPECTED: ExpectedMatrix = {
     "members.invite": false,
     "members.manage": false,
     "platform.admin": false,
+    "provider_keys.read": false,
+    "provider_keys.write": false,
     "workspace.settings": false,
   },
   admin: {
@@ -229,6 +244,8 @@ const EXPECTED: ExpectedMatrix = {
     "members.invite": true,
     "members.manage": true,
     "platform.admin": true,
+    "provider_keys.read": true,
+    "provider_keys.write": true,
     "workspace.settings": true,
   },
 };
