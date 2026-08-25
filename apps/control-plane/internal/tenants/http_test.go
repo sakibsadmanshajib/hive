@@ -202,24 +202,26 @@ func TestSwitch_NilDeps_503(t *testing.T) {
 // selected_tenant_id and must never grant a non-member a switch. Those two
 // invariants are the membership-check's job and hold deterministically.
 //
-// The audit write is a *separate*, best-effort invariant and does not: a
-// burst of N simultaneous Switch calls funnels into audit.SyncWriter.Write,
-// which runs under SERIALIZABLE isolation with its own internal retry (3
-// attempts) around a genuine read/write conflict on public.audit_log's
-// per-month MAX(seq) read. Diagnosed live against this suite's own Postgres
-// (10 fully-simultaneous audit.Write calls, no HTTP layer involved): 6 of 10
-// still failed with SQLSTATE 40001 after exhausting all 3 retries. Before
-// this file, that failure was invisible — apps/control-plane/internal/
-// tenants/http.go discarded the audit.Log() return with a bare `_ = ...` on
-// both call sites, directly contradicting the comment above Switch promising
-// "a misconfiguration cannot silently... lose a CROSS_TENANT_ATTEMPT event."
-// Fixed here to log.Printf on failure instead of discarding it, so the loss
-// is loud rather than silent; the retry-budget/locking fix that would make
-// it not happen at all lives in the audit package, out of this task's scope
-// (a shared writer used well beyond the tenants package). These tests assert
-// the now-honest contract: at least one audit row per outcome, never zero,
-// never more than N — not "always exactly N", which the writer does not
-// actually guarantee under contention.
+// The audit write used to be a *separate*, best-effort invariant: a burst of
+// N simultaneous Switch calls funnels into audit.SyncWriter.Write, which runs
+// under SERIALIZABLE isolation with its own internal retry (3 attempts)
+// around a genuine read/write conflict on public.audit_log's per-month
+// MAX(seq) read. Diagnosed live against this suite's own Postgres (10
+// fully-simultaneous audit.Write calls, no HTTP layer involved): 6 of 10
+// still failed with SQLSTATE 40001 after exhausting all 3 retries, because
+// the SERIALIZABLE snapshot was taken at the first statement inside the
+// transaction (the old pg_advisory_xact_lock call) — BEFORE that lock was
+// actually granted — so a blocked writer's snapshot predated its own turn.
+// apps/control-plane/internal/tenants/http.go discarded the audit.Log()
+// return with a bare `_ = ...` on both call sites, directly contradicting the
+// comment above Switch promising "a misconfiguration cannot silently... lose
+// a CROSS_TENANT_ATTEMPT event"; that was fixed to log.Printf on failure
+// instead of discarding it. #1182 then fixed the root cause in the audit
+// package itself: the advisory lock is now session-scoped and acquired
+// BEFORE BeginTx, so the transaction's snapshot can only form once this
+// writer already has exclusive possession of the month. These tests now
+// assert the contract the writer actually holds: exactly N audit rows for N
+// fully-simultaneous calls, not merely "at least one".
 // -----------------------------------------------------------------------------
 
 func TestSwitch_ConcurrentCallsFromActiveMember_AllSucceedConsistently(t *testing.T) {
@@ -275,9 +277,8 @@ func TestSwitch_ConcurrentCallsFromActiveMember_AllSucceedConsistently(t *testin
 	var switchCount int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM public.audit_log WHERE actor_id=$1 AND action='TENANT_SWITCH'`, userID).Scan(&switchCount))
-	require.GreaterOrEqual(t, switchCount, 1,
-		"expected at least one TENANT_SWITCH audit row to survive; zero means the audit write failure is being silently swallowed again")
-	require.LessOrEqual(t, switchCount, n, "cannot have more audit rows than switch calls")
+	require.Equal(t, n, switchCount,
+		"expected exactly N TENANT_SWITCH audit rows for N fully-simultaneous switch calls (#1182); fewer means the audit writer is still losing rows under concurrency")
 }
 
 func TestSwitch_ConcurrentCallsFromNonMember_AllRejectedNoneLeakThrough(t *testing.T) {
@@ -334,7 +335,6 @@ func TestSwitch_ConcurrentCallsFromNonMember_AllRejectedNoneLeakThrough(t *testi
 	var attemptCount int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM public.audit_log WHERE actor_id=$1 AND action='CROSS_TENANT_ATTEMPT'`, userID).Scan(&attemptCount))
-	require.GreaterOrEqual(t, attemptCount, 1,
-		"expected at least one CROSS_TENANT_ATTEMPT audit row to survive; zero means the audit write failure is being silently swallowed again")
-	require.LessOrEqual(t, attemptCount, n, "cannot have more audit rows than rejected attempts")
+	require.Equal(t, n, attemptCount,
+		"expected exactly N CROSS_TENANT_ATTEMPT audit rows for N fully-simultaneous rejected attempts (#1182); fewer means the audit writer is still losing rows under concurrency")
 }

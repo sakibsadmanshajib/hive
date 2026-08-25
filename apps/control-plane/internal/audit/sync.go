@@ -54,7 +54,12 @@ func NewSyncWriter(pool *pgxpool.Pool, cfg WriterConfig) *SyncWriter {
 // with serialisation_failure (40001). We retry the entire transaction
 // up to maxSerializationRetries because each attempt is short and
 // retrying with a fresh `ts` keeps the row attributable to its true
-// commit time, not its first attempt.
+// commit time, not its first attempt. As of #1182 the advisory lock
+// is held from before BeginTx through the explicit unlock (see
+// writeOnce), so two SyncWriter.Write calls racing each other no
+// longer produce 40001 at all — the retry loop is defense-in-depth
+// against a conflict from something else entirely serializable on
+// public.audit_log, not the writer's own concurrency.
 func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 	if e.Action == "" {
 		return errors.New("audit: action required")
@@ -84,32 +89,65 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 }
 
 func (w *SyncWriter) writeOnce(ctx context.Context, e Event, before, after []byte) error {
-	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return fmt.Errorf("audit: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	// Truncate to microseconds so the canonical hash, the canonical
 	// timestamp string, and the value Postgres stores are identical.
 	// Re-captured per attempt so a retried row carries its actual
 	// commit time, not the first attempt's stale time.
 	ts := canonical.TruncateTS(time.Now())
-
-	// Advisory lock keyed on the month's epoch as bigint. ::int was
-	// 32-bit and would silently overflow in January 2038; ::bigint is
-	// 64-bit and matches pg_advisory_xact_lock(bigint) so the lock
-	// namespace is unambiguous.
-	if _, err := tx.Exec(
-		ctx,
-		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::bigint)`,
-		ts,
-	); err != nil {
-		return fmt.Errorf("audit: advisory lock: %w", err)
-	}
-
 	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, 0)
+	// Lock key is the month's epoch as bigint (not ::int, which is
+	// 32-bit and would silently overflow in January 2038), computed
+	// once here in Go and reused for both lock and unlock below.
+	lockKey := monthStart.Unix()
+
+	conn, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("audit: acquire conn: %w", err)
+	}
+	defer conn.Release()
+
+	// Session-scoped advisory lock, acquired BEFORE the SERIALIZABLE
+	// transaction opens, held until the explicit unlock below.
+	//
+	// Postgres takes a SERIALIZABLE transaction's snapshot at the
+	// first statement inside it, not at BEGIN. The previous version of
+	// this writer took the lock with pg_advisory_xact_lock as that
+	// first statement: every concurrent writer's snapshot was formed
+	// the instant it started waiting on the lock, not the instant it
+	// actually got its turn, so each one committed against a MAX(seq)
+	// read that was already stale by the time it ran — the textbook
+	// SSI write-skew shape, and exactly why 6 of 10 fully-simultaneous
+	// writers failed with SQLSTATE 40001 (#1182). Acquiring the lock
+	// on the plain session first, before BEGIN, means the transaction
+	// below can only take its snapshot once this writer already has
+	// exclusive possession of the month, so nothing downstream of
+	// BEGIN can observe a stale one.
+	//
+	// Session- not transaction-scoped deliberately: it must survive
+	// past BeginTx to Commit. If the connection drops mid-hold,
+	// Postgres releases the session lock when the backend terminates,
+	// so the failure mode is one orphaned physical connection (which
+	// the pool detects and evicts on the next health check), never a
+	// permanently stuck lock. Same acquire/exec/defer-release shape as
+	// accounting.PgxAccountLocker (internal/accounting/pglock.go); no
+	// in-process gate is needed here the way that locker needs one,
+	// because this critical section never asks the pool for a second
+	// connection while holding the first.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey); err != nil {
+		return fmt.Errorf("audit: advisory lock: %w", err)
+	}
+	defer func() {
+		// Background context: unlock must run even if ctx was cancelled.
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, lockKey)
+	}()
+
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return fmt.Errorf("audit: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	tenantArg := nullableUUID(e.TenantID)
 
 	var maxSeq int64
