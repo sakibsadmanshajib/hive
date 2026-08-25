@@ -60,8 +60,6 @@ func TestLiveBench(t *testing.T) {
 	entUncached := catalog.NewService(cbase)
 	entCached := catalog.NewService(catalog.NewCachedRepository(cbase, cache))
 
-	benchSeq(t, ctx, cachedRouting, entCached, tid, alias) // warm
-
 	const n = 300
 	run := func(repo routing.Repository, ent routing.TenantEntitlements) []float64 {
 		ts := make([]float64, 0, n)
@@ -74,6 +72,8 @@ func TestLiveBench(t *testing.T) {
 		return ts
 	}
 
+	benchSeq(t, ctx, cachedRouting, entCached, tid, alias) // warm cache
+	run(uncachedRouting, entUncached)                      // warm the DB pool too, so neither timed pass pays a cold-start penalty
 	u := run(uncachedRouting, entUncached)
 	c := run(cachedRouting, entCached)
 
