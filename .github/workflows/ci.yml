@@ -214,10 +214,10 @@ jobs:
           #     boots (deploy/docker/Dockerfile.edge-api,
           #     Dockerfile.control-plane) before Playwright runs.
           #   - packages/storage/*, packages/audit-canonical/*,
-          #     packages/embedmodel/*   go.work members actually
-          #     imported by edge-api and/or control-plane (confirmed by
-          #     grep, not assumed), so a change here changes the built
-          #     images even though the path isn't under apps/.
+          #     packages/embedmodel/*, packages/dbtest/*   go.work members
+          #     actually imported by edge-api and/or control-plane
+          #     (confirmed by grep, not assumed), so a change here changes
+          #     the built images even though the path isn't under apps/.
           #   - deploy/docker/*   the compose files and Dockerfiles the
           #     job runs (`docker compose ... up`, docker-bake.hcl).
           #   - scripts/ci-throwaway-db.sh, scripts/ci-supabase-stack.sh
@@ -251,7 +251,7 @@ jobs:
             case "$f" in
               apps/web-console/* | apps/edge-api/* | apps/control-plane/* \
               | packages/storage/* | packages/audit-canonical/* \
-              | packages/embedmodel/* | deploy/docker/* \
+              | packages/embedmodel/* | packages/dbtest/* | deploy/docker/* \
               | supabase/migrations/* | deploy/supabase/init/* \
               | scripts/ci-throwaway-db.sh | scripts/ci-supabase-stack.sh \
               | scripts/apply-migrations.sh | .github/ci/test-db-bootstrap.sql \
