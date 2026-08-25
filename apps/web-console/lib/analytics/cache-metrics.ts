@@ -45,15 +45,23 @@ export interface CacheHitRate {
  * The EXCLUSIVE convention reports `prompt_tokens` with both cache components
  * already removed, and nothing in a stored row marks which shape produced it.
  * So this guards on the arithmetic rather than on a flag that does not exist:
- * under INCLUSIVE, cache read plus cache write can never exceed `input_tokens`,
- * because the fresh remainder is clamped non-negative upstream. A row where
- * they do exceed it can only have come from the exclusive shape, and its true
- * prompt total is the sum of all three components.
+ * under INCLUSIVE, cache read alone can never exceed `input_tokens`, because
+ * it is a subset of it. A row where cache read does exceed input can only
+ * have come from the exclusive shape.
  *
- * Only cache READ feeds the numerator. Cache WRITE is deliberately excluded:
- * per decision D-056 every `cache_write_tokens` value stored before PR #1157
- * deployed is a bug artifact rather than a measured zero, and a stored row
- * carries no marker saying which side of that deploy it fell on.
+ * That check deliberately reads `cache_read_tokens` alone, never
+ * `cache_write_tokens`. Per decision D-056 every `cache_write_tokens` value
+ * stored before PR #1157 deployed is a bug artifact rather than a measured
+ * quantity, and a stored row carries no marker saying which side of that
+ * deploy it fell on, so it can never be trusted, in either direction: not as
+ * the signal that decides which shape a row is, and not as an addend in the
+ * prompt-token total once a shape is picked. An artifact large enough on its
+ * own to push `cache_read_tokens + cache_write_tokens` past `input_tokens`
+ * used to flip a genuinely inclusive row to the exclusive branch and inflate
+ * the denominator with garbage, silently lowering the displayed hit rate.
+ * Cache WRITE is excluded from both the shape check and the prompt-token sum
+ * for exactly that reason; only cache READ, which carries no such artifact
+ * history, ever moves this arithmetic.
  */
 export function deriveCacheHitRate(
   rows: ReadonlyArray<CacheTokenRow>,
@@ -63,11 +71,10 @@ export function deriveCacheHitRate(
 
   for (const row of rows) {
     const cacheRead = row.cache_read_tokens ?? 0;
-    const cacheWrite = row.cache_write_tokens ?? 0;
     const input = row.input_tokens;
-    const exclusiveShape = cacheRead + cacheWrite > input;
+    const exclusiveShape = cacheRead > input;
 
-    promptTokens += exclusiveShape ? input + cacheRead + cacheWrite : input;
+    promptTokens += exclusiveShape ? input + cacheRead : input;
     cachedTokens += cacheRead;
   }
 

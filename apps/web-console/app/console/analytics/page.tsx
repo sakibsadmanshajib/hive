@@ -210,7 +210,7 @@ export default async function AnalyticsPage({
 
   function cacheHitNote(): string {
     if (!EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
-      return "No sample for this window. Pick 24h, 7d or 30d.";
+      return "No sample for this window. Pick 1h, 24h, 7d or 30d.";
     }
     if (!cacheHitRate) {
       return "Request sample unavailable.";

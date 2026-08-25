@@ -117,6 +117,26 @@ describe("deriveCacheHitRate", () => {
     expect(result.rate).toBe(0.5);
   });
 
+  it("does not let an artifact cache_write_tokens value flip a genuinely inclusive row to the exclusive shape", () => {
+    // A pre-#1157 row can carry a garbage cache_write_tokens value large
+    // enough on its own to exceed input_tokens, even though cache_read_tokens
+    // (400) sits well inside input_tokens (1000) and the row is really the
+    // ordinary inclusive shape: 400 of 1000 prompt tokens came from cache.
+    // Letting the artifact drive shape detection used to add it to the
+    // denominator too, diluting a true 40% hit rate down to under 1%.
+    const result = deriveCacheHitRate([
+      event({
+        input_tokens: 1000,
+        cache_read_tokens: 400,
+        cache_write_tokens: 50_000,
+      }),
+    ]);
+
+    expect(result.promptTokens).toBe(1000);
+    expect(result.cachedTokens).toBe(400);
+    expect(result.rate).toBe(0.4);
+  });
+
   it("excludes cache writes from the numerator", () => {
     // D-056: a pre-#1157 cache_write_tokens value is a bug artifact, not a
     // measured quantity, so it must not move the hit rate.
