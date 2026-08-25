@@ -65,11 +65,11 @@ const ACTOR_STATES: ActorState[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Defensive count guard — fails if PERMISSIONS registry diverges from 11
+// Defensive count guard — fails if PERMISSIONS registry diverges from 13
 // ---------------------------------------------------------------------------
 describe("PERMISSIONS registry", () => {
-  it("has exactly 11 permissions", () => {
-    expect(PERMISSIONS.length).toBe(11);
+  it("has exactly 13 permissions", () => {
+    expect(PERMISSIONS.length).toBe(13);
   });
 });
 
