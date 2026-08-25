@@ -273,7 +273,7 @@ export default async function ConsolePage() {
         <div className="mt-10 border-t border-[var(--color-border)] pt-4 text-2xs text-[var(--color-ink-3)]">
           Need the API reference?{" "}
           <Link
-            href="https://hivegpt.io"
+            href="/console/docs"
             className="text-[var(--color-ink-2)] underline-offset-4 hover:text-[var(--color-ink)] hover:underline"
           >
             Read the docs

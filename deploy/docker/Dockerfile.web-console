@@ -40,6 +40,17 @@ COPY deploy/ /app/deploy/
 COPY docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json /app/docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json
 COPY supabase/migrations/ /app/supabase/migrations/
 
+# The console's /console/docs page and its /api/openapi.yaml route read the
+# generated OpenAPI contract and its support matrix straight out of this
+# package at request time (apps/web-console/lib/api-contract.ts). It is read
+# rather than imported because the spec is 1.1 MB of YAML that no loader in
+# that app turns into a module, and it is not copied into apps/web-console
+# because a second copy of a generated artefact is exactly the drift that
+# generating it exists to prevent. Without this COPY the route answers 500 and
+# the docs page fails to render, in the image only, which is the failure this
+# line exists to prevent.
+COPY packages/openai-contract/ /app/packages/openai-contract/
+
 EXPOSE 3000
 
 CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
