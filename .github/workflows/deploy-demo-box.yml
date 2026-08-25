@@ -66,6 +66,18 @@ on:
       # here is exactly the kind of change that must not wait for an
       # unrelated commit to ship it.
       - '.dockerignore'
+      # deploy/docker/Dockerfile.web-console COPYs these three repo-root
+      # paths so tests/unit/control-plane-host.test.ts and
+      # tests/unit/chat-coverage-lib.test.ts have their fixtures inside the
+      # image (PR #1151): .env.example, all of deploy/ (the hostname-drift
+      # test scans the whole tree recursively, so this is deliberately not
+      # narrowed to deploy/docker/** or deploy/litellm/** above), and one
+      # frozen coverage-run artifact under docs/proof/. Same blind spot as
+      # every other entry in this list: without one, a change to any of
+      # these would merge and never trigger a deploy.
+      - '.env.example'
+      - 'deploy/**'
+      - 'docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json'
       # A schema-only merge used to match nothing here, so it deployed nothing
       # and applied nothing. That is literally how PR #624's
       # 20260731_01_tenant_billing_account_backfill_v2.sql and PR #602's
