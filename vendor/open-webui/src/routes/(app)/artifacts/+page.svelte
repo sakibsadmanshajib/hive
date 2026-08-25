@@ -293,7 +293,7 @@
 		{:else}
 			<div class="flex flex-col w-full h-full overflow-y-auto">
 				<div class="px-6 pt-6 pb-3">
-					<div class="text-lg font-medium text-gray-900 dark:text-white">
+					<div class="hv-display text-2xl text-gray-900 dark:text-white">
 						{$i18n.t('Artifacts')}
 					</div>
 					<div class="text-xs text-gray-500 dark:text-gray-400 mt-1">

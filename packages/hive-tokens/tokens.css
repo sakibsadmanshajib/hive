@@ -112,15 +112,52 @@
 	--hv-container-pad: 48px;
 
 	/* ---------------------------------------------------------------- *
-	 * Type. One family, Hanken Grotesk, carrying display and interface
-	 * both, separated by weight. Geist Mono is a product only addition
-	 * the brand does not have, because a marketing page has no credit
-	 * balances, key fragments, model identifiers or log output to set.
-	 * Both are SIL Open Font License 1.1.
+	 * Type. Two families doing two jobs.
+	 *
+	 * Hanken Grotesk carries the interface: navigation, buttons, labels,
+	 * tables, settings, every control surface. Source Serif 4 carries the
+	 * document: the chat greeting, page titles, and assistant prose in the
+	 * transcript. Geist Mono is a product only addition the brand does not
+	 * have, because a marketing page has no credit balances, key fragments,
+	 * model identifiers or log output to set. All three are SIL Open Font
+	 * License 1.1.
+	 *
+	 * The serif was added on 2026-08-25. Until then this file declared one
+	 * family for display and interface both, separated only by weight, and
+	 * the consequence was measurable rather than theoretical: a chat home
+	 * set entirely in a grotesque reads as a control panel, and the same
+	 * screen with a serif greeting and serif transcript reads as a document.
+	 * Hierarchy carried by weight alone is a legitimate system; it is simply
+	 * not the one this product is being measured against.
+	 *
+	 * Source Serif 4 specifically, over the other open serifs, because it is
+	 * a transitional text face with a real italic and a genuine weight axis,
+	 * so it can set 19px running prose and a 40px greeting from one file.
+	 * A display-only serif (Instrument Serif, already vendored for upstream's
+	 * own use) has one weight and no italic and would have forced synthetic
+	 * bold and synthetic oblique into every emphasised span of a reply.
 	 * ---------------------------------------------------------------- */
 	--hv-font-sans: 'Hanken Grotesk', 'Noto Sans Bengali', ui-sans-serif, system-ui, sans-serif;
-	--hv-font-display: var(--hv-font-sans);
+	--hv-font-serif: 'Source Serif 4', 'Noto Serif Bengali', ui-serif, Georgia, serif;
+	--hv-font-display: var(--hv-font-serif);
 	--hv-font-mono: 'Geist Mono', 'Noto Sans Bengali', ui-monospace, 'SFMono-Regular', monospace;
+
+	/*
+	 * Running prose in the transcript. Larger and looser than interface body
+	 * text on purpose: this is the one text on the screen a person reads
+	 * rather than scans, and it is set in the serif, which needs more room
+	 * than the grotesque at the same nominal size.
+	 */
+	--hv-text-prose: 19px;
+	--hv-leading-prose: 30px;
+
+	/*
+	 * The reading measure. Roughly 80 characters at --hv-text-prose, which is
+	 * the width the transcript, the composer and the turn separators all
+	 * share, so the conversation reads as one column rather than as prose
+	 * floating inside a wider pane.
+	 */
+	--hv-measure: 52rem;
 
 	/* Body stays at 14px. This is a control surface with dense lists and
 	 * tables; 16px body turns it into a marketing page. */
