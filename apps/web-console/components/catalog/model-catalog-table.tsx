@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import type { CatalogModel } from "@/lib/control-plane/client";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -77,9 +79,12 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
       header: "Model",
       cell: (row) => (
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-[var(--color-ink)]">
-            {row.display_name}
-          </span>
+          <Link
+            href={`/console/catalog/${encodeURIComponent(row.id)}`}
+            className="text-sm font-medium text-[var(--color-ink)] underline-offset-4 hover:underline"
+          >
+            {row.display_name || row.id}
+          </Link>
           <code className="font-mono text-2xs text-[var(--color-ink-3)]">
             {row.id}
           </code>
