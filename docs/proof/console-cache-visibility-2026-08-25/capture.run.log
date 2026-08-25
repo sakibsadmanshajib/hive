@@ -1,0 +1,12 @@
+[after] session minted for owner@hive-verify-952.invalid via admin one-time token (no password used)
+[after] catalog  http://127.0.0.1:13310/console/catalog  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/after-catalog.png
+[after] logs  http://127.0.0.1:13310/console/logs?window=24h  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/after-logs.png
+[after] analytics  http://127.0.0.1:13310/console/analytics?tab=overview&window=24h  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/after-analytics.png
+[after] catalog-search  http://127.0.0.1:13310/console/catalog  search="deepseek"  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/after-catalog-search.png
+[after] catalog-sort-desc  http://127.0.0.1:13310/console/catalog  sort="input_desc"  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/after-catalog-sort-desc.png
+[after] browser console errors: none
+[before] session minted for owner@hive-verify-952.invalid via admin one-time token (no password used)
+[before] catalog  http://127.0.0.1:13310/console/catalog  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/before-catalog.png
+[before] logs  http://127.0.0.1:13310/console/logs?window=24h  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/before-logs.png
+[before] analytics  http://127.0.0.1:13310/console/analytics?tab=overview&window=24h  ->  /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof/before-analytics.png
+[before] browser console errors: none

@@ -6,7 +6,7 @@ import {
   getViewer,
 } from "@/lib/control-plane/client";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
-import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
+import { ModelCatalogBrowser } from "@/components/catalog/model-catalog-browser";
 import { PageHeader } from "@/components/ui/page-header";
 
 export default async function CatalogPage() {
@@ -41,10 +41,10 @@ export default async function CatalogPage() {
       <PageHeader
         eyebrow="Build"
         title="Model catalog"
-        description="Available models and per-million-token pricing across providers. Capabilities are surfaced as tags."
+        description="Available models with per-million-token input, output and prompt-cache pricing. Search, filter by capability, or sort by price."
       />
 
-      <ModelCatalogTable models={models} />
+      <ModelCatalogBrowser models={models} />
     </ConsoleShell>
   );
 }

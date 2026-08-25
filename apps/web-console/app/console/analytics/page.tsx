@@ -7,13 +7,19 @@ import {
   getAnalyticsErrors,
   getAnalyticsSpend,
   getAnalyticsUsage,
+  getUsageEvents,
   getViewer,
 } from "@/lib/control-plane/client";
 import type {
   ErrorSummaryRow,
   SpendSummaryRow,
+  UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import {
+  deriveBlendedCreditsPerMillion,
+  deriveCacheHitRate,
+} from "@/lib/analytics/cache-metrics";
 import { AnalyticsControls } from "@/components/analytics/analytics-controls";
 import { ObservabilityTiles } from "@/components/analytics/observability-tiles";
 import { AnalyticsTable } from "@/components/analytics/analytics-table";
@@ -30,7 +36,7 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/cn";
-import { formatCredits } from "@/lib/format/credits";
+import { formatCredits, formatPercent } from "@/lib/format/credits";
 
 interface AnalyticsPageProps {
   searchParams: Promise<{
@@ -66,9 +72,14 @@ const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
 interface SummaryCardProps {
   label: string;
   value: string;
+  // Says what the number above actually covers. Required on any tile whose
+  // value is derived rather than read straight off the server aggregate, so
+  // the sample or the formula is never left implicit.
+  note?: string;
+  testId?: string;
 }
 
-function SummaryCard({ label, value }: SummaryCardProps) {
+function SummaryCard({ label, value, note, testId }: SummaryCardProps) {
   return (
     <Card>
       <CardContent className="flex flex-col gap-1 px-5 py-5">
@@ -78,13 +89,35 @@ function SummaryCard({ label, value }: SummaryCardProps) {
         <p
           className="metric text-2xl text-[var(--color-ink)]"
           data-numeric
+          data-testid={testId}
         >
           {value}
         </p>
+        {note ? (
+          <p className="text-2xs leading-tight text-[var(--color-ink-3)]">
+            {note}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );
 }
+
+// Windows the usage-events endpoint accepts as a preset. The analytics
+// controls also offer 90d and a custom range, which parseListEventsFilter
+// (apps/control-plane/internal/usage/http.go) rejects with a 400. Rather than
+// fire a request that is known to fail, or quietly substitute a different
+// window and label the answer as though it covered the one on screen, the
+// cache tile says it has no sample for those windows.
+//
+// ponytail: preset windows only. Widening it means teaching getUsageEvents to
+// pass explicit from/to bounds, which the endpoint already accepts.
+const EVENT_SAMPLE_WINDOWS: ReadonlyArray<string> = ["1h", "24h", "7d", "30d"];
+
+// The usage-events endpoint caps a page at 100 rows (maxEventsPageLimit), so
+// the cache sample is the most recent 100 requests in the window and every
+// tile built from it says so.
+const CACHE_SAMPLE_LIMIT = 100;
 
 export default async function AnalyticsPage({
   searchParams,
@@ -146,6 +179,52 @@ export default async function AnalyticsPage({
     (sum, r) => sum + r.total_credits_spent,
     0,
   );
+
+  // Cache hit rate has no server-side aggregate to read (GetUsageSummary sums
+  // input, output, credits and count only), so it is derived here from real
+  // usage_events rows. The sample is bounded by the endpoint's page cap, and
+  // the tile prints the sample size rather than implying it covered the whole
+  // window.
+  let cacheSample: UsageEventRow[] | null = null;
+  let cacheSampleTruncated = false;
+  if (activeTab === "overview" && EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
+    try {
+      const page = await getUsageEvents({
+        limit: CACHE_SAMPLE_LIMIT,
+        window: timeWindow,
+      });
+      cacheSample = page.events;
+      cacheSampleTruncated = page.next_cursor !== null;
+    } catch {
+      // Leave cacheSample null: the tile renders as unavailable rather than
+      // as a zero-percent hit rate nobody measured.
+      cacheSample = null;
+    }
+  }
+
+  const cacheHitRate = cacheSample ? deriveCacheHitRate(cacheSample) : null;
+  const blendedCreditsPerMillion = deriveBlendedCreditsPerMillion(
+    totalCreditsSpent,
+    totalInputTokens + totalOutputTokens,
+  );
+
+  function cacheHitNote(): string {
+    if (!EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
+      return "No sample for this window. Pick 1h, 24h, 7d or 30d.";
+    }
+    if (!cacheHitRate) {
+      return "Request sample unavailable.";
+    }
+    if (cacheHitRate.sampleSize === 0) {
+      return "No requests in this window.";
+    }
+    if (cacheHitRate.promptTokens === 0) {
+      return `No prompt tokens across the last ${cacheHitRate.sampleSize} requests.`;
+    }
+    return cacheSampleTruncated
+      ? `Cached prompt tokens over the last ${cacheHitRate.sampleSize} requests, the most this window returns in one page.`
+      : `Cached prompt tokens over all ${cacheHitRate.sampleSize} requests in this window.`;
+  }
 
   return (
     <ConsoleShell
@@ -211,7 +290,7 @@ export default async function AnalyticsPage({
         <>
           {activeTab === "overview" ? (
             <div className="flex flex-col gap-6">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <SummaryCard
                   label="Total requests"
                   value={formatCredits(totalRequests)}
@@ -227,6 +306,26 @@ export default async function AnalyticsPage({
                 <SummaryCard
                   label="Credits spent"
                   value={formatCredits(totalCreditsSpent)}
+                />
+                <SummaryCard
+                  label="Cache hit rate"
+                  value={formatPercent(cacheHitRate?.rate ?? null)}
+                  note={cacheHitNote()}
+                  testId="cache-hit-rate"
+                />
+                <SummaryCard
+                  label="Blended credits / 1M"
+                  value={
+                    blendedCreditsPerMillion === null
+                      ? "—"
+                      : formatCredits(blendedCreditsPerMillion)
+                  }
+                  note={
+                    blendedCreditsPerMillion === null
+                      ? "No tokens served in this window."
+                      : "Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in."
+                  }
+                  testId="blended-credits-per-million"
                 />
               </section>
               <ChartCard title="Usage" description="Requests and tokens.">

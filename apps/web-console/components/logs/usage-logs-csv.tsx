@@ -12,8 +12,15 @@ interface UsageLogsCsvProps {
 
 export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
   function handleExport() {
+    // cache_read_tokens and cache_write_tokens sit next to the token columns
+    // they belong with. An absent value exports as an EMPTY cell rather than
+    // 0, for the same reason the table renders an em-dash: the control-plane
+    // omits both fields when they are zero, so the console cannot tell a
+    // measured zero from an unmeasured one, and a spreadsheet full of zeroes
+    // is exactly the shape a customer would reconcile a bill against.
     const header =
-      "created_at,request_id,model_alias,status,input_tokens,output_tokens,hive_credit_delta,error_code,api_key\n";
+      "created_at,request_id,model_alias,status,input_tokens,output_tokens," +
+      "cache_read_tokens,cache_write_tokens,hive_credit_delta,error_code,api_key\n";
     const lines = rows.map((row) => {
       const key = row.api_key_id
         ? (keyNames[row.api_key_id] ?? `…${row.api_key_id.slice(-6)}`)
@@ -26,6 +33,12 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
         row.status,
         String(row.input_tokens),
         String(row.output_tokens),
+        row.cache_read_tokens === undefined
+          ? ""
+          : String(row.cache_read_tokens),
+        row.cache_write_tokens === undefined
+          ? ""
+          : String(row.cache_write_tokens),
         String(row.hive_credit_delta),
         row.error_code ?? "",
         key,
