@@ -1,0 +1,34 @@
+hive PR #1187, issue #1179 -- console API reference, captured 2026-08-25.
+
+Substrate: the image built from this branch's deploy/docker/Dockerfile.web-console.prod
+(next build + next start, the same Dockerfile that builds console-hive.scubed.co),
+running against a live self-hosted Supabase and a live control-plane, signed in with a
+session minted through tests/e2e/support/live-auth.mjs. No password was set or rotated.
+The signed-in address is covered by Playwright's screenshot mask in every capture and
+never appears in this log.
+
+GET /console/catalog -> 200
+shell header Documentation link href = /console/docs
+screenshot console-docs-01-shell-link.png  url=http://localhost:3111/console/catalog
+clicking the shell Documentation link landed on http://localhost:3111/console/docs
+screenshot console-docs-02-quickstart.png  url=http://localhost:3111/console/docs
+quickstart alias line = hive-auto is a routing alias, not a single upstream model. See the model catalog for what each alias resolves to and wha
+page h1 = API reference
+provenance line = Served unauthenticated at /api/openapi.yaml on this console's own origin · 97 operations described · support matrix version 0.1.0, generated 2026-03-28
+screenshot console-docs-03-disagreements.png  url=http://localhost:3111/console/docs
+screenshot console-docs-04-unsupported.png  url=http://localhost:3111/console/docs
+section present: Supported now -> true
+section present: Planned for launch -> true
+section present: Not supported at launch -> true
+section present: Out of scope -> true
+endpoint rows rendered = 164
+GET /api/openapi.yaml (no session) -> 200 application/yaml; charset=utf-8
+spec bytes served = 1165460
+first spec line = openapi: 3.0.0
+
+clean load, no capture-side DOM mutation:
+  /console -> 200, no page errors
+  /console/catalog -> 200, no page errors
+  /console/docs -> 200, no page errors
+
+browser console during the capture:

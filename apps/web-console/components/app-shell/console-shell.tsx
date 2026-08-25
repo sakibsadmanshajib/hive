@@ -204,8 +204,13 @@ export function ConsoleShell({
             {topbar}
           </div>
           <div className="flex items-center gap-3">
+            {/*
+              In-product docs, not hivegpt.io. That host is off-product and
+              this link is in the shell on every console page, so it was the
+              most-seen dead end in the console (issues #883, #1179).
+            */}
             <Link
-              href="https://hivegpt.io"
+              href="/console/docs"
               className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
             >
               {tShell("docs")}
