@@ -1,0 +1,133 @@
+name: external-uptime-probe
+
+# Answers one question that nothing else in this repository can answer:
+# "is the demo actually down, or does it only look down from where we are
+# sitting?"
+#
+# Every other reachability gate we own runs on the self-hosted runner, which
+# lives on the demo box in Bangladesh (post-deploy-verify.yml pins
+# `runs-on: [self-hosted, hive-demo]` for exactly that reason: it needs the
+# local docker socket). That is the right substrate for asking whether the
+# containers are healthy, and the wrong one for asking whether the internet
+# can reach them, because it shares a country, an ISP path and a Cloudflare
+# colo with every human on this project. When that shared path degrades,
+# every probe we own and every browser we own go dark at the same instant,
+# and the honest reading of that evidence is "the product is down" even when
+# the product is serving the rest of the world perfectly.
+#
+# That is not hypothetical. On 2026-08-25 all three public hostnames returned
+# curl code 000 from every vantage anyone on the project could reach, for
+# roughly seventy minutes. The tunnel was healthy, the origins were healthy,
+# and the surfaces were returning correct payloads to the rest of the
+# internet the entire time. Cloudflare had Dhaka (DAC) under maintenance and
+# Singapore and Hong Kong, the two colos Bangladesh traffic fails over to, in
+# active maintenance windows. The remediation that was very nearly applied
+# was bouncing cloudflared, which would have taken a working tunnel down and
+# forced it to re-establish through the degraded region.
+#
+# This job runs on GitHub's hosted runners, outside that blast radius, so its
+# verdict is independent of the local path.
+#
+# HOW TO READ THIS JOB DURING AN INCIDENT
+#
+#   red   -> the surfaces are genuinely unreachable from the public internet.
+#            Escalate. Look at the tunnel, the origins and the deploy.
+#   green -> while you personally cannot reach the surfaces, the problem is
+#            between YOU and Cloudflare, not between Cloudflare and us.
+#            Do not restart cloudflared. Do not redeploy. Check
+#            cloudflarestatus.com for your nearest colo and confirm from a
+#            vantage outside your region before touching production.
+#
+# The cf-ray header printed for each host is the fastest way to tell the two
+# apart by hand: a response carrying one was served through the Cloudflare
+# edge, so the edge and the tunnel behind it were both working at that moment.
+
+on:
+  schedule:
+    # Every 15 minutes. This repository is public, so hosted-runner minutes
+    # are free and the cadence costs nothing. Fifteen minutes is chosen to
+    # bound how long a real outage can sit unnoticed; the 2026-08-25 event
+    # went roughly forty-five minutes before anyone looked.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+# Deliberately no `concurrency` group. Collapsing monitor runs would let a
+# burst of scheduled checks cancel each other, and a cancelled check is a
+# silent absence rather than a loud failure. A monitor that quietly skips is
+# worse than no monitor, because it reads as green.
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe public surfaces from outside the demo box's region
+    # The entire point of this job. Never move it to [self-hosted, hive-demo]:
+    # that would put the probe back inside the blast radius it exists to see
+    # around, and it would go dark in precisely the incident it is meant to
+    # adjudicate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Probe every public hostname
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # hostname|path|expected status. These are the hostnames
+          # deploy/cloudflare/tunnel-ingress.json declares public. Keep this
+          # list in step with that file: a public hostname absent here is a
+          # surface that can go down without anyone being told.
+          targets=(
+            "chat-hive.scubed.co|/api/config|200"
+            "console-hive.scubed.co|/|200"
+            "api-hive.scubed.co|/health|200"
+          )
+
+          failed=0
+
+          for entry in "${targets[@]}"; do
+            IFS='|' read -r host path want <<<"$entry"
+            url="https://${host}${path}"
+
+            # Headers go to a file so the body is never printed. /api/config
+            # and /health are both non-sensitive today, but a probe that
+            # dumps response bodies into a public log is one endpoint change
+            # away from leaking something, and nothing here needs the body.
+            headers="$(mktemp)"
+            code="$(curl -sS -o /dev/null -D "${headers}" \
+                      --max-time 20 \
+                      -w '%{http_code}' \
+                      "${url}" 2>/dev/null || echo '000')"
+
+            # cf-ray proves the response came through the Cloudflare edge
+            # rather than from somewhere in between. Its absence on a 200 is
+            # itself worth seeing.
+            ray="$(grep -i '^cf-ray:' "${headers}" | tr -d '\r' | awk '{print $2}' || true)"
+            rm -f "${headers}"
+            [ -n "${ray}" ] || ray='(none)'
+
+            if [ "${code}" = "${want}" ]; then
+              echo "ok    ${url} -> ${code} (cf-ray ${ray})"
+            else
+              echo "FAIL  ${url} -> ${code}, wanted ${want} (cf-ray ${ray})"
+              failed=1
+            fi
+          done
+
+          if [ "${failed}" -ne 0 ]; then
+            echo
+            echo "One or more public surfaces did not answer correctly from a"
+            echo "runner outside the demo box's region. Because this probe does"
+            echo "not share a network path with the team, this is a real"
+            echo "outage rather than a local or regional artifact. Escalate:"
+            echo "check the tunnel, the origins, and the most recent deploy."
+            exit 1
+          fi
+
+          echo
+          echo "All public surfaces answered correctly from outside the region."
+          echo "If the surfaces look down to you right now, the fault is"
+          echo "between you and Cloudflare. Do not restart cloudflared and do"
+          echo "not redeploy on the strength of a local timeout."
