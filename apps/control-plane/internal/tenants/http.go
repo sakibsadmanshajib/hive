@@ -123,25 +123,39 @@ func (h *Handler) Switch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		_ = h.deps.Audit.Log(r.Context(), audit.Event{
+		// Best-effort, not fail-closed: audit.SyncWriter.Write already retries
+		// its own SERIALIZABLE conflicts internally (up to
+		// maxSerializationRetries), and under concurrent Switch calls that
+		// retry budget can still be exhausted (SQLSTATE 40001). A failure
+		// here must never flip a real cross-tenant attempt into a silent
+		// success, so it is logged loudly rather than discarded: the comment
+		// at the top of Switch promises this event is never LOST silently,
+		// and a bare `_ = ...` broke that promise under load.
+		if auditErr := h.deps.Audit.Log(r.Context(), audit.Event{
 			TenantID: user.TenantID,
 			Actor:    audit.Actor{ID: user.ID, Type: audit.ActorUser},
 			Action:   "CROSS_TENANT_ATTEMPT",
 			Severity: audit.SeverityCritical,
 			Before:   map[string]string{"requested_tenant_id": body.TenantID.String()},
-		})
+		}); auditErr != nil {
+			log.Printf("tenants: CROSS_TENANT_ATTEMPT audit write failed for user=%s requested_tenant=%s: %v",
+				user.ID, body.TenantID, auditErr)
+		}
 		writeError(w, http.StatusForbidden, "CROSS_TENANT", "not a member of the requested tenant")
 		return
 	}
 
-	_ = h.deps.Audit.Log(r.Context(), audit.Event{
+	if auditErr := h.deps.Audit.Log(r.Context(), audit.Event{
 		TenantID: body.TenantID,
 		Actor:    audit.Actor{ID: user.ID, Type: audit.ActorUser},
 		Action:   "TENANT_SWITCH",
 		Severity: audit.SeverityInfo,
 		Before:   map[string]string{"from": user.TenantID.String()},
 		After:    map[string]string{"to": body.TenantID.String()},
-	})
+	}); auditErr != nil {
+		log.Printf("tenants: TENANT_SWITCH audit write failed for user=%s tenant=%s: %v",
+			user.ID, body.TenantID, auditErr)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

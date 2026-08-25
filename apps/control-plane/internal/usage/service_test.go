@@ -21,6 +21,15 @@ type stubRepo struct {
 	lastRecordedEvent RecordEventInput
 	lastAttemptsLimit int
 	lastEventsFilter  ListEventsFilter
+
+	lastAnalyticsFilter    AnalyticsFilter
+	usageSummaryRows       []UsageSummaryRow
+	spendSummaryRows       []SpendSummaryRow
+	errorSummaryRows       []ErrorSummaryRow
+	lastUpdateAttemptID    uuid.UUID
+	lastUpdateStatus       string
+	lastUpdateCompletedAt  *time.Time
+	updateAttemptStatusErr error
 }
 
 func newStubRepo() *stubRepo {
@@ -56,6 +65,12 @@ func (s *stubRepo) CreateAttempt(_ context.Context, input StartAttemptInput) (Re
 }
 
 func (s *stubRepo) UpdateAttemptStatus(_ context.Context, attemptID uuid.UUID, status string, completedAt *time.Time) error {
+	s.lastUpdateAttemptID = attemptID
+	s.lastUpdateStatus = status
+	s.lastUpdateCompletedAt = completedAt
+	if s.updateAttemptStatusErr != nil {
+		return s.updateAttemptStatusErr
+	}
 	for accountID, attempts := range s.attempts {
 		for idx, attempt := range attempts {
 			if attempt.ID == attemptID {
@@ -170,16 +185,19 @@ func (s *stubRepo) ListEvents(_ context.Context, filter ListEventsFilter) ([]Usa
 	return append([]UsageEvent(nil), events...), nil
 }
 
-func (s *stubRepo) GetUsageSummary(_ context.Context, _ AnalyticsFilter) ([]UsageSummaryRow, error) {
-	return nil, nil
+func (s *stubRepo) GetUsageSummary(_ context.Context, filter AnalyticsFilter) ([]UsageSummaryRow, error) {
+	s.lastAnalyticsFilter = filter
+	return s.usageSummaryRows, nil
 }
 
-func (s *stubRepo) GetSpendSummary(_ context.Context, _ AnalyticsFilter) ([]SpendSummaryRow, error) {
-	return nil, nil
+func (s *stubRepo) GetSpendSummary(_ context.Context, filter AnalyticsFilter) ([]SpendSummaryRow, error) {
+	s.lastAnalyticsFilter = filter
+	return s.spendSummaryRows, nil
 }
 
-func (s *stubRepo) GetErrorSummary(_ context.Context, _ AnalyticsFilter) ([]ErrorSummaryRow, error) {
-	return nil, nil
+func (s *stubRepo) GetErrorSummary(_ context.Context, filter AnalyticsFilter) ([]ErrorSummaryRow, error) {
+	s.lastAnalyticsFilter = filter
+	return s.errorSummaryRows, nil
 }
 
 func (s *stubRepo) ListMembershipsByUserID(_ context.Context, userID uuid.UUID) ([]accounts.Membership, error) {
@@ -381,5 +399,188 @@ func TestStartAttemptRejectsBlankRequestID(t *testing.T) {
 	var validationErr *ValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("expected ValidationError, got %T", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Analytics filter validation + pass-through (GetUsageSummary / GetSpendSummary
+// / GetErrorSummary). These three were entirely uncovered: validateAnalyticsFilter
+// gates every one of them but had zero direct tests, so a broken group_by
+// allow-list or a reversed from/to check could ship silently.
+// -----------------------------------------------------------------------------
+
+func TestGetUsageSummary_RejectsInvalidGroupBy(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	_, err := svc.GetUsageSummary(context.Background(), AnalyticsFilter{
+		AccountID: uuid.New(),
+		GroupBy:   "not_a_real_dimension",
+	})
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError for bad group_by, got %v", err)
+	}
+	if validationErr.Field != "group_by" {
+		t.Fatalf("expected field=group_by, got %q", validationErr.Field)
+	}
+}
+
+func TestGetUsageSummary_RejectsFromNotBeforeTo(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	now := time.Now().UTC()
+	_, err := svc.GetUsageSummary(context.Background(), AnalyticsFilter{
+		AccountID: uuid.New(),
+		GroupBy:   "model",
+		From:      now,
+		To:        now.Add(-1 * time.Hour), // to before from
+	})
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError when from is not before to, got %v", err)
+	}
+}
+
+func TestGetUsageSummary_ValidFilterReachesRepository(t *testing.T) {
+	repo := newStubRepo()
+	want := []UsageSummaryRow{{GroupKey: "gpt-test", TotalInputTokens: 10, TotalOutputTokens: 20, TotalCreditsSpent: 5, RequestCount: 1}}
+	repo.usageSummaryRows = want
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	got, err := svc.GetUsageSummary(context.Background(), AnalyticsFilter{AccountID: accountID, GroupBy: "endpoint"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].GroupKey != "gpt-test" {
+		t.Fatalf("expected the repository's rows to pass through unchanged, got %#v", got)
+	}
+	if repo.lastAnalyticsFilter.AccountID != accountID || repo.lastAnalyticsFilter.GroupBy != "endpoint" {
+		t.Fatalf("expected the validated filter to reach the repository unchanged, got %#v", repo.lastAnalyticsFilter)
+	}
+}
+
+func TestGetSpendSummary_RejectsInvalidGroupBy(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	_, err := svc.GetSpendSummary(context.Background(), AnalyticsFilter{AccountID: uuid.New(), GroupBy: "bogus"})
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError, got %v", err)
+	}
+}
+
+func TestGetSpendSummary_ValidFilterReachesRepository(t *testing.T) {
+	repo := newStubRepo()
+	want := []SpendSummaryRow{{GroupKey: "api-key-1", TotalCredits: 100, EntryCount: 3}}
+	repo.spendSummaryRows = want
+	svc := NewService(repo)
+
+	got, err := svc.GetSpendSummary(context.Background(), AnalyticsFilter{AccountID: uuid.New(), GroupBy: "api_key"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].TotalCredits != 100 {
+		t.Fatalf("expected repository rows to pass through, got %#v", got)
+	}
+}
+
+func TestGetErrorSummary_RejectsInvalidGroupBy(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	_, err := svc.GetErrorSummary(context.Background(), AnalyticsFilter{AccountID: uuid.New(), GroupBy: "bogus"})
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError, got %v", err)
+	}
+}
+
+func TestGetErrorSummary_ValidFilterReachesRepository(t *testing.T) {
+	repo := newStubRepo()
+	want := []ErrorSummaryRow{{GroupKey: "model-x", ErrorCount: 2, TotalRequests: 10, ErrorRate: 0.2}}
+	repo.errorSummaryRows = want
+	svc := NewService(repo)
+
+	got, err := svc.GetErrorSummary(context.Background(), AnalyticsFilter{AccountID: uuid.New(), GroupBy: "model"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].ErrorRate != 0.2 {
+		t.Fatalf("expected repository rows to pass through, got %#v", got)
+	}
+}
+
+func TestGetUsageSummary_EmptyGroupByIsAllowed(t *testing.T) {
+	// Empty string defaults to "model" at the query level (repository.go's
+	// switch default case); the service validator must let it through rather
+	// than rejecting it as an invalid dimension.
+	repo := newStubRepo()
+	svc := NewService(repo)
+	if _, err := svc.GetUsageSummary(context.Background(), AnalyticsFilter{AccountID: uuid.New(), GroupBy: ""}); err != nil {
+		t.Fatalf("expected empty group_by to be accepted, got %v", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// UpdateAttemptStatus validation
+// -----------------------------------------------------------------------------
+
+func TestUpdateAttemptStatus_RejectsNilAttemptID(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	err := svc.UpdateAttemptStatus(context.Background(), uuid.Nil, AttemptStatusCompleted, nil)
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError for nil attempt id, got %v", err)
+	}
+}
+
+func TestUpdateAttemptStatus_RejectsInvalidStatus(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	err := svc.UpdateAttemptStatus(context.Background(), uuid.New(), AttemptStatus("not_a_status"), nil)
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError for invalid status, got %v", err)
+	}
+	if repo.lastUpdateAttemptID != uuid.Nil {
+		t.Fatal("repository must not be called when status validation fails")
+	}
+}
+
+func TestUpdateAttemptStatus_ValidStatusReachesRepository(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	accountID := uuid.New()
+	attemptID := uuid.New()
+	repo.attempts[accountID] = []RequestAttempt{{ID: attemptID, AccountID: accountID}}
+	completed := time.Now().UTC()
+
+	for _, status := range []AttemptStatus{
+		AttemptStatusAccepted, AttemptStatusDispatching, AttemptStatusStreaming,
+		AttemptStatusCompleted, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusInterrupted,
+	} {
+		if err := svc.UpdateAttemptStatus(context.Background(), attemptID, status, &completed); err != nil {
+			t.Fatalf("status %q: unexpected error: %v", status, err)
+		}
+		if repo.lastUpdateStatus != string(status) {
+			t.Fatalf("expected repository to receive status %q, got %q", status, repo.lastUpdateStatus)
+		}
+	}
+}
+
+func TestUpdateAttemptStatus_PropagatesRepositoryError(t *testing.T) {
+	repo := newStubRepo()
+	repo.updateAttemptStatusErr = errors.New("boom")
+	svc := NewService(repo)
+	err := svc.UpdateAttemptStatus(context.Background(), uuid.New(), AttemptStatusCompleted, nil)
+	if err == nil {
+		t.Fatal("expected repository error to propagate")
+	}
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		t.Fatal("a repository failure must not be reported as a ValidationError")
 	}
 }

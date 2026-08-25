@@ -196,7 +196,7 @@ func (*legacyNoopRepo) GetThreshold(_ context.Context, _ uuid.UUID) (*budgets.Bu
 func (*legacyNoopRepo) UpsertThreshold(_ context.Context, _ uuid.UUID, _ int64) (*budgets.BudgetThreshold, error) {
 	return nil, nil
 }
-func (*legacyNoopRepo) DismissAlert(_ context.Context, _ uuid.UUID) error  { return nil }
+func (*legacyNoopRepo) DismissAlert(_ context.Context, _ uuid.UUID) error { return nil }
 func (*legacyNoopRepo) MarkNotified(_ context.Context, _ uuid.UUID) error { return nil }
 
 type legacyNoopNotifier struct{}
@@ -413,5 +413,49 @@ func TestEvaluateBudgets_RefiresOnNextPeriod(t *testing.T) {
 	}
 	if fired != 1 {
 		t.Fatalf("expected refire in new period, got %d", fired)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// HardCapForWorkspace — nil (no budget) vs *big.Int(0) (explicit zero cap)
+// must stay distinguishable. This is the value edge-api's budget gate reads
+// (apps/edge-api/internal/limits/budget_gate.go: nil hard cap is
+// pass-through, a parsed "0" is an immediate hard block), so collapsing the
+// two here would silently disable every zero-cap workspace's gate.
+// -----------------------------------------------------------------------------
+
+func TestHardCapForWorkspace_ZeroCap_ReturnsNonNilZero(t *testing.T) {
+	wsID := uuid.New()
+	repo := newFakeWorkspaceRepo()
+	svc := newWorkspaceService(repo, &fakeAlertNotifier{})
+	if _, err := svc.SetBudget(context.Background(), budgets.SetBudgetInput{
+		WorkspaceID: wsID,
+		PeriodStart: time.Now().UTC(),
+		SoftCap:     big.NewInt(0),
+		HardCap:     big.NewInt(0),
+	}); err != nil {
+		t.Fatalf("SetBudget with zero caps must be accepted (0 >= 0): %v", err)
+	}
+
+	cap, err := svc.HardCapForWorkspace(context.Background(), wsID)
+	if err != nil {
+		t.Fatalf("HardCapForWorkspace: %v", err)
+	}
+	if cap == nil {
+		t.Fatal("expected a non-nil *big.Int(0) for a workspace with an explicit zero hard cap, got nil " +
+			"(nil means \"no budget configured\" to every caller of this method)")
+	}
+	if cap.Sign() != 0 {
+		t.Fatalf("expected cap value 0, got %s", cap.String())
+	}
+
+	// The other branch: a workspace with genuinely no budget set must still
+	// return nil, or the two cases collapse into one.
+	noCap, err := svc.HardCapForWorkspace(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("HardCapForWorkspace (no budget): %v", err)
+	}
+	if noCap != nil {
+		t.Fatalf("expected nil for a workspace with no budget row, got %s", noCap.String())
 	}
 }
