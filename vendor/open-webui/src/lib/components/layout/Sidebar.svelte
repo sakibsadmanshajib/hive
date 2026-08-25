@@ -1133,9 +1133,16 @@
 			>
 				<div class="pb-1.5">
 					<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+						<!--
+							hive: the reference leads its sidebar with one filled primary row,
+							and every other row is quiet. Upstream's hover-only treatment made
+							New Chat read as the same weight as Search, so the sidebar had no
+							entry point. The Tailwind hover utilities are gone rather than
+							overridden: hv-nav-primary owns the whole ground state.
+						-->
 						<a
 							id="sidebar-new-chat-button"
-							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
+							class="hv-nav-primary group grow flex items-center space-x-3 px-2.5 py-2 transition outline-none"
 							href="/"
 							draggable="false"
 							on:click={newChatHandler}
@@ -1385,7 +1392,7 @@
 				<Folder
 					id="sidebar-chats"
 					className="px-2 mt-0.5"
-					name={$i18n.t('Recents')}
+					name={$i18n.t('Chats and tasks')}
 					chevron={false}
 					on:change={async (e) => {
 						selectedFolder.set(null);
@@ -1550,35 +1557,14 @@
 						<div class="pt-1.5">
 							{#if $chats}
 								{#each $chats as chat, idx (`chat-${chat?.id ?? idx}`)}
-									{#if idx === 0 || (idx > 0 && chat.time_range !== $chats[idx - 1].time_range)}
-										<div
-											class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-medium {idx ===
-											0
-												? ''
-												: 'pt-5'} pb-1.5"
-										>
-											{$i18n.t(chat.time_range)}
-											<!-- localisation keys for time_range to be recognized from the i18next parser (so they don't get automatically removed):
-							{$i18n.t('Today')}
-							{$i18n.t('Yesterday')}
-							{$i18n.t('Previous 7 days')}
-							{$i18n.t('Previous 30 days')}
-							{$i18n.t('January')}
-							{$i18n.t('February')}
-							{$i18n.t('March')}
-							{$i18n.t('April')}
-							{$i18n.t('May')}
-							{$i18n.t('June')}
-							{$i18n.t('July')}
-							{$i18n.t('August')}
-							{$i18n.t('September')}
-							{$i18n.t('October')}
-							{$i18n.t('November')}
-							{$i18n.t('December')}
-							-->
-										</div>
-									{/if}
-
+									<!--
+										hive: no date-bucket header. The reference's conversation
+										list is one flat list with no buckets and no timestamps;
+										the ordering already carries recency, and at fourteen
+										conversations the buckets made our list read busier than
+										the reference's at twenty. `chat.time_range` is still
+										computed by the backend and simply not drawn.
+									-->
 									<ChatItem
 										className=""
 										id={chat.id}

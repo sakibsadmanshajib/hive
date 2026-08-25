@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'projects' | 'agents' | 'knowledge' | 'scheduled';
+export type HiveNavIcon = 'projects' | 'artifacts' | 'knowledge' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -39,13 +39,37 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 		activePaths: ['/projects']
 	},
 	{
-		id: 'agents',
-		label: 'Agents',
-		href: '/agents',
-		icon: 'agents',
-		activePaths: ['/agents']
+		// D-045 ruling 2 names Artifacts alongside Projects as the pair that
+		// replaces Knowledge and Workspace. The route has existed since #1141
+		// and was reachable only by typing the URL: the index rendered, and no
+		// row in the shell ever pointed at it.
+		id: 'artifacts',
+		label: 'Artifacts',
+		href: '/artifacts',
+		icon: 'artifacts',
+		activePaths: ['/artifacts']
 	},
+	/*
+	 * There is no Agents row, and that is the point of #944 rather than an
+	 * omission. D-045: Cowork is a mode of the chat composer, a run IS a
+	 * conversation, and it appears in the conversation list beside chats. A
+	 * destination called Agents is the design the owner rejected: you write a
+	 * prompt on another page, press start, and can then neither see what the
+	 * agent is doing nor steer it, because the surface that would carry both is
+	 * somewhere else.
+	 *
+	 * The '/agents' route itself survives, unlinked, so runs submitted before
+	 * this change are still reachable by URL. It gets no row.
+	 */
 	{
+		/*
+		 * D-045 ruling 2 eliminates Knowledge in favour of Projects and
+		 * Artifacts, and this row is therefore on borrowed time. It is not
+		 * deleted here because Projects does not hold RAG collections yet, so
+		 * removing the row today would take away the only way to reach them and
+		 * put nothing in its place, which is the failure mode #944 warns about
+		 * for the Agents row. It goes when Projects can hold what it holds.
+		 */
 		id: 'knowledge',
 		label: 'Knowledge',
 		// '/knowledge', not '/workspace/knowledge': the workspace layout's

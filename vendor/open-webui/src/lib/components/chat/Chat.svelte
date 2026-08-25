@@ -31,6 +31,7 @@
 		audioQueue,
 		showControls,
 		showCallOverlay,
+		composerMode,
 		currentChatPage,
 		temporaryChatEnabled,
 		mobile,
@@ -106,6 +107,8 @@
 	// hive (#1063): remaining-credits pill above the composer; self-fetching,
 	// renders nothing when the balance is unavailable.
 	import CreditsBanner from '$lib/hive/CreditsBanner.svelte';
+	import { createTask, describeRefusal, listTasks, TERMINAL_STATUSES } from '$lib/hive/agentTasks';
+	import { packForMode, renderRun, runTurnIsDone } from '$lib/hive/coworkMode';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -1678,6 +1681,10 @@
 					}
 				}
 
+				// hive (#944): a run did not stop because the tab closed, so the
+				// blanket done-flip above is undone for a turn that carries one.
+				void resumeCoworkRun($chatId);
+
 				await tick();
 
 				return true;
@@ -2126,6 +2133,205 @@
 		await sendMessage(history, userMessageId);
 	};
 
+	/* ------------------------------------------------------------------ *
+	 * Cowork: a run rendered as a conversation (#944, D-045)
+	 *
+	 * The claim underneath D-045 is that a run and a conversation are the same
+	 * kind of object, so this path deliberately reuses the ordinary chat
+	 * machinery rather than growing a parallel one: the same `history`, the
+	 * same `initChatHandler` that creates the chat and puts it in the sidebar
+	 * list, the same `saveChatHandler` that persists it, and the same
+	 * transcript component that renders a chat renders this. There is no agent
+	 * route, no second origin and nothing to authenticate into, because there
+	 * is no second surface.
+	 * ------------------------------------------------------------------ */
+
+	// How often the run is re-read, and how long this tab keeps following one.
+	// ponytail: a poll, not a stream, because edge-api exposes no event feed
+	// for a task; when one lands, this loop becomes a subscription and nothing
+	// else in this file moves. The ceiling exists so a task wedged in `running`
+	// cannot leave a browser tab polling until it is closed.
+	const COWORK_POLL_INTERVAL_MS = 3000;
+	const COWORK_FOLLOW_CEILING_MS = 30 * 60 * 1000;
+
+	const coworkTurn = (messageId: string) => history.messages[messageId] ?? null;
+
+	/**
+	 * Writes one reading of the run onto its transcript turn.
+	 *
+	 * Returns false when the turn is gone or the user has moved to another
+	 * conversation, which is the caller's signal to stop: `history` is replaced
+	 * wholesale on navigation, so a late write would land on a different chat's
+	 * transcript.
+	 */
+	const applyCoworkRun = async (_chatId, messageId: string, task) => {
+		if ($chatId !== _chatId) {
+			return false;
+		}
+		const turn = coworkTurn(messageId);
+		if (!turn) {
+			return false;
+		}
+
+		turn.content = renderRun(task);
+		turn.done = runTurnIsDone(task);
+		history.messages[messageId] = turn;
+		history = history;
+
+		await saveChatHandler(_chatId, history);
+		return true;
+	};
+
+	const followCoworkRun = async (_chatId, messageId: string, taskId: string) => {
+		const deadline = Date.now() + COWORK_FOLLOW_CEILING_MS;
+
+		while (Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, COWORK_POLL_INTERVAL_MS));
+
+			if ($chatId !== _chatId || !coworkTurn(messageId)) {
+				// Not an error and not a lost run: the run continues server side
+				// and the turn is picked back up by resumeCoworkRun when this
+				// conversation is opened again.
+				return;
+			}
+
+			let task;
+			try {
+				// ponytail: edge-api has no GET /v1/agent/tasks/{id}, so the list
+				// is read and filtered. Fine at demo volume, wrong at scale; swap
+				// the two lines below the day a by-id read exists.
+				task = (await listTasks(localStorage.token)).find((row) => row.id === taskId);
+			} catch (error) {
+				// A blip is worth another attempt; a refusal is not, and asking a
+				// settled question every three seconds forever is how a surface
+				// turns one outage into a permanent load on the gateway.
+				if (describeRefusal(error)) {
+					await applyCoworkRun(_chatId, messageId, {
+						status: 'failed',
+						error_message: describeRefusal(error)?.message ?? ''
+					});
+					return;
+				}
+				continue;
+			}
+
+			if (!task) {
+				continue;
+			}
+
+			if (!(await applyCoworkRun(_chatId, messageId, task))) {
+				return;
+			}
+			if (TERMINAL_STATUSES.has(task.status) || task.status === 'unknown') {
+				return;
+			}
+		}
+
+		await applyCoworkRun($chatId, messageId, {
+			status: 'unknown',
+			error_message: ''
+		});
+	};
+
+	/**
+	 * Picks a run back up when its conversation is opened again.
+	 *
+	 * loadChat marks any assistant turn left mid-flight as done, which is the
+	 * right recovery for an interrupted completion and the wrong one for a run:
+	 * the run did not stop when the tab closed. So the turn is re-read from the
+	 * server, and following resumes if it is still going.
+	 */
+	const resumeCoworkRun = async (_chatId) => {
+		const pending = Object.values(history.messages ?? {}).find(
+			(message: any) => message?.role === 'assistant' && message?.hive_agent_task_id
+		) as any;
+		if (!pending) {
+			return;
+		}
+		const taskId = pending.hive_agent_task_id;
+
+		let task;
+		try {
+			task = (await listTasks(localStorage.token)).find((row) => row.id === taskId);
+		} catch (error) {
+			// Leave the stored turn exactly as it was rather than overwriting a
+			// real result with a transport failure.
+			return;
+		}
+		if (!task) {
+			return;
+		}
+		if (!(await applyCoworkRun(_chatId, pending.id, task))) {
+			return;
+		}
+		if (!TERMINAL_STATUSES.has(task.status) && task.status !== 'unknown') {
+			void followCoworkRun(_chatId, pending.id, taskId);
+		}
+	};
+
+	const submitCoworkRun = async (userPrompt: string) => {
+		const userMessageId = uuidv4();
+		history.messages[userMessageId] = {
+			id: userMessageId,
+			parentId: history.currentId ?? null,
+			childrenIds: [],
+			role: 'user',
+			content: userPrompt,
+			timestamp: Math.floor(Date.now() / 1000),
+			models: selectedModels
+		};
+		if (history.currentId !== null) {
+			history.messages[history.currentId].childrenIds.push(userMessageId);
+		}
+		history.currentId = userMessageId;
+
+		const runMessageId = uuidv4();
+		const model = $models.find((m) => m.id === selectedModels[0]);
+		history.messages[runMessageId] = {
+			parentId: userMessageId,
+			id: runMessageId,
+			childrenIds: [],
+			role: 'assistant',
+			content: renderRun({ status: 'queued' }),
+			done: false,
+			model: model?.id ?? selectedModels[0],
+			modelName: model?.name ?? selectedModels[0],
+			modelIdx: 0,
+			timestamp: Math.floor(Date.now() / 1000)
+		};
+		history.messages[userMessageId].childrenIds.push(runMessageId);
+		history.currentId = runMessageId;
+		history = history;
+
+		// The chat is created before the task, so the run has a row in the
+		// conversation list from the moment it is submitted rather than only
+		// once it answers. This is the same call an ordinary first message makes.
+		let _chatId = $chatId;
+		if (_chatId === '') {
+			_chatId = await initChatHandler(history);
+		}
+
+		let task;
+		try {
+			task = await createTask(localStorage.token, packForMode('cowork'), userPrompt);
+		} catch (error) {
+			const refusal = describeRefusal(error);
+			await applyCoworkRun(_chatId, runMessageId, {
+				status: 'failed',
+				error_message: refusal?.message ?? (error as Error)?.message ?? ''
+			});
+			return;
+		}
+
+		// Stored on the turn, so reopening the conversation can find the run it
+		// belongs to. There is nowhere else to keep it: the transcript is the
+		// only record of this run the shell has.
+		history.messages[runMessageId].hive_agent_task_id = task.id;
+		await applyCoworkRun(_chatId, runMessageId, task);
+
+		void followCoworkRun(_chatId, runMessageId, task.id);
+	};
+
 	const submitHandler = async (userPrompt, { _raw = false } = {}) => {
 		console.log('submitHandler', userPrompt, $chatId);
 
@@ -2223,6 +2429,14 @@
 		const _files = structuredClone(files);
 		files = [];
 		messageInput?.setText('');
+
+		// hive (#944): the mode decides what the message does. Everything above
+		// this line (the model guard, the upload guards, the queue) applies to
+		// both modes and is deliberately not duplicated into the cowork path.
+		if ($composerMode === 'cowork') {
+			await submitCoworkRun(userPrompt);
+			return;
+		}
 
 		await submitPrompt(userPrompt, _files);
 	};

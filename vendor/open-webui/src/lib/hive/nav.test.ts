@@ -16,7 +16,7 @@ describe('HIVE_NAV', () => {
 		// view was ever built behind it (PR #938 added it for row parity only).
 		expect(HIVE_NAV.map((item) => item.id)).toEqual([
 			'projects',
-			'agents',
+			'artifacts',
 			'knowledge',
 			'scheduled'
 		]);
@@ -29,12 +29,20 @@ describe('HIVE_NAV', () => {
 		expect(byId('projects').href.startsWith('http')).toBe(false);
 	});
 
-	it('points the agent destination at a route inside this application', () => {
-		// The whole point of the change: the agent is a destination in the shell,
-		// not a link out of it. An absolute URL here would put the user back on a
-		// separate page with no sidebar.
-		expect(byId('agents').href).toBe('/agents');
-		expect(byId('agents').href.startsWith('http')).toBe(false);
+	it('points Artifacts at the in-shell index shipped by #1141', () => {
+		// D-045 names Projects and Artifacts as the pair replacing Knowledge and
+		// Workspace. The index existed for a week with nothing linking to it.
+		expect(byId('artifacts').href).toBe('/artifacts');
+		expect(byId('artifacts').href.startsWith('http')).toBe(false);
+	});
+
+	it('ships no Agents row, because Cowork is a composer mode (#944, D-045)', () => {
+		// The row is the thing D-045 forbids, not the route: '/agents' still
+		// answers so runs submitted before the composer mode existed are
+		// reachable by URL. A row here would restore the destination the owner
+		// rejected, where a run is started on a page the conversation cannot see.
+		expect(HIVE_NAV.some((item) => item.id === 'agents')).toBe(false);
+		expect(HIVE_NAV.some((item) => item.href.startsWith('/agents'))).toBe(false);
 	});
 
 	it('points Scheduled at the schedules surface inside this application', () => {
@@ -65,22 +73,22 @@ describe('HIVE_NAV', () => {
 });
 
 describe('isNavItemActive', () => {
-	const agents = byId('agents');
+	const projects = byId('projects');
 	const knowledge = byId('knowledge');
 
-	it('marks Agents current on the agent destination and below it', () => {
-		expect(isNavItemActive(agents, '/agents')).toBe(true);
-		expect(isNavItemActive(agents, '/agents/')).toBe(true);
-		expect(isNavItemActive(agents, '/agents/some-task')).toBe(true);
+	it('marks a row current on its own destination and below it', () => {
+		expect(isNavItemActive(projects, '/projects')).toBe(true);
+		expect(isNavItemActive(projects, '/projects/')).toBe(true);
+		expect(isNavItemActive(projects, '/projects/some-project')).toBe(true);
 	});
 
 	it('does not match a route that merely starts with the same characters', () => {
-		expect(isNavItemActive(agents, '/agents-archive')).toBe(false);
+		expect(isNavItemActive(projects, '/projects-archive')).toBe(false);
 		expect(isNavItemActive(knowledge, '/knowledgebase')).toBe(false);
 	});
 
 	it('treats an empty or missing pathname as no match, since no row links to it', () => {
-		expect(isNavItemActive(agents, '')).toBe(false);
+		expect(isNavItemActive(projects, '')).toBe(false);
 		expect(isNavItemActive(knowledge, '')).toBe(false);
 	});
 
@@ -88,7 +96,7 @@ describe('isNavItemActive', () => {
 		for (const route of [
 			'/projects',
 			'/projects/abc',
-			'/agents',
+			'/artifacts',
 			'/knowledge',
 			'/schedules'
 		]) {

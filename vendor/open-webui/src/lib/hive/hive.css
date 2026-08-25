@@ -636,3 +636,133 @@ samp,
 	line-height: var(--hv-leading-xs);
 	color: var(--hv-ink-muted);
 }
+
+/* ------------------------------------------------------------------ *
+ * Cowork as a composer mode (#944, D-045)
+ *
+ * The reference puts a two segment control inside the composer, in the
+ * same rail as the plus and the model chip: the selected segment is a
+ * raised block, the other is quiet text on the composer's own ground.
+ * Tokens only, so both themes follow without a second declaration.
+ * ------------------------------------------------------------------ */
+
+.hv-mode {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+	margin-inline-start: var(--hv-space-1);
+	padding: 2px;
+	border-radius: var(--hv-radius-pill);
+}
+
+.hv-mode-segment {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	padding-inline: var(--hv-space-3);
+	padding-block: 3px;
+	border-radius: var(--hv-radius-pill);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-base);
+	line-height: var(--hv-leading-base);
+	font-weight: var(--hv-weight-label);
+	color: var(--hv-ink-muted);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background-color var(--hv-duration-fast) linear,
+		color var(--hv-duration-fast) linear;
+}
+
+.hv-mode-segment:hover {
+	color: var(--hv-ink);
+}
+
+.hv-mode-segment-on {
+	background-color: var(--hv-surface-raised);
+	color: var(--hv-ink);
+}
+
+/*
+ * The focus ring is drawn on the segment rather than on the group. Only the
+ * selected segment is in the tab order (roving tabindex), so a ring on the
+ * group would appear in the same place whichever segment the arrow keys had
+ * moved focus to, which is exactly the information a keyboard user needs.
+ */
+.hv-mode-segment:focus-visible {
+	outline: 2px solid var(--hv-focus-ring);
+	outline-offset: 2px;
+}
+
+/*
+ * The second row Cowork grows, welded to the bottom of the same composer
+ * container and separated from the rail by a hairline rather than by a gap:
+ * a gap would read as two stacked surfaces, which is the "bolted on" shape
+ * D-045 was written against.
+ */
+.hv-cowork-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--hv-space-4);
+	padding: var(--hv-space-2) var(--hv-space-4);
+	border-top: 1px solid var(--hv-border);
+	font-family: var(--hv-font-sans);
+	font-size: var(--hv-text-sm);
+	line-height: var(--hv-leading-sm);
+}
+
+.hv-cowork-scope {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--hv-space-2);
+	color: var(--hv-ink-secondary);
+	font-weight: var(--hv-weight-label);
+}
+
+.hv-cowork-icon {
+	width: 16px;
+	height: 16px;
+	flex-shrink: 0;
+}
+
+.hv-cowork-note {
+	color: var(--hv-ink-muted);
+	text-align: end;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+	/* The note is the first thing to go on a narrow composer: the scope line
+	 * says what will run, the note only says where the result appears. */
+	.hv-cowork-note {
+		display: none;
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * The sidebar's one filled primary row
+ *
+ * The reference leads its sidebar with a single filled row and keeps every
+ * other row quiet, which is what gives the sidebar an entry point. Upstream
+ * gave New Chat the same hover-only treatment as Search, so nothing led.
+ * ------------------------------------------------------------------ */
+
+.hv-nav-primary {
+	border-radius: var(--hv-radius-sm);
+	background-color: var(--hv-surface-raised);
+	color: var(--hv-ink);
+	transition: background-color var(--hv-duration-fast) linear;
+}
+
+.hv-nav-primary:hover {
+	background-color: var(--hv-surface-sunken);
+}
+
+.hv-nav-primary:focus-visible {
+	outline: 2px solid var(--hv-focus-ring);
+	outline-offset: 2px;
+}
