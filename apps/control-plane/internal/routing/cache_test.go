@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
@@ -45,9 +44,11 @@ func (r *countingRepo) LoadAliasPricing(ctx context.Context, aliasID string) (ca
 func newRoutingCache(t *testing.T) *rcache.Cache {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	return rcache.New(client, "test:v1", 30*time.Second)
+	cache, err := rcache.New("redis://"+mr.Addr(), "test:v1", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cache
 }
 
 func TestCachedRepository_PolicyAndCandidatesHitCache(t *testing.T) {
@@ -128,8 +129,10 @@ func TestCachedRepository_EmptyCandidatesCachedAsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got1) != 0 || len(got2) != 0 {
-		t.Fatalf("expected empty lists, got %d and %d", len(got1), len(got2))
+	// The raw pgx repository returns a nil slice for zero rows; the cache must
+	// preserve that exactly (nil stays nil through both the miss and the hit).
+	if got1 != nil || got2 != nil {
+		t.Fatalf("nil candidate list changed shape through the cache: %T/%T", got1, got2)
 	}
 	if repo.candCalls != 1 {
 		t.Fatalf("empty result must be cached too: calls=%d", repo.candCalls)

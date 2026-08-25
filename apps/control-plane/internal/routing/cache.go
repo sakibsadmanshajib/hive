@@ -57,32 +57,18 @@ func (r *CachedRepository) LoadAliasPolicy(ctx context.Context, aliasID string) 
 	})
 }
 
-// ListRouteCandidates caches the route candidate list for one alias. A nil or
-// empty result is cached like any other successful read so an alias with no
-// routes does not hammer the database either; JSON null round-trips back to
-// nil, preserving the zero-value semantics ListRouteCandidates documents.
+// ListRouteCandidates caches the route candidate list for one alias, nil and
+// empty results alike (an alias with no routes must not hammer the database
+// either). JSON null round-trips back to nil, preserving the raw repository's
+// zero-value semantics.
 func (r *CachedRepository) ListRouteCandidates(ctx context.Context, aliasID string) ([]RouteCandidate, error) {
-	var loaded []RouteCandidate
-	got, err := rcache.GetJSON(ctx, r.cache, keyCandidates(aliasID), func(ctx context.Context) ([]RouteCandidate, error) {
-		rows, err := r.Repository.ListRouteCandidates(ctx, aliasID)
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []RouteCandidate{}
-		}
-		return rows, nil
+	return rcache.GetJSON(ctx, r.cache, keyCandidates(aliasID), func(ctx context.Context) ([]RouteCandidate, error) {
+		// A nil result marshals as JSON null and unmarshals back to nil, so the
+		// raw repository's nil-vs-empty semantics survive the round trip exactly.
+		return r.Repository.ListRouteCandidates(ctx, aliasID)
 	})
-	if err != nil {
-		return nil, err
-	}
-	loaded = got
-	return loaded, nil
 }
 
-// LoadAliasPricing caches the published per-million credit price. See the
-// money-path boundary note on CachedRepository above: balances, reservations
-// and ledger entries are never cached anywhere in this change.
 // LoadAliasPricing caches the published per-million credit price. See the
 // money-path boundary note on CachedRepository above: balances, reservations
 // and ledger entries are never cached anywhere in this change.

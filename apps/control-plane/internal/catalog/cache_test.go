@@ -7,7 +7,6 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
@@ -55,9 +54,11 @@ func (r *fakeCatalogRepo) DeleteVisibility(ctx context.Context, tenantID uuid.UU
 func newCatalogCache(t *testing.T) *rcache.Cache {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	return rcache.New(client, "test:v1", 30*time.Second)
+	cache, err := rcache.New("redis://"+mr.Addr(), "test:v1", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cache
 }
 
 func TestCachedCatalog_PublicListCached(t *testing.T) {

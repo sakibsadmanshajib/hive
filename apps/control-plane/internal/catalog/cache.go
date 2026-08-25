@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
@@ -46,45 +47,18 @@ func keyVisible(tid uuid.UUID, aliasID string) string {
 }
 
 // ListPublicAliases caches the global public/preview alias list. Keyed without
-// a tenant on purpose: the underlying query takes no tenant input.
+// a tenant on purpose: the underlying query takes no tenant input. Nil results
+// marshal as JSON null and unmarshal back to nil, preserving raw semantics.
 func (r *CachedRepository) ListPublicAliases(ctx context.Context) ([]ModelAlias, error) {
-	var loaded []ModelAlias
-	got, err := rcache.GetJSON(ctx, r.cache, keyPublic(), func(ctx context.Context) ([]ModelAlias, error) {
-		rows, err := r.Repository.ListPublicAliases(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []ModelAlias{}
-		}
-		return rows, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	loaded = got
-	return loaded, nil
+	return rcache.GetJSON(ctx, r.cache, keyPublic(), r.Repository.ListPublicAliases)
 }
 
 // ListAliasesForTenant caches one tenant's entitled alias list under a key
 // that embeds the tenant UUID (see the tenant-scoping note above).
 func (r *CachedRepository) ListAliasesForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
-	var loaded []ModelAlias
-	got, err := rcache.GetJSON(ctx, r.cache, keyTenantList(tenantID), func(ctx context.Context) ([]ModelAlias, error) {
-		rows, err := r.Repository.ListAliasesForTenant(ctx, tenantID)
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []ModelAlias{}
-		}
-		return rows, nil
+	return rcache.GetJSON(ctx, r.cache, keyTenantList(tenantID), func(ctx context.Context) ([]ModelAlias, error) {
+		return r.Repository.ListAliasesForTenant(ctx, tenantID)
 	})
-	if err != nil {
-		return nil, err
-	}
-	loaded = got
-	return loaded, nil
 }
 
 // IsAliasVisibleToTenant caches one tenant's entitlement verdict for one
@@ -99,11 +73,19 @@ func (r *CachedRepository) IsAliasVisibleToTenant(ctx context.Context, tenantID 
 // UpsertVisibility delegates the write, then deletes exactly the cache keys
 // derived from this (tenant, alias): the tenant's model list and its single
 // alias entitlement verdict.
+//
+// A failed invalidation does NOT fail the method: the visibility row has
+// already committed, so the caller must see success. It is logged loudly
+// instead. The residual risk is bounded: a stale cached verdict can serve
+// for at most one TTL (30s), the same bound every other staleness window in
+// this cache has.
 func (r *CachedRepository) UpsertVisibility(ctx context.Context, row TenantModelVisibility) error {
 	if err := r.Repository.UpsertVisibility(ctx, row); err != nil {
 		return err
 	}
-	r.cache.Delete(ctx, keyTenantList(row.TenantID), keyVisible(row.TenantID, row.AliasID))
+	if err := r.cache.Delete(ctx, keyTenantList(row.TenantID), keyVisible(row.TenantID, row.AliasID)); err != nil {
+		log.Printf("WARNING: catalog cache: invalidation after UpsertVisibility(tenant=%s alias=%s) failed: %v; a stale entry may serve up to the cache TTL", row.TenantID, row.AliasID, err)
+	}
 	return nil
 }
 
@@ -112,6 +94,8 @@ func (r *CachedRepository) DeleteVisibility(ctx context.Context, tenantID uuid.U
 	if err := r.Repository.DeleteVisibility(ctx, tenantID, aliasID); err != nil {
 		return err
 	}
-	r.cache.Delete(ctx, keyTenantList(tenantID), keyVisible(tenantID, aliasID))
+	if err := r.cache.Delete(ctx, keyTenantList(tenantID), keyVisible(tenantID, aliasID)); err != nil {
+		log.Printf("WARNING: catalog cache: invalidation after DeleteVisibility(tenant=%s alias=%s) failed: %v; a stale entry may serve up to the cache TTL", tenantID, aliasID, err)
+	}
 	return nil
 }

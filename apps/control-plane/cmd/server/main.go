@@ -85,6 +85,25 @@ const metricsListenAddr = ":9101"
 // never reads a value a whole pass out of date.
 const provisioningGaugeInterval = time.Minute
 
+// resolveHotCacheTTL reads HIVE_HOT_CACHE_TTL_SECONDS, the TTL for the
+// routing/catalog hot-path read cache. Empty selects rcache.DefaultTTL (30s);
+// a present but invalid or out-of-range value logs a warning and falls back
+// rather than failing startup over an optional tuning knob. The ceiling of
+// 24h keeps a typo from turning the cache into a day-long staleness window.
+func resolveHotCacheTTL() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("HIVE_HOT_CACHE_TTL_SECONDS"))
+	if raw == "" {
+		return rcache.DefaultTTL
+	}
+	n, err := strconv.Atoi(raw)
+	const maxTTLSeconds = 24 * 60 * 60
+	if err != nil || n <= 0 || n > maxTTLSeconds {
+		log.Printf("WARNING: HIVE_HOT_CACHE_TTL_SECONDS=%q is not an integer in (0, %d]; using default %v", raw, maxTTLSeconds, rcache.DefaultTTL)
+		return rcache.DefaultTTL
+	}
+	return time.Duration(n) * time.Second
+}
+
 // How long startup waits for the database before giving up, and how often it
 // retries inside that window. The session-mode pooler is shared and capped at
 // 15 clients across CI, developer stacks and the live deployment, so a boot can
@@ -368,17 +387,34 @@ func main() {
 
 		// Hot-path read cache (Redis): wraps the repositories behind
 		// /internal/routing/select and /v1/models so each request's catalog,
-		// pricing and entitlement reads hit Redis instead of Postgres for 30s
-		// at a time. Enabled only when REDIS_URL was reachable at startup;
-		// without Redis both repos run uncached exactly as before. Money state
-		// (balances, reservations, ledger entries, billing state) is never
-		// cached; see rcache.Cache's boundary note.
+		// pricing and entitlement reads hit Redis instead of Postgres for one
+		// TTL at a time. Enabled only when REDIS_URL is set AND reachable at
+		// startup; otherwise both repos run uncached exactly as before. The
+		// dedicated hot-path client carries tight timeouts so a hung Redis
+		// costs milliseconds, and Flush at boot drops keys written by a
+		// previous binary so a migration that repriced aliases between deploys
+		// is never answered with pre-deploy prices. Money state (balances,
+		// reservations, ledger entries, billing state) is never cached; see
+		// rcache.Cache's boundary note.
 		var hotCache *rcache.Cache
-		if redisClient != nil {
-			hotCache = rcache.New(redisClient, "hivecp:v1", rcache.DefaultTTL)
-			log.Println("redis hot-path read cache enabled for routing/catalog")
-		} else {
-			log.Println("REDIS_URL unavailable: routing/catalog reads run uncached")
+		switch hc, hcErr := rcache.New(cfg.RedisURL, "hivecp:v1", resolveHotCacheTTL()); {
+		case cfg.RedisURL == "":
+			log.Println("REDIS_URL not set: routing/catalog reads run uncached")
+		case hcErr != nil:
+			log.Printf("WARNING: hot-path read cache disabled, client build failed: %v", hcErr)
+		default:
+			if pingErr := hc.Ping(ctx); pingErr != nil {
+				log.Printf("WARNING: hot-path read cache disabled, redis unreachable: %v", pingErr)
+				_ = hc.Close()
+				break
+			}
+			flushed, flushErr := hc.Flush(ctx)
+			if flushErr != nil {
+				log.Printf("WARNING: hot-path cache startup flush failed (%v); keys from the previous binary may serve up to one TTL", flushErr)
+			}
+			hotCache = hc
+			defer hc.Close()
+			log.Printf("redis hot-path read cache enabled for routing/catalog (startup flush removed %d keys)", flushed)
 		}
 
 		catalogRepo := catalog.NewCachedRepository(catalog.NewPgxRepository(pool), hotCache)

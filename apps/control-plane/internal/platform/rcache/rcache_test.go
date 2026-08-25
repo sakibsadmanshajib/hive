@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
 )
@@ -16,9 +15,12 @@ import (
 func newTestCache(t *testing.T) (*rcache.Cache, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	return rcache.New(client, "test:v1", 60*time.Second), mr
+	cache, err := rcache.New("redis://"+mr.Addr(), "test:v1", 60*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	return cache, mr
 }
 
 func TestGetJSON_LoadsAndCaches(t *testing.T) {
@@ -85,8 +87,10 @@ func TestGetJSON_NilCachePassesThrough(t *testing.T) {
 
 func TestGetJSON_RedisDownStillServes(t *testing.T) {
 	mr := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	cache := rcache.New(client, "t", time.Second)
+	cache, err := rcache.New("redis://"+mr.Addr(), "t", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	// Load once to populate, then kill Redis.
@@ -125,17 +129,77 @@ func TestGetJSON_ErrorsAreNeverCached(t *testing.T) {
 	}
 }
 
-func TestDelete_RemovesKeys(t *testing.T) {
+func TestDelete_RemovesKeysAndReportsErrors(t *testing.T) {
 	cache, mr := newTestCache(t)
 	ctx := context.Background()
 
 	cache.SetJSON(ctx, "a", 1)
 	cache.SetJSON(ctx, "b", 2)
-	cache.Delete(ctx, "a")
+	if err := cache.Delete(ctx, "a"); err != nil {
+		t.Fatalf("delete against healthy redis: %v", err)
+	}
 	if mr.Exists("test:v1:a") {
 		t.Fatal("deleted key still present")
 	}
 	if !mr.Exists("test:v1:b") {
 		t.Fatal("unrelated key was removed")
+	}
+
+	// A failed DEL must be observable to the caller: the invalidation
+	// contract is that stale-data risk is logged, never silent.
+	mr.Close()
+	if err := cache.Delete(ctx, "a"); err == nil {
+		t.Fatal("delete against dead redis must return an error")
+	}
+}
+
+func TestFlush_RemovesEveryPrefixedKey(t *testing.T) {
+	cache, mr := newTestCache(t)
+	ctx := context.Background()
+
+	for _, k := range []string{"rt:pol:x", "rt:cand:y", "cat:public"} {
+		cache.SetJSON(ctx, k, 1)
+	}
+	cache.SetJSON(ctx, "", 0) // prefix-only key must be swept too
+
+	n, err := cache.Flush(ctx)
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if n < 4 {
+		t.Fatalf("flushed %d keys, want >= 4", n)
+	}
+	if len(mr.Keys()) != 0 {
+		t.Fatalf("keys survived flush: %v", mr.Keys())
+	}
+}
+
+func TestGetJSON_VersionMismatchTreatedAsMiss(t *testing.T) {
+	cache, mr := newTestCache(t)
+	ctx := context.Background()
+
+	// Simulate an entry written by an older binary with a different envelope
+	// version: stored raw, no "v" field.
+	if err := mr.Set("test:v1:k", `{"stale":"pre-deploy shape"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	got, err := rcache.GetJSON(ctx, cache, "k", func(context.Context) (map[string]any, error) {
+		calls++
+		return map[string]any{"fresh": true}, nil
+	})
+	if err != nil || calls != 1 || got["fresh"] != true {
+		t.Fatalf("version-mismatched entry must reload: got=%v calls=%d err=%v", got, calls, err)
+	}
+
+	// And the fresh value is now cached under the current version.
+	calls = 0
+	got, err = rcache.GetJSON(ctx, cache, "k", func(context.Context) (map[string]any, error) {
+		calls++
+		return map[string]any{}, nil
+	})
+	if err != nil || calls != 0 || got["fresh"] != true {
+		t.Fatalf("freshly loaded value must be cached: got=%v calls=%d", got, calls)
 	}
 }
