@@ -42,9 +42,9 @@ CREATE TABLE public.tenant_provider_keys (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   revoked_at         TIMESTAMPTZ NULL,
   CONSTRAINT tenant_provider_keys_target_check CHECK (
-    (provider_slug IS NOT NULL AND base_url IS NULL)
+    (provider_slug IS NOT NULL AND provider_slug <> '' AND base_url IS NULL)
     OR
-    (provider_slug IS NULL AND base_url IS NOT NULL)
+    (provider_slug IS NULL AND base_url IS NOT NULL AND base_url <> '')
   )
 );
 

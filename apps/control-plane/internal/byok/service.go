@@ -42,6 +42,14 @@ func NewService(repo Repository, c *Cipher, a AuditLogger) *Service {
 // Register validates input, encrypts the credential with AES-256-GCM, and
 // persists it scoped to accountID.
 func (s *Service) Register(ctx context.Context, accountID, userID uuid.UUID, in RegisterInput) (Key, error) {
+	// Normalize empty-string pointers to nil so "no target" is a clean
+	// validation error rather than a raw FK violation at the database.
+	if in.ProviderSlug != nil && *in.ProviderSlug == "" {
+		in.ProviderSlug = nil
+	}
+	if in.BaseURL != nil && *in.BaseURL == "" {
+		in.BaseURL = nil
+	}
 	if err := validateRegisterInput(in); err != nil {
 		return Key{}, err
 	}
@@ -111,7 +119,7 @@ func (s *Service) Reveal(ctx context.Context, accountID, id uuid.UUID) (string, 
 // Revoke marks a key revoked. The WHERE clause matches active rows for this
 // account only, so revoking another account's key id is a clean 404.
 func (s *Service) Revoke(ctx context.Context, accountID, id, actor uuid.UUID) (Key, error) {
-	k, err := s.repo.Revoke(ctx, accountID, id, timeNow())
+	k, err := s.repo.Revoke(ctx, accountID, id)
 	if err != nil {
 		return Key{}, err
 	}

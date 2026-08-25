@@ -26,7 +26,10 @@ type Repository interface {
 	ListByAccount(ctx context.Context, accountID uuid.UUID) ([]Key, error)
 	ListAll(ctx context.Context) ([]Key, error)
 	Get(ctx context.Context, accountID, id uuid.UUID) (Key, error)
-	Revoke(ctx context.Context, accountID, id uuid.UUID, now time.Time) (Key, error)
+	// Revoke flips an active row to revoked. Timestamps are stamped by the
+	// database clock (now()) so created_at and revoked_at can never invert
+	// under app/server skew.
+	Revoke(ctx context.Context, accountID, id uuid.UUID) (Key, error)
 }
 
 // timeNow is a test seam over the wall clock.
@@ -113,14 +116,14 @@ func (r *pgxRepository) Get(ctx context.Context, accountID, id uuid.UUID) (Key, 
 	return s.key, nil
 }
 
-func (r *pgxRepository) Revoke(ctx context.Context, accountID, id uuid.UUID, now time.Time) (Key, error) {
+func (r *pgxRepository) Revoke(ctx context.Context, accountID, id uuid.UUID) (Key, error) {
 	sql := `update public.tenant_provider_keys
-		set status = 'revoked', revoked_at = $3, updated_at = $3
+		set status = 'revoked', revoked_at = now(), updated_at = now()
 		where id = $2 and account_id = $1 and status = 'active'
 		returning ` + selectCols
 
 	s := &scanTarget{}
-	err := r.pool.QueryRow(ctx, sql, accountID, id, now).Scan(s.columns()...)
+	err := r.pool.QueryRow(ctx, sql, accountID, id).Scan(s.columns()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Key{}, ErrNotFound
 	}

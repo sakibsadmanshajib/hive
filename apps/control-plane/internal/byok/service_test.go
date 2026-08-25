@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -58,7 +57,7 @@ func (f *fakeRepo) Get(_ context.Context, accountID, id uuid.UUID) (Key, error) 
 	return Key{}, ErrNotFound
 }
 
-func (f *fakeRepo) Revoke(_ context.Context, accountID, id uuid.UUID, _ time.Time) (Key, error) {
+func (f *fakeRepo) Revoke(_ context.Context, accountID, id uuid.UUID) (Key, error) {
 	for i, k := range f.rows {
 		if k.ID == id && k.AccountID == accountID {
 			f.rows[i].Status = StatusRevoked
@@ -149,6 +148,8 @@ func TestRegisterValidation(t *testing.T) {
 		{"missing label", RegisterInput{BaseURL: base.BaseURL, APIKey: base.APIKey}},
 		{"missing api key", RegisterInput{Label: "l", BaseURL: base.BaseURL}},
 		{"no target", RegisterInput{Label: "l", APIKey: base.APIKey}},
+		{"empty string targets normalize to nil", RegisterInput{Label: "l",
+			APIKey: base.APIKey, ProviderSlug: strPtr(""), BaseURL: strPtr("")}},
 		{"both targets", RegisterInput{Label: "l", APIKey: base.APIKey,
 			BaseURL: base.BaseURL, ProviderSlug: strPtr("openrouter")}},
 		{"bad url", RegisterInput{Label: "l", APIKey: base.APIKey, BaseURL: strPtr("not a url")}},
