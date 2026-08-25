@@ -111,7 +111,10 @@ function maskEmail(value) {
 
 export async function prepareE2EAuthFixtures() {
   if (process.env.E2E_FIXTURE_VERBOSE === "1") {
-    console.log(
+    // stderr, not stdout: the CLI's stdout is the JSON summary, and the CI
+    // step that captures it (`| tee file`, then JSON.parse the whole file)
+    // dies on "Unexpected token" when a progress line shares the stream.
+    console.error(
       `[e2e-auth-fixtures] seeding verifiedEmail=${maskEmail(
         E2E_VERIFIED_EMAIL
       )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`

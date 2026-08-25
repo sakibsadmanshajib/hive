@@ -227,3 +227,59 @@ func TestClient_OmitsSessionAPIKeyHeaderWhenEmpty(t *testing.T) {
 		t.Fatal("expected no session API key header when Client was constructed with an empty key")
 	}
 }
+
+func TestAgentSettings_ToolsWireShape(t *testing.T) {
+	settings := controlclient.AgentSettings{
+		AgentKind: "openhands",
+		LLM:       controlclient.LLMSettings{Model: "m"},
+		Tools: []controlclient.ToolSpec{
+			{Name: "terminal"},
+			{Name: "file_editor"},
+			{Name: "task_tracker"},
+			{Name: controlclient.BrowserToolName},
+		},
+	}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Tools) != 4 {
+		t.Fatalf("expected 4 tool specs on the wire, got %d: %s", len(payload.Tools), raw)
+	}
+	got := make([]string, 0, len(payload.Tools))
+	for _, ts := range payload.Tools {
+		got = append(got, ts.Name)
+	}
+	want := append([]string(nil), controlclient.DefaultExecToolNames...)
+	want = append(want, controlclient.BrowserToolName)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool %d: got %q, want %q (wire: %s)", i, got[i], want[i], raw)
+		}
+	}
+}
+
+func TestAgentSettings_NilToolsOmittedFromWire(t *testing.T) {
+	raw, err := json.Marshal(controlclient.AgentSettings{
+		AgentKind: "openhands",
+		LLM:       controlclient.LLMSettings{Model: "m"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := payload["tools"]; present {
+		t.Fatalf("expected tools omitted when nil so the sandbox default set applies, got: %s", raw)
+	}
+}

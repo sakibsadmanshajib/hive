@@ -10,6 +10,11 @@ export default defineConfig({
     setupFiles: [],
     include: ["**/__tests__/**/*.test.{ts,tsx}", "**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next", "e2e"],
+    coverage: {
+      provider: "v8",
+      include: ["app/**", "lib/**", "components/**"],
+      exclude: ["lib/control-plane/permissions.generated.ts", "**/*.d.ts"],
+    },
   },
   resolve: {
     alias: {

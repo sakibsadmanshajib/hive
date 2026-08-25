@@ -58,6 +58,7 @@ import (
 	platformdb "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/http"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/rcache"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
@@ -84,6 +85,25 @@ const metricsListenAddr = ":9101"
 // refreshed from the reconciler. Shorter than the sweep interval so a scrape
 // never reads a value a whole pass out of date.
 const provisioningGaugeInterval = time.Minute
+
+// resolveHotCacheTTL reads HIVE_HOT_CACHE_TTL_SECONDS, the TTL for the
+// routing/catalog hot-path read cache. Empty selects rcache.DefaultTTL (30s);
+// a present but invalid or out-of-range value logs a warning and falls back
+// rather than failing startup over an optional tuning knob. The ceiling of
+// 24h keeps a typo from turning the cache into a day-long staleness window.
+func resolveHotCacheTTL() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("HIVE_HOT_CACHE_TTL_SECONDS"))
+	if raw == "" {
+		return rcache.DefaultTTL
+	}
+	n, err := strconv.Atoi(raw)
+	const maxTTLSeconds = 24 * 60 * 60
+	if err != nil || n <= 0 || n > maxTTLSeconds {
+		log.Printf("WARNING: HIVE_HOT_CACHE_TTL_SECONDS=%q is not an integer in (0, %d]; using default %v", raw, maxTTLSeconds, rcache.DefaultTTL)
+		return rcache.DefaultTTL
+	}
+	return time.Duration(n) * time.Second
+}
 
 // How long startup waits for the database before giving up, and how often it
 // retries inside that window. The session-mode pooler is shared and capped at
@@ -367,7 +387,39 @@ func main() {
 		accountsSvc = accountsSvc.WithBillingPool(pool)
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
-		catalogRepo := catalog.NewPgxRepository(pool)
+		// Hot-path read cache (Redis): wraps the repositories behind
+		// /internal/routing/select and /v1/models so each request's catalog,
+		// pricing and entitlement reads hit Redis instead of Postgres for one
+		// TTL at a time. Enabled only when REDIS_URL is set AND reachable at
+		// startup; otherwise both repos run uncached exactly as before. The
+		// dedicated hot-path client carries tight timeouts so a hung Redis
+		// costs milliseconds, and Flush at boot drops keys written by a
+		// previous binary so a migration that repriced aliases between deploys
+		// is never answered with pre-deploy prices. Money state (balances,
+		// reservations, ledger entries, billing state) is never cached; see
+		// rcache.Cache's boundary note.
+		var hotCache *rcache.Cache
+		switch hc, hcErr := rcache.New(cfg.RedisURL, "hivecp:v1", resolveHotCacheTTL()); {
+		case cfg.RedisURL == "":
+			log.Println("REDIS_URL not set: routing/catalog reads run uncached")
+		case hcErr != nil:
+			log.Printf("WARNING: hot-path read cache disabled, client build failed: %v", hcErr)
+		default:
+			if pingErr := hc.Ping(ctx); pingErr != nil {
+				log.Printf("WARNING: hot-path read cache disabled, redis unreachable: %v", pingErr)
+				_ = hc.Close()
+				break
+			}
+			flushed, flushErr := hc.Flush(ctx)
+			if flushErr != nil {
+				log.Printf("WARNING: hot-path cache startup flush failed (%v); keys from the previous binary may serve up to one TTL", flushErr)
+			}
+			hotCache = hc
+			defer hc.Close()
+			log.Printf("redis hot-path read cache enabled for routing/catalog (startup flush removed %d keys)", flushed)
+		}
+
+		catalogRepo := catalog.NewCachedRepository(catalog.NewPgxRepository(pool), hotCache)
 		catalogSvc = catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
 
@@ -398,7 +450,7 @@ func main() {
 		}
 		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
-		routingRepo := routing.NewPgxRepository(pool)
+		routingRepo := routing.NewCachedRepository(routing.NewPgxRepository(pool), hotCache)
 		// catalogSvc is the per-tenant entitlement source: route selection and
 		// the catalog listing resolve visibility through the same predicate, so
 		// a tenant cannot invoke a model an admin hid from it.

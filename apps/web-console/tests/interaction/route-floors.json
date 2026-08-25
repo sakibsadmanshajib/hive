@@ -1,0 +1,50 @@
+{
+  "$comment": "What every route must render, and leave usable. Presence and reachability rather than a control count: a count taken against one account's data is not comparable to another's, so a count either goes red forever in CI or gets lowered to CI's level and stops detecting anything. These identities are rendered by the shell and by the pages themselves, not by the account's data, so the same list holds against an empty CI tenant and the live console. A required control that is missing, or that renders disabled, fails the gate. Hand written and reviewed on purpose: there is no regenerate command, because a bar a run can rewrite is a bar a run can lower.",
+  "shell": {
+    "$comment": "components/app-shell/console-shell.tsx renders these on every console route from a static list, with no dependency on the account. A run that finds them missing is looking at a page that failed to render, and a run that finds them disabled is looking at a permission regression.",
+    "prefix": "/console",
+    "require": [
+      "a|Hive",
+      "a|Overview",
+      "a|API keys",
+      "a|Model catalog",
+      "a|Analytics",
+      "a|Billing",
+      "a|Members",
+      "a|Settings",
+      "a|Feature gates",
+      "a|Marketplace",
+      "a|Documentation",
+      "button|Sign out",
+      "button|Switch to EN",
+      "button|Switch to বাংলা"
+    ]
+  },
+  "routes": {
+    "/auth/sign-in": ["input|#email", "input|#password", "button|Continue"],
+    "/auth/sign-up": ["input|#email", "input|#password", "button|Create account"],
+    "/auth/forgot-password": ["input|#email", "button|Send reset link"],
+    "/auth/reset-password": ["input|#password", "input|#confirm", "button|Update password"],
+    "/no-workspace": ["a|Check again", "button|Sign out"],
+    "/console/api-keys": ["button|Create key", "input|#key-nickname"],
+    "/console/members": ["input|#invite-email", "select|#invite-role", "button|Send invite"],
+    "/console/billing": ["a|Invoices", "a|Ledger", "input|#threshold-credits"],
+    "/console/billing/alerts": ["input|#alert-email", "button|Create alert"],
+    "/console/billing/budget": [
+      "input|#budget-soft-cap",
+      "input|#budget-hard-cap",
+      "button|Save budget"
+    ],
+    "/console/billing/checkout/return": ["a|Back to billing"],
+    "/console/analytics": [
+      "button|24h",
+      "button|7d",
+      "button|30d",
+      "button|90d",
+      "select|#group-by"
+    ],
+    "/console/settings/profile": ["input|#ownerName", "button|Save profile"],
+    "/console/settings/billing": ["input|#legalEntityName", "button|Save billing details"],
+    "/console/setup": ["input|#accountName", "button|Save and continue"]
+  }
+}

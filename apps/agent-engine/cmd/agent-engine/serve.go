@@ -35,6 +35,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -131,6 +132,17 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_LLM_BASE_URL: %w", err)
 	}
 
+	// Off by default; an unset variable is the normal state. A set-but
+	// unparseable value fails startup rather than silently launching without
+	// the capability the operator asked for.
+	browserTools := false
+	if raw := os.Getenv("HIVE_AGENT_ENGINE_BROWSER_TOOLS"); raw != "" {
+		browserTools, err = strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_BROWSER_TOOLS=%q: %w", raw, err)
+		}
+	}
+
 	egress := egressclient.New(controlPlaneURL, controlPlaneToken)
 	// The tenant's effective egress policy governs what the agent's own
 	// shell may reach. The model endpoint is not that: it is Hive's own
@@ -164,6 +176,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		LLMModel:               llmModel,
 		LLMBaseURL:             llmBaseURL,
 		LLMAPIKey:              os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
+		BrowserTools:           browserTools,
 		SessionAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
 		QuotaTenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
 		QuotaUserConcurrency:   envInt("HIVE_QUOTA_USER_CONCURRENCY", 2),

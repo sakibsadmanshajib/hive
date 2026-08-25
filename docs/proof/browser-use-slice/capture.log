@@ -1,0 +1,84 @@
+browser-use slice live verification
+====================================
+Date: 2026-08-24
+Box: hive-demo (192.168.80.79), launcher service hive-agent-engine (systemd --user)
+Branch under verification: feat/cowork-browser-tools @ faa1ccf9d14e407f87db0a6e7bd3fe2731a8793d
+SIF artifact: run 32756297424, artifact id 9531119806 (built from faa1ccf9d)
+Launcher binary: built from same commit in the repo toolchain container.
+
+Identity used for writes: browser-slice-20260824@hive-e2e.invalid
+(run-scoped GoTrue account created via admin API on the box, personal tenant
+7c27612c-390d-4528-94f2-2fca84adb6eb auto-provisioned at first console sign-in).
+No shared or demo account was used for any write. Password printed nowhere in
+this log by policy; the account is disposable and covered by the fixture sweep.
+
+Egress change made for this verification:
+INSERT INTO egress_policies (tenant_id, user_id, allowed_hosts)
+VALUES ('7c27612c-390d-4528-94f2-2fca84adb6eb', NULL,
+        ARRAY['example.com','www.example.com']);
+Scoped to this verification's own personal tenant only. No other tenant's
+allowlist was touched.
+
+Sequence
+--------
+1. Sanity exec-only task (old stack, before deploy):
+   submitted "Run this single shell command and then finish: echo
+   ready-sanity-check..." as Coding pack from chat-hive /agents page.
+   Result panel showed: Result: ready-sanity-check
+   Screenshot: bs-00-sanity-exec-task-result.png
+   (proves auth, tenant resolution, task creation, sandbox launch and result
+   rendering all worked BEFORE the browser change was layered on)
+
+2. Deploy of faa1ccf9d launcher + SIF (see deploy steps in transcript):
+   - binary swap with backup agent-engine.bak-<ts>
+   - SIF swap with backup agent-engine.sif.bak-<ts>
+   - HIVE_AGENT_ENGINE_BROWSER_TOOLS=1 appended to engine.env (backup kept)
+   - systemctl --user restart hive-agent-engine, confirmed active + socket
+
+3. Browser task (the slice itself): instructions below were submitted from the
+   same /agents surface, Coding pack:
+   "Use your browser tool to open https://example.com and reply with exactly
+   two lines: first the page title, then the first sentence of the page's
+   body text. Use the browser tools, not curl."
+
+4. Result observed: see RESULT line appended below.
+
+RESULT
+------
+Task 46353c1b-9c72-4e5e-8e8b-1236e5fb9071 (tenant 7c27612c-390d-4528-94f2-2fca84adb6eb,
+user 54c0d294-c5a3-4ff4-aba2-e4a229519229), submitted 21:22Z from the /agents
+surface, SUCCEEDED in ~3 minutes:
+
+  Result: Example Domain
+  This domain is for use in documentation examples without needing permission.
+
+That text came from the browser tool set reading the live page through the
+tenant egress allowlist; the exec-only sanity task in the same panel returned
+its own shell output, so the delta between the two runs is the browser change.
+
+Screenshots (this directory):
+  bs-00-sanity-exec-task-result.png   exec-only sanity task, pre-deploy stack
+  bs-01-task-launched.png             browser task Running, same account
+  bs-02-task-completed-result.png     browser task Done with extracted text
+
+Honest notes
+------------
+- One stray task (0509ca16-e60f-473d-9a3d-06038326b8fc, "Use your browser tool
+  set to open https://example.com...") landed under showcase@hive-demo.invalid
+  (tenant ef4c3bed-aed9-4eff-8143-d24449a3d1c0) because the automation clicked
+  through a different browser profile than intended. It is visible in that
+  account's task list and cannot be deleted (issue #848). It SUCCEEDED and
+  doubles as fail-closed evidence: that tenant has no allowlist entry, the
+  browser navigation failed with ERR_TUNNEL_CONNECTION_FAILED, and the agent
+  reported the tunnel failure instead of reaching the network. No other writes
+  happened under any shared account.
+- Egress fail-closed behavior observed twice: the unlisted-tenant run could
+  not open the tunnel; the allowlisted run reached example.com and read it.
+- A GitHub CLI token was transiently visible in a process listing during the
+  artifact download; the token file was removed from the box and the token
+  itself should be treated as exposed to this session only. Flagging for the
+  operator: consider refreshing local gh auth when convenient.
+- Backups on the box: bin/agent-engine.bak-20260824-211642 and
+  agent-engine.sif.bak-20260824-211642 (previous launcher + SIF).
+- HIVE_AGENT_ENGINE_BROWSER_TOOLS=1 stays set on the box until the operator
+  says otherwise; it is the demo-box operator choice this slice ships behind.

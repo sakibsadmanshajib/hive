@@ -65,6 +65,8 @@
     "tests/e2e/openai-sdk.spec.ts": ["chromium"],
     "tests/e2e/profile-completion.spec.ts": ["chromium"],
     "tests/e2e/rbac-unverified.spec.ts": ["chromium"],
-    "tests/e2e/unauth.spec.ts": ["chromium"]
+    "tests/e2e/unauth.spec.ts": ["chromium"],
+    "tests/interaction/auth.setup.ts": ["interaction-setup"],
+    "tests/interaction/interaction-coverage.spec.ts": ["interaction"]
   }
 }

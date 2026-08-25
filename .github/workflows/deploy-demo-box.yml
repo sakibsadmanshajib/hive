@@ -1837,6 +1837,13 @@ jobs:
       # Daily automated consumption belongs on the free pool alias, not on a
       # paid tier (migration 20260824_02_free_pool_router.sql).
       HIVE_TEST_MODEL: hive-free
+      # Capability tests (tools/response_format) cannot run on hive-free: its
+      # pool members are seeded tools_supported=false until cross-member parity
+      # is probed (#1115), and the edge correctly 400s those parameters there
+      # (run 32736430913). deepseek-v4-pro is tools-capable with a pinned,
+      # contract-stable route; the flash variant returned message.content as
+      # object/null/string across probes (run 32665985618).
+      HIVE_TOOLS_MODEL: deepseek-v4-pro
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v7
@@ -1868,7 +1875,11 @@ jobs:
           body="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 --max-time 15 \
             -H "Authorization: Bearer $HIVE_API_KEY" "$HIVE_BASE_URL/models")"
           echo "$body" | jq -e '.data | length >= 4' >/dev/null
-          for alias in hive-auto hive-default hive-embedding-default hive-fast; do
+          # HIVE_TEST_MODEL and HIVE_TOOLS_MODEL join the fixed list: this job's
+          # env sets both, and a deployment whose catalog lost either alias must
+          # fail here in preflight rather than mid-suite (CodeRabbit finding).
+          for alias in hive-auto hive-default hive-embedding-default hive-fast \
+                       "$HIVE_TEST_MODEL" "$HIVE_TOOLS_MODEL"; do
             echo "$body" | jq -e --arg id "$alias" '.data | map(.id) | index($id) != null' >/dev/null \
               || { echo "missing alias: $alias"; exit 1; }
           done

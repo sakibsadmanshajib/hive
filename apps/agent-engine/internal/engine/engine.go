@@ -141,6 +141,16 @@ type Config struct {
 	LLMBaseURL string
 	LLMAPIKey  string
 
+	// BrowserTools, when true, adds the browser tool set to inline
+	// agent_settings launches: Tools becomes the exec defaults plus
+	// browser_tool_set, so a launched task can drive Chromium inside the
+	// sandbox. Network access stays bounded by the per-session egress
+	// allowlist proxy exactly as shell traffic is; the flag only widens what
+	// the agent may DO, never where it may reach. Ignored on the
+	// AgentProfileID path (profiles carry their own tool lists). Default
+	// false, so existing tasks launch unchanged.
+	BrowserTools bool
+
 	// SessionAPIKey, when set, is both passed to the sandbox
 	// (sandbox.LaunchConfig.SessionAPIKey, actually enforced server-side)
 	// and sent by the control client as controlclient.SessionAPIKeyHeader.
@@ -491,7 +501,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		Workspace: controlclient.LocalWorkspace("/workspace"),
 	}
 	if e.cfg.LLMModel != "" {
-		req.AgentSettings = &controlclient.AgentSettings{
+		settings := &controlclient.AgentSettings{
 			AgentKind: "openhands",
 			LLM: controlclient.LLMSettings{
 				Model:   e.cfg.LLMModel,
@@ -507,6 +517,18 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 				Stream: true,
 			},
 		}
+		if e.cfg.BrowserTools {
+			// An explicit Tools list replaces the default set wholesale
+			// (OpenHandsAgentSettings.create_agent), so the exec defaults are
+			// repeated here; browser_tool_set rides along only when the flag
+			// asks for it. The sandbox strips the spec again if its chromium
+			// stack is unusable (conversation_service HIVE PATCH).
+			for _, name := range controlclient.DefaultExecToolNames {
+				settings.Tools = append(settings.Tools, controlclient.ToolSpec{Name: name})
+			}
+			settings.Tools = append(settings.Tools, controlclient.ToolSpec{Name: controlclient.BrowserToolName})
+		}
+		req.AgentSettings = settings
 	} else {
 		profileID := e.cfg.AgentProfileID
 		req.AgentProfileID = &profileID

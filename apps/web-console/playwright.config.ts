@@ -1,5 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// The interaction coverage gate is origin agnostic on purpose: CI points it
+// at the composed stack, a live run points it at the deployed console.
+const INTERACTION_BASE_URL =
+  process.env.INTERACTION_BASE_URL ??
+  process.env.PLAYWRIGHT_BASE_URL ??
+  "http://localhost:3000";
+
 export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -71,6 +78,68 @@ export default defineConfig({
       testDir: "./tests/e2e/_probe",
       testIgnore: /agent-workspace-flows\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    // Interaction coverage gate (see tests/interaction/README.md). Origin is
+    // configurable so the same run targets the composed stack in CI and the
+    // deployed box for a live run.
+    //
+    // Both projects run with retries: 0, against the repository default of two.
+    // A retry here is worse than useless: the sweep is one test that walks the
+    // whole console for tens of minutes, so a retry re-walks all of it, and a
+    // control that only works on the second attempt is exactly the defect this
+    // gate exists to report rather than to absorb.
+    {
+      name: "interaction-setup",
+      testDir: "./tests/interaction",
+      testMatch: /auth\.setup\.ts$/,
+      retries: 0,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: INTERACTION_BASE_URL,
+        // No trace and no video for this suite, for two independent reasons.
+        //
+        // Leak: the sweep types into password fields, and a trace carries the
+        // Authorization header of every XHR the console made. Issue #554 is
+        // the same problem in the HTML report's ARIA snapshots, which is why
+        // the CI job already refuses to upload that. An artifact nobody may
+        // upload is not worth recording.
+        //
+        // Cost: a failing run of a whole-application sweep spent over ten
+        // minutes after the verdict finalizing artifacts, on a job with a 60
+        // minute cap. The evidence this gate produces is its own JSON ledger,
+        // which is written after every route and uploaded unconditionally.
+        trace: "off",
+        video: "off",
+      },
+      // A live origin over the public internet signs in slower than a local
+      // stack; the default 30s cut the wait off mid-redirect.
+      timeout: 120 * 1000,
+    },
+    {
+      name: "interaction",
+      testDir: "./tests/interaction",
+      testMatch: /interaction-coverage\.spec\.ts$/,
+      retries: 0,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: INTERACTION_BASE_URL,
+        // No trace and no video for this suite, for two independent reasons.
+        //
+        // Leak: the sweep types into password fields, and a trace carries the
+        // Authorization header of every XHR the console made. Issue #554 is
+        // the same problem in the HTML report's ARIA snapshots, which is why
+        // the CI job already refuses to upload that. An artifact nobody may
+        // upload is not worth recording.
+        //
+        // Cost: a failing run of a whole-application sweep spent over ten
+        // minutes after the verdict finalizing artifacts, on a job with a 60
+        // minute cap. The evidence this gate produces is its own JSON ledger,
+        // which is written after every route and uploaded unconditionally.
+        trace: "off",
+        video: "off",
+      },
+      dependencies: ["interaction-setup"],
+      timeout: 3 * 60 * 60 * 1000,
     },
     {
       // Interaction-coverage probe for the agent workspace (Cowork), run

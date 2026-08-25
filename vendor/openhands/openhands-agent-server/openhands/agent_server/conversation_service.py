@@ -51,7 +51,12 @@ from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.git.exceptions import GitCommandError, GitRepositoryError
 from openhands.sdk.git.utils import run_git_command, validate_git_repository
 from openhands.sdk.mcp.utils import MCPToolProvider
-from openhands.sdk.tool import BROWSER_TOOL_NAME, Tool, is_tool_usable
+from openhands.sdk.tool import (
+    BROWSER_TOOL_NAME,
+    DEFAULT_EXEC_TOOL_NAMES,
+    Tool,
+    is_tool_usable,
+)
 from openhands.sdk.tool.client_tool import register_client_tools
 from openhands.sdk.utils.cipher import Cipher
 from openhands.sdk.workspace import LocalWorkspace
@@ -931,6 +936,44 @@ class ConversationService:
                 mcp_config,
             )
             request = request.model_copy(update={"agent": resolved_agent})
+
+        # HIVE PATCH: mirror the profile-path browser injection in
+        # _resolve_agent_from_profile for the inline agent_settings path. A
+        # client that lists browser_tool_set in agent_settings.tools keeps it
+        # only when this runtime can actually run it; on a runtime without a
+        # usable chromium stack the spec is stripped here instead of being
+        # left to fail tool resolution at agent init, degrading to the
+        # exec-only set exactly as the profile path silently omits the tool
+        # there. A usable runtime is untouched: create_agent already used the
+        # explicit list as given.
+        if request.agent_settings is not None and request.agent is not None:
+            requested = {
+                tool.get("name")
+                for tool in (request.agent_settings.get("tools") or [])
+                if isinstance(tool, dict)
+            }
+            if BROWSER_TOOL_NAME in requested and not is_tool_usable(
+                BROWSER_TOOL_NAME
+            ):
+                remaining = [
+                    t
+                    for t in request.agent.tools
+                    if t.name != BROWSER_TOOL_NAME
+                ]
+                if not remaining:
+                    # A browser-only explicit list must not degrade to a bare
+                    # agent: an empty tools list means no execution tools at
+                    # all, so restore the canonical exec set instead.
+                    remaining = [
+                        Tool(name=name) for name in DEFAULT_EXEC_TOOL_NAMES
+                    ]
+                request = request.model_copy(
+                    update={
+                        "agent": request.agent.model_copy(
+                            update={"tools": remaining}
+                        )
+                    }
+                )
 
         additions = request.agent_launch_additions
         suffix = (

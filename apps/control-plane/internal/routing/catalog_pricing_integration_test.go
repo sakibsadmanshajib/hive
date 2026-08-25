@@ -274,3 +274,102 @@ func TestEveryAliasHasACostBasis(t *testing.T) {
 		t.Fatalf("iterate: %v", err)
 	}
 }
+
+// TestHiveFreeResolvesInASeededDatabase is the regression guard for the CI
+// live-integration outage of 2026-08-24 (PR #1121): the throwaway database
+// carried the free pool rows, yet every plain-chat suite call failed with
+// Invalid model name, because nothing had derived LiteLLM's serving config
+// from this catalog. The data half is guarded here: the alias the suites call
+// by default must resolve to ACTIVE pool members under the exact activity rule
+// litellmconfig.SyncService uses (health_state not disabled/eol on an enabled
+// provider), so a migration that seeds the rows but leaves them unselectable,
+// or a repoint that strands the pinned policy on a dead member, fails in the
+// go-tests job instead of only in a live-keyed run. The wiring half (LiteLLM
+// actually being told about the group) is asserted in ci.yml's live-integration
+// job right after its config sync.
+func TestHiveFreeResolvesInASeededDatabase(t *testing.T) {
+	pool := connectCatalogDB(t)
+
+	// The alias itself must exist and be publicly selectable.
+	var visibility, lifecycle string
+	err := pool.QueryRow(context.Background(), `
+		SELECT visibility, lifecycle
+		FROM public.model_aliases
+		WHERE alias_id = 'hive-free'
+	`).Scan(&visibility, &lifecycle)
+	if err != nil {
+		t.Fatalf("hive-free missing from the seeded catalog: %v", err)
+	}
+	if visibility != "public" || lifecycle != "stable" {
+		t.Errorf("hive-free visibility=%q lifecycle=%q, want public/stable", visibility, lifecycle)
+	}
+
+	// Active members under SyncService's own filter, which is stricter than
+	// SelectRoute's: it also excludes 'eol' and requires the provider enabled.
+	rows, err := pool.Query(context.Background(), `
+		SELECT pr.route_id, pr.litellm_model_name
+		FROM public.provider_routes pr
+		JOIN public.custom_providers cp ON cp.slug = pr.provider
+		WHERE pr.alias_id = 'hive-free'
+		  AND pr.health_state NOT IN ('disabled', 'eol')
+		  AND cp.enabled
+		ORDER BY pr.route_id
+	`)
+	if err != nil {
+		t.Fatalf("query active hive-free routes: %v", err)
+	}
+	defer rows.Close()
+
+	const wantGroup = "route-free-pool"
+	var members []string
+	for rows.Next() {
+		var routeID, modelName string
+		if err := rows.Scan(&routeID, &modelName); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		members = append(members, routeID)
+		if modelName != wantGroup {
+			t.Errorf("pool member %s serves group %q, want %q", routeID, modelName, wantGroup)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if len(members) == 0 {
+		t.Fatal("hive-free has no active route: the sync would emit no deployment for it and every plain-chat request would fail with Invalid model name")
+	}
+
+	// The pinned fallback must point at one of those active members.
+	var pinned string
+	err = pool.QueryRow(context.Background(), `
+	 SELECT fallback_order->>0
+	 FROM public.alias_route_policies
+	 WHERE alias_id = 'hive-free'
+	`).Scan(&pinned)
+	if err != nil {
+		t.Fatalf("read hive-free pinned policy: %v", err)
+	}
+	pinnedActive := false
+	for _, m := range members {
+		if m == pinned {
+			pinnedActive = true
+			break
+		}
+	}
+	if !pinnedActive {
+		t.Errorf("hive-free pins fallback_order[0]=%q, which is not among the active members %v; selection would strand on a dead route", pinned, members)
+	}
+
+	// Group membership rows gate tenant visibility: a default-tier key sees
+	// only aliases in its groups. Missing membership makes the alias invisible
+	// however correct everything else is.
+	var groupCount int
+	if err := pool.QueryRow(context.Background(), `
+	 SELECT count(*) FROM public.model_policy_group_members WHERE alias_id = 'hive-free'
+	`).Scan(&groupCount); err != nil {
+		t.Fatalf("query hive-free group membership: %v", err)
+	}
+	if groupCount == 0 {
+		t.Error("hive-free belongs to no model_policy_group, so no default-tier tenant can see it")
+	}
+}

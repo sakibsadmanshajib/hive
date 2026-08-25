@@ -196,12 +196,12 @@ func TestService_SetTenantDefault_AcceptsConcreteHostnamesAndIPs(t *testing.T) {
 	tenantID, callerID := uuid.New(), uuid.New()
 	svc := egress.NewService(newFakeRepo(), &fakeOwner{isOwner: true})
 
-	p, err := svc.SetTenantDefault(context.Background(), callerID, tenantID, []string{"pypi.org", "192.0.2.1", "2001:db8::1"})
+	p, err := svc.SetTenantDefault(context.Background(), callerID, tenantID, []string{"pypi.org", "example.com", "192.0.2.1", "2001:db8::1"})
 	if err != nil {
 		t.Fatalf("expected concrete hosts/IPs to be accepted, got %v", err)
 	}
-	if len(p.AllowedHosts) != 3 {
-		t.Fatalf("expected 3 hosts, got %v", p.AllowedHosts)
+	if len(p.AllowedHosts) != 4 {
+		t.Fatalf("expected 4 hosts, got %v", p.AllowedHosts)
 	}
 }
 
