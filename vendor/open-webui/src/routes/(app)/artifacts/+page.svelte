@@ -78,16 +78,20 @@
 		status = 'loading';
 		errorMsg = '';
 		const myToken = ++scanToken;
+		const ac = new AbortController();
 		try {
 			// The NDJSON export endpoint streams every chat with full message
 			// content, one request. Parsed incrementally and stopped at the
 			// artifact cap, so a large history costs only what the cap needs,
 			// and the whole load is bounded by withTimeout so a slow or dead
 			// backend becomes a visible error instead of an eternal spinner.
+			// The AbortController makes the timeout real: the response body is
+			// torn down when the load fails or the user has navigated on.
 			const found = await withTimeout(
 				(async () => {
 					const res = await fetch(`${WEBUI_API_BASE_URL}/chats/all`, {
-						headers: { Accept: 'application/x-ndjson', authorization: `Bearer ${token}` }
+						headers: { Accept: 'application/x-ndjson', authorization: `Bearer ${token}` },
+						signal: ac.signal
 					});
 					if (!res.ok || !res.body) {
 						throw new Error(`HTTP ${res.status}`);
@@ -114,12 +118,22 @@
 							}
 						}
 					}
+					// The generator ends every record with a newline, so the
+					// buffer is normally empty here; parse it anyway so a
+					// final record without the trailing newline still counts.
+					buffer += decoder.decode();
+					const rest = buffer.trim();
+					if (rest) {
+						found.push(...extractArtifacts(JSON.parse(rest)));
+					}
 					try {
 						await reader.cancel();
 					} catch {
 						// the body may already be closed when the cap ended the loop
 					}
-					return found;
+					// A single chat can carry several artifacts, so the last
+					// push can overshoot the cap; trim to it.
+					return found.slice(0, 50);
 				})(),
 				20000
 			);
@@ -130,6 +144,7 @@
 			selectedIdx = null;
 			status = 'ready';
 		} catch (e: any) {
+			ac.abort();
 			if (myToken === scanToken) {
 				if (e?.message !== 'timeout') {
 					// Provider names and internal detail never reach the customer:
