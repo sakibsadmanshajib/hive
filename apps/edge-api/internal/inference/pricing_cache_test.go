@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // hiveClaudeCacheRoute is an illustrative Anthropic-Sonnet-class fixture (no
@@ -162,7 +164,7 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 
-		got := resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "read")
+		got := resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "groq", "read")
 		want := scaleRate(10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom)
 		if got != want {
 			t.Errorf("resolveCacheRate = %d, want fallback %d", got, want)
@@ -178,7 +180,7 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 		defer log.SetOutput(os.Stderr)
 
 		zero := int64(0)
-		got := resolveCacheRate(&zero, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "write")
+		got := resolveCacheRate(&zero, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-test", "groq", "write")
 		if got != 0 {
 			t.Errorf("resolveCacheRate = %d, want 0 (the deliberate stored rate, not the fallback)", got)
 		}
@@ -192,7 +194,7 @@ func TestResolveCacheRateFallsBackOnNilNotOnDeliberateZero(t *testing.T) {
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 
-		resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 0, "hive-test", "read")
+		resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 0, "hive-test", "groq", "read")
 		if buf.Len() != 0 {
 			t.Errorf("a route that metered zero cache tokens must not warn just because its price is unset, got: %q", buf.String())
 		}
@@ -221,13 +223,98 @@ func TestAssertCacheBillingMagnitudeGuard(t *testing.T) {
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 
-		// totalPrompt=205000, output=2000: 2x ceiling = (205000*2*3,000,000 +
-		// 2000*15,000,000)/1e6 = (1,230,000,000,000+30,000,000,000)/1e6 =
-		// 1,260,000. Pass an implausible charge above that to simulate an
-		// inverted-semantics bug.
-		assertCacheBillingMagnitude(hiveClaudeCacheRoute, 5_000, 200_000, 0, 2_000, 1_260_001)
+		// totalPrompt=205000, output=2000. The ceiling scales off the HIGHEST
+		// of input/cache-read/cache-write (here cache-write's 3,750,000 beats
+		// the flat input rate of 3,000,000): 2x ceiling =
+		// (205000*2*3,750,000 + 2000*15,000,000)/1e6 =
+		// (1,537,500,000,000+30,000,000,000)/1e6 = 1,567,500. Pass an
+		// implausible charge above that to simulate an inverted-semantics bug.
+		assertCacheBillingMagnitude(hiveClaudeCacheRoute, 5_000, 200_000, 0, 2_000, 1_567_501)
 		if !bytes.Contains(buf.Bytes(), []byte("BUG:")) || !bytes.Contains(buf.Bytes(), []byte("hive-claude-cache-demo")) {
 			t.Errorf("expected a loud BUG line naming the alias when the ceiling is breached, got: %q", buf.String())
 		}
 	})
+
+	t.Run("ceiling scales off the highest cache rate, not the flat input rate alone", func(t *testing.T) {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+
+		// A charge that WOULD have tripped the old input-rate-only ceiling
+		// (1,260,000) but sits below the correct max-rate ceiling
+		// (1,567,500) must not trip: this is exactly the false-positive the
+		// fix removes.
+		assertCacheBillingMagnitude(hiveClaudeCacheRoute, 5_000, 200_000, 0, 2_000, 1_300_000)
+		if bytes.Contains(buf.Bytes(), []byte("BUG:")) {
+			t.Errorf("guard false-tripped using the flat input rate instead of the highest of input/cache-read/cache-write: %q", buf.String())
+		}
+	})
+}
+
+// TestCreditsForTokensLoudlyClampsNegativeInputs is the review-requested
+// fix: the four negative clamps in CreditsForTokens must log a BUG line
+// naming the alias and the field, matching NormalizeCacheUsage's own
+// clamp-and-alarm pattern, rather than clamping silently.
+func TestCreditsForTokensLoudlyClampsNegativeInputs(t *testing.T) {
+	cases := []struct {
+		name                                 string
+		fresh, cacheRead, cacheWrite, output int64
+		wantField                            string
+	}{
+		{"negative fresh", -1, 0, 0, 1, "fresh_input_tokens"},
+		{"negative cache read", 1, -1, 0, 1, "cache_read_tokens"},
+		{"negative cache write", 1, 0, -1, 1, "cache_write_tokens"},
+		{"negative output", 1, 0, 0, -1, "output_tokens"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			defer log.SetOutput(os.Stderr)
+
+			CreditsForTokens(hiveClaudeCacheRoute, tc.fresh, tc.cacheRead, tc.cacheWrite, tc.output)
+
+			if !bytes.Contains(buf.Bytes(), []byte("BUG:")) || !bytes.Contains(buf.Bytes(), []byte(tc.wantField)) {
+				t.Errorf("expected a loud BUG line naming %q, got: %q", tc.wantField, buf.String())
+			}
+		})
+	}
+}
+
+// TestCreditsForTokensCounterOnMagnitudeGuardTrip confirms the magnitude
+// guard actually increments hive_cache_billing_magnitude_guard_trips_total,
+// not just logs, so the signal reaches Prometheus rather than only stdout.
+func TestCreditsForTokensCounterOnMagnitudeGuardTrip(t *testing.T) {
+	before := testutil.ToFloat64(cacheBillingMagnitudeGuardTrips.WithLabelValues(hiveClaudeCacheRoute.AliasID, hiveClaudeCacheRoute.Provider))
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	// Deliberately implausible: fresh dominates with no cache reduction at
+	// all, at a route whose input rate alone already exceeds a sane bound
+	// for this quantity is not how we trip it -- instead pass a credits
+	// figure far past the real ceiling directly via the same route used
+	// above, mirroring the "trips loudly" subtest.
+	assertCacheBillingMagnitude(hiveClaudeCacheRoute, 5_000, 200_000, 0, 2_000, 1_567_501)
+
+	after := testutil.ToFloat64(cacheBillingMagnitudeGuardTrips.WithLabelValues(hiveClaudeCacheRoute.AliasID, hiveClaudeCacheRoute.Provider))
+	if after != before+1 {
+		t.Errorf("cacheBillingMagnitudeGuardTrips = %v after a trip, want %v", after, before+1)
+	}
+}
+
+// TestResolveCacheRateCounterOnFallback confirms the fallback path
+// increments hive_cache_billing_fallback_rate_used_total.
+func TestResolveCacheRateCounterOnFallback(t *testing.T) {
+	before := testutil.ToFloat64(cacheBillingFallbackRateUsed.WithLabelValues("hive-counter-test", "groq", "read"))
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	resolveCacheRate(nil, 10_000, DefaultCacheReadRateNum, DefaultCacheReadRateDenom, 500, "hive-counter-test", "groq", "read")
+
+	after := testutil.ToFloat64(cacheBillingFallbackRateUsed.WithLabelValues("hive-counter-test", "groq", "read"))
+	if after != before+1 {
+		t.Errorf("cacheBillingFallbackRateUsed = %v after a fallback, want %v", after, before+1)
+	}
 }

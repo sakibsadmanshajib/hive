@@ -111,19 +111,21 @@ func scaleRate(rate, numerator, denominator int64) int64 {
 
 // resolveCacheRate returns the alias's own cache rate when the catalog carries
 // one (including a deliberate zero), or the documented fallback multiplier of
-// inputRate when it does not. It logs a WARN, naming the alias and which side
-// fell back, only when quantity is actually nonzero: a route that has never
-// once seen a cache token should not spam a WARN every request just because
-// its cache columns happen to be unset.
-func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, quantity int64, aliasID, side string) int64 {
+// inputRate when it does not. It logs a WARN and increments
+// cacheBillingFallbackRateUsed, naming the alias and which side fell back,
+// only when quantity is actually nonzero: a route that has never once seen a
+// cache token should not spam a WARN (or a counter increment) every request
+// just because its cache columns happen to be unset.
+func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, quantity int64, aliasID, provider, side string) int64 {
 	if priceCredits != nil {
 		return *priceCredits
 	}
 	fallback := scaleRate(inputRate, numerator, denominator)
 	if quantity > 0 {
-		log.Printf("inference: WARN falling back to default cache-%s rate alias=%s input_rate=%d fallback_rate=%d tokens=%d: "+
+		log.Printf("inference: WARN falling back to default cache-%s rate alias=%s provider=%s input_rate=%d fallback_rate=%d tokens=%d: "+
 			"catalog has no %s cache price for this alias, see the seeding migration and model_aliases.cache_%s_price_credits",
-			side, aliasID, inputRate, fallback, quantity, side, side)
+			side, aliasID, provider, inputRate, fallback, quantity, side, side)
+		cacheBillingFallbackRateUsed.WithLabelValues(aliasID, provider, side).Inc()
 	}
 	return fallback
 }
@@ -141,8 +143,23 @@ func resolveCacheRate(priceCredits *int64, inputRate, numerator, denominator, qu
 // for delivered work, not about refusing a suspicious charge after the fact).
 func assertCacheBillingMagnitude(route SelectRouteResult, fresh, cacheRead, cacheWrite, output, credits int64) {
 	totalPrompt := fresh + cacheRead + cacheWrite
+	// The ceiling scales off the HIGHEST of the three input-side rates, not
+	// the flat input rate alone: a catalog row whose cache rate is priced
+	// above the input rate (a real, sourced case -- Anthropic's 1h cache
+	// write TTL reaches 2.0x) would otherwise make this guard false-positive
+	// on a perfectly correct charge, degrading a real signal into noise on
+	// exactly the rows that need it working. Using the max of all three
+	// keeps the guard a true upper bound under any catalog configuration,
+	// not just the ones seeded today.
+	inputSideRate := route.Pricing.InputCredits()
+	if r := derefPrice(route.Pricing.CacheReadPriceCredits); r > inputSideRate {
+		inputSideRate = r
+	}
+	if r := derefPrice(route.Pricing.CacheWritePriceCredits); r > inputSideRate {
+		inputSideRate = r
+	}
 	ceiling := metering.ChargeCredits(
-		metering.UnitCharge{Quantity: totalPrompt * 2, CreditsPerMillion: route.Pricing.InputCredits()},
+		metering.UnitCharge{Quantity: totalPrompt * 2, CreditsPerMillion: inputSideRate},
 		metering.UnitCharge{Quantity: output, CreditsPerMillion: route.Pricing.OutputCredits()},
 	)
 	// The same 1-credit floor CreditsForTokens applies to a nonzero-but-cheap
@@ -154,9 +171,10 @@ func assertCacheBillingMagnitude(route SelectRouteResult, fresh, cacheRead, cach
 		ceiling = 1
 	}
 	if credits > ceiling {
-		log.Printf("inference: BUG: cache billing magnitude guard tripped alias=%s credits=%d ceiling=%d fresh=%d cache_read=%d cache_write=%d output=%d: "+
+		log.Printf("inference: BUG: cache billing magnitude guard tripped alias=%s provider=%s credits=%d ceiling=%d fresh=%d cache_read=%d cache_write=%d output=%d: "+
 			"charge exceeds 2x the flat-rate bound, which usually means a cache semantics inversion",
-			route.AliasID, credits, ceiling, fresh, cacheRead, cacheWrite, output)
+			route.AliasID, route.Provider, credits, ceiling, fresh, cacheRead, cacheWrite, output)
+		cacheBillingMagnitudeGuardTrips.WithLabelValues(route.AliasID, route.Provider).Inc()
 	}
 }
 
@@ -190,24 +208,22 @@ func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens
 			route.AliasID)
 		return 0
 	}
-	if freshInputTokens < 0 {
-		freshInputTokens = 0
-	}
-	if cacheReadTokens < 0 {
-		cacheReadTokens = 0
-	}
-	if cacheWriteTokens < 0 {
-		cacheWriteTokens = 0
-	}
-	if outputTokens < 0 {
-		outputTokens = 0
-	}
+	// Loud, not silent: matches the clamp-and-alarm shape NormalizeCacheUsage
+	// already uses one frame up. A negative count reaching this far means
+	// either a caller that bypassed NormalizeCacheUsage, or a corrupted
+	// component NormalizeCacheUsage's own boundary clamp did not fully
+	// absorb; either way it is worth a trace, not a silent zero (review
+	// finding on PR #1157).
+	freshInputTokens = clampNonNegative(freshInputTokens, route.AliasID, route.Provider, "fresh_input_tokens")
+	cacheReadTokens = clampNonNegative(cacheReadTokens, route.AliasID, route.Provider, "cache_read_tokens")
+	cacheWriteTokens = clampNonNegative(cacheWriteTokens, route.AliasID, route.Provider, "cache_write_tokens")
+	outputTokens = clampNonNegative(outputTokens, route.AliasID, route.Provider, "output_tokens")
 
 	inputRate := route.Pricing.InputCredits()
 	cacheReadRate := resolveCacheRate(route.Pricing.CacheReadPriceCredits, inputRate,
-		DefaultCacheReadRateNum, DefaultCacheReadRateDenom, cacheReadTokens, route.AliasID, "read")
+		DefaultCacheReadRateNum, DefaultCacheReadRateDenom, cacheReadTokens, route.AliasID, route.Provider, "read")
 	cacheWriteRate := resolveCacheRate(route.Pricing.CacheWritePriceCredits, inputRate,
-		DefaultCacheWriteRateNum, DefaultCacheWriteRateDenom, cacheWriteTokens, route.AliasID, "write")
+		DefaultCacheWriteRateNum, DefaultCacheWriteRateDenom, cacheWriteTokens, route.AliasID, route.Provider, "write")
 
 	credits := metering.ChargeCredits(
 		metering.UnitCharge{Quantity: freshInputTokens, CreditsPerMillion: inputRate},

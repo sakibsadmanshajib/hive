@@ -128,3 +128,88 @@ func TestNormalizeCacheUsageNilUsageIsZeroValue(t *testing.T) {
 		t.Errorf("expected zero-value CacheUsage for nil usage, got %+v", got)
 	}
 }
+
+// TestNormalizeCacheUsageNegativeCacheComponentClampsLoudlyInclusiveShape
+// covers the review-found gap: a negative cacheRead or cacheWrite from a
+// malformed upstream must not silently inflate fresh (subtracting a negative
+// number adds); each component is validated and clamped, loudly, BEFORE
+// fresh is derived, so the partition invariant survives.
+func TestNormalizeCacheUsageNegativeCacheComponentClampsLoudlyInclusiveShape(t *testing.T) {
+	t.Run("negative cache read", func(t *testing.T) {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+
+		usage := &UsageResponse{
+			PromptTokens: 100,
+			PromptTokensDetails: &PromptTokensDetails{
+				CachedTokens: -10, // malformed upstream
+			},
+		}
+		got := NormalizeCacheUsage(usage, "hive-fast", "groq")
+
+		if got.CacheReadTokens != 0 {
+			t.Errorf("CacheReadTokens = %d, want 0 (clamped)", got.CacheReadTokens)
+		}
+		// Without the fix, fresh would be 100 - (-10) - 0 = 110: inflated,
+		// past the wire total, and never caught by the fresh<0 clamp.
+		if got.FreshInputTokens != 100 {
+			t.Errorf("FreshInputTokens = %d, want 100 (unaffected by the clamped-away negative component)", got.FreshInputTokens)
+		}
+		if sum := got.FreshInputTokens + got.CacheReadTokens + got.CacheWriteTokens; sum != usage.PromptTokens {
+			t.Errorf("partition invariant broke: fresh+read+write = %d, want prompt_tokens = %d", sum, usage.PromptTokens)
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("BUG:")) || !bytes.Contains(buf.Bytes(), []byte("hive-fast")) {
+			t.Errorf("expected a loud BUG line naming the alias, got: %q", buf.String())
+		}
+	})
+
+	t.Run("negative cache write", func(t *testing.T) {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+
+		usage := &UsageResponse{
+			PromptTokens: 100,
+			PromptTokensDetails: &PromptTokensDetails{
+				CacheWriteTokens: -5,
+			},
+		}
+		got := NormalizeCacheUsage(usage, "hive-fast", "groq")
+
+		if got.CacheWriteTokens != 0 {
+			t.Errorf("CacheWriteTokens = %d, want 0 (clamped)", got.CacheWriteTokens)
+		}
+		if got.FreshInputTokens != 100 {
+			t.Errorf("FreshInputTokens = %d, want 100", got.FreshInputTokens)
+		}
+		if !bytes.Contains(buf.Bytes(), []byte("BUG:")) {
+			t.Errorf("expected a loud BUG line, got: %q", buf.String())
+		}
+	})
+}
+
+// TestNormalizeCacheUsageNegativeCacheComponentClampsLoudlyExclusiveShape is
+// the same defense on the EXCLUSIVE (Anthropic-native) branch.
+func TestNormalizeCacheUsageNegativeCacheComponentClampsLoudlyExclusiveShape(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	negativeRead := int64(-50)
+	usage := &UsageResponse{
+		PromptTokens:         5_000,
+		CacheReadInputTokens: &negativeRead,
+	}
+	got := NormalizeCacheUsage(usage, "claude-direct", "anthropic")
+
+	if got.CacheReadTokens != 0 {
+		t.Errorf("CacheReadTokens = %d, want 0 (clamped)", got.CacheReadTokens)
+	}
+	if got.FreshInputTokens != 5_000 {
+		t.Errorf("FreshInputTokens = %d, want 5000 (unaffected, exclusive shape never derives fresh from cache components)", got.FreshInputTokens)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("BUG:")) || !bytes.Contains(buf.Bytes(), []byte("claude-direct")) {
+		t.Errorf("expected a loud BUG line naming the alias, got: %q", buf.String())
+	}
+}
