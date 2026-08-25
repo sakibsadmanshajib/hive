@@ -43,21 +43,23 @@ function stubFetch(opts: {
   railsOk?: boolean;
   initiate?: () => Response;
 }) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === RAILS_URL) {
-      if (opts.railsOk === false) {
-        return new Response("nope", { status: 500 });
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === RAILS_URL) {
+        if (opts.railsOk === false) {
+          return new Response("nope", { status: 500 });
+        }
+        return new Response(JSON.stringify(opts.rails ?? optionsFixture()), {
+          status: 200,
+        });
       }
-      return new Response(JSON.stringify(opts.rails ?? optionsFixture()), {
-        status: 200,
-      });
-    }
-    if (url === INITIATE_URL) {
-      return opts.initiate ? opts.initiate() : new Response("{}", { status: 200 });
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  });
+      if (url === INITIATE_URL) {
+        return opts.initiate ? opts.initiate() : new Response("{}", { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    },
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
