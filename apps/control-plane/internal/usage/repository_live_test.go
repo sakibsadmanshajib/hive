@@ -189,10 +189,16 @@ func TestGetUsageSummary_SumsInputOutputAndCredits(t *testing.T) {
 	repo := NewPgxRepository(pool)
 	ctx := context.Background()
 	accountID := seedUsageAccount(t, pool)
-	attemptID := seedUsageAttempt(t, ctx, repo, accountID)
 
 	from := time.Now().UTC().Add(-1 * time.Hour)
+	// Two DISTINCT attempts, not one attempt written twice: a single
+	// request_attempt_id carries at most one 'completed' row
+	// (ux_usage_events_completed_attempt, issue #1180's dedup fix), matching
+	// production where one attempt has exactly one terminal outcome. This
+	// test's subject is SUM() across multiple genuine requests, so it needs
+	// multiple genuine attempts to sum over.
 	for i := 0; i < 2; i++ {
+		attemptID := seedUsageAttempt(t, ctx, repo, accountID)
 		if _, err := repo.RecordEvent(ctx, RecordEventInput{
 			AccountID:        accountID,
 			RequestAttemptID: attemptID,
@@ -357,12 +363,15 @@ func TestGetErrorSummary_ComputesRateOverAllRequests(t *testing.T) {
 	repo := NewPgxRepository(pool)
 	ctx := context.Background()
 	accountID := seedUsageAccount(t, pool)
-	attemptID := seedUsageAttempt(t, ctx, repo, accountID)
 
 	model := "gpt-error-test-" + uuid.NewString()[:8]
 	from := time.Now().UTC().Add(-1 * time.Hour)
 
 	// 1 error out of 4 total requests on this model => 25% error rate.
+	// Each entry is its own attempt (issue #1180): a single
+	// request_attempt_id carries at most one 'completed'-event_type row, so
+	// four distinct requests need four distinct attempts, matching how
+	// finalizeLocked and edge-api actually write these rows in production.
 	statuses := []struct {
 		status    string
 		errorCode string
@@ -373,6 +382,7 @@ func TestGetErrorSummary_ComputesRateOverAllRequests(t *testing.T) {
 		{"failed", "upstream_5xx"},
 	}
 	for _, s := range statuses {
+		attemptID := seedUsageAttempt(t, ctx, repo, accountID)
 		if _, err := repo.RecordEvent(ctx, RecordEventInput{
 			AccountID:        accountID,
 			RequestAttemptID: attemptID,

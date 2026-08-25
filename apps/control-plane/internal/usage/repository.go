@@ -86,10 +86,36 @@ func (r *pgxRepository) RecordEvent(ctx context.Context, input RecordEventInput)
 		return UsageEvent{}, fmt.Errorf("usage: marshal customer tags: %w", err)
 	}
 
+	// ON CONFLICT targets ux_usage_events_completed_attempt (partial unique
+	// index on (account_id, request_attempt_id) WHERE event_type =
+	// 'completed', supabase/migrations/20260825_03_...sql). Only a
+	// 'completed' insert can ever hit this arbiter; every other event_type
+	// inserts exactly as before.
+	//
+	// Two writers record a 'completed' row for the same attempt today
+	// (issue #1180): control-plane's own accounting.finalizeLocked, which
+	// always runs FIRST and carries the ledger-matching hive_credit_delta,
+	// and edge-api's separate, unconditional POST that always runs SECOND
+	// and carries the real measured token counts but a hive_credit_delta
+	// that is not a credit figure at all (it is edge-api's TotalTokens,
+	// unrelated to this fix's scope). DO UPDATE folds the second write's
+	// token/provider columns onto the first write's row and deliberately
+	// never touches hive_credit_delta, event_type, status, or the account/
+	// request identifiers: the row that lands first is presumed
+	// authoritative on the money question, and every case measured live
+	// (576 of 576 duplicate pairs, 2026-08-25) bears that out.
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.usage_events
 			(account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, $18)
+		ON CONFLICT (account_id, request_attempt_id) WHERE event_type = 'completed'
+		DO UPDATE SET
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			cache_read_tokens = EXCLUDED.cache_read_tokens,
+			cache_write_tokens = EXCLUDED.cache_write_tokens,
+			provider_request_id = COALESCE(EXCLUDED.provider_request_id, public.usage_events.provider_request_id),
+			internal_metadata = public.usage_events.internal_metadata || EXCLUDED.internal_metadata
 		RETURNING id, account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
 	`, input.AccountID, input.RequestAttemptID, input.APIKeyID, input.RequestID, string(input.EventType), input.Endpoint, input.ModelAlias, input.Status, input.InputTokens, input.OutputTokens, input.CacheReadTokens, input.CacheWriteTokens, input.HiveCreditDelta, nullableString(input.ProviderRequestID), internalMetadata, customerTags, nullableString(input.ErrorCode), nullableString(input.ErrorType))
 
