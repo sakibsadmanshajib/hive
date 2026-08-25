@@ -167,7 +167,7 @@ func (t *SSETranslator) FeedLine(line []byte) bool {
 		}
 		// Overwrite, never accumulate: a usage-bearing chunk reports its own
 		// totals to date, not a delta to add to the last one.
-		t.inputTokens = freshInputTokens(chunk.Usage.PromptTokens, cacheRead, cacheWrite)
+		t.inputTokens = freshInputTokens(chunk.Usage.PromptTokens, cacheRead, cacheWrite, t.clientAlias, chunk.Model)
 		t.outputTokens = chunk.Usage.CompletionTokens
 		t.cacheCreationTokens = cacheWrite
 		t.cacheReadTokens = cacheRead

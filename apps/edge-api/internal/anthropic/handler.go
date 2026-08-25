@@ -108,6 +108,10 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "max_tokens is required and must be greater than 0", "")
 		return
 	}
+	if err := validateCacheControl(req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
 
 	// Capture the client alias before translation so we can echo it back
 	// in the response. We must never return an upstream route identifier.

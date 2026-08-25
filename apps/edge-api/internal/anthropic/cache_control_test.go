@@ -1,10 +1,14 @@
 package anthropic_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 )
@@ -406,5 +410,170 @@ func TestSSETranslator_CacheTokensInMessageDelta(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no message_delta event observed")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Adversarial-review follow-ups (PR #1152 threads):
+//   MEDIUM 1 - freshInputTokens must alarm, not just clamp, on a negative
+//   result (the exact signature of the upstream inclusive/exclusive shape
+//   assumption breaking).
+//   LOW 1 - cache_control is validated at the trust boundary: type must be
+//   "ephemeral", ttl must be "5m"/"1h" if set, at most 4 breakpoints total.
+//   LOW 2 - session_id truncation is rune-boundary-safe, not a raw byte cut.
+// --------------------------------------------------------------------------
+
+func TestFromOAIResponse_CacheTokens_NegativeClamp_LogsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	oai := anthropic.OAIResponse{
+		Model: "openrouter/anthropic/claude-3-haiku",
+		Usage: anthropic.OAIUsage{
+			PromptTokens: 100,
+			PromptTokensDetails: &anthropic.OAIPromptTokensDetails{
+				CachedTokens:     90,
+				CacheWriteTokens: 50, // 90+50 > 100: upstream shape assumption broke
+			},
+		},
+	}
+	got := anthropic.FromOAIResponse(oai, "claude-3-haiku")
+
+	if got.Usage.InputTokens != 0 {
+		t.Errorf("input_tokens: want clamped 0 got %d", got.Usage.InputTokens)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "fresh input tokens went negative") {
+		t.Errorf("expected a WARN alarm on the negative clamp, got log: %s", logged)
+	}
+	if !strings.Contains(logged, "claude-3-haiku") {
+		t.Errorf("expected the alarm to name the client alias, got log: %s", logged)
+	}
+	if !strings.Contains(logged, "openrouter/anthropic/claude-3-haiku") {
+		t.Errorf("expected the alarm to name the upstream model, got log: %s", logged)
+	}
+}
+
+func TestSSETranslator_CacheTokens_NegativeClamp_LogsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-c","model":"openrouter/anthropic/claude-3-haiku","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-c","model":"openrouter/anthropic/claude-3-haiku","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,`+
+			`"prompt_tokens_details":{"cached_tokens":90,"cache_write_tokens":50}}}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "claude-3-haiku")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "fresh input tokens went negative") {
+		t.Errorf("expected a WARN alarm on the negative clamp, got log: %s", buf.String())
+	}
+}
+
+func TestToOAIRequest_SessionID_TruncatedAtRuneBoundary(t *testing.T) {
+	// 255 ASCII bytes followed by a 3-byte rune (e.g. "€", U+20AC) straddles
+	// byte 256 mid-rune under a plain byte-index cut.
+	long := strings.Repeat("a", 255) + "€€€€"
+	req := anthropic.MessagesRequest{
+		Model:     "m",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens: 5,
+		SessionID: long,
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("ToOAIRequest: %v", err)
+	}
+	if len(got.SessionID) > 256 {
+		t.Fatalf("session_id exceeds the 256 byte ceiling: %d bytes", len(got.SessionID))
+	}
+	if !utf8.ValidString(got.SessionID) {
+		t.Fatalf("session_id is not valid UTF-8 after truncation: %q", got.SessionID)
+	}
+	// json.Marshal must round-trip cleanly with no substituted U+FFFD.
+	b, err := json.Marshal(got.SessionID)
+	if err != nil {
+		t.Fatalf("marshal session_id: %v", err)
+	}
+	if strings.Contains(string(b), "\\ufffd") {
+		t.Errorf("session_id marshaled with a replacement character: %s", b)
+	}
+}
+
+func TestValidateCacheControl(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{
+			name:    "valid ephemeral, no ttl",
+			raw:     `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}]}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "valid ephemeral, 1h ttl",
+			raw:     `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "invalid type rejected",
+			raw:     `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"persistent"}}]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid ttl rejected",
+			raw:     `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1d"}}]}]}`,
+			wantErr: true,
+		},
+		{
+			name: "exactly 4 breakpoints accepted",
+			raw: `{"model":"m","max_tokens":5,
+				"cache_control":{"type":"ephemeral"},
+				"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],
+				"tools":[{"name":"t","input_schema":{},"cache_control":{"type":"ephemeral"}}],
+				"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}]}]}`,
+			wantErr: false,
+		},
+		{
+			name: "5 breakpoints rejected",
+			raw: `{"model":"m","max_tokens":5,
+				"cache_control":{"type":"ephemeral"},
+				"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],
+				"tools":[{"name":"t","input_schema":{},"cache_control":{"type":"ephemeral"}}],
+				"messages":[{"role":"user","content":[
+					{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},
+					{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}
+				]}]}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var req anthropic.MessagesRequest
+			if err := json.Unmarshal([]byte(tc.raw), &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: &fakeChat{}})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, newAuthedRequest(t, tc.raw))
+
+			if tc.wantErr {
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status: want 400 got %d, body=%s", rec.Code, rec.Body.String())
+				}
+			} else if rec.Code == http.StatusBadRequest {
+				t.Fatalf("unexpected 400 for a valid request: %s", rec.Body.String())
+			}
+		})
 	}
 }

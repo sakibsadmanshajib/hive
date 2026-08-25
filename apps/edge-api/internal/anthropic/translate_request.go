@@ -3,7 +3,9 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxSessionIDLen is OpenRouter's documented ceiling for the sticky-routing
@@ -43,9 +45,10 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	if req.SessionID != "" {
-		id := req.SessionID
-		if len(id) > maxSessionIDLen {
-			id = id[:maxSessionIDLen]
+		id, truncated := truncateSessionID(req.SessionID)
+		if truncated {
+			slog.Warn("anthropic session_id truncated to the OpenRouter ceiling",
+				"original_len", len(req.SessionID), "truncated_len", len(id))
 		}
 		out.SessionID = id
 	}
@@ -312,4 +315,79 @@ func convertToolChoice(tc *ToolChoice) OAIToolChoice {
 	default:
 		return OAIToolChoice{Sentinel: "auto"}
 	}
+}
+
+// truncateSessionID cuts id to at most maxSessionIDLen bytes at a rune
+// boundary. A plain byte-index slice (id[:maxSessionIDLen]) can land inside
+// a multibyte UTF-8 rune; json.Marshal would then silently replace the
+// corrupted tail byte with U+FFFD, so the value forwarded to OpenRouter
+// would differ from any prefix the caller actually sent. Reports whether it
+// actually cut anything, so the caller can log it.
+func truncateSessionID(id string) (string, bool) {
+	if len(id) <= maxSessionIDLen {
+		return id, false
+	}
+	cut := maxSessionIDLen
+	for cut > 0 && !utf8.RuneStart(id[cut]) {
+		cut--
+	}
+	return id[:cut], true
+}
+
+// maxCacheControlBreakpoints is Anthropic's documented per-request cap.
+// Enforced locally so an unbounded number of breakpoints cannot make Hive
+// forward unbounded upstream work on a client's behalf.
+const maxCacheControlBreakpoints = 4
+
+// validateCacheControl checks every cache_control breakpoint in the request
+// (root, system blocks, message content blocks, tool_result content
+// nested blocks are deliberately excluded -- Anthropic's cache_control lives
+// on a tool_result block itself, not inside its nested content, so nothing
+// there can validly carry one -- and tool definitions) against Anthropic's
+// documented shape: type must be "ephemeral", ttl if set must be "5m" or
+// "1h", and no more than maxCacheControlBreakpoints total. Anthropic's real
+// API already rejects a violation, so this is a pure fail-fast: catching a
+// client mistake (or a script fuzzing this endpoint) before a full round
+// trip to a paid upstream, not a new restriction on anything valid.
+func validateCacheControl(req MessagesRequest) error {
+	count := 0
+	check := func(cc *CacheControl) error {
+		if cc == nil {
+			return nil
+		}
+		count++
+		if cc.Type != "ephemeral" {
+			return fmt.Errorf("cache_control.type must be %q, got %q", "ephemeral", cc.Type)
+		}
+		if cc.TTL != "" && cc.TTL != "5m" && cc.TTL != "1h" {
+			return fmt.Errorf("cache_control.ttl must be %q or %q, got %q", "5m", "1h", cc.TTL)
+		}
+		return nil
+	}
+
+	if err := check(req.CacheControl); err != nil {
+		return err
+	}
+	for _, bl := range req.System.Blocks {
+		if err := check(bl.CacheControl); err != nil {
+			return err
+		}
+	}
+	for _, m := range req.Messages {
+		for _, bl := range m.Content.Blocks {
+			if err := check(bl.CacheControl); err != nil {
+				return err
+			}
+		}
+	}
+	for _, t := range req.Tools {
+		if err := check(t.CacheControl); err != nil {
+			return err
+		}
+	}
+
+	if count > maxCacheControlBreakpoints {
+		return fmt.Errorf("at most %d cache_control breakpoints per request, got %d", maxCacheControlBreakpoints, count)
+	}
+	return nil
 }
