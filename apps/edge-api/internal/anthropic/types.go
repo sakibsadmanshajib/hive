@@ -14,17 +14,30 @@ import "encoding/json"
 
 // MessagesRequest is the Anthropic POST /v1/messages request body.
 type MessagesRequest struct {
-	Model         string           `json:"model"`
-	Messages      []Message        `json:"messages"`
-	System        SystemField      `json:"system,omitempty"`
-	MaxTokens     int              `json:"max_tokens"`
-	Tools         []Tool           `json:"tools,omitempty"`
-	ToolChoice    *ToolChoice      `json:"tool_choice,omitempty"`
-	Temperature   *float64         `json:"temperature,omitempty"`
-	TopP          *float64         `json:"top_p,omitempty"`
+	Model       string      `json:"model"`
+	Messages    []Message   `json:"messages"`
+	System      SystemField `json:"system,omitempty"`
+	MaxTokens   int         `json:"max_tokens"`
+	Tools       []Tool      `json:"tools,omitempty"`
+	ToolChoice  *ToolChoice `json:"tool_choice,omitempty"`
+	Temperature *float64    `json:"temperature,omitempty"`
+	TopP        *float64    `json:"top_p,omitempty"`
+	// TopK has no OpenAI-standard field: it is not part of the chat/completions
+	// surface at all. Carried through to OAIRequest unchanged (same field name
+	// and shape) so LiteLLM can forward it to whatever provider params it maps
+	// to for providers that do support it (Anthropic, Cohere, vLLM, Bedrock);
+	// whether the eventual provider honours it is a LiteLLM/provider concern,
+	// not something this translator may silently drop on the caller's behalf.
+	TopK          *int             `json:"top_k,omitempty"`
 	StopSequences []string         `json:"stop_sequences,omitempty"`
 	Stream        bool             `json:"stream,omitempty"`
 	Metadata      *RequestMetadata `json:"metadata,omitempty"`
+	// Thinking requests Anthropic extended thinking. Carried through to
+	// OAIRequest unchanged (identical field name and shape to Anthropic's own
+	// definition) rather than translated to an equivalent, since Hive has no
+	// local reasoning-effort concept that maps onto a token budget; LiteLLM's
+	// own Anthropic adapter is what interprets this shape on the way out.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 	// CacheControl, at request root, is a valid alternative to a per-block
 	// breakpoint: it applies a single ephemeral cache marker to the whole
 	// request instead of the caller placing one on each block by hand. Kept
@@ -43,6 +56,22 @@ type MessagesRequest struct {
 // RequestMetadata carries optional caller metadata (unused in routing).
 type RequestMetadata struct {
 	UserID string `json:"user_id,omitempty"`
+}
+
+// ThinkingConfig requests Anthropic extended thinking on the model turn.
+type ThinkingConfig struct {
+	Type         string `json:"type"` // "enabled" | "disabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	// Display controls whether thinking content is redacted in the response
+	// while still returning a signature for multi-turn continuity. String
+	// enum, not boolean: Anthropic documents "summarized" and "omitted" as
+	// the two values (ThinkingConfigEnabledParam.display in
+	// anthropic-sdk-python). A *bool here would fail to unmarshal any real
+	// request that sets this field at all -- caught by CodeRabbit review on
+	// #1163 before merge. This struct is a pure carry-through (see
+	// MessagesRequest.Thinking), so dropping or mistyping this field would be
+	// the identical bug class this PR exists to fix, just one struct deeper.
+	Display *string `json:"display,omitempty"`
 }
 
 // CacheControl marks an Anthropic prompt-caching breakpoint. It is valid on a
@@ -141,6 +170,13 @@ type ContentBlock struct {
 	ToolUseID string             `json:"tool_use_id,omitempty"`
 	Content   *ToolResultContent `json:"content,omitempty"`
 
+	// type=thinking
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+
+	// type=redacted_thinking
+	Data string `json:"data,omitempty"`
+
 	// CacheControl is valid on any block type above: text, image, tool_use,
 	// and tool_result all support a cache breakpoint.
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
@@ -187,8 +223,12 @@ type Tool struct {
 
 // ToolChoice controls how the model selects tools.
 type ToolChoice struct {
-	Type string `json:"type"` // "auto" | "any" | "tool"
+	Type string `json:"type"` // "auto" | "any" | "tool" | "none"
 	Name string `json:"name,omitempty"`
+	// DisableParallelToolUse, when true, forbids more than one tool call per
+	// turn. It has no OpenAI field of its own; it maps onto the inverse of
+	// OpenAI's parallel_tool_calls (see OAIRequest.ParallelToolCalls).
+	DisableParallelToolUse *bool `json:"disable_parallel_tool_use,omitempty"`
 }
 
 // --------------------------------------------------------------------------
@@ -360,6 +400,21 @@ type OAIRequest struct {
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
 	// SessionID: see MessagesRequest.SessionID.
 	SessionID string `json:"session_id,omitempty"`
+	// TopK: see MessagesRequest.TopK. Carried through unchanged.
+	TopK *int `json:"top_k,omitempty"`
+	// Thinking: see MessagesRequest.Thinking. Carried through unchanged.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+	// User is OpenAI's stable opaque end-user identifier. This is where
+	// Anthropic's metadata.user_id lands: same purpose (abuse detection /
+	// per-user tracking on the provider side), different field name, so this
+	// is a rename rather than a byte-identical carry-through.
+	User string `json:"user,omitempty"`
+	// ParallelToolCalls is OpenAI's inverse of Anthropic's
+	// tool_choice.disable_parallel_tool_use. Only ever set to false (never
+	// true): Anthropic's default (disable=false, i.e. parallel allowed)
+	// already matches OpenAI's own default, so there is nothing to carry when
+	// the caller never asked to forbid it.
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
 
 // OAIStreamOptions mirrors OpenAI's stream_options object. IncludeUsage asks
@@ -398,6 +453,24 @@ type OAIMessage struct {
 	// where Content is always a single flattened string with no parts array
 	// to hang a per-part cache_control on.
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
+	// ThinkingBlocks carries an Anthropic thinking/redacted_thinking block
+	// from prior conversation history through unchanged, signature included.
+	// This is LiteLLM's own documented convention for round-tripping Anthropic
+	// extended-thinking content through an OpenAI-shaped assistant message
+	// (mirrors reasoning_content/thinking_blocks used for reasoning-model
+	// passthrough generally); the signature must survive verbatim or
+	// Anthropic rejects the next turn, so this is a carry-through, not a
+	// reconstruction.
+	ThinkingBlocks []OAIThinkingBlock `json:"thinking_blocks,omitempty"`
+}
+
+// OAIThinkingBlock mirrors an Anthropic thinking or redacted_thinking content
+// block for round-tripping through an OpenAI-shaped assistant message.
+type OAIThinkingBlock struct {
+	Type      string `json:"type"` // "thinking" | "redacted_thinking"
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
 }
 
 // OAIToolCall is an assistant tool invocation.

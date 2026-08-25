@@ -382,3 +382,259 @@ func TestOAIToolChoice_MarshalJSON_Named(t *testing.T) {
 		t.Errorf("type: want function got %v", m["type"])
 	}
 }
+
+// Issue #1153 item 1, the behaviour inversion: tool_choice:{"type":"none"}
+// must come out as the "none" sentinel, not "auto". Before the fix, "none"
+// matched no case in convertToolChoice's switch and fell to the default
+// branch, which returns "auto" -- a caller explicitly forbidding tool use
+// got a model that may call tools, the opposite of the request.
+func TestToOAIRequest_ToolChoice_None(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:      "m",
+		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens:  5,
+		ToolChoice: &anthropic.ToolChoice{Type: "none"},
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ToolChoice == nil {
+		t.Fatal("tool_choice nil")
+	}
+	b, _ := json.Marshal(got.ToolChoice)
+	if string(b) != `"none"` {
+		t.Errorf(`tool_choice json: want "none" got %s (an inversion back to "auto" means tool use is silently re-enabled)`, b)
+	}
+}
+
+// LOW item from review of #1163: an unrecognized tool_choice.type used to
+// silently map to "auto" via convertToolChoice's default branch -- the
+// identical inversion shape as the tool_choice:"none" bug, just waiting for
+// Anthropic to document a fifth value. Now rejected with a translation error
+// (handler.go turns that into a plain 400), never silently re-enabling tool
+// use nobody asked for.
+func TestToOAIRequest_ToolChoice_UnknownType_Rejected(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:      "m",
+		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens:  5,
+		ToolChoice: &anthropic.ToolChoice{Type: "some_future_type"},
+	}
+	_, err := anthropic.ToOAIRequest(req)
+	if err == nil {
+		t.Fatal("expected error for unrecognized tool_choice.type, got nil (silently defaulted to auto)")
+	}
+}
+
+// Issue #1153 item 2: metadata.user_id is parsed but was never read by
+// ToOAIRequest. It lands on OAIRequest.User, OpenAI's own end-user tracking
+// field -- same purpose, different name.
+func TestToOAIRequest_Metadata_UserID(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:     "m",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens: 5,
+		Metadata:  &anthropic.RequestMetadata{UserID: "end-user-123"},
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.User != "end-user-123" {
+		t.Errorf("user: want end-user-123 got %q", got.User)
+	}
+}
+
+func TestToOAIRequest_Metadata_Nil_UserOmitted(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:     "m",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens: 5,
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.User != "" {
+		t.Errorf("user: want empty got %q", got.User)
+	}
+}
+
+// Issue #1153 item 3: tool_choice.disable_parallel_tool_use had no field at
+// all. It maps onto OpenAI's parallel_tool_calls=false (the inverse boolean).
+func TestToOAIRequest_ToolChoice_DisableParallelToolUse(t *testing.T) {
+	disable := true
+	req := anthropic.MessagesRequest{
+		Model:      "m",
+		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens:  5,
+		ToolChoice: &anthropic.ToolChoice{Type: "auto", DisableParallelToolUse: &disable},
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ParallelToolCalls == nil || *got.ParallelToolCalls != false {
+		t.Errorf("parallel_tool_calls: want false got %v", got.ParallelToolCalls)
+	}
+}
+
+func TestToOAIRequest_ToolChoice_ParallelToolUseAllowed_OmitsField(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:      "m",
+		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens:  5,
+		ToolChoice: &anthropic.ToolChoice{Type: "auto"},
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ParallelToolCalls != nil {
+		t.Errorf("parallel_tool_calls: want nil (omitted) got %v", *got.ParallelToolCalls)
+	}
+}
+
+// Issue #1153 item 4: top_k had no field on MessagesRequest at all. Carried
+// through unchanged to OAIRequest.
+func TestToOAIRequest_TopK(t *testing.T) {
+	topK := 40
+	req := anthropic.MessagesRequest{
+		Model:     "m",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens: 5,
+		TopK:      &topK,
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TopK == nil || *got.TopK != 40 {
+		t.Errorf("top_k: want 40 got %v", got.TopK)
+	}
+}
+
+// Issue #1153 item 5a: the thinking request field had no representation at
+// all. Carried through unchanged to OAIRequest.
+func TestToOAIRequest_ThinkingConfig_Passthrough(t *testing.T) {
+	req := anthropic.MessagesRequest{
+		Model:     "m",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+		MaxTokens: 1024,
+		Thinking:  &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2048},
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Thinking == nil || got.Thinking.Type != "enabled" || got.Thinking.BudgetTokens != 2048 {
+		t.Errorf("thinking: want {enabled 2048} got %+v", got.Thinking)
+	}
+}
+
+// Issue #1153 item 5b: a thinking-only message (no text, no tool_use) used
+// to silently produce empty content -- no case in convertMessage's block
+// switch matched "thinking" at all, so both parts and toolCalls stayed
+// empty and the resulting OAIMessage had no content and no tool_calls.
+func TestToOAIRequest_ThinkingOnlyMessage_NotEmptyContent(t *testing.T) {
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"assistant","content":[
+		{"type":"thinking","thinking":"Let me work through this.","signature":"sig_abc"}
+	]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := got.Messages[0]
+	if len(msg.ThinkingBlocks) != 1 {
+		t.Fatalf("thinking_blocks len: want 1 got %d (message silently produced empty content)", len(msg.ThinkingBlocks))
+	}
+	tb := msg.ThinkingBlocks[0]
+	if tb.Type != "thinking" || tb.Thinking != "Let me work through this." || tb.Signature != "sig_abc" {
+		t.Errorf("thinking block: %+v", tb)
+	}
+}
+
+func TestToOAIRequest_RedactedThinkingBlock(t *testing.T) {
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"assistant","content":[
+		{"type":"redacted_thinking","data":"opaque-payload"}
+	]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := got.Messages[0]
+	if len(msg.ThinkingBlocks) != 1 || msg.ThinkingBlocks[0].Type != "redacted_thinking" || msg.ThinkingBlocks[0].Data != "opaque-payload" {
+		t.Fatalf("redacted thinking block: %+v", msg.ThinkingBlocks)
+	}
+}
+
+// Thinking block mixed with a tool_use block in the same assistant turn
+// (the real extended-thinking + tool-use pattern): both must survive.
+func TestToOAIRequest_ThinkingBlock_MixedWithToolUse(t *testing.T) {
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"assistant","content":[
+		{"type":"thinking","thinking":"I should check the weather.","signature":"sig_xyz"},
+		{"type":"tool_use","id":"tu_01","name":"get_weather","input":{"city":"Dhaka"}}
+	]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := got.Messages[0]
+	if len(msg.ThinkingBlocks) != 1 {
+		t.Fatalf("thinking_blocks len: want 1 got %d", len(msg.ThinkingBlocks))
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Function.Name != "get_weather" {
+		t.Fatalf("tool_calls: want 1 get_weather got %+v", msg.ToolCalls)
+	}
+}
+
+// Issue #1153 item 6: an image block mixed with a tool_use block in the same
+// turn used to be silently dropped once the flat-string branch was taken
+// (no cache_control anywhere to force array form). partsNeedArrayForm now
+// also triggers on any non-text part, not just a cache breakpoint.
+func TestToOAIRequest_ImageBlock_MixedWithToolUse_NotDropped(t *testing.T) {
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"assistant","content":[
+		{"type":"text","text":"Here is the chart:"},
+		{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc123"}},
+		{"type":"tool_use","id":"tu_01","name":"analyze","input":{}}
+	]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := got.Messages[0]
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("tool_calls len: want 1 got %d", len(msg.ToolCalls))
+	}
+	b, _ := json.Marshal(msg.Content)
+	var parts []map[string]interface{}
+	if err := json.Unmarshal(b, &parts); err != nil {
+		t.Fatalf("content is not an array, image was flattened away and lost: %s", b)
+	}
+	foundImage := false
+	for _, p := range parts {
+		if p["type"] == "image_url" {
+			foundImage = true
+		}
+	}
+	if !foundImage {
+		t.Errorf("image_url part missing from content array: %s", b)
+	}
+}

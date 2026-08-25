@@ -40,8 +40,14 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 		Messages:     msgs,
 		Temperature:  req.Temperature,
 		TopP:         req.TopP,
+		TopK:         req.TopK,
 		Stream:       req.Stream,
 		CacheControl: req.CacheControl,
+		Thinking:     req.Thinking,
+	}
+
+	if req.Metadata != nil && req.Metadata.UserID != "" {
+		out.User = req.Metadata.UserID
 	}
 
 	if req.SessionID != "" {
@@ -70,8 +76,15 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	if req.ToolChoice != nil {
-		tc := convertToolChoice(req.ToolChoice)
+		tc, err := convertToolChoice(req.ToolChoice)
+		if err != nil {
+			return OAIRequest{}, fmt.Errorf("tool_choice: %w", err)
+		}
 		out.ToolChoice = &tc
+		if req.ToolChoice.DisableParallelToolUse != nil && *req.ToolChoice.DisableParallelToolUse {
+			no := false
+			out.ParallelToolCalls = &no
+		}
 	}
 
 	return out, nil
@@ -161,9 +174,10 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 		return toolResults, nil
 	}
 
-	// Mixed content blocks: text, image, tool_use.
+	// Mixed content blocks: text, image, tool_use, thinking.
 	var parts []OAIContentPart
 	var toolCalls []OAIToolCall
+	var thinkingBlocks []OAIThinkingBlock
 
 	for _, bl := range m.Content.Blocks {
 		switch bl.Type {
@@ -200,27 +214,41 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 				},
 				CacheControl: bl.CacheControl,
 			})
+
+		case "thinking", "redacted_thinking":
+			// Prior-turn extended-thinking content, echoed back by the client
+			// as conversation history. Before this fix these blocks matched no
+			// case here at all: a thinking-only message fell through with
+			// empty parts and empty toolCalls, and every branch below produced
+			// an OAIMessage with no content and no tool_calls -- silently
+			// empty, not an error. thinkingBlocks is attached to every return
+			// path below so this can never happen again, whether the thinking
+			// block is alone or mixed with text/tool_use in the same turn.
+			thinkingBlocks = append(thinkingBlocks, OAIThinkingBlock{
+				Type:      bl.Type,
+				Thinking:  bl.Thinking,
+				Signature: bl.Signature,
+				Data:      bl.Data,
+			})
 		}
 	}
 
 	// Pure tool-call assistant turn.
 	if len(toolCalls) > 0 && len(parts) == 0 {
-		return []OAIMessage{{Role: m.Role, ToolCalls: toolCalls}}, nil
+		return []OAIMessage{{Role: m.Role, ToolCalls: toolCalls, ThinkingBlocks: thinkingBlocks}}, nil
 	}
-	// Tool calls plus text/image content. A part with a cache breakpoint
-	// keeps the block-array form so it is not lost; otherwise this
-	// reproduces the exact flat-string concatenation this function always
-	// emitted (including its pre-existing wart of silently dropping any
-	// image part mixed with tool calls -- see the PR body's dropped-field
-	// audit; fixing that is a separate, non-cache_control change and out of
-	// this fix's surgical scope), which is the regression guard for the
-	// overwhelmingly common no-cache-control case.
+	// Tool calls plus text/image content. A part with a cache breakpoint, or a
+	// non-text part (image), keeps the block-array form so it is not lost;
+	// otherwise this reproduces the exact flat-string concatenation this
+	// function always emitted, which is the regression guard for the
+	// overwhelmingly common plain-text case.
 	if len(toolCalls) > 0 {
 		if partsNeedArrayForm(parts) {
 			return []OAIMessage{{
-				Role:      m.Role,
-				Content:   OAIMessageContent{Parts: parts},
-				ToolCalls: toolCalls,
+				Role:           m.Role,
+				Content:        OAIMessageContent{Parts: parts},
+				ToolCalls:      toolCalls,
+				ThinkingBlocks: thinkingBlocks,
 			}}, nil
 		}
 		var contentStr string
@@ -230,26 +258,30 @@ func convertMessage(m Message) ([]OAIMessage, error) {
 			}
 		}
 		return []OAIMessage{{
-			Role:      m.Role,
-			Content:   OAIMessageContent{Text: contentStr},
-			ToolCalls: toolCalls,
+			Role:           m.Role,
+			Content:        OAIMessageContent{Text: contentStr},
+			ToolCalls:      toolCalls,
+			ThinkingBlocks: thinkingBlocks,
 		}}, nil
 	}
 
-	// Pure text/image parts: use array form for vision or a cache breakpoint,
-	// string for a lone uncached text block.
-	if len(parts) == 1 && parts[0].Type == "text" && parts[0].CacheControl == nil {
+	// Pure text/image/thinking parts: use array form for vision or a cache
+	// breakpoint, string for a lone uncached text block.
+	if len(parts) == 1 && parts[0].Type == "text" && parts[0].CacheControl == nil && len(thinkingBlocks) == 0 {
 		return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Text: parts[0].Text}}}, nil
 	}
-	return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Parts: parts}}}, nil
+	return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Parts: parts}, ThinkingBlocks: thinkingBlocks}}, nil
 }
 
 // partsNeedArrayForm reports whether a set of content parts must keep the
 // block-array form rather than collapse to a flat string: true if any part
-// carries a cache breakpoint, which a flat string cannot address.
+// carries a cache breakpoint (which a flat string cannot address), or any
+// part is not plain text (a flat string cannot carry an image_url either --
+// this used to silently drop an image mixed with tool calls; see issue
+// #1153 item 6).
 func partsNeedArrayForm(parts []OAIContentPart) bool {
 	for _, p := range parts {
-		if p.CacheControl != nil {
+		if p.CacheControl != nil || p.Type != "text" {
 			return true
 		}
 	}
@@ -298,22 +330,42 @@ func convertTools(tools []Tool) ([]OAITool, error) {
 //
 //	auto        -> sentinel "auto"
 //	any         -> sentinel "required"
+//	none        -> sentinel "none"
 //	{type:tool} -> named function selector
-func convertToolChoice(tc *ToolChoice) OAIToolChoice {
+//
+// "none" is the case that matters most here: it means "the model must not
+// call any tool", and OpenAI's chat/completions surface has the identical
+// sentinel for the identical meaning. Before this fix, "none" fell through to
+// the default branch below and came out as "auto" -- the opposite of what the
+// caller asked for, not merely a dropped field.
+//
+// An unrecognized type is rejected with an error rather than silently mapped
+// to "auto". Anthropic documents exactly these four values, so every one of
+// them is now an explicit case above; a fifth value existing at all means
+// either a client bug or a future Anthropic addition Hive doesn't understand
+// yet, and defaulting either of those to "auto" is the identical inversion
+// shape as the tool_choice:"none" bug this file exists to fix -- silently
+// enabling tool use nobody asked for is worse than a clear 400.
+func convertToolChoice(tc *ToolChoice) (OAIToolChoice, error) {
 	switch tc.Type {
 	case "auto":
-		return OAIToolChoice{Sentinel: "auto"}
+		return OAIToolChoice{Sentinel: "auto"}, nil
 	case "any":
-		return OAIToolChoice{Sentinel: "required"}
+		return OAIToolChoice{Sentinel: "required"}, nil
+	case "none":
+		return OAIToolChoice{Sentinel: "none"}, nil
 	case "tool":
 		return OAIToolChoice{
 			Named: &OAINamedToolChoice{
 				Type:     "function",
 				Function: OAINamedToolChoiceFunction{Name: tc.Name},
 			},
-		}
+		}, nil
 	default:
-		return OAIToolChoice{Sentinel: "auto"}
+		return OAIToolChoice{}, fmt.Errorf(
+			"tool_choice.type %q is not a supported Anthropic value (want one of auto, any, tool, none)",
+			tc.Type,
+		)
 	}
 }
 
