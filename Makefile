@@ -1,4 +1,4 @@
-.PHONY: gen-permissions agent-sif test-scripts test-owui-frontend
+.PHONY: gen-permissions agent-sif test-scripts test-owui-frontend go-cover
 
 # Codegen for the permissions registry → TypeScript mirror.
 # Runs inside the `toolchain` profile container (Go + tools). The toolchain
@@ -45,7 +45,29 @@ test-scripts:
 	python3 scripts/test_owui_agent_proxy.py
 	python3 scripts/test_owui_oauth_callback_landing.py
 
-# Node, not python, and it downloads a pinned vitest, so it is deliberately not
-# folded into test-scripts, which is pure python with no network.
+# Node, not python, and it downloads a pinned vitest (plus its coverage
+# provider), so it is deliberately not folded into test-scripts, which is pure
+# python self-checks with no network.
 test-owui-frontend:
 	sh scripts/test-owui-hive-frontend.sh
+
+# Umbrella Go coverage across both modules in one command. Each module's tests
+# write binary coverage into its own GOCOVERDIR (-coverpkg=./... instruments
+# every package of the module, so unreached packages count as uncovered rather
+# than silently vanishing); `go tool covdata textfmt` merges the directories
+# into profiles that `go tool cover -func` summarizes into one total line per
+# module plus a true cross-module umbrella total. No thresholds are enforced;
+# this makes the number one command away so a threshold decision has something
+# to stand on. Runs in the toolchain container per the Docker-only testing
+# contract; -count=1 -short matches the standard go-tests invocation.
+go-cover:
+	cd deploy/docker && docker compose $(COMPOSE_ENV_ARG) --profile tools run --rm toolchain \
+	  "rm -rf /tmp/hive-go-cover && mkdir -p /tmp/hive-go-cover/control-plane /tmp/hive-go-cover/edge-api && \
+	   cd /workspace/apps/control-plane && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/control-plane > /dev/null && \
+	   cd ../edge-api && go test ./... -count=1 -short -coverpkg=./... -covermode=atomic -args -test.gocoverdir=/tmp/hive-go-cover/edge-api > /dev/null && \
+	   go tool covdata textfmt -i=/tmp/hive-go-cover/control-plane -o=/tmp/hive-go-cover/control-plane.out && \
+	   go tool covdata textfmt -i=/tmp/hive-go-cover/edge-api -o=/tmp/hive-go-cover/edge-api.out && \
+	   go tool covdata textfmt -i=/tmp/hive-go-cover/control-plane,/tmp/hive-go-cover/edge-api -o=/tmp/hive-go-cover/umbrella.out && \
+	   printf 'control-plane '; go tool cover -func=/tmp/hive-go-cover/control-plane.out | tail -1 && \
+	   printf 'edge-api      '; go tool cover -func=/tmp/hive-go-cover/edge-api.out | tail -1 && \
+	   printf 'UMBRELLA      '; go tool cover -func=/tmp/hive-go-cover/umbrella.out | tail -1"

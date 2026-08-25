@@ -854,9 +854,12 @@ jobs:
         working-directory: .
         run: npm run lint:spec-wiring
 
-      - name: Unit tests (vitest)
+      # Coverage is advisory in this job: the v8 provider has no thresholds
+      # configured, so the summary line informs without gating anything. This
+      # step replaces the plain unit run instead of adding a second one.
+      - name: Unit tests with coverage summary (advisory)
         if: needs.changes.outputs.run != 'false'
-        run: npm run test:unit
+        run: npm run test:coverage
 
       - name: Build (Next.js)
         if: needs.changes.outputs.run != 'false'
