@@ -47,9 +47,19 @@
 
 		try {
 			const res = await getKnowledgeBases(localStorage.token);
-			items = res?.items ?? [];
-		} catch (e) {
-			error = typeof e === 'string' ? e : 'Failed to load knowledge bases';
+			// A null return is the client's own failure path (the fetch helper
+			// swallows a rejected request whose error carried no detail), not an
+			// empty account. Mapping it to [] would report a network failure as
+			// a fact about the caller's data.
+			if (!res) {
+				throw new Error('knowledge list unavailable');
+			}
+			items = res.items ?? [];
+		} catch {
+			// The backend's `detail` string is never rendered: error copy at this
+			// boundary is one translated generic message, per the provider-blind
+			// errors rule.
+			error = $i18n.t('Failed to load your knowledge bases.');
 		} finally {
 			loaded = true;
 		}
