@@ -53,7 +53,12 @@ process.stdin.on('end', () => {
       { pattern: /-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----/, label: 'Private key' },
       { pattern: /AKIA[0-9A-Z]{16}/, label: 'AWS access key' },
       { pattern: /eyJ[a-zA-Z0-9_-]{20,}\.eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/, label: 'JWT token (possible Supabase service role key)' },
-      { pattern: /password\s*[:=]\s*["'][^"']{8,}["']/, label: 'Hardcoded password' },
+      // (:=|[:=]) covers Go's `:=` short variable declaration as well as the
+      // plain `:` (YAML/struct literal) and `=` (most languages) assignment
+      // forms. A bare [:=] character class matches only one of the two `:=`
+      // characters, so `password := "..."` (the idiomatic Go form, and this
+      // is a Go-majority repo) silently passed through unblocked.
+      { pattern: /password\s*(:=|[:=])\s*["'][^"']{8,}["']/, label: 'Hardcoded password' },
     ];
 
     for (const { pattern, label } of blockPatterns) {
@@ -63,11 +68,11 @@ process.stdin.on('end', () => {
       }
     }
 
-    // LOW-CONFIDENCE: WARN — generic patterns
+    // LOW-CONFIDENCE: WARN — generic patterns. Same (:=|[:=]) fix as above.
     const warnPatterns = [
-      { pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i, label: 'Possible API key assignment' },
-      { pattern: /secret\s*[:=]\s*["'][^"']{8,}["']/i, label: 'Possible secret assignment' },
-      { pattern: /token\s*[:=]\s*["'][^"']{8,}["']/i, label: 'Possible token assignment' },
+      { pattern: /api[_-]?key\s*(:=|[:=])\s*["'][^"']{8,}["']/i, label: 'Possible API key assignment' },
+      { pattern: /secret\s*(:=|[:=])\s*["'][^"']{8,}["']/i, label: 'Possible secret assignment' },
+      { pattern: /token\s*(:=|[:=])\s*["'][^"']{8,}["']/i, label: 'Possible token assignment' },
     ];
 
     const warns = [];
