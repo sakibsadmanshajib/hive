@@ -84,13 +84,18 @@ func (s *workspaceRepoStub) MonthToDateSpendBDT(_ context.Context, _ uuid.UUID, 
 	return big.NewInt(0), nil
 }
 
-type httpRepoStub struct{}
+type httpRepoStub struct {
+	upsertErr error
+}
 
 func (s *httpRepoStub) GetThreshold(_ context.Context, _ uuid.UUID) (*BudgetThreshold, error) {
 	return nil, nil
 }
 
 func (s *httpRepoStub) UpsertThreshold(_ context.Context, _ uuid.UUID, _ int64) (*BudgetThreshold, error) {
+	if s.upsertErr != nil {
+		return nil, s.upsertErr
+	}
 	return nil, nil
 }
 
