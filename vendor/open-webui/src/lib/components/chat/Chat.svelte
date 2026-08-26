@@ -107,12 +107,23 @@
 	// hive (#1063): remaining-credits pill above the composer; self-fetching,
 	// renders nothing when the balance is unavailable.
 	import CreditsBanner from '$lib/hive/CreditsBanner.svelte';
-	import { createTask, describeRefusal, listTasks, TERMINAL_STATUSES } from '$lib/hive/agentTasks';
 	import {
+		createTask,
+		describeRefusal,
+		EVENT_PAGE_SIZE,
+		getTask,
+		getTaskEvents,
+		TERMINAL_STATUSES
+	} from '$lib/hive/agentTasks';
+	import {
+		foldRunSteps,
+		latestStepSeq,
 		packForMode,
 		renderRun,
 		runTurnIsDone,
-		selectPendingCoworkTurns
+		selectPendingCoworkTurns,
+		settleRunSteps,
+		type RunStep
 	} from '$lib/hive/coworkMode';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
@@ -2152,14 +2163,24 @@
 	 * ------------------------------------------------------------------ */
 
 	// How often the run is re-read, and how long this tab keeps following one.
-	// ponytail: a poll, not a stream, because edge-api exposes no event feed
-	// for a task; when one lands, this loop becomes a subscription and nothing
-	// else in this file moves. The ceiling exists so a task wedged in `running`
-	// cannot leave a browser tab polling until it is closed.
+	// ponytail: a poll, not a stream. The event feed added in #1073 is a cursor
+	// read, not a subscription, so there is nothing to subscribe to yet; when a
+	// stream exists this loop becomes one and nothing else in this file moves.
+	// The ceiling exists so a task wedged in `running` cannot leave a browser
+	// tab polling until it is closed.
 	const COWORK_POLL_INTERVAL_MS = 3000;
 	const COWORK_FOLLOW_CEILING_MS = 30 * 60 * 1000;
 
+	// How many event pages one reading will drain before leaving the rest for
+	// the next poll. Only a conversation reopened after a long run ever sees a
+	// full page, and this bounds the catch-up so a large backlog cannot hold
+	// the loop for an unbounded number of round trips.
+	const COWORK_EVENT_PAGES_PER_READ = 5;
+
 	const coworkTurn = (messageId: string) => history.messages[messageId] ?? null;
+
+	const coworkSteps = (messageId: string): RunStep[] =>
+		(coworkTurn(messageId)?.statusHistory ?? []) as RunStep[];
 
 	/**
 	 * Writes one reading of the run onto its transcript turn.
@@ -2168,8 +2189,12 @@
 	 * conversation, which is the caller's signal to stop: `history` is replaced
 	 * wholesale on navigation, so a late write would land on a different chat's
 	 * transcript.
+	 *
+	 * `steps` is the run's progress lines, and omitting it leaves whatever the
+	 * turn already shows: a caller reporting a transport failure has no new
+	 * progress to report and must not erase the real progress on screen.
 	 */
-	const applyCoworkRun = async (_chatId, messageId: string, task) => {
+	const applyCoworkRun = async (_chatId, messageId: string, task, steps?: RunStep[]) => {
 		if ($chatId !== _chatId) {
 			return false;
 		}
@@ -2180,11 +2205,63 @@
 
 		turn.content = renderRun(task);
 		turn.done = runTurnIsDone(task);
+		if (steps) {
+			// A step still open under a run that has settled would shimmer forever
+			// beneath a turn saying the task finished.
+			turn.statusHistory = turn.done ? settleRunSteps(steps) : steps;
+		} else if (turn.done && turn.statusHistory) {
+			turn.statusHistory = settleRunSteps(turn.statusHistory as RunStep[]);
+		}
 		history.messages[messageId] = turn;
 		history = history;
 
 		await saveChatHandler(_chatId, history);
 		return true;
+	};
+
+	/**
+	 * One reading of a run: its status, plus every event it has produced since
+	 * this turn last saw one.
+	 *
+	 * The cursor is what makes this cheap. `latestStepSeq` reads the highest
+	 * seq already on the turn, the read asks for events strictly after it, and
+	 * a full page means there is more behind it and the loop asks again. A
+	 * follower that re-read the whole event list every poll would be the same
+	 * mistake as the whole-task-list read this replaced.
+	 *
+	 * The status read is the authority and its failure propagates; the event
+	 * read is best effort, because progress lines that stop arriving are a
+	 * worse-looking run, while a status that stops arriving is a wrong one.
+	 */
+	const readCoworkRun = async (_chatId, messageId: string, taskId: string) => {
+		const task = await getTask(localStorage.token, taskId);
+
+		let steps = coworkSteps(messageId);
+		let cursor = latestStepSeq(steps);
+		try {
+			for (let page = 0; page < COWORK_EVENT_PAGES_PER_READ; page++) {
+				const events = await getTaskEvents(
+					localStorage.token,
+					taskId,
+					cursor,
+					EVENT_PAGE_SIZE
+				);
+				if (events.length === 0) {
+					break;
+				}
+				steps = foldRunSteps(steps, events);
+				cursor = latestStepSeq(steps);
+				if (events.length < EVENT_PAGE_SIZE) {
+					break;
+				}
+			}
+		} catch (error) {
+			// Keep the lines already on screen and this reading's status. Nothing
+			// is invented to fill the gap.
+		}
+
+		const applied = await applyCoworkRun(_chatId, messageId, task, steps);
+		return { task, applied };
 	};
 
 	const followCoworkRun = async (_chatId, messageId: string, taskId: string) => {
@@ -2200,12 +2277,9 @@
 				return;
 			}
 
-			let task;
+			let reading;
 			try {
-				// ponytail: edge-api has no GET /v1/agent/tasks/{id}, so the list
-				// is read and filtered. Fine at demo volume, wrong at scale; swap
-				// the two lines below the day a by-id read exists.
-				task = (await listTasks(localStorage.token)).find((row) => row.id === taskId);
+				reading = await readCoworkRun(_chatId, messageId, taskId);
 			} catch (error) {
 				// A blip is worth another attempt; a refusal is not, and asking a
 				// settled question every three seconds forever is how a surface
@@ -2220,14 +2294,10 @@
 				continue;
 			}
 
-			if (!task) {
-				continue;
-			}
-
-			if (!(await applyCoworkRun(_chatId, messageId, task))) {
+			if (!reading.applied) {
 				return;
 			}
-			if (TERMINAL_STATUSES.has(task.status) || task.status === 'unknown') {
+			if (TERMINAL_STATUSES.has(reading.task.status) || reading.task.status === 'unknown') {
 				return;
 			}
 		}
@@ -2256,25 +2326,26 @@
 			return;
 		}
 
-		let tasks;
-		try {
-			tasks = await listTasks(localStorage.token);
-		} catch (error) {
-			// Leave every stored turn exactly as it was rather than overwriting a
-			// real result with a transport failure.
-			return;
-		}
-
 		for (const pending of pendingTurns) {
 			const taskId = pending.hive_agent_task_id;
-			const task = tasks.find((row) => row.id === taskId);
-			if (!task) {
+
+			let reading;
+			try {
+				// Read by id, one request per turn. A failure here leaves this
+				// turn exactly as it was stored rather than overwriting a real
+				// result with a transport failure, and the remaining turns are
+				// still read: one unreadable run must not strand the others.
+				reading = await readCoworkRun(_chatId, pending.id, taskId);
+			} catch (error) {
 				continue;
 			}
-			if (!(await applyCoworkRun(_chatId, pending.id, task))) {
+			if (!reading.applied) {
 				return;
 			}
-			if (!TERMINAL_STATUSES.has(task.status) && task.status !== 'unknown') {
+			if (
+				!TERMINAL_STATUSES.has(reading.task.status) &&
+				reading.task.status !== 'unknown'
+			) {
 				void followCoworkRun(_chatId, pending.id, taskId);
 			}
 		}

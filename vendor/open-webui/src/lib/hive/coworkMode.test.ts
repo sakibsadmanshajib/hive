@@ -6,13 +6,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	COMPOSER_MODES,
+	describeEvent,
+	foldRunSteps,
 	isComposerMode,
+	latestStepSeq,
 	nextMode,
 	packForMode,
 	renderRun,
 	runTurnIsDone,
-	selectPendingCoworkTurns
+	selectPendingCoworkTurns,
+	settleRunSteps,
+	type RunStep
 } from './coworkMode';
+import type { TaskEvent } from './agentTasks';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const readComponent = (relative: string): string =>
@@ -205,5 +211,196 @@ describe('sending in cowork mode starts a run instead of a completion', () => {
 
 	it('bounds the poll loop, so a wedged run cannot poll forever', () => {
 		expect(chat).toContain('COWORK_FOLLOW_CEILING_MS');
+	});
+});
+
+const event = (over: Partial<TaskEvent> = {}): TaskEvent => ({
+	seq: 1,
+	kind: 'tool_call',
+	payload: {},
+	created_at: '2026-08-25T10:00:00Z',
+	...over
+});
+
+describe('describeEvent', () => {
+	it('names the tool on a call and on its result', () => {
+		expect(
+			describeEvent(event({ kind: 'tool_call', payload: { tool_name: 'bash', preview: 'ls -la' } }))
+		).toBe('Using bash: ls -la');
+		expect(
+			describeEvent(
+				event({ kind: 'tool_result', payload: { tool_name: 'bash', preview: 'README.md' } })
+			)
+		).toBe('Used bash: README.md');
+	});
+
+	it('still says something when the tool has no name and the preview is empty', () => {
+		expect(describeEvent(event({ kind: 'tool_call', payload: {} }))).toBe('Using a tool');
+	});
+
+	it('says a preview was shortened rather than showing it as complete', () => {
+		// The wire cut every preview to 2000 runes and left no marker, so a
+		// preview sitting exactly on the boundary is the only evidence.
+		const long = 'x'.repeat(2000);
+		expect(describeEvent(event({ kind: 'message', payload: { preview: long } }))).toBe(
+			`${long} (shortened)`
+		);
+		const short = 'x'.repeat(1999);
+		expect(describeEvent(event({ kind: 'message', payload: { preview: short } }))).toBe(short);
+	});
+
+	it('counts runes, not UTF-16 units, the way the backend cap does', () => {
+		// 1500 astral characters is 3000 UTF-16 units and 1500 runes: under the
+		// cap, so nothing was removed and nothing may claim otherwise.
+		const astral = '𝄞'.repeat(1500);
+		expect(describeEvent(event({ kind: 'message', payload: { preview: astral } }))).toBe(astral);
+	});
+
+	it('reports a payload the backend replaced with its truncation marker', () => {
+		expect(describeEvent(event({ kind: 'tool_result', payload: { truncated: true, size: 82000 } }))).toBe(
+			'An update too large to show here (82000 bytes).'
+		);
+	});
+
+	it('skips a status row that only repeats the task state the turn already shows', () => {
+		expect(describeEvent(event({ kind: 'status', payload: { status: 'running' } }))).toBeNull();
+	});
+
+	it('surfaces an upstream event class this build has never met', () => {
+		// The syncer's fallback stores an unmapped class as `status` with its raw
+		// payload precisely so it cannot vanish. It must not vanish here either.
+		expect(
+			describeEvent(event({ kind: 'status', payload: { sandbox_kind: 'CondenserEvent' } }))
+		).toBe('Sandbox event: CondenserEvent');
+		expect(describeEvent(event({ kind: 'unknown', payload: {} }))).toBe(
+			'An update this version of Hive cannot read.'
+		);
+	});
+
+	it('names a workspace file', () => {
+		expect(describeEvent(event({ kind: 'file', payload: { name: 'report.md', size: 12 } }))).toBe(
+			'Workspace file: report.md'
+		);
+	});
+});
+
+describe('foldRunSteps', () => {
+	it('closes a tool call with its own result rather than adding a second line', () => {
+		const called = foldRunSteps([], [
+			event({ seq: 1, kind: 'tool_call', payload: { tool_name: 'bash', tool_call_id: 'c1' } })
+		]);
+		expect(called).toHaveLength(1);
+		expect(called[0].done).toBe(false);
+
+		const answered = foldRunSteps(called, [
+			event({
+				seq: 2,
+				kind: 'tool_result',
+				payload: { tool_name: 'bash', tool_call_id: 'c1', preview: 'ok' }
+			})
+		]);
+		expect(answered).toHaveLength(1);
+		expect(answered[0].done).toBe(true);
+		expect(answered[0].description).toBe('Used bash: ok');
+		expect(answered[0].seq).toBe(2);
+	});
+
+	it('gives an orphan result its own line instead of dropping it', () => {
+		// A conversation reopened mid-run has its earlier events behind the
+		// cursor, so the call this result belongs to is not on the turn.
+		const steps = foldRunSteps([], [
+			event({ seq: 9, kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'gone' } })
+		]);
+		expect(steps).toHaveLength(1);
+		expect(steps[0].done).toBe(true);
+	});
+
+	it('pairs a result with the newest matching open call, not an already-closed one', () => {
+		const steps = foldRunSteps([], [
+			event({ seq: 1, kind: 'tool_call', payload: { tool_name: 'bash', tool_call_id: 'c1' } }),
+			event({ seq: 2, kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'c1' } }),
+			event({ seq: 3, kind: 'tool_call', payload: { tool_name: 'bash', tool_call_id: 'c1' } }),
+			event({ seq: 4, kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'c1' } })
+		]);
+		expect(steps).toHaveLength(2);
+		expect(steps.every((step) => step.done)).toBe(true);
+	});
+
+	it('never mutates the lines already on the turn', () => {
+		const before: RunStep[] = [
+			{ action: 'hive_agent_step', description: 'Using bash', done: false, seq: 1, tool_call_id: 'c1' }
+		];
+		const after = foldRunSteps(before, [
+			event({ seq: 2, kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'c1' } })
+		]);
+		expect(before[0].done).toBe(false);
+		expect(after[0].done).toBe(true);
+		expect(after).not.toBe(before);
+	});
+
+	it('renders nothing the backend did not send', () => {
+		expect(foldRunSteps([], [])).toEqual([]);
+		// A status row repeating the task state contributes no line, and adds no
+		// placeholder in its stead.
+		expect(foldRunSteps([], [event({ kind: 'status', payload: { status: 'running' } })])).toEqual(
+			[]
+		);
+	});
+});
+
+describe('the follower cursor', () => {
+	it('resumes from the highest seq the turn already carries', () => {
+		const steps = foldRunSteps([], [
+			event({ seq: 4, kind: 'message', payload: { preview: 'starting' } }),
+			event({ seq: 11, kind: 'message', payload: { preview: 'still going' } })
+		]);
+		expect(latestStepSeq(steps)).toBe(11);
+	});
+
+	it('starts at zero for a turn with no lines, and for one stored before seq existed', () => {
+		expect(latestStepSeq([])).toBe(0);
+		expect(latestStepSeq(undefined)).toBe(0);
+		expect(latestStepSeq([{ action: 'hive_agent_step', description: 'x', done: true } as RunStep])).toBe(
+			0
+		);
+	});
+});
+
+describe('settleRunSteps', () => {
+	it('stops a step shimmering under a run that has finished', () => {
+		const settled = settleRunSteps([
+			{ action: 'hive_agent_step', description: 'Using bash', done: false, seq: 1 }
+		]);
+		expect(settled[0].done).toBe(true);
+		// The text is not rewritten: what is known is that it stopped, not that
+		// it succeeded.
+		expect(settled[0].description).toBe('Using bash');
+	});
+});
+
+describe('the run turn follows the detail endpoint, not the task list', () => {
+	const chat = readComponent('../components/chat/Chat.svelte');
+
+	it('reads one task by id rather than filtering every task the user owns', () => {
+		expect(chat).toContain('getTask(localStorage.token, taskId)');
+		expect(chat).not.toContain('listTasks');
+	});
+
+	it('uses the events cursor, so a poll asks only for what it has not seen', () => {
+		expect(chat).toContain('getTaskEvents(');
+		expect(chat).toContain('latestStepSeq(steps)');
+	});
+
+	it('renders progress from the events themselves', () => {
+		expect(chat).toContain('foldRunSteps(steps, events)');
+		expect(chat).toContain('turn.statusHistory');
+	});
+
+	it('keeps the three behaviours #1193 review fixed', () => {
+		// The navigation guard, resuming every pending run rather than the first,
+		// and the clean refusal when files are attached in Cowork mode.
+		expect(chat).toContain('if ($chatId !== _chatId) {');
+		expect(chat).toContain('for (const pending of pendingTurns)');
+		expect(chat).toContain('Attachments are not supported in Cowork mode yet');
 	});
 });
