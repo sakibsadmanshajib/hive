@@ -92,3 +92,80 @@ fragment. The account (`qa-tester@hive.test` / the QA fixture password from
 `.env`) exists only inside this throwaway local SQLite-backed container,
 destroyed with it; no password was set, read, reset, or rotated on any shared
 or deployed account.
+
+## Re-verification after rebase onto main (2026-08-26, 27a4b31c5)
+
+Between this PR's original verification pass above and merge, a peer session
+landed two PRs on adjacent surface: #1233 ("one placeholder on the chat home,
+asserted in the bundle") deleted the dead `ChatPlaceholder.svelte` duplicate
+and reworked `Messages.svelte`'s empty-history branch; #1232 applied the same
+`formatUsdFromCredits`/`formatCachePrice` invariant this PR ports to a
+different surface (`apps/web-console`, untouched by this PR). Neither PR
+touches a file this branch changes (`git diff --stat` against both confirms
+zero overlap), and the merge of `origin/main` into this branch was clean, no
+conflicts.
+
+All five original bugs were re-confirmed present on `origin/main` at
+27a4b31c5 (before re-applying this branch's fixes) by grepping the exact
+code shapes the fixes target: `CodeBlock.svelte`'s `run` default,
+`ResponseMessage.svelte`'s `save={!readOnly}` override, `UserMessage.svelte`'s
+filled-pill class, `coworkMode.ts`'s two apology-string branches, and
+`stores/index.ts`'s unwrapped `user` writable. None had been independently
+fixed by the peer PRs; all five still applied cleanly.
+
+Two CodeRabbit findings posted against this PR (both real, both fixed, both
+threads resolved):
+
+- `CodeBlock.svelte`: `CodeEditor`'s `onSave` callback was wired to
+  `saveCode()` unconditionally, so `Ctrl/Cmd+S` inside the editor could still
+  save a code block whose toolbar Save button was hidden (`save={false}`).
+  Gated the callback on `save` itself.
+- `displayName.ts`: `resolveDisplayName` sanitized an email-derived name but
+  not an accepted server-provided one, so a bidirectional-override character
+  in an upstream `name` field could reach the rendered display name
+  unfiltered. Now sanitizes both paths; regression test added.
+
+### Fresh live verification (post-rebase, post-fix)
+
+Same method as the original pass: `hive-open-webui:pr1223-verify`, built
+locally from this branch's current HEAD (`docker build -f
+deploy/docker/Dockerfile.open-webui .`), run standalone with
+`ENABLE_LOGIN_FORM=true` local password signup and the same stdlib credits
+stub, against the exact bug-report figures.
+
+```
+GET /auth -> http://localhost:23004/auth
+mode: signup (onboarding)
+after sign-in/signup -> http://localhost:23004/
+greeting text: Good morning, Qa Tester
+credits banner text: You've used $0.000396 today · $9.79 remaining
+import chat -> 200 [...]
+imported chat id: 9dc04018-52e4-4b7c-bbf6-c861ccc88c3f
+run-code-button count: 0
+save-code-button count: 0
+```
+
+Two screenshots posted via `scripts/post-pr-visual-proof.sh`:
+
+- Chat home: greeting "Good morning, Qa Tester" (never the raw
+  `qa-tester@hive.test` used as the signup name, the literal regression
+  shape), quick-start chips render (Code/Write/Explain/Analyze), confirming
+  #1233's single-`Placeholder.svelte` mount and this branch's `displayName`
+  normalization compose without collision.
+- Imported transcript: code block action row shows only Collapse/Copy (no
+  Run, no Save), user turn right-aligned with no filled background, sidebar
+  display name also reads "Qa Tester" (the wrapped `user` store normalizes
+  every consumer, not just the greeting).
+
+Item 5 (Cowork step list filtering) remains verified by the automated test
+suite only, unchanged from the original pass: `coworkMode.test.ts` 47 tests
+green, both `describeEvent` branches that used to return the apology string
+now pinned to `null`. Same reasoning as above: a live Cowork run needs the
+full agent-engine sandbox, out of reach for local verification.
+
+Full unit suite after the rebase and both CodeRabbit fixes: 198/198 (15 in
+`displayName.test.ts`, including a new sanitize-bidi-character regression
+test), all 13 `lib/hive/*.svelte` components compile clean.
+
+No OAuth flow was exercised in this re-verification either; the account
+lived only in the throwaway container's SQLite database, destroyed with it.
