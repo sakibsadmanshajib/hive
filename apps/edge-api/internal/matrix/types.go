@@ -57,6 +57,29 @@ func (m *SupportMatrix) Lookup(method, path string) EndpointStatus {
 	return StatusUnknown
 }
 
+// HasCoverage reports whether m has any entry at all for a raw mux
+// registration pattern: an exact path match, or, for a trailing-slash
+// subtree pattern such as "/v1/agent/schedules/", any entry whose path
+// falls under that subtree. It is deliberately coarser than Lookup, which
+// answers "is this exact request allowed" for one method+path; HasCoverage
+// answers "does support-matrix.json know this route exists at all",
+// regardless of method or status, which is what a boot-time drift guard
+// over registered mux patterns can meaningfully ask (see
+// assertMatrixCoverage in apps/edge-api/cmd/server). It cannot see past a
+// registered prefix into a handler's own internal path-suffix dispatch
+// (routeItem/routeTaskByID-style switches), so a new suffix added under an
+// already-covered prefix still needs its own matrix entry added by hand.
+func (m *SupportMatrix) HasCoverage(pattern string) bool {
+	prefix := strings.TrimSuffix(pattern, "/")
+	childPrefix := prefix + "/"
+	for _, ep := range m.Endpoints {
+		if ep.Path == pattern || ep.Path == prefix || strings.HasPrefix(ep.Path, childPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildLookup constructs the internal lookup map from the endpoints slice.
 func (m *SupportMatrix) buildLookup() {
 	m.lookup = make(map[string]EndpointStatus, len(m.Endpoints))

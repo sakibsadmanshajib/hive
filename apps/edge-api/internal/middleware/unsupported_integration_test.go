@@ -16,6 +16,19 @@ import (
 // with their handlers wired but without matrix entries, so every request 404-ed
 // at UnsupportedEndpointMiddleware. The per-package isolation tests bypassed
 // this middleware entirely, which is why the break reached a demo build green.
+//
+// Buglog entry matrix-missing-proprietary-endpoints (2026-07-17). The same
+// defect recurred on GET /v1/audio/voices (#1079) and the whole
+// /v1/agent/schedules family (#1081): a hand-kept case list only ever covers
+// what someone remembers to add, and nobody added these. This file keeps
+// its leaf-level precision (it catches a single missing method or suffix a
+// mux pattern alone cannot see, e.g. a new /{id}/events branch inside an
+// already-registered handler), but the mux-derived, self-updating half of
+// the fix is TestAssertMatrixCoverage_RealRegistrations in
+// apps/edge-api/cmd/server/route_matrix_guard_test.go and the
+// assertMatrixCoverage boot-time check in cmd/server/main.go: a brand-new
+// route family with zero matrix coverage fails there without anyone having
+// to extend this list at all.
 const realMatrixPath = "../../../../packages/openai-contract/matrix/support-matrix.json"
 
 // TestUnsupportedEndpointMiddleware_AgentSubsystemRoutesReachHandlers drives the
@@ -63,6 +76,18 @@ func TestUnsupportedEndpointMiddleware_AgentSubsystemRoutesReachHandlers(t *test
 		{http.MethodGet, "/v1/agent/tasks"},
 		{http.MethodGet, "/v1/agent/tasks/" + id},
 		{http.MethodPost, "/v1/agent/tasks/" + id + "/cancel"},
+		{http.MethodGet, "/v1/agent/tasks/" + id + "/events"},
+		{http.MethodGet, "/v1/agent/tasks/" + id + "/files"},
+		// Agent schedules ("routines", FeatureCowork gate) —
+		// internal/agentsched/handler.go. Shipped in #1081, registered on the
+		// mux exactly like agent tasks above, and missed the matrix entirely:
+		// the same defect this test file exists to catch, recurring on a
+		// sibling route family.
+		{http.MethodPost, "/v1/agent/schedules"},
+		{http.MethodGet, "/v1/agent/schedules"},
+		{http.MethodGet, "/v1/agent/schedules/" + id},
+		{http.MethodPut, "/v1/agent/schedules/" + id},
+		{http.MethodDelete, "/v1/agent/schedules/" + id},
 		// Artifacts management (JWT selector) — internal/artifacts/handler.go.
 		// Only the real POST routes are asserted; the anonymous serving routes
 		// live under /artifacts/ (no /v1/ prefix) and never hit this middleware.
@@ -74,6 +99,11 @@ func TestUnsupportedEndpointMiddleware_AgentSubsystemRoutesReachHandlers(t *test
 		// Function; shipped registered on the mux (main.go) but missing from
 		// the matrix, so it 404-ed exactly like the routes above once did.
 		{http.MethodGet, "/v1/featuregate"},
+		// Audio voices (no gate, no auth boundary at all) — issue #997/#1079,
+		// internal/audio/handler_voices.go. Registered as a bare inline
+		// mux.Handle call in main() and, like agent schedules above, shipped
+		// with no matrix entry.
+		{http.MethodGet, "/v1/audio/voices"},
 	}
 
 	for _, tc := range cases {

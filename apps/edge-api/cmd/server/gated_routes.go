@@ -18,14 +18,14 @@ import (
 // serves and assert the denial, so removing or swapping a gate turns red.
 
 // registerRAGRoutes attaches the RAG surface to mux behind FeatureRAG.
-func registerRAGRoutes(mux *http.ServeMux, gate *featuregate.Gate, ragHandler http.Handler) {
+func registerRAGRoutes(mux httpMux, gate *featuregate.Gate, ragHandler http.Handler) {
 	mux.Handle("/v1/rag/", gate.Require(featuregate.FeatureRAG)(ragHandler))
 }
 
 // registerAgentTaskRoutes attaches the agent-task lifecycle surface to mux
 // behind FeatureCowork. Both the exact path and the subtree share one gated
 // handler so a request to either is denied identically.
-func registerAgentTaskRoutes(mux *http.ServeMux, gate *featuregate.Gate, taskHandler http.Handler) {
+func registerAgentTaskRoutes(mux httpMux, gate *featuregate.Gate, taskHandler http.Handler) {
 	gated := gate.Require(featuregate.FeatureCowork)(taskHandler)
 	mux.Handle("/v1/agent/tasks", gated)
 	mux.Handle("/v1/agent/tasks/", gated)
@@ -35,7 +35,7 @@ func registerAgentTaskRoutes(mux *http.ServeMux, gate *featuregate.Gate, taskHan
 // CRUD surface to mux behind FeatureCowork: deployments (tenants) without
 // Cowork enabled get the same 403 the task routes return, never a 404, and
 // removing or swapping this gate turns gated_routes_test.go red.
-func registerAgentScheduleRoutes(mux *http.ServeMux, gate *featuregate.Gate, scheduleHandler http.Handler) {
+func registerAgentScheduleRoutes(mux httpMux, gate *featuregate.Gate, scheduleHandler http.Handler) {
 	gated := gate.Require(featuregate.FeatureCowork)(scheduleHandler)
 	mux.Handle("/v1/agent/schedules", gated)
 	mux.Handle("/v1/agent/schedules/", gated)
