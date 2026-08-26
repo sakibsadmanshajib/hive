@@ -20,7 +20,6 @@
 	import Loader from '../common/Loader.svelte';
 	import Spinner from '../common/Spinner.svelte';
 
-	import ChatPlaceholder from './ChatPlaceholder.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -499,9 +498,13 @@
 </script>
 
 <div class={className}>
-	{#if Object.keys(history?.messages ?? {}).length == 0}
-		<ChatPlaceholder modelIds={selectedModels} />
-	{:else}
+	<!--
+		hive: upstream rendered its own ChatPlaceholder when history was empty.
+		This branch was unreachable from Chat.svelte, which mounts
+		Placeholder.svelte (the greeting and the quick-start chips) for every
+		empty conversation. One placeholder, not two; see home-surface.test.ts.
+	-->
+	{#if Object.keys(history?.messages ?? {}).length !== 0}
 		<div class="w-full pt-2">
 			{#key chatId}
 				<section class="w-full" aria-labelledby="chat-conversation">

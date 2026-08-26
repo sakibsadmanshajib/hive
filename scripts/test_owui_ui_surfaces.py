@@ -413,9 +413,10 @@ def test_the_suggested_prompts_block_is_gone_from_the_source() -> None:
     """The chat landing surface rendered upstream's six sample starter prompts
     under a "Suggested" heading. The owner asked for the block itself gone, not
     hidden, so this asserts at the source rather than at a feature flag: the
-    component is deleted, neither placeholder references it, and the sample
-    content is out of the backend default. A vendor update that reintroduces any
-    of the three puts someone else's product back on our landing page.
+    component is deleted, the surviving chat-home placeholder does not reference
+    it, and the sample content is out of the backend default. A vendor update
+    that reintroduces any of the three puts someone else's product back on our
+    landing page.
 
     The two front end assertions are the load bearing ones. This image builds
     only the front end from the vendored tree and takes its backend from the
@@ -426,10 +427,13 @@ def test_the_suggested_prompts_block_is_gone_from_the_source() -> None:
     component = src / "lib" / "components" / "chat" / "Suggestions.svelte"
     assert not component.exists(), f"{component} must stay deleted"
 
-    for placeholder in ("Placeholder.svelte", "ChatPlaceholder.svelte"):
-        text = (src / "lib" / "components" / "chat" / placeholder).read_text(encoding="utf-8")
-        assert "Suggestions" not in text, f"{placeholder} must not render suggestions"
-        assert "suggestion_prompts" not in text, f"{placeholder} must not read suggestion prompts"
+    # ChatPlaceholder.svelte is deleted too (PR #1233, one placeholder now);
+    # Suggestions.svelte's own not-exists assert above already guards it.
+    placeholder = src / "lib" / "components" / "chat" / "Placeholder.svelte"
+    assert placeholder.exists(), "the chat-home placeholder must exist"
+    text = placeholder.read_text(encoding="utf-8")
+    assert "Suggestions" not in text, "Placeholder.svelte must not render suggestions"
+    assert "suggestion_prompts" not in text, "Placeholder.svelte must not read suggestion prompts"
 
     config = (
         REPO / "vendor" / "open-webui" / "backend" / "open_webui" / "config.py"

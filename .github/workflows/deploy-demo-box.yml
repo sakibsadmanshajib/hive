@@ -340,6 +340,15 @@ jobs:
           set -euo pipefail
           cd /home/sakib/hive
 
+          # go.work.sum is machine-generated checksum state, so restoring it
+          # is always safe. The previous deploy's installer step (the only
+          # invocation here that can modify it) already restores it after it
+          # runs, but a run that died before reaching that restore leaves the
+          # file dirty, and this step's own pull below trips its dirty-tree
+          # guard over exactly that leftover (#1224, run 32954258787 first
+          # attempt). Restore before the pull too.
+          git -C /home/sakib/hive checkout -- go.work.sum || true
+
           # A leftover .git/index.lock from a prior run killed mid checkout
           # (the timeout-minutes below, a manual cancel, or a box reboot
           # this file's own header says the runner does not survive) would
@@ -703,6 +712,21 @@ jobs:
             export CONTROL_PLANE_INTERNAL_TOKEN
           fi
           bash scripts/install-agent-engine-host.sh
+
+          # The installer just ran `go build` against THIS checkout as a Docker
+          # bind mount (scripts/install-agent-engine-host.sh). In workspace
+          # mode, a build that resolves modules whose sums go.work.sum lacks
+          # appends them to that tracked file. Dependabot bumps land exactly
+          # that shape: it updates each module's go.sum but not the workspace
+          # sum, so the first build on the box after such a merge rewrites
+          # /home/sakib/hive/go.work.sum. Left behind, the NEXT deploy's
+          # "Pull latest main" step trips its dirty-tree guard over that one
+          # modified file and the deploy dies until someone runs
+          # git reset --hard by hand (#1224): success, re-dirty, fail, repeat.
+          # Restore the file here, immediately after the only invocation in
+          # this workflow that can modify it, and tolerate nothing-to-restore
+          # so a tree that was never dirtied is not an error.
+          git -C /home/sakib/hive checkout -- go.work.sum || true
 
       - name: Point control-plane at the launch daemon's socket
         # Shell environment beats --env-file in compose interpolation, so

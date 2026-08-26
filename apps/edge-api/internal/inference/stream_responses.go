@@ -112,6 +112,15 @@ func (o *Orchestrator) executeResponsesStreaming(
 	}
 	body = boundedBody
 
+	// Reasoning headroom, same contract as the sync path's step 2d (issue
+	// #1171): inflate the ceiling fields present by the pool reserve so
+	// hidden reasoning spends the reserve. Applied before the reservation and
+	// before any byte reaches the client. Headroom only here; the sync-path
+	// zero-content guard does not apply mid-stream.
+	if headroomBody, inflated := applyReasoningHeadroom(body, EndpointResponses, route.ReasoningReserveTokens); inflated {
+		body = headroomBody
+	}
+
 	// 4. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
@@ -240,6 +249,11 @@ func (o *Orchestrator) executeResponsesStreaming(
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			continue
 		}
+
+		// A parsed frame is about to be relayed (translated) to the caller, so
+		// delivery is proven even when nothing accumulates -- a tool-call-only
+		// Responses turn used to release free as upstream_error (#1215).
+		acc.HasForwardedChunk = true
 
 		// Clamp upstream-zero completion_tokens against the content streamed
 		// so far. Usage chunks typically arrive last with empty choices, so

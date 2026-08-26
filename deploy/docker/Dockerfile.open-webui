@@ -530,6 +530,10 @@ RUN set -eu; \
       echo "the built bundle does not load the brand typeface" >&2; exit 1; }; \
     grep -rqF 'SourceSerif4-Variable' /app/build/_app/immutable || { \
       echo "the built bundle does not load the document typeface" >&2; exit 1; }; \
+    grep -rqF 'hv-greeting' /app/build/_app/immutable || { \
+      echo "the built bundle carries no chat-home greeting" >&2; exit 1; }; \
+    grep -rqF 'data-hive-quickstart' /app/build/_app/immutable || { \
+      echo "the built bundle carries no quick-start chips" >&2; exit 1; }; \
     ! grep -rqF '"/workspace/models"' /app/build/_app/immutable || { \
       echo "Workspace > Models came back in the built bundle" >&2; exit 1; }; \
     ! grep -rqF 'discord.gg/5rJgQTnV4s' /app/build/_app/immutable || { \

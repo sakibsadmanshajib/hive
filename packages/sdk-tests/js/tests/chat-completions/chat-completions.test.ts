@@ -23,7 +23,13 @@ const TOOL_CAPABLE_MODEL =
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  it("returns a valid chat completion via SDK", async () => {
+  // The only test still on the free MODEL. Free-lane worst case (retry on
+  // empty content, reasoning-member budgets) can exceed vitest's default
+  // 60s; fail here on assertion, never on the runner's timeout.
+  it(
+    "returns a valid chat completion via SDK",
+    { timeout: 120000 },
+    async () => {
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [{ role: "user", content: "Say hello" }],
@@ -38,11 +44,17 @@ describe("Chat Completions", () => {
     expect(response.usage).toBeDefined();
     expect(response.usage!.prompt_tokens).toBeGreaterThan(0);
     expect(response.usage!.completion_tokens).toBeGreaterThan(0);
-  });
+    },
+  );
 
   it("model field shows Hive alias not provider handle", async () => {
+    // Alias-echo check, not a free-lane exercise: since #1225 the free pool
+    // retries once on empty content and reasoning members inflate budgets,
+    // so worst-case free-lane latency exceeds vitest's 60s default. This
+    // test only needs any live alias to echo itself back, so it runs on the
+    // same fast bounded model as the tools/response_format tests.
     const response = await client.chat.completions.create({
-      model: MODEL,
+      model: TOOL_CAPABLE_MODEL,
       messages: [{ role: "user", content: "Say hello" }],
       max_tokens: 256,
     });

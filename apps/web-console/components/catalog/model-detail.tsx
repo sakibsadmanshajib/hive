@@ -14,7 +14,11 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { buttonVariants } from "@/components/ui/button";
 import { statusBadge } from "@/components/catalog/model-catalog-table";
 import { formatCredits, formatTokens } from "@/lib/format/credits";
-import { formatInOutPrice, formatModelPrice } from "@/lib/format/model-pricing";
+import {
+  formatCachePrice,
+  formatInOutPrice,
+  formatModelPrice,
+} from "@/lib/format/model-pricing";
 import { cn } from "@/lib/cn";
 
 export interface ModelDetailProps {
@@ -34,6 +38,12 @@ interface PriceRow {
   dimension: string;
   credits: number | null;
   note: string;
+  /**
+   * Cache dimensions follow the cache absence policy: a missing rate on a
+   * fixed alias is "no such rate" (a dash), not a broken lookup. Input and
+   * output keep the plain price policy, where the same null reads "Unknown".
+   */
+  cache?: boolean;
 }
 
 // Every figure on this page is a rate per one million metered tokens, the
@@ -124,11 +134,13 @@ function priceRows(model: CatalogModel): PriceRow[] {
       dimension: "Cache read",
       credits: model.pricing.cache_read_price_credits,
       note: "Prompt tokens served from an upstream prompt cache.",
+      cache: true,
     },
     {
       dimension: "Cache write",
       credits: model.pricing.cache_write_price_credits,
       note: "Prompt tokens written into an upstream prompt cache.",
+      cache: true,
     },
   ];
 }
@@ -157,7 +169,10 @@ export function ModelDetail({
       header: "Price / 1M",
       numeric: true,
       align: "right",
-      cell: (row) => formatModelPrice(row.credits, model.pricing.pricing_mode),
+      cell: (row) =>
+        row.cache
+          ? formatCachePrice(row.credits, model.pricing.pricing_mode)
+          : formatModelPrice(row.credits, model.pricing.pricing_mode),
     },
     {
       key: "credits",
@@ -166,7 +181,9 @@ export function ModelDetail({
       align: "right",
       cell: (row) => (
         <span className="text-xs text-[var(--color-ink-3)]">
-          {formatModelPrice(row.credits, model.pricing.pricing_mode, "credits")}
+          {row.cache
+            ? formatCachePrice(row.credits, model.pricing.pricing_mode, "credits")
+            : formatModelPrice(row.credits, model.pricing.pricing_mode, "credits")}
         </span>
       ),
     },
@@ -206,24 +223,24 @@ export function ModelDetail({
           </Tile>
           <Tile label="Cache read / write">
             <span className="tabular-nums">
-              {formatModelPrice(
+              {formatCachePrice(
                 model.pricing.cache_read_price_credits,
                 model.pricing.pricing_mode,
               )}
               {" / "}
-              {formatModelPrice(
+              {formatCachePrice(
                 model.pricing.cache_write_price_credits,
                 model.pricing.pricing_mode,
               )}
             </span>
             <span className="block text-2xs text-[var(--color-ink-3)]">
-              {formatModelPrice(
+              {formatCachePrice(
                 model.pricing.cache_read_price_credits,
                 model.pricing.pricing_mode,
                 "credits",
               )}
               {" / "}
-              {formatModelPrice(
+              {formatCachePrice(
                 model.pricing.cache_write_price_credits,
                 model.pricing.pricing_mode,
                 "credits",
@@ -254,7 +271,7 @@ export function ModelDetail({
           <CardDescription>
             {variablePriced
               ? "This alias is priced from the actual cost of each generation, so it publishes no per-million rate. The charge is derived per request, not from a table."
-              : "Every rate Hive charges for this model, per one million metered tokens, in US dollars and in the credits the ledger moves. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free."}
+              : "Every rate Hive charges for this model, per one million metered tokens, in US dollars and in the credits the ledger moves. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free. A dash on a cache row means this alias publishes no cache rate."}
           </CardDescription>
         </CardHeader>
         <CardContent>

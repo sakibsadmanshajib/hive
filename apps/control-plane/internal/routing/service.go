@@ -142,6 +142,22 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	ordered := orderCandidates(policy, filtered)
 	selected := ordered[0]
 
+	// Reasoning headroom is a pool property, not a route property (issue
+	// #1171). LiteLLM load-balances every deployment sharing the selected
+	// litellm_model_name under that one name, so edge-api cannot know which
+	// member will answer before it dispatches; carrying the MAX reserve
+	// across those members is what makes the headroom hold whichever one
+	// does. Candidates on a different litellm_model_name are a different
+	// gateway group and contribute nothing. Computed over filtered, not
+	// ordered: eligibility filters already ran, so a disabled member cannot
+	// inflate an alias whose healthy members never reserve.
+	reserve := 0
+	for _, candidate := range filtered {
+		if candidate.LiteLLMModelName == selected.LiteLLMModelName && candidate.ReasoningReserveTokens > reserve {
+			reserve = candidate.ReasoningReserveTokens
+		}
+	}
+
 	fallbacks := make([]string, 0, len(ordered)-1)
 	for _, candidate := range ordered[1:] {
 		if !policy.AllowPriceClassWidening && candidate.PriceClass != selected.PriceClass {
@@ -195,6 +211,8 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		FallbackRouteIDs: fallbacks,
 		Pricing:          pricing,
 		PriceUnit:        priceUnit,
+
+		ReasoningReserveTokens: reserve,
 	}, nil
 }
 
