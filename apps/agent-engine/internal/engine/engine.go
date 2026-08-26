@@ -331,6 +331,19 @@ type session struct {
 	// reaped and terminal are guarded by SandboxEngine.mu.
 	reaped   bool
 	terminal *terminalOutcome
+
+	// finalEvents and finalFiles are the sandbox's last events and workspace
+	// listing, captured by reap() in the brief window before it kills the
+	// sandbox process and removes sessionDir/workingDir. Events/Files below
+	// serve these instead of dialling a control socket or reading a bind
+	// mount that reap has already torn down — issue #1206: pulling a
+	// finished task's tail AFTER it leaves the active set always raced that
+	// teardown and always lost, because the same Status() call that
+	// discovers a terminal execStatus is what triggers reap, synchronously,
+	// before the DB ever records the task as terminal. Guarded by
+	// SandboxEngine.mu, same as reaped and terminal.
+	finalEvents []controlclient.Event
+	finalFiles  []controlclient.WorkspaceFile
 }
 
 // SandboxEngine launches, polls, and cancels agent-engine sandbox sessions.
@@ -677,7 +690,7 @@ func (e *SandboxEngine) finishTerminal(ctx context.Context, sess *session, id uu
 	// apps/control-plane/internal/agenttask's poller only records the status,
 	// it never calls Cancel. Reaping here is what stops completed tasks from
 	// leaking their sandbox process, directories and quota slot.
-	_ = e.reap(sess, &terminalOutcome{status: status, resultSummary: resultSummary, errMessage: errMessage})
+	_ = e.reap(ctx, sess, &terminalOutcome{status: status, resultSummary: resultSummary, errMessage: errMessage})
 	return status, resultSummary, errMessage, nil
 }
 
@@ -828,7 +841,7 @@ func readCapped(root *os.Root, name string, limit int64) ([]byte, error) {
 // calls to replay. Idempotent: only the first call per session does the work.
 // The returned error is the sandbox process kill failure, which Cancel
 // surfaces to its caller and Status has nothing useful to do with.
-func (e *SandboxEngine) reap(sess *session, outcome *terminalOutcome) error {
+func (e *SandboxEngine) reap(ctx context.Context, sess *session, outcome *terminalOutcome) error {
 	e.mu.Lock()
 	if sess.reaped {
 		e.mu.Unlock()
@@ -844,6 +857,27 @@ func (e *SandboxEngine) reap(sess *session, outcome *terminalOutcome) error {
 	// knowledge-work-pack task's JWT would otherwise sit in this process's
 	// memory for the rest of its life.
 	sess.bearerJWT = ""
+	e.mu.Unlock()
+
+	// Capture the sandbox's last events and workspace listing NOW, while its
+	// control socket and /workspace bind mount are both still alive: this is
+	// the last possible moment either exists. sess.proc.Kill() and the
+	// os.RemoveAll calls below are exactly what issue #1206 found a later
+	// /events or /files call racing and losing to, every time. A capture
+	// failure here is logged and left as a nil/empty snapshot rather than
+	// escalated: outcome is already decided by the caller and must never
+	// flip on a diagnostics-only read.
+	events, err := sess.client.SearchEvents(ctx, sess.conversationID)
+	if err != nil {
+		log.Printf("engine: reap: capture final events for %s: %v", sess.conversationID, err)
+	}
+	files, err := listWorkspaceFiles(sess.workingDir)
+	if err != nil {
+		log.Printf("engine: reap: capture final files for %s: %v", sess.conversationID, err)
+	}
+	e.mu.Lock()
+	sess.finalEvents = events
+	sess.finalFiles = files
 	e.mu.Unlock()
 
 	killErr := sess.proc.Kill()
@@ -867,7 +901,7 @@ func (e *SandboxEngine) Cancel(ctx context.Context, sessionRef string) error {
 	// than being deleted: agenttask's poller retries Status whenever its own
 	// Transition call failed, and an unknown-session error there would leave
 	// the task active forever.
-	killErr := e.reap(sess, &terminalOutcome{status: StatusCancelled})
+	killErr := e.reap(ctx, sess, &terminalOutcome{status: StatusCancelled})
 
 	if interruptErr != nil {
 		return fmt.Errorf("engine: interrupt conversation: %w", interruptErr)

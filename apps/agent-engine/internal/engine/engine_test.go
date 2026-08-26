@@ -56,6 +56,11 @@ type fakeAgentServer struct {
 
 	listener net.Listener
 	srv      *http.Server
+
+	// events backs the /events/search route: one page, no next_page_id.
+	// setEvents lets a test populate it; issue #1206's regression coverage
+	// is the only user today.
+	events []json.RawMessage
 }
 
 func newFakeAgentServer(controlDir string) (*fakeAgentServer, error) {
@@ -98,6 +103,12 @@ func newFakeAgentServer(controlDir string) (*fakeAgentServer, error) {
 		f.executionStatus = controlclient.StatusPaused
 		f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	})
+	mux.HandleFunc(convoPrefix+"/events/search", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		items := f.events
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "next_page_id": ""})
 	})
 	mux.HandleFunc(convoPrefix+"/agent_final_response", func(w http.ResponseWriter, r *http.Request) {
 		// Read the gates and then release f.mu before blocking on them: a
@@ -148,6 +159,21 @@ func (f *fakeAgentServer) setFinalResponse(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.finalResponse = s
+}
+
+// setEvents populates the /events/search fixture from plain kind/field maps,
+// e.g. {"kind": "ActionEvent", "tool_name": "terminal", "tool_call_id": "1"}.
+func (f *fakeAgentServer) setEvents(items ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = make([]json.RawMessage, len(items))
+	for i, item := range items {
+		enc, err := json.Marshal(item)
+		if err != nil {
+			panic(err) // test fixture construction only
+		}
+		f.events[i] = enc
+	}
 }
 
 func (f *fakeAgentServer) wasRun() bool {
@@ -364,6 +390,96 @@ func TestSandboxEngine_Status_TerminalReapsSandboxAndFreesQuota(t *testing.T) {
 	next.UserID = task.UserID
 	if _, err := e.Launch(context.Background(), next); err != nil {
 		t.Fatalf("expected quota slot freed by the reap, got %v", err)
+	}
+}
+
+// Issue #1206: pulling a finished task's tail events and workspace listing
+// AFTER it leaves the active set always raced the sandbox tearing its own
+// control socket and /workspace bind mount down, and always lost — two live
+// runs on the deployed box, 2 for 2. The reason is structural, not timing
+// luck: the same Status() call that discovers a terminal execStatus is what
+// triggers reap(), synchronously, before this or any other caller can ever
+// observe the task as terminal. So Events/Files must serve a snapshot
+// captured before that teardown, never a live pull after it.
+func TestSandboxEngine_Status_CapturesEventsAndFilesBeforeTeardown(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	task := testTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// Written to the sandbox's /workspace bind mount before it goes
+	// terminal, standing in for a real task's tool output.
+	workingDir := filepath.Join(e.cfg.WorkspaceRoot, task.ID.String())
+	if err := os.WriteFile(filepath.Join(workingDir, "notes.md"), []byte("done"), 0o600); err != nil {
+		t.Fatalf("seed workspace file: %v", err)
+	}
+	fake.setEvents(
+		map[string]any{"kind": "ActionEvent", "id": "a1", "tool_name": "terminal", "tool_call_id": "c1"},
+		map[string]any{"kind": "ObservationEvent", "id": "o1", "tool_name": "terminal", "tool_call_id": "c1"},
+	)
+	fake.setFinalResponse("done")
+	fake.setStatus(controlclient.StatusFinished)
+
+	status, _, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != StatusSucceeded {
+		t.Fatalf("expected succeeded, got %s", status)
+	}
+	if !fake.wasKilled() {
+		t.Fatal("expected terminal Status to kill the sandbox process")
+	}
+
+	// The control socket is dead (fake.Kill closed its listener) and
+	// workingDir is removed (reap's os.RemoveAll) by this point. A live pull
+	// would either error or silently see an empty, already-deleted
+	// directory; only the reap-time snapshot can produce this content.
+	events, err := e.Events(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Events after reap: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 captured events surviving reap, got %d: %+v", len(events), events)
+	}
+	if events[0].Kind != "ActionEvent" || events[1].Kind != "ObservationEvent" {
+		t.Fatalf("unexpected event kinds: %+v", events)
+	}
+
+	files, err := e.Files(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Files after reap: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "notes.md" {
+		t.Fatalf("expected the seeded workspace file to survive reap, got %+v", files)
+	}
+}
+
+// Same guarantee via Cancel's reap call, the other of reap's two callers.
+func TestSandboxEngine_Cancel_CapturesEventsBeforeTeardown(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	sessionRef, err := e.Launch(context.Background(), testTask())
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	fake.setEvents(map[string]any{"kind": "ActionEvent", "id": "a1", "tool_name": "terminal", "tool_call_id": "c1"})
+
+	if err := e.Cancel(context.Background(), sessionRef); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	events, err := e.Events(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Events after cancel: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != "ActionEvent" {
+		t.Fatalf("expected the pre-cancel event to survive reap, got %+v", events)
 	}
 }
 
