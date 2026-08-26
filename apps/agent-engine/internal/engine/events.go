@@ -2,7 +2,10 @@ package engine
 
 // Event/files surface for the launcher daemon: reads the live session's
 // sandbox event store through its control client and lists the workspace
-// bind mount from the host directly.
+// bind mount from the host directly. Once a session is reaped (issue #1206),
+// both instead serve the snapshot reap() captured immediately before it tore
+// the control socket and /workspace bind mount down — the same pattern
+// Status already uses via replayOf/terminal, just for the tail data too.
 
 import (
 	"context"
@@ -13,27 +16,55 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 )
 
-// Events returns the session's normalized sandbox events. A reaped session's
-// control socket is gone, so the call errors; the syncer treats that like any
-// other per-task failure and the task's row is terminal by then anyway.
+// Events returns the session's normalized sandbox events: the live pull for
+// an active session, or reap's captured snapshot for one already terminal.
 func (e *SandboxEngine) Events(ctx context.Context, sessionRef string) ([]controlclient.Event, error) {
 	sess, id, err := e.lookup(sessionRef)
 	if err != nil {
 		return nil, err
 	}
+	if cached, reaped := e.finalEventsOf(sess); reaped {
+		return cached, nil
+	}
 	return sess.client.SearchEvents(ctx, id)
 }
 
 // Files lists the session workspace directory (top level, name/size/mtime
-// only), reading the host bind mount directly.
-//
-// ponytail: no recursion; add a walk when a panel needs nested paths.
+// only): the live listing for an active session, or reap's captured snapshot
+// for one already terminal.
 func (e *SandboxEngine) Files(_ context.Context, sessionRef string) ([]controlclient.WorkspaceFile, error) {
 	sess, _, err := e.lookup(sessionRef)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(sess.workingDir)
+	if cached, reaped := e.finalFilesOf(sess); reaped {
+		return cached, nil
+	}
+	return listWorkspaceFiles(sess.workingDir)
+}
+
+// finalEventsOf and finalFilesOf return sess's reap-time snapshot plus
+// whether sess has been reaped at all — the caller's signal to use it rather
+// than dial a control socket or read a bind mount that may already be gone.
+// Guarded by e.mu, same as sess.reaped and sess.terminal.
+func (e *SandboxEngine) finalEventsOf(sess *session) ([]controlclient.Event, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return sess.finalEvents, sess.reaped
+}
+
+func (e *SandboxEngine) finalFilesOf(sess *session) ([]controlclient.WorkspaceFile, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return sess.finalFiles, sess.reaped
+}
+
+// listWorkspaceFiles lists dir's top level (name/size/mtime only). Shared by
+// the live-session Files() path and reap's final-snapshot capture.
+//
+// ponytail: no recursion; add a walk when a panel needs nested paths.
+func listWorkspaceFiles(dir string) ([]controlclient.WorkspaceFile, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// A reaped session's working dir is already deleted; that is a
