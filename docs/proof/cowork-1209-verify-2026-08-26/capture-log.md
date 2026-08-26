@@ -19,7 +19,7 @@ that as the final verdict on one data point, a second run followed
 immediately to establish whether that was systematic or a one-off race.
 It was a race, and the box's own logs prove which race.
 
-## Run 1: task `5a5313ff-a93e-4c70-bcbf-b440d2cee9ac` — total void, worse than baseline
+## Run 1: task `5a5313ff-a93e-4c70-bcbf-b440d2cee9ac`, total void, worse than baseline
 
 Wall time: created `02:49:20.804963`, updated `02:50:03.477442` (succeeded)
 = **43 seconds**, genuinely faster than baseline's 82s.
@@ -61,7 +61,7 @@ t50s (the task had completed by t43s). Every intermediate checkpoint between
 submit and settlement is either blank progress or the final answer; no
 transition state carrying a step line exists anywhere in this run.
 
-## Run 2: task `64983c00-bb2c-4917-a954-00b38f2359e7` — real tool events, mid-run, readable
+## Run 2: task `64983c00-bb2c-4917-a954-00b38f2359e7`, real tool events, mid-run, readable
 
 Wall time: created `02:55:34.472428`, updated `02:56:48.597388` (succeeded)
 = **74 seconds**.
@@ -161,16 +161,16 @@ the only thing happening.
 
 ## Files
 
-* `run2-void-console-log.txt` / `run2-void-network-log.txt` — run 1's own
+* `run2-void-console-log.txt` / `run2-void-network-log.txt`: run 1's own
   script log and its `/hive/agent/*` request trace (the "void" run; despite
   the filename prefix "run2", this is described above as **Run 1**, matching
   the order the two runs actually happened in).
-* `run3-working-console-log.txt` / `run3-working-network-log.txt` — run 2's
+* `run3-working-console-log.txt` / `run3-working-network-log.txt`: run 2's
   own script log and request trace (the run with real tool events; described
   above as **Run 2**).
-* `control-plane-log-excerpt.txt` — every `agenttask`/`agentengine`/
+* `control-plane-log-excerpt.txt`: every `agenttask`/`agentengine`/
   `eventsync` line `hive-control-plane-1` logged across both runs' full
-  windows (02:49:00-02:57:50 UTC), grepped directly from `docker logs`.
+  windows (02:49:00 to 02:57:50 UTC), grepped directly from `docker logs`.
 
 Screenshots were posted to issue #1206 directly (via a manual replication of
 `scripts/post-pr-visual-proof.sh`'s upload-to-release mechanism; that script
