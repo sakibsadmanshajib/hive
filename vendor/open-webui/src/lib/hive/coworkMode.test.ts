@@ -243,10 +243,20 @@ describe('describeEvent', () => {
 		// preview sitting exactly on the boundary is the only evidence.
 		const long = 'x'.repeat(2000);
 		expect(describeEvent(event({ kind: 'message', payload: { preview: long } }))).toBe(
-			`${long} (shortened)`
+			`(shortened) ${long}`
 		);
 		const short = 'x'.repeat(1999);
 		expect(describeEvent(event({ kind: 'message', payload: { preview: short } }))).toBe(short);
+	});
+
+	it('puts the marker in front, where a one-line clamp cannot eat it', () => {
+		// Appended, it is the first thing the clamp drops, and the line then
+		// reads as a complete tool result. Seen in the first capture of this
+		// surface, which is why this test exists.
+		const line = describeEvent(
+			event({ kind: 'tool_result', payload: { tool_name: 'execute_bash', preview: 'y'.repeat(2000) } })
+		);
+		expect(line?.startsWith('Used execute_bash (shortened): ')).toBe(true);
 	});
 
 	it('counts runes, not UTF-16 units, the way the backend cap does', () => {

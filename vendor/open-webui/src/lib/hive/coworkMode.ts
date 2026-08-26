@@ -221,20 +221,34 @@ const asString = (payload: Record<string, unknown>, key: string): string => {
 	return typeof raw === 'string' ? raw : '';
 };
 
-/** A preview, with the fact of its truncation attached when it hit the cap. */
-const preview = (payload: Record<string, unknown>): string => {
+/**
+ * A preview, and whether the wire had already cut it.
+ *
+ * Array.from, not .length: the cap counts runes, and a surrogate pair is one
+ * rune and two UTF-16 units.
+ */
+const preview = (payload: Record<string, unknown>): { text: string; shortened: boolean } => {
 	const raw = asString(payload, 'preview').trim();
 	if (raw === '') {
-		return '';
+		return { text: '', shortened: false };
 	}
-	// Array.from, not .length: the cap counts runes, and a surrogate pair is
-	// one rune and two UTF-16 units.
-	return Array.from(raw).length >= PREVIEW_RUNE_CAP ? `${raw} (shortened)` : raw;
+	return { text: raw, shortened: Array.from(raw).length >= PREVIEW_RUNE_CAP };
 };
 
+/*
+ * The truncation marker goes in FRONT of the text it is about, never after it.
+ *
+ * A step renders as a single clamped line, so a marker appended to a 2000-rune
+ * preview is the first thing the clamp throws away and the line reads as a
+ * complete tool result. That is the exact failure this marker exists to
+ * prevent, and it was visible in the first capture of this surface.
+ */
+const SHORTENED = '(shortened)';
+
 const withPreview = (label: string, payload: Record<string, unknown>): string => {
-	const text = preview(payload);
-	return text === '' ? label : `${label}: ${text}`;
+	const { text, shortened } = preview(payload);
+	const head = shortened ? `${label} ${SHORTENED}` : label;
+	return text === '' ? head : `${head}: ${text}`;
 };
 
 const toolLabel = (payload: Record<string, unknown>, verb: string): string => {
@@ -270,8 +284,11 @@ export const describeEvent = (event: TaskEvent): string | null => {
 		case 'tool_result':
 			return withPreview(toolLabel(payload, 'Used'), payload);
 		case 'message': {
-			const text = preview(payload);
-			return text === '' ? null : text;
+			const { text, shortened } = preview(payload);
+			if (text === '') {
+				return null;
+			}
+			return shortened ? `${SHORTENED} ${text}` : text;
 		}
 		case 'error':
 			return withPreview('Error', payload);
