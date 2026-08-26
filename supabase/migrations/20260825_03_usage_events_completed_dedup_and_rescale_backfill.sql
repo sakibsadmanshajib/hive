@@ -140,6 +140,34 @@
 --   not exist. That is a loud error on every completed request, not a silent
 --   money defect, which is why it is acceptable -- but a migration-only
 --   rollback must never be attempted without rolling the binary back first.
+--
+-- POST-MERGE FIX (2026-08-25, before this file ever ran successfully anywhere)
+--   This file merged (PR #1194) and failed on the first deploy attempt
+--   (deploy-demo-box run 32912034013): "insert or update on table
+--   usage_events violates foreign key constraint
+--   usage_events_request_attempt_id_fkey ... Key (request_attempt_id)=
+--   (819cc2ad-...) is not present in table request_attempts". BEGIN/COMMIT
+--   wraps the whole file, so the failure rolled back cleanly -- verified live
+--   (duplicate 'completed' pairs and the missing index were both still in
+--   their pre-migration state after the failed run) -- and the file was never
+--   recorded in public.hive_schema_migrations, so amending it here in place
+--   is safe: nothing has ever applied this exact SQL.
+--
+--   Root cause is issue #1102, not this migration: a retention purge deletes
+--   public.request_attempts rows without cascading (or nulling) the rows in
+--   usage_events, credit_reservations and credit_reconciliation_jobs that
+--   reference them, despite the FK itself being ON DELETE CASCADE -- the
+--   purge bypasses the cascade trigger rather than going through it. Live
+--   count 2026-08-25: 483 orphaned usage_events rows spanning 2026-04-01
+--   through 2026-08-18, i.e. an ongoing, ordinary state of this table, not a
+--   one-off. Step 2's reconciliation UPDATE has no reason to touch a row
+--   whose parent attempt no longer exists -- there is nothing left to
+--   reconcile it against with confidence -- so it now skips any row lacking a
+--   live request_attempts parent, via the added EXISTS guard below. Step 1's
+--   dedup UPDATE/DELETE needed no equivalent change: it was proven safe
+--   against this same live orphaned data (twice, in a rolled-back replay)
+--   before this fix was written. Fixing the purge itself is issue #1102's
+--   job, not this migration's.
 -- =============================================================================
 
 BEGIN;
@@ -212,6 +240,12 @@ WHERE ue.id = d.id;
 -- this replaced a created_at boundary). No dependency on
 -- credit_unit_rescale.applied_at, so it catches deploy-gap stragglers a
 -- timestamp bound structurally cannot.
+--
+-- The EXISTS guard is the post-merge fix documented at the top of this file
+-- (issue #1102): a row whose request_attempt_id no longer has a parent in
+-- request_attempts is left untouched, not reconciled. Skipping it is
+-- deliberate, not a workaround for the FK error alone -- there is no live
+-- attempt row left to trust the reconciliation against either way.
 -- ---------------------------------------------------------------------------
 UPDATE public.usage_events ue
    SET hive_credit_delta = cle.credits_delta,
@@ -224,7 +258,10 @@ UPDATE public.usage_events ue
    AND cle.attempt_id = ue.request_attempt_id
    AND ue.hive_credit_delta <> 0
    AND ue.hive_credit_delta <> cle.credits_delta
-   AND ue.hive_credit_delta * 10000 = cle.credits_delta;
+   AND ue.hive_credit_delta * 10000 = cle.credits_delta
+   AND EXISTS (
+     SELECT 1 FROM public.request_attempts ra WHERE ra.id = ue.request_attempt_id
+   );
 
 -- ---------------------------------------------------------------------------
 -- Step 3: prevent future duplicates. ON CONFLICT target for
