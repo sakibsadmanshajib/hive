@@ -340,6 +340,15 @@ jobs:
           set -euo pipefail
           cd /home/sakib/hive
 
+          # go.work.sum is machine-generated checksum state, so restoring it
+          # is always safe. The previous deploy's installer step (the only
+          # invocation here that can modify it) already restores it after it
+          # runs, but a run that died before reaching that restore leaves the
+          # file dirty, and this step's own pull below trips its dirty-tree
+          # guard over exactly that leftover (#1224, run 32954258787 first
+          # attempt). Restore before the pull too.
+          git -C /home/sakib/hive checkout -- go.work.sum || true
+
           # A leftover .git/index.lock from a prior run killed mid checkout
           # (the timeout-minutes below, a manual cancel, or a box reboot
           # this file's own header says the runner does not survive) would
