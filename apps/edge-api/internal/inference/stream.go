@@ -308,6 +308,14 @@ func (o *Orchestrator) executeStreaming(
 	// Increase buffer for large chunks
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
 
+	// mintedID is reused for every chunk of this stream: a client-visible id
+	// must be stable within one response, and must match the shape
+	// normalizeChatCompletion/normalizeCompletion mint for the same
+	// endpoint's non-streaming twin. See mintCompletionID.
+	mintedID := mintCompletionID(idPrefixForEndpoint(endpoint))
+	// finishSeen gates the DeepSeek-family post-finish chunk fix below.
+	finishSeen := false
+
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -321,15 +329,40 @@ func (o *Orchestrator) executeStreaming(
 			jsonData := line[6:]
 			var chunk ChatCompletionChunk
 			if err := json.Unmarshal([]byte(jsonData), &chunk); err == nil {
-				// Rewrite model to alias ID
+				// Rewrite model to alias ID, mint a gateway-owned id and drop
+				// system_fingerprint -- upstream identity leaks exactly like
+				// normalizeChatCompletion's non-streaming case; see
+				// mintCompletionID. upstreamChunkID is kept only for the
+				// usage-clamp log line below.
+				upstreamChunkID := chunk.ID
 				chunk.Model = aliasID
+				chunk.ID = mintedID
+				chunk.SystemFingerprint = nil
+
+				// Suppress any chunk that arrives after a terminal
+				// finish_reason has already been relayed, UNLESS it is a
+				// genuine usage-only terminal frame (stream_options.
+				// include_usage legitimately delivers cost data in its own
+				// frame after finish_reason). Observed live on DeepSeek-family
+				// streams via OpenRouter: one extra empty role/content chunk
+				// arrives after finish_reason=stop, before [DONE], and a
+				// strict SSE client that already closed the message on the
+				// real finish frame chokes on anything more (parity finding,
+				// 2026-08-26). Still folded into the accumulator below so
+				// billing never silently drops content -- only the write to
+				// the client is skipped.
+				suppressPostFinish := shouldSuppressPostFinishChunk(finishSeen, chunk)
+				if chunkFinished(chunk) {
+					finishSeen = true
+				}
+
 				// Track output content so the usage clamp has ground truth.
 				accumulator.AccumulateContent(chunk)
 				// Clamp upstream-zero completion_tokens against the
 				// content streamed so far. Usage typically arrives in
 				// the terminal chunk once all deltas are flushed.
 				if chunk.Usage != nil {
-					accumulator.ClampUsage(chunk.Usage, chunk.ID, aliasID, endpoint)
+					accumulator.ClampUsage(chunk.Usage, upstreamChunkID, aliasID, endpoint)
 					// Keep the untyped bytes only for a route that settles
 					// against the upstream's reported cost; see RawUsageChunk.
 					if route.Pricing.IsUpstreamActual() {
@@ -338,6 +371,11 @@ func (o *Orchestrator) executeStreaming(
 				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk, aliasID)
+
+				if suppressPostFinish {
+					continue
+				}
+
 				// Re-marshal sanitized chunk
 				sanitized, marshalErr := json.Marshal(chunk)
 				if marshalErr == nil {
@@ -383,7 +421,11 @@ func (o *Orchestrator) executeStreaming(
 	// 10. Synthesize terminal usage chunk if requested but upstream didn't send one
 	if includeUsage && !accumulator.HasUsage {
 		synth := ChatCompletionChunk{
-			ID:      "chatcmpl-" + uuid.New().String(),
+			// Same mintedID as every other chunk of this stream -- a
+			// synthesized terminal frame is still part of the one response,
+			// and requirement #4 (id stability within a response) applies to
+			// it too.
+			ID:      mintedID,
 			Object:  "chat.completion.chunk",
 			Created: time.Now().Unix(),
 			Model:   aliasID,

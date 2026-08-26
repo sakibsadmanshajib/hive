@@ -181,7 +181,12 @@ func TestFromOAIResponse_EmptyChoices(t *testing.T) {
 	}
 }
 
-func TestFromOAIResponse_IDAlreadyPrefixed(t *testing.T) {
+// The id is always freshly minted, never derived from resp.ID -- even a
+// resp.ID that already looks like a well-formed Anthropic id must not be
+// echoed back verbatim, because it is still the upstream's own id (OpenRouter
+// "gen-*", Groq "chatcmpl-*"), which is exactly the identity leak this
+// function exists to prevent.
+func TestFromOAIResponse_NeverEchoesUpstreamID(t *testing.T) {
 	oai := anthropic.OAIResponse{
 		ID:    "msg_already",
 		Model: "m",
@@ -190,8 +195,11 @@ func TestFromOAIResponse_IDAlreadyPrefixed(t *testing.T) {
 		},
 	}
 	got := anthropic.FromOAIResponse(oai, "m")
-	if got.ID != "msg_already" {
-		t.Errorf("id: want msg_already got %q", got.ID)
+	if !strings.HasPrefix(got.ID, "msg_") {
+		t.Errorf("id: want msg_ prefix got %q", got.ID)
+	}
+	if got.ID == oai.ID {
+		t.Errorf("id: must never echo the upstream id verbatim, got %q", got.ID)
 	}
 }
 

@@ -67,6 +67,14 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 		return nil, nil, err
 	}
 
+	// Mint a gateway-owned id and drop system_fingerprint: both are upstream
+	// identity leaks (see mintCompletionID). The upstream id is kept in
+	// upstreamID purely for the usage-clamp log line below; nothing that
+	// matters for billing or correlation reads resp.ID.
+	upstreamID := resp.ID
+	resp.ID = mintCompletionID("chatcmpl")
+	resp.SystemFingerprint = nil
+
 	resp.Model = aliasID
 	resp.Object = "chat.completion"
 
@@ -85,7 +93,7 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 		coerceNullContent(&resp.Choices[i].Message)
 	}
 
-	clampZeroCompletionUsage(resp.Usage, chatChoiceTexts(resp.Choices), resp.ID, aliasID, EndpointChatCompletions)
+	clampZeroCompletionUsage(resp.Usage, chatChoiceTexts(resp.Choices), upstreamID, aliasID, EndpointChatCompletions)
 
 	normalized, err := json.Marshal(resp)
 	if err != nil {

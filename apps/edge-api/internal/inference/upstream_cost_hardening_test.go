@@ -109,6 +109,7 @@ func TestParseUpstreamCostRefusesAnOversizedLiteralWithoutParsingIt(t *testing.T
 
 func TestSanitizeVariablePriceFrameStripsEverythingConfidential(t *testing.T) {
 	frame := []byte(`{"id":"gen-1","object":"chat.completion.chunk","provider":"Anthropic",` +
+		`"system_fingerprint":"fp_deadbeef",` +
 		`"model":"anthropic/claude-sonnet-4.5",` +
 		`"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],` +
 		`"usage":{"prompt_tokens":1000,"completion_tokens":500,"cost":0.0123456,` +
@@ -120,8 +121,13 @@ func TestSanitizeVariablePriceFrameStripsEverythingConfidential(t *testing.T) {
 	}
 	s := string(out)
 
+	// id and system_fingerprint are upstream-identity leaks: OpenRouter's own
+	// "gen-*" id shape and any provider's system_fingerprint both name the
+	// provider by construction, exactly like the sonnet/anthropic strings
+	// below.
 	for _, forbidden := range []string{
 		"Anthropic", "claude-sonnet-4.5", "0.0123456", "cost_details", "is_byok", `"provider"`, `"cost"`,
+		"gen-1", "fp_deadbeef", `"system_fingerprint"`,
 	} {
 		if strings.Contains(s, forbidden) {
 			t.Errorf("sanitized frame still leaks %q: %s", forbidden, s)

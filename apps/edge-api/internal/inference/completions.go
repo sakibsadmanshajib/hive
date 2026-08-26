@@ -52,10 +52,16 @@ func normalizeCompletion(respBody []byte, aliasID string) ([]byte, *UsageRespons
 		return nil, nil, err
 	}
 
+	// Mint a gateway-owned id -- see mintCompletionID and its twin in
+	// normalizeChatCompletion. upstreamID is kept only for the usage-clamp
+	// log line below.
+	upstreamID := resp.ID
+	resp.ID = mintCompletionID("cmpl")
+
 	resp.Model = aliasID
 	resp.Object = "text_completion"
 
-	clampZeroCompletionUsage(resp.Usage, completionChoiceTexts(resp.Choices), resp.ID, aliasID, EndpointCompletions)
+	clampZeroCompletionUsage(resp.Usage, completionChoiceTexts(resp.Choices), upstreamID, aliasID, EndpointCompletions)
 
 	normalized, err := json.Marshal(resp)
 	if err != nil {

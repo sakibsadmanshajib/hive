@@ -223,7 +223,18 @@ func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
 	// Provider identity and our own cost. Deleting by key rather than
 	// rebuilding from a typed struct keeps every field the client legitimately
 	// needs, including ones this package does not model, such as tool calls.
+	//
+	// id and system_fingerprint are the same provider-identity leak the typed
+	// relay mints a replacement for (mintCompletionID): OpenRouter's own
+	// "gen-*" id shape and Groq's system_fingerprint both leak upstream
+	// identity verbatim. This map-based path has no per-stream state to mint
+	// a stable replacement from (each frame is sanitized independently, by
+	// both this package's own fallback and apps/edge-api/internal/chat's
+	// verbatim relay), so it drops both keys outright rather than emit an
+	// inconsistent id across chunks of the same stream.
 	delete(frame, "provider")
+	delete(frame, "system_fingerprint")
+	delete(frame, "id")
 
 	if rawUsage, present := frame["usage"]; present {
 		var usage map[string]json.RawMessage

@@ -4,17 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
+
+	"github.com/google/uuid"
 )
 
 // FromOAIResponse lifts an OAIResponse to an Anthropic MessagesResponse.
 // clientAlias is the model name the client sent; it is echoed back verbatim
 // so upstream route identifiers (e.g. openrouter/...) never reach the client.
+//
+// The response id is always freshly minted, never derived from resp.ID.
+// resp.ID carries the upstream's own id verbatim (OpenRouter's "gen-*",
+// Groq's "chatcmpl-*"), and prior code merely prefixed that value with
+// "msg_" -- which still shipped the raw upstream id to the client inside the
+// prefix, the same class of leak mintCompletionID's doc comment describes
+// for the OpenAI-shaped surface (CLAUDE.md: "provider names never leak to
+// customers"). Nothing downstream correlates on this id: request/billing
+// correlation keys on this gateway's own attempt.ID, never on anything from
+// the /v1/messages response body.
 func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
-	id := resp.ID
-	if !strings.HasPrefix(id, "msg_") {
-		id = "msg_" + id
-	}
+	id := "msg_" + uuid.New().String()
 
 	model := clientAlias
 	if model == "" {
