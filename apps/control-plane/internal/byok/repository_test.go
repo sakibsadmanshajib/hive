@@ -24,6 +24,14 @@ func requireRepoTestDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-Postgres step and passes
+		// -short for the step that has none, so a missing DSN there is a wiring
+		// defect (the silent-green never-runs shape of issues #701/#708/#797),
+		// not a laptop without Postgres. Fail loudly in CI live leg; local runs
+		// without a test database still skip.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI: this suite guards a real-SQL proof and must not silently skip")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	return dsn
@@ -72,6 +80,11 @@ func TestRepositoryIsolationAgainstRealSQL(t *testing.T) {
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
+		// Same loudness contract as the DSN gate: role provisioning failure in
+		// CI is a schema regression, never a normal day.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatalf("test database unreachable in CI: %v", err)
+		}
 		t.Skipf("test database unreachable: %v", err)
 	}
 	defer pool.Close()
@@ -143,6 +156,11 @@ func TestRepositoryUniqueConstraintsAgainstRealSQL(t *testing.T) {
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
+		// Same loudness contract as the DSN gate: role provisioning failure in
+		// CI is a schema regression, never a normal day.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatalf("test database unreachable in CI: %v", err)
+		}
 		t.Skipf("test database unreachable: %v", err)
 	}
 	defer pool.Close()

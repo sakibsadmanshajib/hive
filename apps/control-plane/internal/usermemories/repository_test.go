@@ -20,6 +20,14 @@ func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-Postgres step and passes
+		// -short for the step that has none, so a missing DSN there is a wiring
+		// defect (the silent-green never-runs shape of issues #701/#708/#797),
+		// not a laptop without Postgres. Fail loudly in CI live leg; local runs
+		// without a test database still skip.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI: this suite guards a real-SQL proof and must not silently skip")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	if !strings.Contains(strings.ToLower(dsn), "test") {
@@ -37,6 +45,11 @@ func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, "SET ROLE hive_app"); err != nil {
 		pool.Close()
+		// Same loudness contract as the DSN gate: role provisioning failure in
+		// CI is a schema regression, never a normal day.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatalf("SET ROLE hive_app failed: %v", err)
+		}
 		t.Skipf("SET ROLE hive_app failed: %v", err)
 	}
 	t.Cleanup(pool.Close)

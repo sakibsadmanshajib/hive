@@ -240,10 +240,33 @@ model_list:
     litellm_params:
       model: openrouter/~deepseek/deepseek-v4-flash-latest
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        # Prompt-cache endpoint affinity, fix/cache-realization (2026-08-26).
+        # Unpinned, OpenRouter bounced three identical prompts across three
+        # endpoints (Inceptron / Fireworks / OpenInference), cached_tokens=0
+        # every time: a cold endpoint cannot serve a cache hit, so the
+        # supports_cache_read=true capability row on this route never paid
+        # off and every repeat prompt billed at full input price. The soft
+        # `order` preference below keeps fallbacks enabled (no availability
+        # cliff): while the preferred endpoint is healthy it serves the
+        # request and DeepSeek prefix caching hits; when it is not, OpenRouter
+        # falls back to another endpoint and callers see a cold cache plus a
+        # different tokenizer's prompt-token count until the preference
+        # resumes. Live-proven pinned: cached_tokens=512 on every repeat.
+        provider:
+          order:
+            - Inceptron
   - model_name: route-deepseek-v4-pro
     litellm_params:
       model: openrouter/deepseek/deepseek-v4-pro-0813
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        # Same defect, same fix as route-deepseek-v4-flash above. Unpinned,
+        # pro bounced DigitalOcean / SiliconFlow / Together with zero cache
+        # hits; pinned to DigitalOcean, cached_tokens=768 on every repeat.
+        provider:
+          order:
+            - DigitalOcean
 
   # ── 4. Doc-layout vision (paid, OpenRouter, the last multimodal route) ──────
   # Blueprint Wave 3, Step 3.2 (issue #300): the doc-layout knowledge-work-pack

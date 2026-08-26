@@ -41,12 +41,10 @@ const SKIP_DIRS = new Set(["node_modules", "vendor", ".git", "target", "dist", "
 // leaves the workflow's list, and it fails again if a package is exempted here
 // after it starts running.
 const KNOWN_DARK = new Map([
-  ["apps/control-plane/./internal/audit", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/auditarchive", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/auditverifier", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/auditworker", "#797 backlog, never executed"],
-  ["apps/control-plane/./internal/licensing", "#797 backlog, never executed"],
-  ["apps/control-plane/./tests/compliance", "#797 backlog, outside ./internal, never executed"],
+  // audit, auditarchive, auditverifier, auditworker, licensing and
+  // tests/compliance were wired into the go-tests job's live-Postgres step by
+  // the 2026-08-26 un-skip pass: removed here because the lint fails if a
+  // package both runs and is still declared as debt.
   // marketplace, tenant/settings and usage wired into the go-tests job's
   // live-Postgres step by issue #708: removed here because the lint fails
   // if a package both runs and is still declared as debt.

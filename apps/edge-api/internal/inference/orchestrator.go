@@ -171,6 +171,16 @@ func (o *Orchestrator) executeSync(
 	}
 	body = boundedBody
 
+	// 2d. Reasoning headroom (issue #1171): on a pool whose members reserve
+	// reasoning budget, inflate the completion ceiling actually present in the
+	// body by that reserve, so hidden reasoning spends the reserve instead of
+	// starving visible content out of the caller's own budget. A no-op for
+	// every non-reserving alias: applyReasoningHeadroom returns the body
+	// unchanged when the reserve is 0 or no ceiling field was set.
+	if headroomBody, inflated := applyReasoningHeadroom(body, endpoint, route.ReasoningReserveTokens); inflated {
+		body = headroomBody
+	}
+
 	// 3. Start attempt
 	requestID := uuid.New().String()
 	endStartAttempt := o.stage(endpoint, StageStartAttempt)
@@ -272,6 +282,50 @@ func (o *Orchestrator) executeSync(
 		return
 	}
 
+	// 7b. Zero-content guard (issue #1171). A chat completion whose every
+	// choice finished with finish_reason=length and no visible output is the
+	// reasoning-burn signature: a member spent the whole ceiling on hidden
+	// reasoning. Retry once against the same pool; if the retry is empty too,
+	// or fails, keep the original response and settle fail-closed below.
+	zeroContentCaptured := false
+	if endpoint == EndpointChatCompletions && route.ReasoningReserveTokens > 0 && isEmptyLengthCompletion(normalized) {
+		log.Printf("inference: zero-content length completion on a reserving pool, retrying once request_id=%s alias=%s", requestID, model)
+		retried, rerr := dispatch(ctx, route.LiteLLMModelName, body)
+		if rerr != nil {
+			zeroContentCaptured = true
+			log.Printf("inference: zero-content retry transport error request_id=%s alias=%s: %v", requestID, model, rerr)
+		} else {
+			defer retried.Body.Close()
+			if retried.StatusCode < 200 || retried.StatusCode >= 300 {
+				drainAndClose(retried)
+				zeroContentCaptured = true
+				log.Printf("inference: zero-content retry answered %d request_id=%s alias=%s", retried.StatusCode, requestID, model)
+			} else {
+				retryBody, rerr2 := io.ReadAll(io.LimitReader(retried.Body, 10*1024*1024))
+				if rerr2 != nil {
+					zeroContentCaptured = true
+					log.Printf("inference: zero-content retry body read failed request_id=%s alias=%s: %v", requestID, model, rerr2)
+				} else {
+					rn, ru, nerr := normalize(retryBody, model)
+					switch {
+					case nerr != nil:
+						zeroContentCaptured = true
+						log.Printf("inference: zero-content retry normalize failed request_id=%s alias=%s: %v", requestID, model, nerr)
+					case isEmptyLengthCompletion(rn):
+						zeroContentCaptured = true
+					default:
+						respBody, normalized, usage = retryBody, rn, ru
+					}
+				}
+			}
+		}
+		if zeroContentCaptured {
+			log.Printf("inference: zero_content_captured request_id=%s reservation_id=%s endpoint=%s alias=%s: empty visible content after retry, capturing hold instead of settling full price",
+				requestID, reservation.ID, endpoint, model)
+			zeroContentCaptureTrips.WithLabelValues(model, endpoint).Inc()
+		}
+	}
+
 	// 8. Finalize reservation and record usage
 	if reservation.ID != "" {
 		// What the provider actually reported, or an estimate from the bytes
@@ -321,6 +375,22 @@ func (o *Orchestrator) executeSync(
 			actualCredits, confirmed, billable = settlementCredits(route, hasUsage,
 				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content)
 		}
+
+		// Zero-content capture (issue #1171): a completion that returned no
+		// visible output even after its one retry must never settle as an
+		// ordinary full-price success. Capture the hold instead: charge at the
+		// hold's size with terminal_usage_confirmed=false, so control-plane's
+		// finalize clamp keeps it inside what was authorized and
+		// reconciliation still sees it. The upstream did consume real tokens
+		// (hidden reasoning is real inference we paid for), which is why this
+		// captures rather than releases; what it may never do is bill the
+		// alias's service price for content that does not exist.
+		if zeroContentCaptured {
+			actualCredits = reservation.Held()
+			confirmed = false
+			billable = true
+		}
+
 		if !billable {
 			// Nothing measured and nothing produced: there is no quantity to
 			// charge, so leave finalized false and let the deferred release
@@ -400,6 +470,12 @@ func (o *Orchestrator) executeSync(
 	// 9. Write response
 	endResponseWrite := o.stage(endpoint, StageResponseWrite)
 	w.Header().Set("Content-Type", "application/json")
+	if zeroContentCaptured {
+		// The honest flag promised in the guard's contract: the caller gets
+		// the upstream body (finish_reason=length already tells an SDK why
+		// content is empty) plus this header so no client is left guessing.
+		w.Header().Set(emptyContentHeader, emptyContentHeaderValue)
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(normalized)
 	endResponseWrite()
