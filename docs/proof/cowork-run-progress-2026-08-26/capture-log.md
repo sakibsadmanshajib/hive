@@ -54,6 +54,11 @@ Everything from that wire response to the pixels is the shipped read path:
 `getTaskEvents` -> `foldRunSteps` -> the turn's `statusHistory` ->
 StatusHistory.svelte -> StatusItem.svelte, none of which is stubbed.
 
+The capture was taken on the final build of this branch, after the cursor
+commit (96c17d45d). An earlier capture of the same run, posted first on the
+pull request, was taken on the build before it; the rendering is identical
+between the two, and the commit changed only which seq a poll acknowledges.
+
 ## Stack
 
     docker run -d --name runprogress-owui \
@@ -79,11 +84,11 @@ account and no deployed environment was touched.
     joined to its result on tool_call_id), `Workspace file: notes.md`, and
     `An update too large to show here (82134 bytes).` for the payload the
     backend replaced with its truncation marker.
-  * 07-reloaded-mid-run-t65s: the page reloaded while the run was still
+  * 07-reloaded-mid-run-t70s: the page reloaded while the run was still
     going. Every line survived, the turn is still in flight, and the follower
     resumed from the stored cursor rather than re-reading from zero (see the
     request log below).
-  * 08-settled-t93s: the run settled. Eight lines, none shimmering, and the
+  * 08-settled-t99s: the run settled. Eight lines, none shimmering, and the
     run's own summary as the turn's content.
 
 ## The cursor, from the browser's own request log
@@ -93,67 +98,68 @@ Every request the page made to the agent surface, in order. Note that
 appears exactly once, as the POST that creates the run.
 
 ```
-2026-08-26T00:43:52.766Z POST /api/v1/hive/agent/tasks
-2026-08-26T00:43:55.942Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:43:55.948Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=0&limit=200
-2026-08-26T00:43:59.140Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:43:59.147Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=0&limit=200
-2026-08-26T00:44:02.369Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:02.374Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=2&limit=200
-2026-08-26T00:44:03.411Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:03.416Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=2&limit=200
-2026-08-26T00:44:06.674Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:06.694Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=3&limit=200
-2026-08-26T00:44:09.875Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:09.881Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=3&limit=200
-2026-08-26T00:44:13.072Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:13.079Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=4&limit=200
-2026-08-26T00:44:16.262Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:16.266Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=5&limit=200
-2026-08-26T00:44:19.580Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:19.581Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=5&limit=200
-2026-08-26T00:44:22.763Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:22.770Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=5&limit=200
-2026-08-26T00:44:25.944Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:25.949Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=6&limit=200
-2026-08-26T00:44:29.132Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:29.137Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=7&limit=200
-2026-08-26T00:44:30.127Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:30.132Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=8&limit=200
-2026-08-26T00:44:33.338Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:33.343Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=8&limit=200
-2026-08-26T00:44:36.531Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:36.537Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=8&limit=200
-2026-08-26T00:44:39.789Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:39.797Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=8&limit=200
-2026-08-26T00:44:42.980Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:43.015Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=9&limit=200
-2026-08-26T00:44:46.186Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:46.191Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=10&limit=200
-2026-08-26T00:44:49.476Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:49.482Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=10&limit=200
-2026-08-26T00:44:54.204Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:54.239Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=10&limit=200
-2026-08-26T00:44:57.427Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:57.433Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=10&limit=200
-2026-08-26T00:44:58.558Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:44:58.563Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=10&limit=200
-2026-08-26T00:45:01.729Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
+2026-08-26T01:00:07.763Z POST /api/v1/hive/agent/tasks
+2026-08-26T01:00:10.945Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:10.951Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=0&limit=200
+2026-08-26T01:00:14.145Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:14.150Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=0&limit=200
+2026-08-26T01:00:17.351Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:17.365Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=2&limit=200
+2026-08-26T01:00:18.449Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:18.454Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=2&limit=200
+2026-08-26T01:00:21.639Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:21.644Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=3&limit=200
+2026-08-26T01:00:24.819Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:24.833Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=3&limit=200
+2026-08-26T01:00:28.040Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:28.046Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=4&limit=200
+2026-08-26T01:00:31.230Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:31.234Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=5&limit=200
+2026-08-26T01:00:34.401Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:34.405Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=5&limit=200
+2026-08-26T01:00:37.671Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:37.680Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=5&limit=200
+2026-08-26T01:00:40.891Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:40.898Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=6&limit=200
+2026-08-26T01:00:44.089Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:44.094Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=7&limit=200
+2026-08-26T01:00:45.153Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:45.159Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=8&limit=200
+2026-08-26T01:00:48.338Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:48.343Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=8&limit=200
+2026-08-26T01:00:51.513Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:51.519Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=8&limit=200
+2026-08-26T01:00:54.730Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:54.747Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=8&limit=200
+2026-08-26T01:00:57.939Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:00:57.943Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=9&limit=200
+2026-08-26T01:01:01.124Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:01.129Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=10&limit=200
+2026-08-26T01:01:04.313Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:04.320Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=10&limit=200
+2026-08-26T01:01:12.143Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:12.279Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=10&limit=200
+2026-08-26T01:01:15.429Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:15.439Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=10&limit=200
+2026-08-26T01:01:18.708Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
 ```
 
-... 6 further polls, omitted here, cursor continuing to advance ...
+... 5 further polls, omitted here, cursor continuing to advance ...
 
-The page was reloaded mid-run at 00:44:54, and the request either side of it
-is the evidence for the resume: the cursor did NOT restart at 0. It continued
-from 10, read off the lines already stored on the turn by `latestStepSeq`.
+The page was reloaded mid-run: that is the 7.8 second gap in the log, the one
+break in an otherwise 3-second cadence, ending at 01:01:12. The request on the
+far side of it is the evidence for the resume. The cursor did NOT restart at 0.
+It came back as `after_seq=10`, read off the lines already stored on the turn
+by `latestStepSeq`.
 
 ```
-2026-08-26T00:45:14.478Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:45:14.484Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=11&limit=200
-2026-08-26T00:45:17.662Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:45:17.666Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=12&limit=200
-2026-08-26T00:45:20.849Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b
-2026-08-26T00:45:20.855Z GET /api/v1/hive/agent/tasks/ea9fce9a-648f-4265-8fa3-d33dbac10d6b/events?after_seq=12&limit=200```
+2026-08-26T01:01:28.782Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:28.789Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=11&limit=200
+2026-08-26T01:01:32.018Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:32.030Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=12&limit=200
+2026-08-26T01:01:35.239Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24
+2026-08-26T01:01:35.245Z GET /api/v1/hive/agent/tasks/0ce3e5cc-c8e3-435b-b881-cd06c4c2be24/events?after_seq=12&limit=200
+```
 
 Polling stops there, at the first terminal reading, rather than continuing
 against a settled task.
@@ -163,4 +169,4 @@ against a settled task.
     $ grep -c 'agent/tasks$' network.log        # whole-list reads: the create POST only
     1
     $ wc -l < network.log                       # every agent request the page made
-    58
+    55
