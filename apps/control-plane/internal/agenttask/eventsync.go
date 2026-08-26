@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,28 +171,7 @@ func (s *EventSyncer) Stop() {
 // the workspace listing. Every failure here logs against this task alone and
 // never reaches RunOnce's return value.
 func (s *EventSyncer) syncTask(ctx context.Context, t Task) {
-	events := []TaskEvent{statusEvent(t)}
-
-	sandboxEvents, err := s.pullSandboxEvents(ctx, t.EngineSessionRef)
-	if err != nil {
-		s.logger.WarnContext(ctx, "agenttask: event sync pull failed",
-			"task_id", t.ID, "error", err)
-	} else {
-		for _, se := range sandboxEvents {
-			if ev, ok := mapSandboxEvent(se); ok {
-				events = append(events, ev)
-			}
-		}
-		files, ferr := s.src.Files(ctx, t.EngineSessionRef)
-		if ferr != nil {
-			s.logger.WarnContext(ctx, "agenttask: workspace listing failed",
-				"task_id", t.ID, "error", ferr)
-		} else {
-			for _, f := range files {
-				events = append(events, fileEvent(f))
-			}
-		}
-	}
+	events := append([]TaskEvent{statusEvent(t)}, s.pullTaskEvents(ctx, t)...)
 
 	if err := s.repo.AppendEvents(ctx, t, events); err != nil {
 		// Retried whole-batch next pass; dedup makes the retry idempotent.
@@ -202,6 +182,51 @@ func (s *EventSyncer) syncTask(ctx context.Context, t Task) {
 	s.remember(t)
 }
 
+// pullTaskEvents pulls t's sandbox events and workspace listing and maps them
+// onto TaskEvent rows, in that order. Both syncTask (t is still active) and
+// finishVanished (t just left the active set, this is its last possible
+// pass) call this: a short task's real activity, tool calls and file writes,
+// often concentrates in the tail of its run, and skipping this pull on the
+// final pass is exactly how issue #1206's run went dead for 58 straight
+// seconds and never recorded the tool_call/tool_result events a genuine
+// terminal command and file write produced. Every failure here logs against
+// t alone; the caller still gets whatever partial slice was built.
+func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task) []TaskEvent {
+	var events []TaskEvent
+
+	sandboxEvents, err := s.pullSandboxEvents(ctx, t.EngineSessionRef)
+	if err != nil {
+		s.logger.WarnContext(ctx, "agenttask: event sync pull failed",
+			"task_id", t.ID, "error", err)
+		return events
+	}
+	for _, se := range sandboxEvents {
+		if ev, ok := mapSandboxEvent(se); ok {
+			events = append(events, ev)
+		}
+	}
+
+	files, ferr := s.src.Files(ctx, t.EngineSessionRef)
+	if ferr != nil {
+		s.logger.WarnContext(ctx, "agenttask: workspace listing failed",
+			"task_id", t.ID, "error", ferr)
+		return events
+	}
+	for _, f := range files {
+		// A dot-prefixed entry (.git, .cache, ...) is workspace scaffolding,
+		// never something the agent produced for the user; rendering it as a
+		// step is exactly the "bare .git listing reads as progress" defect
+		// #1206 also named. Filtered here, at the same layer as every other
+		// not-an-agent-action exclusion below, rather than left for the
+		// frontend to guess at.
+		if strings.HasPrefix(f.Name, ".") {
+			continue
+		}
+		events = append(events, fileEvent(f))
+	}
+	return events
+}
+
 // remember records t as still-active-seen.
 func (s *EventSyncer) remember(t Task) {
 	if s.seen == nil {
@@ -210,9 +235,10 @@ func (s *EventSyncer) remember(t Task) {
 	s.seen[t.ID] = t
 }
 
-// finishVanished emits the terminal status event for tasks that left the
-// active set since they were last seen, then forgets them. A transient Get
-// failure drops the tracking entry anyway: a missed terminal status event is
+// finishVanished emits the terminal status event, plus one last sandbox
+// events and workspace listing pull, for tasks that left the active set
+// since they were last seen, then forgets them. A transient Get failure
+// drops the tracking entry anyway: a missed terminal status event is
 // degraded-but-safe (acceptance item 5's direction), while keeping the entry
 // would leak memory on a permanently broken read.
 func (s *EventSyncer) finishVanished(ctx context.Context, active map[uuid.UUID]bool) {
@@ -225,7 +251,16 @@ func (s *EventSyncer) finishVanished(ctx context.Context, active map[uuid.UUID]b
 			s.logger.WarnContext(ctx, "agenttask: could not read a finished task's final status for its event",
 				"task_id", id, "error", err)
 		} else if err == nil {
-			_ = s.repo.AppendEvents(ctx, t, []TaskEvent{statusEvent(final)})
+			// This is t's last possible pass: it has already left ListActive,
+			// so no future syncTask call will ever run for it again. Pull the
+			// tail one last time before recording the terminal status, or
+			// whatever tool calls and file writes happened between the last
+			// active pass and completion are lost for good, never a retry.
+			events := append(s.pullTaskEvents(ctx, final), statusEvent(final))
+			if aerr := s.repo.AppendEvents(ctx, t, events); aerr != nil {
+				s.logger.WarnContext(ctx, "agenttask: final event append failed",
+					"task_id", id, "error", aerr)
+			}
 		}
 		delete(s.seen, id)
 	}
@@ -266,14 +301,25 @@ func (s *EventSyncer) pullSandboxEvents(ctx context.Context, sessionRef string) 
 
 // mapSandboxEvent translates one normalized sandbox event into our six-kind
 // vocabulary. The mapping is deliberately isolated here so OpenHands schema
-// drift costs one function, and the fallback NEVER drops silently: any kind
-// this switch does not name lands as kind `status` carrying the raw payload
-// (or a marker when the raw dump was too large to transport), so a new
-// upstream event class surfaces in the transcript instead of vanishing.
+// drift costs one function, and the fallback for a kind this switch does not
+// name NEVER drops silently: it lands as kind `status` carrying the raw
+// payload (or a marker when the raw dump was too large to transport), so a
+// new upstream event class surfaces in the transcript instead of vanishing
+// unexplained.
 //
-// MessageEvent maps for every role, not only assistant: dropping user-role
-// messages would be exactly the silent drop the plan forbids, and the role
-// rides in the payload so consumers can tell them apart.
+// That is a different thing from the false returns below. Those are named,
+// understood kinds this function recognises and deliberately excludes
+// because they are bookkeeping, not agent progress: SystemPromptEvent and
+// ConversationStateUpdateEvent are bootstrap/state-sync noise confirmed
+// against a live run's stored payloads (task a98420c4, issue #1206), where
+// three of five rendered lines were exactly this pair falling through the
+// unmapped branch with neither a `sandbox_kind` nor a `status` key the
+// frontend understood. A user-role MessageEvent is excluded for a narrower,
+// concrete reason: agent-engine's only way to put a user message into this
+// stream is the task's own initiating prompt (InitialMessage at launch,
+// engine.go); there is no running-task follow-up-message surface today, so
+// every user-role MessageEvent that will ever reach this function IS that
+// same prompt echoed back, not a real interjection.
 func mapSandboxEvent(e SandboxEvent) (TaskEvent, bool) {
 	base := TaskEvent{
 		// Empty sandbox ids would be exempt from the dedup index and
@@ -297,6 +343,9 @@ func mapSandboxEvent(e SandboxEvent) (TaskEvent, bool) {
 			"preview":      truncateRunes(e.TextPreview, maxPreviewRunes),
 		})
 	case "MessageEvent":
+		if e.Source == "user" {
+			return TaskEvent{}, false
+		}
 		base.Kind = EventMessage
 		base.Payload = mustJSON(map[string]any{
 			"role":    e.Source,
@@ -307,6 +356,8 @@ func mapSandboxEvent(e SandboxEvent) (TaskEvent, bool) {
 		base.Payload = mustJSON(map[string]any{
 			"preview": truncateRunes(e.TextPreview, maxPreviewRunes),
 		})
+	case "SystemPromptEvent", "ConversationStateUpdateEvent":
+		return TaskEvent{}, false
 	default:
 		base.Kind = EventStatus
 		if raw := capEventPayload(e.Raw); raw != nil {
