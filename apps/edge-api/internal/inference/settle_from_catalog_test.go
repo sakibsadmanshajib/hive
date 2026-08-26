@@ -349,6 +349,11 @@ func TestExecuteStreaming_SettlesCacheAwarePrice(t *testing.T) {
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
 		t.Error("terminal_usage_confirmed must stay true: the upstream reported a real usage block")
 	}
+	// #1174: the finalize call itself must carry the metered cache counts, so
+	// control-plane's api_key_usage_rollups write stops recording zeroes.
+	if got, _ := body["cache_read_tokens"].(float64); int64(got) != 200_000 {
+		t.Errorf("finalize cache_read_tokens = %v, want 200000: the count was dropped from the settlement call", body["cache_read_tokens"])
+	}
 }
 
 // TestExecuteSync_SettlesCacheAwarePrice is the same scenario through the
@@ -375,6 +380,10 @@ func TestExecuteSync_SettlesCacheAwarePrice(t *testing.T) {
 	}
 	if int64(actual) == 645_000 {
 		t.Error("actual_credits = 645000: still the flat-rate price, cache pricing was not applied on the sync path")
+	}
+	// #1174: same bound as the streaming sibling, on the non-streaming path.
+	if got, _ := body["cache_read_tokens"].(float64); int64(got) != 200_000 {
+		t.Errorf("finalize cache_read_tokens = %v, want 200000: the count was dropped from the settlement call", body["cache_read_tokens"])
 	}
 }
 
@@ -404,6 +413,10 @@ func TestExecuteSync_SettlesCacheWritePrice(t *testing.T) {
 	}
 	if int64(actual) == 630_000 {
 		t.Error("actual_credits = 630000: the pre-fix flat-rate undercharge for cache-write tokens")
+	}
+	// #1174: the write side of the same bound.
+	if got, _ := body["cache_write_tokens"].(float64); int64(got) != 200_000 {
+		t.Errorf("finalize cache_write_tokens = %v, want 200000: the count was dropped from the settlement call", body["cache_write_tokens"])
 	}
 }
 

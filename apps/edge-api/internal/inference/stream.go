@@ -586,6 +586,15 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		ActualCredits:          credits,
 		TerminalUsageConfirmed: confirmed,
 		Status:                 "completed",
+		// Forward every metered count the settlement priced from (#856,
+		// #1174), same as the sync path in orchestrator.go: control-plane
+		// writes them onto the completed usage event and the
+		// api_key_usage_rollups row. This route never sent any token counts
+		// on finalize before, so all four rollup columns stayed zero here.
+		InputTokens:      acc.InputTokens,
+		OutputTokens:     acc.OutputTokens,
+		CacheReadTokens:  acc.CachedTokens,
+		CacheWriteTokens: acc.CacheWriteTokens,
 	})
 	// Cancelled the moment finalize returns, never before: the call has
 	// already completed, so this can only release the timer, never abort a

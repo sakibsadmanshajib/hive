@@ -209,8 +209,8 @@ func (h *Handler) startSettlement(
 // Every settlement call runs on its own fresh background context, never the
 // request context: a client disconnect is exactly what cancels that one, and
 // settling on it converts a delivered response into a free one.
-func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens int64) bool {
-	err := s.finalizeOnce(credits, confirmed, inTokens, outTokens)
+func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens, cacheReadTokens, cacheWriteTokens int64) bool {
+	err := s.finalizeOnce(credits, confirmed, inTokens, outTokens, cacheReadTokens, cacheWriteTokens)
 	if err == nil {
 		return true
 	}
@@ -226,7 +226,7 @@ func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens
 	// It cannot produce a second charge.
 	slog.Warn("session chat finalize failed, retrying once before release",
 		"err", err, "request_id", s.requestID, "reservation_id", s.reservationID)
-	if retryErr := s.finalizeOnce(credits, confirmed, inTokens, outTokens); retryErr != nil {
+	if retryErr := s.finalizeOnce(credits, confirmed, inTokens, outTokens, cacheReadTokens, cacheWriteTokens); retryErr != nil {
 		slog.Error("session chat finalize failed twice, releasing hold instead",
 			"err", retryErr, "request_id", s.requestID, "reservation_id", s.reservationID)
 		return false
@@ -235,8 +235,9 @@ func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens
 }
 
 // finalizeOnce is one attempt, on its own fresh context so a retry is never
-// handed the timed-out context of the attempt it is retrying.
-func (s *settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTokens int64) error {
+// handed the timed-out context of the attempt it is retrying. The cache
+// components ride along with the input/output counts they split (#1174).
+func (s *settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTokens, cacheReadTokens, cacheWriteTokens int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementTimeout)
 	defer cancel()
 	return s.accounting.FinalizeReservation(ctx, inference.FinalizeReservationInput{
@@ -249,6 +250,8 @@ func (s *settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTo
 		TerminalUsageConfirmed: confirmed,
 		InputTokens:            inTokens,
 		OutputTokens:           outTokens,
+		CacheReadTokens:        cacheReadTokens,
+		CacheWriteTokens:       cacheWriteTokens,
 		Status:                 "completed",
 	})
 }

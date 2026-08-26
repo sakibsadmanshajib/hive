@@ -109,6 +109,13 @@ type FinalizeReservationInput struct {
 	// Optional: a caller that omits them settles exactly as before.
 	InputTokens  int64 `json:"input_tokens,omitempty"`
 	OutputTokens int64 `json:"output_tokens,omitempty"`
+	// CacheReadTokens and CacheWriteTokens are the prompt's cache components
+	// behind ActualCredits (#1174). Control-plane forwards them into the
+	// api_key_usage_rollups write, so the rollup stops accumulating zeroes in
+	// exactly the token classes that dominate agent traffic. Optional like
+	// their siblings: a caller that omits them settles exactly as before.
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // ReleaseReservationInput is the request body for releasing a reservation.

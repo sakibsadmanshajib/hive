@@ -365,6 +365,16 @@ func (o *Orchestrator) executeSync(
 				// carrying real token counts earns it.
 				TerminalUsageConfirmed: confirmed,
 				Status:                 "completed",
+				// Forward every metered count the settlement priced from
+				// (#856, #1174): control-plane writes them onto the completed
+				// usage event and the api_key_usage_rollups row, so both
+				// surfaces carry real figures instead of zeroes. The sync path
+				// never sent even input/output before, so the rollup stayed
+				// zero across all four token columns on this route.
+				InputTokens:      inputTokens,
+				OutputTokens:     outputTokens,
+				CacheReadTokens:  cache.CacheReadTokens,
+				CacheWriteTokens: cache.CacheWriteTokens,
 			})
 			endFinalize()
 			cancel()
