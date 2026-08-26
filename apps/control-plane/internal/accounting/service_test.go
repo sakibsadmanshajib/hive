@@ -934,6 +934,29 @@ func TestFinalizeReservationUsageRollupCarriesCacheTokens(t *testing.T) {
 		t.Fatalf("expected the rollup to carry the metered cache-write tokens (4000), got %d: the count silently dropped to zero", got.cacheWriteTokens)
 	}
 
+	// The completed usage_event written by the same finalizeLocked pass must
+	// carry the same counts: two accounting surfaces diverging on exactly the
+	// token classes that dominate agent traffic is the bug shape #1174 guards
+	// against.
+	var completed *usage.RecordEventInput
+	for i := range usageSvc.eventCalls {
+		if usageSvc.eventCalls[i].EventType == "completed" {
+			completed = &usageSvc.eventCalls[i]
+			break
+		}
+	}
+	if completed == nil {
+		t.Fatalf("expected a completed usage event, got %#v", usageSvc.eventCalls)
+	}
+	if completed.CacheReadTokens != 200_000 || completed.CacheWriteTokens != 4_000 {
+		t.Fatalf("expected the completed usage event to carry cache read=200000 write=4000, got read=%d write=%d: the surfaces diverge",
+			completed.CacheReadTokens, completed.CacheWriteTokens)
+	}
+	if completed.InputTokens != 205_000 || completed.OutputTokens != 2_000 {
+		t.Fatalf("expected the completed usage event to carry input=205000 output=2000, got input=%d output=%d",
+			completed.InputTokens, completed.OutputTokens)
+	}
+
 	// A caller that does not know about the cache fields settles exactly as
 	// before: omitted means zero, never a fabricated count or an error.
 	reservation2, err := svc.CreateReservation(context.Background(), CreateReservationInput{

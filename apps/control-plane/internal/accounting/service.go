@@ -421,10 +421,12 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		// into usage_events and the console's analytics beside a non-negative
 		// credit delta, and a SUM over that column would silently understate
 		// consumption.
-		InputTokens:     max(input.InputTokens, 0),
-		OutputTokens:    max(input.OutputTokens, 0),
-		HiveCreditDelta: -actualCredits,
-		CustomerTags:    reservation.CustomerTags,
+		InputTokens:      max(input.InputTokens, 0),
+		OutputTokens:     max(input.OutputTokens, 0),
+		CacheReadTokens:  max(input.CacheReadTokens, 0),
+		CacheWriteTokens: max(input.CacheWriteTokens, 0),
+		HiveCreditDelta:  -actualCredits,
+		CustomerTags:     reservation.CustomerTags,
 		InternalMetadata: map[string]any{
 			"reservation_id": reservation.ID.String(),
 			// The unused part of the hold, matching the reservation row's
