@@ -245,10 +245,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var finishReason string
 	var completion strings.Builder
 
-	// mintedID feeds SanitizeVariablePriceFrame below: on a variable-price
-	// alias every frame is sanitized independently with no memory of frames
-	// before it, so the id replacement must be minted once per stream here
-	// and reused on every frame, matching the id-stability contract
+	// mintedID feeds SanitizeVariablePriceFrame below, which now sanitizes
+	// every frame of every alias: it has no memory of frames before it, so
+	// the id replacement must be minted once per stream here and reused on
+	// every frame, matching the id-stability contract
 	// inference.SanitizeVariablePriceFrame documents.
 	mintedID := "chatcmpl-" + uuid.New().String()
 
@@ -261,21 +261,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			flush(flusher)
 			continue
 		}
-		// This relay is verbatim by design, which is fine while the upstream
-		// frame carries nothing we must not publish. Enabling usage accounting
-		// for a variable-price alias changes that: the frame then carries our
-		// cost, its breakdown and the model the router actually chose. So that
-		// one route is sanitized before the write, and an unparseable frame is
-		// dropped rather than forwarded, because an unparseable frame is
-		// precisely the one whose contents are unknown.
+		// Every data frame is sanitized before the write, on every alias,
+		// fixed-price included. This used to sanitize the variable-price
+		// case only, on the reasoning that a fixed-price frame carries no
+		// cost data to leak -- true for cost, but every frame still carries
+		// the upstream's own id and, on some providers, system_fingerprint,
+		// which is exactly the same provider-identity leak
+		// inference.SanitizeVariablePriceFrame exists to strip, and
+		// fixed-price is the D-032 norm so this is most of this relay's
+		// traffic (security review finding, PR #1222). An unparseable frame
+		// is dropped rather than forwarded, because an unparseable frame is
+		// precisely the one whose contents are unknown; only [DONE] and
+		// non-data SSE lines (blank lines, event: fields) pass through
+		// untouched, since they carry nothing provider-identifying.
 		isData := bytes.HasPrefix(line, []byte("data: "))
 		payload := bytes.TrimPrefix(line, []byte("data: "))
 		isDone := isData && bytes.Equal(payload, []byte("[DONE]"))
 
-		if isData && !isDone && route.Pricing.IsUpstreamActual() {
+		if isData && !isDone {
 			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel, mintedID)
 			if !sanOK {
-				slog.Warn("session chat: dropping an unparseable upstream frame on a variable-price alias",
+				slog.Warn("session chat: dropping an unparseable upstream frame",
 					"request_id", requestID, "alias", clientModel)
 				continue
 			}

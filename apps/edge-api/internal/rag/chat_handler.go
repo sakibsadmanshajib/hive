@@ -393,6 +393,15 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 
 	var promptTokens, completionTokens, totalTokens int64
 	completed := false
+	// mintedID replaces the upstream's own id on every chunk of this
+	// stream, minted once and reused throughout: the map-based sanitizer
+	// below has no memory of frames before it, and a client-visible id must
+	// stay the same across one stream. Same leak class and same fix as
+	// apps/edge-api/internal/inference's normalize boundary (PR #1222):
+	// this handler's own "provider-blind" design intent already drops
+	// provider/event lines, but the id and system_fingerprint keys survived
+	// inside the generic map because nothing explicitly stripped them.
+	mintedID := "ragchat-" + uuid.New().String()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
 	for scanner.Scan() {
@@ -419,6 +428,10 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 			if _, ok := chunk["model"]; ok {
 				chunk["model"] = alias
 			}
+			if _, ok := chunk["id"]; ok {
+				chunk["id"] = mintedID
+			}
+			delete(chunk, "system_fingerprint")
 			if usage, ok := chunk["usage"].(map[string]any); ok {
 				promptTokens = asInt64(usage["prompt_tokens"])
 				completionTokens = asInt64(usage["completion_tokens"])

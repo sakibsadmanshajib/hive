@@ -313,6 +313,26 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 		t.Errorf("expected relayed chunks rewritten to alias hive-fast, got:\n%s", body)
 	}
 
+	// The upstream's own id ("up-1" in cannedSSEResponse) is provider
+	// identity exactly like a provider name string, and must never reach
+	// the client: every chunk gets a gateway-minted id instead, the same
+	// one reused across both chunks of this stream (PR #1222 finding: this
+	// handler's map-based relay stripped provider names and event lines but
+	// never touched id/system_fingerprint).
+	if strings.Contains(body, "up-1") {
+		t.Errorf("upstream chunk id leaked into the stream:\n%s", body)
+	}
+	idPrefix := `"id":"`
+	start := strings.Index(body, idPrefix)
+	if start == -1 || !strings.HasPrefix(body[start+len(idPrefix):], "ragchat-") {
+		t.Fatalf("expected a minted ragchat- id in the stream, got:\n%s", body)
+	}
+	start += len(idPrefix)
+	mintedID := body[start : start+strings.Index(body[start:], `"`)]
+	if got := strings.Count(body, mintedID); got != 2 {
+		t.Errorf("expected the SAME minted id %q on both chunks of one stream, got %d occurrences:\n%s", mintedID, got, body)
+	}
+
 	// Terminated with [DONE].
 	if !strings.HasSuffix(strings.TrimSpace(body), "data: [DONE]") {
 		t.Errorf("expected stream to end with data: [DONE], got:\n%s", body)

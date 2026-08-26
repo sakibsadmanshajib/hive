@@ -396,25 +396,30 @@ func (o *Orchestrator) executeStreaming(
 					continue
 				}
 			}
-			// Fallback: pass through the original line. Everything that keeps
-			// our cost off this path relies on the typed struct discarding
-			// unknown fields, and this branch is exactly where that protection
-			// is not in force, so a variable-price route sanitizes explicitly
-			// and drops the frame outright if it cannot.
-			if route.Pricing.IsUpstreamActual() {
-				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID, mintedID); sanOK {
-					accumulator.HasForwardedChunk = true
-					fmt.Fprintf(w, "data: %s\n\n", sanitized)
-					flusher.Flush()
-				} else {
-					log.Printf("inference: dropping an unparseable upstream frame on a variable-price alias endpoint=%s alias=%s: forwarding it verbatim would publish our cost and the chosen model",
-						endpoint, aliasID)
-				}
-				continue
+			// Fallback: the typed decode above failed (an upstream frame our
+			// struct can't parse -- the DeepSeek surprise-frame class of
+			// input is exactly what drives a chunk here for real, not a
+			// theoretical case). A fallback that cannot parse a chunk must
+			// not become a fallback that leaks it: every route, fixed-price
+			// included, sanitizes through the SAME map-based path the
+			// variable-price case always used, id-minted and
+			// system_fingerprint-stripped like every other chunk of this
+			// stream. Cost-field stripping is a no-op on a frame that has
+			// none, so one path serves both pricing models rather than
+			// carrying a second, unsanitized one. An unparseable frame is
+			// dropped rather than forwarded, because an unparseable frame is
+			// exactly the one whose contents are unknown -- and unlike the
+			// silent version this replaces, every drop is logged, so an
+			// unsanitized-fallback regression is visible in production
+			// rather than invisible.
+			if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID, mintedID); sanOK {
+				accumulator.HasForwardedChunk = true
+				fmt.Fprintf(w, "data: %s\n\n", sanitized)
+				flusher.Flush()
+			} else {
+				log.Printf("inference: dropping an unparseable upstream frame endpoint=%s alias=%s: forwarding it verbatim would leak upstream identity and, on a variable-price alias, our cost",
+					endpoint, aliasID)
 			}
-			accumulator.HasForwardedChunk = true
-			fmt.Fprintf(w, "%s\n\n", line)
-			flusher.Flush()
 			continue
 		}
 
