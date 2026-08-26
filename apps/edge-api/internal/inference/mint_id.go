@@ -51,13 +51,20 @@ func chunkFinished(chunk ChatCompletionChunk) bool {
 // dropped from the wire rather than relayed to the client, because a
 // terminal finish_reason has already been relayed on an earlier chunk of
 // this same response. The one exception is a genuine usage-only terminal
-// frame delivered after finish_reason by design
-// (stream_options.include_usage): that always forwards.
+// frame delivered after finish_reason by design (stream_options.
+// include_usage): that shape is usage set AND zero choices, matching a real
+// terminal usage frame, and it always forwards. A chunk that carries usage
+// alongside actual choice content is still suppressed -- usage presence
+// alone is not the exception, an empty-choices usage-only shape is.
 //
 // Exists because DeepSeek-family streams via OpenRouter emit one extra
 // empty role/content chunk after finish_reason=stop, before [DONE] -- a
 // strict SSE client that already closed the message on the real finish
 // frame chokes on anything more (parity finding, 2026-08-26).
 func shouldSuppressPostFinishChunk(finishSeen bool, chunk ChatCompletionChunk) bool {
-	return finishSeen && chunk.Usage == nil
+	if !finishSeen {
+		return false
+	}
+	isUsageOnlyTerminalFrame := chunk.Usage != nil && len(chunk.Choices) == 0
+	return !isUsageOnlyTerminalFrame
 }

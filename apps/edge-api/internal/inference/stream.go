@@ -391,7 +391,7 @@ func (o *Orchestrator) executeStreaming(
 			// is not in force, so a variable-price route sanitizes explicitly
 			// and drops the frame outright if it cannot.
 			if route.Pricing.IsUpstreamActual() {
-				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID); sanOK {
+				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID, mintedID); sanOK {
 					accumulator.HasForwardedChunk = true
 					fmt.Fprintf(w, "data: %s\n\n", sanitized)
 					flusher.Flush()

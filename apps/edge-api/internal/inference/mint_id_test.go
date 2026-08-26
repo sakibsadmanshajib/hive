@@ -163,6 +163,21 @@ func TestShouldSuppressPostFinishChunk_DeepSeekSpuriousFrame(t *testing.T) {
 func TestShouldSuppressPostFinishChunk_UsageOnlyTerminalFrameStillForwards(t *testing.T) {
 	usageOnly := ChatCompletionChunk{Usage: &UsageResponse{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11}}
 	if shouldSuppressPostFinishChunk(true, usageOnly) {
-		t.Error("a usage-bearing chunk must never be suppressed, even after finish")
+		t.Error("a usage-only, zero-choices chunk must never be suppressed, even after finish")
+	}
+}
+
+// TestShouldSuppressPostFinishChunk_UsageWithContentStillSuppressed guards
+// against narrowing the exception too far: usage presence alone is not
+// sufficient, only a genuine usage-only (zero choices) terminal shape is. A
+// chunk that carries both usage AND actual choice content after finish is
+// still spurious and must be suppressed.
+func TestShouldSuppressPostFinishChunk_UsageWithContentStillSuppressed(t *testing.T) {
+	usageWithContent := ChatCompletionChunk{
+		Usage:   &UsageResponse{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11},
+		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: strPtr("hi")}}},
+	}
+	if !shouldSuppressPostFinishChunk(true, usageWithContent) {
+		t.Error("a chunk with usage AND non-empty choices after finish must still be suppressed")
 	}
 }

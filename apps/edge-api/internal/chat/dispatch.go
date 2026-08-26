@@ -245,6 +245,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var finishReason string
 	var completion strings.Builder
 
+	// mintedID feeds SanitizeVariablePriceFrame below: on a variable-price
+	// alias every frame is sanitized independently with no memory of frames
+	// before it, so the id replacement must be minted once per stream here
+	// and reused on every frame, matching the id-stability contract
+	// inference.SanitizeVariablePriceFrame documents.
+	mintedID := "chatcmpl-" + uuid.New().String()
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -266,7 +273,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isDone := isData && bytes.Equal(payload, []byte("[DONE]"))
 
 		if isData && !isDone && route.Pricing.IsUpstreamActual() {
-			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel)
+			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel, mintedID)
 			if !sanOK {
 				slog.Warn("session chat: dropping an unparseable upstream frame on a variable-price alias",
 					"request_id", requestID, "alias", clientModel)

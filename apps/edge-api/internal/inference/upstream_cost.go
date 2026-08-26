@@ -201,7 +201,8 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 }
 
 // SanitizeVariablePriceFrame strips the fields a cost-reporting upstream adds
-// that must never reach a customer, and rewrites the model to the alias.
+// that must never reach a customer, rewrites the model to the alias, and
+// replaces the upstream id with the caller's mintedID.
 //
 // Both streaming relays need this and for the same reason. Turning on usage
 // accounting is what makes the upstream put its own cost, its cost breakdown
@@ -211,10 +212,16 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 // unmarshalling discards what it does not declare, but its raw-line fallback is
 // not, and apps/edge-api/internal/chat relays every line verbatim by design.
 //
+// mintedID must be the SAME value the caller mints once per stream and
+// reuses on every other chunk (mintCompletionID), never a fresh id per call:
+// this function sanitizes one frame at a time with no memory of the frames
+// before it, so a caller that minted a fresh id here would break the
+// id-stability contract the moment this fallback fires mid-stream.
+//
 // ok is false when the frame cannot be parsed. The caller must then DROP the
 // frame rather than forward it, because an unparseable frame is exactly the one
 // whose contents are unknown.
-func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
+func SanitizeVariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool) {
 	var frame map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &frame); err != nil {
 		return nil, false
@@ -223,18 +230,21 @@ func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
 	// Provider identity and our own cost. Deleting by key rather than
 	// rebuilding from a typed struct keeps every field the client legitimately
 	// needs, including ones this package does not model, such as tool calls.
-	//
-	// id and system_fingerprint are the same provider-identity leak the typed
-	// relay mints a replacement for (mintCompletionID): OpenRouter's own
-	// "gen-*" id shape and Groq's system_fingerprint both leak upstream
-	// identity verbatim. This map-based path has no per-stream state to mint
-	// a stable replacement from (each frame is sanitized independently, by
-	// both this package's own fallback and apps/edge-api/internal/chat's
-	// verbatim relay), so it drops both keys outright rather than emit an
-	// inconsistent id across chunks of the same stream.
 	delete(frame, "provider")
 	delete(frame, "system_fingerprint")
-	delete(frame, "id")
+
+	// id is the same provider-identity leak the typed relay mints a
+	// replacement for (mintCompletionID): OpenRouter's own "gen-*" id shape
+	// leaks upstream identity verbatim. Rewrite rather than delete, using
+	// the caller's stream-stable mintedID, so a client never sees a chunk
+	// missing its id, or a stream where the id changes mid-flight.
+	if _, present := frame["id"]; present {
+		id, err := json.Marshal(mintedID)
+		if err != nil {
+			return nil, false
+		}
+		frame["id"] = id
+	}
 
 	if rawUsage, present := frame["usage"]; present {
 		var usage map[string]json.RawMessage
