@@ -36,7 +36,11 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/cn";
-import { formatCredits, formatPercent } from "@/lib/format/credits";
+import {
+  formatCredits,
+  formatNumber,
+  formatPercent,
+} from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 interface AnalyticsPageProps {
@@ -324,7 +328,7 @@ export default async function AnalyticsPage({
                   note={
                     blendedCreditsPerMillion === null
                       ? "No tokens served in this window."
-                      : `${formatCredits(blendedCreditsPerMillion)} credits. Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in.`
+                      : `${formatNumber(blendedCreditsPerMillion)} credits. Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in.`
                   }
                   testId="blended-credits-per-million"
                 />
