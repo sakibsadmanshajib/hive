@@ -2250,7 +2250,11 @@
 					break;
 				}
 				steps = foldRunSteps(steps, events);
-				cursor = latestStepSeq(steps);
+				// Advanced from the PAGE, not from the folded lines. An event
+				// that renders no line (a status row repeating the task's own
+				// state, which is most of them) would otherwise leave the cursor
+				// behind it and be re-read on every poll for the rest of the run.
+				cursor = Math.max(cursor, ...events.map((event) => event.seq));
 				if (events.length < EVENT_PAGE_SIZE) {
 					break;
 				}
