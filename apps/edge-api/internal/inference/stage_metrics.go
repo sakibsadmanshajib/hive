@@ -54,6 +54,10 @@ var (
 		Name: "hive_stream_usage_block_missing_total",
 		Help: "Streams that delivered output while the upstream sent no usable usage block; settled at the reservation hold instead of an estimate or zero (#1215, D-034). A rising rate means a provider stopped honouring stream_options.include_usage or shipped unparseable usage frames.",
 	}, []string{"alias", "endpoint"})
+	zeroContentCaptureTrips = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_zero_content_captured_total",
+		Help: "Sync chat completions that returned no visible content even after one retry and settled fail-closed by capturing the reservation hold instead of full price (issue #1171), by alias and endpoint.",
+	}, []string{"alias", "endpoint"})
 )
 
 // Stage names. Fixed set, so the label stays low cardinality and a dashboard

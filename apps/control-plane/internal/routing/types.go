@@ -64,6 +64,13 @@ type RouteCandidate struct {
 	SupportsSTT             bool
 	SupportsBatch           bool
 	SupportsTools           bool
+
+	// ReasoningReserveTokens is provider_routes.reasoning_reserve_tokens: the
+	// per-member headroom this member's upstream may spend on hidden
+	// reasoning before visible content starts (issue #1171). Zero means the
+	// member does not reason (or no reserve was set), and its deployments
+	// keep exactly the ceiling the caller asked for.
+	ReasoningReserveTokens int
 }
 
 type SelectionResult struct {
@@ -115,4 +122,16 @@ type SelectionResult struct {
 	// (supabase/migrations/20260801_13_alias_price_unit.sql), so a
 	// single-quantity modality has exactly one price.
 	PriceUnit string `json:"price_unit"`
+
+	// ReasoningReserveTokens is the largest per-member reasoning reserve
+	// (provider_routes.reasoning_reserve_tokens, issue #1171) across every
+	// eligible route sharing this selection's litellm_model_name. LiteLLM
+	// load-balances the whole group under that one name, so edge-api cannot
+	// know which member will serve before dispatch; the pool maximum is what
+	// makes headroom hold no matter which member answers. A reasoning member
+	// burns hidden tokens against the ceiling it is sent; inflating that
+	// ceiling by this figure lets visible content survive the caller's own
+	// budget. Zero (the default for every non-reasoning alias) means dispatch
+	// the caller's max_tokens untouched.
+	ReasoningReserveTokens int `json:"reasoning_reserve_tokens"`
 }
