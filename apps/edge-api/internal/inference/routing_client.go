@@ -99,6 +99,18 @@ type SelectRouteResult struct {
 	// whichever candidate route serves it (D-032).
 	Pricing   SelectRoutePricing `json:"pricing"`
 	PriceUnit string             `json:"price_unit"`
+
+	// ReasoningReserveTokens mirrors control-plane's
+	// routing.SelectionResult.reasoning_reserve_tokens (issue #1171): the
+	// largest per-member reasoning reserve across every eligible route sharing
+	// this selection's litellm_model_name. LiteLLM load-balances that whole
+	// group under the one name, so edge-api cannot know which member answers
+	// before it dispatches; when this figure is positive,
+	// executeSync/executeStreaming inflate the completion ceiling they send
+	// upstream by it, so hidden reasoning spends the reserve instead of
+	// starving visible content out of the caller's own budget. Zero means the
+	// caller's max_tokens goes through untouched.
+	ReasoningReserveTokens int `json:"reasoning_reserve_tokens"`
 }
 
 // Pricing modes, mirroring control-plane's catalog.PricingMode* constants and
