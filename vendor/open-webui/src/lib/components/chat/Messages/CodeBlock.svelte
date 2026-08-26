@@ -558,9 +558,11 @@
 							value={code}
 							{id}
 							{lang}
-							onSave={() => {
-								saveCode();
-							}}
+							onSave={save
+								? () => {
+										saveCode();
+									}
+								: () => {}}
 							onChange={(value) => {
 								_code = value;
 							}}

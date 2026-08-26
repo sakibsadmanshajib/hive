@@ -103,7 +103,7 @@ export function resolveDisplayName(
 	name: string | null | undefined,
 	email: string | null | undefined
 ): string {
-	const trimmedName = (name ?? '').trim();
+	const trimmedName = sanitize((name ?? '').trim()).trim();
 	const trimmedEmail = (email ?? '').trim();
 
 	const nameLooksLikeEmail = trimmedName.includes('@');

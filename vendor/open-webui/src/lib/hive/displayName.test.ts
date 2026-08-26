@@ -47,6 +47,13 @@ describe('resolveDisplayName', () => {
 		expect(resolveDisplayName('Sakib Shajib', 'sakib@example.com')).toBe('Sakib Shajib');
 	});
 
+	it('strips bidirectional-override characters from an accepted server name', () => {
+		const hostile = 'Sakib‮evil';
+		const result = resolveDisplayName(hostile, 'sakib@example.com');
+		expect(result).not.toContain('‮');
+		expect(result).toBe('Sakibevil');
+	});
+
 	it('never returns the raw email address when name is empty', () => {
 		const result = resolveDisplayName('', 'qa-tester@hive.test');
 		expect(result).not.toBe('qa-tester@hive.test');
