@@ -236,6 +236,11 @@ type internalFinalizeReservationRequest struct {
 	Status                 string `json:"status"`
 	InputTokens            int64  `json:"input_tokens"`
 	OutputTokens           int64  `json:"output_tokens"`
+	// CacheReadTokens and CacheWriteTokens carry the prompt's cache components
+	// into the rollup write (#1174). Optional: an older edge-api that omits
+	// them settles exactly as before, with zeroes in the rollup.
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 type internalReleaseReservationRequest struct {
@@ -309,6 +314,8 @@ func (h *Handler) handleInternalFinalizeReservation(w http.ResponseWriter, r *ht
 		Status:                 req.Status,
 		InputTokens:            req.InputTokens,
 		OutputTokens:           req.OutputTokens,
+		CacheReadTokens:        req.CacheReadTokens,
+		CacheWriteTokens:       req.CacheWriteTokens,
 	})
 	if err != nil {
 		writeAccountingError(w, err)

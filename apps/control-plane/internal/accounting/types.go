@@ -75,6 +75,14 @@ type FinalizeReservationInput struct {
 	// settles exactly as before, with zeroes.
 	InputTokens  int64
 	OutputTokens int64
+	// CacheReadTokens and CacheWriteTokens are the cache components of the
+	// prompt behind ActualCredits (#1174). The gateway meters and prices them
+	// (#1157); without these fields the finalize path dropped both counts on
+	// the floor and public.api_key_usage_rollups accumulated zeroes in exactly
+	// the token classes that dominate agent traffic. Optional like their
+	// siblings: omitted means zero, never an error.
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 type ReleaseReservationInput struct {

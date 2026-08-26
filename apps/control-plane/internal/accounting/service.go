@@ -443,13 +443,15 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -heldCredits, actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
-		// Cache read/write token counts are not yet threaded into
-		// FinalizeReservationInput from either finalize HTTP path (see
-		// finalizeReservationRequest / internalFinalizeReservationRequest);
-		// they stay zero here until a caller can actually supply them. Input
-		// and output tokens ARE available on input (used two calls above, for
-		// the completed usage event) and must not be dropped the same way.
-		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, max(input.InputTokens, 0), max(input.OutputTokens, 0), 0, 0, actualCredits, at); err != nil {
+		// The cache components ride in on FinalizeReservationInput like their
+		// input/output siblings (#1174): edge-api threads them from the same
+		// metered usage block that priced ActualCredits, so
+		// public.api_key_usage_rollups carries real cache_read/write counts
+		// instead of the permanent zeroes #1173 left behind. Clamped like every
+		// other token count entering the ledger surfaces. The customer-facing
+		// finalize request still carries no token fields at all; widening it is
+		// a separate decision with no caller today.
+		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, max(input.InputTokens, 0), max(input.OutputTokens, 0), max(input.CacheReadTokens, 0), max(input.CacheWriteTokens, 0), actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: record usage finalization: %w", err)
 		}
 		if err := s.apiKeySvc.MarkLastUsed(ctx, *attempt.APIKeyID, at); err != nil {

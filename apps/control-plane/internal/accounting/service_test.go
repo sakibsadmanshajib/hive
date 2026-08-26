@@ -877,6 +877,95 @@ func TestFinalizeReservationUsageRollupCarriesMeteredTokens(t *testing.T) {
 	}
 }
 
+// TestFinalizeReservationUsageRollupCarriesCacheTokens extends the guard above
+// (#1173) to the cache halves of the rollup write (#1174):
+// RecordUsageFinalization must forward the metered cache read/write counts
+// from FinalizeReservationInput into public.api_key_usage_rollups instead of
+// the literal zeroes it used to write, and it must stay backward compatible:
+// a caller that omits the fields settles exactly as before.
+func TestFinalizeReservationUsageRollupCarriesCacheTokens(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
+	usageSvc := &usageStub{}
+	apiKeyID := uuid.New()
+	apiKeySvc := &apiKeyStub{
+		budgetKindByKey: map[uuid.UUID]string{apiKeyID: "lifetime"},
+	}
+	svc := NewService(repo, ledgerSvc, usageSvc, apiKeySvc)
+
+	accountID := uuid.New()
+	reservation, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_rollup_cache_tokens",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 100,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+
+	_, err = svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          35,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+		InputTokens:            205_000,
+		OutputTokens:           2_000,
+		CacheReadTokens:        200_000,
+		CacheWriteTokens:       4_000,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if len(apiKeySvc.finalizationCalls) != 1 {
+		t.Fatalf("expected one usage rollup update, got %#v", apiKeySvc.finalizationCalls)
+	}
+	got := apiKeySvc.finalizationCalls[0]
+	if got.cacheReadTokens != 200_000 {
+		t.Fatalf("expected the rollup to carry the metered cache-read tokens (200000), got %d: the count silently dropped to zero", got.cacheReadTokens)
+	}
+	if got.cacheWriteTokens != 4_000 {
+		t.Fatalf("expected the rollup to carry the metered cache-write tokens (4000), got %d: the count silently dropped to zero", got.cacheWriteTokens)
+	}
+
+	// A caller that does not know about the cache fields settles exactly as
+	// before: omitted means zero, never a fabricated count or an error.
+	reservation2, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_rollup_cache_tokens_omitted",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 100,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+	if _, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:     accountID,
+		ReservationID: reservation2.ID,
+		ActualCredits: 10,
+		Status:        string(usage.AttemptStatusCompleted),
+	}); err != nil {
+		t.Fatalf("FinalizeReservation (no cache fields) returned error: %v", err)
+	}
+	if len(apiKeySvc.finalizationCalls) != 2 {
+		t.Fatalf("expected two usage rollup updates, got %#v", apiKeySvc.finalizationCalls)
+	}
+	omitted := apiKeySvc.finalizationCalls[1]
+	if omitted.cacheReadTokens != 0 || omitted.cacheWriteTokens != 0 {
+		t.Fatalf("expected omitted cache fields to settle as zeroes, got read=%d write=%d", omitted.cacheReadTokens, omitted.cacheWriteTokens)
+	}
+}
+
 func TestBudgetProjectionCountsOpenReservations(t *testing.T) {
 	repo := newRepoStub()
 	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
