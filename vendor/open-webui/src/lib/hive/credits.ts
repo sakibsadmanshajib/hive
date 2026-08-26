@@ -5,7 +5,7 @@
 export const DEFAULT_CREDITS_API_BASE_URL = '/api/v1/hive/credits';
 
 export interface CreditBalance {
-	/** Whole credits left on the tenant billing account (100000 credits = $1). */
+	/** Whole credits left on the tenant billing account (1,000,000,000 credits = $1, D-046). */
 	available_credits: number;
 	/** Usage charges posted since midnight UTC today. */
 	usage_today_credits: number;
@@ -18,8 +18,24 @@ export interface CreditBalance {
 
 export type CreditState = 'healthy' | 'low' | 'empty';
 
-/** 50000 credits = $0.50 at CREDITS_PER_USD = 100000. Below this reads as low. */
-export const LOW_CREDITS_THRESHOLD = 50_000;
+/**
+ * One US dollar equals one billion Hive credits (`.wolf/decisions.md`
+ * D-046, migration `20260823_40_credit_unit_rescale_billion.sql`). Ported
+ * from `apps/web-console/lib/format/model-pricing.ts`'s `CREDITS_PER_USD`,
+ * the source of truth for this conversion: the two cannot share a module
+ * across the Node/Next.js console and this separate SvelteKit chat build, so
+ * keep any future rate change in sync by hand.
+ */
+export const CREDITS_PER_USD = 1_000_000_000;
+
+/**
+ * 500,000,000 credits = $0.50 at CREDITS_PER_USD above. Below this reads as
+ * low. Was 50,000 (=$0.50 at the pre-D-046 rate of 100,000 credits per
+ * dollar); left unscaled through the D-046 rescale, this threshold could
+ * never trip again at the new credit magnitude, silently disabling the
+ * low/empty banner states.
+ */
+export const LOW_CREDITS_THRESHOLD = 500_000_000;
 
 export function creditState(available: number): CreditState {
 	if (!Number.isFinite(available) || available <= 0) return 'empty';
@@ -27,9 +43,31 @@ export function creditState(available: number): CreditState {
 	return 'healthy';
 }
 
-export function formatCredits(amount: number): string {
-	if (!Number.isFinite(amount)) return '0';
-	return Math.round(amount).toLocaleString('en-US');
+/**
+ * Render a credit balance as US dollars for the composer banner, rather than
+ * the raw billions-scale integer the credit unit rescale (D-046) turned every
+ * balance into ("9,789,478,244 remaining" told a customer nothing).
+ *
+ * Ported from `apps/web-console/lib/format/model-pricing.ts`'s
+ * `formatUsdFromCredits`, including its honesty invariant: an explicit zero
+ * renders as the literal `$0`, and precision scales with magnitude so a real,
+ * non-zero balance never rounds down to that same string. Source of truth is
+ * the ported function; keep the two in sync by hand, see the module comment
+ * above for why they cannot share code.
+ */
+export function formatUsdFromCredits(credits: number): string {
+	if (!Number.isFinite(credits) || credits === 0) {
+		return '$0';
+	}
+	const usd = credits / CREDITS_PER_USD;
+	const magnitude = Math.floor(Math.log10(Math.abs(usd)));
+	const maximumFractionDigits = Math.min(9, Math.max(2, 2 - magnitude));
+	return new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		minimumFractionDigits: 2,
+		maximumFractionDigits
+	}).format(usd);
 }
 
 /**
