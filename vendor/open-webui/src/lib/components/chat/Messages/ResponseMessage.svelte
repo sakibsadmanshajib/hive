@@ -803,6 +803,12 @@
 							{:else if hasResponseContent && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
+								<!--
+									save is explicit false, not `!readOnly` as upstream has it: that
+									expression is why CodeBlock.svelte's own default-off `save` prop
+									never took effect on a real message, this call site overrode it.
+									Hive does not ship a code-block save-back flow.
+								-->
 								<ContentRenderer
 									id={`${chatId}-${message.id}`}
 									content={message.content}
@@ -811,7 +817,7 @@
 									floatingButtons={message?.done &&
 										!readOnly &&
 										($settings?.showFloatingActionButtons ?? true)}
-									save={!readOnly}
+									save={false}
 									preview={!readOnly}
 									{editCodeBlock}
 									{topPadding}

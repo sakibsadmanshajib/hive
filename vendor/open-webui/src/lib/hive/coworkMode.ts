@@ -258,13 +258,19 @@ const toolLabel = (payload: Record<string, unknown>, verb: string): string => {
 
 /**
  * The sentence one event becomes, or null when it says nothing a person can
- * read that the turn is not already saying.
+ * read, or nothing a person should have to read.
  *
- * Only two kinds return null, and neither is a dropped event: a `status` row
- * carrying the task's own status duplicates the turn's state, which is
- * rendered from the task itself and would otherwise appear twice, and a
- * `message` with an empty preview has no text to show. Everything else,
- * including a kind this build has never heard of, produces a line.
+ * Four cases return null. None of them silently drop information the user
+ * needed: a `status` row carrying the task's own status duplicates the
+ * turn's state, which is rendered from the task itself and would otherwise
+ * appear twice; a `message` with an empty preview has no text to show; and a
+ * `status` row that is neither a sandbox event nor a task-status echo, or an
+ * event kind this build has never heard of, has no readable content at all.
+ * That last pair used to render the literal apology "An update this version
+ * of Hive cannot read.", which reached real users as a junk line in an
+ * otherwise normal step list and told them nothing actionable. Filtered
+ * instead, same as the other two null cases: an unreadable step is not
+ * information.
  */
 export const describeEvent = (event: TaskEvent): string | null => {
 	const payload = event.payload;
@@ -304,10 +310,15 @@ export const describeEvent = (event: TaskEvent): string | null => {
 			if (asString(payload, 'status') !== '') {
 				return null;
 			}
-			return 'An update this version of Hive cannot read.';
+			// Neither a sandbox event nor a task-status echo: nothing readable
+			// left in this row. Filtered, not apologized for.
+			return null;
 		}
 		default:
-			return 'An update this version of Hive cannot read.';
+			// A kind this build has never heard of. Filtered rather than shown
+			// as an apology: a step the user cannot act on does not belong in
+			// the step list at all.
+			return null;
 	}
 };
 

@@ -282,9 +282,17 @@ describe('describeEvent', () => {
 		expect(
 			describeEvent(event({ kind: 'status', payload: { sandbox_kind: 'CondenserEvent' } }))
 		).toBe('Sandbox event: CondenserEvent');
-		expect(describeEvent(event({ kind: 'unknown', payload: {} }))).toBe(
-			'An update this version of Hive cannot read.'
-		);
+	});
+
+	it('filters an event kind this build has never heard of, rather than apologizing', () => {
+		// Used to render the literal string "An update this version of Hive
+		// cannot read.", which reached real users as a junk line in the step
+		// list. Filtered out (null) instead, same as any other unreadable row.
+		expect(describeEvent(event({ kind: 'unknown', payload: {} }))).toBeNull();
+	});
+
+	it('filters a status row that is neither a sandbox event nor a task-status echo', () => {
+		expect(describeEvent(event({ kind: 'status', payload: {} }))).toBeNull();
 	});
 
 	it('names a workspace file', () => {

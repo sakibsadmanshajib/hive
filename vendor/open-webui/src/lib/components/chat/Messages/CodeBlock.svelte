@@ -35,8 +35,19 @@
 	export let onUpdate = (e) => {};
 	export let onPreview = (e) => {};
 
+	// Both default off: Hive does not ship a Python execution sandbox (no
+	// Jupyter, no Pyodide file persistence path) or a code-block save-back
+	// flow, so both stock Open WebUI affordances stay hidden unless a caller
+	// opts back in explicitly. `run={true}` has no caller (grep for `run={`
+	// across vendor/open-webui/src): the two existing overrides
+	// (CodeExecutionModal, FileItemModal) already pass `run={false}` for a
+	// read-only "here is what already ran" view. `save` needed the same
+	// belt-and-braces default flip: `ResponseMessage.svelte` passed
+	// `save={!readOnly}` for the live message tree, which shadowed this
+	// default on every real assistant turn; that call site is now pinned to
+	// `save={false}` explicitly, see its own comment.
 	export let save = false;
-	export let run = true;
+	export let run = false;
 	export let preview = false;
 	export let collapsed = false;
 
@@ -547,9 +558,11 @@
 							value={code}
 							{id}
 							{lang}
-							onSave={() => {
-								saveCode();
-							}}
+							onSave={save
+								? () => {
+										saveCode();
+									}
+								: () => {}}
 							onChange={(value) => {
 								_code = value;
 							}}

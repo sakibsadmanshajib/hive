@@ -1,0 +1,19 @@
+GET /auth -> http://localhost:23003/auth
+clicked onboarding Get started
+after signup -> http://localhost:23003/
+greeting text: Good morning, Qa Tester
+credits banner text: You've used $0.000396 today · $9.79 remaining
+import chat -> 200 [{"id":"8f0cc825-8abe-4ddb-9a71-51f52b734679","user_id":"74ad97ba-deb9-4628-9095-b1c48d5ef1d1","title":"Verify items 3 and 4","chat":{"id":"w0verify-synthetic-1","title":"Verify items 3 and 4","models":["hive-default"],"messages":[],"history":{"currentId":"asst-1","messages":{"user-1":{"id":"user-1"
+imported chat id: 8f0cc825-8abe-4ddb-9a71-51f52b734679
+run-code-button count: 0
+save-code-button count: 0
+
+--- re-verification after rebase onto main (27a4b31c5), 2026-08-26 ---
+GET /auth -> http://localhost:23004/auth
+mode: signup (onboarding)
+after sign-in/signup -> http://localhost:23004/
+greeting text: Good morning, Qa Tester
+credits banner text: You've used $0.000396 today · $9.79 remaining
+imported chat id: 9dc04018-52e4-4b7c-bbf6-c861ccc88c3f
+run-code-button count: 0
+save-code-button count: 0

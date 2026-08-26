@@ -369,12 +369,18 @@
 				<div class="w-full">
 					<div class="flex {($settings?.chatBubble ?? true) ? 'justify-end pb-1' : 'w-full'}">
 						<div
-							class="rounded-3xl {($settings?.chatBubble ?? true)
-								? `max-w-[90%] px-4 py-1.5  bg-gray-50 dark:bg-gray-850 ${
-										message.files ? 'rounded-tr-lg' : ''
-									}`
+							class="{($settings?.chatBubble ?? true)
+								? 'max-w-[90%] px-4 py-1.5'
 								: ' w-full'}"
 						>
+							<!--
+								Unfilled by design: stock Open WebUI renders this as a solid
+								bg-gray-50/dark:bg-gray-850 pill. The reference transcript has
+								no chat-bubble chrome on the user turn, right alignment and
+								the max-width constraint are what read as "a message", not a
+								fill. Keep the width/alignment envelope from chatBubble, drop
+								only the paint.
+							-->
 							{#if message.content}
 								{#if $settings?.renderMarkdownInUserMessages ?? true}
 									<Markdown

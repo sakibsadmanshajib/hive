@@ -1,9 +1,10 @@
 import { APP_NAME } from '$lib/constants';
-import { type Writable, writable } from 'svelte/store';
+import { type Writable, type Updater, writable } from 'svelte/store';
 import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
 import type { AudioQueue } from '$lib/utils/audio';
+import { resolveDisplayName } from '$lib/hive/displayName';
 
 import emojiShortCodes from '$lib/emoji-shortcodes.json';
 
@@ -16,7 +17,31 @@ export const WEBUI_VERSION = writable(null);
 export const WEBUI_DEPLOYMENT_ID = writable(null);
 
 export const config: Writable<Config | undefined> = writable(undefined);
-export const user: Writable<SessionUser | undefined> = writable(undefined);
+
+/*
+ * `user` wraps a plain writable so `name` is normalized on every write, not
+ * only at initial session load. See lib/hive/displayName.ts for why: the
+ * backend's own derive-on-signup fix (hive_display_name.py) only covers new
+ * OAuth signups, not an already-provisioned account or a local
+ * email/password account, so a raw email can still reach this store from any
+ * of its several write sites. Every current one (routes/auth/+page.svelte,
+ * routes/+layout.svelte, chat/Settings/Account.svelte,
+ * layout/Sidebar/UserMenu.svelte) calls `user.set(...)` with whatever the
+ * backend returned; wrapping `set`/`update` here is the one place all of them
+ * converge, so none of them need their own guard and a future call site gets
+ * one for free.
+ */
+const rawUser: Writable<SessionUser | undefined> = writable(undefined);
+
+const normalizeSessionUser = (value: SessionUser | undefined): SessionUser | undefined =>
+	value ? { ...value, name: resolveDisplayName(value.name, value.email) } : value;
+
+export const user: Writable<SessionUser | undefined> = {
+	subscribe: rawUser.subscribe,
+	set: (value: SessionUser | undefined) => rawUser.set(normalizeSessionUser(value)),
+	update: (updater: Updater<SessionUser | undefined>) =>
+		rawUser.update((current) => normalizeSessionUser(updater(current)))
+};
 
 // Electron App
 export const isApp = writable(false);

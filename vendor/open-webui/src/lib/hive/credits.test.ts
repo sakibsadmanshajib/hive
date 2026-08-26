@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
 	creditState,
 	CREDITS_DISMISS_KEY,
+	CREDITS_PER_USD,
 	creditsDismissed,
 	dismissCredits,
-	fetchCreditBalance
+	fetchCreditBalance,
+	formatUsdFromCredits,
+	LOW_CREDITS_THRESHOLD
 } from './credits';
 
 describe('creditState', () => {
@@ -15,8 +18,38 @@ describe('creditState', () => {
 	});
 
 	it('low below the threshold, healthy at and above it', () => {
-		expect(creditState(49_999)).toBe('low');
-		expect(creditState(50_000)).toBe('healthy');
+		expect(creditState(LOW_CREDITS_THRESHOLD - 1)).toBe('low');
+		expect(creditState(LOW_CREDITS_THRESHOLD)).toBe('healthy');
+	});
+
+	it('threshold is $0.50 at the D-046 credit unit (1 USD = 1e9 credits)', () => {
+		// Pinned to the actual scale rather than a bare literal, so a future
+		// credit-unit rescale that forgets to update this threshold shows up as
+		// a failing assertion here instead of a banner that never goes low.
+		expect(LOW_CREDITS_THRESHOLD).toBe(0.5 * CREDITS_PER_USD);
+	});
+});
+
+describe('formatUsdFromCredits', () => {
+	it('renders the literal $0 for an explicit zero, never an absence', () => {
+		expect(formatUsdFromCredits(0)).toBe('$0');
+	});
+
+	it('renders a whole-dollar balance cleanly', () => {
+		expect(formatUsdFromCredits(9_789_478_244)).toBe('$9.79');
+	});
+
+	it('never rounds a real non-zero balance down to $0.00', () => {
+		// The exact regression this replaces: a raw integer credit count. A
+		// tiny but real balance must still read as a non-zero dollar figure.
+		const result = formatUsdFromCredits(395_640);
+		expect(result).not.toBe('$0.00');
+		expect(result).not.toBe('$0');
+	});
+
+	it('never throws on non-finite input, and treats it as $0', () => {
+		expect(formatUsdFromCredits(Number.NaN)).toBe('$0');
+		expect(formatUsdFromCredits(Number.POSITIVE_INFINITY)).toBe('$0');
 	});
 });
 
