@@ -54,10 +54,10 @@ func TestExecuteResponsesStreaming_ClientDisconnect_SettlesDeliveredTokensDespit
 		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled context; calls seen: %+v", rec.calls)
 	}
 	actual, _ := body["actual_credits"].(float64)
-	if actual <= 0 {
-		t.Errorf("actual_credits = %v, want > 0 (content was delivered)", body["actual_credits"])
+	if int64(actual) != 10000 {
+		t.Errorf("actual_credits = %v, want 10000: with actuals unavailable the reservation hold is captured in full (#1215), never an undercharge", body["actual_credits"])
 	}
-	if int64(actual) == 10000 {
-		t.Error("actual_credits must not fall back to the flat 10000 estimate")
+	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
+		t.Error("terminal_usage_confirmed must be false: no real usage arrived")
 	}
 }

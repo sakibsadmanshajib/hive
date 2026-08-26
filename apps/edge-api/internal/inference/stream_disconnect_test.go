@@ -344,8 +344,9 @@ func waitDone(t *testing.T, done <-chan struct{}) {
 // is the primary regression guard: it reproduces the exact bug shape from the
 // investigation (dispatch and settlement sharing a request context that the
 // client disconnect cancels) and asserts that settlement still reaches the
-// control-plane, charging for what was actually delivered -- not the flat
-// 10000 estimate, and not zero.
+// control-plane despite a dead context. Since #1215 the unconfirmed charge is
+// the full reservation hold: actuals unavailable means capture the estimate,
+// never an undercharge and never zero.
 func TestExecuteStreaming_ClientDisconnect_SettlesDeliveredTokensDespiteCancelledContext(t *testing.T) {
 	rec := &accountingRecorder{}
 	acctSrv := newAccountingMock(rec)
@@ -385,11 +386,8 @@ func TestExecuteStreaming_ClientDisconnect_SettlesDeliveredTokensDespiteCancelle
 	}
 
 	actual, _ := body["actual_credits"].(float64)
-	if actual <= 0 {
-		t.Errorf("actual_credits = %v, want > 0 (content was delivered)", body["actual_credits"])
-	}
-	if int64(actual) == 10000 {
-		t.Error("actual_credits must not fall back to the flat 10000 estimate")
+	if int64(actual) != 10000 {
+		t.Errorf("actual_credits = %v, want 10000: with actuals unavailable the reservation hold is captured in full (#1215), never an undercharge", body["actual_credits"])
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: upstream never sent a real usage block")

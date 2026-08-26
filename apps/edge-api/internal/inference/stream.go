@@ -41,7 +41,16 @@ type UsageAccumulator struct {
 	FreshInputTokens int64
 	TotalTokens      int64
 	HasUsage         bool
-	Content          strings.Builder
+	// HasForwardedChunk records whether at least one upstream data chunk was
+	// relayed to the caller through any relay branch -- typed, sanitized, or
+	// verbatim pass-through. It is the delivery signal that does not depend on
+	// anything accumulating: a frame whose JSON fails to parse into
+	// ChatCompletionChunk still reaches the customer through the pass-through,
+	// and a tool-call-only turn forwards real work while accumulating no
+	// visible content. Without it both shapes settle at zero and get filed as
+	// upstream_error over a fully delivered response (#1215).
+	HasForwardedChunk bool
+	Content           strings.Builder
 	// RawUsageChunk is the VERBATIM bytes of the last streamed chunk that
 	// carried a usage object. It exists because ChatCompletionChunk is a typed
 	// struct and unmarshalling into it silently discards every field we did
@@ -332,6 +341,7 @@ func (o *Orchestrator) executeStreaming(
 				// Re-marshal sanitized chunk
 				sanitized, marshalErr := json.Marshal(chunk)
 				if marshalErr == nil {
+					accumulator.HasForwardedChunk = true
 					fmt.Fprintf(w, "data: %s\n\n", sanitized)
 					flusher.Flush()
 					continue
@@ -344,6 +354,7 @@ func (o *Orchestrator) executeStreaming(
 			// and drops the frame outright if it cannot.
 			if route.Pricing.IsUpstreamActual() {
 				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID); sanOK {
+					accumulator.HasForwardedChunk = true
 					fmt.Fprintf(w, "data: %s\n\n", sanitized)
 					flusher.Flush()
 				} else {
@@ -352,6 +363,7 @@ func (o *Orchestrator) executeStreaming(
 				}
 				continue
 			}
+			accumulator.HasForwardedChunk = true
 			fmt.Fprintf(w, "%s\n\n", line)
 			flusher.Flush()
 			continue
@@ -417,9 +429,11 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // alias's catalog price applied to real usage tokens when the upstream
 // confirmed them, otherwise to a content-based token estimate. There is no
 // estimatedCredits fallback here on purpose -- an unconfirmed usage block must
-// never turn into a flat, hardcoded overcharge. delivered is false only when
-// nothing was produced at all; the caller must release the reservation in full
-// rather than charge in that case.
+// never turn into a flat, hardcoded overcharge AT THIS FUNCTION'S LEVEL: the
+// estimate it returns on an unconfirmed stream is superseded by settleStream,
+// which since #1215 captures the reservation hold instead of settling the
+// undercharge. delivered is false only when nothing was produced at all; the
+// caller must release the reservation in full rather than charge in that case.
 //
 // Both branches go through the same catalog conversion (#688), so an
 // unconfirmed estimate is priced exactly like a confirmed measurement and only
@@ -506,7 +520,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	var credits int64
 	var confirmed, delivered bool
 	if route.Pricing.IsUpstreamActual() {
-		// No catalog price exists for this alias, so the charge comes from the
+		// No catalog price exists for this alias, since the charge comes from the
 		// cost the upstream reported in its terminal usage chunk. A failed
 		// read settles at the hold rather than at zero; see
 		// UpstreamActualSettlement.
@@ -525,6 +539,16 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	} else {
 		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
 	}
+
+	// A frame reached the caller even though nothing accumulated: an
+	// unparseable chunk forwarded through the verbatim pass-through, or a
+	// tool-call-only turn whose deltas AccumulateContent ignores. The response
+	// was served, so it bills (#1215); with no accumulated quantity to price,
+	// the hold capture below is the only billable figure left.
+	if !delivered && acc.HasForwardedChunk {
+		delivered = true
+	}
+
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		if reqCtx.Err() != nil {
@@ -558,15 +582,21 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		return true
 	}
 
-	// Mirrors the synchronous path's own line in orchestrator.go. The charge
-	// still lands, priced from a content estimate rather than measured
-	// tokens, and control-plane clamps it at the hold and files a
-	// reconciliation job that nothing drains today (issue #925). This line
-	// is the only signal that a provider stopped honouring
-	// stream_options.include_usage.
+	// Fail-closed money capture (#1215): actuals were unavailable on a stream
+	// that delivered output, so the charge is the full reservation hold -- the
+	// same rule UpstreamActualSettlement has always applied to variable-price
+	// aliases, extended here to every catalog-priced stream. Control-plane
+	// clamps at the hold and files a reconciliation job; TerminalUsageConfirmed
+	// stays false so nothing records an estimate as measured truth. The alarm
+	// below is the only standing signal that a provider stopped honouring
+	// stream_options.include_usage or shipped unparseable usage frames.
 	if !confirmed {
-		log.Printf("inference: settling unconfirmed usage estimate request_id=%s reservation_id=%s endpoint=%s model=%s estimated_credits=%d: upstream returned no usable usage block",
-			requestID, reservation.ID, endpoint, model, credits)
+		if reservation.ID != "" {
+			credits = reservation.Held()
+		}
+		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
+		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_reservation_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the reservation hold per D-034 (#1215)",
+			requestID, reservation.ID, endpoint, model, credits, len(content))
 	}
 
 	if reservation.ID == "" {

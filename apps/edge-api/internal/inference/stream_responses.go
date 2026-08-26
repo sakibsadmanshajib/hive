@@ -241,6 +241,11 @@ func (o *Orchestrator) executeResponsesStreaming(
 			continue
 		}
 
+		// A parsed frame is about to be relayed (translated) to the caller, so
+		// delivery is proven even when nothing accumulates -- a tool-call-only
+		// Responses turn used to release free as upstream_error (#1215).
+		acc.HasForwardedChunk = true
+
 		// Clamp upstream-zero completion_tokens against the content streamed
 		// so far. Usage chunks typically arrive last with empty choices, so
 		// translator.currentContent already holds the full response body.
