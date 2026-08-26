@@ -32,6 +32,14 @@ func newRLSTestPool(t *testing.T, role string) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-Postgres step and passes
+		// -short for the step that has none, so a missing DSN there is a wiring
+		// defect (the silent-green never-runs shape of issues #701/#708/#797),
+		// not a laptop without Postgres. Fail loudly in CI live leg; local runs
+		// without a test database still skip.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI: this suite guards a real-SQL proof and must not silently skip")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	if !strings.Contains(strings.ToLower(dsn), "test") {
@@ -51,6 +59,11 @@ func newRLSTestPool(t *testing.T, role string) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, "SET ROLE "+role); err != nil {
 		pool.Close()
+		// Same loudness contract as the DSN gate: role provisioning failure in
+		// CI is a schema regression, never a normal day.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatalf("SET ROLE %s failed (is %s provisioned + migrations applied on this test DB?): %v", role, role, err)
+		}
 		t.Skipf("SET ROLE %s failed (is %s provisioned + migrations applied on this test DB?): %v", role, role, err)
 	}
 	t.Cleanup(pool.Close)
@@ -72,6 +85,14 @@ func seedTenant(t *testing.T, id uuid.UUID) {
 	// the skip, an empty DSN falls back to a local unix socket and the seed
 	// fails in CI (which is TCP-only) instead of skipping like the pool helper.
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-Postgres step and passes
+		// -short for the step that has none, so a missing DSN there is a wiring
+		// defect (the silent-green never-runs shape of issues #701/#708/#797),
+		// not a laptop without Postgres. Fail loudly in CI live leg; local runs
+		// without a test database still skip.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI: this suite guards a real-SQL proof and must not silently skip")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	if !strings.Contains(strings.ToLower(dsn), "test") {

@@ -475,7 +475,14 @@ jobs:
             # helper this wiring turns on). Removed from KNOWN_DARK in the
             # same change, since the lint fails if a package both runs and
             # stays listed as debt.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/... ./internal/marketplace/... ./internal/usage/... ./internal/tenant/...
+            # 2026-08-26 un-skip pass (owner-directed coverage audit): audit,
+            # auditarchive, auditverifier, auditworker, licensing and
+            # tests/compliance join this step's package list. Their DSN gates
+            # now fail loudly in CI instead of skipping silently, and their
+            # suites run against real Postgres for the first time; a suite
+            # that has never run is not known to pass, which is exactly what
+            # this step proves.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/audit/... ./internal/auditarchive/... ./internal/auditverifier/... ./internal/auditworker/... ./internal/licensing/... ./tests/compliance/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/... ./internal/marketplace/... ./internal/usage/... ./internal/tenant/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
