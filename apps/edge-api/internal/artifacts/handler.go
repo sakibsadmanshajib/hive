@@ -83,8 +83,16 @@ func NewHandler(store Store, blobs BlobStorage, bucket string, claimsParser Clai
 	}
 }
 
+// muxHandleFunc is the subset of *http.ServeMux's API Register needs.
+// Accepting this instead of the concrete type lets a caller (edge-api's
+// boot-time route/matrix coverage guard, cmd/server/route_recorder.go) pass
+// a recording wrapper without Register knowing anything about that.
+type muxHandleFunc interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 // Register mounts every artifacts route on mux.
-func (h *Handler) Register(mux *http.ServeMux) {
+func (h *Handler) Register(mux muxHandleFunc) {
 	mux.HandleFunc("/v1/artifacts", h.handleCreate)
 	mux.HandleFunc("/v1/artifacts/", h.routeManage)
 	mux.HandleFunc("/artifacts/", h.routeServe)

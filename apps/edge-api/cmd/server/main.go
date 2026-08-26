@@ -144,8 +144,11 @@ func main() {
 	// Initialize Prometheus metrics registry for edge-api.
 	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
 
-	// Create the main mux
-	mux := http.NewServeMux()
+	// Create the main mux. routeRecorder (route_recorder.go) records every
+	// pattern registered through it, so the boot-time assertMatrixCoverage
+	// call below can catch a route shipped with zero support-matrix.json
+	// coverage, without a hand-kept parallel list of routes.
+	mux := newRouteRecorder()
 
 	// Infrastructure routes (no unsupported middleware). /metrics is not among
 	// them; it is served on metricsListenAddr instead.
@@ -280,7 +283,7 @@ func main() {
 	// roster here is what keeps Open WebUI's get_available_voices from falling
 	// back to its hardcoded alloy-style list (#996); gating it would silently
 	// reinstate that fallback. See audio.VoicesHandler for the full rationale.
-	mux.Handle("/v1/audio/voices", audio.VoicesHandler())
+	registerAudioVoicesRoute(mux)
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
 
@@ -577,6 +580,14 @@ func main() {
 		artifactsHandler.Register(mux)
 	}
 
+	// Boot-time route/matrix drift guard (route_recorder.go). Refuses to
+	// start rather than silently 404 a shipped route: see
+	// assertMatrixCoverage's doc comment for exactly what this does and does
+	// not catch.
+	if err := assertMatrixCoverage(mux.Patterns(), m); err != nil {
+		log.Fatal(err)
+	}
+
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
 	// budgetGate resolves the workspace identity from the API-key bearer
@@ -685,7 +696,7 @@ const metricsListenAddr = ":9102"
 // inverted that polarity, so a fully healthy edge-api reported 503 and an
 // actual control-plane outage reported 200 -- a second lie in the exact fix
 // meant to stop this endpoint from lying.
-func registerInfraRoutes(mux *http.ServeMux, specPath string, degraded func() bool) {
+func registerInfraRoutes(mux httpMux, specPath string, degraded func() bool) {
 	mux.HandleFunc("/health", handleHealth(degraded))
 	mux.Handle("/docs/", docs.SwaggerHandler(specPath))
 }
@@ -777,7 +788,7 @@ const (
 // #293: Voice had a gate constant but no route ever called it). Images,
 // files, and batches are ungated here by design — their own gate keys, if
 // any, are out of this step's scope.
-func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler, voiceMW func(http.Handler) http.Handler) {
+func registerMediaFileBatchRoutes(mux httpMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler, voiceMW func(http.Handler) http.Handler) {
 	images := http.MaxBytesHandler(imagesHandler, imagesMaxBody)
 	audio := voiceMW(http.MaxBytesHandler(audioHandler, audioMaxBody))
 	mux.Handle("/v1/images/generations", images)
@@ -792,6 +803,16 @@ func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandle
 	mux.Handle("/v1/uploads/", filesHandler)
 	mux.Handle("/v1/batches", batchesHandler)
 	mux.Handle("/v1/batches/", batchesHandler)
+}
+
+// registerAudioVoicesRoute attaches GET /v1/audio/voices. Extracted (issue
+// #1079 shipped this as a bare inline mux.Handle call, which is exactly what
+// left it with no support-matrix.json entry) so route_matrix_guard_test.go
+// can register it in isolation and exercise assertMatrixCoverage against it.
+// See the call site in main() for why this route deliberately sits outside
+// every auth gate.
+func registerAudioVoicesRoute(mux httpMux) {
+	mux.Handle("/v1/audio/voices", audio.VoicesHandler())
 }
 
 func jwtAwareChatHandler(jwtHandler, apiKeyHandler http.Handler) http.Handler {

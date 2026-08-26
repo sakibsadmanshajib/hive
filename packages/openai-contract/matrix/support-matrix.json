@@ -60,6 +60,13 @@
     },
     {
       "method": "GET",
+      "path": "/v1/audio/voices",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1079): lists available TTS voices for Open WebUI's voice dropdown."
+    },
+    {
+      "method": "GET",
       "path": "/v1/batches",
       "status": "supported_now",
       "phase": 7,
@@ -1107,6 +1114,55 @@
       "status": "supported_now",
       "phase": null,
       "notes": "Hive proprietary (agent subsystem): cancel an agent task."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/tasks/{task_id}/events",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): server-sent task progress events."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/tasks/{task_id}/files",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): list files produced by an agent task."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent/schedules",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1081): create a scheduled agent task (\"routine\")."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/schedules",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1081): list scheduled agent tasks."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/schedules/{schedule_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1081): retrieve a scheduled agent task."
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/agent/schedules/{schedule_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1081): update a scheduled agent task."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/agent/schedules/{schedule_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1081): delete a scheduled agent task."
     },
     {
       "method": "GET",
