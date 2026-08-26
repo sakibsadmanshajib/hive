@@ -423,7 +423,19 @@ COPY deploy/docker/owui-patches/apply_router_authz_family_patch.py /tmp/apply_ro
 RUN python3 /tmp/apply_retrieval_authz_patch.py \
     && python3 /tmp/apply_router_authz_family_patch.py
 
-# Consolidated drift guard for ALL owui authz patches (#1056 + #1186): assert
+# issue #1191: two residuals from the #1190-family review that the #1186 sweep
+# had classified as false positives. chats.py clone_shared_chat_by_id let a
+# bare instance admin skip the shared-chat AccessGrants check and read (clone)
+# any tenant's ALREADY-SHARED chat; knowledge.py /reindex let a bare instance
+# admin trigger a global wipe+rebuild of every tenant's vector collections.
+# Both are flag-gated here: ENABLE_ADMIN_CHAT_ACCESS for chats (the router's
+# own predicate) and BYPASS_ADMIN_ACCESS_CONTROL for reindex (already imported,
+# same escape hatch as the rest of the knowledge family); compose sets both
+# false. Same fail-loud posture as the patches above.
+COPY deploy/docker/owui-patches/apply_authz_residuals_1191_patch.py /tmp/apply_authz_residuals_1191_patch.py
+RUN python3 /tmp/apply_authz_residuals_1191_patch.py
+
+# Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191):
 # the exact expected marker count in every patched file so a vendor bump that
 # silently drops any single fix fails the image build instead of reopening a
 # cross-tenant hole (same failure mode class as #1162).
@@ -438,7 +450,9 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1186)' $B/routers/prompts.py)" -eq 11 \
     && test "$(grep -c '# hive (#1186)' $B/routers/notes.py)" -eq 6 \
     && test "$(grep -c '# hive (#1186)' $B/routers/tools.py)" -eq 10 \
-    && test "$(grep -c '# hive (#1186)' $B/routers/models.py)" -eq 5
+    && test "$(grep -c '# hive (#1186)' $B/routers/models.py)" -eq 5 \
+    && test "$(grep -c '# hive (#1191)' $B/routers/chats.py)" -eq 1 \
+    && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
 # auth credential. The tool servers added there are direct ones, called by the

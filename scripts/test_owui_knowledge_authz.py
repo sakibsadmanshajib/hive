@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Self-check for the owui authz patches (#1056 knowledge reads, #1186 family).
+"""Self-check for the owui authz patches (#1056 knowledge reads, #1186 family,
+#1191 residuals).
 
 Runs the real build-time patch scripts against copies of the vendored backend
 source and asserts the result. Structural, no framework, no network.
@@ -167,16 +168,66 @@ def check_router_family() -> int:
         )
     return report(checks)
 
+def check_authz_residuals() -> int:
+    """#1191: shared-chat grant-skip and global reindex are flag-gated."""
+    routers = VENDORED / "routers"
+    patch = PATCHES / "apply_authz_residuals_1191_patch.py"
+    CHATS_OLD = (
+        "    if shared and user.role != 'admin' and shared.user_id != user.id:\n"
+    )
+    KNOW_OLD = (
+        "    if user.role != 'admin':\n"
+        "        raise HTTPException(\n"
+        "            status_code=status.HTTP_401_UNAUTHORIZED,\n"
+        "            detail=ERROR_MESSAGES.UNAUTHORIZED,\n"
+        "        )\n"
+    )
+    checks = {
+        "chats: vendored still has unflagged grant skip (negative control)":
+            CHATS_OLD in (routers / "chats.py").read_text(),
+        "knowledge: vendored still has bare reindex guard (negative control)":
+            KNOW_OLD in (routers / "knowledge.py").read_text(),
+    }
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copy(routers / "chats.py", tmp / "chats.py")
+    shutil.copy(routers / "knowledge.py", tmp / "knowledge.py")
+    env = dict(os.environ)
+    env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
+    r = subprocess.run(
+        [sys.executable, str(patch)], env=env, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print("FAIL: authz residuals patch failed:", r.stdout + r.stderr)
+        return 1
+    for name in ("chats.py", "knowledge.py"):
+        text = (tmp / name).read_text()
+        checks[f"{name}: one #1191 marker after patch"] = (
+            text.count("# hive (#1191)") == 1
+        )
+        checks[f"{name}: patched source compiles"] = isinstance(
+            ast.parse(text), ast.Module
+        )
+    checks["chats: old grant skip gone"] = CHATS_OLD not in (tmp / "chats.py").read_text()
+    checks["chats: flag-or-grant predicate present"] = (
+        "and not (user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS)" in (tmp / "chats.py").read_text()
+    )
+    checks["knowledge: bare reindex guard gone"] = KNOW_OLD not in (tmp / "knowledge.py").read_text()
+    checks["knowledge: BYPASS predicate present"] = (
+        "if not (user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL):" in (tmp / "knowledge.py").read_text()
+    )
+    return report(checks)
+
 
 def main() -> int:
     rc = check_knowledge()
     rc += check_retrieval()
     rc += check_router_family()
+    rc += check_authz_residuals()
     if rc:
         print("FAIL: owui authz patch self-check failed")
         return 1
     print("ok: knowledge by-id ownership (#1056), retrieval filter and")
-    print("ok: router family flag-gating (#1186) all enforced")
+    print("ok: router family flag-gating (#1186) and residuals (#1191) all enforced")
     return 0
 
 
