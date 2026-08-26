@@ -69,11 +69,30 @@ func (m *SupportMatrix) Lookup(method, path string) EndpointStatus {
 // registered prefix into a handler's own internal path-suffix dispatch
 // (routeItem/routeTaskByID-style switches), so a new suffix added under an
 // already-covered prefix still needs its own matrix entry added by hand.
+//
+// The subtree/exact distinction must key off the mux pattern's own trailing
+// slash, not off a trimmed copy: only a pattern registered as a genuine
+// subtree ("/v1/foo/") may match a descendant entry ("/v1/foo/{id}"), and an
+// exact pattern ("/v1/foo") must never be satisfied by a descendant entry it
+// cannot actually dispatch. Symmetrically, a subtree pattern must never be
+// satisfied by an entry that sits exactly at the trimmed prefix ("/v1/foo")
+// instead of under it, since Lookup itself draws that same line: a request
+// to "/v1/foo" never matches a matrix entry with the extra "{id}" segment,
+// and a request under "/v1/foo/" never matches an entry sitting bare at
+// "/v1/foo". Diverging from Lookup here is exactly the failure mode this
+// guard exists to prevent, so the non-subtree arm below reuses
+// pathMatchesTemplate, the same matcher Lookup itself uses.
 func (m *SupportMatrix) HasCoverage(pattern string) bool {
-	prefix := strings.TrimSuffix(pattern, "/")
-	childPrefix := prefix + "/"
+	if strings.HasSuffix(pattern, "/") {
+		for _, ep := range m.Endpoints {
+			if strings.HasPrefix(ep.Path, pattern) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, ep := range m.Endpoints {
-		if ep.Path == pattern || ep.Path == prefix || strings.HasPrefix(ep.Path, childPrefix) {
+		if pathMatchesTemplate(ep.Path, pattern) {
 			return true
 		}
 	}
