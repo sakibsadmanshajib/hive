@@ -246,7 +246,12 @@ func TestHandleChat_ChatNotConfigured_Returns503(t *testing.T) {
 // cannedSSEResponse includes an event: line carrying a provider name so the
 // test proves non-data upstream lines are dropped (never relayed): if the
 // relay forwarded it, assertNoLeak would catch "groq" in the response body.
-const cannedSSEResponse = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer"}}]}
+// The first chunk also carries a system_fingerprint (the PR #1222 third-leak
+// shape: Groq's own fingerprint value), so a regression that drops the
+// `delete(chunk, "system_fingerprint")` line in streamGroundedChat fails the
+// assertions below instead of passing silently -- the fixture had never
+// carried this field before, so nothing could catch its removal.
+const cannedSSEResponse = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{"content":"The answer"}}]}
 
 event: groq.internal.rate_notice
 
@@ -322,6 +327,18 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 	if strings.Contains(body, "up-1") {
 		t.Errorf("upstream chunk id leaked into the stream:\n%s", body)
 	}
+
+	// system_fingerprint (both the key and the upstream's fingerprint
+	// value, per cannedSSEResponse's first chunk) must never reach the
+	// client: same provider-identity leak class as the id, third leak found
+	// during the PR #1222 security review.
+	if strings.Contains(body, "system_fingerprint") {
+		t.Errorf("system_fingerprint key leaked into the stream:\n%s", body)
+	}
+	if strings.Contains(body, "fp_44709d6fcb") {
+		t.Errorf("system_fingerprint value leaked into the stream:\n%s", body)
+	}
+
 	idPrefix := `"id":"`
 	start := strings.Index(body, idPrefix)
 	if start == -1 || !strings.HasPrefix(body[start+len(idPrefix):], "ragchat-") {
