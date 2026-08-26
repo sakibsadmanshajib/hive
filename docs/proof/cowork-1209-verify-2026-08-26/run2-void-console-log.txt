@@ -1,0 +1,29 @@
+2026-08-26T02:49:12.807Z mint: session for browser-slice-20260824@hive-e2e.invalid via internal http://caddy-supabase
+2026-08-26T02:49:12.970Z mint: ok, userId=54c0d294-c5a3-4ff4-aba2-e4a229519229
+2026-08-26T02:49:13.665Z nav: console https://console-hive.scubed.co/console
+2026-08-26T02:49:14.600Z console: signed in, url=https://console-hive.scubed.co/console
+2026-08-26T02:49:14.600Z nav: chat https://chat-hive.scubed.co
+2026-08-26T02:49:18.992Z chat: no Continue-with-Hive button visible (already signed in on this origin?)
+2026-08-26T02:49:19.001Z chat: landed on https://chat-hive.scubed.co/
+2026-08-26T02:49:19.017Z chat: New Chat control visible, considered loaded
+2026-08-26T02:49:19.148Z screenshot 00-chat-loaded
+2026-08-26T02:49:19.165Z composer: Chat|Cowork radiogroup visible = true
+2026-08-26T02:49:19.187Z composer: default mode = chat
+2026-08-26T02:49:19.274Z composer: typed draft in Chat mode
+2026-08-26T02:49:19.412Z screenshot 02-chat-mode-with-draft
+2026-08-26T02:49:19.794Z composer: mode after click = cowork
+2026-08-26T02:49:19.795Z composer: draft preserved = true
+2026-08-26T02:49:19.918Z screenshot 03-cowork-mode-draft-check
+2026-08-26T02:49:20.080Z screenshot 04-cowork-instructions-typed
+2026-08-26T02:49:20.080Z composer: submitting Cowork task
+2026-08-26T02:49:21.839Z screenshot 05-submitted-t0
+2026-08-26T02:49:29.980Z screenshot 06-inflight-t8s
+2026-08-26T02:49:41.977Z screenshot 06-inflight-t20s
+2026-08-26T02:49:56.980Z screenshot 06-inflight-t35s
+2026-08-26T02:50:11.967Z screenshot 06-inflight-t50s
+2026-08-26T02:50:27.001Z screenshot 06-inflight-t65s
+2026-08-26T02:50:41.976Z screenshot 06-inflight-t80s
+2026-08-26T02:51:01.992Z screenshot 06-inflight-t100s
+2026-08-26T02:51:21.997Z screenshot 06-inflight-t120s
+2026-08-26T02:51:27.148Z screenshot 09-final
+2026-08-26T02:51:27.148Z run: settledSeenAt = null

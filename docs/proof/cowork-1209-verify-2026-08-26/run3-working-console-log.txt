@@ -1,0 +1,34 @@
+2026-08-26T02:55:26.334Z mint: session for browser-slice-20260824@hive-e2e.invalid via internal http://caddy-supabase
+2026-08-26T02:55:26.494Z mint: ok, userId=54c0d294-c5a3-4ff4-aba2-e4a229519229
+2026-08-26T02:55:27.192Z nav: console https://console-hive.scubed.co/console
+2026-08-26T02:55:28.172Z console: signed in, url=https://console-hive.scubed.co/console
+2026-08-26T02:55:28.172Z nav: chat https://chat-hive.scubed.co
+2026-08-26T02:55:32.553Z chat: no Continue-with-Hive button visible (already signed in on this origin?)
+2026-08-26T02:55:32.567Z chat: landed on https://chat-hive.scubed.co/
+2026-08-26T02:55:32.596Z chat: New Chat control visible, considered loaded
+2026-08-26T02:55:32.736Z screenshot 00-chat-loaded
+2026-08-26T02:55:32.749Z composer: Chat|Cowork radiogroup visible = true
+2026-08-26T02:55:32.757Z composer: default mode = chat
+2026-08-26T02:55:32.843Z composer: typed draft in Chat mode
+2026-08-26T02:55:32.991Z screenshot 02-chat-mode-with-draft
+2026-08-26T02:55:33.378Z composer: mode after click = cowork
+2026-08-26T02:55:33.378Z composer: draft preserved = true
+2026-08-26T02:55:33.507Z screenshot 03-cowork-mode-draft-check
+2026-08-26T02:55:33.687Z screenshot 04-cowork-instructions-typed
+2026-08-26T02:55:33.687Z composer: submitting Cowork task
+2026-08-26T02:55:35.448Z screenshot 05-submitted-t0
+2026-08-26T02:55:43.624Z screenshot 06-inflight-t8s
+2026-08-26T02:55:55.599Z screenshot 06-inflight-t20s
+2026-08-26T02:56:10.600Z screenshot 06-inflight-t35s
+2026-08-26T02:56:25.520Z run: expanded status history at t50s
+2026-08-26T02:56:26.149Z screenshot 06-inflight-t50s
+2026-08-26T02:56:26.149Z run: reloading mid-run at t50s
+2026-08-26T02:56:29.464Z run: composer mode after reload = chat
+2026-08-26T02:56:29.610Z screenshot 07-reloaded-t50s
+2026-08-26T02:56:30.303Z screenshot 08-reloaded-expanded-t50s
+2026-08-26T02:56:40.572Z screenshot 06-inflight-t65s
+2026-08-26T02:56:55.601Z screenshot 06-inflight-t80s
+2026-08-26T02:57:15.615Z screenshot 06-inflight-t100s
+2026-08-26T02:57:35.608Z screenshot 06-inflight-t120s
+2026-08-26T02:57:40.766Z screenshot 09-final
+2026-08-26T02:57:40.766Z run: settledSeenAt = null

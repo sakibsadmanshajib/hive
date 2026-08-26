@@ -1,0 +1,4 @@
+2026/08/26 02:50:03 agentengine: /events: status 502: controlclient: request failed: Get "http://agent-server.control/api/conversations/04494460-3416-4a1b-bf44-21860c390836/events/search?limit=100": dial unix /home/sakib/agent-runtime/sessions/3667032889/c/agent.sock: connect: no such file or directory
+2026/08/26 02:50:03 WARN agenttask: event sync pull failed task_id=5a5313ff-a93e-4c70-bcbf-b440d2cee9ac error="agentengine: /events: status 502"
+2026/08/26 02:56:48 agentengine: /events: status 502: controlclient: request failed: Get "http://agent-server.control/api/conversations/6cddf47c-095a-44fe-a051-0db88ae94d50/events/search?limit=100": dial unix /home/sakib/agent-runtime/sessions/1250681324/c/agent.sock: connect: no such file or directory
+2026/08/26 02:56:48 WARN agenttask: event sync pull failed task_id=64983c00-bb2c-4917-a954-00b38f2359e7 error="agentengine: /events: status 502"
