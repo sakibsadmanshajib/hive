@@ -401,7 +401,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			releaseReason = "client_disconnect"
 		}
 		costCredits = 0
-	case settle.finalize(costCredits, confirmed, inTokens, outTokens):
+	case settle.finalize(costCredits, confirmed, inTokens, outTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens):
 		settled = true
 	default:
 		// The charge did not land. Leaving settled false hands the reservation
