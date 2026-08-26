@@ -322,6 +322,177 @@ export const cancelTask = async (
 	return decoded;
 };
 
+/**
+ * One task, read by id.
+ *
+ * The list read this replaced returned every task the user owns in order to
+ * find one of them, which is the wrong request at any volume and was only ever
+ * written because this endpoint did not exist yet. It does: control-plane
+ * serves it, edge-api exposes it as GET /v1/agent/tasks/{id}, and the proxy
+ * routes it (deploy/docker/owui-patches/hive_agent_proxy.py, `get_task`).
+ *
+ * A task that is not this user's is a 404 here, not a filtered-out row, so a
+ * caller gets an AgentTaskError rather than a silent "not found in the list".
+ */
+export const getTask = async (
+	token: string,
+	id: string,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
+): Promise<AgentTask> => {
+	const response = await fetch(`${apiBase}/tasks/${encodeURIComponent(id)}`, {
+		method: 'GET',
+		headers: headers(token)
+	});
+	if (!response.ok) {
+		await raise(response, 'Failed to load task');
+	}
+	const decoded = decodeTask(await readBody(response));
+	if (!decoded) {
+		throw new Error('Failed to parse task response');
+	}
+	return decoded;
+};
+
+/*
+ * The per-step event feed.
+ *
+ * The six kinds are the CHECK constraint on public.agent_task_events, mirrored
+ * in apps/control-plane/internal/agenttask/events.go. `unknown` is the same
+ * local seventh that TaskStatus carries and for the same reason: a kind this
+ * build cannot name still reaches the caller, which can say so, rather than
+ * being dropped on the floor. The backend itself already refuses to drop an
+ * unmapped OpenHands class (it lands as `status` carrying the raw payload), so
+ * discarding it here would undo that deliberately.
+ */
+export type TaskEventKind =
+	| 'status'
+	| 'tool_call'
+	| 'tool_result'
+	| 'message'
+	| 'error'
+	| 'file'
+	| 'unknown';
+
+const EVENT_KINDS: ReadonlySet<string> = new Set([
+	'status',
+	'tool_call',
+	'tool_result',
+	'message',
+	'error',
+	'file'
+]);
+
+export interface TaskEvent {
+	seq: number;
+	kind: TaskEventKind;
+	/**
+	 * Whatever JSONB the syncer stored. Every layer between here and the
+	 * database passes it through without parsing it, so this is the first place
+	 * that reads inside it, and it reads defensively: see runSteps() in
+	 * coworkMode.ts for the per-kind shapes and what happens to a payload that
+	 * does not match one.
+	 */
+	payload: Record<string, unknown>;
+	created_at: string;
+}
+
+/**
+ * Decodes one event row, or null when it carries no cursor position.
+ *
+ * `seq` is the only truly load-bearing field: it is the cursor, and a row
+ * without a usable one cannot be acknowledged, so accepting it would mean
+ * re-reading it forever. A non-object payload (nothing this backend writes
+ * today, but the column is raw JSONB) degrades to an empty object rather than
+ * discarding the event, because the kind alone is still worth something.
+ */
+export const decodeEvent = (value: unknown): TaskEvent | null => {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const seq = value['seq'];
+	if (typeof seq !== 'number' || !Number.isFinite(seq) || seq < 0) {
+		return null;
+	}
+	const kind = readString(value, 'kind');
+	const payload = value['payload'];
+	return {
+		seq,
+		kind: kind !== null && EVENT_KINDS.has(kind) ? (kind as TaskEventKind) : 'unknown',
+		payload: isRecord(payload) ? payload : {},
+		created_at: readString(value, 'created_at') ?? ''
+	};
+};
+
+/*
+ * The page size this front end asks for.
+ *
+ * edge-api clamps `limit` to 500 (maxEventsLimit in
+ * apps/edge-api/internal/agenttask/handler.go) and defaults it to 100. 200 is
+ * a follower's page, not a backlog dump: a live run produces a handful of
+ * events between polls, and the only time a full page comes back is the first
+ * read of a conversation reopened after a long run, which pages.
+ */
+export const EVENT_PAGE_SIZE = 200;
+
+/**
+ * Events strictly newer than `afterSeq`, oldest first.
+ *
+ * The cursor is the whole point. A follower that re-read the full event list
+ * every few seconds would repeat the mistake this call was added to fix, one
+ * layer down: control-plane's read is `seq > $2 ORDER BY seq ASC LIMIT $4`
+ * (repository.go), so passing the highest seq already seen costs one small
+ * page per poll no matter how long the run has been going.
+ *
+ * A returned page of exactly `limit` rows means there may be more behind it.
+ * The caller advances the cursor and asks again rather than assuming the run
+ * has produced nothing since.
+ */
+export const getTaskEvents = async (
+	token: string,
+	id: string,
+	afterSeq: number = 0,
+	limit: number = EVENT_PAGE_SIZE,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
+): Promise<TaskEvent[]> => {
+	// The proxy validates both as plain non-negative integers before they reach
+	// a URL and answers anything else with a 400, so they are floored to that
+	// shape here rather than sent as-is and refused a round trip later.
+	const cursor = Math.max(0, Math.floor(afterSeq));
+	const page = Math.max(1, Math.floor(limit));
+	const response = await fetch(
+		`${apiBase}/tasks/${encodeURIComponent(id)}/events?after_seq=${cursor}&limit=${page}`,
+		{
+			method: 'GET',
+			headers: headers(token)
+		}
+	);
+	if (!response.ok) {
+		await raise(response, 'Failed to load task events');
+	}
+	const body = await readBody(response);
+	if (!isRecord(body) || !('events' in body)) {
+		// Same distinction listTasks draws: a missing key is a payload we could
+		// not read, and reporting it as "no progress yet" would be the exact
+		// silent failure this surface exists to stop.
+		throw new Error('Failed to parse task events response');
+	}
+	const rows = body['events'];
+	if (rows === null) {
+		return [];
+	}
+	if (!Array.isArray(rows)) {
+		throw new Error('Failed to parse task events response');
+	}
+	const events: TaskEvent[] = [];
+	for (const row of rows) {
+		const decoded = decodeEvent(row);
+		if (decoded) {
+			events.push(decoded);
+		}
+	}
+	return events;
+};
+
 // Polling and the cancel button both stop once a task reaches one of these
 // (matches apps/control-plane/internal/agenttask/SYNC_CONTRACT.md's state
 // machine). `unknown` is deliberately absent: a state we cannot name is not a
