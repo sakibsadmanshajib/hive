@@ -48,6 +48,14 @@ func requireAccountRoleTestDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL for the live-Postgres step and passes
+		// -short for the step that has none, so a missing DSN there is a wiring
+		// defect (the silent-green never-runs shape of issues #701/#708/#797),
+		// not a laptop without Postgres. Fail loudly in CI live leg; local runs
+		// without a test database still skip.
+		if os.Getenv("CI") != "" && !testing.Short() {
+			t.Fatal(skipNoTestDSN + " in CI: this membership RLS suite must not silently skip")
+		}
 		t.Skip(skipNoTestDSN)
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)

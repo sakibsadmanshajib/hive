@@ -32,7 +32,10 @@ func seedAttemptAccount(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 		 VALUES (gen_random_uuid(), $1, '{}'::jsonb) RETURNING id`,
 		"attempt-idem-"+uuid.NewString()+"@test.local",
 	).Scan(&userID); err != nil {
-		t.Skipf("seed auth.users failed (is this a migrated test DB?): %v", err)
+		// Fatal, not Skip, matching balance_over_release_live_test.go: the CI
+		// live leg bootstraps the full migration chain, so a seed failure here
+		// is a schema regression that skipping would report green.
+		t.Fatalf("seed auth.users failed (is this a migrated test DB?): %v", err)
 	}
 
 	var accountID uuid.UUID
