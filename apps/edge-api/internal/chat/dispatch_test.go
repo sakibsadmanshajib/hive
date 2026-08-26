@@ -249,6 +249,78 @@ func TestDispatchResolvesAliasToLiteLLMModelName(t *testing.T) {
 	require.Equal(t, "route-groq-fast", gotModel)
 }
 
+// TestDispatchFixedPriceStreamSanitizesUpstreamID reproduces the security
+// review finding on PR #1222: this relay's fixed-price branch used to write
+// every SSE line verbatim, with no sanitization at all. Fixed-price is the
+// D-032 norm for most aliases, so this is the primary Open WebUI chat
+// surface, not an edge case. The fixture id/system_fingerprint shape below
+// matches the live leak captured in the PR (OpenRouter gen-*, Groq
+// chatcmpl-*+system_fingerprint).
+func TestDispatchFixedPriceStreamSanitizesUpstreamID(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl-8f3a9c2e1b4d","object":"chat.completion.chunk","system_fingerprint":"fp_44709d6fcb","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"hi"}}]}` + "\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl-8f3a9c2e1b4d","object":"chat.completion.chunk","system_fingerprint":"fp_44709d6fcb","model":"route-groq-fast","choices":[{"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}` + "\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer upstream.Close()
+
+	routing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(inference.SelectRouteResult{
+			AliasID:          "hive-fast",
+			LiteLLMModelName: "route-groq-fast",
+			Provider:         "groq",
+			// Fixed pricing (D-032 norm) is the branch that shipped raw
+			// before this fix -- IsUpstreamActual() must be false here.
+			Pricing:   inference.FixedPricing(10_500, 42_000),
+			PriceUnit: inference.PriceUnitTokens,
+		})
+	}))
+	defer routing.Close()
+
+	accounting, billing := billedDeps(t)
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    inference.NewRoutingClient(routing.URL),
+		Accounting: accounting,
+		Billing:    billing,
+		LiteLLMURL: upstream.URL,
+		DeploySHA:  "test",
+		Env:        "test",
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"hive-fast","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID: uuid.New(), TenantID: uuid.New(), Role: "member",
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+
+	require.NotContains(t, body, "chatcmpl-8f3a9c2e1b4d", "upstream id leaked on a fixed-price stream")
+	require.NotContains(t, body, "system_fingerprint", "system_fingerprint leaked on a fixed-price stream")
+	require.NotContains(t, body, "fp_44709d6fcb", "system_fingerprint value leaked on a fixed-price stream")
+
+	idPrefix := `"id":"`
+	start := strings.Index(body, idPrefix)
+	require.NotEqual(t, -1, start, "expected a minted id in the sanitized stream:\n%s", body)
+	start += len(idPrefix)
+	mintedID := body[start : start+strings.Index(body[start:], `"`)]
+	require.True(t, strings.HasPrefix(mintedID, "chatcmpl-"), "minted id %q should carry the chatcmpl- prefix", mintedID)
+	require.Equal(t, 2, strings.Count(body, mintedID), "expected the SAME minted id on both chunks of one stream")
+}
+
 // TestDispatchUnknownAliasReturns404 covers an alias the catalog does not
 // recognise -- the request must never reach LiteLLM with an unresolved
 // model string.

@@ -333,9 +333,12 @@ func TestSSETranslator_TwoParallelToolUseBlocks(t *testing.T) {
 	assertContainsInOrder(t, seq, "content_block_start", "content_block_stop", "content_block_start", "content_block_stop")
 }
 
-// T3: when upstream chunk ID is non-empty but lacks msg_ prefix, the translator
-// must add it; Anthropic SDK clients reject IDs that don't start with msg_.
-func TestSSETranslator_NonMsgPrefixChunkID_GetsPrefix(t *testing.T) {
+// T3: the translator always mints its own message id, never derives one from
+// the upstream chunk id -- Anthropic SDK clients reject IDs that don't start
+// with msg_, AND an upstream chunk id (OpenRouter "gen-*", Groq
+// "chatcmpl-*") is provider identity that must never reach the client, even
+// wrapped in a "msg_" prefix.
+func TestSSETranslator_MessageID_NeverLeaksUpstreamID(t *testing.T) {
 	stream := buildOAIStream(
 		`{"id":"chatcmpl-abc123","model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}`,
 		`{"id":"chatcmpl-abc123","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
@@ -355,6 +358,9 @@ func TestSSETranslator_NonMsgPrefixChunkID_GetsPrefix(t *testing.T) {
 			id, _ := msg["id"].(string)
 			if !strings.HasPrefix(id, "msg_") {
 				t.Errorf("message_start.id: want msg_ prefix got %q", id)
+			}
+			if strings.Contains(id, "chatcmpl-abc123") {
+				t.Errorf("message_start.id leaks the upstream chunk id: %q", id)
 			}
 		}
 	}

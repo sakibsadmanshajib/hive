@@ -200,21 +200,30 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 	return charge, nil
 }
 
-// SanitizeVariablePriceFrame strips the fields a cost-reporting upstream adds
-// that must never reach a customer, and rewrites the model to the alias.
+// SanitizeVariablePriceFrame strips the fields an upstream adds that must
+// never reach a customer (cost, provider identity), rewrites the model to
+// the alias, and replaces the upstream id with the caller's mintedID.
 //
-// Both streaming relays need this and for the same reason. Turning on usage
-// accounting is what makes the upstream put its own cost, its cost breakdown
-// and the model the router chose into the frame, so the moment that flag went
-// on, any path that forwards a frame verbatim started publishing all three.
-// The typed-struct relay in executeStreaming is safe by construction because
-// unmarshalling discards what it does not declare, but its raw-line fallback is
-// not, and apps/edge-api/internal/chat relays every line verbatim by design.
+// Name kept despite now running unconditionally on every alias, fixed-price
+// included (security review finding, PR #1222): cost-field stripping is a
+// no-op on a frame that has none, so one path serves every pricing model
+// rather than carrying a second, unsanitized one for fixed-price traffic.
+//
+// Two callers, both a raw-line SSE relay with no typed-struct protection:
+// executeStreaming's fallback (a chunk the typed decode above it could not
+// parse) and apps/edge-api/internal/chat's dispatch handler, which relays
+// every line through this map-based path rather than a typed one at all.
+//
+// mintedID must be the SAME value the caller mints once per stream and
+// reuses on every other chunk (mintCompletionID), never a fresh id per call:
+// this function sanitizes one frame at a time with no memory of the frames
+// before it, so a caller that minted a fresh id here would break the
+// id-stability contract the moment this path fires mid-stream.
 //
 // ok is false when the frame cannot be parsed. The caller must then DROP the
 // frame rather than forward it, because an unparseable frame is exactly the one
 // whose contents are unknown.
-func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
+func SanitizeVariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool) {
 	var frame map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &frame); err != nil {
 		return nil, false
@@ -224,6 +233,20 @@ func SanitizeVariablePriceFrame(payload []byte, aliasID string) ([]byte, bool) {
 	// rebuilding from a typed struct keeps every field the client legitimately
 	// needs, including ones this package does not model, such as tool calls.
 	delete(frame, "provider")
+	delete(frame, "system_fingerprint")
+
+	// id is the same provider-identity leak the typed relay mints a
+	// replacement for (mintCompletionID): OpenRouter's own "gen-*" id shape
+	// leaks upstream identity verbatim. Rewrite rather than delete, using
+	// the caller's stream-stable mintedID, so a client never sees a chunk
+	// missing its id, or a stream where the id changes mid-flight.
+	if _, present := frame["id"]; present {
+		id, err := json.Marshal(mintedID)
+		if err != nil {
+			return nil, false
+		}
+		frame["id"] = id
+	}
 
 	if rawUsage, present := frame["usage"]; present {
 		var usage map[string]json.RawMessage

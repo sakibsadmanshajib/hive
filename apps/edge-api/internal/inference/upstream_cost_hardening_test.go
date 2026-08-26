@@ -109,19 +109,26 @@ func TestParseUpstreamCostRefusesAnOversizedLiteralWithoutParsingIt(t *testing.T
 
 func TestSanitizeVariablePriceFrameStripsEverythingConfidential(t *testing.T) {
 	frame := []byte(`{"id":"gen-1","object":"chat.completion.chunk","provider":"Anthropic",` +
+		`"system_fingerprint":"fp_deadbeef",` +
 		`"model":"anthropic/claude-sonnet-4.5",` +
 		`"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],` +
 		`"usage":{"prompt_tokens":1000,"completion_tokens":500,"cost":0.0123456,` +
 		`"is_byok":false,"cost_details":{"upstream_inference_cost":0.0123456}}}`)
 
-	out, ok := SanitizeVariablePriceFrame(frame, "openrouter-auto")
+	mintedID := "chatcmpl-test-stable-id"
+	out, ok := SanitizeVariablePriceFrame(frame, "openrouter-auto", mintedID)
 	if !ok {
 		t.Fatal("a well-formed frame must sanitize, not be dropped")
 	}
 	s := string(out)
 
+	// id and system_fingerprint are upstream-identity leaks: OpenRouter's own
+	// "gen-*" id shape and any provider's system_fingerprint both name the
+	// provider by construction, exactly like the sonnet/anthropic strings
+	// below.
 	for _, forbidden := range []string{
 		"Anthropic", "claude-sonnet-4.5", "0.0123456", "cost_details", "is_byok", `"provider"`, `"cost"`,
+		"gen-1", "fp_deadbeef", `"system_fingerprint"`,
 	} {
 		if strings.Contains(s, forbidden) {
 			t.Errorf("sanitized frame still leaks %q: %s", forbidden, s)
@@ -129,18 +136,49 @@ func TestSanitizeVariablePriceFrameStripsEverythingConfidential(t *testing.T) {
 	}
 
 	// Everything the client legitimately needs must survive, including the
-	// token counts and the delta content.
-	for _, required := range []string{"openrouter-auto", "prompt_tokens", "completion_tokens", `"hi"`, "chat.completion.chunk"} {
+	// token counts and the delta content. The id is rewritten, not dropped:
+	// the caller's stream-stable mintedID must be present so every chunk of
+	// one stream keeps carrying the same client-visible id.
+	for _, required := range []string{"openrouter-auto", "prompt_tokens", "completion_tokens", `"hi"`, "chat.completion.chunk", mintedID} {
 		if !strings.Contains(s, required) {
 			t.Errorf("sanitized frame dropped %q, which the client needs: %s", required, s)
 		}
 	}
 }
 
+// TestSanitizeVariablePriceFrameRewritesIDToMintedID guards the id-stability
+// contract this fallback path shares with the typed relay in
+// executeStreaming: a client must see the SAME id on every chunk of one
+// stream, even the rare chunk that falls back to this map-based sanitizer
+// because typed decoding failed on it. Deleting the id outright (rather than
+// rewriting it) would break that contract the moment this fallback fires
+// mid-stream.
+func TestSanitizeVariablePriceFrameRewritesIDToMintedID(t *testing.T) {
+	frame := []byte(`{"id":"gen-should-never-reach-client","object":"chat.completion.chunk","choices":[]}`)
+	mintedID := "chatcmpl-fixed-for-this-stream"
+
+	out, ok := SanitizeVariablePriceFrame(frame, "openrouter-auto", mintedID)
+	if !ok {
+		t.Fatal("a well-formed frame must sanitize, not be dropped")
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	var gotID string
+	if err := json.Unmarshal(got["id"], &gotID); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != mintedID {
+		t.Errorf("id: want mintedID %q, got %q", mintedID, gotID)
+	}
+}
+
 func TestSanitizeVariablePriceFrameDropsWhatItCannotParse(t *testing.T) {
 	// An unparseable frame is exactly the one whose contents are unknown, so
 	// the caller must drop it rather than forward it.
-	if _, ok := SanitizeVariablePriceFrame([]byte(`{"usage": nope}`), "openrouter-auto"); ok {
+	if _, ok := SanitizeVariablePriceFrame([]byte(`{"usage": nope}`), "openrouter-auto", "chatcmpl-irrelevant"); ok {
 		t.Fatal("an unparseable frame must not be reported as safe to forward")
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 )
@@ -148,14 +147,13 @@ func (t *SSETranslator) FeedLine(line []byte) bool {
 
 	if !t.started {
 		t.started = true
-		// Use the upstream chunk ID when present, otherwise generate a
-		// unique ID per stream so concurrent streams never collide.
-		t.messageID = chunk.ID
-		if t.messageID == "" {
-			t.messageID = "msg_" + uuid.New().String()
-		} else if !strings.HasPrefix(t.messageID, "msg_") {
-			t.messageID = "msg_" + t.messageID
-		}
+		// Always mint a fresh gateway-owned id, one per stream, reused on
+		// every subsequent chunk via t.messageID. Never derive from
+		// chunk.ID: that carries the upstream's own id verbatim (OpenRouter
+		// "gen-*", Groq "chatcmpl-*"), and the old "msg_"-prefix behavior
+		// still shipped that raw upstream id to the client -- see
+		// FromOAIResponse for the non-streaming twin of this fix.
+		t.messageID = "msg_" + uuid.New().String()
 		t.emitMessageStart()
 	}
 
