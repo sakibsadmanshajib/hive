@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
 // UsageAccumulator tracks token usage and output text across SSE streaming chunks.
@@ -273,6 +274,28 @@ func (o *Orchestrator) executeStreaming(
 		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
 	}()
 
+	// Force upstream usage accounting on a provider verified to honor it
+	// (#1226): without this, a caller that never set stream_options.
+	// include_usage itself gets no terminal usage frame from a provider that
+	// requires the flag, and settlement (#1215) falls back to capturing the
+	// full reservation hold instead of the real charge -- fail-closed and
+	// correct, but a hold is provably wrong far more often than it needs to
+	// be. Reuses the single metering.RewriteBody implementation the
+	// chat-orchestrator path already forces unconditionally
+	// (apps/edge-api/internal/chat/dispatch.go) rather than a second copy;
+	// gated per provider here because, unlike that internal-only surface,
+	// this path can reach an upstream the flag has never been verified
+	// against. This does not change what Hive bills for -- see the
+	// includeUsage-gated strip below, which keeps the flag's effect
+	// internal to settlement for a caller that never asked for it.
+	if metering.SupportsIncludeUsage(route.Provider) {
+		if rewritten, rewriteErr := metering.RewriteBody(body); rewriteErr == nil {
+			body = rewritten
+		} else {
+			log.Printf("inference: include_usage rewrite failed request_id=%s provider=%s: %v", requestID, route.Provider, rewriteErr)
+		}
+	}
+
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
 	// have been written to the client yet at this point).
 	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, dispatch)
@@ -382,6 +405,24 @@ func (o *Orchestrator) executeStreaming(
 				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk, aliasID)
+
+				// The caller's OWN request decides whether a usage-bearing
+				// frame is contract-visible (#1226), never the include_usage
+				// this gateway may have just forced upstream for billing
+				// alone: accumulation above already ran unconditionally, so
+				// billing sees every frame regardless. A caller who never
+				// set stream_options.include_usage itself must see the same
+				// stream shape it always has. A usage-only frame (no delta,
+				// no finish_reason -- the dedicated terminal chunk an
+				// OpenAI-compatible upstream emits for this flag) is dropped
+				// outright rather than forwarded empty; a frame that also
+				// carries real content is forwarded with usage stripped.
+				if !includeUsage {
+					chunk.Usage = nil
+					if len(chunk.Choices) == 0 {
+						continue
+					}
+				}
 
 				if suppressPostFinish {
 					continue
