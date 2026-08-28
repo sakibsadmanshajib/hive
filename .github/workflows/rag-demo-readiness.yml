@@ -138,6 +138,60 @@ jobs:
             exit 1
           fi
 
+      - name: Diagnose whether SUPABASE_SERVICE_ROLE_KEY actually carries service_role
+        # PR #1257's first live run of the next step failed with "permission
+        # denied for table tenants" (42501) on a call authenticated with
+        # SUPABASE_SERVICE_ROLE_KEY, which should bypass RLS entirely as
+        # service_role. Root-cause this with evidence instead of guessing:
+        # decode the JWT's own "role" claim and compare the key byte-for-byte
+        # against ENTERPRISE_SERVICE_ROLE_KEY (the value
+        # docker-compose.enterprise.yml actually configures PostgREST/GoTrue
+        # with -- see .env.example's self-host recipe:
+        # "SUPABASE_SERVICE_ROLE_KEY=<same value as ENTERPRISE_SERVICE_ROLE_KEY
+        # below>", a manual mirror an operator can leave stale). Prints only
+        # the decoded role claim and a match/mismatch boolean -- never the key
+        # material itself, since this repository is public.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          read_env() {
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+          decode_jwt_role() {
+            local token="$1" payload b64
+            payload=$(printf '%s' "$token" | cut -d. -f2)
+            b64=$(printf '%s' "$payload" | tr '_-' '/+')
+            case $(( ${#b64} % 4 )) in
+              2) b64="${b64}==" ;;
+              3) b64="${b64}=" ;;
+            esac
+            printf '%s' "$b64" | base64 -d 2>/dev/null \
+              | grep -oE '"role"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+              || echo "<could not decode as a JWT>"
+          }
+
+          supabase_key=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          enterprise_key=$(read_env ENTERPRISE_SERVICE_ROLE_KEY)
+
+          echo "SUPABASE_SERVICE_ROLE_KEY length: ${#supabase_key}"
+          echo "SUPABASE_SERVICE_ROLE_KEY decoded role claim: $(decode_jwt_role "$supabase_key")"
+          echo "ENTERPRISE_SERVICE_ROLE_KEY length: ${#enterprise_key}"
+          if [ -n "$enterprise_key" ]; then
+            echo "ENTERPRISE_SERVICE_ROLE_KEY decoded role claim: $(decode_jwt_role "$enterprise_key")"
+          else
+            echo "ENTERPRISE_SERVICE_ROLE_KEY is not set in $env_file"
+          fi
+          if [ "$supabase_key" = "$enterprise_key" ] && [ -n "$supabase_key" ]; then
+            echo "MATCH: SUPABASE_SERVICE_ROLE_KEY == ENTERPRISE_SERVICE_ROLE_KEY"
+          else
+            echo "MISMATCH: SUPABASE_SERVICE_ROLE_KEY != ENTERPRISE_SERVICE_ROLE_KEY (or one is empty)"
+          fi
+
       - name: Run the RAG round-trip + streaming leak-check + error-path check
         # scripts/verify-rag-roundtrip.py owns its own throwaway tenant
         # (rag-verify-e2e, upserted with ENABLE_RAG=true on every run) and
