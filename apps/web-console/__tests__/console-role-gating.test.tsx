@@ -19,17 +19,30 @@ import ProvidersPage from "../app/console/providers/page";
 import FeatureGatesPage from "../app/console/feature-gates/page";
 import MarketplacePage from "../app/console/marketplace/page";
 
-const mockNotFound = vi.fn(() => {
-  throw Object.assign(new Error("NEXT_HTTP_ERROR_FALLBACK;404"), {
-    digest: "NEXT_HTTP_ERROR_FALLBACK;404",
-  });
-});
-
-const mockGetViewer = vi.fn();
-const mockGetAccountProfile = vi.fn();
-const mockGetProviders = vi.fn();
-const mockGetFeatureGates = vi.fn();
-const mockGetMarketplaceEntries = vi.fn();
+// Hoisted: ProvidersPage/FeatureGatesPage/MarketplacePage are imported
+// statically above, so evaluating those imports (and the next/navigation +
+// control-plane/client modules they pull in) runs the vi.mock factories
+// below before a plain top-level `const mock... = vi.fn()` would have
+// executed. vi.hoisted guarantees these exist first regardless.
+const {
+  mockNotFound,
+  mockGetViewer,
+  mockGetAccountProfile,
+  mockGetProviders,
+  mockGetFeatureGates,
+  mockGetMarketplaceEntries,
+} = vi.hoisted(() => ({
+  mockNotFound: vi.fn(() => {
+    throw Object.assign(new Error("NEXT_HTTP_ERROR_FALLBACK;404"), {
+      digest: "NEXT_HTTP_ERROR_FALLBACK;404",
+    });
+  }),
+  mockGetViewer: vi.fn(),
+  mockGetAccountProfile: vi.fn(),
+  mockGetProviders: vi.fn(),
+  mockGetFeatureGates: vi.fn(),
+  mockGetMarketplaceEntries: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   redirect: () => {
