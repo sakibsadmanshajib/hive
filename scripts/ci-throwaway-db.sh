@@ -129,10 +129,15 @@ done
 # revision of 20260828_01_service_role_public_schema_grant.sql granted ALL on
 # every table in the schema to both roles and reached the live demo box before
 # review caught it, which also reopened a SECURITY DEFINER RPC hole
-# 20260823_02_agent_task_schedules.sql had explicitly closed. These three
-# assertions are what stop that from coming back silently: they run over the
-# real migration chain on a throwaway database, so a future GRANT that widens
-# the API-role surface fails here rather than on the box.
+# 20260823_02_agent_task_schedules.sql had explicitly closed. These assertions
+# are what stop that from coming back silently: they run over the real
+# migration chain on a throwaway database, so a future GRANT that widens the
+# API-role surface fails here rather than on the box.
+#
+# Tables, routines and sequences are checked separately on purpose. The
+# rejected revision granted all three, and a check that only looked at tables
+# would have reported success while `GRANT ALL ON ALL FUNCTIONS` was still in
+# place, which is the same shape of blind spot the grant itself was.
 anon_grants="$(q "SELECT count(*) FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee='anon'")"
 if [ "$anon_grants" != "0" ]; then
   fail "anon holds $anon_grants table privilege(s) in the public schema after the migration chain; it is supposed to hold none"
@@ -143,6 +148,20 @@ if [ -n "$authenticated_extra" ]; then
 fi
 if [ "$(q "SELECT has_function_privilege('anon', 'public.agent_tasks_list_active()', 'EXECUTE')")" != "f" ]; then
   fail "anon can EXECUTE the SECURITY DEFINER function public.agent_tasks_list_active(), which 20260823_02_agent_task_schedules.sql revokes precisely because it is a cross-tenant read"
+fi
+# Explicit routine grants only. PUBLIC holds EXECUTE on most functions by
+# default, and has_function_privilege would report that as reachable for every
+# role, so the named-grantee view is the one that answers "did a migration
+# hand these roles the function surface" rather than "is Postgres's default in
+# force". The four SECURITY DEFINER functions that matter carry their own
+# REVOKE ... FROM PUBLIC, and the assertion above covers one of them directly.
+routine_grants="$(q "SELECT count(*) FROM information_schema.role_routine_grants WHERE routine_schema='public' AND grantee IN ('anon', 'authenticated')")"
+if [ "$routine_grants" != "0" ]; then
+  fail "anon/authenticated hold $routine_grants explicit routine grant(s) in the public schema; no migration is supposed to grant either role EXECUTE on anything"
+fi
+sequence_grants="$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('anon', c.oid, 'USAGE') OR has_sequence_privilege('anon', c.oid, 'SELECT') OR has_sequence_privilege('anon', c.oid, 'UPDATE') OR has_sequence_privilege('authenticated', c.oid, 'USAGE') OR has_sequence_privilege('authenticated', c.oid, 'SELECT') OR has_sequence_privilege('authenticated', c.oid, 'UPDATE'))")"
+if [ "$sequence_grants" != "0" ]; then
+  fail "anon/authenticated can reach $sequence_grants public-schema sequence(s); neither role is supposed to hold any sequence privilege"
 fi
 
 # Say out loud which pg_cron branch 20260729_02 took, so an unscheduled purge is

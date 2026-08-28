@@ -306,10 +306,42 @@ jobs:
           image=$(docker inspect -f '{{.Config.Image}}' "$live")
           echo "live edge-api: image $image on network $network"
 
+          # This whole mechanism rests on the image compiling from /app at
+          # start, which is what air does. Against an image that instead runs
+          # a binary baked in at build time, the bind mount below would be
+          # inert, the job would verify the deployed build, and it would say
+          # PASS while measuring the wrong thing. Refuse loudly instead: this
+          # step would need to build an image from the checkout at that point.
+          if ! docker inspect -f '{{json .Config.Cmd}}' "$image" | grep -q '"air"'; then
+            echo "::error::$image no longer starts air, so bind-mounting the checkout over /app would not change what runs; this step needs to build an image from the checkout instead"
+            exit 1
+          fi
+
           docker rm -f "$PR_EDGE_CONTAINER" >/dev/null 2>&1 || true
           umask 077
+          # Strict KEY=VALUE lines only. A value containing a newline would
+          # otherwise leave a bare fragment on its own line, which docker
+          # reads as "inherit this name from the host environment" and can
+          # echo back at you, putting part of a secret in the job log. Nothing
+          # is currently shaped like that, so a dropped line means the live
+          # container's configuration changed shape and this needs looking at
+          # rather than silently running with a truncated value. The count is
+          # reported; the content never is.
+          live_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" | grep -c '^[A-Za-z_][A-Za-z0-9_]*=' || true)
           docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" \
-            | grep -v '^$' > "$RUNNER_TEMP/edge-api-under-test.env"
+            | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$RUNNER_TEMP/edge-api-under-test.env"
+          total_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" | grep -c . || true)
+          if [ "$live_env" != "$total_env" ]; then
+            echo "::error::$((total_env - live_env)) of $total_env environment lines on the live container are not plain KEY=VALUE, so this step refuses to copy a partial configuration"
+            rm -f "$RUNNER_TEMP/edge-api-under-test.env"
+            exit 1
+          fi
+          # Create air's tmp directory as the runner user before docker can
+          # create it as root. It is inside the bind-mounted workspace, and
+          # while an empty root-owned directory is still removable by the
+          # runner (the parent is runner-owned), not creating it at all is one
+          # fewer thing for a later change to get wrong.
+          mkdir -p "$GITHUB_WORKSPACE/apps/edge-api/tmp"
           docker run -d --name "$PR_EDGE_CONTAINER" \
             --network "$network" \
             --env-file "$RUNNER_TEMP/edge-api-under-test.env" \

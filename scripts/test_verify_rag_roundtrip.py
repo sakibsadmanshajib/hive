@@ -110,10 +110,12 @@ def main() -> None:
         parse_created_at("2026-08-28T22:13:25.541365Z")
     assert parse_created_at("2026-08-28T22:13:25Z") == 1787955205
     assert parse_created_at("2026-08-28T22:13:25+00:00") == 1787955205
-    # Unreadable shapes must sort as ancient (0.0), never as recent, so the
-    # purge errs towards deleting a leftover rather than keeping it forever.
+    # Unreadable shapes return None, which the purge keeps and reports. Not a
+    # sentinel age: "ancient" would delete a concurrent run's document, and
+    # "recent" would silently switch the purge off and let the corpus grow
+    # back, which is the failure the purge exists to prevent.
     for unreadable in ("", "yesterday", None, 17870050):
-        assert parse_created_at(unreadable) == 0.0, unreadable
+        assert parse_created_at(unreadable) is None, unreadable
 
     print("ok: verify-rag-roundtrip.py check_stream_frames leak/post-finish assertions")
 

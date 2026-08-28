@@ -267,19 +267,24 @@ def ingest(edge: str, auth: dict, marker: str) -> str:
     fail(f"document never reached status=embedded after {INGEST_ATTEMPTS} attempts")
 
 
-def parse_created_at(value: str) -> float:
-    """Epoch seconds from the API's created_at, or 0.0 when unparseable.
+def parse_created_at(value: str) -> "float | None":
+    """Epoch seconds from the API's created_at, or None when unparseable.
 
-    Deliberately tolerant: only the leading YYYY-MM-DDTHH:MM:SS is read, so a
-    trailing Z, an offset, or sub-second digits of any length all parse the
-    same. 0.0 (treated as ancient by the caller) is the right answer for a
-    shape this cannot read, because the only thing it drives is whether a
-    leftover fixture is old enough to delete.
+    Deliberately tolerant about what it accepts: only the leading
+    YYYY-MM-DDTHH:MM:SS is read, so a trailing Z, an offset, or sub-second
+    digits of any length all parse the same.
+
+    None rather than a sentinel age, because both sentinels are wrong. Treat
+    an unreadable timestamp as ancient and the purge deletes a document a
+    concurrent run may still be using. Treat it as recent and the purge
+    silently stops working, which brings back the crowding failure it exists
+    to prevent. The caller keeps the document and says so, so the format
+    change surfaces as a line in the log rather than as either failure.
     """
     try:
-        return calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S"))
+        return float(calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S")))
     except (ValueError, TypeError):
-        return 0.0
+        return None
 
 
 def purge_stale_fixtures(edge: str, auth: dict) -> None:
@@ -313,7 +318,11 @@ def purge_stale_fixtures(edge: str, auth: dict) -> None:
     for doc in docs:
         if not str(doc.get("name", "")).startswith(FIXTURE_NAME_PREFIX):
             continue
-        if parse_created_at(doc.get("created_at", "")) > cutoff:
+        created = parse_created_at(doc.get("created_at", ""))
+        if created is None:
+            print(f"  fixture purge: kept {doc['id']}, created_at {doc.get('created_at')!r} is not a shape this understands")
+            continue
+        if created > cutoff:
             continue
         del_status, _ = request(edge, auth, "DELETE", f"/v1/rag/documents/{doc['id']}")
         if del_status in (200, 202, 204):
