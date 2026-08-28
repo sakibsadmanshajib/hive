@@ -27,7 +27,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { formatCredits, formatTokens } from "@/lib/format/credits";
+import {
+  formatCredits,
+  formatNumber,
+  formatTokens,
+} from "@/lib/format/credits";
 
 /*
  * Next steps shown under the metric row. Every entry is a real console route,
@@ -73,25 +77,35 @@ export default async function ConsolePage() {
   const isUnverified = viewer.user.email_verified === false;
   const needsSetup = profile.profile_setup_complete === false;
 
+  // usageRows/errorRows are `null` on a fetch failure and `[]` on a genuine
+  // empty result: an analytics outage must not render as "no requests" or
+  // "no errors", the same false-zero the em-dash placeholder this replaced
+  // would never have claimed. Mirrors the usageUnavailable pattern in
+  // app/console/catalog/[id]/page.tsx.
   const [balance, usageRows, errorRows] = await Promise.all([
     isUnverified ? Promise.resolve(null) : getBalance().catch((): null => null),
     getAnalyticsUsage({ group_by: "model", window: "24h" }).catch(
-      (): [] => [],
+      (): null => null,
     ),
     getAnalyticsErrors({ group_by: "api_key", window: "24h" }).catch(
-      (): [] => [],
+      (): null => null,
     ),
   ]);
 
-  const requestCount = usageRows.reduce(
+  const usageUnavailable = usageRows === null;
+  const errorsUnavailable = errorRows === null;
+  const requestCount = (usageRows ?? []).reduce(
     (sum, row) => sum + row.request_count,
     0,
   );
-  const totalTokens = usageRows.reduce(
+  const totalTokens = (usageRows ?? []).reduce(
     (sum, row) => sum + row.total_input_tokens + row.total_output_tokens,
     0,
   );
-  const errorCount = errorRows.reduce((sum, row) => sum + row.error_count, 0);
+  const errorCount = (errorRows ?? []).reduce(
+    (sum, row) => sum + row.error_count,
+    0,
+  );
 
   return (
     <ConsoleShell
@@ -190,13 +204,29 @@ export default async function ConsolePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="px-5 py-5">
-              {requestCount > 0 ? (
+              {usageUnavailable ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    Couldn&rsquo;t load activity.
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    Try{" "}
+                    <Link
+                      href="/console/analytics"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      Analytics
+                    </Link>{" "}
+                    directly, or reload this page.
+                  </p>
+                </div>
+              ) : requestCount > 0 ? (
                 <div className="flex flex-col gap-1">
                   <p
                     className="metric text-3xl text-[var(--color-ink)]"
                     data-numeric
                   >
-                    {formatCredits(requestCount)}
+                    {formatNumber(requestCount)}
                   </p>
                   <p className="text-xs text-[var(--color-ink-3)]">
                     <span className="metric text-[var(--color-ink-2)]">
@@ -239,7 +269,23 @@ export default async function ConsolePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="px-5 py-5">
-              {errorCount > 0 ? (
+              {errorsUnavailable ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    Couldn&rsquo;t load error data.
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    Try{" "}
+                    <Link
+                      href="/console/logs"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      the request log
+                    </Link>{" "}
+                    directly, or reload this page.
+                  </p>
+                </div>
+              ) : errorCount > 0 ? (
                 <div className="flex items-center gap-3">
                   <span className="grid h-9 w-9 place-items-center rounded-full bg-[var(--color-danger-soft)] text-[var(--color-danger)]">
                     <AlertTriangle size={16} aria-hidden="true" />
@@ -249,7 +295,7 @@ export default async function ConsolePage() {
                       className="metric text-2xl text-[var(--color-ink)]"
                       data-numeric
                     >
-                      {formatCredits(errorCount)}
+                      {formatNumber(errorCount)}
                     </p>
                     <p className="text-xs text-[var(--color-ink-3)]">
                       <Link

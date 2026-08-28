@@ -136,4 +136,20 @@ describe("Console overview empty states", () => {
     expect(cta.getAttribute("href")).toBe("/console/logs?errors=true&window=24h");
     expect(screen.queryByText("No errors recorded.")).toBeNull();
   });
+
+  it("shows a distinct unavailable state for Today's activity on a fetch failure, never the empty-state copy", async () => {
+    usageMock.mockRejectedValue(new Error("upstream 500"));
+    errorsMock.mockResolvedValue([]);
+    await renderOverview();
+    expect(screen.getByText("Couldn’t load activity.")).toBeTruthy();
+    expect(screen.queryByText("No requests in the last 24 hours.")).toBeNull();
+  });
+
+  it("shows a distinct unavailable state for Recent errors on a fetch failure, never the empty-state copy", async () => {
+    usageMock.mockResolvedValue([]);
+    errorsMock.mockRejectedValue(new Error("upstream 500"));
+    await renderOverview();
+    expect(screen.getByText("Couldn’t load error data.")).toBeTruthy();
+    expect(screen.queryByText("No errors recorded.")).toBeNull();
+  });
 });

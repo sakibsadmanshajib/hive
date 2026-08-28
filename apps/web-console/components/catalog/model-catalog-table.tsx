@@ -145,7 +145,7 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
     },
     {
       key: "try",
-      header: "",
+      header: <span className="sr-only">Try in chat</span>,
       cell: (row) => (
         <a
           href={chatModelUrl(row.id)}

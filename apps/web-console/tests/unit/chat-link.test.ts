@@ -7,11 +7,10 @@ describe("chat-link", () => {
 
   it("builds a model preselect URL on the default chat origin", async () => {
     vi.resetModules();
-    const { chatModelUrl, chatHomeUrl } = await import("@/lib/chat-link");
+    const { chatModelUrl } = await import("@/lib/chat-link");
     expect(chatModelUrl("groq/llama-3.3-70b")).toBe(
       "https://chat-hive.scubed.co/?model=groq%2Fllama-3.3-70b",
     );
-    expect(chatHomeUrl()).toBe("https://chat-hive.scubed.co/");
   });
 
   it("encodes reserved characters in model ids", async () => {
@@ -24,6 +23,13 @@ describe("chat-link", () => {
 
   it("honors the NEXT_PUBLIC_CHAT_URL override", async () => {
     vi.stubEnv("NEXT_PUBLIC_CHAT_URL", "http://localhost:8080");
+    vi.resetModules();
+    const { chatModelUrl } = await import("@/lib/chat-link");
+    expect(chatModelUrl("m1")).toBe("http://localhost:8080/?model=m1");
+  });
+
+  it("strips a trailing slash from a pasted NEXT_PUBLIC_CHAT_URL override", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAT_URL", "http://localhost:8080/");
     vi.resetModules();
     const { chatModelUrl } = await import("@/lib/chat-link");
     expect(chatModelUrl("m1")).toBe("http://localhost:8080/?model=m1");
