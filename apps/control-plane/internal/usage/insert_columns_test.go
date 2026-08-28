@@ -45,12 +45,23 @@ func TestUsageEventInsertWritesOnlyKnownColumns(t *testing.T) {
 	}
 
 	pattern := regexp.MustCompile(`(?s)INSERT INTO public\.usage_events\s*\(([^)]*)\)`)
-	match := pattern.FindSubmatch(source)
-	if match == nil {
+	matches := pattern.FindAllSubmatch(source, -1)
+	if len(matches) == 0 {
 		t.Fatal("could not find the usage_events INSERT column list in repository.go")
 	}
 
-	for _, raw := range strings.Split(string(match[1]), ",") {
+	for _, match := range matches {
+		assertColumnsAreKnown(t, string(match[1]))
+	}
+}
+
+// assertColumnsAreKnown checks one INSERT column list. Every such statement in
+// the file is checked, not just the first: a second insert added later is
+// exactly the drift this test exists to catch.
+func assertColumnsAreKnown(t *testing.T, columnList string) {
+	t.Helper()
+
+	for _, raw := range strings.Split(columnList, ",") {
 		column := strings.TrimSpace(raw)
 		if column == "" {
 			continue

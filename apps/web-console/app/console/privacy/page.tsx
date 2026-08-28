@@ -42,6 +42,10 @@ type CatalogList = CatalogModel[] | null;
  *     (apps/control-plane/internal/usage/service.go), a key-name denylist.
  *     UsageEventRow in lib/control-plane/client.ts is a console-side
  *     projection of that table, not the table, so it cannot carry the claim.
+ *     customer_tags gets no redaction at all, which is safe only because
+ *     nothing writes it today (no call site in edge-api sets CustomerTags).
+ *     If a customer-supplied tag ever reaches that column, this card needs
+ *     a sentence about it.
  *   - Content that IS stored is named rather than omitted: batch input and
  *     output files (apps/control-plane/internal/batchstore/executor), file
  *     uploads (apps/edge-api/internal/files), and RAG documents and chunks
@@ -123,9 +127,14 @@ export default async function PrivacyPage() {
               completions are not part of it.
             </p>
             <p>
-              No synchronous request through this gateway has its body
-              persisted or logged: chat completion, completion, embedding
-              and audio requests are relayed and not retained here.
+              No synchronous request through this gateway has its request or
+              response body stored: chat completion, completion, embedding
+              and audio requests are relayed and not retained. One
+              exception, named because it is a real one: when an upstream
+              provider fails a request, the error text it returned is
+              written to this deployment's server logs for diagnosis, and a
+              provider that echoes part of a request in its error text would
+              have that fragment logged with it.
             </p>
             <p>
               Three endpoints on this same gateway do store content, because
@@ -141,13 +150,13 @@ export default async function PrivacyPage() {
                 account.
               </li>
               <li>
-                <strong className="font-medium">File uploads.</strong>
-                Anything uploaded through the files API is stored until you
+                <strong className="font-medium">File uploads.</strong> Anything
+                uploaded through the files API is stored until you
                 delete it through that same API.
               </li>
               <li>
-                <strong className="font-medium">RAG documents.</strong>
-                Indexed documents are stored in full, both as the original
+                <strong className="font-medium">RAG documents.</strong> Indexed
+                documents are stored in full, both as the original
                 upload and as the text chunks the retrieval index searches.
                 Deleting a document deletes its chunks with it.
               </li>
@@ -216,7 +225,7 @@ export default async function PrivacyPage() {
                 display failure on this page and does not change anything
                 stated above.
               </p>
-            ) : models.length ? (
+            ) : models.length > 0 ? (
               <ul className="flex flex-col gap-2">
                 {models.map((model) => (
                   <li

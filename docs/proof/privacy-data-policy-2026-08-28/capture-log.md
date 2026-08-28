@@ -95,3 +95,49 @@ without naming *which* vendor. This screenshot (`privacy-page-v2.png`)
 reflects the corrected copy; the original (`privacy-page-full.png`,
 superseded, still linked from the PR's review history for context) does
 not.
+
+## Revision 3: recapture after the review-round corrections (2026-08-28, later)
+
+Commit under test: the review-round fix that rewrites the four content
+claims flagged on PR #1277, plus the adversarial-review follow-ups.
+
+What changed on the page since revision 2, and therefore what this capture
+has to show: the metering sentence is now behavioural rather than
+structural, a bulleted list names batch jobs, file uploads and RAG
+documents as the three surfaces that do store content, the provider
+blindness sentence is narrowed to error responses and this page, the
+data-collection paragraph is new, the alias sentence no longer claims a
+permanent one-to-one mapping, and a fourth card lists what the page does
+not cover.
+
+Same substrate constraint as revision 1 and unchanged: the shared dev
+Supabase project is deleted, so no real signed-in console session is
+obtainable in this sandbox on any branch. The same throwaway, uncommitted
+harness route was used, generated mechanically from the real
+app/console/privacy/page.tsx by splitting it at its return statement and
+substituting literal mock props for the getViewer, getAccountProfile and
+getCatalogModels calls. The copy, the components, the compiled Tailwind
+CSS and the ConsoleShell sidebar in the screenshot are the real ones from
+this branch.
+
+Captured URL: http://localhost:3000/proofharness
+
+No credential appears in that URL, in the page, or in the screenshot. The
+harness takes no query parameters and required no sign-in, and the only
+identifiers visible in the sidebar are the mock values qa@example.test and
+"QA Workspace", which are fixtures, not a real account. The dev server ran
+with placeholder Supabase values (https://placeholder.supabase.invalid and
+a literal placeholder string) rather than any real key, since the
+middleware only needs the client to construct.
+
+Verified in the captured frame: the "Privacy" nav entry is present and
+active in the Workspace group, all four cards render, and the two bold
+list labels are correctly spaced (an earlier frame in this session showed
+"File uploads.Anything" run together, which was fixed in the source before
+this capture rather than left in the screenshot).
+
+Tool: npx playwright@1.62.1 screenshot --viewport-size=1440,1800 --full-page
+
+Cleanup performed: the harness route and the generator scripts were
+deleted from the worktree (git status clean apart from the two files this
+PR touches), and the dev container was stopped and removed.
