@@ -208,6 +208,8 @@ func TestContainsProviderIdentity(t *testing.T) {
 		"CerebrasCloud",
 		"Served by Together AI.",
 		"Hosted on Google Vertex.",
+		"GoogleVertexAI",
+		"VertexAIStudio",
 		"Runs on Azure ML.",
 	}
 	for _, s := range leaks {
@@ -247,8 +249,9 @@ func TestContainsProviderIdentity(t *testing.T) {
 //   - perplexity, a standard language model evaluation metric, so "low
 //     perplexity on long-context benchmarks" is plausible copy that gets
 //     blanked.
-//   - hyperbolic and bedrock, plain English words, so "the bedrock of our
-//     reasoning stack" is blanked.
+//   - hyperbolic, bedrock and fireworks, plain English words, so "the bedrock
+//     of our reasoning stack" and "produces fireworks on creative prompts"
+//     are blanked.
 //   - the route- slug pattern, which matches route-planning, so "great for
 //     route-planning and logistics" is blanked.
 //
@@ -261,6 +264,7 @@ func TestContainsProviderIdentityAcceptedFalsePositives(t *testing.T) {
 		"Low perplexity on long-context benchmarks.",
 		"The bedrock of our reasoning stack.",
 		"Great for route-planning and logistics tasks.",
+		"The model produces fireworks on creative prompts.",
 	} {
 		if !ContainsProviderIdentity(s) {
 			t.Errorf("accepted false positive %q no longer matches; if that was deliberate, delete it from this list", s)

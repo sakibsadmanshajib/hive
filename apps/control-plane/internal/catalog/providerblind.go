@@ -50,15 +50,17 @@ import (
 // the whole string walks through clean. The same shape loses "OpenRouterAI",
 // "FireworksAI" and "CerebrasCloud". Matching on the leading boundary only
 // costs nothing here, because none of these eleven tokens is the prefix of a
-// common English word. The multiword patterns below keep their trailing
-// boundary, because "together" and "azure" ARE common words and "work
-// together aiming at" must not read as together.ai.
+// common English word. The vertex patterns drop it for the same reason, which
+// is what catches GoogleVertexAI and VertexAIStudio: neither is English.
+// "together" and "azure" ARE common English words, so those two keep their
+// trailing boundary, or "we work together aiming at one answer" reads as
+// together.ai and loses a whole description.
 var providerIdentityRegex = regexp.MustCompile(`(?i)(?:` + strings.Join([]string{
 	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)`,
 	`\bnvidia[ _-]?nim\b`,
 	`\btogether[ ._-]?ai\b`,
-	`\bvertex[ _-]?ai\b`,
-	`\bgoogle[ _-]?vertex\b`,
+	`\bvertex[ _-]?ai`,
+	`\bgoogle[ _-]?vertex`,
 	`\bazure[ _-]?(?:openai|ai|ml)\b`,
 	`\broute-[a-z0-9][a-z0-9._/-]*`,
 }, "|") + `)`)

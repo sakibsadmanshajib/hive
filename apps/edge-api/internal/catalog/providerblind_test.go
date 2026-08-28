@@ -173,6 +173,33 @@ func TestRedactSnapshotLeavesTheCallersSlicesAlone(t *testing.T) {
 	}
 }
 
+// fetchSnapshot deliberately replaces a nil Models or Catalog with an empty
+// slice one line before calling redactSnapshot, so GET /v1/models serialises
+// "models":[] rather than "models":null and a strict OpenAI client does not
+// choke. The defensive copy inside redactSnapshot must not undo that:
+// append([]Model(nil)) with nothing to append returns the nil first argument,
+// so copying an empty-but-not-nil slice hands back a nil one.
+func TestFetchSnapshotKeepsEmptyListsNonNil(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[],"catalog":[]}`))
+	}))
+	defer server.Close()
+
+	snapshot, err := NewClient(server.URL).FetchSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSnapshot: %v", err)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if got := string(raw); got != `{"models":[],"catalog":[]}` {
+		t.Errorf("empty lists must serialise as [] and not null, got %s", got)
+	}
+}
+
 // The vocabulary is duplicated across the two Go modules rather than shared
 // (see providerblind.go for why fifteen tokens do not justify a new module).
 // This is the half of that trade that keeps the copies honest: the same table
@@ -195,6 +222,8 @@ func TestContainsProviderIdentity(t *testing.T) {
 		"CerebrasCloud",
 		"Served by Together AI.",
 		"Hosted on Google Vertex.",
+		"GoogleVertexAI",
+		"VertexAIStudio",
 		"Runs on Azure ML.",
 	}
 	for _, s := range leaks {

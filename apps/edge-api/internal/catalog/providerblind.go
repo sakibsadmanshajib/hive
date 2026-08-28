@@ -26,16 +26,17 @@ import (
 // carries the full reasoning and the note on why fifteen tokens do not justify
 // a shared Go module across the two.
 //
-// The token list carries no trailing \b on purpose: "GroqCloud" is Groq's own
-// product name and a trailing boundary loses it, since q followed by C is word
-// character to word character. The multiword patterns keep theirs, because
-// "together" and "azure" are common English words.
+// The token list and the vertex patterns carry no trailing \b on purpose:
+// "GroqCloud" is Groq's own product name and a trailing boundary loses it,
+// since q followed by C is word character to word character, and the same
+// shape loses GoogleVertexAI. "together" and "azure" keep theirs, because they
+// are common English words.
 var providerIdentityRegex = regexp.MustCompile(`(?i)(?:` + strings.Join([]string{
 	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)`,
 	`\bnvidia[ _-]?nim\b`,
 	`\btogether[ ._-]?ai\b`,
-	`\bvertex[ _-]?ai\b`,
-	`\bgoogle[ _-]?vertex\b`,
+	`\bvertex[ _-]?ai`,
+	`\bgoogle[ _-]?vertex`,
 	`\bazure[ _-]?(?:openai|ai|ml)\b`,
 	`\broute-[a-z0-9][a-z0-9._/-]*`,
 }, "|") + `)`)
@@ -59,8 +60,18 @@ func redactSnapshot(snapshot Snapshot) Snapshot {
 	// not harmless the day a cache lands in front of an unauthenticated
 	// endpoint that currently makes one HTTP call per request. Control-plane's
 	// half is careful about the same thing for its badge slice.
-	snapshot.Models = append([]Model(nil), snapshot.Models...)
-	snapshot.Catalog = append([]CatalogModel(nil), snapshot.Catalog...)
+	//
+	// Guarded on length, which is not defensive noise: append with nothing to
+	// append returns its first argument, so copying an empty-but-not-nil slice
+	// hands back a nil one. fetchSnapshot replaces nil with []T{} one line
+	// above precisely so GET /v1/models serialises "models":[] rather than
+	// "models":null, and an unguarded copy would silently undo that.
+	if len(snapshot.Models) > 0 {
+		snapshot.Models = append([]Model(nil), snapshot.Models...)
+	}
+	if len(snapshot.Catalog) > 0 {
+		snapshot.Catalog = append([]CatalogModel(nil), snapshot.Catalog...)
+	}
 
 	for i, model := range snapshot.Models {
 		if ContainsProviderIdentity(model.Name) {

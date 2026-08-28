@@ -54,8 +54,8 @@ declare
     '\m(groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)'
     || '|\mnvidia[ _-]?nim\M'
     || '|\mtogether[ ._-]?ai\M'
-    || '|\mvertex[ _-]?ai\M'
-    || '|\mgoogle[ _-]?vertex\M'
+    || '|\mvertex[ _-]?ai'
+    || '|\mgoogle[ _-]?vertex'
     || '|\mazure[ _-]?(openai|ai|ml)\M'
     || '|\mroute-[a-z0-9][a-z0-9._/-]*';
   repaired integer;
@@ -87,7 +87,7 @@ begin
   -- NULL <> 'internal' is NULL, which would drop exactly the rows nobody has
   -- classified yet.
   for offending in
-    select alias_id, display_name, summary, owned_by
+    select alias_id, display_name, summary, owned_by, capability_badges
     from public.model_aliases
     where visibility is distinct from 'internal'
       and (
@@ -98,8 +98,12 @@ begin
       )
     order by alias_id
   loop
-    raise notice 'model_aliases row still names a serving provider in customer-facing copy: alias_id=% display_name=% owned_by=% summary=%',
-      offending.alias_id, offending.display_name, offending.owned_by, offending.summary;
+    -- capability_badges is printed as well as matched. It was matched and not
+    -- printed, so a row that leaked only through a badge reported four clean
+    -- looking fields and read as a regex false positive, which is how a real
+    -- leak gets dismissed.
+    raise notice 'model_aliases row still names a serving provider in customer-facing copy: alias_id=% display_name=% owned_by=% capability_badges=% summary=%',
+      offending.alias_id, offending.display_name, offending.owned_by, offending.capability_badges, offending.summary;
   end loop;
 
   -- alias_id gets its own pass, and it is the one that actually needs a human.
