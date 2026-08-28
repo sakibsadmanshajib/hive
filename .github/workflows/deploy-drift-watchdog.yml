@@ -232,10 +232,19 @@ jobs:
       - name: List covered changes since the baseline
         id: changes
         if: steps.resolve.outputs.no_baseline != 'true'
+        # base_sha/head_sha go through env: rather than direct ${{ }}
+        # interpolation into the shell body below: both ultimately trace
+        # back to the workflow_dispatch override_base_sha/override_head_sha
+        # inputs (free text, unvalidated as SHA-shaped), and the standard
+        # GHA injection mitigation is to never splice such a value directly
+        # into `run:` text, even when the immediate source is a step output
+        # rather than the event payload itself.
+        env:
+          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         run: |
           set -euo pipefail
-          node .github/ci/list-covered-deploy-changes.mjs \
-            "${{ steps.resolve.outputs.base_sha }}" "${{ steps.resolve.outputs.head_sha }}" \
+          node .github/ci/list-covered-deploy-changes.mjs "$BASE_SHA" "$HEAD_SHA" \
             | tee covered-changes.txt
           count=$(wc -l < covered-changes.txt | tr -d ' ')
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -244,10 +253,22 @@ jobs:
       - name: Decide freshness of the newest covered change
         id: age
         if: steps.resolve.outputs.no_baseline != 'true' && steps.changes.outputs.count != '0'
+        # Same env: rationale as the "List covered changes" step above.
+        env:
+          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         run: |
           set -euo pipefail
-          committed=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${{ steps.resolve.outputs.head_sha }}" \
-            --jq '.commit.committer.date')
+          # The commit that must be fresh is the NEWEST COVERED commit, not
+          # main's tip: an unrelated, uncovered commit landing after a
+          # genuinely stale covered commit must not reset the apparent
+          # freshness (PR #1249 and PR #1246 merged 8 seconds apart is the
+          # exact shape that exposed this; see newest-covered-commit.mjs's
+          # own header comment). Local git log, not `gh api`: full history is
+          # already fetched by the checkout step above, so no extra round
+          # trip is needed.
+          newest_covered_sha=$(node .github/ci/newest-covered-commit.mjs "$BASE_SHA" "$HEAD_SHA")
+          committed=$(git log -1 --format=%cI "$newest_covered_sha")
           committed_epoch=$(date -u -d "$committed" +%s)
           now_epoch=$(date -u +%s)
           age_minutes=$(( (now_epoch - committed_epoch) / 60 ))
@@ -255,7 +276,7 @@ jobs:
           within_grace=false
           [ "$age_minutes" -lt 15 ] && within_grace=true
           echo "within_grace=$within_grace" >> "$GITHUB_OUTPUT"
-          echo "main's tip is ${age_minutes} minute(s) old (grace window: 15)"
+          echo "newest covered commit ($newest_covered_sha) is ${age_minutes} minute(s) old (grace window: 15)"
 
       - name: Verdict
         id: verdict
