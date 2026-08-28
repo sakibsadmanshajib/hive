@@ -3,7 +3,13 @@
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 
 interface SparklineProps {
-  /** One point per bucket, oldest first. Absent entries render as a gap of 0. */
+  /**
+   * One point per bucket, oldest first. A null entry means that bucket had
+   * nothing to measure, and it draws as a gap rather than as a measured
+   * zero: cacheHitSparkline is null for any bucket with no prompt tokens,
+   * and rendering that as 0% would claim a cache hit rate over a slice of
+   * time the sample never covered.
+   */
   values: ReadonlyArray<number | null>;
   /**
    * CSS color value. Defaults to the accent theme token so the chart tracks
@@ -34,10 +40,11 @@ export function Sparkline({
   color = "var(--color-accent)",
   label,
 }: SparklineProps) {
-  const data = values.map((value, index) => ({
-    index,
-    value: value ?? 0,
-  }));
+  // Nulls travel through untouched. Recharts renders no point for a null
+  // dataKey value, and connectNulls={false} below keeps the line from
+  // bridging the gap, which is the honest shape for a bucket with no
+  // sample behind it.
+  const data = values.map((value, index) => ({ index, value }));
 
   return (
     <div role="img" aria-label={label}>
@@ -51,6 +58,7 @@ export function Sparkline({
             fillOpacity={0.15}
             strokeWidth={1.5}
             dot={false}
+            connectNulls={false}
             isAnimationActive={false}
           />
         </AreaChart>

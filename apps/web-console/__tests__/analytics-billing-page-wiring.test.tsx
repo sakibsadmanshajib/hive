@@ -94,6 +94,26 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
+// A usage_events row the client's decoder accepts: it rejects any row missing
+// one of the eight required string fields, so the tests that need a real
+// cache sample build rows here rather than inline.
+function usageEvent(id: string, createdAt: string, cacheRead: number) {
+  return {
+    id,
+    request_id: id,
+    request_attempt_id: id,
+    event_type: "completed",
+    endpoint: "/v1/chat/completions",
+    model_alias: "hive-auto",
+    status: "completed",
+    created_at: createdAt,
+    input_tokens: 1000,
+    output_tokens: 100,
+    cache_read_tokens: cacheRead,
+    hive_credit_delta: -500,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.CONTROL_PLANE_BASE_URL = "http://localhost:8081";
@@ -154,7 +174,11 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     });
     render(page);
 
-    expect(screen.queryByText("Unable to load analytics.")).toBeNull();
+    // Regex, not a string: the rendered banner is the single text node
+    // "Unable to load analytics. Refresh to try again." and queryByText
+    // matches the whole normalized string exactly by default, so the string
+    // form returned null whether or not the banner was there.
+    expect(screen.queryByText(/Unable to load analytics/)).toBeNull();
     // The four summary cards: total requests, input tokens, output tokens,
     // total spend. Pre-fix, every one of these rendered "0" regardless of
     // what the mocked endpoints answered (issue #856); this pins the wiring
@@ -236,6 +260,183 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     expect(
       screen.queryByText("No API keys with spend in this window."),
     ).toBeNull();
+  });
+
+  it("renders the page-level error banner, and no overview tiles, when the tab's own primary fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.includes("/analytics/usage")) {
+          return jsonResponse(500, { error: "boom" });
+        }
+        if (url.includes("/analytics/spend")) {
+          return jsonResponse(200, { spend: [] });
+        }
+        if (url.includes("/analytics/errors")) {
+          return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const mod = await import("../app/console/analytics/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ tab: "overview", window: "24h" }),
+    });
+    render(page);
+
+    // The banner is one text node ending in "Refresh to try again.", so only
+    // a substring matcher can see it at all.
+    screen.getByText(/Unable to load analytics/);
+    // And the tiles are gone rather than sitting next to it rendering zeros
+    // an account could read as real.
+    expect(screen.queryByTestId("total-spend")).toBeNull();
+    expect(screen.queryByTestId("cache-hit-rate")).toBeNull();
+  });
+
+  it("renders sparkline captions off a real sample, a rise off a measured zero, and 'No prior data' for a price that has no prior figure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.includes("/analytics/usage")) {
+          // The prior-period call is the one carrying explicit from/to
+          // bounds. It succeeds here, and returns a genuinely empty prior
+          // period rather than failing.
+          if (url.includes("from=")) {
+            return jsonResponse(200, { usage: [] });
+          }
+          return jsonResponse(200, {
+            usage: [
+              {
+                group_key: "hive-auto",
+                total_input_tokens: 18,
+                total_output_tokens: 4,
+                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
+                // A round dollar figure keeps the rendered-text assertion
+                // below stable; the tile now formats this through
+                // formatUsdFromCredits rather than the raw integer.
+                total_credits_spent: 3_000_000_000,
+                request_count: 7,
+              },
+            ],
+          });
+        }
+        if (url.includes("/analytics/spend")) {
+          return jsonResponse(200, { spend: [] });
+        }
+        if (url.includes("/analytics/errors")) {
+          return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          const events = [
+            usageEvent("ev1", "2026-08-25T09:00:00Z", 200),
+            usageEvent("ev2", "2026-08-25T11:00:00Z", 400),
+          ];
+          return jsonResponse(200, { events, next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const mod = await import("../app/console/analytics/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ tab: "overview", window: "24h" }),
+    });
+    render(page);
+
+    // Sparkline caption: visible text, one per tile that carries a trend,
+    // stating the sample it covers. Never absent, and never silent about a
+    // sample being smaller than the window the headline number aggregates.
+    const captions = screen.getAllByText("Trend across all 2 requests this window");
+    expect(captions.length).toBeGreaterThanOrEqual(5);
+    // The prior period came back genuinely empty, so requests, input tokens,
+    // output tokens and spend each rose off a measured zero. That is a rise,
+    // not the absence of a prior period, and it reads differently.
+    const rises = screen.getAllByText(/from zero in the prior period/);
+    expect(rises.length).toBeGreaterThanOrEqual(4);
+    // Blended price is the exception: a prior period that served no tokens
+    // has no price at all, so that one tile says there is no prior figure
+    // rather than claiming a rise off zero credits per million.
+    screen.getByText("No prior data");
+    expect(screen.queryByText("Unavailable")).toBeNull();
+  });
+
+  it("serves a prototype-colliding window value as an ordinary unsupported window, not a 500", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.includes("/analytics/usage")) {
+          return jsonResponse(200, {
+            usage: [
+              {
+                group_key: "hive-auto",
+                total_input_tokens: 18,
+                total_output_tokens: 4,
+                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
+                // A round dollar figure keeps the rendered-text assertion
+                // below stable; the tile now formats this through
+                // formatUsdFromCredits rather than the raw integer.
+                total_credits_spent: 3_000_000_000,
+                request_count: 7,
+              },
+            ],
+          });
+        }
+        if (url.includes("/analytics/spend")) {
+          return jsonResponse(200, { spend: [] });
+        }
+        if (url.includes("/analytics/errors")) {
+          return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const mod = await import("../app/console/analytics/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ tab: "overview", window: "toString" }),
+    });
+    render(page);
+
+    // Live-captured before the fix: this exact query string returned HTTP 500
+    // and the console rendered its generic crash page, because both the span
+    // lookup and the membership check walked the prototype chain and resolved
+    // "toString" to an inherited, always-truthy function.
+    expect(screen.queryByText(/Unable to load analytics/)).toBeNull();
+    screen.getByText("7");
+    // It degrades to the same visible note any other unrecognized window
+    // gets, rather than silently dropping the delta and trend rows.
+    const notes = screen.getAllByText(
+      "No comparison or trend for this window. Pick 24h, 7d or 30d.",
+    );
+    expect(notes.length).toBeGreaterThanOrEqual(4);
   });
 });
 

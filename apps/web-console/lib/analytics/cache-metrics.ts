@@ -132,22 +132,31 @@ export function deriveBlendedCreditsPerMillion(
 export interface PeriodDelta {
   /**
    * Percent change of `current` versus `previous`, e.g. 50 for a 50% rise.
-   * Null when `previous` is zero: OpenRouter's own tile renders "No prior
-   * data" in exactly this case rather than a divide-by-zero Infinity or a
-   * misleading 0%.
+   * Null in the three cases below where no finite percentage exists, each of
+   * which the flags distinguish so the UI never renders two of them as the
+   * same sentence.
    */
   percent: number | null;
   direction: "up" | "down" | "flat";
   /**
-   * True when `previous` is null, meaning the prior-period fetch itself
-   * failed rather than genuinely returning zero. "The prior period had no
+   * True when the prior-period fetch itself failed. "The prior period had no
    * requests" and "we could not ask" are different facts and must render
    * different text (repo convention: lib/format/model-pricing.ts never
    * collapses "explicit zero" and "unknown" into the same label). Absent,
-   * not false, in the ordinary zero-previous case, so existing callers that
-   * never pass null don't have to check it.
+   * not false, otherwise, so callers that never pass the flag do not have to
+   * check it.
    */
   unavailable?: boolean;
+  /**
+   * True when the prior period is a MEASURED zero and the current period is
+   * not: a genuine, observed move off zero, which simply has no finite
+   * percent change. Separate from a bare `percent: null` because "no prior
+   * figure exists" and "the prior figure was zero" are as different as the
+   * two above. An account that served plenty of requests last period and hit
+   * cache on none of them has a real 0% prior cache hit rate, not an absent
+   * one, and a rise off it is a rise.
+   */
+  fromZero?: boolean;
 }
 
 /**
@@ -156,20 +165,43 @@ export interface PeriodDelta {
  * server-side aggregate the tile itself renders (never a bounded sample),
  * so the percentage is exact rather than a sample-derived estimate.
  *
- * `previous: null` is the caller's signal that the prior-period fetch
- * failed (network error, 5xx, timeout) as opposed to succeeding with a
- * genuine zero. It must never be reached by coercing a failed fetch to `0`
- * or `[]` and reducing that -- see fetchPreviousUsage in the analytics page.
+ * The three not-a-percentage cases stay separate, because the caller renders
+ * a different sentence for each and collapsing any two of them states
+ * something about the account that was never measured:
+ *
+ *   - `previousUnavailable` is the caller's signal that the prior-period
+ *     fetch failed (network error, 5xx, timeout). It must never be reached
+ *     by coercing a failed fetch to `0` or `[]` and reducing that, see
+ *     fetchPreviousUsage in lib/analytics/overview-fetch.ts.
+ *   - `previous: null` means no prior figure exists at all, which is not the
+ *     same as a prior figure of zero. A blended price over a prior period
+ *     that served no tokens is undefined, not zero credits per million.
+ *   - `previous` of exactly zero is a real, measured zero. For a count that
+ *     is an account that ran nothing last period; for a RATE it is an
+ *     account that measured 0%, and 0% to 20% is a genuine rise rather than
+ *     an absence of prior data. That case returns `fromZero` with a real
+ *     direction and no percentage, since dividing by zero yields none.
  */
 export function derivePeriodDelta(
   current: number,
   previous: number | null,
+  previousUnavailable = false,
 ): PeriodDelta {
-  if (previous === null) {
+  if (previousUnavailable) {
     return { percent: null, direction: "flat", unavailable: true };
   }
-  if (previous <= 0) {
+  if (previous === null) {
     return { percent: null, direction: "flat" };
+  }
+  if (previous <= 0) {
+    if (current === previous) {
+      return { percent: 0, direction: "flat" };
+    }
+    return {
+      percent: null,
+      direction: current > previous ? "up" : "down",
+      fromZero: true,
+    };
   }
   const percent = ((current - previous) / previous) * 100;
   return {
@@ -412,17 +444,21 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
   const hasDeltaWindow = hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, timeWindow);
   const hasSparklineWindow = EVENT_SAMPLE_WINDOWS.includes(timeWindow);
 
+  // previousUsageFailed rides the third argument rather than being folded
+  // into the previous value as a null, so derivePeriodDelta can keep "the
+  // fetch failed", "there is no prior figure" and "the prior figure was a
+  // measured zero" apart.
   const requestsDelta = hasDeltaWindow
-    ? derivePeriodDelta(totalRequests, previousUsageFailed ? null : previousTotalRequests)
+    ? derivePeriodDelta(totalRequests, previousTotalRequests, previousUsageFailed)
     : undefined;
   const inputTokensDelta = hasDeltaWindow
-    ? derivePeriodDelta(totalInputTokens, previousUsageFailed ? null : previousTotalInputTokens)
+    ? derivePeriodDelta(totalInputTokens, previousTotalInputTokens, previousUsageFailed)
     : undefined;
   const outputTokensDelta = hasDeltaWindow
-    ? derivePeriodDelta(totalOutputTokens, previousUsageFailed ? null : previousTotalOutputTokens)
+    ? derivePeriodDelta(totalOutputTokens, previousTotalOutputTokens, previousUsageFailed)
     : undefined;
   const creditsDelta = hasDeltaWindow
-    ? derivePeriodDelta(totalCreditsSpent, previousUsageFailed ? null : previousTotalCreditsSpent)
+    ? derivePeriodDelta(totalCreditsSpent, previousTotalCreditsSpent, previousUsageFailed)
     : undefined;
 
   const windowUnsupportedNote = overviewWindowNote(hasDeltaWindow, hasSparklineWindow);
@@ -441,14 +477,18 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
     totalCreditsSpent,
     totalInputTokens + totalOutputTokens,
   );
-  // null already carries its own real meaning (no prior tokens to price at
-  // all, deriveBlendedCreditsPerMillion's own guard), distinct from
-  // previousUsageFailed. Only fold the fetch-failure signal in on top of
-  // it; a genuine zero-token prior period still reads as "no prior data"
-  // below, not "unavailable".
-  const previousBlendedCreditsPerMillion = previousUsageFailed
-    ? null
-    : deriveBlendedCreditsPerMillion(previousTotalCreditsSpent, previousTotalTokens);
+  // Null here carries its own real meaning, distinct from a failed fetch: no
+  // prior tokens to price at all (deriveBlendedCreditsPerMillion's own
+  // guard), which derivePeriodDelta now reads as "no prior figure exists"
+  // and the tile renders as "No prior data". The failure signal travels
+  // separately, in the third argument below. The `?? 0` that used to sit at
+  // that call site is gone with it: it turned an unpriceable prior period
+  // into a measured price of zero credits per million, a figure nothing ever
+  // observed, and then compared this window against it.
+  const previousBlendedCreditsPerMillion = deriveBlendedCreditsPerMillion(
+    previousTotalCreditsSpent,
+    previousTotalTokens,
+  );
   const blendedNoteKind: BlendedNoteKind =
     blendedCreditsPerMillion === null
       ? "no-tokens"
@@ -460,7 +500,8 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
       ? undefined
       : derivePeriodDelta(
           blendedCreditsPerMillion,
-          previousUsageFailed ? null : (previousBlendedCreditsPerMillion ?? 0),
+          previousBlendedCreditsPerMillion,
+          previousUsageFailed,
         );
 
   // Sparklines: bucket the CURRENT cache sample over its own real time

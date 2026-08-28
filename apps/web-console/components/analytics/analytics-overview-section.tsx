@@ -48,6 +48,23 @@ function DeltaRow({ delta }: { delta: PeriodDelta }) {
       </p>
     );
   }
+  // A measured prior of exactly zero, with a real move off it. Percent change
+  // against zero is undefined, but the move is not, so the tile states the
+  // move rather than claiming there was no prior figure. An account whose
+  // cache hit rate went from 0% to 20% rose; it did not lack a prior period.
+  if (delta.fromZero) {
+    const zeroTone =
+      delta.direction === "down"
+        ? "text-2xs leading-tight text-[var(--color-danger)]"
+        : "text-2xs leading-tight text-[var(--color-success)]";
+    const zeroArrow = delta.direction === "down" ? "↓" : "↑";
+    return (
+      <p className={zeroTone}>
+        {zeroArrow} from zero in the prior period
+      </p>
+    );
+  }
+  // No prior figure exists to compare against at all.
   if (delta.percent === null) {
     return (
       <p className="text-2xs leading-tight text-[var(--color-ink-3)]">

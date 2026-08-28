@@ -235,36 +235,37 @@ describe("derivePeriodDelta", () => {
     expect(result.direction).toBe("flat");
   });
 
-  it("returns a null percent, never a divide-by-zero Infinity, when the previous period had no data", () => {
-    // A previous period of zero is "nothing to compare against", not a
-    // percent change of positive infinity. OpenRouter's own tile prints
-    // "No prior data" in exactly this case rather than a percentage.
+  it("reports a real move off a measured zero as a rise, never as missing prior data", () => {
+    // A prior rate of 0 percent is measured, not absent, so a current 42
+    // against it is a rise. No finite percentage exists for it, so fromZero
+    // carries the direction instead.
     const result = derivePeriodDelta(42, 0);
     expect(result.percent).toBeNull();
-    // And it is a genuine zero, not a failed fetch: unavailable must be
-    // falsy here, or "No prior data" and "the fetch failed" collapse into
-    // the same signal.
+    expect(result.fromZero).toBe(true);
+    expect(result.direction).toBe("up");
     expect(result.unavailable).toBeFalsy();
   });
 
-  it("treats a zero previous and zero current as flat, not an absence", () => {
+  it("treats a zero previous and zero current as flat at 0 percent, not an absence", () => {
     const result = derivePeriodDelta(0, 0);
-    expect(result.percent).toBeNull();
+    expect(result.percent).toBe(0);
     expect(result.direction).toBe("flat");
+    expect(result.fromZero).toBeFalsy();
   });
 
-  it("marks the delta unavailable, distinct from a real zero previous period, when previous is null", () => {
-    // previous: null is the caller's signal that the prior-period fetch
-    // itself failed (see fetchPreviousUsage in the analytics page), not
-    // that the account genuinely had zero requests last period. Rendering
-    // both as "No prior data" tells a customer with real prior spend that
-    // they had none, purely because control-plane hiccuped.
-    const failed = derivePeriodDelta(42, null);
-    const genuineZero = derivePeriodDelta(42, 0);
+  it("keeps a failed prior fetch, an absent prior figure and a measured zero as three distinct shapes", () => {
+    // Tile text: Unavailable, No prior data, and an arrow off zero. Collapse
+    // any two and the page states something the account never measured.
+    const failed = derivePeriodDelta(42, 0, true);
+    const absent = derivePeriodDelta(42, null);
+    const measuredZero = derivePeriodDelta(42, 0);
 
-    expect(failed.percent).toBeNull();
     expect(failed.unavailable).toBe(true);
-    expect(genuineZero.unavailable).not.toBe(true);
+    expect(absent.unavailable).toBeFalsy();
+    expect(absent.fromZero).toBeFalsy();
+    expect(absent.percent).toBeNull();
+    expect(measuredZero.fromZero).toBe(true);
+    expect(measuredZero.unavailable).toBeFalsy();
   });
 });
 
@@ -412,7 +413,7 @@ describe("sampleTimeSpan", () => {
 });
 
 describe("deriveOverviewTiles", () => {
-  it("distinguishes a failed prior-period fetch (unavailable) from a real zero previous period (no prior data) on requests, tokens and spend", () => {
+  it("distinguishes a failed prior-period fetch (unavailable) from a measured zero previous period (a rise off zero) on requests, tokens and spend", () => {
     const failed = deriveOverviewTiles({
       timeWindow: "7d",
       usage: [usageRow({ request_count: 42 })],
@@ -436,6 +437,13 @@ describe("deriveOverviewTiles", () => {
     });
     expect(realZero.requestsDelta?.unavailable).not.toBe(true);
     expect(realZero.requestsDelta?.percent).toBeNull();
+    expect(realZero.requestsDelta?.fromZero).toBe(true);
+    // The blended price is the exception in the same bundle: a prior period
+    // with no tokens has no price at all, so the tile reads "No prior data"
+    // rather than a rise off a fabricated zero credits per million.
+    expect(realZero.blendedDelta?.percent).toBeNull();
+    expect(realZero.blendedDelta?.fromZero).toBeFalsy();
+    expect(realZero.blendedDelta?.unavailable).toBeFalsy();
   });
 
   it("distinguishes a failed top-keys fetch from a real empty result", () => {
