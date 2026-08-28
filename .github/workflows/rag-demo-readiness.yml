@@ -277,7 +277,20 @@ jobs:
             exit 1
           fi
 
+          # toolchain's own volume (docker-compose.yml: `../../:/workspace`,
+          # relative to THIS compose file) mounts the BOX's persistent
+          # /home/sakib/hive checkout, not this PR's -- it is still on
+          # whatever main was at the last deploy. Confirmed live (run
+          # 33212925653): without the override below, this step ran the
+          # pre-this-PR script and failed on the password branch this PR had
+          # already deleted. The extra -v layers this PR's own copy of the
+          # one file that matters on top, read-only, so the container
+          # actually exercises the change under review rather than
+          # whatever's currently deployed. Once this PR merges and deploys,
+          # the box's own checkout carries this file and the override is
+          # redundant, not wrong -- safe to leave in place permanently.
           docker compose $HIVE_COMPOSE_FLAGS --profile tools run --rm -T \
+            -v "$GITHUB_WORKSPACE/scripts/verify-rag-roundtrip.py:/workspace/scripts/verify-rag-roundtrip.py:ro" \
             -e SUPABASE_URL="$supabase_admin_url" \
             -e SUPABASE_SERVICE_ROLE_KEY="$service_key" \
             -e SUPABASE_ANON_KEY="$anon_key" \
