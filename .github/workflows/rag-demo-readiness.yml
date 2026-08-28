@@ -121,10 +121,16 @@ jobs:
           	SQL
           )
 
-          result=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+          # Piped via stdin, NOT `-c "$sql"`: confirmed live (run 33207901293,
+          # reproduced locally against a throwaway postgres:16-alpine
+          # container) that psql's `-c` argument mode does NOT run the
+          # `:'var'` client-side variable substitution -- only stdin/`-f`
+          # input goes through that scanner. `-c` sent the SQL to the server
+          # completely literally, and the server itself has no idea what a
+          # psql variable is, hence "syntax error at or near ':'".
+          result=$(printf '%s\n' "$sql" | docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
             psql -U "$db_user" -d "$db_name" --no-psqlrc -tAXq -v ON_ERROR_STOP=1 \
-              -v demo_slug=hive-demo -v qa_email="${QA_TESTER_EMAIL:-}" \
-              -c "$sql")
+              -v demo_slug=hive-demo -v qa_email="${QA_TESTER_EMAIL:-}")
           echo "ENABLE_RAG upserted for tenant id(s):"
           echo "$result"
           if [ -z "$(printf '%s' "$result" | tr -d '[:space:]')" ]; then
