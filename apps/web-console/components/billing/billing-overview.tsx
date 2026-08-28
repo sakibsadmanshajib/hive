@@ -12,6 +12,7 @@ import {
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCredits, formatShortDate } from "@/lib/format/credits";
+import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 interface BillingOverviewProps {
   balance: BalanceSummary;
@@ -91,22 +92,33 @@ export function BillingOverview({
         </CardHeader>
         <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex flex-col gap-1">
+            {/*
+             * Same unit change as the overview card, and it matters more here:
+             * this is the page a customer opens to check their money. Fixing
+             * only the dashboard would have left the raw integer on the surface
+             * that decides whether they top up.
+             */}
             <p
               className="metric text-3xl text-[var(--color-ink)]"
               data-numeric
             >
-              {formatCredits(balance.available_credits)}
+              {formatUsdFromCredits(balance.available_credits)}
+            </p>
+            <p className="text-xs text-[var(--color-ink-3)]">
+              <span className="metric text-[var(--color-ink-2)]">
+                {formatCredits(balance.available_credits)}
+              </span>{" "}
+              credits
             </p>
             <p className="text-xs text-[var(--color-ink-3)]">
               Posted{" "}
               <span className="metric text-[var(--color-ink-2)]">
-                {formatCredits(balance.posted_credits)}
+                {formatUsdFromCredits(balance.posted_credits)}
               </span>{" "}
               · Reserved{" "}
               <span className="metric text-[var(--color-ink-2)]">
-                {formatCredits(balance.reserved_credits)}
-              </span>{" "}
-              <span className="ml-1 text-[var(--color-ink-3)]">credits</span>
+                {formatUsdFromCredits(balance.reserved_credits)}
+              </span>
             </p>
           </div>
           <div className="flex items-center gap-3">

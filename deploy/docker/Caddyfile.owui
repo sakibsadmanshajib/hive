@@ -234,30 +234,41 @@
   }
   respond @adminMutationSubtree 404
 
-  # Blueprint Step 3.1 (#311) agent console sidecar. Path-prefixed, not a
-  # subdomain, so it shares this listener and the /admin, /signup, and
-  # mutation blocks above without any new Caddy site block or cert.
+  # Retired: the agent console sidecar (Blueprint Step 3.1, #311). This prefix
+  # used to reverse_proxy to agent-console:3000, a second whole Next.js
+  # application with its own Supabase session, whose signed-out response is a
+  # page headed "Sign in to run agent tasks".
   #
-  # Collision analysis: Open WebUI has no route under /agent-workspace (its
-  # own paths are the SPA root, /api/*, /ws, and /static/*), and Caddy
-  # directives of the same name run in the order they're written in this
-  # file (documented Caddyfile behaviour for repeated directives), so this
-  # matched reverse_proxy is always evaluated -- and can intercept --
-  # before the unmatched catch-all below ever sees the request. OWUI's own
-  # websocket traffic is untouched since it lives on a different path.
-  # Matches both the bare entry URL (/agent-workspace, no trailing slash --
-  # what a freshly-typed or bookmarked link looks like) and everything
-  # under it. The bare path proxies straight to the Next.js app's own root
-  # route, which (via basePath) redirects to /agent-workspace/tasks itself
-  # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
-  @agentConsole path /agent-workspace /agent-workspace/*
-  reverse_proxy @agentConsole agent-console:3000 {
-    header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
-    transport http {
-      response_header_timeout 60s
-      dial_timeout 5s
-    }
-  }
+  # D-045 ruling 1 rejected exactly that: the agent surface is a mode of the
+  # chat composer, an agent run IS a conversation in the same list and the same
+  # transcript, and because there is no separate destination there is no
+  # separate origin and nothing to authenticate into. The proxy left the
+  # rejected gate publicly reachable to anyone holding a bookmark, unlinked
+  # from the UI but answering on the live chat host.
+  #
+  # Redirected rather than 404ed, because three callers still point here and
+  # none of them gains anything from an error: the desktop app builds its
+  # console URL from this prefix (apps/desktop/src/settings.ts), the chat
+  # pipeline action emits /agent-workspace/tasks as a link
+  # (deploy/docker/pipelines/hive_agent_console_action.py), and browsers hold
+  # bookmarks from the months the surface shipped. All three land on the chat
+  # root, which is where Cowork lives now.
+  #
+  # The matcher is the one the proxy used, unchanged, so the set of paths that
+  # reached the sidecar is exactly the set that now redirects: the bare entry
+  # URL (no trailing slash, what a typed or bookmarked link looks like) and
+  # everything under it. 308 rather than Caddy's bare `redir` default of 302:
+  # the retirement is permanent and the method is worth preserving.
+  #
+  # scripts/test_caddy_agent_workspace_redirect.py pins both halves, and it
+  # checks for the upstream address rather than the matcher name, so renaming
+  # the matcher cannot smuggle the proxy back in.
+  #
+  # agent-console itself, its compose service and its build-time proof harness
+  # still exist and are retired separately (#944). This closes the public door;
+  # nothing behind it is reachable through the chat origin any more.
+  @agentWorkspaceRetired path /agent-workspace /agent-workspace/*
+  redir @agentWorkspaceRetired / 308
 
   # `/api/v1/hive/*` is deliberately left to the catch-all below, and the
   # reason is written here so a future reviewer does not have to re-derive it

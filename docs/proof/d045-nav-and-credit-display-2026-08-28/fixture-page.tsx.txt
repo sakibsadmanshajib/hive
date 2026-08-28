@@ -1,0 +1,36 @@
+/*
+ * NOT SHIPPED. This file is copied to apps/web-console/app/proof-fixture/page.tsx
+ * by run-console.sh for the duration of the capture and deleted afterwards, so
+ * the console never carries an unauthenticated route that renders balances.
+ *
+ * It exists because the console's real balance surfaces both sit behind
+ * getRequestContext(), which validates a Supabase session with a server-side
+ * getUser() round trip. There was no Supabase this capture could legitimately
+ * use: the shared pool was saturated, and the only self-hosted stack running on
+ * this machine belongs to another agent's session. So this renders the real
+ * BillingOverview component, from this branch, with fixture props, inside the
+ * real Next.js app and against the real stylesheet. It is a fixture capture and
+ * the log says so.
+ *
+ * The numbers are the ones observed on the live demo box on 2026-08-28:
+ * 458,419,464 credits available, which is $0.458419464 at D-046's unit.
+ */
+import { BillingOverview } from "@/components/billing/billing-overview";
+
+export default function ProofFixturePage() {
+  return (
+    <main className="min-h-screen bg-[var(--color-canvas)] p-10">
+      <div className="mx-auto max-w-3xl">
+        <BillingOverview
+          balance={{
+            available_credits: 458_419_464,
+            posted_credits: 460_000_000,
+            reserved_credits: 1_580_536,
+          }}
+          recentEntries={[]}
+          accountCountryCode="BD"
+        />
+      </div>
+    </main>
+  );
+}

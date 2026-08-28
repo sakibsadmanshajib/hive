@@ -14,12 +14,7 @@ describe('HIVE_NAV', () => {
 	it('names the destinations the shell ships, Projects first per D-045', () => {
 		// 'chats' was dropped: its href ('/') duplicated New Chat and no list
 		// view was ever built behind it (PR #938 added it for row parity only).
-		expect(HIVE_NAV.map((item) => item.id)).toEqual([
-			'projects',
-			'artifacts',
-			'knowledge',
-			'scheduled'
-		]);
+		expect(HIVE_NAV.map((item) => item.id)).toEqual(['projects', 'artifacts', 'scheduled']);
 	});
 
 	it('points the projects destination at its own route inside this application', () => {
@@ -52,12 +47,23 @@ describe('HIVE_NAV', () => {
 		expect(byId('scheduled').href).toBe('/schedules');
 	});
 
-	it('points Knowledge at its own top-level route, outside the workspace permission guard (#1109)', () => {
-		// /workspace/knowledge sits behind the workspace layout's permission
-		// guard and bounced a non-admin straight home, which is what made this
-		// row read as dead on the demo box. The top-level route renders the
-		// read-only index instead.
-		expect(byId('knowledge').href).toBe('/knowledge');
+	it('ships no Knowledge row, because Projects and Artifacts replaced it (#1109, D-045)', () => {
+		// D-045 ruling 2 eliminates Knowledge rather than renaming it. The row
+		// survived one round on the argument that Projects held no RAG
+		// collections yet, and that argument was already false when it was
+		// written: a Hive project IS an Open WebUI knowledge collection
+		// (./projects/projects.ts states the seam), the project detail surface
+		// attaches files to it, and those files are exactly where retrieval
+		// looks. Both rows listed one resource under two names.
+		//
+		// Same shape as the Agents row above, and for the same reason: the ROW
+		// is what D-045 forbids, so '/knowledge' still answers for a bookmark.
+		expect(HIVE_NAV.some((item) => item.id === 'knowledge')).toBe(false);
+		expect(HIVE_NAV.some((item) => item.href.startsWith('/knowledge'))).toBe(false);
+		expect(HIVE_NAV.some((item) => item.label.toLowerCase().includes('knowledge'))).toBe(false);
+		// No Workspace row either: D-045 eliminates the container along with
+		// the row it held.
+		expect(HIVE_NAV.some((item) => item.href.startsWith('/workspace'))).toBe(false);
 	});
 
 	it('gives every row a unique id, a label and an in-app href', () => {
@@ -74,7 +80,7 @@ describe('HIVE_NAV', () => {
 
 describe('isNavItemActive', () => {
 	const projects = byId('projects');
-	const knowledge = byId('knowledge');
+	const artifacts = byId('artifacts');
 
 	it('marks a row current on its own destination and below it', () => {
 		expect(isNavItemActive(projects, '/projects')).toBe(true);
@@ -84,12 +90,12 @@ describe('isNavItemActive', () => {
 
 	it('does not match a route that merely starts with the same characters', () => {
 		expect(isNavItemActive(projects, '/projects-archive')).toBe(false);
-		expect(isNavItemActive(knowledge, '/knowledgebase')).toBe(false);
+		expect(isNavItemActive(artifacts, '/artifacts-archive')).toBe(false);
 	});
 
 	it('treats an empty or missing pathname as no match, since no row links to it', () => {
 		expect(isNavItemActive(projects, '')).toBe(false);
-		expect(isNavItemActive(knowledge, '')).toBe(false);
+		expect(isNavItemActive(artifacts, '')).toBe(false);
 	});
 
 	it('marks exactly one row current on each row\'s own destination', () => {
@@ -97,7 +103,6 @@ describe('isNavItemActive', () => {
 			'/projects',
 			'/projects/abc',
 			'/artifacts',
-			'/knowledge',
 			'/schedules'
 		]) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));

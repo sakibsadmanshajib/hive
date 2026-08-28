@@ -1,0 +1,20 @@
+FIXTURE CAPTURE. Real component, real stylesheet, fixture balance.
+Balance fixture: 458,419,464 available, 460,000,000 posted, 1,580,536 reserved.
+That available figure is the one observed on the live demo box on 2026-08-28.
+
+headline figure rendered: "$0.458"
+card text, line by line:
+  Available balance
+  Top up to keep production traffic flowing without interruption.
+  $0.458
+  458,419,464 credits
+  Posted $0.46 · Reserved $0.00158
+  Buy credits
+  Tax profile
+  Recent transactions
+  The last five ledger events.
+  No transactions yet
+  Your credit ledger fills up after the first top-up.
+  Buy credits
+
+captured 03-console-balance-in-usd.png

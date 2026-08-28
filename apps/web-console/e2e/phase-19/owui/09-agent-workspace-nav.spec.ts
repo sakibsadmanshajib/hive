@@ -72,7 +72,7 @@ async function setSidebar(page: Page, state: "expanded" | "collapsed") {
 const visibleNavRow = (page: Page, id: string) =>
   page.locator(`${NAV_ROW(id)}:visible`).first();
 
-test("the sidebar carries labelled Chats, Agents and Knowledge destinations", async ({
+test("the sidebar carries the labelled destinations D-045 ships, and no others", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -82,10 +82,9 @@ test("the sidebar carries labelled Chats, Agents and Knowledge destinations", as
   await setSidebar(page, "expanded");
 
   for (const [id, label, href] of [
-    ["chats", "Chats", "/"],
-    ["agents", "Agents", "/agents"],
-    // The full path. /knowledge alone is a 404 on this deployment.
-    ["knowledge", "Knowledge", "/workspace/knowledge"],
+    ["projects", "Projects", "/projects"],
+    ["artifacts", "Artifacts", "/artifacts"],
+    ["scheduled", "Scheduled", "/schedules"],
   ] as const) {
     // The visible one of the two, not `.first()`: see setSidebar above.
     const row = visibleNavRow(page, id);
@@ -93,6 +92,22 @@ test("the sidebar carries labelled Chats, Agents and Knowledge destinations", as
     await expect(row).toHaveAttribute("href", href);
     // A label, not an unlabelled icon. This is the specific complaint.
     await expect(row).toContainText(label);
+  }
+
+  /*
+   * The rows D-045 forbids, asserted absent rather than merely not listed
+   * above. "Chats" and "Agents" went with #944 (Cowork is a composer mode, and
+   * a chat list row duplicated New Chat). "Knowledge" goes with #1109: ruling
+   * 2 eliminates it in favour of Projects and Artifacts, and it was listing
+   * the same resource Projects lists, since a Hive project IS an Open WebUI
+   * knowledge collection. The routes behind Agents and Knowledge still answer
+   * for a bookmark; it is the navigation entry that is the finding.
+   */
+  for (const id of ["chats", "agents", "knowledge", "workspace"]) {
+    await expect(
+      page.locator(NAV_ROW(id)),
+      `the ${id} row is back in the sidebar, which D-045 removed`,
+    ).toHaveCount(0);
   }
 });
 

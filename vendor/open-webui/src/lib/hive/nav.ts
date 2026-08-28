@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'projects' | 'artifacts' | 'knowledge' | 'scheduled';
+export type HiveNavIcon = 'projects' | 'artifacts' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -61,27 +61,22 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	 * The '/agents' route itself survives, unlinked, so runs submitted before
 	 * this change are still reachable by URL. It gets no row.
 	 */
-	{
-		/*
-		 * D-045 ruling 2 eliminates Knowledge in favour of Projects and
-		 * Artifacts, and this row is therefore on borrowed time. It is not
-		 * deleted here because Projects does not hold RAG collections yet, so
-		 * removing the row today would take away the only way to reach them and
-		 * put nothing in its place, which is the failure mode #944 warns about
-		 * for the Agents row. It goes when Projects can hold what it holds.
-		 */
-		id: 'knowledge',
-		label: 'Knowledge',
-		// '/knowledge', not '/workspace/knowledge': the workspace layout's
-		// permission guard bounces a non-admin without the workspace.knowledge
-		// permission straight home (#1109), which made this row highlight and do
-		// nothing on the demo box. The /knowledge route sits outside that guard
-		// and renders a read-only index of the caller's own bases; an admin or a
-		// permitted account is forwarded to the full workspace surface.
-		href: '/knowledge',
-		icon: 'knowledge',
-		activePaths: ['/knowledge']
-	},
+	/*
+	 * There is no Knowledge row either, and this one is a deletion rather than
+	 * an omission. D-045 ruling 2 eliminates Knowledge in favour of Projects
+	 * and Artifacts, and the reason previously written here for keeping it,
+	 * that Projects did not hold RAG collections yet, was not true even then:
+	 * a Hive project IS an Open WebUI knowledge collection (the seam is stated
+	 * in ./projects/projects.ts), the project detail surface uploads files
+	 * into it, and those files are where retrieval looks. The two rows listed
+	 * the same resource under two names, so removing this one takes nothing
+	 * away.
+	 *
+	 * '/knowledge' still answers, unlinked, exactly like '/agents' above: the
+	 * row is what D-045 forbids, and a bookmark should not 404. #1109 asked
+	 * for a working destination or no entry, and named removal as the correct
+	 * fix if D-045 stands. It stands.
+	 */
 	{
 		id: 'scheduled',
 		label: 'Scheduled',

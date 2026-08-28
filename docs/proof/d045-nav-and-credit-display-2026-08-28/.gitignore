@@ -1,0 +1,10 @@
+# Screenshots live on the permanent visual-proof-assets GitHub Release, posted
+# with scripts/post-pr-visual-proof.sh, never in git. A raw.githubusercontent
+# URL pinned to a PR branch renders at review time and 404s the moment the
+# branch is deleted, which is what this repo's squash-and-delete merge does to
+# every PR (.wolf/decisions.md D-042, PR #867).
+#
+# The text logs beside them ARE committed, because npm run lint:proof-tokens
+# scans docs/proof/ and nothing else: a log left out of git is a log nothing
+# ever checks for a leaked credential.
+out/*.png

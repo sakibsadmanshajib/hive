@@ -1,0 +1,7 @@
+curl through the repository Caddyfile (deploy/docker/Caddyfile.owui):
+  /agent-workspace                 -> 308 http://caddy-proof:80/
+  /agent-workspace/                -> 308 http://caddy-proof:80/
+  /agent-workspace/tasks           -> 308 http://caddy-proof:80/
+  /agent-workspace/auth/sign-in    -> 308 http://caddy-proof:80/
+  /agents                          -> 200 
+  /agent-workspaces                -> 200 

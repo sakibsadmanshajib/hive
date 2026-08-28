@@ -1,0 +1,17 @@
+base origin under test: http://caddy-proof:80
+
+nav ids present in the DOM: ["artifacts","projects","scheduled"]
+knowledge row present: false
+workspace row present: false
+  hive-nav-projects -> /projects "Projects"
+  hive-nav-artifacts -> /artifacts "Artifacts"
+  hive-nav-scheduled -> /schedules "Scheduled"
+
+captured 01-sidebar-no-knowledge.png
+
+navigating to http://caddy-proof:80/agent-workspace/tasks
+response chain: ["308 /agent-workspace/tasks -> /","200 / -> (no Location)"]
+browser landed on: /
+second sign-in gate on the page: 0
+chat composer present on the landing page: 1
+captured 02-agent-workspace-redirects-to-chat.png

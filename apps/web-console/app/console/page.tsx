@@ -32,6 +32,7 @@ import {
   formatNumber,
   formatTokens,
 } from "@/lib/format/credits";
+import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 /*
  * Next steps shown under the metric row. Every entry is a real console route,
@@ -172,20 +173,40 @@ export default async function ConsolePage() {
             <CardContent className="px-5 py-5">
               {balance ? (
                 <div className="flex flex-col gap-1">
+                  {/*
+                   * Dollars, not the raw credit integer. One US dollar is a
+                   * billion credits (D-046), so a balance of 46 cents rendered
+                   * as "458,419,464": nine digits, no currency mark, no unit
+                   * word. Every price surface in this console and the chat
+                   * composer's credits banner already draw credits as dollars
+                   * through this same formatter, which also guarantees a real
+                   * balance never prints as $0.00.
+                   */}
                   <p
                     className="metric text-3xl text-[var(--color-ink)]"
                     data-numeric
                   >
-                    {formatCredits(balance.available_credits)}
+                    {formatUsdFromCredits(balance.available_credits)}
+                  </p>
+                  {/*
+                   * The exact credit count stays, labelled. The ledger and the
+                   * invoices are denominated in credits, so a balance card with
+                   * no credit figure cannot be reconciled against them.
+                   */}
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    <span className="metric text-[var(--color-ink-2)]">
+                      {formatCredits(balance.available_credits)}
+                    </span>{" "}
+                    credits
                   </p>
                   <p className="text-xs text-[var(--color-ink-3)]">
                     Posted{" "}
                     <span className="metric text-[var(--color-ink-2)]">
-                      {formatCredits(balance.posted_credits)}
+                      {formatUsdFromCredits(balance.posted_credits)}
                     </span>{" "}
                     · Reserved{" "}
                     <span className="metric text-[var(--color-ink-2)]">
-                      {formatCredits(balance.reserved_credits)}
+                      {formatUsdFromCredits(balance.reserved_credits)}
                     </span>
                   </p>
                 </div>
