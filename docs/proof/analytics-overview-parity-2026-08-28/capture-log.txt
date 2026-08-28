@@ -1,0 +1,186 @@
+Visual proof: PR #1276, analytics overview parity (deltas, sparklines, cache
+split, top keys).
+
+Captured 2026-08-28T21:54Z against a LIVE stack. Nothing below is a fixture, a
+mock server, or a stubbed control-plane response. The account's usage numbers
+are synthetic rows seeded into a throwaway database; every layer that reads,
+aggregates, serves and renders them is the real one.
+
+
+STACK UNDER TEST
+================
+
+  browser        Chromium via Playwright, 1440x1000 viewport
+  web-console    Next.js PRODUCTION build (npm run build && npm start),
+                 http://localhost:3276, built from this PR's head commit
+                 3cb454e27
+  control-plane  hive-control-plane:ci, http://localhost:8276, compose project
+                 hive-apr1276, --profile local (in-stack redis)
+  database       throwaway Postgres, pgvector/pgvector:pg17, port 55432, with
+                 all 108 files in supabase/migrations applied through
+                 scripts/apply-migrations.sh (109 ledger rows, source=applied)
+  auth           throwaway GoTrue + PostgREST behind one nginx origin on port
+                 9276, stood up by scripts/ci-supabase-stack.sh, the same
+                 script the "Web E2E (full stack)" CI job uses
+  identity       seeded by apps/web-console/tests/e2e/support/
+                 e2e-auth-fixtures.mjs with a per-run E2E_RUN_KEY; no shared
+                 or pre-existing account was touched and no password was reset
+
+Why a throwaway stack and not the usual shared one: the SUPABASE_DB_URL in the
+shared checkout's .env points at a hosted Supabase project that no longer
+resolves. A direct libpq connection to it returns
+
+  FATAL:  (ENOTFOUND) tenant/user postgres.<project-ref> not found
+
+which is a deleted project, not an exhausted connection pool. The earlier
+attempt on this PR was diagnosed as shared-pool exhaustion; it was not, and
+waiting for that pool to free up would never have produced a render.
+
+Every container, network and volume created for this capture is torn down at
+the end of the run.
+
+
+SEED DATA
+=========
+
+Synthetic, written directly into the throwaway database. 410 request_attempts
+and 410 completed usage_events on one account, split into two equal windows so
+the prior-period deltas have something real to compare against:
+
+  period      events  input_tokens  output_tokens  cache_read  cache%   USD
+  prior 7d       170        317,765         68,000      63,261   19.9%  1.07
+  current 7d     240        540,500         96,000      88,418   16.4%  1.69
+
+Requests are spread EVENLY across each 7-day window on purpose. That matters
+for reading the sparklines below: the true shape of this account's traffic is
+flat, so any non-flat sparkline the page draws is an artifact of how the
+sparkline is sourced, not of the data.
+
+Three API keys ("Production gateway", "Staging gateway", "Nightly batch job")
+carry a 60/30/10 share of the traffic, so the Top API keys panel has a real
+ranking to render.
+
+
+CAPTURE TRANSCRIPT
+==================
+
+## Sign-in
+URL: http://localhost:3276/auth/sign-in
+Signed in as the run-scoped verified fixture user, POST form, no credential in
+any URL -> http://localhost:3276/console
+
+## 01-overview-7d
+URL: http://localhost:3276/console/analytics?window=7d
+HTTP status: 200
+screenshot: 01-overview-7d.png
+
+Rendered overview tiles (label | value | delta | note):
+  Total requests | 240 | up 41.2% vs prior period
+  Input tokens | 540,500 | up 70.1% vs prior period
+  Output tokens | 96,000 | up 41.2% vs prior period
+  Total spend | $1.69 | up 58.6% vs prior period
+  Cache hit rate | 15.6% | down 19.0% vs prior period | Cached prompt tokens
+    over the last 100 requests, the most this window returns in one page.
+  Blended price / 1M | $2.65 | down 3.9% vs prior period | 2,654,905,891.595
+    credits. Credits spent divided by input plus output tokens, per million.
+    Effective, so cache reads are already priced in.
+
+Panels present: Cached vs uncached, Top API keys by spend
+
+Cached vs uncached panel: CACHED 36,674 / UNCACHED 198,996, described in the
+panel itself as "over the same bounded sample as the cache hit rate tile
+above".
+
+Top API keys by spend:
+  1  Production gateway  ...9f2c   $0.954
+  2  Staging gateway     ...41ab   $0.518
+  3  Nightly batch job   ...7d05   $0.218
+
+Provider-exposure check, read off the rendered page rather than off the diff:
+the only identifiers rendered anywhere in the new panels are this account's own
+key nicknames and their redacted suffixes. No model alias, no provider name, no
+upstream request id appears in either new panel or on any tile. The PR's claim
+here holds.
+
+## 02-overview-24h
+URL: http://localhost:3276/console/analytics?window=24h
+HTTP status: 200
+screenshot: 02-overview-24h.png
+
+Rendered overview tiles (24h window):
+  Total requests | 34 | flat 0.0% vs prior period
+  Input tokens | 82,625 | up 2.6% vs prior period
+  Output tokens | 13,690 | up 0.7% vs prior period
+  Total spend | $0.253 | up 2.6% vs prior period
+  Cache hit rate | 14.7% | down 8.5% vs prior period | Cached prompt tokens
+    over all 34 requests in this window.
+  Blended price / 1M | $2.63 | up 0.2% vs prior period
+
+This window holds 34 requests, under the 100-row sample cap, so its note reads
+"over all 34 requests in this window" and its sparklines cover the whole
+window. Contrast with the 7d capture above.
+
+## 03-window-prototype-crash
+URL: http://localhost:3276/console/analytics?window=toString
+HTTP status: 500
+screenshot: 03-window-prototype-crash.png
+Page text: "Something went wrong on this page. The rest of the console is
+unaffected. Try again, and if it keeps failing, contact support and quote
+reference 4020607265."
+
+Browser console:
+  [error] Failed to load resource: the server responded with a status of 500
+          (Internal Server Error)
+  [error] Error: Minified React error #441
+
+This is a live reproduction of a defect this PR introduces, captured on the
+same stack as the two working screenshots above. `window` is read straight off
+the query string with no allowlist (page.tsx: `const timeWindow =
+params.window ?? "7d"`), and the new code then does a plain object lookup on
+it. `"toString" in ANALYTICS_WINDOW_SPAN_MS` is true, because `in` walks the
+prototype chain, and `ANALYTICS_WINDOW_SPAN_MS["toString"]` is a function,
+which is truthy, so `priorPeriodBounds`'s `if (!spanMs) return null` guard does
+not fire. `new Date(now.getTime() - <function>)` is an Invalid Date and
+`.toISOString()` on it throws a RangeError, outside any try/catch, which
+rejects the outer Promise.all and takes the whole server component down.
+`constructor`, `valueOf`, `hasOwnProperty` and `__proto__` all do the same
+thing.
+
+
+WHAT THE SPARKLINES ACTUALLY SHOW
+=================================
+
+On 01-overview-7d.png the sparklines on Total requests, Input tokens, Output
+tokens, Total spend and Cache hit rate are flat at zero across roughly the
+left seven eighths of their width and then rise steeply at the right edge.
+
+The seeded traffic behind them is uniform across all seven days. The hockey
+stick is not in the data. It is the 100-row page cap: fetchCacheSample asks
+for CACHE_SAMPLE_LIMIT=100 rows and the backend serves them
+`ORDER BY created_at DESC` (apps/control-plane/internal/usage/repository.go),
+so the sample is the most recent 100 of the window's 240 requests, all of them
+clustered in the newest third of the window. bucketByTime then spreads those
+100 rows across the full seven-day span, and the six or seven buckets with no
+rows in them render as a real, measured zero.
+
+The cache-hit tile does disclose its sample, in words, on the tile. The
+sparklines do not: four of the five sit next to a headline number that IS a
+full-window server aggregate (240 requests, 540,500 input tokens, $1.69), and
+they carry no caption, no tooltip and no accessible description, because the
+wrapper is aria-hidden.
+
+Also visible in the same screenshot: the Blended price / 1M tile has a delta
+but NO sparkline, so five tiles carry one, not the six the PR description
+claims.
+
+
+TEARDOWN
+========
+
+docker compose -p hive-apr1276 down -v --remove-orphans
+docker rm -f hive-ci-db-apr1276 psqlhost-apr1276 supabase-auth supabase-rest
+             supabase-gw
+docker network rm hive-ci-supabase
+
+No shared account, no shared database and no shared credential was written to
+at any point in this capture.
