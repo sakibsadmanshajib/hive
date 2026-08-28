@@ -37,70 +37,67 @@ package signup
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SyncTenantMembershipRole propagates accountRole (an
-// accounts.RoleOwner/accounts.RoleMember value) for userID onto the
-// public.tenant_users row for the tenant public.tenant_billing_accounts maps
-// accountID to.
+// SyncTenantMembershipRole propagates userID's CURRENT
+// public.account_memberships.role on accountID onto the public.tenant_users
+// row for the tenant public.tenant_billing_accounts maps accountID to.
 //
-// accountID resolving to no tenant, or userID holding no tenant_users row on
-// the resolved tenant, are both ordinary, non-fatal, transitional states --
-// mirroring EnsureTenantBillingAccount's own contract -- reported via reason
-// rather than err, so the caller can log without treating them as a fault:
+// Deliberately does not take the caller's requested role as a parameter and
+// write it directly: accounts.Service.UpdateMemberRole already committed the
+// account_memberships write before calling this, so re-reading it fresh,
+// inside the same UPDATE statement that writes tenant_users, is what makes
+// this call race-safe against a second, concurrent UpdateMemberRole call for
+// the same user. Two overlapping calls (a promote and a demote for the same
+// account_memberships row, however unlikely) can commit their
+// account_memberships writes in either order; whichever commits LAST is,
+// correctly, the final account_memberships value. If this function instead
+// trusted its own caller's newRole parameter, the two resulting
+// tenant_users writes could themselves be reordered independently of that,
+// and the loser could leave tenant_users disagreeing with the
+// account_memberships row that actually won -- reproducing a narrow window
+// of exactly the bug this function exists to close (issue #1245). Reading
+// account_memberships fresh inside the UPDATE means every call converges on
+// whatever account_memberships currently says at the moment it runs, not
+// what its own caller asked for.
 //
-//   - reason == "unmapped_account": no public.tenant_billing_accounts row for
-//     accountID yet. Common for a tenant whose billing mapping has not
-//     converged (see EnsureTenantBillingAccount's doc for when that
-//     resolves), and for any non-HIVE_CLOUD deployment that never maps at
-//     all.
-//   - reason == "no_tenant_membership_row": accountID resolved to a tenant,
-//     but userID has no row in public.tenant_users for it (a race with
-//     signup provisioning, or a membership predating it). Nothing to sync
-//     yet.
+// A single UPDATE ... FROM, not a SELECT then an UPDATE: one round trip, and
+// no separate "resolve the tenant" step to race against a mapping that
+// changes between two queries (it does not, tenant_billing_accounts rows are
+// never reassigned, but there is no reason to take two round trips for what
+// one accomplishes).
 //
-// err is reserved for a genuine, unexpected database fault.
-func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID, userID uuid.UUID, accountRole string) (synced bool, reason string, err error) {
-	var tenantRole string
-	switch accountRole {
-	case "owner":
-		tenantRole = "OWNER"
-	case "member":
-		tenantRole = "MEMBER"
-	default:
-		return false, "", fmt.Errorf("signup: sync tenant membership role: unsupported account role %q", accountRole)
-	}
-
-	// account_id is UNIQUE on public.tenant_billing_accounts
-	// (20260728_01_tenant_billing_account.sql), so this mapping is never
-	// ambiguous: at most one tenant funds a given account.
-	var tenantID uuid.UUID
-	err = pool.QueryRow(ctx, `
-		SELECT tenant_id FROM public.tenant_billing_accounts WHERE account_id = $1
-	`, accountID).Scan(&tenantID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, "unmapped_account", nil
-		}
-		return false, "", fmt.Errorf("signup: resolve tenant for account: %w", err)
-	}
-
+// RowsAffected() == 0 covers three ordinary, non-fatal, transitional states
+// at once, all reported as reason == "no_match" rather than err: accountID
+// has no public.tenant_billing_accounts row yet (mapping has not converged,
+// or a non-HIVE_CLOUD deployment that never maps at all -- see
+// EnsureTenantBillingAccount's doc), userID has no ACTIVE... row in
+// public.account_memberships for accountID (should not happen for a caller
+// that just updated one, but is not this function's job to assume), or
+// userID has no public.tenant_users row on the resolved tenant (a race with
+// signup provisioning). err is reserved for a genuine, unexpected database
+// fault.
+func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID, userID uuid.UUID) (synced bool, reason string, err error) {
 	tag, err := pool.Exec(ctx, `
-		UPDATE public.tenant_users
-		   SET role = $3
-		 WHERE tenant_id = $1 AND user_id = $2
-	`, tenantID, userID, tenantRole)
+		UPDATE public.tenant_users tu
+		   SET role = CASE am.role WHEN 'owner' THEN 'OWNER' ELSE 'MEMBER' END
+		  FROM public.tenant_billing_accounts tba
+		  JOIN public.account_memberships am
+		    ON am.account_id = tba.account_id
+		   AND am.user_id    = $2
+		 WHERE tba.account_id = $1
+		   AND tu.tenant_id   = tba.tenant_id
+		   AND tu.user_id     = $2
+	`, accountID, userID)
 	if err != nil {
 		return false, "", fmt.Errorf("signup: sync tenant_users role: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return false, "no_tenant_membership_row", nil
+		return false, "no_match", nil
 	}
 	return true, "", nil
 }

@@ -532,7 +532,7 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 	// unmapped tenant or a missing tenant_users row are both ordinary
 	// transitional states, not faults.
 	if s.billing != nil {
-		if _, reason, sErr := signup.SyncTenantMembershipRole(ctx, s.billing, accountID, targetUserID, newRole); sErr != nil {
+		if _, reason, sErr := signup.SyncTenantMembershipRole(ctx, s.billing, accountID, targetUserID); sErr != nil {
 			log.Printf("accounts: tenant_users role sync failed account=%s user=%s: %v", accountID, targetUserID, sErr)
 		} else if reason != "" {
 			log.Printf("accounts: tenant_users role sync skipped account=%s user=%s reason=%s", accountID, targetUserID, reason)
