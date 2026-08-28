@@ -1,4 +1,6 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+
+import { isWorkspaceAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
@@ -16,13 +18,21 @@ import { MarketplaceManager } from "@/components/marketplace/marketplace-manager
 // Marketplace page (issue #309, agent-subsystem blueprint Step 2.3, re-gated by
 // issue #758). Lists the curated MCP and skills catalog for the current
 // workspace and lets the workspace administrator choose which entries this
-// workspace uses. Curating the catalog itself stays a platform operation, and
-// the control-plane says which of the two this caller is through can_curate.
-// Mirrors app/console/feature-gates/page.tsx.
+// workspace uses. Curating the catalog itself stays a platform operation
+// (can_curate), and the control-plane is the authority on the data. The page
+// mirrors its WorkspaceAdminGate locally so the URL itself refuses
+// non-administrators server-side (hidden nav is not access control,
+// #947/#948/#949 family): OWNER of the selected workspace or platform admin
+// may render, anyone else gets a 404 that does not confirm the surface exists.
 export default async function MarketplacePage() {
   const viewer = await getViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
+  }
+
+  // Server-side role gate: refuse the page shell before any data fetch.
+  if (!isWorkspaceAdminViewer(viewer)) {
+    notFound();
   }
 
   const profile = await getAccountProfile().catch(
@@ -50,6 +60,7 @@ export default async function MarketplacePage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console/marketplace"
       topbar={

@@ -23,6 +23,11 @@
       "skip": "needs an API key to exist in the signed-in workspace, and the gate refuses to create one: it blocks every state-changing request whose values it supplied",
       "owner": "@sakibsadmanshajib",
       "issue": 885
+    },
+    "/console/providers": {
+      "skip": "platform-admin only (PR #1239, issue #947/#948/#949 family): the page now calls notFound() server-side for any viewer isPlatformAdminViewer rejects, and the gate's one fixture session is a workspace owner, not a platform admin, so it correctly gets a 404 here. No second, platform-admin authenticated persona exists in this harness yet to exercise the route's controls",
+      "owner": "@sakibsadmanshajib",
+      "issue": 1241
     }
   }
 }

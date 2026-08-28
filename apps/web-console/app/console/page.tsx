@@ -115,6 +115,7 @@ export default async function ConsolePage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console"
       topbar={

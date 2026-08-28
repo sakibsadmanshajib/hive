@@ -1,4 +1,6 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+
+import { isWorkspaceAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
@@ -16,16 +18,20 @@ import { FeatureGateManager } from "@/components/feature-gates/feature-gate-mana
 // Feature-gate page (issue #292, agent-subsystem blueprint Step 1.2, re-gated
 // by issue #758). Lists every registered gate for the current workspace and
 // lets the workspace administrator toggle the ones that belong to the
-// workspace. The control-plane is the authority: it admits the OWNER of the
-// tenant in scope as well as a platform admin, so this page asks it rather than
-// second-guessing with a local permission check that could disagree.
-//
-// A caller who is neither gets 403 here, which renders one line pointing at
-// their administrator instead of a wall.
+// workspace. The control-plane is the authority on the data; the page mirrors
+// its WorkspaceAdminGate locally so the URL itself refuses non-administrators
+// server-side (hidden nav is not access control, #947/#948/#949 family):
+// OWNER of the selected workspace or platform admin may render, anyone else
+// gets a 404 that does not confirm the surface exists.
 export default async function FeatureGatesPage() {
   const viewer = await getViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
+  }
+
+  // Server-side role gate: refuse the page shell before any data fetch.
+  if (!isWorkspaceAdminViewer(viewer)) {
+    notFound();
   }
 
   const profile = await getAccountProfile().catch(
@@ -53,6 +59,7 @@ export default async function FeatureGatesPage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console/feature-gates"
       topbar={
