@@ -91,14 +91,21 @@ Anything left in that `comm` output is a required check GitHub never
 triggered for this commit, and that alone is enough to leave a PR permanently
 BLOCKED with a page that looks otherwise green.
 
-Known cause: webhook delivery failure. On 2026-08-28 GitHub failed to deliver
-push events for roughly 2.5 hours; PRs merged or pushed to during that window
-never got a `pull_request` run for any workflow, required or not. Closing and
-reopening the PR did **not** re-fire the checks. A fresh push to the branch
-did (`git commit --allow-empty -m "..." && git push`, or push any real
-change). If a check is missing and there is no config reason for it, suspect
-delivery, not your workflow YAML, and test the fix with a real push before
-concluding the workflow itself is broken.
+Known cause: GitHub webhook/event delivery gaps, not a workflow config bug.
+Issue #1238 documents PR #1222's merge commit getting zero `deploy-demo-box`
+or `CI` runs at all (only three unrelated CodeQL analyses fired), for no
+config reason: the paths filter matched, there was no concurrency block, the
+push simply produced no run. It was the third occurrence of the same
+symptom with a different cause each time (#786 and #971 were both
+paths-filter gaps, since fixed; #1222 was neither). Resolution there was a
+manual `gh workflow run <workflow>.yml --ref main` against the affected
+commit. If a required check is missing and there is no config reason for it
+(the paths filter matches, no concurrency group ate it), suspect a one-off
+delivery gap rather than your workflow YAML, and re-dispatch the workflow
+directly rather than assuming closing and reopening the PR will re-trigger
+it — that has not been verified to work and there is reason to doubt it,
+since GitHub treats a reopen as a different event than the push that never
+delivered in the first place.
 
 ### 3. A genuinely failing check
 
