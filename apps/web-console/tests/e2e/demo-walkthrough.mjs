@@ -66,14 +66,17 @@ mkdirSync(OUT_DIR, { recursive: true });
 const results = [];
 let shotCounter = 0;
 
-// Live credentials this run creates for itself. `redactSecrets` only knows
-// about the service-role key by default, and this walkthrough mints a real
-// API key (step 11) and sets one brand-new account's password (owner-signup),
-// either of which would otherwise be written verbatim into a step log that is
-// committed under docs/proof/. Registered here the moment they exist, so the
-// single choke point below scrubs them out of every observation, error
-// message and report cell without each call site having to remember.
-const runSecrets = [];
+// Every credential this run holds. `redactSecrets` only knows about the
+// service-role key by default, and this walkthrough also signs in with the QA
+// fixture password, mints a real API key (step 11) and sets one brand-new
+// account's password (owner-signup). Any of them would otherwise be written
+// verbatim into a step log committed under docs/proof/ in a public
+// repository: a failing Playwright action reports the state it was acting on,
+// and that report goes straight into `entry.notes`. Registered here the
+// moment each one exists, so the single choke point below scrubs them from
+// every observation, error message and report cell without each call site
+// having to remember.
+const runSecrets = [QA_PASSWORD];
 // Minted in step 11, consumed by step 12.
 let mintedApiKey = "";
 function redact(text) {
@@ -584,7 +587,9 @@ async function main() {
       // past every timeout in this file and well short of a key that outlives
       // the run that made it.
       const expiresAt = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-      await cpage.locator("#key-expires").fill(expiresAt).catch(() => {});
+      // Short timeout: the field is optional, so a missing or disabled one
+      // should cost two seconds, not Playwright's 30 second default.
+      await cpage.locator("#key-expires").fill(expiresAt, { timeout: 2000 }).catch(() => {});
       await cpage.locator('button[type="submit"]').click().catch(() => {});
       await cpage.waitForTimeout(2000);
       // Read the secret from its own element, not by regexing the page text:
@@ -607,7 +612,18 @@ async function main() {
     // after the wait above gave up is covered too. The list view's masked
     // "hk_xxxx" rows are far short of the length floor and stay legible.
     await cpage.evaluate(maskLiveApiKeys).catch(() => {});
-    entry.screenshots.push(await shot(cpage, "11c-console-api-key-created"));
+    let keyShot = await shot(cpage, "11c-console-api-key-created");
+    // Masking and the shutter are two calls, so a panel that paints between
+    // them is captured unmasked. Re-run the sweep afterwards: a non-zero
+    // return means exactly that happened, and the only safe move is to
+    // discard that frame and take another. Cheap, because the normal case
+    // masks nothing and retakes nothing.
+    const paintedLate = await cpage.evaluate(maskLiveApiKeys).catch(() => 0);
+    if (paintedLate > 0) {
+      shotCounter -= 1; // reuse the number; the unmasked file is overwritten
+      keyShot = await shot(cpage, "11c-console-api-key-created");
+    }
+    entry.screenshots.push(keyShot);
 
     await cpage.goto(`${CONSOLE}/console/logs`, { waitUntil: "domcontentloaded" }).catch(() => {});
     entry.screenshots.push(await shot(cpage, "11d-console-usage-logs"));
@@ -857,7 +873,7 @@ async function createOwnerAccount(browser) {
 
 function writeReport(ownerCreds) {
   const lines = [];
-  lines.push(`# Demo walkthrough run — ${today}`);
+  lines.push(`# Demo walkthrough run: ${today}`);
   lines.push("");
   lines.push(`Chat: ${CHAT} | Console: ${CONSOLE} | API: ${API}`);
   lines.push("");
@@ -889,7 +905,7 @@ function writeReport(ownerCreds) {
     redact(JSON.stringify({ CHAT, CONSOLE, API, results }, null, 2)),
   );
   console.log(`\ndemo-walkthrough: wrote ${results.length} step results to ${OUT_DIR}`);
-  for (const r of results) console.log(`  [${r.step}] ${r.verdict} — ${r.title}`);
+  for (const r of results) console.log(`  [${r.step}] ${r.verdict}: ${r.title}`);
 }
 
 main().catch((error) => {

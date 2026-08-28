@@ -24,6 +24,10 @@ describe("mdTableCell", () => {
     );
   });
 
+  it("flattens the unicode line separators too", () => {
+    expect(mdTableCell("one\u2028two\u2029three")).toBe("one two three");
+  });
+
   it("never leaves an orphan backslash when truncating", () => {
     // Cut lands exactly on the escape character; keeping it would escape the
     // row's own closing pipe.

@@ -19,7 +19,11 @@
  */
 export function mdTableCell(value, { max } = {}) {
   const escaped = String(value ?? "")
-    .replace(/\r\n|\r|\n/g, " ")
+    // U+2028 and U+2029 are not CommonMark line endings, so GitHub itself
+    // would not break the row on them, but plenty of other things that read
+    // this file line by line do. Flattened with the real newlines rather than
+    // left for one of them to find.
+    .replace(/\r\n|[\r\n\u2028\u2029]/g, " ")
     .replace(/[\\|]/g, "\\$&");
   if (typeof max !== "number") return escaped;
   // Truncating escaped text can sever a backslash from the character it

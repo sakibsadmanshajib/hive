@@ -108,8 +108,16 @@ export function findOffenders(text) {
       match = PARAM_RE.exec(line);
     }
     BARE_JWT_RE.lastIndex = 0;
+    if (BARE_JWT_RE.test(line)) {
+      offenders.push({ line: i + 1, text: line.trim() });
+      return;
+    }
+    // Through looksLikeToken, not a bare regex test, so a deliberately
+    // redacted capture ("hk_REDACTED_KEY_PLACEHOLDER") is allowed by the same
+    // rule that allows a redacted query parameter.
     BARE_API_KEY_RE.lastIndex = 0;
-    if (BARE_JWT_RE.test(line) || BARE_API_KEY_RE.test(line)) {
+    const apiKey = BARE_API_KEY_RE.exec(line);
+    if (apiKey !== null && looksLikeToken(apiKey[0])) {
       offenders.push({ line: i + 1, text: line.trim() });
     }
   });
@@ -152,7 +160,8 @@ const MUST_ALLOW = [
   ["language code", "GET /oauth/callback?code=en"],
   ["documented example value", "?token=example-not-a-real-value-but-twenty-chars"],
   ["masked API key as the console list renders it", "hk_xxxx•••s2Yn0s  Revoked"],
-  ["redacted API key placeholder", "created key: hk_<redacted by demo-walkthrough>"],
+  ["redacted API key, as the capture harness masks it", "created key: hk_<redacted by capture harness>"],
+  ["deliberate API key placeholder in documentation", "export HIVE_API_KEY=hk_REDACTED_PLACEHOLDER_VALUE_HERE"],
 ];
 
 function selfTest() {
