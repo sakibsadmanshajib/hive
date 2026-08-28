@@ -33,6 +33,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { redactSecrets } from "./support/e2e-fixture-seed.mjs";
+import { maskLiveApiKeys } from "./support/mask-api-keys.mjs";
 import { mdTableCell } from "./support/md-table.mjs";
 
 // --- config ------------------------------------------------------------
@@ -596,17 +597,16 @@ async function main() {
       }
       if (mintedKey) runSecrets.push(mintedKey);
     }
-    // Mask the revealed secret in the DOM BEFORE the screenshot. This capture
-    // is committed under docs/proof/, and `npm run lint:proof-tokens` reads
-    // text files only: a key burned into a PNG has no automated backstop at
-    // all (.claude/rules/orchestrator.md, PR #578). Masking after upload is
-    // not a remedy, so it happens here, before the shutter.
-    await cpage
-      .locator('[data-testid="created-api-key-secret"]')
-      .evaluateAll((nodes) => {
-        for (const node of nodes) node.textContent = "hk_<redacted by demo-walkthrough>";
-      })
-      .catch(() => {});
+    // Mask every live-looking key in the DOM BEFORE the screenshot. This
+    // capture is committed under docs/proof/ in a public repository, and
+    // `npm run lint:proof-tokens` reads text files only: a key burned into a
+    // PNG has no automated backstop at all, and masking after upload is not a
+    // remedy (.claude/rules/orchestrator.md, PR #578). Swept across the whole
+    // document rather than just the one-time reveal panel, so a key that also
+    // lands in a toast, a copy confirmation, or a panel that painted a moment
+    // after the wait above gave up is covered too. The list view's masked
+    // "hk_xxxx" rows are far short of the length floor and stay legible.
+    await cpage.evaluate(maskLiveApiKeys).catch(() => {});
     entry.screenshots.push(await shot(cpage, "11c-console-api-key-created"));
 
     await cpage.goto(`${CONSOLE}/console/logs`, { waitUntil: "domcontentloaded" }).catch(() => {});
