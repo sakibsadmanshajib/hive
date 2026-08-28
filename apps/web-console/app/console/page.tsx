@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import {
-  ArrowRight,
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Boxes,
   ChevronRight,
@@ -12,6 +12,8 @@ import {
 
 import {
   getAccountProfile,
+  getAnalyticsErrors,
+  getAnalyticsUsage,
   getBalance,
   getViewer,
 } from "@/lib/control-plane/client";
@@ -25,7 +27,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { formatCredits } from "@/lib/format/credits";
+import {
+  formatCredits,
+  formatNumber,
+  formatTokens,
+} from "@/lib/format/credits";
 
 /*
  * Next steps shown under the metric row. Every entry is a real console route,
@@ -71,9 +77,35 @@ export default async function ConsolePage() {
   const isUnverified = viewer.user.email_verified === false;
   const needsSetup = profile.profile_setup_complete === false;
 
-  const balance = isUnverified
-    ? null
-    : await getBalance().catch((): null => null);
+  // usageRows/errorRows are `null` on a fetch failure and `[]` on a genuine
+  // empty result: an analytics outage must not render as "no requests" or
+  // "no errors", the same false-zero the em-dash placeholder this replaced
+  // would never have claimed. Mirrors the usageUnavailable pattern in
+  // app/console/catalog/[id]/page.tsx.
+  const [balance, usageRows, errorRows] = await Promise.all([
+    isUnverified ? Promise.resolve(null) : getBalance().catch((): null => null),
+    getAnalyticsUsage({ group_by: "model", window: "24h" }).catch(
+      (): null => null,
+    ),
+    getAnalyticsErrors({ group_by: "api_key", window: "24h" }).catch(
+      (): null => null,
+    ),
+  ]);
+
+  const usageUnavailable = usageRows === null;
+  const errorsUnavailable = errorRows === null;
+  const requestCount = (usageRows ?? []).reduce(
+    (sum, row) => sum + row.request_count,
+    0,
+  );
+  const totalTokens = (usageRows ?? []).reduce(
+    (sum, row) => sum + row.total_input_tokens + row.total_output_tokens,
+    0,
+  );
+  const errorCount = (errorRows ?? []).reduce(
+    (sum, row) => sum + row.error_count,
+    0,
+  );
 
   return (
     <ConsoleShell
@@ -172,24 +204,60 @@ export default async function ConsolePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="px-5 py-5">
-              <div className="flex flex-col gap-1">
-                <p
-                  className="metric text-3xl text-[var(--color-ink)]"
-                  data-numeric
-                >
-                  —
-                </p>
-                <p className="text-xs text-[var(--color-ink-3)]">
-                  Detailed counts available in{" "}
-                  <Link
-                    href="/console/analytics"
-                    className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+              {usageUnavailable ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    Couldn&rsquo;t load activity.
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    Try{" "}
+                    <Link
+                      href="/console/analytics"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      Analytics
+                    </Link>{" "}
+                    directly, or reload this page.
+                  </p>
+                </div>
+              ) : requestCount > 0 ? (
+                <div className="flex flex-col gap-1">
+                  <p
+                    className="metric text-3xl text-[var(--color-ink)]"
+                    data-numeric
                   >
-                    Analytics
-                  </Link>
-                  .
-                </p>
-              </div>
+                    {formatNumber(requestCount)}
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    <span className="metric text-[var(--color-ink-2)]">
+                      {formatTokens(totalTokens)}
+                    </span>{" "}
+                    tokens in the last 24h ·{" "}
+                    <Link
+                      href="/console/analytics"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      Analytics
+                    </Link>
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    No requests in the last 24 hours.
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    Detailed counts available in{" "}
+                    <Link
+                      href="/console/analytics"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      Analytics
+                    </Link>
+                    .
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -201,23 +269,61 @@ export default async function ConsolePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="px-5 py-5">
-              <div className="flex items-center gap-3">
-                <span className="grid h-9 w-9 place-items-center rounded-full bg-[var(--color-surface-inset)] text-[var(--color-ink-3)]">
-                  <AlertTriangle size={16} aria-hidden="true" />
-                </span>
-                <div className="flex flex-col">
-                  <p
-                    className="metric text-2xl text-[var(--color-ink-3)]"
-                    data-numeric
-                  >
-                    —
+              {errorsUnavailable ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    Couldn&rsquo;t load error data.
                   </p>
                   <p className="text-xs text-[var(--color-ink-3)]">
-                    Error telemetry not yet wired up. View detailed failures in
-                    Analytics.
+                    Try{" "}
+                    <Link
+                      href="/console/logs"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      the request log
+                    </Link>{" "}
+                    directly, or reload this page.
                   </p>
                 </div>
-              </div>
+              ) : errorCount > 0 ? (
+                <div className="flex items-center gap-3">
+                  <span className="grid h-9 w-9 place-items-center rounded-full bg-[var(--color-danger-soft)] text-[var(--color-danger)]">
+                    <AlertTriangle size={16} aria-hidden="true" />
+                  </span>
+                  <div className="flex flex-col">
+                    <p
+                      className="metric text-2xl text-[var(--color-ink)]"
+                      data-numeric
+                    >
+                      {formatNumber(errorCount)}
+                    </p>
+                    <p className="text-xs text-[var(--color-ink-3)]">
+                      <Link
+                        href="/console/logs?errors=true&window=24h"
+                        className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                      >
+                        View in the request log
+                      </Link>
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm text-[var(--color-ink-2)]">
+                    No errors recorded.
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    Request outcomes visible in{" "}
+                    <Link
+                      href="/console/logs"
+                      className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+                    >
+                      the request log
+                    </Link>
+                    .
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </section>
