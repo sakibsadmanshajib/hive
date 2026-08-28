@@ -32,6 +32,12 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 		writeMissingFieldError(w, "messages")
 		return
 	}
+	// n other than 1 is refused rather than silently truncated to one choice
+	// (issue #1283). See writeUnsupportedChoiceCountError.
+	if unsupportedChoiceCount(req.N) {
+		writeUnsupportedChoiceCountError(w)
+		return
+	}
 
 	// Detect tool-calling / structured-output parameters (issue #118).
 	// If present, probe whether the alias has at least one tool-capable route.

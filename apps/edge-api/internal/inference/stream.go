@@ -205,7 +205,11 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
-	// 2c. Bound the request for a variable-price alias, before dispatch. Its
+	// 3c. Read the caller's own completion ceiling BEFORE any outbound rewrite,
+	// same contract as the sync path's step 2c (issue #1283).
+	ceiling := requestedCompletionCeiling(endpoint, body)
+
+	// 3d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
 	// every fixed-price alias.
@@ -214,17 +218,6 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 	body = boundedBody
-
-	// Reasoning headroom, same contract as the sync path's step 2d (issue
-	// #1171): inflate the ceiling fields present by the pool reserve so
-	// hidden reasoning spends the reserve. Applied before the reservation is
-	// created and before any byte reaches the client, which keeps the stream
-	// retryable up to this point; a mid-stream empty-content retry is not
-	// possible once chunks have flowed, so the streaming path gets headroom
-	// only. Its settlement side is PR #1220's in-flight territory.
-	if headroomBody, inflated := applyReasoningHeadroom(body, endpoint, route.ReasoningReserveTokens); inflated {
-		body = headroomBody
-	}
 
 	// 4. Start attempt
 	requestID := uuid.New().String()
@@ -271,7 +264,7 @@ func (o *Orchestrator) executeStreaming(
 		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, ceiling, accumulator, string(body), accumulator.Content.String())
 	}()
 
 	// Force upstream usage accounting on a provider verified to honor it
@@ -397,6 +390,13 @@ func (o *Orchestrator) executeStreaming(
 				// the terminal chunk once all deltas are flushed.
 				if chunk.Usage != nil {
 					accumulator.ClampUsage(chunk.Usage, upstreamChunkID, aliasID, endpoint)
+					// Cap the metered completion count at the caller's own
+					// ceiling (#1283). Applied to the chunk BEFORE Accumulate
+					// copies it and before the frame is re-marshalled, so the
+					// ledger charge and the usage frame the caller receives are
+					// the same number by construction rather than by two
+					// clamps agreeing.
+					clampUsageToCeiling(chunk.Usage, ceiling, endpoint, aliasID)
 					// Keep the untyped bytes only for a route that settles
 					// against the upstream's reported cost; see RawUsageChunk.
 					if route.Pricing.IsUpstreamActual() {
@@ -612,7 +612,7 @@ func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens,
 // route carries the alias's catalog price, which is what the charge is derived
 // from (#688); it is the same route the request was dispatched to, so a charge
 // can never be priced off a different alias than the one that served it.
-func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, route SelectRouteResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
+func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, route SelectRouteResult, requestID, endpoint, model string, ceiling int64, acc *UsageAccumulator, promptBody, content string) bool {
 	// Parse promptBody (the raw request bytes) down to just the message/input
 	// text before estimating -- see promptText in usage_clamp.go for why the
 	// raw bytes themselves must never be counted directly (issue #602).
@@ -691,7 +691,16 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// stream_options.include_usage or shipped unparseable usage frames.
 	if !confirmed {
 		if reservation.ID != "" {
-			credits = reservation.Held()
+			// Bounded by the caller's own completion ceiling (#1283), for the
+			// same reason the sync path's zero-content capture is: the hold is
+			// a flat authorization floor, so capturing it whole against a
+			// request capped at a handful of completion tokens breaches the
+			// never-bill-past-the-ceiling invariant far harder than the
+			// undercharge this capture exists to prevent. It only ever lowers
+			// the figure, and never to zero, so the fail-closed property is
+			// untouched.
+			credits = capCaptureAtCeiling(route, ceiling,
+				acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
 		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_reservation_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the reservation hold per D-034 (#1215)",
