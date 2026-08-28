@@ -2,6 +2,7 @@ package errors
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 
@@ -18,9 +19,33 @@ const (
 	CodeCrossTenant          Code = "CROSS_TENANT"
 	CodeInvalidTenantSetting Code = "INVALID_TENANT_SETTING"
 	CodeInvalidRequest       Code = "INVALID_REQUEST"
+	CodeRequestTooLarge      Code = "REQUEST_TOO_LARGE"
 	CodeServiceUnavailable   Code = "SERVICE_UNAVAILABLE"
 	CodeInternal             Code = "INTERNAL"
 )
+
+// MaxRequestBodyBytes is the single request-body-size cap for every JSON
+// endpoint edge-api parses directly from a client: /v1/messages,
+// /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/responses, and
+// the internal session chat-dispatch path.
+//
+// Value: 10 MiB, matching the pre-existing OpenAI-shaped endpoints' limit
+// (the Go-rewrite baseline, #89). /v1/messages and the internal
+// chat-dispatch path previously capped at 4 MiB, introduced independently
+// and later (#168/#243) with no comment or test tying it to the existing
+// convention (issue #1250). Lowering the established 10 MiB endpoints would
+// break any caller already sending a body between 4 and 10 MiB; raising the
+// narrower ones to match is a pure widening and cannot break an existing
+// caller. One constant, used everywhere it applies: the next accidental
+// divergence has to edit this comment to happen.
+const MaxRequestBodyBytes = 10 << 20 // 10 MiB
+
+// RequestTooLargeMessage is the standard, limit-naming message every
+// body-size refusal uses, so the number in the client-facing text can never
+// drift from MaxRequestBodyBytes.
+func RequestTooLargeMessage() string {
+	return fmt.Sprintf("Request body exceeds the maximum allowed size of %d MiB.", MaxRequestBodyBytes/(1<<20))
+}
 
 var stableErrorLeakPatterns = []*regexp.Regexp{
 	// Provider names — extended to cover Google/Gemini/Mistral/Cohere/
@@ -52,6 +77,8 @@ func stableType(status int) string {
 		return "FORBIDDEN"
 	case status == http.StatusBadRequest:
 		return "INVALID_REQUEST"
+	case status == http.StatusRequestEntityTooLarge:
+		return "REQUEST_TOO_LARGE"
 	case status == http.StatusServiceUnavailable:
 		return "SERVICE_UNAVAILABLE"
 	case status >= http.StatusInternalServerError:

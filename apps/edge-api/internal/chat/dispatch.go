@@ -106,8 +106,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	// Honest read instead of silent truncation (issue #1250): http.MaxBytesReader
+	// errors when the body exceeds the cap rather than quietly cutting it off,
+	// which used to make an oversized-but-valid body fail json.Unmarshal below
+	// and get reported as "bad json" with no mention of size anywhere.
+	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeRequestTooLarge, apierr.RequestTooLargeMessage())
+			return
+		}
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "body read")
 		return
 	}

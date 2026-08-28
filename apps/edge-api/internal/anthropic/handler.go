@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,12 +13,35 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
-
-const maxBodyBytes = 4 << 20 // 4 MiB
 
 // chatCompletionsPath is the internal endpoint this surface delegates to.
 const chatCompletionsPath = "/v1/chat/completions"
+
+// readMessagesBody reads r.Body up to apierr.MaxRequestBodyBytes via
+// http.MaxBytesReader, which errors instead of silently truncating an
+// oversized body. Before this, io.LimitReader truncated silently; the
+// truncated bytes then failed json.Unmarshal and the caller saw a lying
+// "invalid JSON body" with no mention of size anywhere (issue #1250). A
+// too-large body now gets an honest 413 in Anthropic's own
+// request_too_large error type, naming the limit; any other read failure
+// keeps the prior generic message. errors.As distinguishes the two rather
+// than any truncate-then-fails-to-parse heuristic.
+func readMessagesBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
+			return nil, false
+		}
+		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+		return nil, false
+	}
+	return raw, true
+}
 
 // Deps holds the runtime dependencies for the Anthropic handler.
 type Deps struct {
@@ -84,9 +108,8 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 
@@ -173,9 +196,8 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 

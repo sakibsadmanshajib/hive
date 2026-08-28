@@ -1,12 +1,43 @@
 package inference
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
+
+// readLimitedBody reads r.Body up to apierrors.MaxRequestBodyBytes via
+// http.MaxBytesReader, which errors instead of silently truncating an
+// oversized body. Before this, io.LimitReader truncated silently; the
+// truncated bytes then failed json.Unmarshal and the caller saw a lying
+// "Invalid request body." with no mention of size anywhere (issue #1250).
+// Shared by every inference-package endpoint that decodes a client-supplied
+// JSON body (chat/completions, completions, embeddings, responses), so the
+// cap and its error shape can only diverge by editing this one function.
+func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, apierrors.MaxRequestBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeRequestTooLargeError(w)
+			return nil, false
+		}
+		writeInvalidBodyError(w)
+		return nil, false
+	}
+	return body, true
+}
+
+func writeRequestTooLargeError(w http.ResponseWriter) {
+	code := "request_too_large"
+	apierrors.WriteError(w, http.StatusRequestEntityTooLarge, "invalid_request_error",
+		apierrors.RequestTooLargeMessage(), &code)
+}
 
 func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 	code := "unsupported_parameter"
