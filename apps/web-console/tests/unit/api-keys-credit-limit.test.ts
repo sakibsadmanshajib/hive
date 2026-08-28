@@ -37,7 +37,11 @@ describe("usdToCreditsInput", () => {
   });
 
   it("keeps trailing-zero and leading-zero forms of the same amount identical", () => {
+    // Anchored on a literal as well as on each other: equality alone would
+    // still hold if every conversion were off by the same factor.
+    expect(usdToCreditsInput("10.00")).toBe(10_000_000_000);
     expect(usdToCreditsInput("10.00")).toBe(usdToCreditsInput("10"));
+    expect(usdToCreditsInput("0.50")).toBe(500_000_000);
     expect(usdToCreditsInput("0.50")).toBe(usdToCreditsInput("0.5"));
     expect(usdToCreditsInput("007")).toBe(7 * CREDITS_PER_USD);
   });

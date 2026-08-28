@@ -66,7 +66,12 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
     },
     {
       key: "spend_credits",
-      header: "Spend",
+      // "lifetime" is in the header, not implied. spend_credits is the key's
+      // whole-life total (Repository.GetLifetimeSpend), while the cap beside
+      // it can be monthly, and two numbers side by side read as a ratio. A
+      // key at $500 lifetime against a $10/mo cap is not over its cap, and
+      // an unqualified "Spend" column says it is.
+      header: "Spend (lifetime)",
       numeric: true,
       align: "right",
       cell: (row) => (

@@ -516,6 +516,19 @@ func defaultPolicy(keyID uuid.UUID) KeyPolicy {
 func buildKeyView(key APIKey, policy KeyPolicy, spendCredits int64) KeyView {
 	key = applyExpiry(key, time.Now())
 
+	// A limit is only reported when it is a limit. UpdatePolicy's upsert
+	// COALESCEs budget_limit_credits, so a nil in that column means "leave
+	// unchanged", not "clear": a key switched to budget_kind "none" keeps
+	// whatever ceiling it last carried in the row. Enforcement already ignores
+	// it (edge-api authz.CheckAccess requires budget_kind != "none" AND a
+	// non-nil limit), so reporting the stale number would put a figure on the
+	// console next to a key that is not capped at all, which is the one lie a
+	// spending-limit surface must never tell.
+	budgetLimitCredits := policy.BudgetLimitCredits
+	if policy.BudgetKind == "" || policy.BudgetKind == "none" {
+		budgetLimitCredits = nil
+	}
+
 	return KeyView{
 		ID:                 key.ID,
 		Nickname:           key.Nickname,
@@ -529,7 +542,7 @@ func buildKeyView(key APIKey, policy KeyPolicy, spendCredits int64) KeyView {
 		BudgetSummary:      budgetSummary(policy),
 		AllowlistSummary:   allowlistSummary(policy),
 		SpendCredits:       spendCredits,
-		BudgetLimitCredits: policy.BudgetLimitCredits,
+		BudgetLimitCredits: budgetLimitCredits,
 	}
 }
 

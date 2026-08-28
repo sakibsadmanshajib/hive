@@ -305,4 +305,23 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
     expect(alert.textContent).toContain("credit limit could not be applied");
     expect(limitCell()).toBe("Unlimited");
   });
+
+  it("a transport failure applying the cap still shows the one-time secret", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(createdKeyBody()), { status: 201 }),
+      )
+      .mockRejectedValueOnce(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "net-fail" } });
+    fireEvent.change(limitField(), { target: { value: "5" } });
+    fireEvent.click(submitButton());
+    const secret = await screen.findByTestId("created-api-key-secret");
+    expect(secret.textContent).toBe("sk-hive-once-only-secret");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("live and uncapped");
+    expect(limitCell()).toBe("Unlimited");
+  });
 });

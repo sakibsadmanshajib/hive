@@ -35,6 +35,9 @@ const LIMIT_HINT: Record<ResetCadence, string> = {
   monthly: "Per calendar month; blank for unlimited",
 };
 
+const BUDGET_NOT_APPLIED =
+  "Key created, but the credit limit could not be applied. The key is live and uncapped. Set the limit from the key's settings.";
+
 const CADENCE_PHRASE: Record<ResetCadence, string> = {
   never: "spent in total",
   monthly: "spent in the current calendar month",
@@ -159,24 +162,34 @@ export function ApiKeyCreateForm() {
       // who believes a limit is in place when none was ever set is worse off
       // than one who was told it did not apply.
       if (limitCredits !== null) {
-        const policyResponse = await fetch(
-          `/api/v1/accounts/current/api-keys/${data.id}/policy`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              budget_kind: resetCadence === "monthly" ? "monthly" : "lifetime",
-              budget_limit_credits: limitCredits,
-            }),
-          },
-        );
-        if (policyResponse.ok) {
-          setAppliedLimitCredits(limitCredits);
-        } else {
-          setBudgetWarning(
-            "Key created, but the credit limit could not be applied. Set it from the key's settings.",
+        // From here the key exists, and its secret is shown exactly once. A
+        // throw inside this block would land in the outer catch, which reports
+        // "failed to create key" and never renders the secret panel: the
+        // customer would be told nothing was created while holding a real,
+        // uncapped key whose only copy of the secret had just been discarded.
+        // So a transport failure is caught here and reported as the same
+        // "limit not applied" warning a refusal produces, and the panel still
+        // renders.
+        try {
+          const policyResponse = await fetch(
+            `/api/v1/accounts/current/api-keys/${data.id}/policy`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                budget_kind: resetCadence === "monthly" ? "monthly" : "lifetime",
+                budget_limit_credits: limitCredits,
+              }),
+            },
           );
+          if (policyResponse.ok) {
+            setAppliedLimitCredits(limitCredits);
+          } else {
+            setBudgetWarning(BUDGET_NOT_APPLIED);
+          }
+        } catch {
+          setBudgetWarning(BUDGET_NOT_APPLIED);
         }
       }
 

@@ -1156,3 +1156,41 @@ func TestBudgetAffectingDeltaInvalidatesSnapshot(t *testing.T) {
 		t.Fatalf("expected invalidation attempt for %q, got %#v", result.Key.TokenHash, cache.invalidated)
 	}
 }
+
+// TestKeyViewHidesALimitThatIsNotEnforced pins that a credit limit is only
+// reported when it is actually enforced. UpdatePolicy upserts
+// budget_limit_credits with COALESCE, so a nil on the way in means "leave
+// unchanged" rather than "clear": a key moved to budget_kind "none" keeps
+// whatever ceiling it last carried in the row, while edge-api authz
+// CheckAccess ignores it (it requires budget_kind != "none" AND a non-nil
+// limit). Reporting the stale value would show a ceiling next to a key that
+// is not capped at all.
+//
+// Asserted against buildKeyView directly, not through svc.UpdatePolicy: the
+// in-package stub repository overwrites budget_limit_credits instead of
+// COALESCEing it, so a stub-driven test would report nil either way and could
+// not go red for the defect this guards.
+func TestKeyViewHidesALimitThatIsNotEnforced(t *testing.T) {
+	limit := int64(10_000_000_000)
+
+	for _, kind := range []string{"", "none"} {
+		key := APIKey{ID: uuid.New(), Status: KeyStatusActive}
+		policy := KeyPolicy{BudgetKind: kind, BudgetLimitCredits: &limit}
+		view := buildKeyView(key, policy, 0)
+		if view.BudgetLimitCredits != nil {
+			t.Fatalf("budget_kind %q enforces nothing, so no limit may be reported, got %d", kind, *view.BudgetLimitCredits)
+		}
+		if view.BudgetSummary.Kind != "none" {
+			t.Fatalf("budget_kind %q should summarise as none, got %q", kind, view.BudgetSummary.Kind)
+		}
+	}
+
+	for _, kind := range []string{"lifetime", "monthly"} {
+		key := APIKey{ID: uuid.New(), Status: KeyStatusActive}
+		policy := KeyPolicy{BudgetKind: kind, BudgetLimitCredits: &limit}
+		view := buildKeyView(key, policy, 0)
+		if view.BudgetLimitCredits == nil || *view.BudgetLimitCredits != limit {
+			t.Fatalf("an enforced %q cap must be reported unchanged, got %#v", kind, view.BudgetLimitCredits)
+		}
+	}
+}
