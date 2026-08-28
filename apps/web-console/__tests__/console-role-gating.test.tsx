@@ -18,6 +18,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import ProvidersPage from "../app/console/providers/page";
 import FeatureGatesPage from "../app/console/feature-gates/page";
 import MarketplacePage from "../app/console/marketplace/page";
+import type { Viewer } from "@/lib/control-plane/client";
 
 // Hoisted: ProvidersPage/FeatureGatesPage/MarketplacePage are imported
 // statically above, so evaluating those imports (and the next/navigation +
@@ -77,11 +78,16 @@ vi.mock("@/lib/control-plane/client", () => ({
   },
 }));
 
-// Structural subset of the control-plane viewer payload the role predicates
-// read. No casts.
-function viewerPayload(role: string, permissions: string[]) {
+// Full Viewer fixture, typed against the real interface so a drift between
+// this fixture and control-plane/client.ts's Viewer shape is a compile
+// error, not a silent gap. No casts.
+function viewerPayload(role: string, permissions: string[]): Viewer {
   return {
-    user: { email: "caller@example.test", email_verified: true },
+    user: {
+      id: "u1",
+      email: "caller@example.test",
+      email_verified: true,
+    },
     current_account: {
       id: "a1",
       slug: "qa-workspace",
@@ -126,6 +132,7 @@ describe("server-side role gating of operator surfaces", () => {
         digest: "NEXT_HTTP_ERROR_FALLBACK;404",
       });
       expect(mockNotFound).toHaveBeenCalledTimes(1);
+      expect(mockGetAccountProfile).not.toHaveBeenCalled();
       expect(mockGetProviders).not.toHaveBeenCalled();
       expect(mockGetFeatureGates).not.toHaveBeenCalled();
       expect(mockGetMarketplaceEntries).not.toHaveBeenCalled();
@@ -154,10 +161,8 @@ describe("server-side role gating of operator surfaces", () => {
         "workspace.settings",
       ]),
     );
-    const [fgPage, mktPage] = await Promise.all([
-      PAGES["feature-gates"],
-      PAGES.marketplace,
-    ]);
+    const fgPage = PAGES["feature-gates"];
+    const mktPage = PAGES.marketplace;
 
     render(await fgPage());
     expect(screen.getByTestId("console-shell")).toBeTruthy();
@@ -169,11 +174,9 @@ describe("server-side role gating of operator surfaces", () => {
 
   it("renders all three surfaces for a platform admin", async () => {
     mockGetViewer.mockResolvedValue(viewerPayload("owner", ["platform.admin"]));
-    const [providersPage, fgPage, mktPage] = await Promise.all([
-      PAGES.providers,
-      PAGES["feature-gates"],
-      PAGES.marketplace,
-    ]);
+    const providersPage = PAGES.providers;
+    const fgPage = PAGES["feature-gates"];
+    const mktPage = PAGES.marketplace;
 
     render(await providersPage());
     expect(screen.getByTestId("console-shell")).toBeTruthy();
@@ -196,6 +199,25 @@ describe("server-side role gating of operator surfaces", () => {
     await Promise.resolve(Page());
     expect(mockNotFound).not.toHaveBeenCalled();
     expect(mockGetProviders).toHaveBeenCalledTimes(1);
+  });
+
+  // The "renders all three surfaces for a platform admin" case above uses an
+  // owner viewer, so it can't tell whether feature gates/marketplace let a
+  // platform admin in via isPlatformAdminViewer(viewer) or via the
+  // role === "owner" branch it also satisfies. This isolates the former: a
+  // plain member who only carries the platform-admin overlay.
+  it("admits feature gates and marketplace on the platform-admin overlay alone, regardless of membership role", async () => {
+    mockGetViewer.mockResolvedValue(
+      viewerPayload("member", ["platform.admin"]),
+    );
+
+    await Promise.resolve(PAGES["feature-gates"]());
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(mockGetFeatureGates).toHaveBeenCalledTimes(1);
+
+    await Promise.resolve(PAGES.marketplace());
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(mockGetMarketplaceEntries).toHaveBeenCalledTimes(1);
   });
 });
 

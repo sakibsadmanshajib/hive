@@ -19,8 +19,7 @@ export function can(viewer: ViewerWithPermissions, perm: Permission): boolean {
 
 // Shape the predicates need from lib/control-plane/client's Viewer. Kept
 // structural so tests can pass minimal fixtures without casts.
-export interface RoleGateViewer {
-  permissions: string[];
+export interface RoleGateViewer extends ViewerWithPermissions {
   current_account: { role: string };
 }
 
@@ -33,6 +32,18 @@ export function isPlatformAdminViewer(viewer: RoleGateViewer): boolean {
 
 // Feature gates and Marketplace are mounted behind WorkspaceAdminGate, which
 // admits the OWNER of the selected workspace plus the platform-admin overlay.
+//
+// This is a best-effort UX-layer mirror, not a guaranteed match: the
+// control-plane's WorkspaceAdminGate resolves ownership from
+// public.tenant_users.role, while `current_account.role` here traces to the
+// separate public.account_memberships.role. The two tables can diverge (see
+// issue #1244) after any Members-page role change, since only
+// account_memberships gets updated post-signup. In practice that only ever
+// costs a legitimate, currently-promoted co-owner a wrong page (this check
+// admits them, the real backend gate then 403s the data fetch, and they land
+// on the existing "managed by your administrator" empty state) — a genuine
+// non-owner is denied correctly here regardless, so the customer-facing
+// threat this file exists for (#947/#948/#949) is unaffected.
 export function isWorkspaceAdminViewer(viewer: RoleGateViewer): boolean {
   return (
     isPlatformAdminViewer(viewer) ||
