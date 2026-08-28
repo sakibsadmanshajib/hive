@@ -1,0 +1,61 @@
+name: OpenAI SDK live conformance
+
+# Manual only. This exercises the real, deployed production gateway
+# (api-hive.scubed.co) with the genuine `openai` npm SDK, using the same
+# long-lived HIVE_API_KEY secret deploy-demo-box.yml's post-deploy smoke
+# check already sends real traffic through. It is deliberately NOT wired to
+# push or pull_request: the point is a manual, occasional, real-traffic
+# conformance run against production, not one more job competing for the
+# session-mode Postgres pool shared with live chat on every PR. The
+# always-on regression coverage for this same suite already runs against a
+# throwaway local stack in ci.yml's sdk-tests-js job.
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: "vitest path filter (default: run the whole suite)"
+        required: false
+        default: ""
+
+concurrency:
+  group: openai-sdk-live-conformance
+  cancel-in-progress: false
+
+jobs:
+  live-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: packages/sdk-tests/js/package.json
+
+      - name: Install SDK test dependencies
+        working-directory: packages/sdk-tests/js
+        run: npm install
+
+      - name: Run the OpenAI SDK conformance suite against the live gateway
+        working-directory: packages/sdk-tests/js
+        env:
+          HIVE_BASE_URL: https://api-hive.scubed.co/v1
+          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          HIVE_FIXTURES_DIR: ${{ github.workspace }}/packages/sdk-tests/fixtures/golden
+        run: |
+          set -euo pipefail
+          if [ -z "${HIVE_API_KEY:-}" ]; then
+            echo "::error::HIVE_API_KEY secret is not set — this run cannot exercise the live gateway. Failing loudly rather than skipping."
+            exit 1
+          fi
+          npx vitest run --reporter=verbose ${{ inputs.test_path }} 2>&1 | tee live-conformance-output.log
+
+      - name: Upload full test output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openai-sdk-live-conformance-log
+          path: packages/sdk-tests/js/live-conformance-output.log
+          retention-days: 14

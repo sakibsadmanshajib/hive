@@ -115,9 +115,13 @@ describe("Chat Completions", () => {
     expect(response.choices[0].finish_reason).toBe("tool_calls");
     expect(response.choices[0].message.tool_calls).toBeDefined();
     expect(response.choices[0].message.tool_calls!.length).toBeGreaterThan(0);
-    expect(response.choices[0].message.tool_calls![0].function.name).toBe(
-      "get_weather",
-    );
+    // openai@7's ChatCompletionMessageToolCall is a union of function and
+    // custom tool calls; narrow before reaching .function.
+    const toolCall = response.choices[0].message.tool_calls![0];
+    expect(toolCall.type).toBe("function");
+    if (toolCall.type === "function") {
+      expect(toolCall.function.name).toBe("get_weather");
+    }
   });
 
   it("passes response_format through and returns valid JSON", async () => {
