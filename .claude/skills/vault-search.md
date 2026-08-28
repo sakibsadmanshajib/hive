@@ -11,7 +11,7 @@ decision|discussion|architecture`, `date`, often `status`/`tags`/`source`. Files
 large: several plans and specs are 50-100KB. Never `cat` a whole file into context;
 grep for headings and lines, then read only the matched range. This path only
 resolves from a Claude Code CLI session on the owner's WSL2 box; if `ls` on it
-fails outright, the mount isn't attached in your environment — say so plainly
+fails outright, the mount isn't attached in your environment: say so plainly
 (same applies to `vault-decisions`, `vault-staleness`, `vault-write`) rather than
 retrying blind or inventing a fallback location.
 
@@ -20,10 +20,11 @@ retrying blind or inventing a fallback location.
 Two files exist precisely to answer "what do we have on X" without opening source
 docs:
 
-- `MOC-plans.md` — every plan/decision doc, one dense paragraph each, dated, newest
-  first, in two tables (Decisions, Plans).
-- `MOC-timeline-current.md` — the same universe in chronological order.
-- `README.md` — top-level "Start here" pointers plus an architecture/topic index.
+- `MOC-plans.md`: every standalone doc in the vault, one dense paragraph each,
+  dated, newest first, across six sections: Decisions, Plans, Specs, Research,
+  Discussions, Archived (superseded/shipped work, moved but still linked).
+- `MOC-timeline-current.md`: the same universe in chronological order.
+- `README.md`: top-level "Start here" pointers plus an architecture/topic index.
 
 ```bash
 grep -n -i "<topic>" \
@@ -48,7 +49,7 @@ sed -n '<start>,<end>p' "$V/<file>.md"       # read just that section
 Pick the section from the heading map that brackets the matched line, and read only
 that span. A 90KB spec does not need a full read for one paragraph.
 
-### Step 3: a match is not automatically current — check for a later pass in the same file
+### Step 3: a match is not automatically current, check for a later pass in the same file
 
 This vault does not delete superseded content, it appends corrections in place.
 Concretely observed patterns:
@@ -79,7 +80,7 @@ Every answer this skill produces must carry, alongside the excerpt: the file's
 quoted section. Returning content with no timestamp attached is how stale claims
 re-enter downstream work. If the topic looks decision-shaped (an owner ruling, a
 locked call, something that could have been revoked), use the `vault-decisions`
-skill instead of, or alongside, this one — `.wolf/decisions.md` is the faster and
+skill instead of, or alongside, this one: `.wolf/decisions.md` is the faster and
 more authoritative source for "is this still the rule"; this skill is for
 everything else (plans, specs, research, session narratives).
 
