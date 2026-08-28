@@ -23,12 +23,28 @@ import { HiveMark } from "@/components/brand/hive-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import type { ViewerMembership } from "@/lib/control-plane/client";
+import {
+  isPlatformAdminViewer,
+  isWorkspaceAdminViewer,
+  type RoleGateViewer,
+} from "@/lib/viewer-gates";
 
 // Labels are message keys resolved at render, not literals — the nav is the
 // one place every console page shares, so it has to follow the active locale.
+//
+// `guard` keeps an operator-only entry out of a customer's rail (issues
+// #947/#948/#949 family): the route itself is the real access control
+// (app/console/{providers,feature-gates,marketplace}/page.tsx call notFound()
+// server-side), this only stops the rail from advertising a link that would
+// 404 for this viewer. Omit `guard` for entries every member sees.
 const NAV_GROUPS: ReadonlyArray<{
   labelKey: string;
-  items: ReadonlyArray<{ href: string; labelKey: string; icon: React.ReactNode }>;
+  items: ReadonlyArray<{
+    href: string;
+    labelKey: string;
+    icon: React.ReactNode;
+    guard?: (viewer: RoleGateViewer) => boolean;
+  }>;
 }> = [
   {
     labelKey: "groupBuild",
@@ -55,16 +71,19 @@ const NAV_GROUPS: ReadonlyArray<{
         href: "/console/providers",
         labelKey: "providers",
         icon: <Server size={14} />,
+        guard: isPlatformAdminViewer,
       },
       {
         href: "/console/feature-gates",
         labelKey: "featureGates",
         icon: <ToggleRight size={14} />,
+        guard: isWorkspaceAdminViewer,
       },
       {
         href: "/console/marketplace",
         labelKey: "marketplace",
         icon: <Store size={14} />,
+        guard: isWorkspaceAdminViewer,
       },
     ],
   },
@@ -77,6 +96,7 @@ interface ConsoleShellProps {
     slug?: string;
   };
   memberships: ViewerMembership[];
+  viewer: RoleGateViewer;
   user: {
     email: string;
     name?: string | null;
@@ -89,6 +109,7 @@ interface ConsoleShellProps {
 export function ConsoleShell({
   workspace,
   memberships,
+  viewer,
   user,
   topbar,
   children,
@@ -96,6 +117,15 @@ export function ConsoleShell({
 }: ConsoleShellProps) {
   const tNav = useTranslations("Nav");
   const tShell = useTranslations("Shell");
+
+  // Filter before render, not with CSS: an admin-only <Link> still in the DOM
+  // is still a working link. Groups left with zero items (a plain member
+  // sees no Admin section at all) drop out rather than rendering an empty
+  // heading.
+  const visibleNavGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.guard || item.guard(viewer)),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-[240px_1fr] bg-[var(--color-canvas)]">
@@ -121,7 +151,7 @@ export function ConsoleShell({
           aria-label={tShell("primaryNav")}
           className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5"
         >
-          {NAV_GROUPS.map((group) => (
+          {visibleNavGroups.map((group) => (
             <div key={group.labelKey} className="flex flex-col gap-1">
               <span className="px-2 text-2xs uppercase tracking-wider text-[var(--color-ink-3)]">
                 {tNav(group.labelKey)}
