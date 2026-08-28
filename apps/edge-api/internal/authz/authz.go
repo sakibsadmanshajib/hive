@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -62,6 +63,16 @@ var ErrAccountNotProvisioned = errors.New(
 func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
 	tenantID, err := uuid.Parse(s.TenantID)
 	if err != nil || tenantID == uuid.Nil {
+		// Loud on purpose (found live 2026-08-28: a security reviewer's
+		// freshly minted key 403'd with no operator-visible signal anywhere
+		// but the HTTP response itself). account_not_provisioned is a
+		// customer-facing 403, which is loud to the caller, but until this
+		// line nothing told an operator it happened at all -- the only
+		// existing watcher is the OWUI shim-key probe (main.go
+		// checkOWUIShimKey), which covers exactly one account. AccountID and
+		// KeyID are internal identifiers, safe to log; never log the raw key
+		// secret, which this snapshot does not carry.
+		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", s.AccountID, s.KeyID)
 		return uuid.Nil, ErrAccountNotProvisioned
 	}
 	return tenantID, nil
