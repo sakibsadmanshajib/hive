@@ -95,3 +95,50 @@ func TestExecuteResponsesStreaming_NormalCompletion_BodyUnaffectedByScannerErrCh
 		t.Error("a normal completion must never emit the abort response.failed event")
 	}
 }
+
+// TestExecuteResponsesStreaming_ClientDisconnect_NoSpuriousFailedEvent is the
+// Responses API twin of stream_scanner_err_test.go's chat-completions
+// MEDIUM-1 guard (go-review, PR #1271): r.Context() cancellation tears down
+// the upstream body read the same way a real relay failure does, so
+// scanner.Err() == context.Canceled on an ordinary client disconnect too.
+// Without the ctx.Err() == nil guard in stream_responses.go, a routine
+// cancellation would emit a spurious response.failed event to an
+// already-dead socket, burying the real ErrTooLong signal this PR exists to
+// surface.
+func TestExecuteResponsesStreaming_ClientDisconnect_NoSpuriousFailedEvent(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	ready := make(chan struct{})
+	litellmSrv := gatedSSEServer("partial responses-api reply before disconnect", ready)
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		orch.executeResponsesStreaming(ctx, w, req, []byte(`{}`), ResponsesRequest{Model: "gpt-4o"}, "gpt-4o",
+			NeedFlags{NeedResponses: true, NeedStreaming: true}, 10000)
+	}()
+
+	waitReady(t, ready)
+	cancel()
+	waitDone(t, done)
+
+	body := w.Body.String()
+	if strings.Contains(body, "response.failed") {
+		t.Error("a client disconnect must never emit response.failed: that would bury real relay failures under routine cancellations")
+	}
+}

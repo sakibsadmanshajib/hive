@@ -58,6 +58,10 @@ var (
 		Name: "hive_zero_content_captured_total",
 		Help: "Sync chat completions that returned no visible content even after one retry and settled fail-closed by capturing the reservation hold instead of full price (issue #1171), by alias and endpoint.",
 	}, []string{"alias", "endpoint"})
+	streamRelayAborted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_stream_relay_aborted_total",
+		Help: "SSE relay loops (chat completions and Responses API) that ended on a genuine scanner read/token error rather than [DONE] or a client disconnect -- most commonly bufio.ErrTooLong, a single upstream line over the scanner's buffer limit (issue #1255). A client disconnect never increments this: ctx.Err() != nil is excluded so routine cancellations, the overwhelming majority of stream endings, do not bury the signal this counter exists to surface.",
+	}, []string{"alias", "endpoint"})
 )
 
 // Stage names. Fixed set, so the label stays low cardinality and a dashboard
@@ -89,7 +93,11 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 			Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
 		}, []string{"stage", "endpoint"}),
 	}
-	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing)
+	// zeroContentCaptureTrips is deliberately not in this list: it is a
+	// pre-existing state (declared but never registered), out of this PR's
+	// scope to change. streamRelayAborted is added here, alongside the
+	// counters that already were.
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted)
 	return m
 }
 
