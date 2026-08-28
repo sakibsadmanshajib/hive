@@ -65,3 +65,46 @@ func TestChatCompletion_WithinCapSucceeds(t *testing.T) {
 		t.Fatalf("expected non-empty body")
 	}
 }
+
+// TestChatCompletion_ExactlyAtCapSucceeds is the boundary control PR #1253's
+// review named (finding M1): the read limit is maxLocalInferenceResponseBytes+1
+// and the truncation check is `len(respBody) > maxLocalInferenceResponseBytes`,
+// two off-by-one-prone numbers that must agree. A body of EXACTLY the cap
+// size must succeed, not be misreported as truncated.
+func TestChatCompletion_ExactlyAtCapSucceeds(t *testing.T) {
+	// Build a JSON body whose total byte length is exactly
+	// maxLocalInferenceResponseBytes, padding a string field to make up the
+	// difference.
+	const prefix = `{"id":"chatcmpl-x","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"padding":"`
+	const suffix = `"}`
+	padLen := maxLocalInferenceResponseBytes - len(prefix) - len(suffix)
+	if padLen < 0 {
+		t.Fatalf("prefix+suffix already exceeds the cap, fixture needs adjusting")
+	}
+	body := prefix + strings.Repeat("a", padLen) + suffix
+	if len(body) != maxLocalInferenceResponseBytes {
+		t.Fatalf("fixture body is %d bytes, want exactly %d", len(body), maxLocalInferenceResponseBytes)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	client := NewLiteLLMInferenceClient(srv.URL, "test-key")
+	respBody, usage, status, err := client.ChatCompletion(context.Background(), "route-x", json.RawMessage(`{"model":"route-x"}`))
+	if err != nil {
+		t.Fatalf("exactly-at-cap body reported as truncated: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("status=%d want 200", status)
+	}
+	if usage == nil || usage.TotalTokens != 2 {
+		t.Fatalf("usage=%+v want total_tokens=2", usage)
+	}
+	if len(respBody) != maxLocalInferenceResponseBytes {
+		t.Fatalf("returned body is %d bytes, want exactly %d", len(respBody), maxLocalInferenceResponseBytes)
+	}
+}

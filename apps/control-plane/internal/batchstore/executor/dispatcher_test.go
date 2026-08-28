@@ -345,14 +345,17 @@ func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
 // honest reason via the existing errors.jsonl shape, not a second
 // convention.
 func TestDispatcher_TruncatedResponseIsNeverASuccess(t *testing.T) {
+	var calls atomic.Int32
 	infer := &fakeInference{
 		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			calls.Add(1)
 			// Mirrors LiteLLMInferenceClient.ChatCompletion's truncation
-			// shape: nil body, status 0, a non-nil error.
-			return nil, nil, 0, errors.New("upstream response exceeded 4194304 byte limit and was truncated")
+			// shape exactly: nil body, status 0, an error wrapping
+			// ErrTruncatedUpstreamResponse.
+			return nil, nil, 0, fmt.Errorf("%w: exceeded 4194304 byte limit", ErrTruncatedUpstreamResponse)
 		},
 	}
-	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, infer, nil)
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
 	if err != nil {
 		t.Fatalf("new dispatcher: %v", err)
 	}
@@ -370,8 +373,100 @@ func TestDispatcher_TruncatedResponseIsNeverASuccess(t *testing.T) {
 	if res.Error == nil {
 		t.Fatalf("expected a failed line, got neither output nor error")
 	}
+	if res.Error.Error.Code != "response_too_large" {
+		t.Fatalf("code=%q want response_too_large", res.Error.Error.Code)
+	}
 	if res.ConsumedCredits != 0 {
 		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	}
+	// Deterministic failure: MaxRetries=3 but a truncation is terminal on
+	// the first attempt, unlike a transient failure (PR #1253 review:
+	// retrying a byte-cap truncation only re-pays the upstream for the
+	// same guaranteed failure).
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream called %d times, want exactly 1 (truncation must not retry)", got)
+	}
+}
+
+// Test 8c: the inverse of Test 8b -- an unparseable 2xx body (not a
+// truncation) IS worth retrying, since it may be a transient upstream
+// encoding quirk rather than a deterministic failure. Confirms the retry
+// policies were actually swapped, not just the truncation side fixed.
+func TestDispatcher_UnparseableUpstreamBody_RetriesThenFails(t *testing.T) {
+	var calls atomic.Int32
+	infer := &fakeInference{
+		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			calls.Add(1)
+			// 200 status with a body that is not valid JSON at all --
+			// VariablePriceFrame's json.Unmarshal fails, ok=false, on
+			// every attempt in this test.
+			return json.RawMessage(`not valid json`), &Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}, 200, nil
+		},
+	}
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	res := disp.Dispatch(context.Background(), InputLine{
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
+		Body:         mustBody(t, "customer-alias-1", ""),
+		Alias:        "customer-alias-1",
+		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+	})
+	if res.Output != nil {
+		t.Fatalf("unparseable 200 body recorded as success: %+v", res.Output)
+	}
+	if res.Error == nil {
+		t.Fatalf("expected a failed line, got neither output nor error")
+	}
+	if res.Error.Error.Code != "upstream_error" {
+		t.Fatalf("code=%q want upstream_error", res.Error.Error.Code)
+	}
+	if res.ConsumedCredits != 0 {
+		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("upstream called %d times, want exactly 3 (unparseable 2xx must retry up to MaxRetries)", got)
+	}
+}
+
+// Test 8d: issue #1253 review H1 -- a single unparseable 2xx body, when the
+// NEXT attempt succeeds, settles as a normal success. Proves the sanitize
+// ok=false branch composes correctly with retry rather than poisoning a
+// later good attempt.
+func TestDispatcher_UnparseableUpstreamBody_ThenSuccessOnRetry(t *testing.T) {
+	var calls atomic.Int32
+	infer := &fakeInference{
+		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			n := calls.Add(1)
+			if n < 2 {
+				return json.RawMessage(`not valid json`), nil, 200, nil
+			}
+			return json.RawMessage(`{"id":"gen-x","model":"route-x","choices":[]}`), &Usage{TotalTokens: 5}, 200, nil
+		},
+	}
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	res := disp.Dispatch(context.Background(), InputLine{
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
+		Body:         mustBody(t, "customer-alias-1", ""),
+		Alias:        "customer-alias-1",
+		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+	})
+	if res.Error != nil {
+		t.Fatalf("expected eventual success, got error %+v", res.Error)
+	}
+	if res.Output == nil {
+		t.Fatalf("expected a successful output")
+	}
+	if strings.Contains(string(res.Output.Response.Body), "gen-x") || strings.Contains(string(res.Output.Response.Body), "route-x") {
+		t.Fatalf("recovered success still leaked upstream id/model: %s", res.Output.Response.Body)
 	}
 }
 

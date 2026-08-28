@@ -96,8 +96,12 @@ func (c *LiteLLMInferenceClient) ChatCompletion(ctx context.Context, model strin
 		// "no usable status" convention the dispatcher's retry loop and
 		// codeForStatus already handle (the same shape a read/timeout
 		// error already produces above), rather than inventing a second
-		// failure convention.
-		return nil, nil, 0, fmt.Errorf("upstream response exceeded %d byte limit and was truncated", maxLocalInferenceResponseBytes)
+		// failure convention. Wrapping executor.ErrTruncatedUpstreamResponse
+		// lets Dispatch recognize this specific, deterministic failure and
+		// skip retrying it (PR #1253 review finding), unlike the read
+		// error and status-code failures above and below, which stay
+		// plain errors and go through the normal retry path.
+		return nil, nil, 0, fmt.Errorf("%w: exceeded %d byte limit", executor.ErrTruncatedUpstreamResponse, maxLocalInferenceResponseBytes)
 	}
 
 	usage := decodeUsage(respBody)

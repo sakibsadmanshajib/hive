@@ -143,30 +143,47 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 			// response.body is itself a full chat-completion response.
 			mintedID := sanitize.MintID("chatcmpl")
 			sanitizedBody, ok := sanitize.VariablePriceFrame(body, line.Alias, mintedID)
-			if !ok {
-				return d.errResult(line.CustomID, "upstream_error", "upstream returned an unparseable response", attempt)
+			if ok {
+				out := &OutputLine{
+					ID:       "batch_req_" + uuid.New().String(),
+					CustomID: line.CustomID,
+					Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: sanitizedBody},
+					Error:    nil,
+				}
+				res := DispatchResult{
+					CustomID:        line.CustomID,
+					Output:          out,
+					Attempts:        attempt,
+					ConsumedCredits: d.credits.Credits(usage),
+				}
+				if usage != nil {
+					res.UsedPromptTokens = usage.PromptTokens
+					res.UsedCompTokens = usage.CompletionTokens
+				}
+				return res
 			}
-			out := &OutputLine{
-				ID:       "batch_req_" + uuid.New().String(),
-				CustomID: line.CustomID,
-				Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: sanitizedBody},
-				Error:    nil,
-			}
-			res := DispatchResult{
-				CustomID:        line.CustomID,
-				Output:          out,
-				Attempts:        attempt,
-				ConsumedCredits: d.credits.Credits(usage),
-			}
-			if usage != nil {
-				res.UsedPromptTokens = usage.PromptTokens
-				res.UsedCompTokens = usage.CompletionTokens
-			}
-			return res
+			// Unparseable 2xx body: fall through to the SAME retry/backoff
+			// path below instead of failing on attempt one. Unlike a
+			// byte-cap truncation (deterministic, see the
+			// ErrTruncatedUpstreamResponse check below), a malformed-JSON
+			// 2xx is plausibly a transient upstream encoding quirk
+			// (observed live: DigitalOcean's odd shape) and is worth one
+			// more attempt (PR #1253 review: the two failure modes had
+			// opposite retry behavior from what their determinism
+			// warrants). status resets to 0, the same "no usable status"
+			// convention truncation and a read/timeout error already use,
+			// so the eventual failure settles as the existing
+			// upstream_error code rather than a new one.
+			callErr = errors.New("upstream returned an unparseable response")
+			status = 0
 		}
 
 		lastErr = callErr
 		lastStatus = status
+
+		if errors.Is(callErr, ErrTruncatedUpstreamResponse) {
+			return d.errResult(line.CustomID, "response_too_large", errMessage(callErr, "upstream response exceeded size limit"), attempt)
+		}
 
 		// 4xx (except 408/429) — terminal, no retry.
 		if status >= 400 && status < 500 && status != 408 && status != 429 {

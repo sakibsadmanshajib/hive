@@ -2,8 +2,9 @@
 // invariant on customer-bound response bodies (CLAUDE.md: "provider names
 // never leak to customers, sanitized at both the control-plane and edge
 // boundaries"). It strips upstream-identifying fields -- an upstream's own
-// response id format, system_fingerprint, the provider name, and
-// provider-reported cost -- and rewrites id/model to gateway-owned values.
+// response id format, system_fingerprint, the provider name,
+// provider-reported cost, and per-choice provider_specific_fields -- and
+// rewrites id/model to gateway-owned values.
 //
 // Moved here from apps/edge-api/internal/inference (mint_id.go's
 // mintCompletionID, upstream_cost.go's SanitizeVariablePriceFrame, PR #1222)
@@ -94,6 +95,43 @@ func VariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool)
 			return nil, false
 		}
 		frame["usage"] = rebuilt
+	}
+
+	// provider_specific_fields: OpenRouter's own wrapper-schema convention
+	// for passing provider-specific extension data through the proxy layer
+	// (observed live, 2026-08-28: {"native_finish_reason":"stop"} on the
+	// choice, {"reasoning":null,"refusal":null} on choice.message). The key
+	// name itself is a routing-layer identity signal independent of its
+	// contents -- its mere presence tells a customer they're behind an
+	// OpenRouter-style multi-provider router -- so it is stripped
+	// unconditionally at both nesting depths it has been observed at,
+	// rather than allowlisted by content (issue #1280).
+	if rawChoices, present := frame["choices"]; present {
+		var choices []map[string]json.RawMessage
+		if err := json.Unmarshal(rawChoices, &choices); err != nil {
+			return nil, false
+		}
+		for i, choice := range choices {
+			delete(choice, "provider_specific_fields")
+			if rawMessage, present := choice["message"]; present {
+				var message map[string]json.RawMessage
+				if err := json.Unmarshal(rawMessage, &message); err != nil {
+					return nil, false
+				}
+				delete(message, "provider_specific_fields")
+				rebuiltMessage, err := json.Marshal(message)
+				if err != nil {
+					return nil, false
+				}
+				choice["message"] = rebuiltMessage
+			}
+			choices[i] = choice
+		}
+		rebuiltChoices, err := json.Marshal(choices)
+		if err != nil {
+			return nil, false
+		}
+		frame["choices"] = rebuiltChoices
 	}
 
 	// The router's chosen model. LiteLLM's model_name (e.g.
