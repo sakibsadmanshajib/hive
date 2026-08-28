@@ -362,6 +362,42 @@ func (o *Orchestrator) executeResponsesStreaming(
 			}
 		}
 	}
+
+	// A read/token error ended the relay before [DONE] arrived -- most
+	// commonly bufio.ErrTooLong (the 512 KiB scanner.Buffer limit set
+	// above), occasionally a genuine upstream connection drop. Previously
+	// this was never checked at all (issue #1255 HIGH #1): the client just
+	// saw the event stream stop, with no response.failed, no
+	// response.completed, and nothing in the server log. Settlement (the
+	// deferred settleStream call) is untouched by this branch: it reads
+	// accumulator state that is already final by this point, the same
+	// state it would have read without this check.
+	if err := scanner.Err(); err != nil {
+		log.Printf("inference: responses API SSE relay aborted request_id=%s alias=%s err=%v",
+			requestID, model, err)
+		translator.emitFailed(w, flusher)
+	}
+}
+
+// emitFailed emits the response.failed event when the upstream relay ends
+// abnormally, mirroring emitCompleted's shape (same ResponseObject, same
+// event-frame convention) so the client sees the established Responses API
+// lifecycle terminate honestly instead of the connection just stopping. The
+// error message is a static, provider-blind string -- never built from the
+// underlying scanner error, which can carry the upstream's own address.
+func (t *responsesEventTranslator) emitFailed(w http.ResponseWriter, flusher http.Flusher) {
+	failedResp := t.buildPartialResponse("failed", nil, nil)
+	failedResp.Error = json.RawMessage(`{"code":"stream_interrupted","message":"The response stream ended unexpectedly."}`)
+
+	dataJSON, err := json.Marshal(map[string]any{
+		"type":     "response.failed",
+		"response": failedResp,
+	})
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: response.failed\ndata: %s\n\n", dataJSON)
+	flusher.Flush()
 }
 
 // emitCompleted emits the response.completed event with the full response object.

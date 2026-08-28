@@ -475,6 +475,30 @@ func (o *Orchestrator) executeStreaming(
 		flusher.Flush()
 	}
 
+	// 9b. A read/token error ended the relay before [DONE] arrived -- most
+	// commonly bufio.ErrTooLong (the 512 KiB scanner.Buffer limit set above),
+	// occasionally a genuine upstream connection drop. Previously this was
+	// never checked at all (issue #1255 HIGH #1): the client just saw the
+	// connection stop, with no error frame, no [DONE], and nothing in the
+	// server log. err.Error() is never put in the client-facing message --
+	// a net/http read error can carry the upstream's own address, exactly
+	// the leak apierrors.WriteProviderBlindUpstreamError exists to prevent
+	// everywhere else -- full detail goes to the operator log only. Settlement
+	// (the deferred settleStream call) is untouched by this branch: it reads
+	// accumulator state that is already final by this point, the same state
+	// it would have read without this check.
+	if err := scanner.Err(); err != nil {
+		log.Printf("inference: chat completions SSE relay aborted request_id=%s alias=%s endpoint=%s err=%v",
+			requestID, aliasID, endpoint, err)
+		code := "stream_interrupted"
+		if errPayload, marshalErr := json.Marshal(apierrors.NewError("api_error",
+			"The response stream ended unexpectedly.", &code)); marshalErr == nil {
+			fmt.Fprintf(w, "data: %s\n\n", errPayload)
+			flusher.Flush()
+		}
+		return nil
+	}
+
 	// 10. Synthesize terminal usage chunk if requested but upstream didn't send one
 	if includeUsage && !accumulator.HasUsage {
 		synth := ChatCompletionChunk{
