@@ -222,6 +222,34 @@ jobs:
             fi
           fi
 
+          # Validate both SHAs before they leave this step, once, for every
+          # caller downstream (list-covered-deploy-changes.mjs and
+          # newest-covered-commit.mjs both only ever see values that already
+          # passed this check). head_sha and base_sha can both originate
+          # from override_head_sha/override_base_sha, workflow_dispatch
+          # inputs that reach here as free text with no format guarantee.
+          # Passed unvalidated, either becomes a single argv element to
+          # `git log`/`git diff`/`git diff-tree` with no `--` separator: a
+          # value starting with `-` is parsed by git as an option rather
+          # than a revision, and `git diff --output=<file>` is an arbitrary
+          # file write on the runner, not just a parse error. This also
+          # closes a second, lower severity issue on the same value: a
+          # `$GITHUB_OUTPUT` line written via plain `echo "key=$value"` (no
+          # heredoc delimiter) lets an embedded newline in $value inject an
+          # extra key=value pair into this step's outputs, and a value that
+          # matches this regex cannot contain a newline. base_sha is allowed
+          # to be empty here (the no_baseline=true path never sets it); head
+          # sha is never legitimately empty.
+          sha_re='^[0-9a-f]{7,40}$'
+          if ! [[ "$head_sha" =~ $sha_re ]]; then
+            echo "::error::head_sha '$head_sha' is not a valid git SHA (7-40 lowercase hex chars); refusing to use it" >&2
+            exit 1
+          fi
+          if [ -n "$base_sha" ] && ! [[ "$base_sha" =~ $sha_re ]]; then
+            echo "::error::base_sha '$base_sha' is not a valid git SHA (7-40 lowercase hex chars); refusing to use it" >&2
+            exit 1
+          fi
+
           {
             echo "head_sha=$head_sha"
             echo "base_sha=$base_sha"
@@ -280,10 +308,30 @@ jobs:
 
       - name: Verdict
         id: verdict
+        # always(): without this, a genuine crash in any of the three steps
+        # this one reads from (resolve/changes/age) skips this step entirely
+        # (GitHub Actions' default behavior for a step with no if: at all),
+        # which skips the alert output, which skips "File or update the
+        # tracking issue" below (gated on that output). The run shows red on
+        # the Actions tab and nothing else happens: the exact silent-failure
+        # shape this watchdog exists to catch, reproduced by a bug in the
+        # watchdog itself. The new first branch below exists because a bare
+        # always() alone is not enough: with a genuine upstream crash, every
+        # output this step reads is simply unset (empty string, not "true"
+        # or "false"), and the pre-existing elif chain was written assuming
+        # those outputs are always trustworthy -- an empty count, compared
+        # with `= "0"`, is not equal to "0" and falls through to the same
+        # branch a real zero-count quiet result would, which would have
+        # silently reported "quiet" for a run that never actually determined
+        # that. Checking each step's own outcome first, before trusting its
+        # outputs, avoids that.
+        if: always()
         run: |
           set -euo pipefail
           reason=""
-          if [ "${{ steps.resolve.outputs.no_baseline }}" = "true" ]; then
+          if [ "${{ steps.resolve.outcome }}" = "failure" ] || [ "${{ steps.changes.outcome }}" = "failure" ] || [ "${{ steps.age.outcome }}" = "failure" ]; then
+            reason="the watchdog's own check failed partway through (resolve=${{ steps.resolve.outcome }}, changes=${{ steps.changes.outcome }}, age=${{ steps.age.outcome }}); treating this as drift since the real state could not be determined"
+          elif [ "${{ steps.resolve.outputs.no_baseline }}" = "true" ]; then
             reason="no successful deploy-demo-box run was found in the last 30 runs, so no baseline could be established"
           elif [ "${{ steps.changes.outputs.count }}" = "0" ]; then
             echo "quiet: no covered path changed since the last successful deploy -- absence of a new run is correct"

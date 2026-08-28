@@ -42,6 +42,14 @@ function commit(cwd, relPath, content, isoDate) {
   return git(cwd, ['rev-parse', 'HEAD']);
 }
 
+function runScript(cwd, args) {
+  return spawnSync('node', [SCRIPT, ...args], {
+    cwd: REPO_ROOT, // needs the real deploy-demo-box.yml to read the filter
+    encoding: 'utf8',
+    env: { ...process.env, GIT_DIR: join(cwd, '.git'), GIT_WORK_TREE: cwd },
+  });
+}
+
 // Uses REAL deploy-demo-box.yml paths (apps/edge-api/** is covered, a
 // top-level doc is not) rather than a fabricated filter, so this test proves
 // the script against the actual filter it will run against in CI.
@@ -64,11 +72,7 @@ try {
   // a genuinely stale covered change look fresh.
   const headSha = commit(root, 'NOTES.md', 'unrelated\n', '2026-08-28T10:58:00Z');
 
-  const result = spawnSync('node', [SCRIPT, baseSha, headSha], {
-    cwd: REPO_ROOT, // needs the real deploy-demo-box.yml to read the filter
-    encoding: 'utf8',
-    env: { ...process.env, GIT_DIR: join(root, '.git'), GIT_WORK_TREE: root },
-  });
+  const result = runScript(root, [baseSha, headSha]);
 
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}. stderr:\n${result.stderr}`);
   const newestCoveredSha = result.stdout.trim();
@@ -98,7 +102,61 @@ try {
     `fixture invariant broken: old covered commit must be >= 15 minutes before head, got ${ageMinutesIfHeadWereUsedAsNow}`,
   );
 
-  console.log('newest-covered-commit.test: PASS');
+  console.log('newest-covered-commit.test: PASS (linear history)');
 } finally {
   rmSync(root, { recursive: true, force: true });
+}
+
+// Scenario 2: a real merge commit. `git diff-tree` without `-m` prints
+// nothing at all for a merge commit, so without that flag the merge commit
+// itself would look uncovered and the walk would fall through to an OLDER
+// commit even when the merge is the newer, real answer. Constructs a
+// two-parent merge (--no-ff) whose covered change came entirely from the
+// merged-in branch, dated NEWER than that branch's own commit (the ordinary
+// shape: a feature branch commit lands, then gets merged later).
+const mergeRoot = mkdtempSync(join(tmpdir(), 'newest-covered-commit-merge-fixture-'));
+try {
+  git(mergeRoot, ['init', '-q']);
+  git(mergeRoot, ['config', 'user.email', 'test@example.com']);
+  git(mergeRoot, ['config', 'user.name', 'Test']);
+
+  const baseSha = commit(mergeRoot, 'README.md', 'base\n', '2026-08-01T00:00:00Z');
+
+  git(mergeRoot, ['checkout', '-q', '-b', 'feature']);
+  const featureSha = commit(
+    mergeRoot,
+    'apps/edge-api/feature.go',
+    'package main\n',
+    '2026-08-28T10:00:00Z',
+  );
+  git(mergeRoot, ['checkout', '-q', '-']);
+
+  git(mergeRoot, ['merge', '--no-ff', '-q', '-m', 'merge feature', 'feature'], {
+    GIT_AUTHOR_DATE: '2026-08-28T10:30:00Z',
+    GIT_COMMITTER_DATE: '2026-08-28T10:30:00Z',
+  });
+  const mergeSha = git(mergeRoot, ['rev-parse', 'HEAD']);
+  assert.notEqual(mergeSha, featureSha, 'fixture invariant broken: merge must be its own commit');
+
+  // Mechanical proof of the exact git behavior the code comment describes:
+  // without -m, diff-tree on the merge commit is empty; with -m --root, it
+  // is not, and includes the covered path.
+  const withoutM = git(mergeRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', mergeSha]);
+  assert.equal(withoutM, '', 'fixture invariant broken: expected diff-tree without -m to be empty for a merge commit');
+  const withM = git(mergeRoot, ['diff-tree', '-m', '--root', '--no-commit-id', '--name-only', '-r', mergeSha]);
+  assert.match(withM, /apps\/edge-api\/feature\.go/, 'expected diff-tree -m to show the covered path on the merge commit');
+
+  const result = runScript(mergeRoot, [baseSha, mergeSha]);
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}. stderr:\n${result.stderr}`);
+  assert.equal(
+    result.stdout.trim(),
+    mergeSha,
+    `expected the merge commit (${mergeSha}) to be reported as the newest covered commit, got ` +
+      `${result.stdout.trim()}. Without -m, the walk would skip the merge commit (its diff-tree ` +
+      `is empty) and fall back to the older feature-branch commit (${featureSha}) instead.`,
+  );
+
+  console.log('newest-covered-commit.test: PASS (merge commit)');
+} finally {
+  rmSync(mergeRoot, { recursive: true, force: true });
 }

@@ -28,6 +28,25 @@ if (!baseSha || !headSha) {
   process.exit(2);
 }
 
+// Defense in depth: deploy-drift-watchdog.yml already validates both values
+// against this same shape before they ever reach this script (its "Resolve
+// base and head commits" step is the only real caller today), but this
+// script does not get to assume that stays true forever. Without this, a
+// value starting with `-` would end up inside the single `${baseSha}..${headSha}`
+// argv element below with no `--` separator, so git would parse it as an
+// option instead of a revision range -- `git diff --output=<file>` is an
+// arbitrary file write on the runner, not just a parse error.
+const SHA_RE = /^[0-9a-f]{7,40}$/;
+for (const [name, value] of [
+  ['base-sha', baseSha],
+  ['head-sha', headSha],
+]) {
+  if (!SHA_RE.test(value)) {
+    console.error(`${name} '${value}' is not a valid git SHA (7-40 lowercase hex chars)`);
+    process.exit(2);
+  }
+}
+
 const workflow = parse(readFileSync(WORKFLOW_FILE, 'utf8'));
 const filters = pushPaths(workflow);
 if (filters.length === 0) {

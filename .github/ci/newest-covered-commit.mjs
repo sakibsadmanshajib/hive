@@ -28,6 +28,24 @@ if (!baseSha || !headSha) {
   process.exit(2);
 }
 
+// Defense in depth: deploy-drift-watchdog.yml already validates both values
+// against this same shape before they ever reach this script (its "Resolve
+// base and head commits" step is the only real caller today), but this
+// script does not get to assume that stays true forever. Without this, a
+// value starting with `-` would be handed to `git log` as a single argv
+// element with no `--` separator, so git would parse it as an option
+// instead of a revision.
+const SHA_RE = /^[0-9a-f]{7,40}$/;
+for (const [name, value] of [
+  ['base-sha', baseSha],
+  ['head-sha', headSha],
+]) {
+  if (!SHA_RE.test(value)) {
+    console.error(`${name} '${value}' is not a valid git SHA (7-40 lowercase hex chars)`);
+    process.exit(2);
+  }
+}
+
 const workflow = parse(readFileSync(WORKFLOW_FILE, 'utf8'));
 const filters = pushPaths(workflow);
 if (filters.length === 0) {
@@ -49,17 +67,26 @@ try {
   process.exit(2);
 }
 
-// ponytail: `git diff-tree` without `-m` prints nothing for a merge commit
-// (ambiguous against which parent), so a merge commit that itself introduced
-// a covered change would be silently skipped by this loop. Not handled: this
-// repo's merge policy is squash-only with branch deletion (CLAUDE.md, git
-// workflow rules), so a real merge commit should never appear in main's
-// history between two successive baselines. Add `-m --first-parent` here if
-// that policy ever changes.
+// `-m`: without it, `git diff-tree` prints nothing at all for a merge
+// commit (ambiguous against which parent), so a merge commit that itself
+// introduced a covered change would be silently skipped by this loop.
+// `--root`: without it, the same "prints nothing" happens for a commit with
+// no parent at all (a repository's very first commit). Neither should ever
+// actually appear between two successive baselines on this repo's real main
+// history (squash-only merge policy; base_sha is itself always a later
+// commit than any repo's root), but the consequence if one ever does is
+// worse than a plain miss: the caller (deploy-drift-watchdog.yml) hard-fails
+// on this script's exit 1 under `set -euo pipefail`, its "Verdict" step has
+// no `if: always()` guard so a failed prior step skips it too, the alert
+// output never gets set, and "File or update the tracking issue" (gated on
+// that output) never fires either. That is the exact silent-failure shape
+// this watchdog exists to catch, reproduced inside the watchdog itself, so
+// both flags are worth carrying even though today's real callers should
+// never exercise either path.
 for (const sha of commits) {
   let changed;
   try {
-    changed = execFileSync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', sha], {
+    changed = execFileSync('git', ['diff-tree', '-m', '--root', '--no-commit-id', '--name-only', '-r', '-z', sha], {
       encoding: 'utf8',
     })
       .split('\0')
