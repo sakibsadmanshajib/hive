@@ -4,14 +4,13 @@
 -- (issue #958): a role with USAGE on a schema but no table-level GRANT
 -- fails every query with "permission denied for table X", which reads like
 -- an RLS problem and is in fact a missing GRANT. deploy/supabase/init/
--- 00-extensions.sql grants anon, authenticated and service_role USAGE ON
--- SCHEMA public (line 64) and BYPASSRLS on service_role specifically
--- (CREATE ROLE service_role ... BYPASSRLS), but that init file only ever
--- backfilled ALTER DEFAULT PRIVILEGES for the storage schema, whose header
--- comment already documents this exact class of defect for storage ("That
--- is exactly what broke bucket creation on the first enterprise-profile
--- boot"). The public schema never got the equivalent grant for any of the
--- three roles.
+-- 00-extensions.sql grants service_role USAGE ON SCHEMA public (line 64)
+-- and BYPASSRLS on the role itself (CREATE ROLE service_role ... BYPASSRLS),
+-- but that init file only ever backfilled ALTER DEFAULT PRIVILEGES for the
+-- storage schema, whose header comment already documents this exact class
+-- of defect for storage ("That is exactly what broke bucket creation on
+-- the first enterprise-profile boot"). The public schema never got the
+-- equivalent grant for service_role.
 --
 -- Found live while verifying the RAG feature-gate fix (PR #1257,
 -- rag-demo-readiness.yml run 33209756779): scripts/verify-rag-roundtrip.py's
@@ -24,30 +23,65 @@
 -- storage-schema precedent above is the actual cause once the key itself
 -- was cleared.
 --
--- Scope widened past service_role after finding scripts/ci-supabase-stack.sh
--- already carries the full fix for this exact gap, predating this migration
--- and never propagated to the real deployment's init file:
+-- Scope is service_role ONLY. An earlier revision of this migration also
+-- granted anon and authenticated (matching scripts/ci-supabase-stack.sh's
+-- own CI-only workaround), and adversarial review caught two reasons that
+-- was wrong for the real deployment, not just a broader-than-needed
+-- default:
 --
---   log "==> API-role grants the hosted platform applies for us"
---   # On a hosted Supabase project the platform holds default privileges that
---   # give anon, authenticated and service_role table access in public; RLS
---   # is what actually gates anon and authenticated, and service_role is
---   # BYPASSRLS... supabase/migrations grants none of this because it never
---   # had to. Without it PostgREST answers 403 to every request...
---   GRANT ALL ON ALL TABLES    IN SCHEMA public TO anon, authenticated, service_role;
---   GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
---   GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+--   1. It reopens a hole 20260823_02_agent_task_schedules.sql explicitly
+--      closed. That migration REVOKEs EXECUTE on
+--      agent_task_schedules_claim_due(...) and agent_tasks_list_active()
+--      FROM PUBLIC precisely because "anon/authenticated could call this
+--      SECURITY DEFINER function directly through PostgREST's RPC surface
+--      (the anon key is public): a cross-tenant read of every tenant's
+--      schedule rows plus a starvation DoS" (that migration's own words).
+--      REVOKE ... FROM PUBLIC does not block a later direct GRANT to a
+--      named role, and RLS is no backstop for a SECURITY DEFINER function
+--      by design (it runs as the defining superuser, bypassing RLS on
+--      purpose). `GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon,
+--      authenticated` was exactly that later direct grant, on every
+--      SECURITY DEFINER function in the schema, not just the two named
+--      above. public.custom_access_token_hook carries the identical
+--      FROM PUBLIC revoke across four migrations, most recently
+--      20260823_03_owui_role_never_admin.sql.
+--   2. ALTER DEFAULT PRIVILEGES grants the role directly, not through
+--      PUBLIC, so it survives every REVOKE ... FROM PUBLIC precedent in
+--      this repo and cannot be clawed back by the same pattern: the next
+--      SECURITY DEFINER helper written the way this codebase already
+--      writes them would read clean in review and still be callable by
+--      anon. It would also have covered less than it looked like it did
+--      (FOR ROLE postgres misses anything supabase_admin creates).
 --
--- That comment is the actual design intent, stated once, correctly, by
--- whoever wrote ci-supabase-stack.sh: a self-hosted deployment must grant
--- explicitly what a hosted Supabase project's platform grants implicitly.
--- This migration is that same fix, finally applied where the CI script's
--- own comment says it belongs -- the real deployment, not just its
--- throwaway CI stand-in -- so this migration matches ci-supabase-stack.sh's
--- scope exactly (three roles, tables, sequences, and functions) rather than
--- re-deriving a narrower one.
+--   Also HIGH, not just these two CRITICAL findings: 54 of the ~80
+--   public-schema tables carry no RLS policy at all (only 26 have
+--   ENABLE ROW LEVEL SECURITY), including api_keys, credit_ledger_entries,
+--   credit_grants, credit_reservations, accounts, account_memberships,
+--   invoices, payment_intents, usage_events, files, rag_chunks,
+--   audit_log_default, and llm_traces_default -- granting anon/authenticated
+--   table access there has no RLS gate behind it at all. It also directly
+--   reversed 20260822_01_tenant_email_domains_admin_only.sql's own
+--   REVOKE INSERT, DELETE ... FROM authenticated, whose header says that
+--   revoke "should not be done without a domain ownership check in front
+--   of it".
 --
--- Blast radius, checked rather than assumed (PR #1257 discussion):
+--   No live customer-facing exposure resulted (deploy/docker/
+--   Caddyfile.supabase keeps /rest/v1 off the public listener; port 8080
+--   serves only /auth/v1 today), but that Caddyfile's own comment warns
+--   "a public /rest/v1 would put the whole public schema one anon key away
+--   from the internet, governed only by whatever grants happen to exist...
+--   add a prefix here only together with the RLS policies and grants that
+--   make it safe to serve anonymously" -- and this migration would have
+--   quietly broken half of that promise, one route-config line away from
+--   mattering. scripts/ci-supabase-stack.sh's three-role, functions-included
+--   scope is correct for what it is: a throwaway CI database with no real
+--   data and no exposure. It is not automatically correct for the
+--   production data plane, and citing it as precedent for that was the
+--   actual scoping mistake here -- this project's own "verify against the
+--   real substrate" lesson, applied to a grant instead of a config value.
+--
+-- Blast radius, checked rather than assumed (PR #1257 discussion), still
+-- accurate for the service_role-only scope below:
 --   * scripts/seed-demo-owner.py -- same `/rest/v1` + SUPABASE_SERVICE_ROLE_KEY
 --     pattern as verify-rag-roundtrip.py. Consistent with the live symptom
 --     this whole investigation started from: the demo tenant's ENABLE_RAG
@@ -65,44 +99,36 @@
 --     by code-pattern inspection alone if ever pointed at this box.
 --   * scripts/verify-rag-roundtrip.py -- confirmed live-blocked, fixed by
 --     this migration (this PR).
---   * scripts/ci-supabase-stack.sh -- NOT affected: already carries the
---     complete workaround above, applied fresh every run. This is the
---     migration's own source, not a casualty.
+--   * scripts/ci-supabase-stack.sh -- NOT affected: already carries its own
+--     (CI-only) workaround, applied fresh every run.
 --   * .github/ci/test-db-bootstrap.sql -- did not create the service_role
 --     role AT ALL before this PR (nothing before this migration ever
---     referenced it in an actual GRANT), fixed in the same PR. Whether its
---     HIVE_TEST_DB_URL-gated RLS suites also need anon/authenticated table
---     grants (as opposed to just the role existing) is not established
---     either way here: those suites drive Postgres directly via pgx, not
---     through PostgREST, and it is not yet confirmed whether any of them
---     SET ROLE into anon/authenticated for a query this scope would affect.
---     Flagged, not chased further in this migration.
+--     referenced it in an actual GRANT), fixed in the same PR.
 --   * control-plane and edge-api's own request path -- unaffected regardless
 --     of scope: both connect with their own pgx pool as hive_app, never
 --     through PostgREST. web-console's Supabase usage is auth-only (no
---     `.from()`/`.storage` call anywhere in that app). No RLS policy in this
---     schema that names `TO authenticated` or `TO anon` (e.g. phase-19's
---     tenant_settings/tenant_users policies) had a live caller reaching it
---     through PostgREST either, so granting them here changes zero currently
---     observable behavior; it only lets those already-written policies be
---     reachable at all, matching what they were written assuming.
+--     `.from()`/`.storage` call anywhere in that app).
 --
 -- Existing tables need the direct GRANT below; ALTER DEFAULT PRIVILEGES
 -- alone only covers objects created AFTER it runs, exactly as
 -- 00-extensions.sql's own storage-schema comment explains. Both are applied
--- here, for the same reason storage carries both.
+-- here, for the same reason storage carries both. Explicit verbs, not ALL:
+-- service_role's actual need (every ops/verification script's REST calls,
+-- all upsert/select shaped) is SELECT/INSERT/UPDATE/DELETE on tables,
+-- USAGE/SELECT on sequences for default-value inserts on any serial/
+-- identity column; nothing here calls a function through this role, so no
+-- FUNCTIONS grant is included -- add one, scoped and evidenced, if a real
+-- caller ever needs it, rather than opening every current and future
+-- SECURITY DEFINER function as a side effect of a table-access fix.
 
 BEGIN;
 
-GRANT ALL ON ALL TABLES    IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT ALL ON TABLES TO anon, authenticated, service_role;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+  GRANT USAGE, SELECT ON SEQUENCES TO service_role;
 
 COMMIT;

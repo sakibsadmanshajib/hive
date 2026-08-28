@@ -42,17 +42,18 @@ DO $$
 DECLARE
   r text;
 BEGIN
-  -- service_role and anon added for
-  -- 20260828_01_service_role_public_schema_grant.sql: PostgREST's anon and
-  -- service_role have USAGE on the public schema (service_role also
-  -- BYPASSRLS) on a real project, but no migration before that one ever
-  -- named either role in a GRANT, so nothing here needed them to exist
-  -- until then. authenticated already existed in this array; that
-  -- migration also grants it, which needed no new role here. NOLOGIN only,
-  -- no BYPASSRLS: the migration only needs the roles to exist as GRANT
-  -- targets, and no suite here runs as either one, so the extra privilege
-  -- would be untested surface, not a requirement.
-  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'authenticated', 'supabase_auth_admin', 'service_role', 'anon'] LOOP
+  -- service_role added for 20260828_01_service_role_public_schema_grant.sql
+  -- (issue: PostgREST's service_role has USAGE on the public schema and
+  -- BYPASSRLS on a real project, but no migration before that one ever
+  -- named the role in a GRANT, so nothing here needed it to exist until
+  -- then). NOLOGIN only, no BYPASSRLS: the migration only needs the role
+  -- to exist as a GRANT target, and no suite here runs as it, so the extra
+  -- privilege would be untested surface, not a requirement. anon is
+  -- deliberately NOT added: that migration's scope is service_role only
+  -- (adversarial review caught anon/authenticated grants reopening a
+  -- SECURITY DEFINER RPC hole a prior migration explicitly closed), so
+  -- nothing here needs the anon role to exist either.
+  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'authenticated', 'supabase_auth_admin', 'service_role'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN', r);
     END IF;
