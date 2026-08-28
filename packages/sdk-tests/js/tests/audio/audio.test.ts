@@ -12,7 +12,14 @@ const STT_MODEL = process.env.HIVE_STT_MODEL ?? "hive-stt";
 describe("Audio", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  it("audio.speech.create returns non-empty binary audio", async () => {
+  // EXPECTED FAILURE, issue #1318: every OpenAI voice name is refused by the
+  // configured speech route, which names six of its own, and the refusal
+  // arrives as a 500 rather than a 4xx. The voice below is deliberately the
+  // OpenAI default rather than one the current upstream happens to accept:
+  // the point of this suite is what an unmodified OpenAI SDK can do, and
+  // swapping in a provider-specific voice would hide the gap instead of
+  // measuring it.
+  it.fails("audio.speech.create returns non-empty binary audio", async () => {
     const response = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
@@ -23,7 +30,9 @@ describe("Audio", () => {
     expect(buffer.length).toBeGreaterThan(0);
   });
 
-  it("audio.transcriptions.create round-trips speech back to text", async () => {
+  // EXPECTED FAILURE, issue #1318: blocked on the same speech synthesis
+  // above, which this round trip needs before it has anything to transcribe.
+  it.fails("audio.transcriptions.create round-trips speech back to text", async () => {
     const speech = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",

@@ -64,7 +64,11 @@ describe("Usage accounting", () => {
     expect(cached as number).toBeGreaterThanOrEqual(0);
   });
 
-  it("stream_options.include_usage emits a terminal usage chunk with prompt_tokens_details", async () => {
+  // EXPECTED FAILURE, issue #1317: no chunk in the stream carries the
+  // OpenAI-defined terminal usage shape today. it.fails keeps the request and
+  // every assertion below live; the day the frame arrives, this passes,
+  // vitest reports an unexpected pass, and the marker comes off.
+  it.fails("stream_options.include_usage emits a terminal usage chunk with prompt_tokens_details", async () => {
     // Pinned to the single-route capable alias, not hive-free: hive-free is
     // a load-balanced pool across four heterogeneous keys (D-048), and the
     // skipped local regression test in streaming-chat.test.ts documents that

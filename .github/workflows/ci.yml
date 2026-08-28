@@ -1601,7 +1601,19 @@ jobs:
           # for reasoning variance while still catching an order-of-magnitude
           # runaway. Raise it only alongside a measurement, and only after
           # finding out what grew.
-          RUN_TOKEN_CEILING: '6000'
+          #
+          # Raised from 6000 to 20000 on 2026-08-28, with the measurement and
+          # the cause, per the rule above. Run 33210676196 metered 70048
+          # tokens. What grew was one line, not the suite: the oversized-body
+          # probe in typed-exceptions.test.ts sent about 300KB of prompt, and
+          # nothing on the chat path rejects a body that size, so all of it
+          # was forwarded upstream and metered as prompt tokens. That probe is
+          # now a tenth of the size. The remaining growth is real and expected:
+          # this suite went from 22 completions to roughly 50 as the OpenAI
+          # surface coverage landed. 20000 is about twice the measured shape
+          # after the fix, which keeps the order-of-magnitude runaway detector
+          # that is the whole point of this ceiling.
+          RUN_TOKEN_CEILING: '20000'
         run: |
           set -uo pipefail
           q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "$1"; }

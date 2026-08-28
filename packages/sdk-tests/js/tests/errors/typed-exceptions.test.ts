@@ -30,15 +30,28 @@ describe("SDK typed exception classes", () => {
     ).rejects.toBeInstanceOf(OpenAI.AuthenticationError);
   });
 
-  it("a missing Authorization header raises AuthenticationError", async () => {
-    const client = new OpenAI({ baseURL: BASE_URL, apiKey: "" });
-
-    await expect(
-      client.chat.completions.create({
+  it("a request with no Authorization header is a structured 401", async () => {
+    // Deliberately raw HTTP rather than the SDK. openai v7 refuses to build
+    // a client with an empty apiKey and throws locally before any bytes
+    // leave the process, so the SDK form of this test asserted the SDK
+    // constructor and never reached the gateway at all. What is worth
+    // asserting is the gateway contract, so this speaks HTTP directly.
+    const res = await fetch(BASE_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         model: MODEL,
         messages: [{ role: "user", content: "hi" }],
       }),
-    ).rejects.toBeInstanceOf(OpenAI.AuthenticationError);
+    });
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as {
+      error?: { type?: string; message?: string };
+    };
+    expect(typeof body.error?.type).toBe("string");
+    expect(typeof body.error?.message).toBe("string");
+    expect(JSON.stringify(body)).not.toMatch(/openrouter|groq|gemini/i);
   });
 
   it("an invalid model raises NotFoundError", async () => {
@@ -77,11 +90,16 @@ describe("SDK typed exception classes", () => {
 
   it("a large request body either succeeds (bounded output cost) or is cleanly rejected, never hangs or 5xxs", async () => {
     const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
-    // ~300KB of content. max_tokens: 1 bounds the worst-case output spend if
-    // the gateway accepts and dispatches it upstream; the point of this test
-    // is the boundary behavior (whichever layer owns it: app, Caddy, or
-    // Cloudflare), not the model's answer.
-    const bigContent = "word ".repeat(60_000);
+    // ~30KB of content. It was ~300KB, and that single line metered about
+    // 70,000 prompt tokens against the shared free pool in one CI run, on its
+    // own blowing the whole job token ceiling: nothing rejects a body this
+    // size on the chat path, so every byte was forwarded upstream and billed
+    // as prompt. max_tokens: 1 only bounds the OUTPUT, which was never where
+    // the cost was. The boundary behaviour is still what is under test
+    // (whichever layer owns it: app, Caddy, or Cloudflare), and it is just as
+    // observable at a tenth of the spend against an allowance shared with the
+    // live demo.
+    const bigContent = "word ".repeat(6_000);
 
     try {
       const response = await client.chat.completions.create({

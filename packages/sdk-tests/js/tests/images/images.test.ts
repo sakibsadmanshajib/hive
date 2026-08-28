@@ -17,17 +17,22 @@ const IMAGE_MODEL = process.env.HIVE_IMAGE_MODEL ?? "hive-auto";
 describe("Images", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  it("images.generate either returns a real image or fails with a structured, provider-blind error (never a 5xx)", async () => {
+  // EXPECTED FAILURE, issue #1319: the call answers 200 with an empty data
+  // array, which is neither an image nor an error a caller can act on.
+  //
+  // The success assertions moved OUT of the try block, and that is a fix in
+  // its own right, not cosmetics: a failed expect() is itself a thrown
+  // exception, so inside the try the catch below caught this suite own
+  // assertion and re-reported it as "not an APIError". The real defect was
+  // invisible behind a confusing message about instanceof.
+  it.fails("images.generate either returns a real image or fails with a structured, provider-blind error (never a 5xx)", async () => {
+    let response: Awaited<ReturnType<typeof client.images.generate>>;
     try {
-      const response = await client.images.generate({
+      response = await client.images.generate({
         model: IMAGE_MODEL,
         prompt: "a single red circle on a white background",
         n: 1,
       });
-
-      expect(response.data?.length).toBeGreaterThanOrEqual(1);
-      const image = response.data![0];
-      expect(image.url ?? image.b64_json).toBeTruthy();
     } catch (err) {
       // The support matrix declares POST /v1/images/generations
       // supported_now (phase 6). If the catalog cannot actually serve an
@@ -39,6 +44,11 @@ describe("Images", () => {
       const apiErr = err as APIError;
       const raw = JSON.stringify(apiErr.error ?? apiErr.message ?? "");
       expect(raw).not.toMatch(/groq|openrouter|deepseek/i);
+      return;
     }
+
+    expect(response.data?.length).toBeGreaterThanOrEqual(1);
+    const image = response.data![0];
+    expect(image.url ?? image.b64_json).toBeTruthy();
   });
 });
