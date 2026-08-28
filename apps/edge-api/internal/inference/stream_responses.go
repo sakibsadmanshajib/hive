@@ -229,7 +229,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 
 	// 10. Scan and translate upstream SSE chunks
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -362,6 +362,75 @@ func (o *Orchestrator) executeResponsesStreaming(
 			}
 		}
 	}
+
+	// A read/token error ended the relay before [DONE] arrived -- most
+	// commonly bufio.ErrTooLong (the 512 KiB scanner.Buffer limit set
+	// above), occasionally a genuine upstream connection drop. Previously
+	// this was never checked at all (issue #1255 HIGH #1): the client just
+	// saw the event stream stop, with no response.failed, no
+	// response.completed, and nothing in the server log. Settlement (the
+	// deferred settleStream call) is untouched by this branch: it reads
+	// accumulator state that is already final by this point, the same
+	// state it would have read without this check.
+	//
+	// ctx.Err() == nil is required, not optional: r.Context() cancellation
+	// tears down the in-flight upstream body read the exact same way a real
+	// relay failure does, so scanner.Err() is context.Canceled on a routine
+	// disconnect too. Without this guard every ordinary cancellation would
+	// log "SSE relay aborted" and emit a spurious response.failed event to
+	// an already-dead socket, burying the ErrTooLong signal this PR exists
+	// to surface under the far more common disconnect case. Same
+	// distinction settleStream already draws via reqCtx.Err() (client
+	// disconnect vs. upstream_error) -- settlement still logs and accounts
+	// for a disconnect on its own path regardless of this branch.
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("inference: responses API SSE relay aborted request_id=%s alias=%s err=%v",
+			requestID, model, err)
+		streamRelayAborted.WithLabelValues(model, EndpointResponses).Inc()
+		translator.emitFailed(w, flusher)
+	}
+}
+
+// emitFailed emits the response.failed event when the upstream relay ends
+// abnormally, mirroring emitCompleted's shape (same ResponseObject, same
+// event-frame convention) so the client sees the established Responses API
+// lifecycle terminate honestly instead of the connection just stopping. The
+// error message is a static, provider-blind string -- never built from the
+// underlying scanner error, which can carry the upstream's own address.
+func (t *responsesEventTranslator) emitFailed(w http.ResponseWriter, flusher http.Flusher) {
+	// A client tracking the Responses lifecycle state machine expects
+	// response.created before any terminal event. If the relay aborts on
+	// the very first upstream line, nothing has been emitted yet, and
+	// response.failed would otherwise be the first event the client ever
+	// sees -- out of order for a strict client (go-review LOW,
+	// stream_responses.go:375). The official SDKs tolerate this today (they
+	// do not validate ordering on the streaming path), but there is no
+	// reason to rely on that leniency when emitting response.created first
+	// costs one more marshal.
+	if !t.started {
+		t.started = true
+		created := t.buildPartialResponse("in_progress", nil, nil)
+		if dataJSON, err := json.Marshal(map[string]any{
+			"type":     "response.created",
+			"response": created,
+		}); err == nil {
+			fmt.Fprintf(w, "event: response.created\ndata: %s\n\n", dataJSON)
+			flusher.Flush()
+		}
+	}
+
+	failedResp := t.buildPartialResponse("failed", nil, nil)
+	failedResp.Error = json.RawMessage(`{"code":"stream_interrupted","message":"The response stream ended unexpectedly."}`)
+
+	dataJSON, err := json.Marshal(map[string]any{
+		"type":     "response.failed",
+		"response": failedResp,
+	})
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: response.failed\ndata: %s\n\n", dataJSON)
+	flusher.Flush()
 }
 
 // emitCompleted emits the response.completed event with the full response object.

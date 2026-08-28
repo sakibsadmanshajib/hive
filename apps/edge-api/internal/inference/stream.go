@@ -18,6 +18,15 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
+// sseScanLineMaxBytes is the maximum single SSE line either relay loop in
+// this package (executeStreaming, executeResponsesStreaming) accepts from
+// upstream before bufio.Scanner reports bufio.ErrTooLong. Both loops pass it
+// as scanner.Buffer's max argument. Named rather than a bare literal so the
+// oversized-line regression tests (stream_scanner_err_test.go,
+// stream_responses_scanner_err_test.go) stay correct if this value ever
+// changes, instead of quietly testing under the real limit.
+const sseScanLineMaxBytes = 512 * 1024
+
 // UsageAccumulator tracks token usage and output text across SSE streaming chunks.
 // Content is recorded so the usage clamp can recompute completion_tokens when
 // the upstream terminal usage chunk reports 0 on a non-empty response.
@@ -340,7 +349,7 @@ func (o *Orchestrator) executeStreaming(
 	// 9. Relay SSE chunks
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer for large chunks
-	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
 	// mintedID is reused for every chunk of this stream: a client-visible id
 	// must be stable within one response, and must match the shape
@@ -473,6 +482,44 @@ func (o *Orchestrator) executeStreaming(
 		// Pass through event: lines and other SSE fields
 		fmt.Fprintf(w, "%s\n", line)
 		flusher.Flush()
+	}
+
+	// 9b. A read/token error ended the relay before [DONE] arrived -- most
+	// commonly bufio.ErrTooLong (the 512 KiB scanner.Buffer limit set above),
+	// occasionally a genuine upstream connection drop. Previously this was
+	// never checked at all (issue #1255 HIGH #1): the client just saw the
+	// connection stop, with no error frame, no [DONE], and nothing in the
+	// server log. err.Error() is never put in the client-facing message --
+	// a net/http read error can carry the upstream's own address, exactly
+	// the leak apierrors.WriteProviderBlindUpstreamError exists to prevent
+	// everywhere else -- full detail goes to the operator log only. Settlement
+	// (the deferred settleStream call) is untouched by this branch: it reads
+	// accumulator state that is already final by this point, the same state
+	// it would have read without this check.
+	//
+	// ctx.Err() == nil is required, not optional: r.Context() cancellation
+	// (a client hitting stop, or just navigating away) tears down the
+	// in-flight upstream body read the exact same way a real relay failure
+	// does, so scanner.Err() is context.Canceled on a routine disconnect too.
+	// Without this guard every ordinary cancellation would log "SSE relay
+	// aborted" and write a stream_interrupted frame to an already-dead
+	// socket, burying the ErrTooLong signal this PR exists to surface under
+	// the far more common disconnect case. Same distinction settleStream
+	// already draws via reqCtx.Err() a few dozen lines below (client
+	// disconnect vs. upstream_error) -- settlement still logs and accounts
+	// for a disconnect on its own path regardless of this branch, so nothing
+	// goes unrecorded by skipping it here.
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("inference: chat completions SSE relay aborted request_id=%s alias=%s endpoint=%s err=%v",
+			requestID, aliasID, endpoint, err)
+		streamRelayAborted.WithLabelValues(aliasID, endpoint).Inc()
+		code := "stream_interrupted"
+		if errPayload, marshalErr := json.Marshal(apierrors.NewError("api_error",
+			"The response stream ended unexpectedly.", &code)); marshalErr == nil {
+			fmt.Fprintf(w, "data: %s\n\n", errPayload)
+			flusher.Flush()
+		}
+		return nil
 	}
 
 	// 10. Synthesize terminal usage chunk if requested but upstream didn't send one
