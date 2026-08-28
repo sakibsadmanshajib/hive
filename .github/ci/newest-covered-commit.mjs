@@ -49,6 +49,13 @@ try {
   process.exit(2);
 }
 
+// ponytail: `git diff-tree` without `-m` prints nothing for a merge commit
+// (ambiguous against which parent), so a merge commit that itself introduced
+// a covered change would be silently skipped by this loop. Not handled: this
+// repo's merge policy is squash-only with branch deletion (CLAUDE.md, git
+// workflow rules), so a real merge commit should never appear in main's
+// history between two successive baselines. Add `-m --first-parent` here if
+// that policy ever changes.
 for (const sha of commits) {
   let changed;
   try {

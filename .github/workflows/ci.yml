@@ -671,6 +671,24 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: node .github/ci/lint-deploy-paths-filter.mjs
 
+      # Regression guard for deploy-drift-watchdog.yml's grace-window
+      # freshness check. Before this test existed, that check read main's
+      # tip commit date instead of the newest covered commit's date, so an
+      # unrelated uncovered commit landing shortly after a genuinely stale
+      # covered commit reset the apparent freshness and masked real drift
+      # (PR #1249 and PR #1246 merging 8 seconds apart is the shape that
+      # exposed it). Wired here, in a required check, for the same reason
+      # lint-deploy-paths-filter.mjs above is: a workflow-only change must
+      # not be able to reintroduce this without CI noticing.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/newest-covered-commit.test.mjs
+
+      # Regression guard for the set-compose-project-name.sh --check
+      # collision detector (issue #1242). No docker daemon needed: it stubs
+      # `docker` on PATH with a fake `ps` line.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-set-compose-project-name.sh
+
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:tenant-setting
       - if: needs.changes.outputs.run != 'false'
