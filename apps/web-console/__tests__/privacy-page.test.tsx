@@ -194,6 +194,20 @@ describe("app/console/privacy/page.tsx", () => {
     screen.getByText(/does not describe/i);
   });
 
+  it("links both interactive controls on the page to their real destinations", async () => {
+    stubFetch();
+
+    const mod = await import("../app/console/privacy/page");
+    const page = await mod.default();
+    render(page);
+
+    const usageLogLink = screen.getByRole("link", { name: /view your usage log/i });
+    expect(usageLogLink.getAttribute("href")).toBe("/console/logs");
+
+    const apiKeysLink = screen.getByRole("link", { name: /manage api key model access/i });
+    expect(apiKeysLink.getAttribute("href")).toBe("/console/api-keys");
+  });
+
   it("redirects an unverified email to profile settings, matching every other console page", async () => {
     vi.stubGlobal(
       "fetch",
