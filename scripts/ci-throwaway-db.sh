@@ -122,6 +122,29 @@ for rel in public.tenants public.accounts public.api_keys public.usage_events \
   fi
 done
 
+# The public schema must not carry blanket table grants for the PostgREST API
+# roles. anon holds nothing at all by design (00-extensions.sql gives it USAGE
+# on the schema and no more), and every privilege `authenticated` holds is
+# named in a migration, on one of five tenant-scoped tables. An earlier
+# revision of 20260828_01_service_role_public_schema_grant.sql granted ALL on
+# every table in the schema to both roles and reached the live demo box before
+# review caught it, which also reopened a SECURITY DEFINER RPC hole
+# 20260823_02_agent_task_schedules.sql had explicitly closed. These three
+# assertions are what stop that from coming back silently: they run over the
+# real migration chain on a throwaway database, so a future GRANT that widens
+# the API-role surface fails here rather than on the box.
+anon_grants="$(q "SELECT count(*) FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee='anon'")"
+if [ "$anon_grants" != "0" ]; then
+  fail "anon holds $anon_grants table privilege(s) in the public schema after the migration chain; it is supposed to hold none"
+fi
+authenticated_extra="$(q "SELECT coalesce(string_agg(DISTINCT table_name, ', '), '') FROM information_schema.role_table_grants WHERE table_schema='public' AND grantee='authenticated' AND table_name NOT IN ('tenants', 'tenant_users', 'tenant_email_domains', 'tenant_invites', 'tenant_settings')")"
+if [ -n "$authenticated_extra" ]; then
+  fail "authenticated holds public-schema table grants outside the five migration-documented tenant tables: $authenticated_extra"
+fi
+if [ "$(q "SELECT has_function_privilege('anon', 'public.agent_tasks_list_active()', 'EXECUTE')")" != "f" ]; then
+  fail "anon can EXECUTE the SECURITY DEFINER function public.agent_tasks_list_active(), which 20260823_02_agent_task_schedules.sql revokes precisely because it is a cross-tenant read"
+fi
+
 # Say out loud which pg_cron branch 20260729_02 took, so an unscheduled purge is
 # a stated fact in the log rather than a silent difference from production.
 if [ "$(q "SELECT count(*) FROM pg_extension WHERE extname='pg_cron'")" = "0" ]; then

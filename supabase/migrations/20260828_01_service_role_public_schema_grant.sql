@@ -123,6 +123,62 @@
 
 BEGIN;
 
+-- Repair first, then grant. An earlier revision of THIS file (the one
+-- adversarial review rejected, above) was already applied to the live demo
+-- box by .github/workflows/rag-demo-readiness.yml's own "apply ahead of the
+-- normal deploy migration" step, on PR #1257 run 33212925653. Narrowing the
+-- grant below does not undo that: a GRANT already made is not withdrawn by a
+-- later, narrower GRANT. Verified on the box on 2026-08-28, before writing
+-- this block: anon, authenticated and service_role each held all seven table
+-- privileges on all 82 public-schema tables (574 rows each in
+-- information_schema.role_table_grants), pg_default_acl carried
+-- {anon,authenticated,service_role} on tables, sequences AND functions, and
+-- has_function_privilege('anon', 'public.agent_tasks_list_active()',
+-- 'EXECUTE') answered true -- the exact cross-tenant SECURITY DEFINER read
+-- 20260823_02_agent_task_schedules.sql closed. So the revokes below are not
+-- defensive tidiness, they are the fix for a live state that exists right
+-- now on the demo box and would otherwise survive this PR.
+--
+-- Safe on a database where that revision never ran (CI throwaway, a fresh
+-- deploy): REVOKE of a privilege that was never granted is a no-op, not an
+-- error. Not safe to write as a blanket revoke alone, though -- five earlier
+-- migrations grant `authenticated` real, intended access, and a blanket
+-- REVOKE would take those with it, so they are re-granted verbatim below.
+-- The role names are all guaranteed to exist by this point:
+-- deploy/supabase/init/00-extensions.sql creates them on every real and CI
+-- stack, and .github/ci/test-db-bootstrap.sql creates them for the one CI
+-- leg that does not run that init file.
+
+REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated, service_role;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated, service_role;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON TABLES FROM anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON SEQUENCES FROM anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON FUNCTIONS FROM anon, authenticated, service_role;
+
+-- The five grants `authenticated` is supposed to hold, restored exactly as
+-- their own migrations state them. Verbatim from:
+--   20260516_01_phase19_tenants.sql
+--   20260516_03_phase19_tenant_users.sql
+--   20260516_09_phase19_tenant_email_domains.sql, as narrowed by
+--     20260822_01_tenant_email_domains_admin_only.sql (which revokes the
+--     INSERT and DELETE that file granted, so only SELECT is restored here:
+--     re-granting the other two would reverse an explicit security decision)
+--   20260516_08_phase19_tenant_invites.sql
+--   20260516_02_phase19_tenant_settings.sql
+-- `anon` is granted nothing, because no migration in this repository ever
+-- granted it anything: 00-extensions.sql gives it USAGE on the schema and
+-- nothing else, which is the whole intended surface.
+GRANT SELECT                         ON public.tenants              TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_users         TO authenticated;
+GRANT SELECT                         ON public.tenant_email_domains TO authenticated;
+GRANT SELECT, INSERT, UPDATE         ON public.tenant_invites       TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_settings      TO authenticated;
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
