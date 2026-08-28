@@ -105,9 +105,10 @@ export default async function PrivacyPage() {
               body could land in.
             </p>
             <p>
-              There is currently no automatic deletion schedule for usage
-              records. They are retained indefinitely for billing and audit
-              unless removed at the database level by an operator.
+              There is currently no automatic deletion schedule for that
+              per-request usage record. It is retained indefinitely for
+              billing and audit unless removed at the database level by an
+              operator.
             </p>
             <p>
               Error messages returned by the API are sanitized before they
