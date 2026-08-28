@@ -36,6 +36,16 @@ cp .env.example .env
 See `.env.example` for all vars with inline comments. Payment rail keys (Stripe, bKash, SSLCommerz) optional — services start without them.
 Supabase Storage only object storage backend. Enable S3 protocol in Supabase Storage, pre-create `hive-files` + `hive-images` buckets, provide all S3 vars before start `edge-api` or `control-plane`.
 
+If this checkout is a git worktree (anything under `.claude/worktrees/` or a
+sibling directory, not the canonical `hive` checkout), run
+`scripts/set-compose-project-name.sh` once now, before any `docker compose`
+command below (both the Run and Testing sections use them). Compose keys
+container identity on the project name, which defaults to `hive` for every
+checkout, so the same documented command run from two worktrees can recreate
+or crash each other's containers (issue #1242, PR #1249). The script is a
+no-op on the canonical `hive` checkout (what the demo box and CI use), so it
+never changes that project name.
+
 ### 2. Run
 
 ```bash
@@ -127,14 +137,8 @@ detail: `deploy/apptainer/README.md`.
 
 ### Testing (always use Docker)
 
-In a git worktree checkout (anything under `.claude/worktrees/` or a sibling
-directory, not the canonical `hive` checkout), run
-`scripts/set-compose-project-name.sh` once before the commands below. Compose
-keys container identity on the project name, which defaults to `hive` for
-every checkout, so the same documented command run from two worktrees can
-recreate or crash each other's containers (issue #1242, PR #1249). The script
-is a no-op on the canonical `hive` checkout (what the demo box and CI use),
-so it never changes that project name.
+Worktree checkout? See the worktree note under "1. Environment" above before
+running these.
 
 ```bash
 # Go unit tests. The toolchain image is Alpine with ENTRYPOINT ["/bin/sh","-c"],
