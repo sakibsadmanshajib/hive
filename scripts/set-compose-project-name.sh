@@ -78,7 +78,7 @@ if [[ "${1:-}" == "--check" ]]; then
     echo "ERROR: 'docker ps' failed, cannot check for a project-name collision (is the docker daemon running?)." >&2
     exit 1
   }
-  colliding_dir="$(printf '%s\n' "$ps_output" | sort -u | grep -v -F "$compose_dir" || true)"
+  colliding_dir="$(printf '%s\n' "$ps_output" | sort -u | grep -vxF "$compose_dir" || true)"
   if [[ -n "$colliding_dir" ]]; then
     echo "ERROR: compose project '${project_name}' already has containers from a different working directory:" >&2
     echo "$colliding_dir" >&2
