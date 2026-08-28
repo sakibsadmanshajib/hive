@@ -74,16 +74,18 @@ docker compose run --no-deps --build web-console npm run test:unit
 pull in unconditionally, even though this target never calls it.
 
 For visual proof when no full stack is reachable at all: render the real
-page/component tree server-side with React's `renderToStaticMarkup`,
-mocking the same seam the unit tests already mock (`vi.mock('@/lib/control-
-plane/client', ...)`), write the HTML through a mounted volume alongside the
-real `next build` output's compiled Tailwind CSS chunk
-(`.next/static/chunks/*.css`, also copied out via a mounted volume), then
-screenshot the static HTML file in a real browser (chrome-devtools MCP or
-Playwright). This is not a mock-only screenshot: it renders the actual
+page/component tree server-side with React's `renderToStaticMarkup`, mocking
+the same seam the unit tests already mock
+(`vi.mock('@/lib/control-plane/client', ...)`), write the HTML through a
+mounted volume alongside the real `next build` output's compiled Tailwind CSS
+chunk (`.next/static/chunks/*.css`, also copied out via a mounted volume),
+then screenshot the static HTML file in a real browser (chrome-devtools MCP
+or Playwright). This is not a mock-only screenshot: it renders the actual
 component tree against the actual compiled styles, just without a live
-backend. Full worked example: `docs/proof/console-overview-cards-and-try-
-in-chat/capture-log.md` on that PR's branch.
+backend. Full worked example (from PR #1243, merged; the file lives on `main`, not on
+the PR's own branch, which is already deleted per this repo's
+squash-and-delete-branch merge policy):
+`docs/proof/console-overview-cards-and-try-in-chat/capture-log.md`.
 
 Do not spend time debugging this as a docker-networking or timeout problem
 before checking issue #1254's status; the symptom (generic DB-unreachable
