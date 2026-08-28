@@ -29,7 +29,7 @@
 // prior day's evidence.
 
 import { chromium } from "playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { redactSecrets } from "./support/e2e-fixture-seed.mjs";
@@ -620,7 +620,11 @@ async function main() {
     // masks nothing and retakes nothing.
     const paintedLate = await cpage.evaluate(maskLiveApiKeys).catch(() => 0);
     if (paintedLate > 0) {
-      shotCounter -= 1; // reuse the number; the unmasked file is overwritten
+      // Delete first, then retake. Overwriting would be enough only if the
+      // retake succeeds, and a failed retake must not leave the unmasked
+      // frame sitting in the proof directory.
+      if (keyShot) rmSync(join(OUT_DIR, keyShot), { force: true });
+      shotCounter -= 1; // reuse the number the deleted frame had
       keyShot = await shot(cpage, "11c-console-api-key-created");
     }
     entry.screenshots.push(keyShot);
