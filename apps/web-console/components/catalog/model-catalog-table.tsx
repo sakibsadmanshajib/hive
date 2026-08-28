@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 
 import type { CatalogModel } from "@/lib/control-plane/client";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
+import { chatModelUrl } from "@/lib/chat-link";
 import { formatCachePrice, formatModelPrice } from "@/lib/format/model-pricing";
 
 interface ModelCatalogTableProps {
@@ -140,6 +142,22 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
         const { label, tone } = statusBadge(row.lifecycle);
         return <Badge tone={tone}>{label}</Badge>;
       },
+    },
+    {
+      key: "try",
+      header: "",
+      cell: (row) => (
+        <a
+          href={chatModelUrl(row.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Opens Hive Chat with ${row.display_name || row.id} preselected`}
+          className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] underline-offset-4 hover:underline"
+        >
+          Try in chat
+          <ArrowUpRight size={12} aria-hidden="true" />
+        </a>
+      ),
     },
   ];
 
