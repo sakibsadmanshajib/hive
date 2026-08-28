@@ -34,10 +34,15 @@ func messagesBodyOfSize(t *testing.T, n int) string {
 // /v1/chat/completions, /v1/embeddings, /v1/responses) must actually admit a
 // body between the old 4 MiB and the new 10 MiB.
 func TestHandler_MessagesBodyOneByteUnderLimitIsDelegated(t *testing.T) {
+	// http.MaxBytesReader accepts exactly MaxRequestBodyBytes and rejects the
+	// (n+1)th byte, so the real boundary is n and n+1, not n-1 and n+1.
+	// Using n-1 here would leave a one-byte hole: an off-by-one that started
+	// rejecting exactly at the limit (rather than one past it) would pass
+	// every test in this file if none of them ever sent exactly n bytes.
 	chat := &fakeChat{respond: respondStatus(http.StatusUnauthorized,
 		`{"error":{"message":"Incorrect API key provided.","type":"invalid_request_error","code":"invalid_api_key"}}`)}
 	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: chat})
-	req := newAuthedRequest(t, messagesBodyOfSize(t, apierr.MaxRequestBodyBytes-1))
+	req := newAuthedRequest(t, messagesBodyOfSize(t, apierr.MaxRequestBodyBytes))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -70,7 +75,11 @@ func TestHandler_MessagesBodyOneByteOverLimitIsHonest413(t *testing.T) {
 	}
 
 	var got anthropicErrorEnvelope
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+	// json.Unmarshal, not json.NewDecoder(...).Decode(...): Decode reads only
+	// the first JSON value and silently ignores anything written after it,
+	// so it cannot catch a handler that (wrongly) writes a second body after
+	// the 413. Unmarshal requires the whole buffer to be exactly one value.
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
 	if got.Type != "error" {

@@ -13,7 +13,7 @@ import (
 // paddedBody returns prefix with a trailing "_pad" string value sized so the
 // full JSON body (prefix + pad + closing `"}`) is exactly n bytes. Built by
 // direct string concatenation rather than json.Marshal so the byte count is
-// exact -- these tests must land precisely on apierrors.MaxRequestBodyBytes-1 and
+// exact -- these tests must land precisely on apierrors.MaxRequestBodyBytes and
 // apierrors.MaxRequestBodyBytes+1, and Go map-key marshal order plus re-encoding
 // overhead would make that imprecise.
 func paddedBody(t *testing.T, prefix string, n int) string {
@@ -53,10 +53,16 @@ func requestTooLargeBody(t *testing.T, w *httptest.ResponseRecorder) {
 	}
 }
 
+// The four "OneByteUnderIsAccepted" tests below send exactly
+// apierrors.MaxRequestBodyBytes bytes, not one byte under it: http.MaxBytesReader
+// accepts exactly n and rejects the (n+1)th byte, so the real boundary is n
+// and n+1. Testing at n-1 would leave a one-byte hole where an off-by-one
+// that started rejecting exactly at the limit (instead of one past it)
+// would pass every test in this file.
 func TestBodyLimit_ChatCompletions_OneByteUnderIsAccepted(t *testing.T) {
 	h := NewHandler(&Orchestrator{})
 	prefix := `{"model":"hive-fast","messages":[{"role":"user","content":"hi"}],"_pad":"`
-	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes-1)
+	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -80,7 +86,7 @@ func TestBodyLimit_ChatCompletions_OneByteOverIsHonest413(t *testing.T) {
 func TestBodyLimit_Completions_OneByteUnderIsAccepted(t *testing.T) {
 	h := NewHandler(&Orchestrator{})
 	prefix := `{"model":"hive-fast","prompt":"hi","_pad":"`
-	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes-1)
+	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes)
 	req := httptest.NewRequest(http.MethodPost, "/v1/completions", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -102,7 +108,7 @@ func TestBodyLimit_Completions_OneByteOverIsHonest413(t *testing.T) {
 func TestBodyLimit_Embeddings_OneByteUnderIsAccepted(t *testing.T) {
 	h := NewHandler(&Orchestrator{})
 	prefix := `{"model":"hive-embedding-default","input":"hi","_pad":"`
-	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes-1)
+	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes)
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -124,7 +130,7 @@ func TestBodyLimit_Embeddings_OneByteOverIsHonest413(t *testing.T) {
 func TestBodyLimit_Responses_OneByteUnderIsAccepted(t *testing.T) {
 	h := NewHandler(&Orchestrator{})
 	prefix := `{"model":"hive-fast","input":"hi","_pad":"`
-	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes-1)
+	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

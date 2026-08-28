@@ -49,9 +49,36 @@ const (
 // widening further than 10 MiB is a separate, not-yet-made call.
 const MaxRequestBodyBytes = 10 << 20 // 10 MiB
 
+// This constant-index trick is a compile-time assertion: MaxRequestBodyBytes
+// must stay a whole number of MiB. RequestTooLargeMessage below reports it
+// via integer division, which silently produces a wrong number (10 MiB
+// claimed while a 10.5 MiB body is actually accepted, or "0 MiB" for a value
+// under 1 MiB) if that ever stops holding. Indexing a 1-element array with a
+// non-zero constant is a compile error ("array index out of bounds"), so a
+// non-whole-MiB value fails the build instead of drifting quietly at
+// runtime.
+var _ = [1]struct{}{}[MaxRequestBodyBytes%(1<<20)]
+
+// A note for every call site that wraps r.Body with http.MaxBytesReader
+// against this constant (anthropic, inference, chat): its connection-close
+// signal cannot fire here. MaxBytesReader type-asserts the ResponseWriter it
+// is given against net/http's unexported interface{ requestTooLarge() }, but
+// by the time a request reaches any of those handlers the writer is already
+// wrapped by this codebase's own middleware (embedding http.ResponseWriter
+// as an interface, which promotes only Header/Write/WriteHeader), so the
+// assertion always fails. This is not a bug: net/http falls back to
+// draining up to its own bounded post-handler budget before giving up on
+// keep-alive, which is the same behavior the io.LimitReader this replaced
+// also had. It only means MaxBytesReader is not granting the connection
+// teardown optimisation its use might suggest -- do not later "fix" this by
+// draining the body dry, since that would enable keep-alive reuse with
+// megabytes of a rejected upload still unread on the wire.
+
 // RequestTooLargeMessage is the standard, limit-naming message every
-// body-size refusal uses, so the number in the client-facing text can never
-// drift from MaxRequestBodyBytes.
+// body-size refusal uses. The number in the client-facing text cannot drift
+// from MaxRequestBodyBytes given the compile-time guard above keeping the
+// constant a whole number of MiB (the division here is otherwise silently
+// lossy for a non-whole value).
 func RequestTooLargeMessage() string {
 	return fmt.Sprintf("Request body exceeds the maximum allowed size of %d MiB.", MaxRequestBodyBytes/(1<<20))
 }

@@ -24,6 +24,19 @@ import (
 // already fully in memory and was already validated at its own ingress
 // boundary, so re-capping it can only wrongly reject a client body that
 // never exceeded anything (#1273 review finding 2).
+//
+// This read happens before credential validation for an API-key (hk_)
+// caller: the authorizer only runs inside executeSync's own Authorize step,
+// downstream of every call site here. An unauthenticated caller can
+// therefore make this handler buffer up to MaxRequestBodyBytes. audio and
+// images validate before reading for this reason; this package does not,
+// and this PR does not reorder it (a bigger, riskier change than fixing the
+// body-size cap itself). The ContentLength pre-check above mitigates the
+// common case (a declared-oversize body is rejected at ~0 bytes buffered
+// rather than up to the cap), and the outer http.MaxBytesHandler in
+// cmd/server/main.go already allows a much larger pre-auth body on other
+// routes, so this is a real but bounded, pre-existing exposure, not one
+// this PR meaningfully worsens.
 func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	if !apierrors.IsTrustedBody(r.Context()) {
 		// Reject a declared oversize body before reading anything, mirroring

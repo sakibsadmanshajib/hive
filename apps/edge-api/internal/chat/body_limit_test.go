@@ -44,13 +44,18 @@ func newAuthedChatRequest(t *testing.T, body string) *http.Request {
 // the unified 10 MiB cap parses and reaches route selection, rather than
 // being rejected as malformed.
 func TestDispatchBodyOneByteUnderLimitIsAccepted(t *testing.T) {
+	// http.MaxBytesReader accepts exactly MaxRequestBodyBytes and rejects the
+	// (n+1)th byte, so the real boundary is n and n+1, not n-1 and n+1.
+	// Using n-1 here would leave a one-byte hole: an off-by-one that started
+	// rejecting exactly at the limit (rather than one past it) would pass
+	// every test in this file if none of them ever sent exactly n bytes.
 	handler := chat.NewDispatch(chat.Deps{
 		Routing:    newPassthroughRoutingClient(t),
 		LiteLLMURL: "http://unused",
 		DeploySHA:  "s",
 		Env:        "test",
 	})
-	req := newAuthedChatRequest(t, chatDispatchBodyOfSize(t, apierr.MaxRequestBodyBytes-1))
+	req := newAuthedChatRequest(t, chatDispatchBodyOfSize(t, apierr.MaxRequestBodyBytes))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -84,7 +89,11 @@ func TestDispatchBodyOneByteOverLimitIsHonest413(t *testing.T) {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	require.NoError(t, json.NewDecoder(strings.NewReader(rec.Body.String())).Decode(&errBody))
+	// json.Unmarshal, not json.NewDecoder(...).Decode(...): Decode reads only
+	// the first JSON value and silently ignores anything written after it,
+	// so it cannot catch a handler that (wrongly) writes a second body after
+	// the 413. Unmarshal requires the whole buffer to be exactly one value.
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody))
 	require.Equal(t, "REQUEST_TOO_LARGE", errBody.Error.Code)
 	require.Contains(t, errBody.Error.Message, "MiB")
 	require.NotContains(t, strings.ToLower(errBody.Error.Message), "json")
