@@ -3,7 +3,6 @@ package inference
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
@@ -12,9 +11,8 @@ import (
 
 // handleChatCompletions handles POST /v1/chat/completions.
 func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
-	if err != nil {
-		writeInvalidBodyError(w)
+	body, ok := readLimitedBody(w, r)
+	if !ok {
 		return
 	}
 

@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,12 +13,51 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
-
-const maxBodyBytes = 4 << 20 // 4 MiB
 
 // chatCompletionsPath is the internal endpoint this surface delegates to.
 const chatCompletionsPath = "/v1/chat/completions"
+
+// readMessagesBody reads r.Body up to apierr.MaxRequestBodyBytes via
+// http.MaxBytesReader, which errors instead of silently truncating an
+// oversized body. Before this, io.LimitReader truncated silently; the
+// truncated bytes then failed json.Unmarshal and the caller saw a lying
+// "invalid JSON body" with no mention of size anywhere (issue #1250). A
+// too-large body now gets an honest 413 in Anthropic's own
+// request_too_large error type, naming the limit; any other read failure
+// keeps the prior generic message. errors.As distinguishes the two rather
+// than any truncate-then-fails-to-parse heuristic. Only ever called on the
+// real client-facing read (handleMessages, handleCountTokens), never on the
+// translated sub-request this surface delegates downstream, so it always
+// enforces the cap -- no apierr.IsTrustedBody check needed here.
+func readMessagesBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	// Reject a declared oversize body before reading anything, mirroring
+	// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
+	// optimisation, not an error-delivery fix: it bounds the server's peak
+	// buffering for a declared-oversize body instead of reading up to the
+	// cap before erroring, but the client sees the 413 no later (often
+	// earlier), so it does not make an honest error any more reachable, and
+	// ContentLength is -1 when unknown (chunked), which fails this
+	// comparison and falls through to MaxBytesReader below, a no-op for
+	// that transfer encoding.
+	if r.ContentLength > apierr.MaxRequestBodyBytes {
+		writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
+			return nil, false
+		}
+		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+		return nil, false
+	}
+	return raw, true
+}
 
 // Deps holds the runtime dependencies for the Anthropic handler.
 type Deps struct {
@@ -84,9 +124,8 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 
@@ -141,7 +180,16 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// Hand the lowered request to the OpenAI chat-completions chain. The alias
 	// travels unresolved on purpose: resolving it is the routing layer's job, and
 	// this surface must never name a route itself.
-	sub := r.Clone(r.Context())
+	// Translation can grow the body past what the client sent (Stream and
+	// StreamOptions are always added above; a string system prompt becomes a
+	// message object; text content becomes array form for vision or cache
+	// breakpoints), so a client body the inbound readMessagesBody check just
+	// cleared can land here over apierr.MaxRequestBodyBytes. Marking this
+	// server-constructed, already-in-memory body as trusted stops the
+	// delegated chain's own body-size cap from re-rejecting it with an
+	// honest-looking but wrong "exceeds the limit" error for a client body
+	// that never exceeded anything (#1273 review finding 2).
+	sub := r.Clone(apierr.WithTrustedBody(r.Context()))
 	sub.URL.Path = chatCompletionsPath
 	sub.URL.RawPath = ""
 	sub.RequestURI = chatCompletionsPath
@@ -173,9 +221,8 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 
