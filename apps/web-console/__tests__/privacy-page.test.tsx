@@ -150,15 +150,25 @@ describe("app/console/privacy/page.tsx", () => {
     screen.getByText(/token counts, cost, status, model alias/i);
   });
 
-  it("names the real upstream providers instead of implying data never leaves the box", async () => {
+  it("discloses that requests leave the deployment boundary to a third-party provider, without implying data never leaves the box", async () => {
     stubFetch();
 
     const mod = await import("../app/console/privacy/page");
     const page = await mod.default();
     render(page);
 
-    screen.getByText(/OpenRouter/);
-    screen.getByText(/Groq/);
+    screen.getByText(/leaves this deployment's infrastructure boundary/i);
+  });
+
+  it("does not name which specific vendor serves which model, matching the console-wide provider-blind convention", async () => {
+    stubFetch();
+
+    const mod = await import("../app/console/privacy/page");
+    const page = await mod.default();
+    render(page);
+
+    expect(screen.queryByText(/openrouter/i)).toBeNull();
+    expect(screen.queryByText(/\bgroq\b/i)).toBeNull();
   });
 
   it("renders the live catalog aliases rather than a hardcoded list", async () => {

@@ -69,8 +69,29 @@ Tool: `npx playwright@1.62.1 screenshot --viewport-size=1440,1600 --full-page`.
 Full-page capture of `/console/privacy`: sidebar with the new "Privacy" nav
 entry active, page title "Privacy and data policy", and three cards:
 "Request and response content" (retention statement, links to
-`/console/logs`), "Where a request goes" (the OpenRouter/Groq disclosure plus
-a live-shaped catalog list), and "Provider allow/block" (the honest
-not-yet-a-real-control disclosure, links to `/console/api-keys`). No toggle
-or switch control is rendered anywhere on the page, matching the automated
-test's assertion that none exists.
+`/console/logs`), "Where a request goes" (the third-party-infrastructure
+disclosure, deliberately without naming which vendor, plus a live-shaped
+catalog list), and "Provider allow/block" (the honest not-yet-a-real-control
+disclosure, links to `/console/api-keys`). No toggle or switch control is
+rendered anywhere on the page, matching the automated test's assertion that
+none exists.
+
+## Revision note (same session)
+
+The first capture named "OpenRouter" and "Groq" literally in the "Where a
+request goes" card. CodeRabbit's committed-diff review (`coderabbit review
+--agent --committed --base main`) flagged this as a major finding: it
+violates the console-wide provider-blind convention (`PublicCatalogModel`/
+`CatalogModel` both omit a provider field on every other page;
+`apps/edge-api/internal/errors/provider_blind_test.go` strips provider
+strings from every error response). Re-reading the task brief's own wording
+("say so accurately rather than implying otherwise" about routing to
+"third-party providers", generic, not "name OpenRouter and Groq") confirmed
+the generic phrasing satisfies the honesty requirement just as well without
+introducing a new provider-identity leak this product has deliberately never
+had anywhere else. The page copy, its file-header comment, and the test
+assertions were all corrected to disclose the *fact* of third-party routing
+without naming *which* vendor. This screenshot (`privacy-page-v2.png`)
+reflects the corrected copy; the original (`privacy-page-full.png`,
+superseded, still linked from the PR's review history for context) does
+not.

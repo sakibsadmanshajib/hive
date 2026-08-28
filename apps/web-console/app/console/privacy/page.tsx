@@ -35,13 +35,16 @@ const LIFECYCLE_TONE: Record<string, "success" | "accent" | "neutral"> = {
  *     (UsageEventRow in lib/control-plane/client.ts carries no request or
  *     response body field), not a policy promise layered on top of storage
  *     that could hold content.
- *   - The provider names (OpenRouter, Groq) are named deliberately here,
- *     departing from the rest of the console, which never exposes a
- *     provider identity anywhere else (PublicCatalogModel and CatalogModel
- *     both omit a provider field; provider-blind error handling strips
- *     provider strings from every failure response). A page whose entire
- *     purpose is disclosing where data goes cannot honestly omit that,
- *     without implying data never leaves the deployment when it does.
+ *   - "Requests leave this deployment's boundary to reach a third-party
+ *     provider" is disclosed without naming which provider serves which
+ *     model. Provider identity stays out of this page the same way it stays
+ *     out of every other customer-facing console surface (PublicCatalogModel
+ *     and CatalogModel both omit a provider field) and out of error
+ *     responses (provider-blind error handling strips provider strings from
+ *     every failure response). Omitting the *fact* of third-party routing
+ *     would be a false-safety implication; omitting *which* named vendor is
+ *     consistent with the rest of the product and does not weaken the
+ *     disclosure the fact itself carries.
  *   - The provider allow/block section says plainly that no tenant control
  *     persists a choice into the routing layer's AllowedProviders input
  *     today (verified: no call site in apps/edge-api sets it), rather than
@@ -125,22 +128,23 @@ export default async function PrivacyPage() {
           <CardHeader>
             <CardTitle>Where a request goes</CardTitle>
             <CardDescription>
-              This deployment&apos;s current model catalog, and the upstream
-              infrastructure providers behind it.
+              This deployment&apos;s current model catalog, and whether a
+              request stays inside this deployment&apos;s boundary.
             </CardDescription>
           </CardHeader>
           <CardContent className="px-5 py-4 text-sm text-[var(--color-ink-2)] leading-relaxed flex flex-col gap-4">
             <p>
-              Every model in the catalog is served by one of two upstream
-              infrastructure providers: OpenRouter, for the DeepSeek models,
-              or Groq, for Hive&apos;s own fast, default, and auto aliases.
-              No other providers are configured on this deployment. When a
-              request routes to either of them, its content leaves this
-              deployment&apos;s infrastructure boundary to reach that
-              provider, regardless of whether you are on Hive Cloud or a
+              Every model in the catalog below is served by a third-party
+              model provider&apos;s infrastructure, not hosted inside this
+              deployment. When a request routes to one of them, its content
+              leaves this deployment&apos;s infrastructure boundary to reach
+              that provider, regardless of whether you are on Hive Cloud or a
               customer-hosted Hive Enterprise deployment. A Hive Enterprise
               deployment configured for self-hosted inference only would not
-              be subject to this.
+              be subject to this. Which specific provider serves which model
+              is not shown here: Hive keeps that identity out of every
+              customer-facing surface, the same way it keeps it out of error
+              responses.
             </p>
             {models.length > 0 ? (
               <ul className="flex flex-col gap-2">
