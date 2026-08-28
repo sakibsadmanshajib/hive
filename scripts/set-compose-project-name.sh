@@ -68,10 +68,17 @@ project_name="hive-${slug}-${path_hash}"
 compose_dir="$repo_root/deploy/docker"
 
 if [[ "${1:-}" == "--check" ]]; then
-  colliding_dir="$(docker ps -a \
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker not found on PATH, cannot check for a project-name collision." >&2
+    exit 1
+  fi
+  ps_output="$(docker ps -a \
     --filter "label=com.docker.compose.project=${project_name}" \
-    --format '{{.Label "com.docker.compose.project.working_dir"}}' \
-    2>/dev/null | sort -u | grep -v -F "$compose_dir" || true)"
+    --format '{{.Label "com.docker.compose.project.working_dir"}}')" || {
+    echo "ERROR: 'docker ps' failed, cannot check for a project-name collision (is the docker daemon running?)." >&2
+    exit 1
+  }
+  colliding_dir="$(printf '%s\n' "$ps_output" | sort -u | grep -v -F "$compose_dir" || true)"
   if [[ -n "$colliding_dir" ]]; then
     echo "ERROR: compose project '${project_name}' already has containers from a different working directory:" >&2
     echo "$colliding_dir" >&2
