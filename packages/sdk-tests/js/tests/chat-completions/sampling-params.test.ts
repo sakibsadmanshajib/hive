@@ -50,10 +50,17 @@ describe("Chat Completions sampling parameters", () => {
   // max_tokens being dropped outright.
   const REASONING_RESERVE_TOKENS = 4096;
 
+  // Both ceiling tests need a prompt whose NATURAL answer is far longer than
+  // the ceiling, or the assertion cannot fail: ask for one short fact and a
+  // gateway that dropped max_tokens entirely still answers in five tokens and
+  // the test passes over nothing. Counting to 200 is the cheap way to get an
+  // answer that only stops early because the ceiling stopped it.
+  const LONG_ANSWER_PROMPT = "Count from 1 to 200, one number per line.";
+
   it("honors max_tokens plus the reasoning reserve on the pooled alias", async () => {
     const response = await client.chat.completions.create({
       model: MODEL,
-      messages: [{ role: "user", content: "Name one sea." }],
+      messages: [{ role: "user", content: LONG_ANSWER_PROMPT }],
       max_tokens: 8,
     });
 
@@ -70,7 +77,7 @@ describe("Chat Completions sampling parameters", () => {
     // assertion that goes red if max_tokens stops being forwarded at all.
     const response = await client.chat.completions.create({
       model: TOOL_CAPABLE_MODEL,
-      messages: [{ role: "user", content: "Name one sea." }],
+      messages: [{ role: "user", content: LONG_ANSWER_PROMPT }],
       max_tokens: 8,
     });
 
