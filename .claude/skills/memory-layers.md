@@ -25,6 +25,18 @@ treated as authoritative, and the gap analysis: vault
 | 5 | Entity/Profile | MEMORY.md `user_*.md`, `project_*.md` | permanent, edit in place |
 | 6 | Reflection/Consolidation | no store (this skill) | promotion + retirement process |
 
+Why layers 5 and 6 exist beyond CoALA's four: **entity/profile** is needed
+because this project already tracks named people and named projects as
+first-class objects (MEMORY.md's `user_*`/`project_*` split predates this
+skill); without a named layer for it, a fact about one specific project
+gets miscategorized as generic semantic memory and loses its "which
+project" anchor. **Reflection/consolidation** is needed because nothing
+else moved a session-scoped observation into a durable store, or marked a
+durable fact wrong once it stopped being true; without it, working memory
+either evaporates unused at session end or gets promoted inconsistently,
+and a revoked fact keeps getting re-cited because nothing says how to
+retire it. See the vault doc's Decision section for the full reasoning.
+
 ### Retrieval order
 
 Cheapest, most-likely-current first. Stop at the first hit that answers it.
