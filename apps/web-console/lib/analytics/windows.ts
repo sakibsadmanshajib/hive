@@ -52,6 +52,48 @@ export const SPARKLINE_BUCKETS = 8;
 export const TOP_KEYS_LIMIT = 5;
 
 /**
+ * Own-property-only lookup into a span map, safe against a caller-controlled
+ * key that happens to name an inherited Object.prototype member.
+ *
+ * `window` reaches this code straight off the URL query string with no
+ * allowlist (`const timeWindow = params.window ?? "7d"` in the analytics
+ * page), so both a plain `spanMap[window]` bracket lookup and a `window in
+ * spanMap` membership check are reachable with `window` equal to
+ * `"toString"`, `"constructor"`, `"valueOf"`, `"hasOwnProperty"`, or
+ * `"__proto__"`. All five walk the prototype chain and resolve to an
+ * inherited, always-truthy function rather than undefined, which used to
+ * defeat this file's own `if (!spanMs) return null` guard: `new
+ * Date(now.getTime() - <function>)` is an Invalid Date, and
+ * `.toISOString()` on one throws a RangeError with no try/catch anywhere
+ * between here and the page's own render call, which took the whole
+ * overview tab down with a 500. Live-reproduced with `?window=toString`
+ * (docs/proof/analytics-overview-parity-2026-08-28/capture-log.txt) before
+ * this function existed. `Object.prototype.hasOwnProperty.call` only ever
+ * matches a key the map's own literal actually declared.
+ */
+function windowSpanMs(
+  spanMap: Readonly<Record<string, number>>,
+  window: string,
+): number | null {
+  if (!Object.prototype.hasOwnProperty.call(spanMap, window)) {
+    return null;
+  }
+  return spanMap[window];
+}
+
+/**
+ * True when `window` is an own key of `spanMap` -- the safe replacement for
+ * `window in spanMap`, which a caller-controlled `window` can defeat the
+ * same way described on windowSpanMs above.
+ */
+export function hasWindowSpan(
+  spanMap: Readonly<Record<string, number>>,
+  window: string,
+): boolean {
+  return windowSpanMs(spanMap, window) !== null;
+}
+
+/**
  * Bounds of the equal-length period immediately before the one `window`
  * names, as explicit ISO8601 from/to. Null when `window` is not one of the
  * preset values `spanMap` recognizes (a custom range, or an unknown string),
@@ -62,7 +104,7 @@ export function priorPeriodBounds(
   window: string,
   now: Date,
 ): { from: string; to: string } | null {
-  const spanMs = spanMap[window];
+  const spanMs = windowSpanMs(spanMap, window);
   if (!spanMs) {
     return null;
   }

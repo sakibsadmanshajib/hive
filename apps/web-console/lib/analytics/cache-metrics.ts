@@ -25,6 +25,7 @@ import {
   EVENT_SAMPLE_WINDOWS,
   SPARKLINE_BUCKETS,
   TOP_KEYS_LIMIT,
+  hasWindowSpan,
 } from "./windows";
 
 /** The subset of a usage event these derivations read. */
@@ -402,7 +403,13 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
   const previousTotalTokens = previousTotalInputTokens + previousTotalOutputTokens;
   const previousTotalCreditsSpent = previousUsageRows.reduce((sum, r) => sum + r.total_credits_spent, 0);
 
-  const hasDeltaWindow = timeWindow in ANALYTICS_WINDOW_SPAN_MS;
+  // Not `timeWindow in ANALYTICS_WINDOW_SPAN_MS`: `in` walks the prototype
+  // chain, and `timeWindow` is unvalidated user input (the page reads it
+  // straight off the URL query string). hasWindowSpan is the own-property
+  // check that doesn't resolve "toString" et al. to an inherited, always
+  // truthy method -- see its doc comment in windows.ts for the live-captured
+  // crash this replaces.
+  const hasDeltaWindow = hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, timeWindow);
   const hasSparklineWindow = EVENT_SAMPLE_WINDOWS.includes(timeWindow);
 
   const requestsDelta = hasDeltaWindow

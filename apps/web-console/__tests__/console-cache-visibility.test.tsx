@@ -26,6 +26,11 @@ import {
   derivePeriodDelta,
   sampleTimeSpan,
 } from "@/lib/analytics/cache-metrics";
+import {
+  ANALYTICS_WINDOW_SPAN_MS,
+  hasWindowSpan,
+  priorPeriodBounds,
+} from "@/lib/analytics/windows";
 import { ModelCatalogBrowser } from "@/components/catalog/model-catalog-browser";
 import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
 import { UsageLogsCsv } from "@/components/logs/usage-logs-csv";
@@ -306,6 +311,81 @@ describe("bucketByTime", () => {
     );
     expect(buckets).toEqual([[], [], []]);
   });
+});
+
+describe("hasWindowSpan / priorPeriodBounds reject Object.prototype-colliding keys", () => {
+  // Live-reproduced against a real deployed stack with ?window=toString
+  // (docs/proof/analytics-overview-parity-2026-08-28/capture-log.txt): the
+  // page reads `window` straight off the URL query string with no
+  // allowlist, and a plain `window in spanMap` / `spanMap[window]` walks
+  // the prototype chain, resolving these five names to an inherited,
+  // always-truthy function instead of undefined -- which used to crash the
+  // whole overview tab with an uncaught RangeError from
+  // `new Date(NaN).toISOString()`.
+  const poisonKeys = [
+    "toString",
+    "constructor",
+    "valueOf",
+    "hasOwnProperty",
+    "__proto__",
+  ];
+
+  it.each(poisonKeys)(
+    "hasWindowSpan(%s) is false, not the truthy inherited member",
+    (key) => {
+      expect(hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, key)).toBe(false);
+    },
+  );
+
+  it.each(poisonKeys)(
+    "priorPeriodBounds(%s) returns null rather than throwing",
+    (key) => {
+      expect(() =>
+        priorPeriodBounds(ANALYTICS_WINDOW_SPAN_MS, key, new Date()),
+      ).not.toThrow();
+      expect(priorPeriodBounds(ANALYTICS_WINDOW_SPAN_MS, key, new Date())).toBeNull();
+    },
+  );
+
+  it("still recognizes every real window value", () => {
+    for (const key of Object.keys(ANALYTICS_WINDOW_SPAN_MS)) {
+      expect(hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, key)).toBe(true);
+      expect(priorPeriodBounds(ANALYTICS_WINDOW_SPAN_MS, key, new Date())).not.toBeNull();
+    }
+  });
+});
+
+describe("deriveOverviewTiles never throws on a prototype-colliding window value", () => {
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"])(
+    "treats window=%s as an ordinary unsupported window, not a crash",
+    (key) => {
+      expect(() =>
+        deriveOverviewTiles({
+          timeWindow: key,
+          usage: [usageRow({ request_count: 5 })],
+          previousUsage: [],
+          cacheSample: null,
+          cacheSampleTruncated: false,
+          previousCacheSample: null,
+          topKeys: { spend: [], keys: [] },
+        }),
+      ).not.toThrow();
+
+      const result = deriveOverviewTiles({
+        timeWindow: key,
+        usage: [usageRow({ request_count: 5 })],
+        previousUsage: [],
+        cacheSample: null,
+        cacheSampleTruncated: false,
+        previousCacheSample: null,
+        topKeys: { spend: [], keys: [] },
+      });
+      expect(result.requestsDelta).toBeUndefined();
+      expect(result.windowUnsupportedNote).toBe(
+        "No comparison or trend for this window. Pick 24h, 7d or 30d.",
+      );
+    },
+  );
 });
 
 describe("sampleTimeSpan", () => {
