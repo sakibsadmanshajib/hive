@@ -14,6 +14,7 @@ require (
 	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/dbtest v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/embedmodel v0.0.0
+	github.com/sakibsadmanshajib/hive/packages/sanitize v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/storage v0.0.0
 	github.com/stripe/stripe-go/v84 v84.4.1
 )
@@ -65,5 +66,7 @@ replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../pack
 replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 
 replace github.com/sakibsadmanshajib/hive/packages/embedmodel => ../../packages/embedmodel
+
+replace github.com/sakibsadmanshajib/hive/packages/sanitize => ../../packages/sanitize
 
 replace github.com/sakibsadmanshajib/hive/apps/agent-engine => ../agent-engine

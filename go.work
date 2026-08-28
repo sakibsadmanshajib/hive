@@ -14,4 +14,6 @@ use ./packages/embedmodel
 
 use ./packages/dbtest
 
+use ./packages/sanitize
+
 use ./apps/agent-engine

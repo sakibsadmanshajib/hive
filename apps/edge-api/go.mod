@@ -12,6 +12,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/embedmodel v0.0.0
+	github.com/sakibsadmanshajib/hive/packages/sanitize v0.0.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.20.0
 )
@@ -64,3 +65,5 @@ replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../pack
 replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 
 replace github.com/sakibsadmanshajib/hive/packages/embedmodel => ../../packages/embedmodel
+
+replace github.com/sakibsadmanshajib/hive/packages/sanitize => ../../packages/sanitize

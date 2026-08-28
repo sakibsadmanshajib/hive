@@ -165,3 +165,20 @@ var errInvalidJSON = errors.New("invalid json line")
 
 // IsInvalidJSON reports whether err originated from a malformed JSONL line.
 func IsInvalidJSON(err error) bool { return errors.Is(err, errInvalidJSON) }
+
+// ErrTruncatedUpstreamResponse is returned (wrapped, via fmt.Errorf %w) by
+// an InferencePort implementation when the upstream response exceeded the
+// implementation's own read cap and was detected as truncated, rather than
+// silently returned as a partial success. Exported here, in the package the
+// Dispatch retry loop already belongs to, so a concrete InferencePort (in
+// apps/control-plane/internal/batchstore, which already imports this
+// package) can return it without creating an import cycle back into that
+// package.
+//
+// Truncation is deterministic for a given prompt/model/max_tokens: retrying
+// re-invokes the same real upstream call and pays for it again, for a
+// failure that already proved itself on attempt one. Dispatch checks this
+// sentinel to treat it as terminal, unlike a transient network or
+// upstream-encoding failure, which is worth a retry (PR #1253 review
+// finding: the two were backwards before this).
+var ErrTruncatedUpstreamResponse = errors.New("executor: upstream response was truncated")

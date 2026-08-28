@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // InferencePort is a small interface that the dispatcher depends on.
@@ -130,27 +131,59 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 		cancel()
 
 		if callErr == nil && status >= 200 && status < 300 {
-			out := &OutputLine{
-				ID:       "batch_req_" + uuid.New().String(),
-				CustomID: line.CustomID,
-				Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: body},
-				Error:    nil,
+			// Issue #1235: body is InferencePort's raw upstream response --
+			// the exact same shape PR #1222 sanitized on the sync/stream
+			// boundaries (upstream id format, system_fingerprint, provider
+			// name, provider-reported cost, internal LiteLLM model name).
+			// output.jsonl is customer-retrievable output, so it gets the
+			// same treatment via the shared sanitize package (see
+			// package doc) rather than a second, drifting implementation.
+			// mintedID reuses the same "chatcmpl-" family the sync
+			// chat-completions endpoint mints, since a batch line's
+			// response.body is itself a full chat-completion response.
+			mintedID := sanitize.MintID("chatcmpl")
+			sanitizedBody, ok := sanitize.VariablePriceFrame(body, line.Alias, mintedID)
+			if ok {
+				out := &OutputLine{
+					ID:       "batch_req_" + uuid.New().String(),
+					CustomID: line.CustomID,
+					Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: sanitizedBody},
+					Error:    nil,
+				}
+				res := DispatchResult{
+					CustomID:        line.CustomID,
+					Output:          out,
+					Attempts:        attempt,
+					ConsumedCredits: d.credits.Credits(usage),
+				}
+				if usage != nil {
+					res.UsedPromptTokens = usage.PromptTokens
+					res.UsedCompTokens = usage.CompletionTokens
+				}
+				return res
 			}
-			res := DispatchResult{
-				CustomID:        line.CustomID,
-				Output:          out,
-				Attempts:        attempt,
-				ConsumedCredits: d.credits.Credits(usage),
-			}
-			if usage != nil {
-				res.UsedPromptTokens = usage.PromptTokens
-				res.UsedCompTokens = usage.CompletionTokens
-			}
-			return res
+			// Unparseable 2xx body: fall through to the SAME retry/backoff
+			// path below instead of failing on attempt one. Unlike a
+			// byte-cap truncation (deterministic, see the
+			// ErrTruncatedUpstreamResponse check below), a malformed-JSON
+			// 2xx is plausibly a transient upstream encoding quirk
+			// (observed live: DigitalOcean's odd shape) and is worth one
+			// more attempt (PR #1253 review: the two failure modes had
+			// opposite retry behavior from what their determinism
+			// warrants). status resets to 0, the same "no usable status"
+			// convention truncation and a read/timeout error already use,
+			// so the eventual failure settles as the existing
+			// upstream_error code rather than a new one.
+			callErr = errors.New("upstream returned an unparseable response")
+			status = 0
 		}
 
 		lastErr = callErr
 		lastStatus = status
+
+		if errors.Is(callErr, ErrTruncatedUpstreamResponse) {
+			return d.errResult(line.CustomID, "response_too_large", errMessage(callErr, "upstream response exceeded size limit"), attempt)
+		}
 
 		// 4xx (except 408/429) — terminal, no retry.
 		if status >= 400 && status < 500 && status != 408 && status != 429 {
