@@ -108,3 +108,30 @@ func TestChatCompletion_ExactlyAtCapSucceeds(t *testing.T) {
 		t.Fatalf("returned body is %d bytes, want exactly %d", len(respBody), maxLocalInferenceResponseBytes)
 	}
 }
+
+// TestChatCompletion_DialFailure_DoesNotLeakNetworkTopology -- issue #1253
+// review: httpClient.Do returns a *url.Error whose message embeds the full
+// request URL and dial target (host:port, sometimes an internal container
+// IP). That error used to flow through unchanged and eventually reaches a
+// customer's errors.jsonl via dispatcher.go's errMessage/SanitizeMessage,
+// which only strips provider-name tokens, not IPs or hostnames. Proves the
+// returned error is a fixed, generic message instead.
+func TestChatCompletion_DialFailure_DoesNotLeakNetworkTopology(t *testing.T) {
+	// Port 0 on a closed server: Do() fails to dial, guaranteed, no live
+	// network access required.
+	closedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	unreachableURL := closedSrv.URL
+	closedSrv.Close() // now guaranteed unreachable: connection refused
+
+	client := NewLiteLLMInferenceClient(unreachableURL, "test-key")
+	_, _, _, err := client.ChatCompletion(context.Background(), "route-x", json.RawMessage(`{"model":"route-x"}`))
+	if err == nil {
+		t.Fatalf("expected a dial error against a closed server")
+	}
+	msg := err.Error()
+	for _, leak := range []string{"://", unreachableURL, "dial", "connect", "refused"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("dial error leaked network topology (%q present): %q", leak, msg)
+		}
+	}
+}

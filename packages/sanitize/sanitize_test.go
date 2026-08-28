@@ -81,6 +81,51 @@ func TestVariablePriceFrame_UnparseablePayloadReturnsNotOK(t *testing.T) {
 	}
 }
 
+// TestVariablePriceFrame_NullPayloadReturnsNotOK -- issue #1253 review
+// (CodeRabbit): json.Unmarshal(nil, &frame) for a JSON "null" body sets
+// frame to a nil map with NO error, so the unparseable-payload guard alone
+// does not catch it. Left unchecked, every "present" guard is then false
+// and json.Marshal(nil map) legally re-encodes to "null" -- an
+// empty-but-valid frame the caller would store as a completed success.
+func TestVariablePriceFrame_NullPayloadReturnsNotOK(t *testing.T) {
+	if _, ok := VariablePriceFrame([]byte("null"), "alias", "minted"); ok {
+		t.Fatalf("expected ok=false on a JSON null payload")
+	}
+}
+
+// TestVariablePriceFrame_TopLevelErrorReturnsNotOK -- issue #1253 review:
+// a 2xx status body carrying a top-level "error" object is an upstream
+// failure delivered inside a success status (observed live from
+// OpenRouter, whose error.metadata.provider_name/raw fields carry upstream
+// identity and the upstream's own error text). Before this fix, nothing in
+// this function inspected "error" at all, so that shape sanitized cleanly
+// and would have been stored as a completed line.
+func TestVariablePriceFrame_TopLevelErrorReturnsNotOK(t *testing.T) {
+	raw := `{"id":"gen-x","model":"route-x","error":{"message":"rate limited upstream","metadata":{"provider_name":"OpenRouter","raw":"upstream said no"}}}`
+	if _, ok := VariablePriceFrame([]byte(raw), "alias", "minted"); ok {
+		t.Fatalf("expected ok=false on a frame carrying a top-level error object")
+	}
+}
+
+// TestVariablePriceFrame_DropsUnknownTopLevelKey is the production-side
+// half of issue #1253 review finding H2: the sanitizer itself now
+// allowlists top-level keys, not only the test fixture. A key this
+// package has never modeled (an "upstream_provider" field, a future
+// vendor extension) must be dropped by VariablePriceFrame directly, not
+// merely detected after the fact by a separate keyset test.
+func TestVariablePriceFrame_DropsUnknownTopLevelKey(t *testing.T) {
+	raw := `{"id":"gen-x","model":"route-x","choices":[{"index":0}],"upstream_provider":"DigitalOcean","x_never_seen_before":{"anything":"at all"}}`
+	out, ok := VariablePriceFrame([]byte(raw), "alias", "minted")
+	if !ok {
+		t.Fatalf("VariablePriceFrame reported not ok on well-formed input")
+	}
+	for _, unknown := range []string{"upstream_provider", "x_never_seen_before", "DigitalOcean"} {
+		if strings.Contains(string(out), unknown) {
+			t.Fatalf("sanitized frame kept an unallowlisted key/value %q:\n%s", unknown, out)
+		}
+	}
+}
+
 func TestVariablePriceFrame_StripsProviderSpecificFieldsFromChoices(t *testing.T) {
 	// issue #1280: OpenRouter's own provider_specific_fields wrapper,
 	// observed live nested at both the choice level and choice.message

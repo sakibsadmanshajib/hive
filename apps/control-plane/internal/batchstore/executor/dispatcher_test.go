@@ -285,7 +285,12 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 // None of that may reach output.jsonl. Reproduces the live shape captured
 // against a real LiteLLM route-deepseek-v4-pro response (2026-08-28).
 func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
-	rawUpstreamBody := `{"id":"gen-1787946282-BraVtgcskggFgHSaafrV","created":1787946282,"model":"route-deepseek-v4-pro","object":"chat.completion","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi!","role":"assistant"}}],"usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12,"cost":2.376e-05,"is_byok":false,"cost_details":{"upstream_inference_cost":2.376e-05}},"provider":"DigitalOcean"}`
+	// The full, untrimmed real capture, including choices[].provider_specific_fields
+	// and choices[].message.provider_specific_fields (issue #1280, fixed in
+	// this same PR): a trimmed fixture that omitted a known-leaked shape
+	// would make this test pass partly because the leak was left out of
+	// the input (PR #1253 review finding).
+	rawUpstreamBody := `{"id":"gen-1787946282-BraVtgcskggFgHSaafrV","created":1787946282,"model":"route-deepseek-v4-pro","object":"chat.completion","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi!","role":"assistant","provider_specific_fields":{"reasoning":null,"refusal":null}},"provider_specific_fields":{"native_finish_reason":"stop"}}],"usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12,"cost":2.376e-05,"is_byok":false,"cost_details":{"upstream_inference_cost":2.376e-05}},"provider":"DigitalOcean"}`
 
 	infer := &fakeInference{
 		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
@@ -318,6 +323,10 @@ func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
 		"cost_details",
 		"is_byok",
 		"route-deepseek-v4-pro", // internal LiteLLM route name, not the customer alias
+		"provider_specific_fields",
+		"native_finish_reason",
+		"\"reasoning\"",
+		"\"refusal\"",
 	} {
 		if strings.Contains(body, leak) {
 			t.Fatalf("output.jsonl body leaked %q:\n%s", leak, body)

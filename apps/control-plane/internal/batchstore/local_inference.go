@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,7 +71,15 @@ func (c *LiteLLMInferenceClient) ChatCompletion(ctx context.Context, model strin
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, nil, 0, err
+		// err is a *url.Error whose message embeds the full request URL
+		// and dial target (host:port, sometimes an internal container IP
+		// when LiteLLM is unreachable), which is internal network
+		// topology, not a provider name -- SanitizeMessage's regex is
+		// built to catch provider tokens, not IPs or hostnames, so this
+		// would otherwise reach a customer's errors.jsonl verbatim (issue
+		// #1253 review). A fixed, unwrapped message here deliberately
+		// never interpolates err.Error() into anything customer-bound.
+		return nil, nil, 0, errors.New("upstream request failed")
 	}
 	defer resp.Body.Close()
 	// Read maxLocalInferenceResponseBytes+1, not the cap itself, so a

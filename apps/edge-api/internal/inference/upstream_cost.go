@@ -229,7 +229,10 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 // Thin wrapper: the strip/rewrite logic itself moved to packages/sanitize
 // (issue #1235) so apps/control-plane's local batch executor can sanitize
 // its own upstream response bodies the same way without duplicating this
-// function. Behavior and both call sites in this package are unchanged.
+// function. Behavior is unchanged, as are both callers: stream.go's
+// executeStreaming fallback in this package, and
+// apps/edge-api/internal/chat/dispatch.go's handler in a different one,
+// which imports this exported function.
 func SanitizeVariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool) {
 	return sanitize.VariablePriceFrame(payload, aliasID, mintedID)
 }
