@@ -96,6 +96,26 @@ func TestRewriteBody_RejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestSupportsIncludeUsage(t *testing.T) {
+	cases := []struct {
+		provider string
+		want     bool
+	}{
+		{"groq", true},
+		{"openrouter", true},
+		{"Groq", true},
+		{"OpenRouter", true},
+		{" groq ", true},
+		{"anthropic", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := SupportsIncludeUsage(tc.provider); got != tc.want {
+			t.Errorf("SupportsIncludeUsage(%q) = %v, want %v", tc.provider, got, tc.want)
+		}
+	}
+}
+
 func assertIncludeUsageTrue(t *testing.T, body []byte) {
 	t.Helper()
 	var fields struct {
