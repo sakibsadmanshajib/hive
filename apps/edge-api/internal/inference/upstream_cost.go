@@ -36,6 +36,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // Errors from reading a reported upstream cost. They are separate values, not
@@ -223,62 +225,13 @@ func ParseUpstreamCost(raw []byte) (UpstreamCharge, error) {
 // ok is false when the frame cannot be parsed. The caller must then DROP the
 // frame rather than forward it, because an unparseable frame is exactly the one
 // whose contents are unknown.
+//
+// Thin wrapper: the strip/rewrite logic itself moved to packages/sanitize
+// (issue #1235) so apps/control-plane's local batch executor can sanitize
+// its own upstream response bodies the same way without duplicating this
+// function. Behavior and both call sites in this package are unchanged.
 func SanitizeVariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool) {
-	var frame map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &frame); err != nil {
-		return nil, false
-	}
-
-	// Provider identity and our own cost. Deleting by key rather than
-	// rebuilding from a typed struct keeps every field the client legitimately
-	// needs, including ones this package does not model, such as tool calls.
-	delete(frame, "provider")
-	delete(frame, "system_fingerprint")
-
-	// id is the same provider-identity leak the typed relay mints a
-	// replacement for (mintCompletionID): OpenRouter's own "gen-*" id shape
-	// leaks upstream identity verbatim. Rewrite rather than delete, using
-	// the caller's stream-stable mintedID, so a client never sees a chunk
-	// missing its id, or a stream where the id changes mid-flight.
-	if _, present := frame["id"]; present {
-		id, err := json.Marshal(mintedID)
-		if err != nil {
-			return nil, false
-		}
-		frame["id"] = id
-	}
-
-	if rawUsage, present := frame["usage"]; present {
-		var usage map[string]json.RawMessage
-		if err := json.Unmarshal(rawUsage, &usage); err != nil {
-			return nil, false
-		}
-		for _, key := range []string{"cost", "cost_details", "is_byok"} {
-			delete(usage, key)
-		}
-		rebuilt, err := json.Marshal(usage)
-		if err != nil {
-			return nil, false
-		}
-		frame["usage"] = rebuilt
-	}
-
-	// The router's chosen model. Present on the sync path and on some
-	// streaming frames; the typed relay already does this, so doing it here
-	// keeps the two consistent.
-	if _, present := frame["model"]; present {
-		alias, err := json.Marshal(aliasID)
-		if err != nil {
-			return nil, false
-		}
-		frame["model"] = alias
-	}
-
-	out, err := json.Marshal(frame)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
+	return sanitize.VariablePriceFrame(payload, aliasID, mintedID)
 }
 
 // CreditsForUpstreamCost converts a provider-reported USD cost into whole

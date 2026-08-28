@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,9 +148,9 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 		t.Fatalf("new dispatcher: %v", err)
 	}
 	res := disp.Dispatch(context.Background(), InputLine{
-		CustomID: "x",
-		Method:   "POST",
-		URL:      "/v1/chat/completions",
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
@@ -181,9 +182,9 @@ func TestDispatcher_4xxNoRetry(t *testing.T) {
 		t.Fatalf("new dispatcher: %v", err)
 	}
 	res := disp.Dispatch(context.Background(), InputLine{
-		CustomID: "x",
-		Method:   "POST",
-		URL:      "/v1/chat/completions",
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
@@ -224,9 +225,9 @@ func TestDispatcher_LineTimeout(t *testing.T) {
 
 	start := time.Now()
 	res := disp.Dispatch(context.Background(), InputLine{
-		CustomID: "x",
-		Method:   "POST",
-		URL:      "/v1/chat/completions",
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
@@ -254,9 +255,9 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 		t.Fatalf("new dispatcher: %v", err)
 	}
 	res := disp.Dispatch(context.Background(), InputLine{
-		CustomID: "x",
-		Method:   "POST",
-		URL:      "/v1/chat/completions",
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
@@ -269,6 +270,72 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 		if containsCI(msg, banned) {
 			t.Fatalf("sanitized message still contains %q: %q", banned, msg)
 		}
+	}
+}
+
+// Test 8: output-body sanitization -- issue #1235. The local batch executor
+// writes InferencePort's raw response body straight into output.jsonl's
+// response.body, which reaches the customer verbatim (a batch output file is
+// customer-retrievable output, same as a sync/stream response). A raw
+// upstream body carries the exact identity leaks PR #1222 closed on the
+// sync/stream boundaries: an OpenRouter "gen-*" id, a "provider" field
+// naming the actual upstream (observed live: "DigitalOcean"), a
+// "system_fingerprint", usage.cost/cost_details, and a "model" field that
+// echoes LiteLLM's internal route name rather than the customer's alias.
+// None of that may reach output.jsonl. Reproduces the live shape captured
+// against a real LiteLLM route-deepseek-v4-pro response (2026-08-28).
+func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
+	rawUpstreamBody := `{"id":"gen-1787946282-BraVtgcskggFgHSaafrV","created":1787946282,"model":"route-deepseek-v4-pro","object":"chat.completion","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi!","role":"assistant"}}],"usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12,"cost":2.376e-05,"is_byok":false,"cost_details":{"upstream_inference_cost":2.376e-05}},"provider":"DigitalOcean"}`
+
+	infer := &fakeInference{
+		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			return json.RawMessage(rawUpstreamBody), &Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}, 200, nil
+		},
+	}
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, infer, nil)
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	res := disp.Dispatch(context.Background(), InputLine{
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
+		Body:         mustBody(t, "customer-alias-1", ""),
+		Alias:        "customer-alias-1",
+		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+	})
+	if res.Output == nil || res.Output.Response == nil {
+		t.Fatalf("expected success output, got %+v", res)
+	}
+	body := string(res.Output.Response.Body)
+
+	for _, leak := range []string{
+		"gen-1787946282-BraVtgcskggFgHSaafrV", // raw upstream id, OpenRouter shape
+		"DigitalOcean",                        // actual provider name
+		"\"provider\"",                        // provider key at all
+		"system_fingerprint",
+		"\"cost\"",
+		"cost_details",
+		"is_byok",
+		"route-deepseek-v4-pro", // internal LiteLLM route name, not the customer alias
+	} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("output.jsonl body leaked %q:\n%s", leak, body)
+		}
+	}
+
+	var decoded struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(res.Output.Response.Body, &decoded); err != nil {
+		t.Fatalf("sanitized body is not valid JSON: %v\n%s", err, body)
+	}
+	if !strings.HasPrefix(decoded.ID, "chatcmpl-") {
+		t.Fatalf("id=%q want gateway-minted chatcmpl- prefix", decoded.ID)
+	}
+	if decoded.Model != "customer-alias-1" {
+		t.Fatalf("model=%q want customer alias %q", decoded.Model, "customer-alias-1")
 	}
 }
 

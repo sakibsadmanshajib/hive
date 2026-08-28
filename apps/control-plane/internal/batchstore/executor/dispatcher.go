@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // InferencePort is a small interface that the dispatcher depends on.
@@ -130,10 +131,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 		cancel()
 
 		if callErr == nil && status >= 200 && status < 300 {
+			// Issue #1235: body is InferencePort's raw upstream response --
+			// the exact same shape PR #1222 sanitized on the sync/stream
+			// boundaries (upstream id format, system_fingerprint, provider
+			// name, provider-reported cost, internal LiteLLM model name).
+			// output.jsonl is customer-retrievable output, so it gets the
+			// same treatment via the shared sanitize package (see
+			// package doc) rather than a second, drifting implementation.
+			// mintedID reuses the same "chatcmpl-" family the sync
+			// chat-completions endpoint mints, since a batch line's
+			// response.body is itself a full chat-completion response.
+			mintedID := sanitize.MintID("chatcmpl")
+			sanitizedBody, ok := sanitize.VariablePriceFrame(body, line.Alias, mintedID)
+			if !ok {
+				return d.errResult(line.CustomID, "upstream_error", "upstream returned an unparseable response", attempt)
+			}
 			out := &OutputLine{
 				ID:       "batch_req_" + uuid.New().String(),
 				CustomID: line.CustomID,
-				Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: body},
+				Response: &OutputResponse{StatusCode: status, RequestID: uuid.New().String(), Body: sanitizedBody},
 				Error:    nil,
 			}
 			res := DispatchResult{
