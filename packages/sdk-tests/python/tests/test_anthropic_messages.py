@@ -40,10 +40,9 @@ of hidden behind a passing assertion that quietly accepted the bug as
 correct behavior.
 """
 
-import json
 import os
 
-import httpx2
+import httpx
 import pytest
 from anthropic import Anthropic, APIStatusError, AuthenticationError, BadRequestError, NotFoundError
 
@@ -110,7 +109,7 @@ def test_messages_create_basic_non_streaming(client: Anthropic) -> None:
     reason="issue #1274: content_block_start omits an empty text field "
     "(json:\"text,omitempty\"), so the SDK's own stream accumulator crashes "
     "with TypeError on the first content_block_delta of any text response",
-    strict=False,
+    strict=True,
 )
 def test_streaming_event_sequence_integrity(client: Anthropic) -> None:
     """The SDK's strict streaming parser accepts Hive's Anthropic event sequence.
@@ -249,7 +248,7 @@ def test_tool_choice_named_tool_forces_that_tool(client: Anthropic) -> None:
 @pytest.mark.xfail(
     reason="issue #1260: empty completions serialize content as JSON null, not [], "
     "breaking any client (including this SDK) that assumes content is iterable",
-    strict=False,
+    strict=True,
 )
 def test_tool_choice_none_forbids_tool_use(client: Anthropic) -> None:
     msg = client.messages.create(
@@ -363,7 +362,7 @@ def test_vision_image_block_is_translated_and_dispatched(client: Anthropic) -> N
 @pytest.mark.xfail(
     reason="issue #1261: count_tokens requires a session principal and 401s "
     "every valid API-key caller, unlike every other endpoint on this surface",
-    strict=False,
+    strict=True,
 )
 def test_count_tokens(client: Anthropic) -> None:
     result = client.messages.count_tokens(model=MODEL, messages=[{"role": "user", "content": "hello world"}])
@@ -374,7 +373,7 @@ def test_count_tokens(client: Anthropic) -> None:
     reason="issue #1259: GET /v1/models does not accept the SDK's default "
     "x-api-key header and answers with the OpenAI error envelope instead of "
     "the Anthropic one",
-    strict=False,
+    strict=True,
 )
 def test_models_list(client: Anthropic) -> None:
     page = client.models.list()
@@ -453,7 +452,7 @@ def test_no_provider_identity_leaks_in_error_body() -> None:
     """The same guard on an error path: an upstream refusal must reach the
     client through the sanitizer, never with a raw provider exception class
     or route id attached."""
-    raw = httpx2.post(
+    raw = httpx.post(
         _anthropic_base_url() + "/v1/messages",
         headers={"x-api-key": API_KEY, "content-type": "application/json"},
         json={"model": "definitely-not-a-real-alias", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
