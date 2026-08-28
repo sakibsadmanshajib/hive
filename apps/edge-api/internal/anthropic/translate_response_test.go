@@ -229,3 +229,60 @@ func TestFromOAIResponse_ToolArgumentsInvalidJSON(t *testing.T) {
 		t.Error("input should not be empty on fallback")
 	}
 }
+
+// TestFromOAIResponse_EmptyCompletionSerializesContentAsArray is the issue
+// #1260 guard. A turn that produced neither text nor a tool call left Content
+// as a nil Go slice, and a nil slice with no `omitempty` marshals to JSON
+// null, not []. Anthropic's contract is that content is ALWAYS an array, so
+// every typed client iterates it unconditionally and gets a TypeError on null
+// instead of an empty turn.
+//
+// The assertion runs on the MARSHALED BYTES, not on the struct. Checking
+// len(got.Content) == 0 in Go passes identically for a nil slice and an empty
+// one, so it cannot see this defect at all; the difference exists only once
+// encoding/json runs.
+func TestFromOAIResponse_EmptyCompletionSerializesContentAsArray(t *testing.T) {
+	cases := map[string]anthropic.OAIResponse{
+		"no choices at all": {
+			ID:    "chatcmpl-empty",
+			Model: "m",
+		},
+		"choice with empty content and no tool calls": {
+			ID:    "chatcmpl-truncated",
+			Model: "m",
+			Choices: []anthropic.OAIChoice{
+				{FinishReason: "length", Message: anthropic.OAIMsg{Role: "assistant", Content: ""}},
+			},
+		},
+	}
+
+	for name, oai := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(anthropic.FromOAIResponse(oai, "claude-3-haiku"))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if !strings.Contains(string(raw), `"content":[]`) {
+				t.Fatalf("empty completion must serialize content as [], got %s", raw)
+			}
+
+			// Decode back the way a real client does, and prove the value is
+			// an array rather than null.
+			var decoded map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			content, present := decoded["content"]
+			if !present {
+				t.Fatal("content key absent from the response body")
+			}
+			var blocks []anthropic.ResponseBlock
+			if err := json.Unmarshal(content, &blocks); err != nil {
+				t.Fatalf("content is not an array: %v", err)
+			}
+			if blocks == nil {
+				t.Fatalf("content decoded to null rather than an empty array: %s", content)
+			}
+		})
+	}
+}

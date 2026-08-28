@@ -256,7 +256,7 @@ func (t *SSETranslator) openTextBlock() {
 		Index: indexPtr(0),
 		ContentBlock: &StreamContentBlock{
 			Type: "text",
-			Text: "",
+			Text: emptyTextPtr(),
 		},
 	})
 }
@@ -310,9 +310,10 @@ func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 			Type:  "content_block_start",
 			Index: indexPtr(nextIndex),
 			ContentBlock: &StreamContentBlock{
-				Type: "tool_use",
-				ID:   tc.ID,
-				Name: tc.Function.Name,
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: json.RawMessage(`{}`),
 			},
 		})
 	}
@@ -341,6 +342,11 @@ func (t *SSETranslator) emitContentBlockStop(index int) {
 // all) can still be assigned the address of a literal int at each
 // content_block_* call site.
 func indexPtr(i int) *int { return &i }
+
+// emptyTextPtr exists for the same reason indexPtr does: StreamContentBlock.Text
+// is a pointer so the empty string still serializes (see its doc comment), and a
+// composite literal cannot take the address of a string constant inline.
+func emptyTextPtr() *string { s := ""; return &s }
 
 func (t *SSETranslator) emitMessageDelta() {
 	if t.stopReason == "" {

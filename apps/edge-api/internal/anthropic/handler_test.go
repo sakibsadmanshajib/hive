@@ -1,6 +1,7 @@
 package anthropic_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // fakeChat stands in for the wired POST /v1/chat/completions handler chain that
@@ -684,5 +686,139 @@ func TestAPIKeyNormalizer_NoKey_PassesThrough(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if captured != "" {
 		t.Errorf("Authorization: want empty got %q", captured)
+	}
+}
+
+// newCountTokensRequest builds an unauthenticated (no session user)
+// count_tokens request carrying an API-key credential, which is how every real
+// Anthropic SDK integration reaches this route.
+func newCountTokensRequest(authHeader string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hello world"}],"max_tokens":5}`))
+	req.Header.Set("Content-Type", "application/json")
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	return req
+}
+
+// TestHandler_CountTokens_AcceptsAPIKeyPrincipal is the issue #1261 guard.
+// count_tokens is the only route on this surface that does not delegate to the
+// chat chain, so it used to recognize a JWT session principal and nothing
+// else. An "hk_" request is routed past the JWT middleware by auth.Selector and
+// therefore carries no session user at all, which made every programmatic
+// caller a 401 on this one route while the sibling /v1/messages accepted the
+// identical key on the identical connection.
+func TestHandler_CountTokens_AcceptsAPIKeyPrincipal(t *testing.T) {
+	var sawHeader string
+	calls := 0
+	h := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: &fakeChat{},
+		AuthorizeAPIKey: func(_ context.Context, authHeader string) (*apierr.OpenAIError, map[string]string) {
+			calls++
+			sawHeader = authHeader
+			return nil, nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newCountTokensRequest("Bearer hk_live_test"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("API-key count_tokens: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("AuthorizeAPIKey called %d times, want exactly 1", calls)
+	}
+	if sawHeader != "Bearer hk_live_test" {
+		t.Errorf("authorizer saw header %q, want the request's own Authorization value", sawHeader)
+	}
+	var got anthropic.CountTokensResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.InputTokens <= 0 {
+		t.Errorf("input_tokens: want a positive estimate got %d", got.InputTokens)
+	}
+}
+
+// TestHandler_CountTokens_RejectedAPIKeyKeepsTheAuthorizersOwnRefusal proves
+// the refusal a caller sees is the authorizer's verdict reshaped into the
+// Anthropic envelope, not the old blanket "missing user" string. The status
+// alone cannot prove that (both are 401), so the message is what this asserts.
+func TestHandler_CountTokens_RejectedAPIKeyKeepsTheAuthorizersOwnRefusal(t *testing.T) {
+	code := "invalid_api_key"
+	h := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: &fakeChat{},
+		AuthorizeAPIKey: func(_ context.Context, _ string) (*apierr.OpenAIError, map[string]string) {
+			refusal := apierr.NewError("invalid_request_error", "Invalid API key.", &code)
+			return &refusal, nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newCountTokensRequest("Bearer hk_revoked"))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked key: want 401 got %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["type"] != "error" {
+		t.Errorf("envelope: want top-level type=error got %v", body["type"])
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["type"] != "authentication_error" {
+		t.Errorf("error.type: want authentication_error got %v", errObj["type"])
+	}
+	if errObj["message"] != "Invalid API key." {
+		t.Errorf("error.message: want the authorizer's own refusal got %v", errObj["message"])
+	}
+	if errObj["code"] != "invalid_api_key" {
+		t.Errorf("error.code: want invalid_api_key got %v", errObj["code"])
+	}
+}
+
+// TestHandler_CountTokens_WithoutAnAPIKeyAuthorityFailsClosed pins the
+// deliberate degradation: a Handler wired without AuthorizeAPIKey stays
+// session-only and refuses, rather than admitting an unauthenticated caller.
+func TestHandler_CountTokens_WithoutAnAPIKeyAuthorityFailsClosed(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: &fakeChat{}})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newCountTokensRequest("Bearer hk_live_test"))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no API-key authority wired: want 401 got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_CountTokens_SessionPrincipalDoesNotConsultTheAPIKeyAuthority
+// keeps the two principals independent: a signed-in user must still be served
+// from the session checks alone, so a deployment whose authorizer is degraded
+// does not start refusing browser traffic.
+func TestHandler_CountTokens_SessionPrincipalDoesNotConsultTheAPIKeyAuthority(t *testing.T) {
+	calls := 0
+	h := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: &fakeChat{},
+		AuthorizeAPIKey: func(_ context.Context, _ string) (*apierr.OpenAIError, map[string]string) {
+			calls++
+			refusal := apierr.NewError("invalid_request_error", "Invalid API key.", nil)
+			return &refusal, nil
+		},
+	})
+	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hello world"}],"max_tokens":5}`)
+	req.URL.Path = "/v1/messages/count_tokens"
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session count_tokens: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if calls != 0 {
+		t.Errorf("API-key authority consulted %d times for a session principal, want 0", calls)
 	}
 }

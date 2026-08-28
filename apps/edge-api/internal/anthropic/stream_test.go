@@ -486,3 +486,100 @@ func TestSSETranslator_FirstBlockIndexIsPresentAndZero(t *testing.T) {
 		t.Fatal("no content_block_* events were found to check")
 	}
 }
+
+// TestSSETranslator_TextBlockStartCarriesExplicitEmptyText pins the exact wire
+// bytes issue #1274 was about, not merely the presence of the event.
+//
+// The real Anthropic API emits
+// {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+// (verified against https://docs.claude.com/en/docs/build-with-claude/streaming
+// on 2026-08-28). The Anthropic SDK's stream accumulator seeds its snapshot
+// from that "text" key and then runs `content.text += event.delta.text` on the
+// first content_block_delta, so dropping the key for the empty string made
+// every streamed text response a TypeError inside the SDK's own documented
+// helper. The assertion is therefore on KEY PRESENCE, which is the thing that
+// was actually wrong; asserting the value alone would pass just as happily
+// against a missing key decoded as a nil interface.
+func TestSSETranslator_TextBlockStartCarriesExplicitEmptyText(t *testing.T) {
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-1","model":"route-upstream","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","model":"route-upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "claude-3-haiku")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+
+	var seen bool
+	for _, ev := range parseSSEEvents(t, rec.Body.String()) {
+		if ev["type"] != "content_block_start" {
+			continue
+		}
+		block, ok := ev["content_block"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("content_block_start has no content_block object: %v", ev)
+		}
+		if block["type"] != "text" {
+			continue
+		}
+		seen = true
+		text, present := block["text"]
+		if !present {
+			t.Fatalf("text content_block_start omits the \"text\" key entirely, which crashes "+
+				"the Anthropic SDK accumulator on the first delta: %v", block)
+		}
+		if text != "" {
+			t.Errorf("content_block.text: want empty string got %v", text)
+		}
+	}
+	if !seen {
+		t.Fatal("no text content_block_start was emitted at all")
+	}
+}
+
+// TestSSETranslator_ToolUseBlockStartCarriesExplicitEmptyInput is the same
+// defect one block type over: Anthropic's documented tool_use block start
+// carries "input":{}, and a nil json.RawMessage under `omitempty` drops it.
+// The Python SDK's accumulator happens to survive this one (it assigns
+// content.input from its own partial-JSON buffer rather than reading the
+// block-start value), but a client that types input as a required object does
+// not, and the wire shape is wrong either way.
+func TestSSETranslator_ToolUseBlockStartCarriesExplicitEmptyInput(t *testing.T) {
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-1","model":"route-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","model":"route-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Dhaka\"}"}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","model":"route-upstream","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "claude-3-haiku")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+
+	var seen bool
+	for _, ev := range parseSSEEvents(t, rec.Body.String()) {
+		if ev["type"] != "content_block_start" {
+			continue
+		}
+		block, ok := ev["content_block"].(map[string]interface{})
+		if !ok || block["type"] != "tool_use" {
+			continue
+		}
+		seen = true
+		input, present := block["input"]
+		if !present {
+			t.Fatalf("tool_use content_block_start omits the \"input\" key: %v", block)
+		}
+		obj, ok := input.(map[string]interface{})
+		if !ok || len(obj) != 0 {
+			t.Errorf("content_block.input: want empty object got %v", input)
+		}
+		if _, hasText := block["text"]; hasText {
+			t.Errorf("tool_use content_block_start must not carry a text key: %v", block)
+		}
+	}
+	if !seen {
+		t.Fatal("no tool_use content_block_start was emitted at all")
+	}
+}

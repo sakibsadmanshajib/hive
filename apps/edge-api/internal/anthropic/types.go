@@ -320,11 +320,32 @@ type StreamMessage struct {
 }
 
 // StreamContentBlock is the block header in content_block_start.
+//
+// Text and Input are pointers for the same reason StreamEvent.Index is: the
+// real Anthropic protocol requires the empty value to be PRESENT on the wire,
+// and `omitempty` on a plain Go string or a nil json.RawMessage drops the key
+// for the empty value exactly as readily as for "unset". Verified against the
+// live streaming specification on 2026-08-28
+// (https://docs.claude.com/en/docs/build-with-claude/streaming), which emits
+//
+//	{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+//	{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_...","name":"get_weather","input":{}}}
+//
+// on every text and tool_use block respectively. The text case was not
+// cosmetic: the Anthropic SDK's own stream accumulator seeds its snapshot from
+// this field and then does `content.text += delta.text` on the first
+// content_block_delta, so a missing key made that a None += str TypeError on
+// every streamed text response (issue #1274).
+//
+// A text block never carries id/name/input and a tool_use block never carries
+// text, so each stays absent by leaving the corresponding field at its zero
+// value; only the block's own required-but-empty field is made explicit.
 type StreamContentBlock struct {
-	Type string `json:"type"` // "text" | "tool_use"
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"` // "text" | "tool_use"
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Text  *string         `json:"text,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // StreamDelta is the delta payload in content_block_delta or message_delta.

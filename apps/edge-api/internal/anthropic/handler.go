@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 const maxBodyBytes = 4 << 20 // 4 MiB
@@ -34,6 +36,22 @@ type Deps struct {
 	// id, that direct POST let a caller name a route instead of an alias and
 	// skip entitlement and metering in one move.
 	OpenAIChat http.Handler
+
+	// AuthorizeAPIKey resolves a "Bearer hk_..." Authorization header to a Hive
+	// API-key principal, returning the already-sanitized OpenAI-shaped refusal
+	// (and any headers that must ride with it) when it cannot.
+	//
+	// It exists for POST /v1/messages/count_tokens alone. Every other route on
+	// this surface delegates to OpenAIChat, which is itself the authority for
+	// an API-key principal; count_tokens never dispatches anywhere, so without
+	// this it could only see a session-cookie principal and 401'd every
+	// programmatic caller -- which is to say, essentially every real Anthropic
+	// SDK integration, since an API key is how they all authenticate (issue
+	// #1261).
+	//
+	// Nil leaves count_tokens session-only and fail-closed, the pre-existing
+	// behaviour.
+	AuthorizeAPIKey func(ctx context.Context, authHeader string) (*apierr.OpenAIError, map[string]string)
 }
 
 // Handler accepts Anthropic Messages requests, translates them to the internal
@@ -159,17 +177,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 // handleCountTokens returns a local token count estimate for the request body.
 func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
-	user, ok := auth.UserFrom(r.Context())
-	if !ok || user == nil {
-		writeAnthropicError(w, http.StatusUnauthorized, "missing user", "")
-		return
-	}
-	if user.TenantID == uuid.Nil {
-		writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
-		return
-	}
-	if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
-		writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
+	if !h.authorizeCountTokens(w, r) {
 		return
 	}
 
@@ -204,6 +212,46 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	if encErr := json.NewEncoder(w).Encode(CountTokensResponse{InputTokens: estimated}); encErr != nil {
 		slog.Warn("anthropic count_tokens encode error", "err", encErr)
 	}
+}
+
+// authorizeCountTokens accepts either principal type this surface serves: a
+// JWT session user (checked for tenant and chat permission, as before) or a
+// Hive API key resolved through Deps.AuthorizeAPIKey. It writes the refusal
+// itself and reports whether the request may proceed.
+//
+// The two are checked in that order because the JWT middleware is what
+// populates auth.UserFrom; an "hk_" request is routed past it by auth.Selector
+// and therefore carries no session user at all, which is exactly why the
+// session-only guard this replaces rejected every API-key caller.
+func (h *Handler) authorizeCountTokens(w http.ResponseWriter, r *http.Request) bool {
+	if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
+		if user.TenantID == uuid.Nil {
+			writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
+			return false
+		}
+		if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
+			writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
+			return false
+		}
+		return true
+	}
+
+	if h.deps.AuthorizeAPIKey == nil {
+		writeAnthropicError(w, http.StatusUnauthorized, "missing user", "")
+		return false
+	}
+	authErr, headers := h.deps.AuthorizeAPIKey(r.Context(), r.Header.Get("Authorization"))
+	if authErr == nil {
+		return true
+	}
+	// Round-trip through the shared OpenAI writer so the status mapping
+	// (401 vs 403 vs 429 vs 503) stays the single implementation the rest of
+	// edge-api uses, then reshape the envelope for an Anthropic client. This
+	// never re-sanitizes: the authorizer's refusals are already customer-safe.
+	rec := &headerlessRecorder{}
+	apierr.WriteAuthFailure(rec, authErr, headers)
+	reshapeToAnthropicError(w, rec.status, rec.body.Bytes())
+	return false
 }
 
 // normalizeAPIKeyHeader rewrites an Anthropic x-api-key header to a standard

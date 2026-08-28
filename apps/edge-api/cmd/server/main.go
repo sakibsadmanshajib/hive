@@ -196,7 +196,20 @@ func main() {
 	// reservation and settlement, upstream retry, tracing and audit are shared
 	// with that surface rather than reimplemented. It previously POSTed straight
 	// to LiteLLM, which let a caller address a raw route id and skip all of it.
-	anthropicHandler := anthropic.NewHandler(anthropic.Deps{OpenAIChat: openAIChatHandler})
+	anthropicHandler := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: openAIChatHandler,
+		// count_tokens is the one route on this surface that does not delegate,
+		// so it is the one route that needs its own API-key authority. Without
+		// it the handler could only see a JWT session user and refused every
+		// Anthropic SDK caller, which authenticates with an API key (#1261).
+		// Zero cost arguments: the estimate is computed locally and bills
+		// nothing, so this resolves and rate-limits the key without reserving
+		// credit against it.
+		AuthorizeAPIKey: func(ctx context.Context, authHeader string) (*apierrors.OpenAIError, map[string]string) {
+			_, headers, authErr := authorizer.Authorize(ctx, authHeader, "", 0, 0, 0)
+			return authErr, headers
+		},
+	})
 	mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(anthropicHandler))
 	mux.Handle("/v1/messages/", anthropic.APIKeyNormalizer(anthropicHandler))
 
@@ -476,7 +489,7 @@ func main() {
 	}
 
 	// API routes
-	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
+	mux.Handle("/v1/models", modelsHandler(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
 	// Feature-gate read seam for Open WebUI (issue #293). OWUI has no in-repo
@@ -841,6 +854,26 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// modelsHandler is what GET /v1/models is actually registered as: the
+// OpenAI-shaped handler below, wrapped so a real Anthropic SDK client works
+// against the same route (issue #1259).
+//
+// APIKeyNormalizer is applied here at the leaf as well as in
+// authSelectorMiddleware, and that is not redundant. The selector wrapper only
+// exists when JWT auth is wired (jwtMW != nil); on a deployment where Supabase
+// JWT config is absent, edge-api logs "JWT auth wiring skipped" and mounts no
+// selector at all, so nothing normalizes x-api-key and handleModels reads an
+// empty Authorization header for every Anthropic SDK caller. POST /v1/messages
+// has always carried the same leaf wrapper for the same reason, which is
+// precisely why it kept working on that deployment while this route 401'd.
+//
+// ModelsCompat then re-shapes the answer, but only for a caller that
+// identified itself as Anthropic-shaped; an OpenAI-shaped caller, Open WebUI
+// included, still gets the byte-identical OpenAI list it always did.
+func modelsHandler(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
+	return anthropic.APIKeyNormalizer(anthropic.ModelsCompat(handleModels(client, authorizer)))
 }
 
 // handleModels serves the OpenAI-compatible model list.
