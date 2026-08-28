@@ -81,6 +81,12 @@ func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {
 			continue
 		}
 
+		// Provider-blindness boundary for catalogue metadata (issue #1284).
+		// Applied here rather than at the row source so a summary seeded by
+		// any future migration or admin surface is scrubbed on the way out,
+		// not merely the two rows that leaked. See providerblind.go.
+		alias = redactAlias(alias)
+
 		ownedBy := strings.TrimSpace(alias.OwnedBy)
 		if ownedBy == "" {
 			ownedBy = "hive"

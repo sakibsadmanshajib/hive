@@ -103,6 +103,11 @@ func buildPublicCatalogModels(aliases []ModelAlias) []PublicCatalogModel {
 		if strings.EqualFold(a.Visibility, "internal") {
 			continue
 		}
+		// Same provider-blindness boundary buildCatalogSnapshot applies. This
+		// endpoint is a second wire shape over the same rows and is reachable
+		// without a bearer token, so it cannot inherit the other one's guard
+		// by accident (issue #1284).
+		a = redactAlias(a)
 		out = append(out, PublicCatalogModel{
 			ID:               a.AliasID,
 			DisplayName:      a.DisplayName,
