@@ -49,7 +49,11 @@ func (a *RoutingAdapter) SelectRoute(ctx context.Context, input RouteInput) (Rou
 	// step with it the way it already had (found live 2026-08-28). The
 	// local ErrAccountNotProvisioned below is kept: this function's error
 	// text and type are unchanged, only the check and its visibility are shared.
-	tenantID, err := authz.ParseTenantID(input.TenantID, input.AccountID, input.APIKeyID)
+	tenantID, err := authz.ParseTenantID(authz.TenantLookup{
+		TenantID:  input.TenantID,
+		AccountID: input.AccountID,
+		KeyID:     input.APIKeyID,
+	})
 	if err != nil {
 		return RouteResult{}, fmt.Errorf("images: select route: %w", ErrAccountNotProvisioned)
 	}

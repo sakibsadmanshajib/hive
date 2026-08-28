@@ -61,7 +61,21 @@ var ErrAccountNotProvisioned = errors.New(
 // probe that asserts a weaker predicate than the request path is a false green,
 // and the only structural defence is one predicate with one definition.
 func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
-	return ParseTenantID(s.TenantID, s.AccountID, s.KeyID)
+	return ParseTenantID(TenantLookup{TenantID: s.TenantID, AccountID: s.AccountID, KeyID: s.KeyID})
+}
+
+// TenantLookup is ParseTenantID's argument: three identifiers, named rather
+// than positional, because three bare strings in a row is a transposition
+// footgun a compiler cannot catch on an auth path -- swap AccountID and
+// KeyID at a call site and it still builds, and now logs (or, if this ever
+// grows a second predicate, checks) the wrong-but-plausible identifier
+// instead. A struct literal forces every call site to name each field, so a
+// transposed pair is a visible diff, not a silent one (review comment,
+// PR #1240).
+type TenantLookup struct {
+	TenantID  string
+	AccountID string
+	KeyID     string
 }
 
 // ParseTenantID is TenantUUID's check, exported so a caller holding only the
@@ -76,10 +90,10 @@ func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
 // minted key 403'd with no operator-visible signal anywhere but the HTTP
 // response itself). AccountID and KeyID are internal identifiers, safe to
 // log; never log the raw key secret, which no caller of this function holds.
-func ParseTenantID(tenantID, accountID, keyID string) (uuid.UUID, error) {
-	id, err := uuid.Parse(tenantID)
+func ParseTenantID(lookup TenantLookup) (uuid.UUID, error) {
+	id, err := uuid.Parse(lookup.TenantID)
 	if err != nil || id == uuid.Nil {
-		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", accountID, keyID)
+		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", lookup.AccountID, lookup.KeyID)
 		return uuid.Nil, ErrAccountNotProvisioned
 	}
 	return id, nil
