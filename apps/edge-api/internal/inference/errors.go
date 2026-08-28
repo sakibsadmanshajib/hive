@@ -18,8 +18,29 @@ import (
 // Shared by every inference-package endpoint that decodes a client-supplied
 // JSON body (chat/completions, completions, embeddings, responses), so the
 // cap and its error shape can only diverge by editing this one function.
+//
+// apierrors.IsTrustedBody(r.Context()) skips the cap entirely: the
+// /v1/messages surface delegates here with a translated body that is
+// already fully in memory and was already validated at its own ingress
+// boundary, so re-capping it can only wrongly reject a client body that
+// never exceeded anything (#1273 review finding 2).
 func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, apierrors.MaxRequestBodyBytes)
+	if !apierrors.IsTrustedBody(r.Context()) {
+		// Reject a declared oversize body before reading anything, mirroring
+		// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
+		// optimisation, not an error-delivery fix: it bounds the server's
+		// peak buffering for a declared-oversize body instead of reading up
+		// to the cap before erroring, but the client sees the 413 no later
+		// (often earlier), so it does not make an honest error any more
+		// reachable, and ContentLength is -1 when unknown (chunked), which
+		// fails this comparison and falls through to MaxBytesReader below, a
+		// no-op for that transfer encoding.
+		if r.ContentLength > apierrors.MaxRequestBodyBytes {
+			writeRequestTooLargeError(w)
+			return nil, false
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, apierrors.MaxRequestBodyBytes)
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError

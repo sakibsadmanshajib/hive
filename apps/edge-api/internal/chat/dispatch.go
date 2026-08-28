@@ -110,7 +110,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// errors when the body exceeds the cap rather than quietly cutting it off,
 	// which used to make an oversized-but-valid body fail json.Unmarshal below
 	// and get reported as "bad json" with no mention of size anywhere.
-	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	//
+	// apierr.IsTrustedBody(r.Context()) skips the cap entirely: /v1/messages
+	// delegates to this handler for a session principal with a translated
+	// body that is already fully in memory and was already validated at its
+	// own ingress boundary, so re-capping it can only wrongly reject a
+	// client body that never exceeded anything (#1273 review finding 2).
+	if !apierr.IsTrustedBody(r.Context()) {
+		// Reject a declared oversize body before reading anything, mirroring
+		// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
+		// optimisation, not an error-delivery fix: it bounds the server's
+		// peak buffering for a declared-oversize body instead of reading up
+		// to the cap before erroring, but the client sees the 413 no later
+		// (often earlier), so it does not make an honest error any more
+		// reachable, and ContentLength is -1 when unknown (chunked), which
+		// fails this comparison and falls through to
+		// MaxBytesReader below.
+		if r.ContentLength > apierr.MaxRequestBodyBytes {
+			apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeRequestTooLarge, apierr.RequestTooLargeMessage())
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError

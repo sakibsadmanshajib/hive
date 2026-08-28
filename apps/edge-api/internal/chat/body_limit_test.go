@@ -89,3 +89,42 @@ func TestDispatchBodyOneByteOverLimitIsHonest413(t *testing.T) {
 	require.Contains(t, errBody.Error.Message, "MiB")
 	require.NotContains(t, strings.ToLower(errBody.Error.Message), "json")
 }
+
+// TestDispatchContentLengthOverLimit_RejectedWithoutReading proves the
+// declared-oversize fast path fires before any body bytes are read: the
+// actual body here is small, only the Content-Length header lies.
+func TestDispatchContentLengthOverLimit_RejectedWithoutReading(t *testing.T) {
+	handler := chat.NewDispatch(chat.Deps{
+		LiteLLMURL: "http://unused",
+		DeploySHA:  "s",
+		Env:        "test",
+	})
+	req := newAuthedChatRequest(t, `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`)
+	req.ContentLength = apierr.MaxRequestBodyBytes + 1
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+}
+
+// TestDispatchTrustedBody_SkipsTheCap proves apierr.WithTrustedBody (set by
+// the /v1/messages surface on its translated sub-request when it delegates
+// to the session chat-dispatch path, PR #1273 review finding 2) makes this
+// handler skip MaxRequestBodyBytes entirely: a body over the cap still
+// reaches route selection instead of being refused as too large.
+func TestDispatchTrustedBody_SkipsTheCap(t *testing.T) {
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    newPassthroughRoutingClient(t),
+		LiteLLMURL: "http://unused",
+		DeploySHA:  "s",
+		Env:        "test",
+	})
+	req := newAuthedChatRequest(t, chatDispatchBodyOfSize(t, apierr.MaxRequestBodyBytes+1024))
+	req = req.WithContext(apierr.WithTrustedBody(req.Context()))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Same fail-closed 503 as TestDispatchBodyOneByteUnderLimitIsAccepted
+	// (Accounting/Billing deliberately unwired), which proves the body was
+	// read in full and reached route selection, not refused as too large.
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+}

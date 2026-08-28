@@ -142,3 +142,37 @@ func TestBodyLimit_Responses_OneByteOverIsHonest413(t *testing.T) {
 	h.ServeHTTP(w, req)
 	requestTooLargeBody(t, w)
 }
+
+// TestBodyLimit_ChatCompletions_ContentLengthOverLimit_RejectedWithoutReading
+// proves the declared-oversize fast path fires before any body bytes are
+// read: the actual body here is small, only the Content-Length header lies.
+func TestBodyLimit_ChatCompletions_ContentLengthOverLimit_RejectedWithoutReading(t *testing.T) {
+	h := NewHandler(&Orchestrator{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"hive-fast","messages":[{"role":"user","content":"hi"}]}`))
+	req.ContentLength = apierrors.MaxRequestBodyBytes + 1
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	requestTooLargeBody(t, w)
+}
+
+// TestBodyLimit_TrustedBody_SkipsTheCap proves apierrors.WithTrustedBody
+// (set by the /v1/messages surface on its translated sub-request, PR #1273
+// review finding 2) makes readLimitedBody skip MaxRequestBodyBytes
+// entirely: a body over the cap is still read and reaches field validation
+// instead of being refused as too large.
+func TestBodyLimit_TrustedBody_SkipsTheCap(t *testing.T) {
+	h := NewHandler(&Orchestrator{})
+	prefix := `{"model":"hive-fast","messages":[{"role":"user","content":"hi"}],"_pad":"`
+	body := paddedBody(t, prefix, apierrors.MaxRequestBodyBytes+1024)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req = req.WithContext(apierrors.WithTrustedBody(req.Context()))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("a trusted body must not be capped: got 413: %s", w.Body.String())
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (auth layer reached, body read in full), got %d: %s", w.Code, w.Body.String())
+	}
+}
