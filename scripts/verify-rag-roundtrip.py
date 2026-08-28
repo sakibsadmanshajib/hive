@@ -14,13 +14,17 @@ document while the unit suite stayed green). Run this against the demo box, or
 any live stack, after touching the RAG or embedding code.
 
 Idempotent: the throwaway tenant, its member user, and the ENABLE_RAG gate are
-upserted. It writes nothing outside its own tenant, and it does not rotate the
-member user's password. It used to, on every run, against a hardcoded shared
-address, which is the shape docs/live-test-auth.md forbids: the control-plane
-resolves every bearer against GoTrue per request, so a rotation revokes the
-sessions of every other run holding one. A first run creates the account and
-prints the password it generated, on stderr, once. Save that value: every later
-run signs in with it through RAG_VERIFY_PASSWORD, and no run will rotate it.
+upserted. It writes nothing outside its own tenant, and it never touches a
+password: the member account is created with none, and every run signs in
+through GoTrue's admin one-time-token (magic link) mint --
+apps/web-console/tests/e2e/support/live-auth.mjs's protocol, reimplemented
+here in Python since that module needs a browser/@supabase/ssr this script
+has no reason to depend on. See docs/live-test-auth.md. No credential is
+ever generated, printed, stored, or rotated for this account -- earlier
+revisions of this script did exactly that (a random password, printed once)
+and it is gone entirely, not merely defaulted off, per the same 2026-08-08
+incident live-auth.mjs's own header documents: rotating a shared account's
+password invalidates every concurrent run holding a session on it.
 
 Retries: the serverless embedding route is slow and uneven (measured between
 one and over a hundred seconds per call on the demo stack), so ingest and query
@@ -41,15 +45,13 @@ exercised live before (blocked by ENABLE_RAG defaulting to false for every
 tenant that has no explicit tenant_settings row -- opt-in by design, see
 supabase/migrations/20260824_01_cowork_gate_default_enabled.sql's header).
 
-Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, and
-              RAG_VERIFY_PASSWORD once the member account exists
+Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY
 Optional env: EDGE_API_URL (default http://localhost:8080),
               RAG_CHAT_MODEL (default hive-fast)
 """
 import json
 import os
 import secrets
-import string
 import sys
 import time
 import urllib.error
@@ -103,19 +105,15 @@ def request(base, headers, method, path, body=None, params=None, prefer=None, ti
         return 0, {"transport_error": str(e)}
 
 
-def random_password() -> str:
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
-    return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
-
-
 def fail(message: str) -> None:
     print(f"FAIL: {message}")
     sys.exit(1)
 
 
-def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
-    """Upsert the throwaway tenant, member user, and RAG gate. Returns
-    (tenant_id, password)."""
+def provision(supabase_url: str, service_key: str) -> str:
+    """Upsert the throwaway tenant, member user (no password -- this account
+    signs in only through mint_session's admin one-time-token flow), and the
+    RAG gate. Returns tenant_id."""
     headers = {"Authorization": f"Bearer {service_key}", "apikey": service_key}
     rest = supabase_url + "/rest/v1"
     gotrue = supabase_url + "/auth/v1"
@@ -139,46 +137,20 @@ def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
         None,
     )
 
-    # An existing account keeps its password. This script signs in with a
-    # password, so it needs one, but overwriting the account's would revoke
-    # every session another run holds on it (docs/live-test-auth.md), and
-    # this address is hardcoded and shared. So the value comes from the
-    # caller, and its absence is a loud failure naming the variable rather
-    # than a rotation nobody asked for. A brand-new account has no session to
-    # break, so it still gets a fresh random one.
-    env_password = os.environ.get("RAG_VERIFY_PASSWORD", "").strip()
     metadata = {"selected_tenant_id": tenant_id}
     if existing is None:
-        password = env_password or random_password()
+        # No `password` field at all: this account is never signed into with
+        # one, only through mint_session's admin one-time-token (magic link)
+        # flow (docs/live-test-auth.md), so there is no credential to
+        # generate, print, store, or ever rotate.
         status, body = request(
             gotrue, headers, "POST", "/admin/users",
-            body={"email": USER_EMAIL, "password": password,
-                  "email_confirm": True, "user_metadata": metadata},
+            body={"email": USER_EMAIL, "email_confirm": True, "user_metadata": metadata},
         )
         if status not in (200, 201):
             fail(f"user create: {status} {body}")
         user_id = body["id"]
-        if not env_password:
-            # Print it, once, on the only run that can know it. Without this
-            # the account exists with a password nobody holds, and every later
-            # run fails on the branch below demanding a value no operator could
-            # ever obtain, which would leave DEMO.md's RAG proof permanently
-            # dead on any environment this has already run against.
-            print(
-                f"created {USER_EMAIL} with a fresh password. Save it: every later "
-                f"run needs it, and no run will rotate it.\n"
-                f"  export RAG_VERIFY_PASSWORD={password}",
-                file=sys.stderr,
-            )
     else:
-        if not env_password:
-            fail(
-                f"{USER_EMAIL} already exists and this script will not rotate its "
-                "password: doing so revokes every session any concurrent run holds "
-                "on it (docs/live-test-auth.md). Set RAG_VERIFY_PASSWORD to the "
-                "account's existing password to sign in with it."
-            )
-        password = env_password
         user_id = existing["id"]
         status, body = request(
             gotrue, headers, "PUT", f"/admin/users/{user_id}",
@@ -207,19 +179,54 @@ def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
         fail(f"{RAG_GATE} gate upsert: {status} {body}")
 
     print(f"provisioned tenant {TENANT_SLUG} with {RAG_GATE} enabled")
-    return tenant_id, password
+    return tenant_id
 
 
-def sign_in(supabase_url: str, anon_key: str, password: str) -> str:
-    status, body = request(
-        supabase_url + "/auth/v1", {"apikey": anon_key}, "POST",
-        "/token?grant_type=password", body={"email": USER_EMAIL, "password": password},
-    )
-    token = (body or {}).get("access_token", "")
-    if status != 200 or not token:
-        fail(f"sign in: {status} {body}")
-    print("signed in, tenant-scoped JWT acquired")
-    return token
+def mint_session(supabase_url: str, service_key: str, anon_key: str) -> str:
+    """Mints a live session for USER_EMAIL via GoTrue's admin one-time-token
+    (magic link) flow: no password needed, and none is ever set or changed.
+    Reimplements apps/web-console/tests/e2e/support/live-auth.mjs's
+    mintOnce in Python (that module needs a browser/@supabase/ssr this
+    script has no other reason to depend on) -- same two calls, same
+    single-retry-on-collision handling: generate_link (service role) ->
+    verify (anon key). See docs/live-test-auth.md and live-auth.mjs's own
+    header for the 2026-08-08 incident this exists to make structurally
+    impossible here (a password rotation invalidated three concurrent
+    agents' sessions on a shared account).
+
+    GoTrue keeps ONE outstanding one-time token per user, so two mints for
+    the same account that interleave leave the loser's verify answering 403
+    "Email link is invalid or has expired"; one retry clears that.
+    """
+    gotrue = supabase_url + "/auth/v1"
+    service_headers = {"Authorization": f"Bearer {service_key}", "apikey": service_key}
+
+    for attempt in range(2):
+        status, body = request(
+            gotrue, service_headers, "POST", "/admin/generate_link",
+            body={"type": "magiclink", "email": USER_EMAIL},
+        )
+        if status != 200:
+            fail(f"generate_link for {USER_EMAIL}: {status} {body}")
+        # GoTrue returns these flat over the raw admin API (supabase-js is
+        # the one that nests them under `properties`); handle both shapes.
+        properties = (body or {}).get("properties") or body or {}
+        token_hash = properties.get("hashed_token")
+        if not token_hash:
+            fail(f"generate_link for {USER_EMAIL}: no hashed_token in response: {body}")
+
+        status, body = request(
+            gotrue, {"apikey": anon_key}, "POST", "/verify",
+            body={"type": "magiclink", "token_hash": token_hash},
+        )
+        token = (body or {}).get("access_token", "")
+        if status == 200 and token:
+            print("signed in via admin one-time-token mint, no password used or changed")
+            return token
+        message = str((body or {}).get("msg") or (body or {}).get("error_description") or body)
+        if attempt == 0 and "invalid or has expired" in message.lower():
+            continue
+        fail(f"verify for {USER_EMAIL}: {status} {body}")
 
 
 def ingest(edge: str, auth: dict, marker: str) -> str:
@@ -476,8 +483,8 @@ def main() -> None:
     # Uppercase so the answer check is case-insensitive without weakening it.
     marker = "PLUM" + secrets.token_hex(3).upper()
 
-    _, password = provision(supabase_url, service_key)
-    auth = {"Authorization": f"Bearer {sign_in(supabase_url, anon_key, password)}"}
+    provision(supabase_url, service_key)
+    auth = {"Authorization": f"Bearer {mint_session(supabase_url, service_key, anon_key)}"}
 
     print(f"ingesting document marked {marker}")
     doc_id = ingest(edge, auth, marker)

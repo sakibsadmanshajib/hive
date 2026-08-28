@@ -243,9 +243,16 @@ jobs:
         # step proves the pipeline and the leak fixes work at all, the step
         # above proves the two demo-relevant tenants can reach it.
         # Absolute, not checkout-relative -- see the previous step's comment.
+        #
+        # No password anywhere in this step: scripts/verify-rag-roundtrip.py
+        # signs in through GoTrue's admin one-time-token (magic link) mint
+        # (apps/web-console/tests/e2e/support/live-auth.mjs's protocol,
+        # reimplemented in Python -- see mint_session in that script and
+        # docs/live-test-auth.md), so it needs no RAG_VERIFY_PASSWORD secret
+        # and there is no credential to leak into this log. Only
+        # SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY, already read from the
+        # box's own .env below, are needed.
         working-directory: /home/sakib/hive/deploy/docker
-        env:
-          RAG_VERIFY_PASSWORD: ${{ secrets.RAG_VERIFY_PASSWORD }}
         run: |
           set -euo pipefail
           env_file=/home/sakib/hive/.env
@@ -270,14 +277,9 @@ jobs:
             exit 1
           fi
 
-          if [ -z "${RAG_VERIFY_PASSWORD:-}" ]; then
-            echo "::warning::RAG_VERIFY_PASSWORD secret not set. If the rag-verify-e2e account already exists this run will fail loudly naming that; if this is the first-ever run it creates the account and prints a fresh password to THIS LOG, once -- save it and set it as the RAG_VERIFY_PASSWORD repository secret immediately (this repo is public, so do not leave the password logged as the only copy)."
-          fi
-
           docker compose $HIVE_COMPOSE_FLAGS --profile tools run --rm -T \
             -e SUPABASE_URL="$supabase_admin_url" \
             -e SUPABASE_SERVICE_ROLE_KEY="$service_key" \
             -e SUPABASE_ANON_KEY="$anon_key" \
             -e EDGE_API_URL="http://edge-api:8080" \
-            -e RAG_VERIFY_PASSWORD="${RAG_VERIFY_PASSWORD:-}" \
             toolchain "cd /workspace && python3 scripts/verify-rag-roundtrip.py"
