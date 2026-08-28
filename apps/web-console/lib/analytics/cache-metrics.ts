@@ -8,7 +8,24 @@
  * these functions derive it from the same `usage_events` rows the request log
  * renders, and every caller is required to state which sample the number
  * covers. A cache hit rate whose sample is unstated is worse than no tile.
+ *
+ * No I/O in this file, by design: everything here is a pure function of data
+ * already fetched by lib/analytics/overview-fetch.ts. Type-only imports from
+ * control-plane/client are fine (they cost nothing at runtime); an actual
+ * fetch call here would not be.
  */
+import type {
+  ApiKey,
+  SpendSummaryRow,
+  UsageEventRow,
+  UsageSummaryRow,
+} from "@/lib/control-plane/client";
+import {
+  ANALYTICS_WINDOW_SPAN_MS,
+  EVENT_SAMPLE_WINDOWS,
+  SPARKLINE_BUCKETS,
+  TOP_KEYS_LIMIT,
+} from "./windows";
 
 /** The subset of a usage event these derivations read. */
 export interface CacheTokenRow {
@@ -120,6 +137,16 @@ export interface PeriodDelta {
    */
   percent: number | null;
   direction: "up" | "down" | "flat";
+  /**
+   * True when `previous` is null, meaning the prior-period fetch itself
+   * failed rather than genuinely returning zero. "The prior period had no
+   * requests" and "we could not ask" are different facts and must render
+   * different text (repo convention: lib/format/model-pricing.ts never
+   * collapses "explicit zero" and "unknown" into the same label). Absent,
+   * not false, in the ordinary zero-previous case, so existing callers that
+   * never pass null don't have to check it.
+   */
+  unavailable?: boolean;
 }
 
 /**
@@ -127,11 +154,19 @@ export interface PeriodDelta {
  * period immediately before it. Both totals must come from the same full
  * server-side aggregate the tile itself renders (never a bounded sample),
  * so the percentage is exact rather than a sample-derived estimate.
+ *
+ * `previous: null` is the caller's signal that the prior-period fetch
+ * failed (network error, 5xx, timeout) as opposed to succeeding with a
+ * genuine zero. It must never be reached by coercing a failed fetch to `0`
+ * or `[]` and reducing that -- see fetchPreviousUsage in the analytics page.
  */
 export function derivePeriodDelta(
   current: number,
-  previous: number,
+  previous: number | null,
 ): PeriodDelta {
+  if (previous === null) {
+    return { percent: null, direction: "flat", unavailable: true };
+  }
   if (previous <= 0) {
     return { percent: null, direction: "flat" };
   }
@@ -183,4 +218,324 @@ export function bucketByTime<T extends { created_at: string }>(
   }
 
   return buckets;
+}
+
+/**
+ * Earliest and latest timestamp actually present in `rows`, or null on an
+ * empty or all-unparseable sample.
+ *
+ * This exists because of a bucketing bug: `ListEvents`
+ * (apps/control-plane/internal/usage/repository.go) orders `created_at DESC`
+ * and pages, so a bounded sample (the 100-row cap this file's callers all
+ * live under) is the MOST RECENT rows in the window, not an even sample
+ * across it. Handing that sample to bucketByTime with bounds spanning the
+ * full nominal window (e.g. "the last 7 days") starves every early bucket
+ * on any window where real traffic exceeds the page cap -- a 7d or 30d
+ * active account, easily -- and draws a sparkline shaped like "a surge
+ * just happened" that has nothing to do with the account's real trend, it
+ * is purely an artifact of where the page boundary fell. Bucketing over the
+ * sample's own real span instead makes every bucket boundary describe where
+ * the fetched rows actually sit in time, sample or no sample.
+ */
+export function sampleTimeSpan(
+  rows: ReadonlyArray<{ created_at: string }>,
+): { start: Date; end: Date } | null {
+  let minMs = Infinity;
+  let maxMs = -Infinity;
+  for (const row of rows) {
+    const t = new Date(row.created_at).getTime();
+    if (Number.isNaN(t)) {
+      continue;
+    }
+    if (t < minMs) minMs = t;
+    if (t > maxMs) maxMs = t;
+  }
+  if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) {
+    return null;
+  }
+  return { start: new Date(minMs), end: new Date(maxMs) };
+}
+
+/**
+ * Explains why a delta or sparkline is missing on the four "plain" overview
+ * tiles (requests, input tokens, output tokens, total spend), which share
+ * one prior-period fetch and one cache sample and so share one window
+ * eligibility check. Undefined when both are supported, meaning the caller
+ * renders no note at all. This mirrors deriveCacheHitNote below, which
+ * already made exactly this distinction for the cache-hit tile alone; every
+ * other tile silently showing nothing on an unsupported window (a custom
+ * range, reachable from the real "Custom" control in TimeWindowPicker, or
+ * 90d for the sparkline half) was the gap this closes.
+ */
+function overviewWindowNote(
+  hasDeltaWindow: boolean,
+  hasSparklineWindow: boolean,
+): string | undefined {
+  if (hasDeltaWindow && hasSparklineWindow) {
+    return undefined;
+  }
+  if (!hasDeltaWindow && !hasSparklineWindow) {
+    return "No comparison or trend for this window. Pick 24h, 7d or 30d.";
+  }
+  if (!hasDeltaWindow) {
+    return "No comparison for this window. Pick 24h, 7d, 30d or 90d.";
+  }
+  return "No trend sample for this window. Pick 1h, 24h, 7d or 30d.";
+}
+
+/**
+ * Same "state the sample" contract as deriveCacheHitRate: text for both the
+ * cache-hit tile's own note and the cached-vs-uncached panel's empty state
+ * (they describe the same sample, so they share the same explanation).
+ */
+function deriveCacheHitNote(
+  timeWindow: string,
+  cacheHitRate: CacheHitRate | null,
+  cacheSampleTruncated: boolean,
+): string {
+  if (!EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
+    return "No sample for this window. Pick 1h, 24h, 7d or 30d.";
+  }
+  if (!cacheHitRate) {
+    return "Request sample unavailable.";
+  }
+  if (cacheHitRate.sampleSize === 0) {
+    return "No requests in this window.";
+  }
+  if (cacheHitRate.promptTokens === 0) {
+    return `No prompt tokens across the last ${cacheHitRate.sampleSize} requests.`;
+  }
+  return cacheSampleTruncated
+    ? `Cached prompt tokens over the last ${cacheHitRate.sampleSize} requests, the most this window returns in one page.`
+    : `Cached prompt tokens over all ${cacheHitRate.sampleSize} requests in this window.`;
+}
+
+export interface TopKeyRow {
+  id: string;
+  label: string;
+  suffix: string;
+  credits: number;
+}
+
+export type BlendedNoteKind = "no-tokens" | "window-unsupported" | "ok";
+
+export interface OverviewDeriveInput {
+  timeWindow: string;
+  /** Current-period rows, already fetched for the tab. */
+  usage: ReadonlyArray<UsageSummaryRow>;
+  /** Null means the prior-period fetch itself failed; `[]` is a real empty result. */
+  previousUsage: ReadonlyArray<UsageSummaryRow> | null;
+  /** Null means no sample: unsupported window, or the fetch failed. */
+  cacheSample: ReadonlyArray<UsageEventRow> | null;
+  cacheSampleTruncated: boolean;
+  previousCacheSample: ReadonlyArray<UsageEventRow> | null;
+  /** Null means the fetch itself failed; `{spend:[],keys:[]}` is a real empty result. */
+  topKeys: { spend: ReadonlyArray<SpendSummaryRow>; keys: ReadonlyArray<ApiKey> } | null;
+}
+
+export interface OverviewTiles {
+  totalRequests: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCreditsSpent: number;
+
+  requestsDelta?: PeriodDelta;
+  inputTokensDelta?: PeriodDelta;
+  outputTokensDelta?: PeriodDelta;
+  creditsDelta?: PeriodDelta;
+  cacheHitDelta?: PeriodDelta;
+  blendedDelta?: PeriodDelta;
+
+  /** Set on requests/input/output/credits when their window supports neither delta nor sparkline. */
+  windowUnsupportedNote?: string;
+
+  requestsSparkline?: number[];
+  inputTokensSparkline?: number[];
+  outputTokensSparkline?: number[];
+  creditsSparkline?: number[];
+  cacheHitSparkline?: Array<number | null>;
+  /** Visible, non-decorative caption for every sparkline above: what sample they trend across. */
+  sparklineCaption?: string;
+
+  cacheHitRate: number | null;
+  cacheHitNote: string;
+
+  blendedCreditsPerMillion: number | null;
+  blendedNoteKind: BlendedNoteKind;
+
+  cachedTokens: number;
+  uncachedTokens: number;
+  hasCacheSplit: boolean;
+
+  topKeys: TopKeyRow[];
+  topKeysFailed: boolean;
+}
+
+/**
+ * Turns the raw fetch bundle from lib/analytics/overview-fetch.ts into
+ * everything the overview tab's tiles render: totals, deltas, sparklines,
+ * notes, the cache split and the top-keys ranking. Pure and synchronous, so
+ * every branch (a failed prior period, an unsupported window, a genuinely
+ * empty result) is directly testable without rendering anything.
+ */
+export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
+  const {
+    timeWindow,
+    usage,
+    previousUsage,
+    cacheSample,
+    cacheSampleTruncated,
+    previousCacheSample,
+    topKeys,
+  } = input;
+
+  const totalRequests = usage.reduce((sum, r) => sum + r.request_count, 0);
+  const totalInputTokens = usage.reduce((sum, r) => sum + r.total_input_tokens, 0);
+  const totalOutputTokens = usage.reduce((sum, r) => sum + r.total_output_tokens, 0);
+  const totalCreditsSpent = usage.reduce((sum, r) => sum + r.total_credits_spent, 0);
+
+  const previousUsageFailed = previousUsage === null;
+  const previousUsageRows = previousUsage ?? [];
+  const previousTotalRequests = previousUsageRows.reduce((sum, r) => sum + r.request_count, 0);
+  const previousTotalInputTokens = previousUsageRows.reduce((sum, r) => sum + r.total_input_tokens, 0);
+  const previousTotalOutputTokens = previousUsageRows.reduce((sum, r) => sum + r.total_output_tokens, 0);
+  const previousTotalTokens = previousTotalInputTokens + previousTotalOutputTokens;
+  const previousTotalCreditsSpent = previousUsageRows.reduce((sum, r) => sum + r.total_credits_spent, 0);
+
+  const hasDeltaWindow = timeWindow in ANALYTICS_WINDOW_SPAN_MS;
+  const hasSparklineWindow = EVENT_SAMPLE_WINDOWS.includes(timeWindow);
+
+  const requestsDelta = hasDeltaWindow
+    ? derivePeriodDelta(totalRequests, previousUsageFailed ? null : previousTotalRequests)
+    : undefined;
+  const inputTokensDelta = hasDeltaWindow
+    ? derivePeriodDelta(totalInputTokens, previousUsageFailed ? null : previousTotalInputTokens)
+    : undefined;
+  const outputTokensDelta = hasDeltaWindow
+    ? derivePeriodDelta(totalOutputTokens, previousUsageFailed ? null : previousTotalOutputTokens)
+    : undefined;
+  const creditsDelta = hasDeltaWindow
+    ? derivePeriodDelta(totalCreditsSpent, previousUsageFailed ? null : previousTotalCreditsSpent)
+    : undefined;
+
+  const windowUnsupportedNote = overviewWindowNote(hasDeltaWindow, hasSparklineWindow);
+
+  const cacheHitRateResult = cacheSample ? deriveCacheHitRate(cacheSample) : null;
+  const previousCacheHitRateResult = previousCacheSample
+    ? deriveCacheHitRate(previousCacheSample)
+    : null;
+  const cacheHitDelta =
+    cacheHitRateResult?.rate != null && previousCacheHitRateResult?.rate != null
+      ? derivePeriodDelta(cacheHitRateResult.rate, previousCacheHitRateResult.rate)
+      : undefined;
+  const cacheHitNoteText = deriveCacheHitNote(timeWindow, cacheHitRateResult, cacheSampleTruncated);
+
+  const blendedCreditsPerMillion = deriveBlendedCreditsPerMillion(
+    totalCreditsSpent,
+    totalInputTokens + totalOutputTokens,
+  );
+  // null already carries its own real meaning (no prior tokens to price at
+  // all, deriveBlendedCreditsPerMillion's own guard), distinct from
+  // previousUsageFailed. Only fold the fetch-failure signal in on top of
+  // it; a genuine zero-token prior period still reads as "no prior data"
+  // below, not "unavailable".
+  const previousBlendedCreditsPerMillion = previousUsageFailed
+    ? null
+    : deriveBlendedCreditsPerMillion(previousTotalCreditsSpent, previousTotalTokens);
+  const blendedNoteKind: BlendedNoteKind =
+    blendedCreditsPerMillion === null
+      ? "no-tokens"
+      : !hasDeltaWindow
+        ? "window-unsupported"
+        : "ok";
+  const blendedDelta =
+    blendedCreditsPerMillion === null || !hasDeltaWindow
+      ? undefined
+      : derivePeriodDelta(
+          blendedCreditsPerMillion,
+          previousUsageFailed ? null : (previousBlendedCreditsPerMillion ?? 0),
+        );
+
+  // Sparklines: bucket the CURRENT cache sample over its own real time
+  // span (sampleTimeSpan), never the nominal window -- see that function's
+  // doc comment for why the nominal window fabricates a shape on any
+  // truncated sample.
+  let requestsSparkline: number[] | undefined;
+  let inputTokensSparkline: number[] | undefined;
+  let outputTokensSparkline: number[] | undefined;
+  let creditsSparkline: number[] | undefined;
+  let cacheHitSparkline: Array<number | null> | undefined;
+  let sparklineCaption: string | undefined;
+  const span = cacheSample ? sampleTimeSpan(cacheSample) : null;
+  if (cacheSample && cacheSample.length > 0 && span) {
+    const buckets = bucketByTime(cacheSample, SPARKLINE_BUCKETS, span.start, span.end);
+    requestsSparkline = buckets.map((bucket) => bucket.length);
+    inputTokensSparkline = buckets.map((bucket) =>
+      bucket.reduce((sum, row) => sum + row.input_tokens, 0),
+    );
+    outputTokensSparkline = buckets.map((bucket) =>
+      bucket.reduce((sum, row) => sum + row.output_tokens, 0),
+    );
+    creditsSparkline = buckets.map((bucket) =>
+      bucket.reduce((sum, row) => sum + Math.max(0, -row.hive_credit_delta), 0),
+    );
+    cacheHitSparkline = buckets.map((bucket) => deriveCacheHitRate(bucket).rate);
+    sparklineCaption = cacheSampleTruncated
+      ? `Trend across the last ${cacheSample.length} requests`
+      : `Trend across all ${cacheSample.length} requests this window`;
+  }
+
+  const uncachedTokens =
+    cacheHitRateResult && cacheHitRateResult.promptTokens > cacheHitRateResult.cachedTokens
+      ? cacheHitRateResult.promptTokens - cacheHitRateResult.cachedTokens
+      : 0;
+  const hasCacheSplit = Boolean(
+    cacheHitRateResult && cacheHitRateResult.sampleSize > 0 && cacheHitRateResult.promptTokens > 0,
+  );
+
+  const topKeysFailed = topKeys === null;
+  const topKeysRows = topKeys?.spend ?? [];
+  const apiKeys = topKeys?.keys ?? [];
+  const apiKeyById = new Map(apiKeys.map((key) => [key.id, key] as const));
+  const topKeysList: TopKeyRow[] = [...topKeysRows]
+    .sort((a, b) => b.total_credits - a.total_credits)
+    .slice(0, TOP_KEYS_LIMIT)
+    .map((row) => {
+      const key = apiKeyById.get(row.group_key);
+      return {
+        id: row.group_key,
+        label: key ? key.nickname : "Deleted key",
+        suffix: key?.redacted_suffix ?? row.group_key.slice(0, 8),
+        credits: row.total_credits,
+      };
+    });
+
+  return {
+    totalRequests,
+    totalInputTokens,
+    totalOutputTokens,
+    totalCreditsSpent,
+    requestsDelta,
+    inputTokensDelta,
+    outputTokensDelta,
+    creditsDelta,
+    cacheHitDelta,
+    blendedDelta,
+    windowUnsupportedNote,
+    requestsSparkline,
+    inputTokensSparkline,
+    outputTokensSparkline,
+    creditsSparkline,
+    cacheHitSparkline,
+    sparklineCaption,
+    cacheHitRate: cacheHitRateResult?.rate ?? null,
+    cacheHitNote: cacheHitNoteText,
+    blendedCreditsPerMillion,
+    blendedNoteKind,
+    cachedTokens: cacheHitRateResult?.cachedTokens ?? 0,
+    uncachedTokens,
+    hasCacheSplit,
+    topKeys: topKeysList,
+    topKeysFailed,
+  };
 }

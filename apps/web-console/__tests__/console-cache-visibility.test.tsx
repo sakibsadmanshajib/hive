@@ -11,12 +11,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import type { CatalogModel, UsageEventRow } from "@/lib/control-plane/client";
+import type {
+  ApiKey,
+  CatalogModel,
+  SpendSummaryRow,
+  UsageEventRow,
+  UsageSummaryRow,
+} from "@/lib/control-plane/client";
 import {
   bucketByTime,
   deriveBlendedCreditsPerMillion,
   deriveCacheHitRate,
+  deriveOverviewTiles,
   derivePeriodDelta,
+  sampleTimeSpan,
 } from "@/lib/analytics/cache-metrics";
 import { ModelCatalogBrowser } from "@/components/catalog/model-catalog-browser";
 import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
@@ -56,6 +64,43 @@ function event(overrides: Partial<UsageEventRow> = {}): UsageEventRow {
     hive_credit_delta: -500,
     customer_tags: {},
     created_at: "2026-08-25T10:00:00Z",
+    ...overrides,
+  };
+}
+
+function usageRow(overrides: Partial<UsageSummaryRow> = {}): UsageSummaryRow {
+  return {
+    group_key: "hive-default",
+    total_input_tokens: 100,
+    total_output_tokens: 50,
+    total_credits_spent: 30,
+    request_count: 10,
+    ...overrides,
+  };
+}
+
+function spendRow(overrides: Partial<SpendSummaryRow> = {}): SpendSummaryRow {
+  return {
+    group_key: "key-1",
+    total_credits: 100,
+    entry_count: 5,
+    ...overrides,
+  };
+}
+
+function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
+  return {
+    id: "key-1",
+    nickname: "Production",
+    status: "active",
+    redacted_suffix: "ab12",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    expires_at: null,
+    last_used_at: null,
+    expiration_summary: { kind: "never", label: "Never expires" },
+    budget_summary: { kind: "none", label: "No budget" },
+    allowlist_summary: { mode: "all", group_names: [], label: "All models" },
     ...overrides,
   };
 }
@@ -191,12 +236,30 @@ describe("derivePeriodDelta", () => {
     // "No prior data" in exactly this case rather than a percentage.
     const result = derivePeriodDelta(42, 0);
     expect(result.percent).toBeNull();
+    // And it is a genuine zero, not a failed fetch: unavailable must be
+    // falsy here, or "No prior data" and "the fetch failed" collapse into
+    // the same signal.
+    expect(result.unavailable).toBeFalsy();
   });
 
   it("treats a zero previous and zero current as flat, not an absence", () => {
     const result = derivePeriodDelta(0, 0);
     expect(result.percent).toBeNull();
     expect(result.direction).toBe("flat");
+  });
+
+  it("marks the delta unavailable, distinct from a real zero previous period, when previous is null", () => {
+    // previous: null is the caller's signal that the prior-period fetch
+    // itself failed (see fetchPreviousUsage in the analytics page), not
+    // that the account genuinely had zero requests last period. Rendering
+    // both as "No prior data" tells a customer with real prior spend that
+    // they had none, purely because control-plane hiccuped.
+    const failed = derivePeriodDelta(42, null);
+    const genuineZero = derivePeriodDelta(42, 0);
+
+    expect(failed.percent).toBeNull();
+    expect(failed.unavailable).toBe(true);
+    expect(genuineZero.unavailable).not.toBe(true);
   });
 });
 
@@ -242,6 +305,205 @@ describe("bucketByTime", () => {
       windowStart,
     );
     expect(buckets).toEqual([[], [], []]);
+  });
+});
+
+describe("sampleTimeSpan", () => {
+  it("returns null for an empty sample", () => {
+    expect(sampleTimeSpan([])).toBeNull();
+  });
+
+  it("returns null when every row has an unparseable timestamp", () => {
+    expect(sampleTimeSpan([{ created_at: "not-a-date" }])).toBeNull();
+  });
+
+  it("returns the earliest and latest real timestamp, ignoring unparseable rows", () => {
+    const span = sampleTimeSpan([
+      { created_at: "2026-08-24T10:00:00Z" },
+      { created_at: "garbage" },
+      { created_at: "2026-08-24T08:00:00Z" },
+      { created_at: "2026-08-24T12:00:00Z" },
+    ]);
+    expect(span).toEqual({
+      start: new Date("2026-08-24T08:00:00Z"),
+      end: new Date("2026-08-24T12:00:00Z"),
+    });
+  });
+});
+
+describe("deriveOverviewTiles", () => {
+  it("distinguishes a failed prior-period fetch (unavailable) from a real zero previous period (no prior data) on requests, tokens and spend", () => {
+    const failed = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [usageRow({ request_count: 42 })],
+      previousUsage: null, // fetchPreviousUsage's own fetch failed
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+    expect(failed.requestsDelta?.unavailable).toBe(true);
+    expect(failed.creditsDelta?.unavailable).toBe(true);
+
+    const realZero = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [usageRow({ request_count: 42 })],
+      previousUsage: [], // fetch succeeded, genuinely nothing last period
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+    expect(realZero.requestsDelta?.unavailable).not.toBe(true);
+    expect(realZero.requestsDelta?.percent).toBeNull();
+  });
+
+  it("distinguishes a failed top-keys fetch from a real empty result", () => {
+    const failed = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: null,
+    });
+    expect(failed.topKeysFailed).toBe(true);
+    expect(failed.topKeys).toEqual([]);
+
+    const empty = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+    expect(empty.topKeysFailed).toBe(false);
+    expect(empty.topKeys).toEqual([]);
+  });
+
+  it("ranks top keys by spend and joins a real key's nickname, never mislabeling one whose spend and key list came back together", () => {
+    const result = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: {
+        spend: [
+          spendRow({ group_key: "key-1", total_credits: 50 }),
+          spendRow({ group_key: "key-2", total_credits: 200 }),
+        ],
+        keys: [
+          apiKey({ id: "key-1", nickname: "Production" }),
+          apiKey({ id: "key-2", nickname: "Staging" }),
+        ],
+      },
+    });
+    expect(result.topKeys.map((k) => k.label)).toEqual(["Staging", "Production"]);
+  });
+
+  it("labels a spend row 'Deleted key' only when the account's own key list genuinely has no match", () => {
+    const result = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: {
+        spend: [spendRow({ group_key: "gone-key", total_credits: 10 })],
+        keys: [], // spend and keys arrived together, atomically -- this is real
+      },
+    });
+    expect(result.topKeys[0].label).toBe("Deleted key");
+  });
+
+  it("explains an unsupported window on every branch: fully supported, delta-only, sparkline-only, and neither", () => {
+    const base = {
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    };
+    // 7d: both the analytics-summary and usage-events endpoints recognize it.
+    expect(deriveOverviewTiles({ timeWindow: "7d", ...base }).windowUnsupportedNote).toBeUndefined();
+    // 1h: usage-events recognizes it (sparkline OK) but the analytics-summary
+    // endpoint's window enum does not (no delta).
+    expect(deriveOverviewTiles({ timeWindow: "1h", ...base }).windowUnsupportedNote).toBe(
+      "No comparison for this window. Pick 24h, 7d, 30d or 90d.",
+    );
+    // 90d: the reverse -- analytics-summary recognizes it (delta OK) but
+    // usage-events does not (no sparkline sample).
+    expect(deriveOverviewTiles({ timeWindow: "90d", ...base }).windowUnsupportedNote).toBe(
+      "No trend sample for this window. Pick 1h, 24h, 7d or 30d.",
+    );
+    // A custom range: reachable from the real "Custom" control in
+    // TimeWindowPicker, and recognized by neither endpoint.
+    expect(
+      deriveOverviewTiles({ timeWindow: "custom:2026-01-01:2026-01-05", ...base })
+        .windowUnsupportedNote,
+    ).toBe("No comparison or trend for this window. Pick 24h, 7d or 30d.");
+  });
+
+  it("buckets sparklines over the sample's own real time span, not the nominal window, so a small recent sample doesn't fabricate an all-recent spike", () => {
+    const now = new Date("2026-08-24T12:00:00Z");
+    // 8 events, 10 minutes apart, spanning the last 70 minutes -- a sliver
+    // of a nominal 30-day window. ListEvents (repository.go) orders
+    // created_at DESC and pages, so this is exactly the shape a real
+    // 100-row-capped sample takes on an active account: the most recent
+    // rows only, clustered near `now`, not spread across the full window.
+    const events = Array.from({ length: 8 }, (_, i) =>
+      event({
+        created_at: new Date(now.getTime() - (70 - i * 10) * 60 * 1000).toISOString(),
+      }),
+    );
+
+    const result = deriveOverviewTiles({
+      timeWindow: "30d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: events,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+
+    // Bucketed over the sample's real ~70-minute span, each of the 8
+    // 10-minutes-apart events lands in its own bucket. Bucketed over the
+    // nominal 30-day window instead (the bug), all 8 would collapse into
+    // the single most-recent bucket -- a manufactured "surge just
+    // happened" shape with no relationship to the account's real trend.
+    expect(result.requestsSparkline).toEqual([1, 1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it("states the sample size and truncation in a visible sparkline caption", () => {
+    const truncated = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: [event(), event({ id: "e2" })],
+      cacheSampleTruncated: true,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+    expect(truncated.sparklineCaption).toBe("Trend across the last 2 requests");
+
+    const complete = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: [event()],
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+    expect(complete.sparklineCaption).toBe("Trend across all 1 requests this window");
   });
 });
 

@@ -165,6 +165,78 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     screen.getByText("4");
     screen.getByText("$3.00");
   });
+
+  it("renders 'Unavailable' for the tile deltas and the top-keys panel when their own fetches fail, never the same 'No prior data' / empty text a real zero would render", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.includes("/analytics/usage")) {
+          // The prior-period call is distinguished by an explicit `from=`
+          // bound (fetchPreviousUsage); the current-period call carries
+          // `window=` instead (fetchMain). Only the prior-period call fails
+          // here, simulating a real control-plane hiccup on that one leg.
+          if (url.includes("from=")) {
+            return jsonResponse(500, { error: "boom" });
+          }
+          return jsonResponse(200, {
+            usage: [
+              {
+                group_key: "hive-auto",
+                total_input_tokens: 18,
+                total_output_tokens: 4,
+                total_credits_spent: 3_000_000_000,
+                request_count: 7,
+              },
+            ],
+          });
+        }
+        if (url.includes("/analytics/spend")) {
+          // fetchTopKeys asks group_by=api_key; fetchMain asks group_by
+          // whatever the page's own default is (model). Only the former
+          // fails.
+          if (url.includes("group_by=api_key")) {
+            return jsonResponse(500, { error: "boom" });
+          }
+          return jsonResponse(200, { spend: [] });
+        }
+        if (url.includes("/analytics/errors")) {
+          return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const mod = await import("../app/console/analytics/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ tab: "overview", window: "24h" }),
+    });
+    render(page);
+
+    // Total requests, input tokens, output tokens, total spend, and blended
+    // price all derive their delta from the same failed prior-period fetch,
+    // so all five render the fetch-failure state.
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(5);
+    // Never the real-zero-previous-period text: that would tell an account
+    // with real prior spend that it measurably had none.
+    expect(screen.queryByText("No prior data")).toBeNull();
+
+    // Top API keys panel: distinct "Unavailable." (with the period, from
+    // TopApiKeysCard) from the panel's own real-empty-result text.
+    screen.getByText("Unavailable.");
+    expect(
+      screen.queryByText("No API keys with spend in this window."),
+    ).toBeNull();
+  });
 });
 
 describe("app/console/billing/page.tsx renders real ledger rows on Overview", () => {
