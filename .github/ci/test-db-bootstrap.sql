@@ -42,7 +42,14 @@ DO $$
 DECLARE
   r text;
 BEGIN
-  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'authenticated', 'supabase_auth_admin'] LOOP
+  -- service_role added for 20260828_01_service_role_public_schema_grant.sql
+  -- (issue: PostgREST's service_role has USAGE on the public schema and
+  -- BYPASSRLS on a real project, but no migration before that one ever
+  -- named the role in a GRANT, so nothing here needed it to exist until
+  -- then). NOLOGIN only, no BYPASSRLS: the migration only needs the role
+  -- to exist as a GRANT target, and no suite here runs as it, so the extra
+  -- privilege would be untested surface, not a requirement.
+  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'authenticated', 'supabase_auth_admin', 'service_role'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN', r);
     END IF;

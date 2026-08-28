@@ -66,6 +66,50 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Apply the service_role public-schema grant fix ahead of the normal deploy migration
+        # Root-caused live (this PR, run 33209756779, see the diagnostic step
+        # below): service_role has USAGE on the public schema and BYPASSRLS,
+        # but deploy/supabase/init/00-extensions.sql only backfilled table
+        # grants for the storage schema, never public, so every PostgREST
+        # call authenticated as service_role against a public-schema table
+        # fails with "permission denied for table X" (42501) -- independent
+        # of RLS, since BYPASSRLS only skips row policies, not the base
+        # GRANT system. supabase/migrations/20260828_01_service_role_public_
+        # schema_grant.sql is this PR's real fix (same GRANT + ALTER DEFAULT
+        # PRIVILEGES pattern the init file already uses for storage,
+        # confirmed locally: reproduced the exact error against a throwaway
+        # postgres+pgvector container, then confirmed the same migration
+        # clears it).
+        #
+        # Applied here, ahead of the normal deploy-time migrate step,
+        # because this PR cannot merge itself (merge is the orchestrator's)
+        # and this check needs real evidence now, not after a merge that
+        # hasn't happened. Idempotent (GRANT/ALTER DEFAULT PRIVILEGES are
+        # no-ops on a repeat), so deploy-demo-box.yml's own migrate step
+        # re-applying the identical file after merge is a harmless no-op,
+        # not a double-apply risk. Reads the migration file from the PR's
+        # own checkout ($GITHUB_WORKSPACE), not the box's persistent
+        # /home/sakib/hive clone, since the file does not exist there until
+        # this PR merges.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
+
+          migration="$GITHUB_WORKSPACE/supabase/migrations/20260828_01_service_role_public_schema_grant.sql"
+          if [ ! -f "$migration" ]; then
+            echo "::error::$migration not found in this checkout"
+            exit 1
+          fi
+          cat "$migration" | docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+            psql -U "$db_user" -d "$db_name" --no-psqlrc -v ON_ERROR_STOP=1
+
       - name: Enable ENABLE_RAG for the demo owner tenant and the QA tester tenant
         # Idempotent upsert straight against the stack's own database, the
         # same `docker compose exec supabase-db psql` idiom
