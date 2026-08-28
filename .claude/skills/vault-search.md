@@ -9,7 +9,11 @@ Vault root: `/mnt/c/Users/sakib/Documents/ObsidianVault/hive/` (WSL mount, read-
 for this skill). One flat folder, kebab-case files, frontmatter `type: plan|spec|
 decision|discussion|architecture`, `date`, often `status`/`tags`/`source`. Files run
 large: several plans and specs are 50-100KB. Never `cat` a whole file into context;
-grep for headings and lines, then read only the matched range.
+grep for headings and lines, then read only the matched range. This path only
+resolves from a Claude Code CLI session on the owner's WSL2 box; if `ls` on it
+fails outright, the mount isn't attached in your environment — say so plainly
+(same applies to `vault-decisions`, `vault-staleness`, `vault-write`) rather than
+retrying blind or inventing a fallback location.
 
 ### Step 1: search the indexes first, not the raw files
 

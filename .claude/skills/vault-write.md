@@ -12,7 +12,11 @@ Vault root: `/mnt/c/Users/sakib/Documents/ObsidianVault/hive/`. One flat folder,
 subfolders, kebab-case filenames. Write directly to this WSL-mounted path — no git,
 no PR, no mirroring for the vault file itself (`.wolf/decisions.md`, if you also
 touch it per Step 4, IS tracked in the hive repo and goes through the normal
-branch+PR flow like any other tracked file).
+branch+PR flow like any other tracked file). This path only resolves from a
+Claude Code CLI session on the owner's WSL2 box; if `ls` on it fails outright,
+the mount isn't attached in your environment (a containerized agent, a
+non-WSL host) — say so plainly rather than retrying blind or inventing a
+fallback location.
 
 ### Step 1: never overwrite silently
 
@@ -62,20 +66,29 @@ private.
 ### Step 4: if this records a decision, also update `.wolf/decisions.md`
 
 Any doc of `type: decision`, or any doc recording an owner ruling, needs a matching
-terse entry in the repo-tracked ledger:
+terse entry in the repo-tracked ledger. Resolve your own repo root first — a
+worktree's copy of `.wolf/decisions.md` can differ from the shared main
+checkout's, same caveat as `vault-decisions`:
 
 ```bash
-grep -o '^- D-[0-9]\+' /home/sakib/hive/.wolf/decisions.md | sort -t- -k2 -n | tail -1
+cd "$(git rev-parse --show-toplevel)"
+grep -o '^- D-[0-9]\+' .wolf/decisions.md | sort -t- -k3 -n | tail -1
 ```
 
-Append the next unused `D-ID` in the ledger's format:
-`D-ID | decision (1 line) | source | date`, pointing at the new vault file. If this
-decision revokes, retires, supersedes, amends, or moots a prior `D-ID`, edit that
-prior line in place to prefix it (`REVOKED 2026-... by D-NNN`, etc.) rather than
-deleting it — this is the exact convention `vault-decisions` depends on to catch
-dead rules. This ledger edit is a normal tracked-file change: commit it on your
-branch and let it ride through the PR like any other code/doc change, it is not
-subject to the buglog.jsonl main-only restriction.
+Append the next unused `D-ID` in the ledger's own format:
+`D-ID | decision (1 line) | source | date`. "1 line" means one physical line in
+the file (no newlines), not necessarily short — read the real entries in
+`vault-decisions` (D-032, D-036, D-044, D-045) before writing yours; the
+ledger's working convention is a dense, reasoned paragraph on one line, not a
+terse stub, whenever the reasoning matters to a future reader. Point the entry
+at the new vault file. If this decision revokes, retires, supersedes, amends,
+or moots a prior `D-ID`, edit that prior line in place to prefix it (`REVOKED
+2026-... by D-NNN`, etc., or the AMENDED/partial-SUPERSEDED shape `vault-
+decisions` Step 1 describes) rather than deleting it — this is the exact
+convention `vault-decisions` depends on to catch dead rules. This ledger edit
+is a normal tracked-file change: commit it on your branch and let it ride
+through the PR like any other code/doc change, it is not subject to the
+buglog.jsonl main-only restriction.
 
 ### Step 5: update `MOC-plans.md`
 
@@ -85,6 +98,12 @@ naming the concrete trigger and the concrete outcome — match the density of th
 rows already there, not a one-line stub. This step is not optional: `MOC-plans.md`
 is the first place `vault-search` looks, and a document left off it is effectively
 invisible to every future retrieval in this skill set.
+
+`MOC-plans.md` is a plain filesystem write with no git/PR layer to catch a
+concurrent clobber (unlike `.wolf/decisions.md` in Step 4, which gets that
+protection for free from the normal branch+PR flow). If multiple agents may be
+writing to the vault around the same time, re-read the file immediately before
+you append rather than trusting a copy you read earlier in the session.
 
 ### Non-goals
 
