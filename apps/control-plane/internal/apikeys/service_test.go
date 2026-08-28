@@ -19,6 +19,10 @@ type stubRepo struct {
 	keyLimits         map[uuid.UUID]KeyLimits
 	tenantByAccount   map[uuid.UUID]uuid.UUID
 	events            []KeyEvent
+	// lifetimeSpend mirrors what RecordUsageFinalization writes to the real
+	// 'lifetime' api_key_usage_rollups window: unconditional, summed across
+	// every model_alias, independent of budget_kind.
+	lifetimeSpend map[uuid.UUID]int64
 
 	// forceGetPolicyErr, when non-nil, is returned by GetPolicyByTokenHash
 	// instead of the normal lookup, simulating an infrastructural failure
@@ -35,6 +39,7 @@ func newStubRepo() *stubRepo {
 		keyRatePolicy:     make(map[uuid.UUID]RatePolicy),
 		keyLimits:         make(map[uuid.UUID]KeyLimits),
 		tenantByAccount:   make(map[uuid.UUID]uuid.UUID),
+		lifetimeSpend:     make(map[uuid.UUID]int64),
 	}
 }
 
@@ -302,7 +307,12 @@ func (r *stubRepo) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID, 
 }
 
 func (r *stubRepo) RecordUsageFinalization(_ context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error {
+	r.lifetimeSpend[apiKeyID] += consumedCredits
 	return nil
+}
+
+func (r *stubRepo) GetLifetimeSpend(_ context.Context, apiKeyID uuid.UUID) (int64, error) {
+	return r.lifetimeSpend[apiKeyID], nil
 }
 
 func (r *stubRepo) MarkLastUsed(_ context.Context, apiKeyID uuid.UUID, usedAt time.Time) error {
@@ -832,6 +842,76 @@ func TestListKeyViewsExposeDefaultSummaries(t *testing.T) {
 	}
 	if len(view.AllowlistSummary.GroupNames) != 1 || view.AllowlistSummary.GroupNames[0] != "default" {
 		t.Fatalf("unexpected allowlist groups: %#v", view.AllowlistSummary.GroupNames)
+	}
+	if view.SpendCredits != 0 {
+		t.Fatalf("expected zero spend for a fresh key, got %d", view.SpendCredits)
+	}
+	if view.BudgetLimitCredits != nil {
+		t.Fatalf("expected no budget limit for a fresh key, got %#v", *view.BudgetLimitCredits)
+	}
+}
+
+// TestKeyViewReportsLifetimeSpendRegardlessOfBudgetKind pins the reason
+// GetLifetimeSpend reads api_key_usage_rollups rather than
+// api_key_budget_windows: ApplyReservationDelta (which is what writes
+// api_key_budget_windows) returns early for a "none" budget_kind and never
+// writes anything, so that table alone cannot report spend for a key that
+// carries no cap. RecordUsageFinalization has no such early return.
+func TestKeyViewReportsLifetimeSpendRegardlessOfBudgetKind(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	created, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "spend-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	keyID := created.Key.ID
+
+	now := time.Now()
+	if err := svc.RecordUsageFinalization(context.Background(), keyID, "hive-fast", 1000, 200, 0, 0, 750, now); err != nil {
+		t.Fatalf("RecordUsageFinalization (first): %v", err)
+	}
+	if err := svc.RecordUsageFinalization(context.Background(), keyID, "hive-default", 500, 100, 0, 0, 250, now); err != nil {
+		t.Fatalf("RecordUsageFinalization (second): %v", err)
+	}
+
+	view, err := svc.GetKeyView(context.Background(), accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView: %v", err)
+	}
+	if view.SpendCredits != 1000 {
+		t.Fatalf("expected lifetime spend to sum across model aliases (750+250=1000), got %d", view.SpendCredits)
+	}
+	// This key never had a budget_kind set (default "none"); spend must
+	// still be reported, matching the money-path rule that display never
+	// depends on enforcement being turned on.
+	if view.BudgetSummary.Kind != "none" {
+		t.Fatalf("expected budget_kind to stay none, got %q", view.BudgetSummary.Kind)
+	}
+
+	limit := int64(5000)
+	kind := "lifetime"
+	if _, err := svc.UpdatePolicy(context.Background(), accountID, actorID, keyID, UpdatePolicyInput{
+		BudgetKind:         &kind,
+		BudgetLimitCredits: &limit,
+	}); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	view, err = svc.GetKeyView(context.Background(), accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView after policy update: %v", err)
+	}
+	if view.SpendCredits != 1000 {
+		t.Fatalf("expected spend to be unaffected by a later budget_kind change, got %d", view.SpendCredits)
+	}
+	if view.BudgetLimitCredits == nil || *view.BudgetLimitCredits != 5000 {
+		t.Fatalf("expected budget limit 5000 to round-trip, got %#v", view.BudgetLimitCredits)
 	}
 }
 

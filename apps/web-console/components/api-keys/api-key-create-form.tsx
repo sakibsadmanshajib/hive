@@ -15,6 +15,14 @@ import {
 } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
 import { formatShortDate } from "@/lib/format/credits";
+import { formatUsdFromCredits } from "@/lib/format/model-pricing";
+import { usdToCreditsInput } from "@/lib/api-keys";
+
+// Mirrors UpdateApiKeyBudgetInput["budgetKind"] in lib/control-plane/client.ts.
+// Duplicated as a literal union rather than imported: that type lives in a
+// server-only module (getRequestContext, cookies) this client component must
+// not pull in.
+type ResetCadence = "never" | "monthly";
 
 interface CreateApiKeyResponse {
   id: string;
@@ -28,6 +36,8 @@ interface CreateApiKeyResponse {
   expiration_summary: { kind: string; label: string };
   budget_summary: { kind: string; label: string };
   allowlist_summary: { mode: string; group_names: string[]; label: string };
+  spend_credits: number;
+  budget_limit_credits: number | null;
   secret?: string;
 }
 
@@ -43,9 +53,13 @@ function isApiKeyResponse(value: unknown): value is CreateApiKeyResponse {
 export function ApiKeyCreateForm() {
   const [nickname, setNickname] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [creditLimit, setCreditLimit] = useState("");
+  const [resetCadence, setResetCadence] = useState<ResetCadence>("never");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
+  const [appliedLimitCredits, setAppliedLimitCredits] = useState<number | null>(null);
+  const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const router = useRouter();
 
@@ -55,9 +69,15 @@ export function ApiKeyCreateForm() {
       setError("Nickname is required.");
       return;
     }
+    const limitCredits = usdToCreditsInput(creditLimit);
+    if (creditLimit.trim() !== "" && limitCredits === null) {
+      setError("Credit limit must be a positive dollar amount.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
+    setBudgetWarning(null);
 
     try {
       const body: { nickname: string; expires_at?: string } = {
@@ -81,12 +101,44 @@ export function ApiKeyCreateForm() {
       }
 
       const data: unknown = await response.json();
-      if (isApiKeyResponse(data)) {
-        setCreatedKey(data);
-        router.refresh();
-      } else {
+      if (!isApiKeyResponse(data)) {
         setError("Failed to create key. Please try again.");
+        setLoading(false);
+        return;
       }
+
+      // The credit cap is a second call against the just-created key's own
+      // policy endpoint (POST .../api-keys/{id}/policy), not part of key
+      // creation itself -- that endpoint is also what edge-api's
+      // authz.CheckAccess enforces against on every request, so a failure
+      // here means the key exists with NO cap, not a cap that silently
+      // failed to apply. That must be surfaced, not swallowed: a customer
+      // who believes a limit is in place when none was ever set is worse off
+      // than one who was told it did not apply.
+      if (limitCredits !== null) {
+        const policyResponse = await fetch(
+          `/api/v1/accounts/current/api-keys/${data.id}/policy`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              budget_kind: resetCadence === "monthly" ? "monthly" : "lifetime",
+              budget_limit_credits: limitCredits,
+            }),
+          },
+        );
+        if (policyResponse.ok) {
+          setAppliedLimitCredits(limitCredits);
+        } else {
+          setBudgetWarning(
+            "Key created, but the credit limit could not be applied. Set it from the key's settings.",
+          );
+        }
+      }
+
+      setCreatedKey(data);
+      router.refresh();
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to create key.";
@@ -159,7 +211,27 @@ export function ApiKeyCreateForm() {
                   : "Never"}
               </dd>
             </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-2xs uppercase tracking-wider">
+                Credit limit
+              </dt>
+              <dd
+                className="text-sm text-[var(--color-ink)] tabular-nums"
+                data-testid="created-api-key-limit"
+              >
+                {appliedLimitCredits !== null
+                  ? `${formatUsdFromCredits(appliedLimitCredits)} (${
+                      resetCadence === "monthly" ? "resets monthly" : "never resets"
+                    })`
+                  : "Unlimited"}
+              </dd>
+            </div>
           </dl>
+          {budgetWarning ? (
+            <p role="alert" className="text-xs text-[var(--color-danger)]">
+              {budgetWarning}
+            </p>
+          ) : null}
           <Button
             type="button"
             variant="secondary"
@@ -168,6 +240,10 @@ export function ApiKeyCreateForm() {
               setCreatedKey(null);
               setNickname("");
               setExpiresAt("");
+              setCreditLimit("");
+              setResetCadence("never");
+              setAppliedLimitCredits(null);
+              setBudgetWarning(null);
             }}
             className="self-start"
           >
@@ -213,6 +289,37 @@ export function ApiKeyCreateForm() {
               value={expiresAt}
               onChange={(e) => setExpiresAt(e.target.value)}
             />
+          </Field>
+          <div aria-hidden="true" className="hidden sm:block" />
+          <Field
+            label="Credit limit (USD)"
+            htmlFor="key-credit-limit"
+            hint="Leave blank for unlimited"
+          >
+            <Input
+              id="key-credit-limit"
+              type="text"
+              inputMode="decimal"
+              value={creditLimit}
+              onChange={(e) => setCreditLimit(e.target.value)}
+              placeholder="e.g. 10.00"
+            />
+          </Field>
+          <Field
+            label="Reset limit every…"
+            htmlFor="key-reset-cadence"
+            hint="Only applies when a credit limit is set"
+          >
+            <select
+              id="key-reset-cadence"
+              value={resetCadence}
+              onChange={(e) => setResetCadence(e.target.value as ResetCadence)}
+              disabled={creditLimit.trim() === ""}
+              className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="never">Never (lifetime cap)</option>
+              <option value="monthly">Every month</option>
+            </select>
           </Field>
           <Button
             type="submit"
