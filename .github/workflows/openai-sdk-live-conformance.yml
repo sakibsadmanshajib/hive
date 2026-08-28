@@ -1,14 +1,16 @@
 name: OpenAI SDK live conformance
 
-# Manual only. This exercises the real, deployed production gateway
-# (api-hive.scubed.co) with the genuine `openai` npm SDK, using the same
-# long-lived HIVE_API_KEY secret deploy-demo-box.yml's post-deploy smoke
-# check already sends real traffic through. It is deliberately NOT wired to
-# push or pull_request: the point is a manual, occasional, real-traffic
-# conformance run against production, not one more job competing for the
-# session-mode Postgres pool shared with live chat on every PR. The
-# always-on regression coverage for this same suite already runs against a
-# throwaway local stack in ci.yml's sdk-tests-js job.
+# This exercises the real, deployed production gateway (api-hive.scubed.co)
+# with the genuine `openai` npm SDK, using the same long-lived HIVE_API_KEY
+# secret deploy-demo-box.yml's post-deploy sdk-replay job already sends real
+# traffic through. Two triggers, same shape as ci.yml's live-integration job:
+# `workflow_dispatch` for an on-demand run once this file is on the default
+# branch, and a `run-openai-sdk-live-conformance`-labelled pull_request (same
+# repo only, so a fork PR never receives secrets) so a suite change can be
+# proven against production before merge, without one more job competing for
+# the shared session-mode Postgres pool on every ordinary PR. The always-on
+# regression coverage for this same suite already runs against a throwaway
+# local stack in ci.yml's sdk-tests-js job.
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +18,8 @@ on:
         description: "vitest path filter (default: run the whole suite)"
         required: false
         default: ""
+  pull_request:
+    types: [labeled]
 
 concurrency:
   group: openai-sdk-live-conformance
@@ -23,6 +27,11 @@ concurrency:
 
 jobs:
   live-conformance:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'run-openai-sdk-live-conformance'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
