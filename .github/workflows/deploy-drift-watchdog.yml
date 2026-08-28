@@ -191,27 +191,34 @@ jobs:
             base_sha=$(git rev-parse origin/main~200)
             echo "base: simulated, 200 commits behind main ($base_sha)"
           else
-            # Last 30 runs is comfortably more than deploy-demo-box.yml fires
+            # Last 50 runs is comfortably more than deploy-demo-box.yml fires
             # in any single day (issue #1238's own history: single digits to
             # low tens on a busy day), so the newest success in that window
             # is the real last-known-good baseline, not a stale one from a
-            # quiet stretch.
+            # quiet stretch -- and comfortably more than a bad stretch of
+            # back-to-back failures during an incident would produce before
+            # someone is already looking at it directly.
             runs_json=$(gh run list --repo "$GITHUB_REPOSITORY" \
-              --workflow=deploy-demo-box.yml --branch=main -L 30 \
+              --workflow=deploy-demo-box.yml --branch=main -L 50 \
               --json headSha,status,conclusion,createdAt)
 
             base_sha=$(echo "$runs_json" | jq -r \
               '[.[] | select(.conclusion == "success")] | first | .headSha // empty')
             if [ -z "$base_sha" ]; then
               no_baseline=true
-              echo "base: no successful run found in the last 30 -- cannot establish a baseline"
+              echo "base: no successful run found in the last 50 -- cannot establish a baseline"
             else
               echo "base: last successful deploy was $base_sha"
             fi
 
-            if echo "$runs_json" | jq -e '[.[] | select(.status != "completed")] | length > 0' >/dev/null; then
+            # Only the NEWEST run, not "any of the last 50": an old run stuck
+            # queued (GitHub eventually times these out, but not instantly)
+            # must not permanently suppress alerting for a real divergence
+            # that shows up after it. `gh run list` is already newest-first.
+            newest_status=$(echo "$runs_json" | jq -r '.[0].status // "completed"')
+            if [ "$newest_status" != "completed" ]; then
               in_flight=true
-              echo "a deploy-demo-box run is currently queued or in progress"
+              echo "the newest deploy-demo-box run is still queued or in progress"
             fi
           fi
 
