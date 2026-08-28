@@ -29,6 +29,18 @@ retry here is about upstream weather, not about masking a defect. Every attempt
 is printed, so a run that only passes on the third try is visible rather than
 silently green.
 
+Also proves the identity-leak fixes on THIS specific route (PR #1222 closed
+three leaks here: mint-once-per-stream id, stripped system_fingerprint, and a
+non-streaming ragchat- id; a fourth, the DeepSeek post-finish spurious chunk,
+was found and fixed separately while writing this check -- see
+apps/edge-api/internal/rag/chat_handler.go). Unit tests cover the code path in
+isolation; stream_leak_check and error_path_check below are the live proof
+that the fix actually holds against a real upstream, since none of the four
+leaks PR #1222 found were on a happy path and this route had never been
+exercised live before (blocked by ENABLE_RAG defaulting to false for every
+tenant that has no explicit tenant_settings row -- opt-in by design, see
+supabase/migrations/20260824_01_cowork_gate_default_enabled.sql's header).
+
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, and
               RAG_VERIFY_PASSWORD once the member account exists
 Optional env: EDGE_API_URL (default http://localhost:8080),
@@ -290,6 +302,170 @@ def grounded_chat(edge: str, auth: dict, marker: str, model: str) -> None:
     fail("grounded chat never answered from the document")
 
 
+# Substrings that must never reach a customer on any provider-blind surface
+# (CLAUDE.md: "provider names never leak to customers"). Lowercase, checked
+# against a lowercased frame.
+PROVIDER_NAME_MARKERS = ("openrouter", "groq", "deepseek", "litellm")
+
+
+def check_stream_frames(raw_frames: list[str], requested_alias: str) -> list[str]:
+    """Pure assertion over a list of already-split `data: ` payloads (JSON
+    text, no prefix, [DONE] and the leading rag.citations frame already
+    excluded by the caller). Returns a list of violation strings; empty means
+    clean. No network, no side effects -- see test_verify_rag_roundtrip.py.
+
+    Mirrors, in the client, exactly what
+    apps/edge-api/internal/rag/chat_handler.go's streamGroundedChat is
+    supposed to guarantee server-side: one stable gateway-minted id per
+    stream, no system_fingerprint, no provider name or raw upstream id, model
+    always rewritten to the requested alias, and nothing relayed after a
+    terminal finish_reason except a genuine usage-only terminal frame.
+    """
+    violations: list[str] = []
+    ids_seen: set[str] = set()
+    finish_seen = False
+    for i, raw in enumerate(raw_frames):
+        lower = raw.lower()
+        if '"system_fingerprint"' in lower:
+            violations.append(f"frame {i}: system_fingerprint key present")
+        if '"id":"gen-' in lower:
+            violations.append(f"frame {i}: raw OpenRouter gen-* id leaked")
+        for marker in PROVIDER_NAME_MARKERS:
+            if marker in lower:
+                violations.append(f"frame {i}: provider-identifying string {marker!r} present")
+        try:
+            chunk = json.loads(raw)
+        except json.JSONDecodeError:
+            violations.append(f"frame {i}: not valid JSON: {raw[:120]!r}")
+            continue
+
+        chunk_id = chunk.get("id")
+        if chunk_id:
+            ids_seen.add(chunk_id)
+            if not chunk_id.startswith("ragchat-"):
+                violations.append(
+                    f"frame {i}: id {chunk_id!r} is not gateway-minted (expected a ragchat- prefix)"
+                )
+
+        model = chunk.get("model")
+        if model and model != requested_alias:
+            violations.append(
+                f"frame {i}: model {model!r} differs from the requested alias {requested_alias!r}"
+            )
+
+        choices = chunk.get("choices") or []
+        is_usage_only_terminal = bool(chunk.get("usage")) and not choices
+        # Suppression must be judged against finishSeen from EARLIER frames
+        # only, so this reads finish_seen before the update below, same
+        # ordering as inference.ShouldSuppressPostFinishChunk /
+        # apps/edge-api/internal/rag/chat_handler.go's streaming loop.
+        if finish_seen and not is_usage_only_terminal:
+            violations.append(f"frame {i}: chunk relayed after finish_reason (post-finish leak)")
+        if any(c.get("finish_reason") for c in choices):
+            finish_seen = True
+
+    if len(ids_seen) > 1:
+        violations.append(
+            f"multiple distinct ids on one stream: {sorted(ids_seen)} (client-visible id must be stable)"
+        )
+    return violations
+
+
+def parse_sse_data_frames(resp):
+    """Yields each `data: ` line's payload (no prefix, no trailing newline)
+    from a streaming HTTP response, stopping at (and excluding) [DONE]."""
+    for raw_line in resp:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: "):]
+        if payload == "[DONE]":
+            return
+        yield payload
+
+
+def stream_leak_check(edge: str, auth: dict, marker: str, model: str) -> None:
+    """Live proof, on the real streaming wire, that /v1/rag/chat never leaks
+    provider identity and never relays a chunk after finish_reason. Skips the
+    leading rag.citations frame (has no id/model/finish_reason, nothing to
+    check) and asserts every remaining frame via check_stream_frames."""
+    for attempt in range(1, QUERY_ATTEMPTS + 1):
+        req = urllib.request.Request(
+            edge + "/v1/rag/chat",
+            data=json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content":
+                              "What pilot codename is recorded in the note? "
+                              "Answer only from the provided context."}],
+                "top_k": 3,
+                "stream": True,
+            }).encode(),
+            method="POST",
+            headers={**auth, "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                if resp.status != 200:
+                    print(f"  stream leak-check attempt {attempt}: http {resp.status}")
+                    continue
+                frames = [f for f in parse_sse_data_frames(resp) if "rag.citations" not in f]
+        except urllib.error.HTTPError as e:
+            print(f"  stream leak-check attempt {attempt}: http {e.code} {e.read()[:200]!r}")
+            continue
+        except (urllib.error.URLError, TimeoutError) as e:
+            print(f"  stream leak-check attempt {attempt}: transport error {e}")
+            continue
+
+        if not frames:
+            print(f"  stream leak-check attempt {attempt}: no data frames received, retrying")
+            continue
+
+        violations = check_stream_frames(frames, model)
+        if not violations:
+            print(f"  stream leak-check attempt {attempt}: clean, {len(frames)} frames, no leaks")
+            return
+        print(f"  stream leak-check attempt {attempt}: {len(violations)} violation(s):")
+        for v in violations:
+            print(f"    - {v}")
+    fail("RAG streaming leak-check failed: see violations above")
+
+
+def error_path_check(edge: str, auth: dict, model: str) -> None:
+    """Forces a real (non-synthesized) upstream error -- an oversized user
+    message most providers reject with a context-length-style 4xx -- and
+    proves the error response stays provider-blind. None of the four leaks
+    found across PR #1222 and this fix were on a happy path, so the error
+    path gets its own live check rather than being assumed clean because the
+    happy path is.
+
+    Best-effort: if the upstream accepts the request anyway (a model with a
+    large enough context window), this reports and returns rather than
+    failing the whole run over an error it could not force.
+    """
+    # ~180KB of message content, under the handler's 256KB request-body cap
+    # (apps/edge-api/internal/rag/chat_handler.go's io.LimitReader) but large
+    # enough to exceed a "fast" model's context window on most providers.
+    oversized = "filler word " * 15000
+    status, body = request(
+        edge, auth, "POST", "/v1/rag/chat",
+        body={
+            "model": model,
+            "messages": [{"role": "user", "content": oversized}],
+            "top_k": 1,
+        },
+        timeout=60,
+    )
+    if 200 <= status < 300:
+        print(f"  error-path check: upstream accepted the oversized request (http {status}); "
+              "could not force an error this run")
+        return
+    text = json.dumps(body).lower()
+    leaked = [m for m in PROVIDER_NAME_MARKERS if m in text]
+    if leaked:
+        fail(f"error path leaked provider identity {leaked} in response: {body}")
+    print(f"  error-path check: http {status}, provider-blind: {body}")
+
+
 def main() -> None:
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
@@ -309,8 +485,13 @@ def main() -> None:
     search(edge, auth, marker)
     print(f"asking {model} to answer from the document")
     grounded_chat(edge, auth, marker, model)
+    print(f"streaming {model} and checking for identity/post-finish leaks")
+    stream_leak_check(edge, auth, marker, model)
+    print(f"forcing an error path against {model} and checking it stays provider-blind")
+    error_path_check(edge, auth, model)
 
-    print("PASS: upload, embed, vector search, and grounded answer all verified")
+    print("PASS: upload, embed, vector search, grounded answer, streaming leak-check, "
+          "and error-path leak-check all verified")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,170 @@
+name: rag-demo-readiness
+
+# On-demand readiness check for the RAG capability on the demo surface.
+#
+# ENABLE_RAG defaults to false for every tenant with no explicit
+# tenant_settings row -- opt-in by design, not a bug (see
+# supabase/migrations/20260824_01_cowork_gate_default_enabled.sql's header:
+# "RAG, voice, relay, SSO, billing, and audit keys keep their current opt-in
+# behavior because their default stays false"). A tenant answering 403 on
+# /v1/rag/chat is expected default state, not a deploy regression, so this
+# workflow is deliberately NOT wired into deploy-demo-box.yml or
+# post-deploy-verify.yml's automatic triggers. It exists to (1) enable the
+# gate for the two identities the demo actually needs it on, then (2) prove
+# the RAG pipeline (upload, embed, vector search, grounded answer) and (3)
+# the /v1/rag/chat streaming leak-check (PR #1222's id/system_fingerprint
+# fixes, plus this same change's RAG-path post-finish-chunk follow-up) both
+# hold live, on demand, rather than assuming either from unit tests alone.
+#
+# Runs on the box itself ([self-hosted, hive-demo]): reaching Supabase's
+# admin surface needs the docker compose network -- Caddyfile.supabase's
+# public listener explicitly refuses the admin API -- which only a job
+# running where the compose project already lives can join, via
+# `docker compose exec`/`run`. There is no SSH path to this box from an
+# agent session (post-deploy-verify.yml's own header comment says so
+# explicitly), so a self-hosted workflow is the only way anything short of
+# the owner's own keyboard reaches it.
+
+on:
+  workflow_dispatch: {}
+  # Same trust model as post-deploy-verify.yml: a label is a maintainer
+  # action, but this job runs on a self-hosted runner that IS the demo box
+  # with its own docker socket, so a mislabelled fork pull request would be
+  # arbitrary code execution there. The head-repo check below is the actual
+  # trust boundary; the label is only the intent gate.
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: Enable + verify RAG on the demo box
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch'
+        || (github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-rag-demo-readiness'))
+      }}
+    runs-on: [self-hosted, hive-demo]
+    timeout-minutes: 15
+    env:
+      # Exact flags deploy-demo-box.yml deploys with (HIVE_COMPOSE_FLAGS at
+      # the top of that file). A narrower set here would resolve a different
+      # compose project than the one actually serving the demo.
+      HIVE_COMPOSE_FLAGS: >-
+        --env-file ../../.env
+        -f docker-compose.yml
+        -f docker-compose.enterprise.yml
+        --profile local
+        --profile chat
+        --profile monitoring
+        --profile selfhost
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enable ENABLE_RAG for the demo owner tenant and the QA tester tenant
+        # Idempotent upsert straight against the stack's own database, the
+        # same `docker compose exec supabase-db psql` idiom
+        # deploy-demo-box.yml's migration-target-identity step already uses.
+        # Not routed through control-plane's admin feature-gate HTTP API:
+        # scripts/seed-demo-owner.py and scripts/verify-rag-roundtrip.py
+        # already write tenant_settings directly the same way, and neither
+        # tenant here is guaranteed to have an OWNER-role session on hand
+        # for this job to authenticate as.
+        working-directory: deploy/docker
+        env:
+          QA_TESTER_EMAIL: ${{ secrets.HIVE_QA_TESTER_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${QA_TESTER_EMAIL:-}" ]; then
+            echo "::warning::HIVE_QA_TESTER_EMAIL is not set; only the demo owner tenant (slug hive-demo) will be enabled"
+          fi
+
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
+
+          # <<-'SQL' (not <<'SQL'): the plain form requires the closing
+          # delimiter at column 0, which a YAML block scalar's indentation
+          # cannot express. The dash form strips leading TABS from the body
+          # (none used here, spaces only) and allows an indented delimiter
+          # line, so both bash and this workflow's YAML indentation agree.
+          sql=$(cat <<-'SQL'
+          	WITH targets AS (
+          	  SELECT id AS tenant_id FROM public.tenants WHERE slug = :'demo_slug'
+          	  UNION
+          	  SELECT tu.tenant_id
+          	    FROM auth.users u
+          	    JOIN public.tenant_users tu ON tu.user_id = u.id
+          	   WHERE :'qa_email' <> '' AND lower(u.email) = lower(:'qa_email')
+          	)
+          	INSERT INTO public.tenant_settings (tenant_id, key, enabled)
+          	SELECT tenant_id, 'ENABLE_RAG'::public.tenant_setting_key, true FROM targets
+          	ON CONFLICT (tenant_id, key) DO UPDATE SET enabled = true, updated_at = now()
+          	RETURNING tenant_id;
+          	SQL
+          )
+
+          result=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+            psql -U "$db_user" -d "$db_name" --no-psqlrc -tAXq -v ON_ERROR_STOP=1 \
+              -v demo_slug=hive-demo -v qa_email="${QA_TESTER_EMAIL:-}" \
+              -c "$sql")
+          echo "ENABLE_RAG upserted for tenant id(s):"
+          echo "$result"
+          if [ -z "$(printf '%s' "$result" | tr -d '[:space:]')" ]; then
+            echo "::error::no tenant matched (neither slug 'hive-demo' nor HIVE_QA_TESTER_EMAIL resolved a tenant) -- nothing was enabled"
+            exit 1
+          fi
+
+      - name: Run the RAG round-trip + streaming leak-check + error-path check
+        # scripts/verify-rag-roundtrip.py owns its own throwaway tenant
+        # (rag-verify-e2e, upserted with ENABLE_RAG=true on every run) and
+        # never touches the demo or QA tester tenant enabled above -- this
+        # step proves the pipeline and the leak fixes work at all, the step
+        # above proves the two demo-relevant tenants can reach it.
+        working-directory: deploy/docker
+        env:
+          RAG_VERIFY_PASSWORD: ${{ secrets.RAG_VERIFY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          read_env() {
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+
+          # The internal, unrefused caddy-supabase listener (port 80): the
+          # public one refuses the admin API this script's provisioning step
+          # needs (Caddyfile.supabase). Resolvable only from inside the
+          # compose network, which is exactly why this whole job runs here.
+          supabase_admin_url="http://caddy-supabase"
+          anon_key=$(read_env NEXT_PUBLIC_SUPABASE_ANON_KEY)
+          [ -n "$anon_key" ] || anon_key=$(read_env SUPABASE_ANON_KEY)
+          service_key=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          if [ -z "$anon_key" ] || [ -z "$service_key" ]; then
+            echo "::error::SUPABASE_ANON_KEY/NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY missing from $env_file"
+            exit 1
+          fi
+
+          if [ -z "${RAG_VERIFY_PASSWORD:-}" ]; then
+            echo "::warning::RAG_VERIFY_PASSWORD secret not set. If the rag-verify-e2e account already exists this run will fail loudly naming that; if this is the first-ever run it creates the account and prints a fresh password to THIS LOG, once -- save it and set it as the RAG_VERIFY_PASSWORD repository secret immediately (this repo is public, so do not leave the password logged as the only copy)."
+          fi
+
+          docker compose $HIVE_COMPOSE_FLAGS --profile tools run --rm -T \
+            -e SUPABASE_URL="$supabase_admin_url" \
+            -e SUPABASE_SERVICE_ROLE_KEY="$service_key" \
+            -e SUPABASE_ANON_KEY="$anon_key" \
+            -e EDGE_API_URL="http://edge-api:8080" \
+            -e RAG_VERIFY_PASSWORD="${RAG_VERIFY_PASSWORD:-}" \
+            toolchain "cd /workspace && python3 scripts/verify-rag-roundtrip.py"

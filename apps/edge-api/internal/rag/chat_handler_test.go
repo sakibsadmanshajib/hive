@@ -371,6 +371,73 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 	}
 }
 
+// spuriousPostFinishSSE reproduces the exact DeepSeek-family-via-OpenRouter
+// shape captured live during PR #1222 (parity finding, 2026-08-26): a
+// genuine finish_reason chunk, immediately followed by one extra empty
+// role/content chunk with finish_reason:null, before the terminal
+// usage-only frame and [DONE]. apps/edge-api/internal/inference's
+// executeStreaming relay drops the spurious chunk (mint_id.go's
+// shouldSuppressPostFinishChunk); this handler's own SSE relay
+// (streamGroundedChat) never applied that same rule, so the marker text
+// below ("SPURIOUS-POST-FINISH-MARKER") leaked onto the wire until fixed.
+const spuriousPostFinishSSE = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer is 42 [1]."},"finish_reason":"stop"}]}
+
+data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"SPURIOUS-POST-FINISH-MARKER"},"finish_reason":null}]}
+
+data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+data: [DONE]
+
+`
+
+func TestHandleChat_StreamingSuppressesPostFinishChunk(t *testing.T) {
+	store := newFakeStore()
+	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: uuid.New(), Content: "ctx", Score: 0.1}}
+
+	var audits []auditRecord
+	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		fakeDispatch(http.StatusOK, spuriousPostFinishSSE, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "what is the answer?"}},
+		Stream:   true,
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for streaming, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// The real fix under test: a chunk arriving after finish_reason is
+	// already relayed must never reach the client, unless it is a genuine
+	// usage-only terminal frame (empty choices, usage set) -- that frame
+	// still must forward, since it carries the accounting data.
+	if strings.Contains(body, "SPURIOUS-POST-FINISH-MARKER") {
+		t.Errorf("spurious post-finish chunk was relayed to the client, must be suppressed:\n%s", body)
+	}
+	if !strings.Contains(body, `"finish_reason":"stop"`) {
+		t.Errorf("expected the real finish_reason chunk to still be relayed, got:\n%s", body)
+	}
+	if !strings.Contains(body, `"total_tokens":15`) {
+		t.Errorf("expected the genuine usage-only terminal frame to still be relayed (accounting must not be lost), got:\n%s", body)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(body), "data: [DONE]") {
+		t.Errorf("expected stream to end with data: [DONE], got:\n%s", body)
+	}
+
+	// Exactly two data frames from the upstream relay reach the client: the
+	// finish_reason chunk and the usage-only terminal frame. Plus the
+	// leading citations frame and [DONE], four frames total.
+	frames := strings.Split(strings.TrimSpace(body), "\n\n")
+	if len(frames) != 4 {
+		t.Errorf("expected 4 SSE frames (citations, finish chunk, usage-only terminal, [DONE]), got %d:\n%s", len(frames), body)
+	}
+}
+
 func TestHandleChat_StreamingUpstreamNon2xx_StaysProviderBlindNoSSE(t *testing.T) {
 	var audits []auditRecord
 	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,

@@ -132,8 +132,8 @@ func TestChunkFinished(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := chunkFinished(tc.chunk); got != tc.want {
-				t.Errorf("chunkFinished() = %v, want %v", got, tc.want)
+			if got := ChunkFinished(tc.chunk); got != tc.want {
+				t.Errorf("ChunkFinished() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -148,10 +148,10 @@ func TestShouldSuppressPostFinishChunk_DeepSeekSpuriousFrame(t *testing.T) {
 	spurious := ChatCompletionChunk{
 		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: strPtr("")}}},
 	}
-	if !shouldSuppressPostFinishChunk(true, spurious) {
+	if !ShouldSuppressPostFinishChunk(true, spurious) {
 		t.Error("a no-usage chunk arriving after finish must be suppressed")
 	}
-	if shouldSuppressPostFinishChunk(false, spurious) {
+	if ShouldSuppressPostFinishChunk(false, spurious) {
 		t.Error("before any finish has been seen, nothing is suppressed")
 	}
 }
@@ -162,7 +162,7 @@ func TestShouldSuppressPostFinishChunk_DeepSeekSpuriousFrame(t *testing.T) {
 // that must never be dropped.
 func TestShouldSuppressPostFinishChunk_UsageOnlyTerminalFrameStillForwards(t *testing.T) {
 	usageOnly := ChatCompletionChunk{Usage: &UsageResponse{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11}}
-	if shouldSuppressPostFinishChunk(true, usageOnly) {
+	if ShouldSuppressPostFinishChunk(true, usageOnly) {
 		t.Error("a usage-only, zero-choices chunk must never be suppressed, even after finish")
 	}
 }
@@ -177,7 +177,7 @@ func TestShouldSuppressPostFinishChunk_UsageWithContentStillSuppressed(t *testin
 		Usage:   &UsageResponse{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11},
 		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: strPtr("hi")}}},
 	}
-	if !shouldSuppressPostFinishChunk(true, usageWithContent) {
+	if !ShouldSuppressPostFinishChunk(true, usageWithContent) {
 		t.Error("a chunk with usage AND non-empty choices after finish must still be suppressed")
 	}
 }

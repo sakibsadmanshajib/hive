@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
@@ -403,6 +404,18 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 	// provider/event lines, but the id and system_fingerprint keys survived
 	// inside the generic map because nothing explicitly stripped them.
 	mintedID := "ragchat-" + uuid.New().String()
+	// finishSeen tracks whether a terminal finish_reason has already been
+	// relayed on an earlier chunk of this stream. DeepSeek-family streams
+	// via OpenRouter emit one extra empty role/content chunk immediately
+	// after finish_reason=stop, before [DONE] (parity finding,
+	// 2026-08-26). apps/edge-api/internal/inference's executeStreaming
+	// relay suppresses that spurious chunk (PR #1222); this handler's own
+	// SSE relay never applied the same rule, so it forwarded the spurious
+	// chunk on every RAG streaming response until this fix -- found while
+	// verifying #1222's fix on this specific route, since none of the
+	// four id/system_fingerprint leaks that PR closed were checked against
+	// this failure mode.
+	finishSeen := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
 	for scanner.Scan() {
@@ -421,6 +434,27 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 
 		if strings.HasPrefix(line, "data: ") {
 			payload := []byte(line[6:])
+
+			// Suppression runs on the raw frame BEFORE the sanitizer forms an
+			// opinion on it: a chunk this check drops never reaches the wire, so
+			// running the sanitizer on it first would be wasted work at best,
+			// and at worst would give a post-finish frame (spurious content, or
+			// an upstream error arriving after the client already got its
+			// finish_reason) a chance to become an extra frame on a stream the
+			// client already considers finished. Re-decoding the raw payload
+			// rather than any sanitizer output here is deliberate: this check
+			// must run before the sanitizer touches the frame at all, so there
+			// is no sanitized output yet to decode from.
+			var typed inference.ChatCompletionChunk
+			_ = json.Unmarshal(payload, &typed)
+			suppress := inference.ShouldSuppressPostFinishChunk(finishSeen, typed)
+			if inference.ChunkFinished(typed) {
+				finishSeen = true
+			}
+			if suppress {
+				continue
+			}
+
 			// Provider blindness on this relay is the shared sanitizer's job,
 			// not this handler's. It used to be hand-rolled here: rewrite
 			// model, rewrite id, delete system_fingerprint, forward every
@@ -451,7 +485,10 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 			// Usage is read back off the sanitized frame rather than the raw
 			// one: VariablePriceFrame keeps usage (minus the upstream cost
 			// fields), so this is the same number, read from the bytes the
-			// customer actually gets.
+			// customer actually gets. Reading it here, after the suppress
+			// check above has already continued away every chunk that will
+			// not reach the wire, is what stops a suppressed chunk's own
+			// (possibly bogus) usage block from inflating RAG_CHAT_COMPLETED.
 			var chunk map[string]any
 			if err := json.Unmarshal(sanitized, &chunk); err == nil {
 				if usage, ok := chunk["usage"].(map[string]any); ok {
