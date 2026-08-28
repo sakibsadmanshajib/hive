@@ -361,7 +361,15 @@ def check_stream_frames(raw_frames: list[str], requested_alias: str) -> list[str
             )
 
         choices = chunk.get("choices") or []
-        is_usage_only_terminal = bool(chunk.get("usage")) and not choices
+        # `is not None`, not a truthiness test: the Go rule this mirrors is
+        # `chunk.Usage != nil` (inference.ShouldSuppressPostFinishChunk), and
+        # a frame carrying `"usage": {}` after finish_reason decodes to a
+        # non-nil pointer there, so the server forwards it. Under
+        # `bool(chunk.get("usage"))` this checker would have called that same
+        # forwarded frame a leak: a false positive on a shape the server is
+        # allowed to emit. Unlikely shape, but the two rules now agree
+        # exactly, which is the point of a mirror.
+        is_usage_only_terminal = chunk.get("usage") is not None and not choices
         # Suppression must be judged against finishSeen from EARLIER frames
         # only, so this reads finish_seen before the update below, same
         # ordering as inference.ShouldSuppressPostFinishChunk /

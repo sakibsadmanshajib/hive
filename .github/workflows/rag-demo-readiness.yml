@@ -61,6 +61,10 @@ jobs:
         --profile chat
         --profile monitoring
         --profile selfhost
+      # Ephemeral edge-api built from the checkout under test (see the step
+      # that starts it). Named per run so two concurrent runs cannot collide
+      # on the box, and so a leaked container is traceable to a run.
+      PR_EDGE_CONTAINER: hive-edge-api-under-test-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -236,6 +240,90 @@ jobs:
             echo "MISMATCH: SUPABASE_SERVICE_ROLE_KEY != ENTERPRISE_SERVICE_ROLE_KEY (or one is empty)"
           fi
 
+      - name: Start an edge-api running THIS checkout's source
+        # The stack's own hive-edge-api-1 serves whatever main was at the last
+        # deploy, so pointing the leak-check at it measures the deployed build
+        # and never the change under review. That is not a hypothetical: this
+        # workflow's first green-everything-else run (33215191600) failed on
+        # exactly two post-finish frames, which is the defect this PR fixes,
+        # reported against code that does not contain the fix. A pre-merge
+        # gate that can only pass after merge is not a gate.
+        #
+        # So: run a second edge-api from the checkout under test, on the same
+        # compose network, and point the verification at that one. Everything
+        # else it talks to (control-plane, LiteLLM, Redis, Postgres, the
+        # embedder) is the box's real running stack, so this stays a live
+        # check rather than a local mock -- only the binary under test is
+        # swapped for the one being reviewed.
+        #
+        # No image build: hive-edge-api:ci runs `air`, which compiles from
+        # /app at container start, so bind-mounting the checkout over /app is
+        # enough to run this PR's source under the deployed runtime. The
+        # runtime configuration is copied from the live container rather than
+        # re-derived (--env-file from its own Config.Env, --volumes-from for
+        # its module/build caches and the Supabase CA it verifies JWKS
+        # against), so a drift between .env and what is actually running
+        # cannot silently produce a different edge-api here. The env file is
+        # written with umask 077 and deleted as soon as docker has read it;
+        # nothing from it is ever echoed.
+        #
+        # The live container is only read from. It is never restarted,
+        # rebuilt, exec'd into or otherwise touched.
+        #
+        # tmpfs over apps/edge-api/tmp because air writes its compiled binary
+        # there as root, and that path is inside the bind-mounted workspace.
+        # Left on disk it would be a root-owned file under a root-owned
+        # directory in the runner's own workspace, and the NEXT run's
+        # actions/checkout (which git-cleans ignored files too) cannot unlink
+        # it as the runner user: deletion needs write permission on the parent
+        # directory, which root created. That would fail every later run of
+        # this workflow at checkout, before any of its own logic. Observed on
+        # the box while validating this step by hand, not theorised.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          live=$(docker compose $HIVE_COMPOSE_FLAGS ps -q edge-api)
+          if [ -z "$live" ]; then
+            echo "::error::the demo stack's edge-api container is not running, so there is no live configuration to copy"
+            exit 1
+          fi
+          network=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$live")
+          image=$(docker inspect -f '{{.Config.Image}}' "$live")
+          echo "live edge-api: image $image on network $network"
+
+          docker rm -f "$PR_EDGE_CONTAINER" >/dev/null 2>&1 || true
+          umask 077
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" \
+            | grep -v '^$' > "$RUNNER_TEMP/edge-api-under-test.env"
+          docker run -d --name "$PR_EDGE_CONTAINER" \
+            --network "$network" \
+            --env-file "$RUNNER_TEMP/edge-api-under-test.env" \
+            --volumes-from "$live" \
+            -v "$GITHUB_WORKSPACE:/app" \
+            --mount type=tmpfs,destination=/app/apps/edge-api/tmp \
+            "$image" >/dev/null
+          rm -f "$RUNNER_TEMP/edge-api-under-test.env"
+
+          # air recompiles the whole edge-api module on first start. Warm
+          # build cache (shared with the live container through
+          # --volumes-from) makes that about ten seconds; a cold one is
+          # minutes, hence the generous ceiling.
+          for _ in $(seq 1 60); do
+            if docker exec "$PR_EDGE_CONTAINER" wget -q -O /dev/null http://localhost:8080/health 2>/dev/null; then
+              echo "$PR_EDGE_CONTAINER is healthy and serving this checkout's source"
+              exit 0
+            fi
+            if [ -z "$(docker ps -q -f "name=^${PR_EDGE_CONTAINER}$")" ]; then
+              echo "::error::$PR_EDGE_CONTAINER exited before becoming healthy"
+              docker logs --tail 50 "$PR_EDGE_CONTAINER" || true
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::$PR_EDGE_CONTAINER never answered /health"
+          docker logs --tail 50 "$PR_EDGE_CONTAINER" || true
+          exit 1
+
       - name: Run the RAG round-trip + streaming leak-check + error-path check
         # scripts/verify-rag-roundtrip.py owns its own throwaway tenant
         # (rag-verify-e2e, upserted with ENABLE_RAG=true on every run) and
@@ -294,5 +382,11 @@ jobs:
             -e SUPABASE_URL="$supabase_admin_url" \
             -e SUPABASE_SERVICE_ROLE_KEY="$service_key" \
             -e SUPABASE_ANON_KEY="$anon_key" \
-            -e EDGE_API_URL="http://edge-api:8080" \
+            -e EDGE_API_URL="http://$PR_EDGE_CONTAINER:8080" \
             toolchain "cd /workspace && python3 scripts/verify-rag-roundtrip.py"
+
+      - name: Remove the edge-api under test
+        if: always()
+        run: |
+          docker rm -f "$PR_EDGE_CONTAINER" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/edge-api-under-test.env"

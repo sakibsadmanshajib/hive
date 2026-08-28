@@ -58,6 +58,18 @@ def main() -> None:
     assert check_stream_frames(usage_only_after_finish, alias) == [], \
         check_stream_frames(usage_only_after_finish, alias)
 
+    # Empty-but-present usage after finish_reason. The server's rule is
+    # `chunk.Usage != nil` (inference.ShouldSuppressPostFinishChunk), so it
+    # forwards this frame; a truthiness test on the client would call the same
+    # forwarded frame a leak. This asserts the two rules agree.
+    empty_usage_after_finish = [
+        frame(id="ragchat-abc", model=alias,
+              choices=[{"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}]),
+        frame(id="ragchat-abc", model=alias, choices=[], usage={}),
+    ]
+    assert check_stream_frames(empty_usage_after_finish, alias) == [], \
+        check_stream_frames(empty_usage_after_finish, alias)
+
     # Raw upstream id (OpenRouter gen-* shape) never minted by the gateway.
     raw_id_leak = [frame(id="gen-1787734315-abc", model=alias, choices=[])]
     violations = check_stream_frames(raw_id_leak, alias)
