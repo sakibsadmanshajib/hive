@@ -494,9 +494,14 @@ func TestExecuteStreaming_HoldCaptureBoundedByCallerCeiling(t *testing.T) {
 		t.Fatalf("no finalize call recorded; calls: %v", rec.calls)
 	}
 	credits := finalizeInt64(t, finalize, "actual_credits")
-	// acc.FreshInputTokens is 0 here: no usage block ever arrived, which is the
-	// whole point of this shape, so the ceiling price is the output side alone.
-	ceilingCredits := CreditsForTokens(routeForPricingAssertions, 0, 0, 0, ceiling)
+	// acc.FreshInputTokens is 0 here, since no usage block ever arrived, which
+	// is the whole point of this shape. The ceiling price is therefore the
+	// output side plus an ESTIMATED prompt, not the output side alone: pricing
+	// the prompt at zero because nobody counted it gives the expensive half of
+	// the request away (review round two, finding 3, and
+	// TestExecuteStreaming_HoldCaptureKeepsThePromptCost below).
+	promptEstimate := estimateCompletionTokens(promptText(EndpointChatCompletions, body))
+	ceilingCredits := CreditsForTokens(routeForPricingAssertions, promptEstimate, 0, 0, ceiling)
 	if credits > ceilingCredits {
 		t.Errorf("hold capture charged %d credits against a ceiling worth %d: a capture may not bill past the caller's own ceiling",
 			credits, ceilingCredits)

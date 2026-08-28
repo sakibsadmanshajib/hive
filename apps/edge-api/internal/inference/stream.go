@@ -721,7 +721,8 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			// the figure, and never to zero, so the fail-closed property is
 			// untouched.
 			credits = capCaptureAtCeiling(route, ceiling,
-				acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, reservation.Held())
+				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, endpoint, []byte(promptBody)),
+				acc.CachedTokens, acc.CacheWriteTokens, reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
 		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_reservation_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the reservation hold per D-034 (#1215)",

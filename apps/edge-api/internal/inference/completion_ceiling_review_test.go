@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Review findings on PR #1305 (issue #1283). Each test here is the
@@ -277,5 +278,125 @@ func TestBestOfOneOrAbsentPassesThrough(t *testing.T) {
 				t.Fatalf("status = 400 on a servable request: %s", w.Body.String())
 			}
 		})
+	}
+}
+
+// Review round two, finding 1. A ceiling field the gateway cannot read as an
+// integer was left in the outbound body, so pairing max_tokens 1 with a float
+// max_completion_tokens reopened the whole bypass through a spelling the JSON
+// number type happens not to cover: the provider parses the float, prefers it,
+// and generates against it, while settlement meters 1.
+func TestExecuteSync_UnreadableCeilingFieldIsPinnedToo(t *testing.T) {
+	litellm := newScriptedLiteLLM(t, []string{contentBody()})
+	defer litellm.server.Close()
+	routing := newRoutingMockFreePool(0)
+	defer routing.Close()
+	rec := &accountingRecorder{}
+	acct := newAccountingMock(rec)
+	defer acct.Close()
+
+	orch := newAuthorizedOrchestrator(acct.URL, routing.URL, litellm.server.URL)
+	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Write a long story."}],"max_tokens":1,"max_completion_tokens":100000.5}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer test-token")
+	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, body, "gpt-4o",
+		NeedFlags{NeedChatCompletions: true}, DefaultHoldText, orch.litellm.ChatCompletion, normalizeChatCompletion)
+
+	sent := litellm.sentBody(0)
+	maxTokens, maxCompletion := dispatchedCeilings(t, sent)
+	if maxTokens == nil || *maxTokens != 1 {
+		t.Errorf("dispatched max_tokens = %v, want 1 (body: %s)", maxTokens, sent)
+	}
+	if maxCompletion == nil || *maxCompletion != 1 {
+		t.Errorf("dispatched max_completion_tokens = %v, want 1: a ceiling this gateway cannot parse is not one it can call smaller, and the provider may well parse it (body: %s)", maxCompletion, sent)
+	}
+}
+
+// Review round two, finding 2. clampCompletionLimit fills in every ceiling
+// field the endpoint speaks, and used to fill them at
+// VariablePriceMaxCompletionTokens regardless of a smaller ceiling already in
+// the body. On chat that wrote max_completion_tokens 16384 in beside a
+// max_tokens of 1, which the provider prefers, so a variable-price alias
+// generated four orders of magnitude more than the caller asked for and billed
+// the upstream cost of it, with no settlement clamp to fall back on.
+func TestEnforceVariablePriceBounds_DoesNotRaiseACeilingTheCallerSet(t *testing.T) {
+	route := SelectRouteResult{Pricing: UpstreamActualPricing(200_000), PriceUnit: PriceUnitTokens}
+	w := httptest.NewRecorder()
+	got, ok := EnforceVariablePriceBounds(w, route, EndpointChatCompletions, "hive-auto",
+		[]byte(`{"model":"hive-auto","max_tokens":1}`))
+	if !ok {
+		t.Fatalf("unexpected refusal: %s", w.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("bounded body is not valid JSON: %v", err)
+	}
+	for _, field := range []string{"max_tokens", "max_completion_tokens"} {
+		value, present := decoded[field]
+		if !present {
+			t.Fatalf("%s missing from the bounded body: %s", field, got)
+		}
+		if number, _ := value.(float64); int64(number) != 1 {
+			t.Errorf("%s = %v, want 1: a field this gateway fills in may never carry a larger number than one the caller wrote (body: %s)", field, value, got)
+		}
+	}
+}
+
+// Review round two, finding 3. Both hold-capture branches price the bound with
+// capCaptureAtCeiling, whose bound is the catalog price of the WHOLE request at
+// the ceiling. Both are reached precisely because no usable usage block
+// arrived, so the metered input count is 0, and passing that through priced a
+// large prompt at nothing: the capture collapsed to the price of a handful of
+// output tokens and served the expensive half of the request for free.
+func TestExecuteStreaming_HoldCaptureKeepsThePromptCost(t *testing.T) {
+	const ceiling = 8
+	litellmSrv := sseNoUsageServer()
+	defer litellmSrv.Close()
+	routingSrv := newRoutingMockFreePool(0)
+	defer routingSrv.Close()
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+	prompt := strings.Repeat("a very long prompt about the sea. ", 4000)
+	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"` + prompt + `"}],"max_tokens":8,"stream":true}`)
+	w := newHeaderCommitRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = orch.executeStreaming(context.Background(), w, req, EndpointChatCompletions, body, "gpt-4o", "gpt-4o",
+			NeedFlags{NeedChatCompletions: true, NeedStreaming: true}, DefaultHoldText, false, nil, orch.litellm.ChatCompletion)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("executeStreaming did not return in time")
+	}
+
+	finalize, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("no finalize call recorded; calls: %v", rec.calls)
+	}
+	credits := finalizeInt64(t, finalize, "actual_credits")
+	promptEstimate := estimateCompletionTokens(promptText(EndpointChatCompletions, body))
+	outputOnly := CreditsForTokens(routeForPricingAssertions, 0, 0, 0, ceiling)
+	want := CreditsForTokens(routeForPricingAssertions, promptEstimate, 0, 0, ceiling)
+	if credits <= outputOnly {
+		t.Errorf("hold capture charged %d credits, no more than the %d a bare %d-token completion costs: a prompt of roughly %d tokens was served for nothing",
+			credits, outputOnly, ceiling, promptEstimate)
+	}
+	// The capture is the SMALLER of the hold and that bound, so the assertion
+	// is one-sided: it may not exceed the ceiling price, and the accounting
+	// mock holds less than it here, which is why this is not an equality.
+	if credits > want {
+		t.Errorf("hold capture charged %d credits, more than the %d this request costs at its ceiling with the prompt priced", credits, want)
+	}
+	if credits < 1 {
+		t.Errorf("hold capture charged %d credits: a served stream never bills zero (D-034)", credits)
 	}
 }

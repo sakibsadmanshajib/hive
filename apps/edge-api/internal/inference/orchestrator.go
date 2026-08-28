@@ -414,7 +414,8 @@ func (o *Orchestrator) executeSync(
 		// the fail-closed property this branch exists for is untouched.
 		if zeroContentCaptured {
 			actualCredits = capCaptureAtCeiling(route, ceiling,
-				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, reservation.Held())
+				captureInputTokens(hasUsage, cache.FreshInputTokens, endpoint, body),
+				cache.CacheReadTokens, cache.CacheWriteTokens, reservation.Held())
 			confirmed = false
 			billable = true
 		}

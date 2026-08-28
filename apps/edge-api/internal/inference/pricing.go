@@ -350,10 +350,20 @@ func EnforceVariablePriceBounds(w http.ResponseWriter, route SelectRouteResult, 
 	return bounded, true
 }
 
-// clampCompletionLimit forces each named field down to
-// VariablePriceMaxCompletionTokens, setting it when the client omitted it. Every
-// other field the caller sent survives byte for byte, the same contract
-// metering.RewriteBody keeps.
+// clampCompletionLimit forces each named field down to the effective limit,
+// setting it when the client omitted it. Every other field the caller sent
+// survives byte for byte, the same contract metering.RewriteBody keeps.
+//
+// The effective limit is VariablePriceMaxCompletionTokens, or a SMALLER ceiling
+// the caller already set, whichever is lower. That second half is load-bearing:
+// this function fills in every field the endpoint speaks, so on chat, where
+// OpenAI treats max_completion_tokens as authoritative, a caller who sent only
+// max_tokens: 1 used to have max_completion_tokens: 16384 written in beside it
+// and got a generation four orders of magnitude larger than the one they asked
+// for, billed at the cost the upstream reported for it, since a variable-price
+// alias has no settlement clamp to fall back on (review round two, finding 2).
+// Filling a field with a number the caller never wrote is only safe while that
+// number is not larger than one they did.
 func clampCompletionLimit(raw []byte, fields []string) ([]byte, error) {
 	if len(fields) == 0 {
 		return raw, nil
@@ -366,14 +376,26 @@ func clampCompletionLimit(raw []byte, fields []string) ([]byte, error) {
 		decoded = map[string]json.RawMessage{}
 	}
 
-	capped := json.RawMessage(strconv.Itoa(VariablePriceMaxCompletionTokens))
+	limit := int64(VariablePriceMaxCompletionTokens)
+	for _, field := range fields {
+		current, present := decoded[field]
+		if !present {
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(current, &value); err == nil && value > 0 && value < limit {
+			limit = value
+		}
+	}
+
+	capped := json.RawMessage(strconv.FormatInt(limit, 10))
 	for _, field := range fields {
 		current, present := decoded[field]
 		if present {
 			var value int64
 			// A field we cannot read is replaced rather than trusted: leaving
 			// an unreadable ceiling in place would defeat the bound.
-			if err := json.Unmarshal(current, &value); err == nil && value <= VariablePriceMaxCompletionTokens && value > 0 {
+			if err := json.Unmarshal(current, &value); err == nil && value <= limit && value > 0 {
 				continue
 			}
 		}

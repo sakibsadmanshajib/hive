@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 	"strconv"
@@ -117,11 +118,19 @@ func requestedCompletionCeiling(endpoint string, body []byte) int64 {
 // token. Caller-triggerable and unbounded in generation size, which is why the
 // request boundary has to be sent the same number settlement will hold.
 //
-// It only ever NARROWS. A field is rewritten only when it parses as a number
-// larger than the ceiling; an absent field stays absent, because this is not
-// the place to invent a budget nobody asked for, and an unreadable or
-// non-positive one is left exactly as written, because raising it to the
-// ceiling would widen what the provider may generate.
+// A field is kept only when it reads as a positive integer at or below the
+// ceiling. Everything else present is overwritten, including a float, a string
+// and a non-positive number, for the same reason clampCompletionLimit replaces
+// what it cannot read: a value this gateway cannot parse is not a value it can
+// call smaller, and the provider may well parse it. Leaving 100000.5 in place
+// beside max_tokens: 1 reopened the whole bypass through a spelling the JSON
+// number type happens not to cover (review round two, finding 1).
+//
+// An absent field stays absent. Filling it would change the outbound body of
+// every ordinary single-ceiling request, and a request that names one ceiling
+// is not self-contradictory, so there is nothing here to reconcile. The
+// variable-price path does fill them, and bounds what it fills by the ceiling
+// already present; see clampCompletionLimit.
 //
 // On any error the ORIGINAL bytes are returned. EnforceVariablePriceBounds is
 // what refuses an unparseable body on the one path where a pre-dispatch bound
@@ -136,6 +145,21 @@ func pinCompletionCeiling(body []byte, endpoint string, ceiling int64) []byte {
 	if ceiling <= 0 || len(fields) < 2 || len(body) == 0 {
 		return body
 	}
+	// A contradiction needs at least two ceiling fields in the body, so a byte
+	// scan settles the common case without a second full decode of a body this
+	// request has already parsed once. A false positive (both names appearing
+	// inside message content) costs one decode that then finds nothing to do,
+	// which is the direction to be wrong in.
+	present := 0
+	for _, field := range fields {
+		if bytes.Contains(body, []byte(field)) {
+			present++
+		}
+	}
+	if present < 2 {
+		return body
+	}
+
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(body, &decoded); err != nil || decoded == nil {
 		return body
@@ -144,16 +168,23 @@ func pinCompletionCeiling(body []byte, endpoint string, ceiling int64) []byte {
 	pinned := json.RawMessage(strconv.FormatInt(ceiling, 10))
 	changed := false
 	for _, field := range fields {
-		raw, present := decoded[field]
-		if !present {
+		raw, ok := decoded[field]
+		if !ok {
 			continue
 		}
 		var value int64
-		if err := json.Unmarshal(raw, &value); err != nil || value <= ceiling {
+		if err := json.Unmarshal(raw, &value); err == nil && value > 0 && value <= ceiling {
 			continue
 		}
-		log.Printf("inference: pinning an outbound completion ceiling endpoint=%s field=%s requested=%d pinned_to=%d: the request carried contradictory ceilings and settlement holds it to the smaller one",
-			endpoint, field, value, ceiling)
+		// The raw literal, not the decoded number: an unreadable field has no
+		// decoded number, and it is the literal that explains why it was
+		// replaced. Truncated because it is attacker-supplied.
+		literal := string(raw)
+		if len(literal) > 32 {
+			literal = literal[:32]
+		}
+		log.Printf("inference: pinning an outbound completion ceiling endpoint=%s field=%s requested=%q pinned_to=%d: the request carried contradictory or unreadable ceilings and settlement holds it to the smaller readable one",
+			endpoint, field, literal, ceiling)
 		decoded[field] = pinned
 		changed = true
 	}
@@ -276,6 +307,28 @@ func rewriteNormalizedUsage(normalized []byte, endpoint string, usage *UsageResp
 //
 // A variable-price alias is left alone: CreditsForTokens has no catalog price to
 // read there and says so loudly, so there is no ceiling price to compare.
+// captureInputTokens gives capCaptureAtCeiling a prompt size to price against
+// when the upstream reported none.
+//
+// The bound capCaptureAtCeiling computes is the catalog price of the whole
+// request at the ceiling, prompt included, and both branches that reach it are
+// reached precisely BECAUSE no usable usage block arrived, so the metered input
+// count sitting in the accumulator is 0. Passing that straight through priced a
+// 100,000-token prompt at nothing and collapsed the capture to the price of a
+// handful of output tokens, which is a free serve of the expensive half of the
+// request and exactly the outcome D-034 exists to prevent (review round two,
+// finding 3).
+//
+// The estimate is the same content-length one settlementCredits already uses on
+// the no-usage path, so the two agree on what an absent usage block is worth,
+// and the figure stays flagged unconfirmed either way.
+func captureInputTokens(hasUsage bool, freshInputTokens int64, endpoint string, requestBody []byte) int64 {
+	if hasUsage && freshInputTokens > 0 {
+		return freshInputTokens
+	}
+	return estimateCompletionTokens(promptText(endpoint, requestBody))
+}
+
 func capCaptureAtCeiling(route SelectRouteResult, ceiling, freshInputTokens, cacheReadTokens, cacheWriteTokens, credits int64) int64 {
 	if ceiling <= 0 || route.Pricing.IsUpstreamActual() {
 		return credits
