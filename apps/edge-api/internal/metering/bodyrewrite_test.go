@@ -103,6 +103,9 @@ func TestSupportsIncludeUsage(t *testing.T) {
 	}{
 		{"groq", true},
 		{"openrouter", true},
+		{"Groq", true},
+		{"OpenRouter", true},
+		{" groq ", true},
 		{"anthropic", false},
 		{"", false},
 	}

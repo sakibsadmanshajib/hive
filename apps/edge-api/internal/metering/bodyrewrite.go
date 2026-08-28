@@ -3,6 +3,7 @@ package metering
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // RewriteBody forces stream_options.include_usage to true on an outbound
@@ -70,6 +71,12 @@ var includeUsageSupportedProviders = map[string]bool{
 
 // SupportsIncludeUsage reports whether provider is known to accept
 // stream_options.include_usage on a streaming request without erroring.
+// Normalizes case/whitespace before the lookup: control-plane emits
+// canonical lowercase provider strings today, but this is a money-relevant
+// gate and an exact-string match would silently fail-closed to the flat
+// reservation hold on nothing worse than a differently-cased row, with
+// nothing reporting it. Normalizing here is cheaper than trusting every
+// future writer of provider_routes.provider to match case exactly.
 func SupportsIncludeUsage(provider string) bool {
-	return includeUsageSupportedProviders[provider]
+	return includeUsageSupportedProviders[strings.ToLower(strings.TrimSpace(provider))]
 }
