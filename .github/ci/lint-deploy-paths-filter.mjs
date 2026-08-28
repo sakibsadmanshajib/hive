@@ -42,7 +42,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
 
-// Exported (not just used below) so check-deploy-drift.mjs can ask this file's
+// Exported (not just used below) so list-covered-deploy-changes.mjs can ask this file's
 // exact question -- "does the paths filter cover this file" -- rather than
 // re-deriving its own copy of the glob rules.
 export const WORKFLOW_FILE = '.github/workflows/deploy-demo-box.yml';
@@ -122,12 +122,11 @@ function copySources(text) {
   return sources;
 }
 
-// Gated on direct execution, not just `import`: check-deploy-drift.mjs's
-// sibling script (list-covered-deploy-changes.mjs) imports pushPaths and
-// isCovered from this file to stay in step with it, and an import must not
-// also run the full Dockerfile scan and print its verdict to stdout as a
-// side effect -- that would corrupt the covered-changed-paths list that
-// caller builds from its own stdout.
+// Gated on direct execution, not just `import`: list-covered-deploy-changes.mjs
+// imports pushPaths and isCovered from this file to stay in step with it, and
+// an import must not also run the full Dockerfile scan and print its verdict
+// to stdout as a side effect -- that would corrupt the covered-changed-paths
+// list that caller builds from its own stdout.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const workflow = parse(readFileSync(WORKFLOW_FILE, 'utf8'));
   const filters = pushPaths(workflow);
