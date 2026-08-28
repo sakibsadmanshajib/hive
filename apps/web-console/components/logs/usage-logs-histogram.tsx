@@ -31,6 +31,19 @@ export interface LatencyBucket {
   count: number;
 }
 
+// A negative latency is not a fast request, it is bad data (clock skew
+// between the two timestamps request_attempts derives it from, or a replayed
+// event). formatLatencyMs already renders negative as the em-dash rather
+// than folding it into the fastest bucket; this predicate is what keeps the
+// histogram's "has a measured latency" decision consistent with that, so a
+// page whose only latency values are negative falls back to the honest empty
+// state instead of silently counting bad data as sub-100ms requests.
+function hasMeasuredLatency(
+  row: Pick<UsageEventRow, "latency_ms">,
+): row is Pick<UsageEventRow, "latency_ms"> & { latency_ms: number } {
+  return row.latency_ms !== undefined && row.latency_ms >= 0;
+}
+
 // Exported so the bucketing rule itself is unit-testable without mounting
 // recharts (which needs a real layout engine to report non-zero size).
 export function bucketLatencies(
@@ -38,8 +51,9 @@ export function bucketLatencies(
 ): LatencyBucket[] {
   const counts = BUCKETS.map(() => 0);
   for (const row of rows) {
-    if (row.latency_ms === undefined) continue;
-    const idx = BUCKETS.findIndex((bucket) => row.latency_ms! <= bucket.maxMs);
+    if (!hasMeasuredLatency(row)) continue;
+    const latency = row.latency_ms;
+    const idx = BUCKETS.findIndex((bucket) => latency <= bucket.maxMs);
     counts[idx === -1 ? BUCKETS.length - 1 : idx] += 1;
   }
   return BUCKETS.map((bucket, i) => ({ label: bucket.label, count: counts[i] }));
@@ -50,7 +64,7 @@ interface UsageLogsHistogramProps {
 }
 
 export function UsageLogsHistogram({ rows }: UsageLogsHistogramProps) {
-  const withLatency = rows.filter((row) => row.latency_ms !== undefined);
+  const withLatency = rows.filter(hasMeasuredLatency);
   const buckets = bucketLatencies(withLatency);
 
   return (

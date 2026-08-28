@@ -31,6 +31,17 @@ describe("bucketLatencies", () => {
     const total = buckets.reduce((sum, b) => sum + b.count, 0);
     expect(total).toBe(0);
   });
+
+  it("excludes a negative latency instead of folding it into the fastest bucket", () => {
+    // A negative value is bad data (clock skew), not a fast request.
+    // formatLatencyMs already renders it as the em-dash on the table column;
+    // the histogram must agree rather than silently count it as <100ms.
+    const buckets = bucketLatencies([row(-5), row(40)]);
+    const byLabel = Object.fromEntries(buckets.map((b) => [b.label, b.count]));
+    expect(byLabel["<100ms"]).toBe(1);
+    const total = buckets.reduce((sum, b) => sum + b.count, 0);
+    expect(total).toBe(1);
+  });
 });
 
 describe("UsageLogsHistogram", () => {
@@ -40,6 +51,15 @@ describe("UsageLogsHistogram", () => {
         rows={[{ ...baseRow(), latency_ms: undefined }]}
       />
     );
+    expect(
+      screen.getByText(
+        "No completed requests in this page carry a measured latency yet."
+      )
+    ).toBeTruthy();
+  });
+
+  it("falls back to the empty state when every row's latency is negative", () => {
+    render(<UsageLogsHistogram rows={[{ ...baseRow(), latency_ms: -12 }]} />);
     expect(
       screen.getByText(
         "No completed requests in this page carry a measured latency yet."
