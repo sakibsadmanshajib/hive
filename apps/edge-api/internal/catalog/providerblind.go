@@ -4,6 +4,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Edge-side provider-blindness guard for catalogue METADATA (issue #1284).
@@ -24,12 +25,18 @@ import (
 // it identical to apps/control-plane/internal/catalog/providerblind.go, which
 // carries the full reasoning and the note on why fifteen tokens do not justify
 // a shared Go module across the two.
+//
+// The token list carries no trailing \b on purpose: "GroqCloud" is Groq's own
+// product name and a trailing boundary loses it, since q followed by C is word
+// character to word character. The multiword patterns keep theirs, because
+// "together" and "azure" are common English words.
 var providerIdentityRegex = regexp.MustCompile(`(?i)(?:` + strings.Join([]string{
-	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)\b`,
+	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)`,
 	`\bnvidia[ _-]?nim\b`,
-	`\btogether\.?ai\b`,
+	`\btogether[ ._-]?ai\b`,
 	`\bvertex[ _-]?ai\b`,
-	`\bazure[ _-]?(?:openai|ai)\b`,
+	`\bgoogle[ _-]?vertex\b`,
+	`\bazure[ _-]?(?:openai|ai|ml)\b`,
 	`\broute-[a-z0-9][a-z0-9._/-]*`,
 }, "|") + `)`)
 
@@ -46,10 +53,19 @@ func ContainsProviderIdentity(s string) bool {
 // removed while the others survive. Alias ids are left alone: they are the
 // customer's invocation handle, so blanking one serves an unusable listing.
 func redactSnapshot(snapshot Snapshot) Snapshot {
+	// Snapshot is taken by value but Models and Catalog are slice headers, so
+	// the indexed writes below would scribble on the caller's backing array.
+	// Harmless today, since fetchSnapshot decodes a fresh value per call, and
+	// not harmless the day a cache lands in front of an unauthenticated
+	// endpoint that currently makes one HTTP call per request. Control-plane's
+	// half is careful about the same thing for its badge slice.
+	snapshot.Models = append([]Model(nil), snapshot.Models...)
+	snapshot.Catalog = append([]CatalogModel(nil), snapshot.Catalog...)
+
 	for i, model := range snapshot.Models {
 		if ContainsProviderIdentity(model.Name) {
 			logRedaction(model.ID, "name", model.Name)
-			snapshot.Models[i].Name = model.ID
+			snapshot.Models[i].Name = displayFallback(model.ID)
 		}
 		if ContainsProviderIdentity(model.Description) {
 			logRedaction(model.ID, "description", model.Description)
@@ -59,7 +75,7 @@ func redactSnapshot(snapshot Snapshot) Snapshot {
 			logRedaction(model.ID, "owned_by", model.OwnedBy)
 			snapshot.Models[i].OwnedBy = "hive"
 		}
-		if ContainsProviderIdentity(model.ID) {
+		if ContainsProviderIdentity(model.ID) && firstSighting(model.ID, "alias_id") {
 			log.Printf("catalog_provider_identity_in_alias_id alias=%q; the id is published as-is and needs a migration to rename", model.ID)
 		}
 	}
@@ -67,7 +83,7 @@ func redactSnapshot(snapshot Snapshot) Snapshot {
 	for i, entry := range snapshot.Catalog {
 		if ContainsProviderIdentity(entry.DisplayName) {
 			logRedaction(entry.ID, "display_name", entry.DisplayName)
-			snapshot.Catalog[i].DisplayName = entry.ID
+			snapshot.Catalog[i].DisplayName = displayFallback(entry.ID)
 		}
 		if ContainsProviderIdentity(entry.Summary) {
 			logRedaction(entry.ID, "summary", entry.Summary)
@@ -89,10 +105,39 @@ func redactSnapshot(snapshot Snapshot) Snapshot {
 	return snapshot
 }
 
+// displayFallback is the alias id, unless the id is itself what the guard
+// would flag, in which case falling back to it would republish the provider
+// name rather than remove it. public.model_aliases carries alias_id
+// 'openrouter-auto', and the id is deliberately published as models[].id and
+// catalog[].id; copying it into a display field puts it on the wire twice
+// more. Kept identical to the control-plane half.
+func displayFallback(aliasID string) string {
+	if ContainsProviderIdentity(aliasID) {
+		return ""
+	}
+	return aliasID
+}
+
+// seen keeps a leaky row on the unauthenticated GET /catalog/models to one log
+// line per process rather than one per request. Steady state is zero lines.
+//
+// ponytail: unbounded in principle, bounded in practice by the catalogue the
+// snapshot already holds in memory. Swap for a bounded LRU if aliases ever
+// become user-generated.
+var seen sync.Map
+
+func firstSighting(parts ...string) bool {
+	_, duplicate := seen.LoadOrStore(strings.Join(parts, "\x00"), struct{}{})
+	return !duplicate
+}
+
 // logRedaction records what was scrubbed, with the raw value, so the row can
 // be repaired by migration. Safe here: this is an internal service log, and
 // every other provider-blindness boundary in this repo logs the unsanitised
 // text for the same reason.
 func logRedaction(aliasID, field, raw string) {
+	if !firstSighting(aliasID, field, raw) {
+		return
+	}
 	log.Printf("catalog_provider_identity_redacted alias=%q field=%q raw=%q", aliasID, field, raw)
 }

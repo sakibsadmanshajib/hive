@@ -4,6 +4,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Provider-blindness guard for catalogue METADATA, as opposed to error bodies.
@@ -41,12 +42,24 @@ import (
 // already carries this duplication twice (the batch executor mirrors the
 // edge-api error list). Promote all three to one shared module when a fourth
 // copy is needed.
+//
+// WHY THE TOKEN LIST HAS NO TRAILING \b
+// A trailing word boundary fails in exactly the place a human writing a
+// product name succeeds. In "GroqCloud", Groq's own product name, the q is
+// followed by a C: word character to word character, so \b never matches and
+// the whole string walks through clean. The same shape loses "OpenRouterAI",
+// "FireworksAI" and "CerebrasCloud". Matching on the leading boundary only
+// costs nothing here, because none of these eleven tokens is the prefix of a
+// common English word. The multiword patterns below keep their trailing
+// boundary, because "together" and "azure" ARE common words and "work
+// together aiming at" must not read as together.ai.
 var providerIdentityRegex = regexp.MustCompile(`(?i)(?:` + strings.Join([]string{
-	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)\b`,
+	`\b(?:groq|openrouter|litellm|cerebras|fireworks|deepinfra|sambanova|novita|hyperbolic|perplexity|bedrock)`,
 	`\bnvidia[ _-]?nim\b`,
-	`\btogether\.?ai\b`,
+	`\btogether[ ._-]?ai\b`,
 	`\bvertex[ _-]?ai\b`,
-	`\bazure[ _-]?(?:openai|ai)\b`,
+	`\bgoogle[ _-]?vertex\b`,
+	`\bazure[ _-]?(?:openai|ai|ml)\b`,
 	`\broute-[a-z0-9][a-z0-9._/-]*`,
 }, "|") + `)`)
 
@@ -67,7 +80,8 @@ func ContainsProviderIdentity(s string) bool {
 // Each field degrades to something renderable rather than to a blank, because
 // an empty display name in the console catalogue table is its own defect:
 //
-//	display_name      -> the alias id, which the payload already publishes
+//	display_name      -> the alias id, which the payload already publishes,
+//	                     unless the id is itself leaky (see displayFallback)
 //	summary           -> dropped (omitempty on /v1/models, so the key vanishes)
 //	owned_by          -> "hive", the column default every seeded row carries
 //	capability_badges -> the offending badge only, the rest survive
@@ -78,13 +92,13 @@ func ContainsProviderIdentity(s string) bool {
 // picker without telling anyone. A leaky id is a seeding mistake that needs a
 // migration, so it is logged loudly and left visible instead.
 func redactAlias(alias ModelAlias) ModelAlias {
-	if ContainsProviderIdentity(alias.AliasID) {
+	if ContainsProviderIdentity(alias.AliasID) && firstSighting(alias.AliasID, "alias_id") {
 		log.Printf("catalog_provider_identity_in_alias_id alias=%q; the id is published as-is and needs a migration to rename", alias.AliasID)
 	}
 
 	if ContainsProviderIdentity(alias.DisplayName) {
 		logRedaction(alias.AliasID, "display_name", alias.DisplayName)
-		alias.DisplayName = alias.AliasID
+		alias.DisplayName = displayFallback(alias.AliasID)
 	}
 	if ContainsProviderIdentity(alias.Summary) {
 		logRedaction(alias.AliasID, "summary", alias.Summary)
@@ -112,11 +126,55 @@ func redactAlias(alias ModelAlias) ModelAlias {
 	return alias
 }
 
+// displayFallback is the alias id, unless the id is itself what the guard
+// would flag.
+//
+// Falling back to a leaky id does not reduce the leak, it multiplies it.
+// public.model_aliases carries alias_id 'openrouter-auto'
+// (20260822_30_openrouter_auto_variable_pricing.sql, whose own comment says
+// flipping its visibility to 'public' is a one-line follow-up migration), and
+// the id is published as models[].id and catalog[].id by design. Copying it
+// into a display field would put the provider name on the wire twice more than
+// the published contract already requires.
+//
+// The empty string is the lesser defect: an empty display name renders as a
+// gap in the console catalogue table, which is visible and fixable, while the
+// alternative is a customer reading who serves the request. It is also the
+// narrow case, since a clean alias id still gets the readable fallback.
+func displayFallback(aliasID string) string {
+	if ContainsProviderIdentity(aliasID) {
+		return ""
+	}
+	return aliasID
+}
+
+// seen records which alias-and-field pairs have already been logged this
+// process, so a leaky row on the unauthenticated GET /catalog/models produces
+// one line rather than one line per request. Steady state is zero lines, so
+// this only matters when something is already wrong, which is exactly when the
+// log needs to stay readable.
+//
+// ponytail: unbounded in principle, bounded in practice by the number of
+// catalogue rows, which is the same set the snapshot already holds in memory.
+// Swap for a bounded LRU if aliases ever become user-generated.
+var seen sync.Map
+
+// The raw value is part of the key, not just the alias and field, so a row
+// with two leaky capability badges still reports both and an edited row
+// reports again.
+func firstSighting(parts ...string) bool {
+	_, duplicate := seen.LoadOrStore(strings.Join(parts, "\x00"), struct{}{})
+	return !duplicate
+}
+
 // logRedaction records what was scrubbed, with the raw value, so the row can
 // be repaired by migration. The raw value is safe here: this is an internal
 // service log, and every other provider-blindness boundary in the repo logs
 // the unsanitised text for the same reason (see
 // apps/edge-api/internal/errors/provider_blind.go).
 func logRedaction(aliasID, field, raw string) {
+	if !firstSighting(aliasID, field, raw) {
+		return
+	}
 	log.Printf("catalog_provider_identity_redacted alias=%q field=%q raw=%q", aliasID, field, raw)
 }
