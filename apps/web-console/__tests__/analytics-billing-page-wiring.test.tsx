@@ -122,7 +122,11 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                total_credits_spent: 3,
+                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
+                // A round dollar figure keeps the rendered-text assertion
+                // below stable; the tile now formats this through
+                // formatUsdFromCredits rather than the raw integer.
+                total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
             ],
@@ -133,6 +137,12 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
         }
         if (url.includes("/analytics/errors")) {
           return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
         }
         throw new Error(`unexpected fetch: ${url}`);
       }),
@@ -146,14 +156,14 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
 
     expect(screen.queryByText("Unable to load analytics.")).toBeNull();
     // The four summary cards: total requests, input tokens, output tokens,
-    // credits spent. Pre-fix, every one of these rendered "0" regardless of
+    // total spend. Pre-fix, every one of these rendered "0" regardless of
     // what the mocked endpoints answered (issue #856); this pins the wiring
     // from the fetched rows through to the rendered totals. getByText throws
     // if the text is absent, which is the assertion.
     screen.getByText("7");
     screen.getByText("18");
     screen.getByText("4");
-    screen.getByText("3");
+    screen.getByText("$3.00");
   });
 });
 

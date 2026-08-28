@@ -13,8 +13,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 import type { CatalogModel, UsageEventRow } from "@/lib/control-plane/client";
 import {
+  bucketByTime,
   deriveBlendedCreditsPerMillion,
   deriveCacheHitRate,
+  derivePeriodDelta,
 } from "@/lib/analytics/cache-metrics";
 import { ModelCatalogBrowser } from "@/components/catalog/model-catalog-browser";
 import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
@@ -161,6 +163,85 @@ describe("deriveBlendedCreditsPerMillion", () => {
   it("returns null on a zero-token window instead of zero or Infinity", () => {
     expect(deriveBlendedCreditsPerMillion(0, 0)).toBeNull();
     expect(deriveBlendedCreditsPerMillion(500, 0)).toBeNull();
+  });
+});
+
+describe("derivePeriodDelta", () => {
+  it("reports a positive percent change when current exceeds previous", () => {
+    const result = derivePeriodDelta(150, 100);
+    expect(result.percent).toBe(50);
+    expect(result.direction).toBe("up");
+  });
+
+  it("reports a negative percent change when current is below previous", () => {
+    const result = derivePeriodDelta(50, 100);
+    expect(result.percent).toBe(-50);
+    expect(result.direction).toBe("down");
+  });
+
+  it("reports flat when current equals previous", () => {
+    const result = derivePeriodDelta(100, 100);
+    expect(result.percent).toBe(0);
+    expect(result.direction).toBe("flat");
+  });
+
+  it("returns a null percent, never a divide-by-zero Infinity, when the previous period had no data", () => {
+    // A previous period of zero is "nothing to compare against", not a
+    // percent change of positive infinity. OpenRouter's own tile prints
+    // "No prior data" in exactly this case rather than a percentage.
+    const result = derivePeriodDelta(42, 0);
+    expect(result.percent).toBeNull();
+  });
+
+  it("treats a zero previous and zero current as flat, not an absence", () => {
+    const result = derivePeriodDelta(0, 0);
+    expect(result.percent).toBeNull();
+    expect(result.direction).toBe("flat");
+  });
+});
+
+describe("bucketByTime", () => {
+  const windowStart = new Date("2026-08-24T00:00:00Z");
+  const windowEnd = new Date("2026-08-25T00:00:00Z");
+
+  it("sorts rows into the bucket their timestamp falls into", () => {
+    const rows = [
+      { created_at: "2026-08-24T01:00:00Z" }, // bucket 0 of 4 (first 6h)
+      { created_at: "2026-08-24T19:00:00Z" }, // bucket 3 of 4 (last 6h)
+    ];
+
+    const buckets = bucketByTime(rows, 4, windowStart, windowEnd);
+
+    expect(buckets).toHaveLength(4);
+    expect(buckets[0]).toEqual([rows[0]]);
+    expect(buckets[3]).toEqual([rows[1]]);
+    expect(buckets[1]).toEqual([]);
+    expect(buckets[2]).toEqual([]);
+  });
+
+  it("clamps a row whose timestamp lands exactly on windowEnd into the last bucket rather than dropping it", () => {
+    const rows = [{ created_at: windowEnd.toISOString() }];
+    const buckets = bucketByTime(rows, 3, windowStart, windowEnd);
+
+    expect(buckets[2]).toEqual(rows);
+  });
+
+  it("drops rows with an unparseable timestamp instead of throwing", () => {
+    const rows = [{ created_at: "not-a-date" }];
+    const buckets = bucketByTime(rows, 2, windowStart, windowEnd);
+
+    expect(buckets[0]).toEqual([]);
+    expect(buckets[1]).toEqual([]);
+  });
+
+  it("returns all-empty buckets rather than dividing by zero when the window has no span", () => {
+    const buckets = bucketByTime(
+      [{ created_at: "2026-08-24T01:00:00Z" }],
+      3,
+      windowStart,
+      windowStart,
+    );
+    expect(buckets).toEqual([[], [], []]);
   });
 });
 

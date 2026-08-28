@@ -110,3 +110,77 @@ export function deriveBlendedCreditsPerMillion(
   }
   return (totalCreditsSpent / totalTokens) * 1_000_000;
 }
+
+export interface PeriodDelta {
+  /**
+   * Percent change of `current` versus `previous`, e.g. 50 for a 50% rise.
+   * Null when `previous` is zero: OpenRouter's own tile renders "No prior
+   * data" in exactly this case rather than a divide-by-zero Infinity or a
+   * misleading 0%.
+   */
+  percent: number | null;
+  direction: "up" | "down" | "flat";
+}
+
+/**
+ * Percent change of a tile's current-period total versus the equal-length
+ * period immediately before it. Both totals must come from the same full
+ * server-side aggregate the tile itself renders (never a bounded sample),
+ * so the percentage is exact rather than a sample-derived estimate.
+ */
+export function derivePeriodDelta(
+  current: number,
+  previous: number,
+): PeriodDelta {
+  if (previous <= 0) {
+    return { percent: null, direction: "flat" };
+  }
+  const percent = ((current - previous) / previous) * 100;
+  return {
+    percent,
+    direction: percent > 0 ? "up" : percent < 0 ? "down" : "flat",
+  };
+}
+
+/**
+ * Splits `rows` into `bucketCount` equal-width time buckets spanning
+ * [windowStart, windowEnd], ordered oldest bucket first. Used to build the
+ * tile sparklines from the same bounded usage_events sample the cache-hit
+ * tile already fetches (see EVENT_SAMPLE_WINDOWS in the analytics page): a
+ * trend across a sample, not a claim about the full window, exactly the
+ * honesty contract deriveCacheHitRate documents above.
+ *
+ * A row whose timestamp cannot be parsed is dropped rather than thrown on.
+ * A row landing exactly on windowEnd clamps into the last bucket instead of
+ * spilling past the array. A zero-span window (or reversed bounds) returns
+ * empty buckets rather than dividing by zero.
+ */
+export function bucketByTime<T extends { created_at: string }>(
+  rows: ReadonlyArray<T>,
+  bucketCount: number,
+  windowStart: Date,
+  windowEnd: Date,
+): T[][] {
+  const buckets: T[][] = Array.from({ length: bucketCount }, () => []);
+  const startMs = windowStart.getTime();
+  const endMs = windowEnd.getTime();
+  const spanMs = endMs - startMs;
+  if (spanMs <= 0) {
+    return buckets;
+  }
+
+  for (const row of rows) {
+    const rowMs = new Date(row.created_at).getTime();
+    if (Number.isNaN(rowMs)) {
+      continue;
+    }
+    const clampedMs = Math.min(Math.max(rowMs, startMs), endMs);
+    const index = Math.min(
+      bucketCount - 1,
+      Math.floor(((clampedMs - startMs) / spanMs) * bucketCount),
+    );
+    buckets[index].push(row);
+  }
+
+  return buckets;
+}
