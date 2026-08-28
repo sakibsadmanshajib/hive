@@ -75,12 +75,15 @@ import (
 // at once, all reported as reason == "no_match" rather than err: accountID
 // has no public.tenant_billing_accounts row yet (mapping has not converged,
 // or a non-HIVE_CLOUD deployment that never maps at all -- see
-// EnsureTenantBillingAccount's doc), userID has no ACTIVE... row in
-// public.account_memberships for accountID (should not happen for a caller
-// that just updated one, but is not this function's job to assume), or
-// userID has no public.tenant_users row on the resolved tenant (a race with
-// signup provisioning). err is reserved for a genuine, unexpected database
-// fault.
+// EnsureTenantBillingAccount's doc), userID has no ACTIVE row in
+// public.account_memberships for accountID (an invited-not-yet-accepted seat
+// grants nothing, matching every other account_memberships read in this
+// codebase -- accounts/repository.go's activeMemberships and this file's own
+// backfill migration both apply the same predicate; should not happen for a
+// caller that just updated an active row, but is not this function's job to
+// assume), or userID has no public.tenant_users row on the resolved tenant
+// (a race with signup provisioning). err is reserved for a genuine,
+// unexpected database fault.
 func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID, userID uuid.UUID) (synced bool, reason string, err error) {
 	tag, err := pool.Exec(ctx, `
 		UPDATE public.tenant_users tu
@@ -89,6 +92,7 @@ func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID
 		  JOIN public.account_memberships am
 		    ON am.account_id = tba.account_id
 		   AND am.user_id    = $2
+		   AND am.status     = 'active'
 		 WHERE tba.account_id = $1
 		   AND tu.tenant_id   = tba.tenant_id
 		   AND tu.user_id     = $2
