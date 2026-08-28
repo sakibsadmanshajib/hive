@@ -16,6 +16,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/httpx"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
@@ -106,41 +107,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Honest read instead of silent truncation (issue #1250): http.MaxBytesReader
+	// Honest read instead of silent truncation (issue #1250), through the same
+	// httpx.ReadBody the other body-reading surfaces use: http.MaxBytesReader
 	// errors when the body exceeds the cap rather than quietly cutting it off,
 	// which used to make an oversized-but-valid body fail json.Unmarshal below
-	// and get reported as "bad json" with no mention of size anywhere.
+	// and get reported as "bad json" with no mention of size anywhere. It also
+	// refuses a declared-oversize body before reading it, and bounds how long
+	// the read may take, so a client that opens a connection and dribbles a
+	// body cannot hold this handler open indefinitely (issue #1299).
 	//
-	// apierr.IsTrustedBody(r.Context()) skips the cap entirely: /v1/messages
+	// apierr.IsTrustedBody(r.Context()) skips all of that: /v1/messages
 	// delegates to this handler for a session principal with a translated
 	// body that is already fully in memory and was already validated at its
 	// own ingress boundary, so re-capping it can only wrongly reject a
-	// client body that never exceeded anything (#1273 review finding 2).
-	if !apierr.IsTrustedBody(r.Context()) {
-		// Reject a declared oversize body before reading anything, mirroring
-		// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
-		// optimisation, not an error-delivery fix: it bounds the server's
-		// peak buffering for a declared-oversize body instead of reading up
-		// to the cap before erroring, but the client sees the 413 no later
-		// (often earlier), so it does not make an honest error any more
-		// reachable, and ContentLength is -1 when unknown (chunked), which
-		// fails this comparison and falls through to
-		// MaxBytesReader below.
-		if r.ContentLength > apierr.MaxRequestBodyBytes {
-			apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeRequestTooLarge, apierr.RequestTooLargeMessage())
+	// client body that never exceeded anything (#1273 review finding 2), and
+	// a bytes.Reader has no connection to time out.
+	var raw []byte
+	if apierr.IsTrustedBody(r.Context()) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "body read")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
-	}
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeRequestTooLarge, apierr.RequestTooLargeMessage())
+		raw = body
+	} else {
+		body, err := httpx.ReadBody(w, r, apierr.MaxRequestBodyBytes)
+		if err != nil {
+			if httpx.TooLarge(err) {
+				apierr.Write(w, http.StatusRequestEntityTooLarge, apierr.CodeRequestTooLarge, apierr.RequestTooLargeMessage())
+				return
+			}
+			apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "body read")
 			return
 		}
-		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "body read")
-		return
+		raw = body
 	}
 	var parsed chatRequest
 	if err := json.Unmarshal(raw, &parsed); err != nil {

@@ -82,6 +82,16 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+// Unwrap exposes the wrapped ResponseWriter to http.ResponseController, which
+// is how a handler reaches SetReadDeadline on the underlying connection. Without
+// it the controller stops at this wrapper and every SetReadDeadline call in the
+// chain silently reports http.ErrNotSupported, so the bounded body-read deadline
+// in internal/httpx would be a no-op in production while still passing its own
+// unit tests (issue #1299).
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // Hijack proxies to the underlying ResponseWriter for connections that take
 // over the raw socket.
 func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
