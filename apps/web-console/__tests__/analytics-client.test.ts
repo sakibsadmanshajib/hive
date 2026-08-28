@@ -170,3 +170,22 @@ describe("control-plane analytics calls (#856)", () => {
     ).resolves.toEqual([]);
   });
 });
+
+describe("getUsageEvents rejects the filter combination the backend 400s on", () => {
+  it("refuses a window preset together with explicit from/to bounds", async () => {
+    // parseListEventsFilter (apps/control-plane/internal/usage/http.go)
+    // answers that combination with a bad request, which the analytics page
+    // would render as an unavailable tile without ever saying the request
+    // was malformed on this side.
+    const { getUsageEvents } = await import("../lib/control-plane/client");
+
+    await expect(
+      getUsageEvents({
+        limit: 100,
+        window: "7d",
+        from: "2026-08-01T00:00:00Z",
+        to: "2026-08-08T00:00:00Z",
+      }),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+});

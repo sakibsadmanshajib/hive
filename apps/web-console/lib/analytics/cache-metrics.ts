@@ -515,7 +515,14 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
   let cacheHitSparkline: Array<number | null> | undefined;
   let sparklineCaption: string | undefined;
   const span = cacheSample ? sampleTimeSpan(cacheSample) : null;
-  if (cacheSample && cacheSample.length > 0 && span) {
+  // A sample whose rows all share one timestamp has no span, and bucketByTime
+  // answers a zero span with eight empty buckets. Drawing those would put a
+  // flat line at zero under a tile whose headline number is not zero, which is
+  // the same fabrication this file exists to avoid, so a sample with no
+  // duration gets no sparkline and no caption at all. One instant is not a
+  // trend.
+  const hasSpan = span !== null && span.end.getTime() !== span.start.getTime();
+  if (cacheSample && cacheSample.length > 0 && span && hasSpan) {
     const buckets = bucketByTime(cacheSample, SPARKLINE_BUCKETS, span.start, span.end);
     requestsSparkline = buckets.map((bucket) => bucket.length);
     inputTokensSparkline = buckets.map((bucket) =>

@@ -2423,6 +2423,16 @@ export async function getUsageEvents(
 ): Promise<UsageEventsPage> {
   const { baseUrl, headers } = await getRequestContext();
 
+  // The two time filters are mutually exclusive upstream: parseListEventsFilter
+  // 400s on a request carrying both a window preset and explicit bounds. Fail
+  // here rather than shipping a request that comes back as
+  // an opaque bad request the caller then renders as an unavailable tile.
+  if (filters.window && (filters.from || filters.to)) {
+    throw new Error(
+      "usage events: a window preset and explicit from/to bounds are mutually exclusive",
+    );
+  }
+
   const qs = new URLSearchParams();
   if (filters.limit !== undefined) {
     qs.set("limit", String(filters.limit));

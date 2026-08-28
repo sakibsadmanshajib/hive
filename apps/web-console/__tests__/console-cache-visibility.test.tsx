@@ -575,7 +575,7 @@ describe("deriveOverviewTiles", () => {
       timeWindow: "7d",
       usage: [],
       previousUsage: [],
-      cacheSample: [event(), event({ id: "e2" })],
+      cacheSample: [event(), event({ id: "e2", created_at: "2026-08-25T12:00:00Z" })],
       cacheSampleTruncated: true,
       previousCacheSample: null,
       topKeys: { spend: [], keys: [] },
@@ -586,12 +586,32 @@ describe("deriveOverviewTiles", () => {
       timeWindow: "7d",
       usage: [],
       previousUsage: [],
-      cacheSample: [event()],
+      cacheSample: [event(), event({ id: "e2", created_at: "2026-08-25T12:00:00Z" })],
       cacheSampleTruncated: false,
       previousCacheSample: null,
       topKeys: { spend: [], keys: [] },
     });
-    expect(complete.sparklineCaption).toBe("Trend across all 1 requests this window");
+    expect(complete.sparklineCaption).toBe("Trend across all 2 requests this window");
+  });
+
+  it("draws no sparkline at all for a sample that covers one instant, rather than eight measured zeros", () => {
+    // sampleTimeSpan returns start === end for a one-row sample, or for one
+    // where every row shares a timestamp, and bucketByTime answers a zero span
+    // with all-empty buckets. Rendering those would draw a flat line at zero
+    // under a headline number that is not zero.
+    const result = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [usageRow()],
+      previousUsage: [],
+      cacheSample: [event(), event({ id: "e2" })],
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: { spend: [], keys: [] },
+    });
+
+    expect(result.requestsSparkline).toBeUndefined();
+    expect(result.cacheHitSparkline).toBeUndefined();
+    expect(result.sparklineCaption).toBeUndefined();
   });
 });
 
