@@ -75,7 +75,15 @@ jobs:
         # already write tenant_settings directly the same way, and neither
         # tenant here is guaranteed to have an OWNER-role session on hand
         # for this job to authenticate as.
-        working-directory: deploy/docker
+        # Absolute, not checkout-relative: `docker compose` here must resolve
+        # the demo box's own persistent clone and its real .env (this is the
+        # running stack), not the ephemeral per-run checkout under
+        # _work/hive/hive that actions/checkout produces. Same absolute path
+        # post-deploy-verify.yml's freshness step uses for the same reason;
+        # first live run of this workflow used the checkout-relative form and
+        # failed with "couldn't find env file:
+        # /home/sakib/actions-runner/_work/hive/hive/.env" (PR #1257).
+        working-directory: /home/sakib/hive/deploy/docker
         env:
           QA_TESTER_EMAIL: ${{ secrets.HIVE_QA_TESTER_EMAIL }}
         run: |
@@ -130,7 +138,8 @@ jobs:
         # never touches the demo or QA tester tenant enabled above -- this
         # step proves the pipeline and the leak fixes work at all, the step
         # above proves the two demo-relevant tenants can reach it.
-        working-directory: deploy/docker
+        # Absolute, not checkout-relative -- see the previous step's comment.
+        working-directory: /home/sakib/hive/deploy/docker
         env:
           RAG_VERIFY_PASSWORD: ${{ secrets.RAG_VERIFY_PASSWORD }}
         run: |
