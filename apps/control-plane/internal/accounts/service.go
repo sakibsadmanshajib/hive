@@ -511,14 +511,18 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 		return ErrSelfRoleChange
 	}
 
-	if target.Role == newRole {
-		// Already the requested role: nothing to write.
-		return nil
+	if target.Role != newRole {
+		if err := s.repo.UpdateMembershipRole(ctx, accountID, targetUserID, newRole); err != nil {
+			return err
+		}
 	}
-
-	if err := s.repo.UpdateMembershipRole(ctx, accountID, targetUserID, newRole); err != nil {
-		return err
-	}
+	// No early return when the role already matches. Re-issuing the same role
+	// change writes nothing to account_memberships but still runs the sync
+	// below, which is the only operator-reachable repair for a propagation
+	// that failed on an earlier call: the sync is best-effort, so a failure
+	// leaves account_memberships and tenant_users disagreeing with nothing but
+	// a log line to show for it, and a naive retry that short-circuited here
+	// would be a no-op forever.
 
 	// Best-effort propagation onto public.tenant_users (issue #1245):
 	// platform.WorkspaceAdminGate and egress.Service both authorize off that
@@ -531,8 +535,20 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 	// committed above, which is the write this handler exists for, and an
 	// unmapped tenant or a missing tenant_users row are both ordinary
 	// transitional states, not faults.
+	//
+	// context.WithoutCancel: ctx is the request context, and the residual this
+	// call leaves behind is asymmetric. A failed promotion is benign (the user
+	// simply does not gain authority yet), while a failed demotion is #1245
+	// itself, a demoted owner keeping WorkspaceAdminGate and egress authority
+	// with the handler still returning success. The likeliest trigger is not a
+	// database fault at all but a client disconnect or a request deadline
+	// firing in the gap between the account_memberships commit above and this
+	// line, which would abort the sync for a request that has already changed
+	// the authoritative role. Detaching from cancellation removes that path;
+	// the pool's own timeouts still bound the statement.
 	if s.billing != nil {
-		if _, reason, sErr := signup.SyncTenantMembershipRole(ctx, s.billing, accountID, targetUserID); sErr != nil {
+		syncCtx := context.WithoutCancel(ctx)
+		if _, reason, sErr := signup.SyncTenantMembershipRole(syncCtx, s.billing, accountID, targetUserID); sErr != nil {
 			log.Printf("accounts: tenant_users role sync failed account=%s user=%s: %v", accountID, targetUserID, sErr)
 		} else if reason != "" {
 			log.Printf("accounts: tenant_users role sync skipped account=%s user=%s reason=%s", accountID, targetUserID, reason)

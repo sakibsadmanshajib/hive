@@ -29,11 +29,23 @@ package signup
 // insertPersonalMembership), specifically so a personal tenant never reaches
 // WorkspaceAdminGate's feature-gate/marketplace admin surfaces. A read-side
 // join through account_memberships would have silently granted every
-// self-serve Hive Cloud signup that access. Syncing on write, from the one
-// call site that ever changes account_memberships.role after signup, cannot
-// touch a personal tenant's row at all: UpdateMemberRole always rejects a
-// role change against a single-member account (ErrLastOwner or
-// ErrSelfRoleChange), so this function is simply never invoked for one.
+// self-serve Hive Cloud signup that access.
+//
+// Syncing on write does not get that protection for free either, which is why
+// the promotion arm of the statement below is gated on
+// public.tenants.personal_owner_user_id IS NULL. An earlier revision of this
+// file argued the gate was unnecessary because UpdateMemberRole always
+// rejects a role change against a single-member account (ErrLastOwner or
+// ErrSelfRoleChange). That premise is false: nothing keeps a personal
+// account single-member. Service.CreateInvitation has no account_type guard
+// and 20260727_02 widened public.account_invitations.role to include 'owner',
+// so the account's own user can invite a second identity as a co-owner, and
+// that co-owner can then promote the original user through the public
+// Members-page endpoint. Without the gate, that sequence writes 'OWNER' onto
+// the personal tenant's row and hands the exact feature-gate, marketplace and
+// egress authority the 'MEMBER' hardcode exists to withhold. The gate is on
+// the promotion arm only: demotion stays unconditional, because removing
+// authority is always the safe direction.
 
 import (
 	"context"
@@ -50,26 +62,61 @@ import (
 // Deliberately does not take the caller's requested role as a parameter and
 // write it directly: accounts.Service.UpdateMemberRole already committed the
 // account_memberships write before calling this, so re-reading it fresh,
-// inside the same UPDATE statement that writes tenant_users, is what makes
-// this call race-safe against a second, concurrent UpdateMemberRole call for
-// the same user. Two overlapping calls (a promote and a demote for the same
+// inside the same UPDATE statement that writes tenant_users, NARROWS the
+// reordering window between two concurrent UpdateMemberRole calls for the
+// same user. Two overlapping calls (a promote and a demote for the same
 // account_memberships row, however unlikely) can commit their
 // account_memberships writes in either order; whichever commits LAST is,
 // correctly, the final account_memberships value. If this function instead
 // trusted its own caller's newRole parameter, the two resulting
 // tenant_users writes could themselves be reordered independently of that,
 // and the loser could leave tenant_users disagreeing with the
-// account_memberships row that actually won -- reproducing a narrow window
-// of exactly the bug this function exists to close (issue #1245). Reading
-// account_memberships fresh inside the UPDATE means every call converges on
-// whatever account_memberships currently says at the moment it runs, not
-// what its own caller asked for.
+// account_memberships row that actually won -- reproducing exactly the bug
+// this function exists to close (issue #1245).
+//
+// Narrows, not closes. Do not read the paragraph above as a claim of
+// race-safety. The read of account_memberships is not serialized against the
+// write to tenant_users: under READ COMMITTED this statement takes its
+// snapshot when it starts, so a promoting call that reads am.role = 'owner',
+// is then overtaken by a demoting call that commits both its
+// account_memberships write and its own sync, can still land its 'OWNER' on
+// tenant_users afterwards and leave the two tables disagreeing until the next
+// role change. Closing it needs the two writes in one transaction, which is
+// what issue #1295 proposes and why that issue is not merely an atomicity
+// nicety. A cheaper partial close, if #1295 stalls, is SELECT ... FOR UPDATE
+// on the account_memberships row inside this statement.
 //
 // A single UPDATE ... FROM, not a SELECT then an UPDATE: one round trip, and
 // no separate "resolve the tenant" step to race against a mapping that
 // changes between two queries (it does not, tenant_billing_accounts rows are
 // never reassigned, but there is no reason to take two round trips for what
 // one accomplishes).
+//
+// The CASE moves the OWNER bit and nothing else. public.tenant_users.role has
+// a four-value domain (OWNER, ADMIN, MEMBER, VIEWER -- the CHECK in
+// 20260516_03_phase19_tenant_users.sql), while public.account_memberships.role
+// has two (accounts.NormalizeRole accepts only owner and member), so a naive
+// CASE am.role WHEN 'owner' THEN 'OWNER' ELSE 'MEMBER' END would flatten the
+// larger domain onto the smaller one on every billing role change: ADMIN would
+// silently lose the INSERT/UPDATE/DELETE grant the tenant_users RLS policies
+// give role IN ('OWNER','ADMIN'), and VIEWER, a genuinely lower tier that
+// public.owui_role passes through unchanged (20260823_03) and Open WebUI's
+// OAUTH_ALLOWED_ROLES lists separately, would be silently WIDENED to MEMBER.
+// Neither tier is written by a live product path today, but both are reachable
+// through PostgREST for a tenant OWNER or ADMIN, so this statement declines to
+// have an opinion about tiers it was never told about: ELSE tu.role.
+//
+// Two guards on the promotion arm, neither on the demotion arm:
+// personal_owner_user_id IS NULL (see the package comment above), and
+// tu.status = 'ACTIVE'. The status guard exists because suspension is how a
+// tenant removes a member's authority without deleting the row, and stamping
+// OWNER onto a SUSPENDED or INVITED row would restore an owner the tenant
+// never granted the moment anything reactivates it (reconcile.go's insert is
+// ON CONFLICT DO NOTHING and will not correct the role on an existing row).
+// The demotion arm is deliberately left unguarded rather than moved into the
+// WHERE clause as the backfill migration does it: a WHERE-side status filter
+// would also stop a stale OWNER on a suspended row from ever being demoted,
+// which is the unsafe half of the same trade.
 //
 // RowsAffected() == 0 covers three ordinary, non-fatal, transitional states
 // at once, all reported as reason == "no_match" rather than err: accountID
@@ -84,11 +131,30 @@ import (
 // assume), or userID has no public.tenant_users row on the resolved tenant
 // (a race with signup provisioning). err is reserved for a genuine,
 // unexpected database fault.
+//
+// One string for three states is a real operator limitation, called out here
+// rather than papered over: reason == "no_match" in a log line does not say
+// whether an unmapped tenant was skipped harmlessly or a demotion failed to
+// land, and those are not equally serious. Splitting them costs a second
+// query on a path that runs once per Members-page role change, so it is not
+// done here; an operator chasing a specific user reads the three predicates
+// above directly. Note that the demotion direction cannot silently no-op
+// through the arm this function controls: whenever the row is found at all,
+// a tenant_users OWNER whose account_memberships row is not an active owner
+// is demoted regardless of tenant type or tenant_users status.
 func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID, userID uuid.UUID) (synced bool, reason string, err error) {
 	tag, err := pool.Exec(ctx, `
 		UPDATE public.tenant_users tu
-		   SET role = CASE am.role WHEN 'owner' THEN 'OWNER' ELSE 'MEMBER' END
+		   SET role = CASE
+		                WHEN am.role = 'owner'
+		                 AND t.personal_owner_user_id IS NULL
+		                 AND tu.status = 'ACTIVE'  THEN 'OWNER'
+		                WHEN tu.role = 'OWNER'     THEN 'MEMBER'
+		                ELSE tu.role
+		              END
 		  FROM public.tenant_billing_accounts tba
+		  JOIN public.tenants t
+		    ON t.id = tba.tenant_id
 		  JOIN public.account_memberships am
 		    ON am.account_id = tba.account_id
 		   AND am.user_id    = $2
