@@ -61,3 +61,37 @@ func TestExecuteResponsesStreaming_OversizedUpstreamLine_ClientGetsHonestFailedE
 		t.Error("terminal_usage_confirmed must be false: no real usage arrived before the abort")
 	}
 }
+
+// TestExecuteResponsesStreaming_NormalCompletion_BodyUnaffectedByScannerErrCheck
+// is the Responses API twin of the chat-completions no-regression control:
+// proves the new scanner.Err() branch does not fire for an ordinary
+// completion, so response.completed still terminates the stream and
+// response.failed never appears.
+func TestExecuteResponsesStreaming_NormalCompletion_BodyUnaffectedByScannerErrCheck(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	litellmSrv := completingSSEServer()
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	orch.executeResponsesStreaming(context.Background(), w, req, []byte(`{}`), ResponsesRequest{Model: "gpt-4o"}, "gpt-4o",
+		NeedFlags{NeedResponses: true, NeedStreaming: true}, 10000)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "response.completed") {
+		t.Errorf("expected the stream to still end with response.completed; body:\n%s", body)
+	}
+	if strings.Contains(body, "response.failed") {
+		t.Error("a normal completion must never emit the abort response.failed event")
+	}
+}
