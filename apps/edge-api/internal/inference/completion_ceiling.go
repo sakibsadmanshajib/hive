@@ -124,7 +124,8 @@ func requestedCompletionCeiling(endpoint string, body []byte) int64 {
 // what it cannot read: a value this gateway cannot parse is not a value it can
 // call smaller, and the provider may well parse it. Leaving 100000.5 in place
 // beside max_tokens: 1 reopened the whole bypass through a spelling the JSON
-// number type happens not to cover (review round two, finding 1).
+// number type happens not to cover (review round two, second stream, finding
+// 1).
 //
 // An absent field stays absent. Filling it would change the outbound body of
 // every ordinary single-ceiling request, and a request that names one ceiling

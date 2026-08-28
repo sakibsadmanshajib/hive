@@ -361,7 +361,8 @@ func EnforceVariablePriceBounds(w http.ResponseWriter, route SelectRouteResult, 
 // max_tokens: 1 used to have max_completion_tokens: 16384 written in beside it
 // and got a generation four orders of magnitude larger than the one they asked
 // for, billed at the cost the upstream reported for it, since a variable-price
-// alias has no settlement clamp to fall back on (review round two, finding 2).
+// alias has no settlement clamp to fall back on (review round two, second
+// stream, finding 2).
 // Filling a field with a number the caller never wrote is only safe while that
 // number is not larger than one they did.
 func clampCompletionLimit(raw []byte, fields []string) ([]byte, error) {

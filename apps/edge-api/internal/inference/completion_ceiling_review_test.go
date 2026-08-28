@@ -281,11 +281,12 @@ func TestBestOfOneOrAbsentPassesThrough(t *testing.T) {
 	}
 }
 
-// Review round two, finding 1. A ceiling field the gateway cannot read as an
-// integer was left in the outbound body, so pairing max_tokens 1 with a float
-// max_completion_tokens reopened the whole bypass through a spelling the JSON
-// number type happens not to cover: the provider parses the float, prefers it,
-// and generates against it, while settlement meters 1.
+// Review round two, second stream, finding 1. A ceiling field the gateway
+// cannot read as an integer was left in the outbound body, so pairing
+// max_tokens 1 with a float max_completion_tokens reopened the whole bypass
+// through a spelling the JSON number type happens not to cover: the provider
+// parses the float, prefers it, and generates against it, while settlement
+// meters 1.
 func TestExecuteSync_UnreadableCeilingFieldIsPinnedToo(t *testing.T) {
 	litellm := newScriptedLiteLLM(t, []string{contentBody()})
 	defer litellm.server.Close()
@@ -313,8 +314,8 @@ func TestExecuteSync_UnreadableCeilingFieldIsPinnedToo(t *testing.T) {
 	}
 }
 
-// Review round two, finding 2. clampCompletionLimit fills in every ceiling
-// field the endpoint speaks, and used to fill them at
+// Review round two, second stream, finding 2. clampCompletionLimit fills in
+// every ceiling field the endpoint speaks, and used to fill them at
 // VariablePriceMaxCompletionTokens regardless of a smaller ceiling already in
 // the body. On chat that wrote max_completion_tokens 16384 in beside a
 // max_tokens of 1, which the provider prefers, so a variable-price alias
@@ -343,9 +344,9 @@ func TestEnforceVariablePriceBounds_DoesNotRaiseACeilingTheCallerSet(t *testing.
 	}
 }
 
-// Review round two, finding 3. Both hold-capture branches price the bound with
-// capCaptureAtCeiling, whose bound is the catalog price of the WHOLE request at
-// the ceiling. Both are reached precisely because no usable usage block
+// Review round two, second stream, finding 3. Both hold-capture branches price
+// the bound with capCaptureAtCeiling, whose bound is the catalog price of the
+// WHOLE request at the ceiling. Both are reached precisely because no usable usage block
 // arrived, so the metered input count is 0, and passing that through priced a
 // large prompt at nothing: the capture collapsed to the price of a handful of
 // output tokens and served the expensive half of the request for free.

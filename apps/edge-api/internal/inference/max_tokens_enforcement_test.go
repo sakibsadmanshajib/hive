@@ -498,7 +498,7 @@ func TestExecuteStreaming_HoldCaptureBoundedByCallerCeiling(t *testing.T) {
 	// is the whole point of this shape. The ceiling price is therefore the
 	// output side plus an ESTIMATED prompt, not the output side alone: pricing
 	// the prompt at zero because nobody counted it gives the expensive half of
-	// the request away (review round two, finding 3, and
+	// the request away (review round two, second stream, finding 3, and
 	// TestExecuteStreaming_HoldCaptureKeepsThePromptCost below).
 	promptEstimate := estimateCompletionTokens(promptText(EndpointChatCompletions, body))
 	ceilingCredits := CreditsForTokens(routeForPricingAssertions, promptEstimate, 0, 0, ceiling)
