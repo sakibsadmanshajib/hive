@@ -1,0 +1,122 @@
+{
+  "CHAT": "https://chat-hive.scubed.co",
+  "CONSOLE": "https://console-hive.scubed.co",
+  "API": "https://api-hive.scubed.co",
+  "results": [
+    {
+      "step": 1,
+      "title": "Landing and sign-in on chat",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 2,
+      "title": "Model picker: catalogue and metadata",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 3,
+      "title": "Plain chat turn, streamed (TTFT)",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 4,
+      "title": "Same prompt, other provider family",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 5,
+      "title": "Multi-turn conversation (prompt caching)",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 6,
+      "title": "Tool or function calling",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 7,
+      "title": "File upload / attachment",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 8,
+      "title": "RAG: upload document, ask against it",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 9,
+      "title": "Voice",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 10,
+      "title": "Cowork (skipped by flag)",
+      "verdict": "UGLY",
+      "observed": "skipped",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 11,
+      "title": "Console: sign in, API keys, usage, billing, catalogue",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 12,
+      "title": "Raw curl: /v1/chat/completions and /v1/messages",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": 13,
+      "title": "Sign out and back in",
+      "verdict": "UGLY",
+      "observed": "skipped (--only-cowork/--only-owner-signup)",
+      "notes": "",
+      "screenshots": []
+    },
+    {
+      "step": "owner-signup",
+      "title": "Owner account: self-service signup",
+      "verdict": "BROKEN",
+      "observed": "signup submit did not yield a Supabase user id (precheck/turnstile/signup itself may have failed; see screenshot)",
+      "notes": "",
+      "screenshots": [
+        "01-owner-01-signup-form.png",
+        "02-owner-02-signup-result.png"
+      ]
+    }
+  ]
+}
