@@ -59,9 +59,10 @@ Concretely observed patterns:
   (live measurement)`, later in the *same file*, with different numbers for the same
   rows and a section titled "What actually shipped, and what only appears to have
   shipped."
-- `spec-2026-08-16-hive-ui-redesign.md` carries an inline `> Correction, 2026-08-23`
-  callout near the top marking specific passages below it superseded, without
-  removing them.
+- `spec-2026-08-16-hive-ui-redesign.md` carries an inline callout near the top,
+  `> **Correction, 2026-08-23. Parts of this document are superseded by owner
+  rulings of that date.**`, marking specific passages below it superseded,
+  without removing them.
 
 Before quoting a match, grep the same file for a later dated heading or a
 `Correction`/`Re-score`/`Revised`/`superseded` marker that postdates the passage:
