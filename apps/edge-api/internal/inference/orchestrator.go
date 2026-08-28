@@ -168,6 +168,13 @@ func (o *Orchestrator) executeSync(
 	// nothing. 0 means they set none.
 	ceiling := requestedCompletionCeiling(endpoint, body)
 
+	// Then send the provider that same number. A body carrying two
+	// contradictory ceilings used to be forwarded verbatim while settlement
+	// held it to the smaller one, which let a caller pair max_tokens 1 with
+	// max_completion_tokens 100000 and buy a full-size generation for the price
+	// of one completion token. See pinCompletionCeiling; it only ever narrows.
+	body = pinCompletionCeiling(body, endpoint, ceiling)
+
 	// 2d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
@@ -335,7 +342,7 @@ func (o *Orchestrator) executeSync(
 	// After 7b, not before: the retry above replaces normalized and usage
 	// wholesale, so a clamp applied first would be discarded on exactly the
 	// path the reserve was built for.
-	if clampUsageToCeiling(usage, ceiling, endpoint, model) {
+	if clampUsageToCeiling(usage, route, ceiling, endpoint, model) {
 		normalized = rewriteNormalizedUsage(normalized, endpoint, usage)
 	}
 
@@ -386,7 +393,7 @@ func (o *Orchestrator) executeSync(
 			}
 		} else {
 			actualCredits, confirmed, billable = settlementCredits(route, hasUsage,
-				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content)
+				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content, ceiling)
 		}
 
 		// Zero-content capture (issue #1171): a completion that returned no

@@ -106,6 +106,12 @@ func (o *Orchestrator) executeResponsesStreaming(
 	// same contract as the sync path's step 2c (issue #1283).
 	ceiling := requestedCompletionCeiling(EndpointResponses, body)
 
+	// Pin the outbound body to it, same contract as the sync path. A no-op
+	// here today, since this endpoint speaks exactly one ceiling field, but it
+	// is the same call the other two paths make so a second field added to
+	// completionLimitFields cannot quietly reopen the bypass on this one.
+	body = pinCompletionCeiling(body, EndpointResponses, ceiling)
+
 	// 3d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
@@ -259,7 +265,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 			// max_output_tokens (#1283), before acc.Accumulate copies it and
 			// before emitCompleted translates it into the response.completed
 			// event's usage block.
-			clampUsageToCeiling(chunk.Usage, ceiling, EndpointResponses, model)
+			clampUsageToCeiling(chunk.Usage, route, ceiling, EndpointResponses, model)
 			// Same capture as executeStreaming. Without it this path can only
 			// ever fail closed for a variable-price alias, because settleStream
 			// reads these bytes and ChatCompletionChunk has already discarded

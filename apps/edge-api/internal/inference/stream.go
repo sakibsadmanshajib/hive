@@ -209,6 +209,12 @@ func (o *Orchestrator) executeStreaming(
 	// same contract as the sync path's step 2c (issue #1283).
 	ceiling := requestedCompletionCeiling(endpoint, body)
 
+	// And pin the outbound body to it, same contract as the sync path: two
+	// contradictory ceilings must not reach the provider as the larger one
+	// while settlement holds the request to the smaller. See
+	// pinCompletionCeiling.
+	body = pinCompletionCeiling(body, endpoint, ceiling)
+
 	// 3d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
@@ -396,7 +402,7 @@ func (o *Orchestrator) executeStreaming(
 					// ledger charge and the usage frame the caller receives are
 					// the same number by construction rather than by two
 					// clamps agreeing.
-					clampUsageToCeiling(chunk.Usage, ceiling, endpoint, aliasID)
+					clampUsageToCeiling(chunk.Usage, route, ceiling, endpoint, aliasID)
 					// Keep the untyped bytes only for a route that settles
 					// against the upstream's reported cost; see RawUsageChunk.
 					if route.Pricing.IsUpstreamActual() {
@@ -574,13 +580,28 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // reason the figure is defensible. The catalog conversion here does not change
 // that: it only turns the estimated token count into the alias's price, so an
 // under-counted estimate stays under-counted in credits too.
-func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64, prompt, content string) (credits int64, confirmed bool, delivered bool) {
+func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64, prompt, content string, ceiling int64) (credits int64, confirmed bool, delivered bool) {
 	if hasUsage && freshInputTokens+cacheReadTokens+cacheWriteTokens+outputTokens > 0 {
 		return CreditsForTokens(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens), true, true
 	}
 	completion := estimateCompletionTokens(content)
 	if completion == 0 {
 		return 0, false, false
+	}
+	// Bound the estimate by the ceiling the caller set (#1283). This branch is
+	// reached exactly when the upstream sent no usable usage block, which is
+	// also exactly when clampUsageToCeiling had no usage object to cap: without
+	// this, the one settlement path that prices from content length was the one
+	// path with no ceiling on it at all, and a 200 carrying content and no
+	// usage block billed 41 times a max_tokens of 8. The streaming caller
+	// survived that only because its unconfirmed branch discards this figure
+	// for a hold capture that is already bounded; the synchronous caller has no
+	// such override. A guess about how many tokens some text came to may not
+	// exceed the number the caller authorized.
+	if ceiling > 0 && completion > ceiling {
+		log.Printf("inference: bounding a content-length completion estimate at the requested ceiling alias=%s estimated_completion_tokens=%d requested_max_tokens=%d",
+			route.AliasID, completion, ceiling)
+		completion = ceiling
 	}
 	// A content-based estimate carries no cache breakdown at all: nothing
 	// downstream of a byte-length guess can tell a cache token apart from a
@@ -636,7 +657,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
-		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content, ceiling)
 	}
 
 	// A frame reached the caller even though nothing accumulated: an

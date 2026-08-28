@@ -377,7 +377,7 @@ func TestRequestedCompletionCeiling(t *testing.T) {
 func TestClampUsageToCeiling(t *testing.T) {
 	t.Run("caps and recomputes the total", func(t *testing.T) {
 		usage := &UsageResponse{PromptTokens: 20, CompletionTokens: 1650, TotalTokens: 1670}
-		if !clampUsageToCeiling(usage, 8, EndpointChatCompletions, "hive-free") {
+		if !clampUsageToCeiling(usage, routeForPricingAssertions, 8, EndpointChatCompletions, "hive-free") {
 			t.Fatal("clampUsageToCeiling reported no change on an over-ceiling usage block")
 		}
 		if usage.CompletionTokens != 8 || usage.TotalTokens != 28 {
@@ -386,7 +386,7 @@ func TestClampUsageToCeiling(t *testing.T) {
 	})
 	t.Run("leaves an in-budget response alone", func(t *testing.T) {
 		usage := &UsageResponse{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25}
-		if clampUsageToCeiling(usage, 8, EndpointChatCompletions, "hive-free") {
+		if clampUsageToCeiling(usage, routeForPricingAssertions, 8, EndpointChatCompletions, "hive-free") {
 			t.Error("clamped a usage block already inside the ceiling")
 		}
 		if usage.CompletionTokens != 5 || usage.TotalTokens != 25 {
@@ -395,11 +395,25 @@ func TestClampUsageToCeiling(t *testing.T) {
 	})
 	t.Run("no ceiling and nil usage are pass-throughs", func(t *testing.T) {
 		usage := &UsageResponse{PromptTokens: 20, CompletionTokens: 1650, TotalTokens: 1670}
-		if clampUsageToCeiling(usage, 0, EndpointChatCompletions, "hive-free") {
+		if clampUsageToCeiling(usage, routeForPricingAssertions, 0, EndpointChatCompletions, "hive-free") {
 			t.Error("clamped with no ceiling set")
 		}
-		if clampUsageToCeiling(nil, 8, EndpointChatCompletions, "hive-free") {
+		if clampUsageToCeiling(nil, routeForPricingAssertions, 8, EndpointChatCompletions, "hive-free") {
 			t.Error("clamped a nil usage block")
+		}
+	})
+	// Review finding 3 on PR #1305: a variable-price alias settles on the cost
+	// the upstream reported, which this clamp never touches, so clamping the
+	// usage block there would only advertise a completion count nobody was
+	// billed on.
+	t.Run("a variable-price alias is left alone", func(t *testing.T) {
+		route := SelectRouteResult{AliasID: "hive-auto", Pricing: UpstreamActualPricing(DefaultHoldText), PriceUnit: PriceUnitTokens}
+		usage := &UsageResponse{PromptTokens: 20, CompletionTokens: 1650, TotalTokens: 1670}
+		if clampUsageToCeiling(usage, route, 8, EndpointChatCompletions, "hive-auto") {
+			t.Error("clamped the usage block of an alias billed on the upstream reported cost")
+		}
+		if usage.CompletionTokens != 1650 || usage.TotalTokens != 1670 {
+			t.Errorf("usage = %+v, want it untouched", usage)
 		}
 	})
 }

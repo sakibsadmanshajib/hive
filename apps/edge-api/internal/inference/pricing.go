@@ -262,8 +262,14 @@ func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens
 // charge anything.
 func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64,
 	requestBody []byte, content string) (credits int64, confirmed bool, delivered bool) {
+	// The completion ceiling is read from the same request bytes, so a content
+	// estimate on this surface is bounded by what the caller asked for exactly
+	// as it is on the API-key path (#1283, review finding 2). Reading it here
+	// rather than taking it as an argument keeps the one detail a second caller
+	// could get wrong in the same place promptText already is.
 	return settlementCredits(route, hasUsage, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
-		promptText(EndpointChatCompletions, requestBody), content)
+		promptText(EndpointChatCompletions, requestBody), content,
+		requestedCompletionCeiling(EndpointChatCompletions, requestBody))
 }
 
 // Request bounds for a variable-price alias.

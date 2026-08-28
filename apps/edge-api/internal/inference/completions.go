@@ -34,6 +34,12 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 		writeUnsupportedChoiceCountError(w)
 		return
 	}
+	// best_of is the same defect and takes the same refusal, reusing the same
+	// predicate: absent and 1 are servable, everything else is not.
+	if unsupportedChoiceCount(req.BestOf) {
+		writeUnsupportedBestOfError(w)
+		return
+	}
 
 	// LiteLLM routes legacy completions through chat/completions-capable routes.
 	needFlags := NeedFlags{

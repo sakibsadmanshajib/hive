@@ -99,12 +99,18 @@ type CompletionRequest struct {
 	Temperature   *float64        `json:"temperature,omitempty"`
 	TopP          *float64        `json:"top_p,omitempty"`
 	N             *int            `json:"n,omitempty"`
-	Stop          json.RawMessage `json:"stop,omitempty"`
-	Suffix        *string         `json:"suffix,omitempty"`
-	Echo          *bool           `json:"echo,omitempty"`
-	Logprobs      *int            `json:"logprobs,omitempty"`
-	Seed          *int            `json:"seed,omitempty"`
-	User          *string         `json:"user,omitempty"`
+	// BestOf is declared so the handler can REFUSE it, not so it can be
+	// honoured: see writeUnsupportedBestOfError. Nothing reads it beyond that
+	// guard, and the outbound body is re-marshalled from a map rather than from
+	// this struct, so an undeclared field would have reached the provider
+	// anyway.
+	BestOf   *int            `json:"best_of,omitempty"`
+	Stop     json.RawMessage `json:"stop,omitempty"`
+	Suffix   *string         `json:"suffix,omitempty"`
+	Echo     *bool           `json:"echo,omitempty"`
+	Logprobs *int            `json:"logprobs,omitempty"`
+	Seed     *int            `json:"seed,omitempty"`
+	User     *string         `json:"user,omitempty"`
 }
 
 // CompletionResponse is the OpenAI-compatible legacy completion response.

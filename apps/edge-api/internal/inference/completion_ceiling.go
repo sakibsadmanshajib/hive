@@ -3,6 +3,7 @@ package inference
 import (
 	"encoding/json"
 	"log"
+	"strconv"
 )
 
 // Caller completion ceilings (issue #1283).
@@ -67,6 +68,14 @@ import (
 // A field that is absent, null, non-positive or unparseable contributes
 // nothing: a caller who set no usable ceiling declared no budget for this
 // gateway to hold them to.
+//
+// Stated rather than left to be discovered: that means max_tokens: 0, a
+// negative, 8.0 and "8" all read as NO ceiling, and such a request bills in
+// full. OpenAI itself rejects max_tokens below 1, and a non-integer or a
+// ceiling sent as a string is not a budget any two readers would agree on, so
+// inventing one here would bound the charge by a number the caller never
+// wrote. Refusing those shapes at the request boundary is a separate contract
+// change; it is deliberately not what a settlement bound does.
 func requestedCompletionCeiling(endpoint string, body []byte) int64 {
 	fields := completionLimitFields[endpoint]
 	if len(fields) == 0 || len(body) == 0 {
@@ -93,6 +102,73 @@ func requestedCompletionCeiling(endpoint string, body []byte) int64 {
 	return ceiling
 }
 
+// pinCompletionCeiling writes the settled ceiling back over every ceiling
+// field PRESENT in the outbound body that currently exceeds it, and returns
+// the body to dispatch.
+//
+// Without it the two boundaries enforce different numbers.
+// requestedCompletionCeiling takes the SMALLER of the two chat spellings, but
+// the outbound body carried both verbatim, and OpenAI treats
+// max_completion_tokens as authoritative while max_tokens is deprecated (Groq
+// documents the same preference). So a body pairing max_tokens 1 with
+// max_completion_tokens 100000 was dispatched unchanged: the provider
+// generated a full-size completion, settlement metered it at 1, and the caller
+// bought that generation on the 4:1 expensive output side for the price of one
+// token. Caller-triggerable and unbounded in generation size, which is why the
+// request boundary has to be sent the same number settlement will hold.
+//
+// It only ever NARROWS. A field is rewritten only when it parses as a number
+// larger than the ceiling; an absent field stays absent, because this is not
+// the place to invent a budget nobody asked for, and an unreadable or
+// non-positive one is left exactly as written, because raising it to the
+// ceiling would widen what the provider may generate.
+//
+// On any error the ORIGINAL bytes are returned. EnforceVariablePriceBounds is
+// what refuses an unparseable body on the one path where a pre-dispatch bound
+// is load-bearing, and a failed re-encode must not turn a servable request
+// into a 400.
+func pinCompletionCeiling(body []byte, endpoint string, ceiling int64) []byte {
+	fields := completionLimitFields[endpoint]
+	// One ceiling field cannot contradict itself: the ceiling was read from
+	// these same fields, so with fewer than two it already equals what the
+	// body carries. Skipping the decode keeps legacy completions, the
+	// Responses API and embeddings at zero cost on the hot path.
+	if ceiling <= 0 || len(fields) < 2 || len(body) == 0 {
+		return body
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(body, &decoded); err != nil || decoded == nil {
+		return body
+	}
+
+	pinned := json.RawMessage(strconv.FormatInt(ceiling, 10))
+	changed := false
+	for _, field := range fields {
+		raw, present := decoded[field]
+		if !present {
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(raw, &value); err != nil || value <= ceiling {
+			continue
+		}
+		log.Printf("inference: pinning an outbound completion ceiling endpoint=%s field=%s requested=%d pinned_to=%d: the request carried contradictory ceilings and settlement holds it to the smaller one",
+			endpoint, field, value, ceiling)
+		decoded[field] = pinned
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+
+	out, err := json.Marshal(decoded)
+	if err != nil {
+		log.Printf("inference: could not re-encode the request body after pinning the completion ceiling endpoint=%s: %v", endpoint, err)
+		return body
+	}
+	return out
+}
+
 // clampUsageToCeiling caps usage.CompletionTokens at the caller's ceiling and
 // recomputes total_tokens, reporting whether it changed anything.
 //
@@ -109,8 +185,20 @@ func requestedCompletionCeiling(endpoint string, body []byte) int64 {
 // Every clamp is logged. An upstream routinely overrunning a ceiling it was
 // sent is a provider fault worth seeing, and after this fix it is also the
 // signal that something re-inflated the outbound body again.
-func clampUsageToCeiling(usage *UsageResponse, ceiling int64, endpoint, aliasID string) bool {
+func clampUsageToCeiling(usage *UsageResponse, route SelectRouteResult, ceiling int64, endpoint, aliasID string) bool {
 	if usage == nil || ceiling <= 0 || usage.CompletionTokens <= ceiling {
+		return false
+	}
+	// A variable-price alias is left alone, for the same reason
+	// capCaptureAtCeiling leaves it alone: its charge is derived from the cost
+	// the upstream reported for that generation, which this clamp cannot reach
+	// (settlement reads the raw response bytes, never this struct). Capping the
+	// usage block there would not move the charge by one credit, and would
+	// leave the caller reading a completion count they were not billed on,
+	// which is the exact divergence the paragraph above exists to prevent. What
+	// bounds that mode instead is EnforceVariablePriceBounds at the request
+	// boundary and the hold clamp in finalizeLocked. hive-auto is live in it.
+	if route.Pricing.IsUpstreamActual() {
 		return false
 	}
 	log.Printf("inference: completion ceiling clamp engaged endpoint=%s alias=%s requested_max_tokens=%d upstream_completion_tokens=%d billed_completion_tokens=%d",
