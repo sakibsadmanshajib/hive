@@ -1,0 +1,332 @@
+name: deploy-drift-watchdog
+
+# Answers one question deploy-demo-box.yml itself cannot answer about its own
+# runs: "did every commit on main that should have deployed actually get a
+# deploy run at all?" (issue #1238).
+#
+# ── Why this cannot be a push-triggered check ────────────────────────────
+#
+# A workflow that never runs does not fail. It is absent, and absence reads
+# as success on a green PR page. That is exactly what happened on 2026-08-26:
+# PR #1222 squash-merged as 483ba7983, touched apps/edge-api/** (which
+# deploy-demo-box.yml's paths filter matches explicitly) and also touched
+# files ci.yml has no paths filter on at all, yet BOTH workflows produced no
+# run whatsoever for that push. Not a paths-filter gap (the two prior
+# occurrences of this general symptom, PR #786 and PR #971, both were, and
+# both are now guarded by .github/ci/lint-deploy-paths-filter.mjs); this one
+# was a webhook or dispatch anomaly with no config to blame, resolved only by
+# a manual workflow_dispatch once a human happened to notice.
+#
+# The failure mode that suppressed deploy-demo-box's run would, by the same
+# mechanism, suppress a push-triggered guard sitting next to it: whatever
+# swallowed the push event swallows it for every workflow listening on that
+# push, not just the one whose absence someone happened to check. So this
+# watchdog is deliberately NOT `on: push`. It runs on a schedule, asks GitHub
+# what state main and deploy-demo-box's run history are ACTUALLY in right
+# now, and does not depend on the same push delivery it exists to audit.
+#
+# ── Cadence ───────────────────────────────────────────────────────────────
+#
+# Every 30 minutes. This repository is public, so hosted-runner minutes cost
+# nothing. deploy-demo-box.yml's own history runs a handful of times on a
+# busy day (single digits to low tens), nowhere near external-uptime-probe's
+# every-15-minutes outage cadence, so 30 minutes bounds how long a real
+# divergence can sit unnoticed without polling far more often than main ever
+# actually moves. Combined with the grace window below (15 minutes), worst
+# case detection latency is under an hour, well inside a working day.
+#
+# ── False positives (the two legitimate "no deploy ran" cases) ──────────
+#
+#   1. The newest commits on main touch nothing deploy-demo-box.yml's paths
+#      filter covers (a docs-only or workflow-only change, say). No deploy
+#      SHOULD have run. Checked by list-covered-deploy-changes.mjs, which
+#      reuses lint-deploy-paths-filter.mjs's own filter-matching so this
+#      watchdog and that lint can never disagree about the same commit.
+#   2. A deploy for the current tip is already queued or running. Checked
+#      directly against the live run list; still in flight is not silently
+#      absent.
+#
+# A grace window (15 minutes since the newest covered commit landed) covers
+# the ordinary case neither of the above catches: normal webhook delivery
+# and queueing latency between a push landing and its run appearing in the
+# run list at all. A watchdog that fires on that lag trains everyone to
+# ignore it, which is the same failure this repository already logged for a
+# monitor that cries wolf (`external-uptime-probe.yml`'s own reasoning).
+#
+# ── Alert mechanism ───────────────────────────────────────────────────────
+#
+# One deduped GitHub issue (title-matched, same shape agent-visual-proof.yml
+# already uses: list open issues, comment on a match, else create). Chosen
+# over a bare failing scheduled check because nobody watches the Actions tab
+# for a workflow they did not personally trigger; chosen over a PR comment
+# because there usually is no PR at the time main drifts. The job itself
+# still exits non-zero on a real divergence, which is a side effect of
+# detecting one, not a second alert mechanism.
+#
+# ── What this deliberately does NOT do ───────────────────────────────────
+#
+# It does not have the deploy job record its shipped SHA on the box for this
+# watchdog to cross-check. post-deploy-verify.yml's "Assert every container
+# runs the image its tag now points to" step (issue #869) already answers
+# the harder version of that question -- not "did a workflow run" but "is
+# the box actually serving what the last successful run built" -- so adding
+# a second, narrower on-box ledger here would duplicate that job rather than
+# extend it. Revisit only if #869's freshness check turns out not to cover
+# this watchdog's blind spot in practice.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      override_base_sha:
+        description: >-
+          Test hook: treat this as the last-successful-deploy SHA instead of
+          auto-detecting one from run history. Leave blank for a real check.
+        type: string
+        default: ''
+      override_head_sha:
+        description: >-
+          Test hook: treat this as main's tip SHA instead of asking the API.
+          Leave blank for a real check. Set equal to override_base_sha (or
+          leave both blank) to exercise the "stays quiet" path on demand.
+        type: string
+        default: ''
+  # Label-gated, the same shape post-deploy-verify.yml and owui-nightly.yml
+  # use for the same reason: workflow_dispatch is unusable until this file
+  # exists on the default branch, so the pull_request that adds it needs its
+  # own way to prove the alert fires red and then stays quiet, before merge.
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+  # `gh run list` against this repo's own deploy-demo-box.yml history reads
+  # the Actions runs API, which the default GITHUB_TOKEN only gets once
+  # `permissions:` is present at all if this scope is listed explicitly.
+  actions: read
+  issues: write
+
+jobs:
+  check:
+    name: Check main against the last successful deploy
+    if: >-
+      ${{
+        github.event_name == 'schedule'
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-deploy-drift-watchdog'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: both the last-successful-deploy SHA and main's tip
+          # need to already be present locally for `git diff` below, and
+          # neither is necessarily an ancestor of whatever ref this event
+          # checked out (a pull_request run checks out the PR's merge ref,
+          # not main).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure main's history is present locally
+        # Redundant on a schedule/workflow_dispatch run (already on main),
+        # load-bearing on a pull_request run (checked out the PR ref
+        # instead). The explicit refspec, not a bare `git fetch origin
+        # main`, is what guarantees `origin/main` itself gets created or
+        # updated: actions/checkout does not promise a wildcard fetch
+        # refspec is configured, so this does not depend on that default.
+        run: git fetch origin +refs/heads/main:refs/remotes/origin/main --quiet
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install repo-level dev deps
+        # Only need `yaml`, for list-covered-deploy-changes.mjs below.
+        run: npm ci --ignore-scripts
+
+      - name: Decide whether this run carries a simulated divergence
+        # Only reachable from a pull_request run (workflow_dispatch has its
+        # own override_base_sha input already). Forces base_sha back to an
+        # old ancestor of main so the covered-changes check below finds real
+        # matches without needing to fabricate any commit or touch the repo.
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          simulate=false
+          case "$PR_LABELS" in
+            *"\"deploy-drift-test:simulate-divergence\""*) simulate=true ;;
+          esac
+          echo "SIMULATE_DIVERGENCE=$simulate" >> "$GITHUB_ENV"
+          echo "simulate divergence: $simulate"
+
+      - name: Resolve base and head commits
+        id: resolve
+        env:
+          OVERRIDE_BASE_SHA: ${{ github.event.inputs.override_base_sha }}
+          OVERRIDE_HEAD_SHA: ${{ github.event.inputs.override_head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${OVERRIDE_HEAD_SHA:-}" ]; then
+            head_sha="$OVERRIDE_HEAD_SHA"
+            echo "head: using override_head_sha"
+          else
+            head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+            echo "head: main tip is $head_sha"
+          fi
+
+          no_baseline=false
+          in_flight=false
+          if [ -n "${OVERRIDE_BASE_SHA:-}" ]; then
+            base_sha="$OVERRIDE_BASE_SHA"
+            echo "base: using override_base_sha"
+          elif [ "${SIMULATE_DIVERGENCE:-false}" = "true" ]; then
+            base_sha=$(git rev-parse origin/main~200)
+            echo "base: simulated, 200 commits behind main ($base_sha)"
+          else
+            # Last 30 runs is comfortably more than deploy-demo-box.yml fires
+            # in any single day (issue #1238's own history: single digits to
+            # low tens on a busy day), so the newest success in that window
+            # is the real last-known-good baseline, not a stale one from a
+            # quiet stretch.
+            runs_json=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow=deploy-demo-box.yml --branch=main -L 30 \
+              --json headSha,status,conclusion,createdAt)
+
+            base_sha=$(echo "$runs_json" | jq -r \
+              '[.[] | select(.conclusion == "success")] | first | .headSha // empty')
+            if [ -z "$base_sha" ]; then
+              no_baseline=true
+              echo "base: no successful run found in the last 30 -- cannot establish a baseline"
+            else
+              echo "base: last successful deploy was $base_sha"
+            fi
+
+            if echo "$runs_json" | jq -e '[.[] | select(.status != "completed")] | length > 0' >/dev/null; then
+              in_flight=true
+              echo "a deploy-demo-box run is currently queued or in progress"
+            fi
+          fi
+
+          {
+            echo "head_sha=$head_sha"
+            echo "base_sha=$base_sha"
+            echo "no_baseline=$no_baseline"
+            echo "in_flight=$in_flight"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: List covered changes since the baseline
+        id: changes
+        if: steps.resolve.outputs.no_baseline != 'true'
+        run: |
+          set -euo pipefail
+          node .github/ci/list-covered-deploy-changes.mjs \
+            "${{ steps.resolve.outputs.base_sha }}" "${{ steps.resolve.outputs.head_sha }}" \
+            | tee covered-changes.txt
+          count=$(wc -l < covered-changes.txt | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count covered path(s) changed between the two SHAs"
+
+      - name: Decide freshness of the newest covered change
+        id: age
+        if: steps.resolve.outputs.no_baseline != 'true' && steps.changes.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          committed=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${{ steps.resolve.outputs.head_sha }}" \
+            --jq '.commit.committer.date')
+          committed_epoch=$(date -u -d "$committed" +%s)
+          now_epoch=$(date -u +%s)
+          age_minutes=$(( (now_epoch - committed_epoch) / 60 ))
+          # 15 minutes: this workflow's own header comment justifies it.
+          within_grace=false
+          [ "$age_minutes" -lt 15 ] && within_grace=true
+          echo "within_grace=$within_grace" >> "$GITHUB_OUTPUT"
+          echo "main's tip is ${age_minutes} minute(s) old (grace window: 15)"
+
+      - name: Verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          reason=""
+          if [ "${{ steps.resolve.outputs.no_baseline }}" = "true" ]; then
+            reason="no successful deploy-demo-box run was found in the last 30 runs, so no baseline could be established"
+          elif [ "${{ steps.changes.outputs.count }}" = "0" ]; then
+            echo "quiet: no covered path changed since the last successful deploy -- absence of a new run is correct"
+            echo "alert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "${{ steps.resolve.outputs.in_flight }}" = "true" ]; then
+            echo "quiet: a deploy-demo-box run is currently queued or in progress for main"
+            echo "alert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "${{ steps.age.outputs.within_grace }}" = "true" ]; then
+            echo "quiet: within the 15-minute grace window since the newest covered commit landed"
+            echo "alert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            reason="main has ${{ steps.changes.outputs.count }} covered path change(s) since the last successful deploy ($SHORT_BASE), older than the 15-minute grace window, with no deploy currently in flight"
+          fi
+          echo "REASON=$reason" >> "$GITHUB_ENV"
+          echo "alert=true" >> "$GITHUB_OUTPUT"
+          echo "::error::deploy drift detected: $reason"
+          exit 1
+        env:
+          SHORT_BASE: ${{ steps.resolve.outputs.base_sha }}
+
+      - name: File or update the tracking issue
+        # `always()` because the verdict step above deliberately exits 1 on
+        # a real divergence (so the scheduled run itself shows red), and a
+        # failed step skips every step after it unless told not to.
+        #
+        # No test/real split here on purpose: a manual workflow_dispatch or
+        # labeled pull_request run that simulates a divergence exercises
+        # this exact step, filing or commenting on the real tracking issue,
+        # because that is the only way to actually prove the alert fires
+        # rather than just the detection logic upstream of it. Verified by
+        # hand and cleaned up (issue closed) once confirmed; see this
+        # change's own pull request for the run that proved it.
+        if: always() && steps.verdict.outputs.alert == 'true'
+        env:
+          TITLE: main has advanced past the last successful deploy-demo-box run
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Capped: a simulated test divergence (200 commits back) can list
+          # thousands of paths, well past what fits in an issue body. A real
+          # divergence between two adjacent deploys is normally a handful.
+          total=$(wc -l < covered-changes.txt 2>/dev/null | tr -d ' ')
+          listed=$(head -50 covered-changes.txt 2>/dev/null || echo '(none listed -- see the run log)')
+          if [ "${total:-0}" -gt 50 ]; then
+            listed=$(printf '%s\n... and %s more (see the run log)' "$listed" "$((total - 50))")
+          fi
+          body=$(printf '%s\n' \
+            "$REASON" \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "Covered, changed paths since the baseline:" \
+            '```' \
+            "$listed" \
+            '```' \
+            "" \
+            "This is issue #1238's own failure mode: a merge to main can produce no" \
+            "deploy-demo-box run at all, with nothing else noticing. Check whether" \
+            "deploy-demo-box.yml ran for the head commit above; if it did not, a manual" \
+            "\`gh workflow run deploy-demo-box.yml\` ships it. Close this once a" \
+            "successful deploy run's headSha catches up to main.")
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
+                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          if [ -n "${num:-}" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$body" || true
+            echo "commented on existing tracking issue #$num"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+            echo "opened the tracking issue"
+          fi
