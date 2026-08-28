@@ -61,21 +61,28 @@ var ErrAccountNotProvisioned = errors.New(
 // probe that asserts a weaker predicate than the request path is a false green,
 // and the only structural defence is one predicate with one definition.
 func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
-	tenantID, err := uuid.Parse(s.TenantID)
-	if err != nil || tenantID == uuid.Nil {
-		// Loud on purpose (found live 2026-08-28: a security reviewer's
-		// freshly minted key 403'd with no operator-visible signal anywhere
-		// but the HTTP response itself). account_not_provisioned is a
-		// customer-facing 403, which is loud to the caller, but until this
-		// line nothing told an operator it happened at all -- the only
-		// existing watcher is the OWUI shim-key probe (main.go
-		// checkOWUIShimKey), which covers exactly one account. AccountID and
-		// KeyID are internal identifiers, safe to log; never log the raw key
-		// secret, which this snapshot does not carry.
-		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", s.AccountID, s.KeyID)
+	return ParseTenantID(s.TenantID, s.AccountID, s.KeyID)
+}
+
+// ParseTenantID is TenantUUID's check, exported so a caller holding only the
+// raw tenant_id string plus the account_id/key_id it came from -- rather than
+// a full AuthSnapshot -- can still route through the one definition instead
+// of re-implementing it. images.RoutingAdapter and audio.RoutingAdapter are
+// exactly that: their RouteInput threads the string form of an
+// already-resolved AuthSnapshot.TenantID across a package boundary and lost
+// the snapshot along the way, which is what let two more account_not_provisioned
+// call sites go silent right alongside the three TenantUUID already covered
+// (found live 2026-08-28, same incident: a security reviewer's freshly
+// minted key 403'd with no operator-visible signal anywhere but the HTTP
+// response itself). AccountID and KeyID are internal identifiers, safe to
+// log; never log the raw key secret, which no caller of this function holds.
+func ParseTenantID(tenantID, accountID, keyID string) (uuid.UUID, error) {
+	id, err := uuid.Parse(tenantID)
+	if err != nil || id == uuid.Nil {
+		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", accountID, keyID)
 		return uuid.Nil, ErrAccountNotProvisioned
 	}
-	return tenantID, nil
+	return id, nil
 }
 
 // RatePolicy is the edge-side rate-limit projection for one scope.

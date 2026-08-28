@@ -1,12 +1,15 @@
 package images_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -145,5 +148,39 @@ func TestRoutingAdapterRefusesEntitlementDenial(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected SelectRoute to refuse a tenant-restricted alias")
+	}
+}
+
+// TestRoutingAdapterLogsAccountNotProvisioned is the #1240 review-comment
+// regression guard: this adapter used to fail closed with a local uuid.Parse
+// that never told an operator anything happened, alongside audio's identical
+// gap, while /v1/models and /v1/chat/completions were already loud. Proven
+// the same way the reviewer proved authz.TenantUUID's log: comment out the
+// account_id/key_id fields on RouteInput below (or the ParseTenantID call in
+// routing_adapter.go) and this test fails; restore either and it passes.
+func TestRoutingAdapterLogsAccountNotProvisioned(t *testing.T) {
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	adapter := images.NewRoutingAdapter(inference.NewRoutingClient("http://unused.invalid"))
+
+	_, err := adapter.SelectRoute(context.Background(), images.RouteInput{
+		AliasID:             "hive-restricted-image",
+		TenantID:            "",
+		AccountID:           "acct-repro",
+		APIKeyID:            "key-repro",
+		NeedImageGeneration: true,
+	})
+	if !errors.Is(err, images.ErrAccountNotProvisioned) {
+		t.Fatalf("expected ErrAccountNotProvisioned, got %v", err)
+	}
+
+	got := buf.String()
+	for _, want := range []string{"account_not_provisioned", "acct-repro", "key-repro"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected log output to contain %q, got %q", want, got)
+		}
 	}
 }

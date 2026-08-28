@@ -60,7 +60,13 @@ type RouteInput struct {
 	// TenantID is the requesting API key's resolved tenant (AuthResult.TenantID).
 	// RoutingAdapter binds it onto ctx before calling the routing client and
 	// fails closed if it is missing or unparseable (#623).
-	TenantID            string
+	TenantID string
+	// AccountID and APIKeyID are threaded through for exactly one reason:
+	// authz.ParseTenantID logs them when TenantID fails to parse, so an
+	// account_not_provisioned 403 from this endpoint is operator-visible the
+	// same way it is on /v1/models and /v1/chat/completions.
+	AccountID           string
+	APIKeyID            string
 	NeedImageGeneration bool
 	NeedImageEdit       bool
 }
@@ -201,6 +207,8 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:             req.Model,
 		TenantID:            auth.TenantID,
+		AccountID:           auth.AccountID,
+		APIKeyID:            auth.APIKeyID,
 		NeedImageGeneration: true,
 	})
 	if err != nil {
@@ -341,6 +349,8 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:       modelAlias,
 		TenantID:      auth.TenantID,
+		AccountID:     auth.AccountID,
+		APIKeyID:      auth.APIKeyID,
 		NeedImageEdit: true,
 	})
 	if err != nil {

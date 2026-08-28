@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
@@ -43,8 +43,14 @@ func NewRoutingAdapter(inner *inference.RoutingClient) *RoutingAdapter {
 // resolvable tenant fails closed here, before the routing client is ever
 // called, rather than falling back to unfiltered access.
 func (a *RoutingAdapter) SelectRoute(ctx context.Context, input RouteInput) (RouteResult, error) {
-	tenantID, err := uuid.Parse(input.TenantID)
-	if err != nil || tenantID == uuid.Nil {
+	// authz.ParseTenantID rather than a local uuid.Parse: it is the same
+	// account_not_provisioned check and log every other fail-closed path
+	// uses (authz.AuthSnapshot.TenantUUID), so this one cannot drift out of
+	// step with it the way it already had (found live 2026-08-28). The
+	// local ErrAccountNotProvisioned below is kept: this function's error
+	// text and type are unchanged, only the check and its visibility are shared.
+	tenantID, err := authz.ParseTenantID(input.TenantID, input.AccountID, input.APIKeyID)
+	if err != nil {
 		return RouteResult{}, fmt.Errorf("audio: select route: %w", ErrAccountNotProvisioned)
 	}
 	ctx = auth.WithUser(ctx, &auth.User{TenantID: tenantID})
