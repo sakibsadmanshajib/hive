@@ -822,3 +822,75 @@ func TestHandler_CountTokens_SessionPrincipalDoesNotConsultTheAPIKeyAuthority(t 
 		t.Errorf("API-key authority consulted %d times for a session principal, want 0", calls)
 	}
 }
+
+// TestHandler_CountTokens_RefusalCarriesTheAuthorizersRetryHeaders is the
+// header half of the same refusal TestHandler_CountTokens_RejectedAPIKeyKeepsTheAuthorizersOwnRefusal
+// checks the body half of. WriteAuthFailure is the shared source of truth
+// precisely so a retryable 429 is never collapsed into a bare non-retryable
+// refusal, and it delivers the retryable part through headers: recording the
+// body and discarding those headers restores exactly the collapse it exists to
+// prevent, since the Anthropic SDK reads retry-after for its backoff.
+func TestHandler_CountTokens_RefusalCarriesTheAuthorizersRetryHeaders(t *testing.T) {
+	code := "rate_limit_exceeded"
+	h := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: &fakeChat{},
+		AuthorizeAPIKey: func(_ context.Context, _ string) (*apierr.OpenAIError, map[string]string) {
+			refusal := apierr.NewError("rate_limit_error", "Rate limit reached.", &code)
+			return &refusal, map[string]string{
+				"retry-after":                    "30",
+				"x-ratelimit-limit-requests":     "100",
+				"x-ratelimit-remaining-requests": "0",
+			}
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newCountTokensRequest("Bearer hk_throttled"))
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("throttled key: want 429 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Errorf("retry-after: want 30 got %q", got)
+	}
+	if got := rec.Header().Get("X-Ratelimit-Limit-Requests"); got != "100" {
+		t.Errorf("x-ratelimit-limit-requests: want 100 got %q", got)
+	}
+	if got := rec.Header().Get("X-Ratelimit-Remaining-Requests"); got != "0" {
+		t.Errorf("x-ratelimit-remaining-requests: want 0 got %q", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["type"] != "rate_limit_error" {
+		t.Errorf("error.type: want rate_limit_error got %v", errObj["type"])
+	}
+}
+
+// TestHandler_CountTokens_UpstreamUnavailableCarriesRetryAfter covers the other
+// branch that populates the header map: the authorizer refusing because the
+// control plane is unreachable. A 503 telling the caller to retry without
+// saying when sends every SDK retry layer back to its own short backoff,
+// against a dependency that is by construction already unable to answer.
+func TestHandler_CountTokens_UpstreamUnavailableCarriesRetryAfter(t *testing.T) {
+	code := "upstream_unavailable"
+	h := anthropic.NewHandler(anthropic.Deps{
+		OpenAIChat: &fakeChat{},
+		AuthorizeAPIKey: func(_ context.Context, _ string) (*apierr.OpenAIError, map[string]string) {
+			refusal := apierr.NewError("api_error", "Authorization is temporarily unavailable.", &code)
+			return &refusal, map[string]string{"retry-after": "5"}
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newCountTokensRequest("Bearer hk_live_test"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("degraded authorizer: want 503 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("retry-after: want 5 got %q", got)
+	}
+}

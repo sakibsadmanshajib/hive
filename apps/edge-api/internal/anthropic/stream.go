@@ -145,17 +145,7 @@ func (t *SSETranslator) FeedLine(line []byte) bool {
 		return false
 	}
 
-	if !t.started {
-		t.started = true
-		// Always mint a fresh gateway-owned id, one per stream, reused on
-		// every subsequent chunk via t.messageID. Never derive from
-		// chunk.ID: that carries the upstream's own id verbatim (OpenRouter
-		// "gen-*", Groq "chatcmpl-*"), and the old "msg_"-prefix behavior
-		// still shipped that raw upstream id to the client -- see
-		// FromOAIResponse for the non-streaming twin of this fix.
-		t.messageID = "msg_" + uuid.New().String()
-		t.emitMessageStart()
-	}
+	t.ensureStarted()
 
 	if chunk.Usage != nil {
 		cacheRead, cacheWrite := 0, 0
@@ -204,12 +194,37 @@ func (t *SSETranslator) Finish() {
 	}
 	t.done = true
 
+	// An upstream stream that yielded no parseable chunk at all never reached
+	// emitMessageStart, and the terminal sequence alone is not a stream any
+	// Anthropic client can read: the SDK accumulator raises a RuntimeError for
+	// unexpected event order when a message_delta arrives while its snapshot is
+	// still nil. Opening the message here costs two events and turns that crash
+	// into an empty turn.
+	t.ensureStarted()
+
 	if t.hasOpenBlock {
 		t.emitContentBlockStop(t.openBlockIndex)
 		t.hasOpenBlock = false
 	}
 	t.emitMessageDelta()
 	t.emitMessageStop()
+}
+
+// ensureStarted emits message_start exactly once per stream, whether the first
+// upstream chunk or the terminal sequence gets there first.
+func (t *SSETranslator) ensureStarted() {
+	if t.started {
+		return
+	}
+	t.started = true
+	// Always mint a fresh gateway-owned id, one per stream, reused on every
+	// subsequent chunk via t.messageID. Never derive from chunk.ID: that
+	// carries the upstream own id verbatim (OpenRouter "gen-*", Groq
+	// "chatcmpl-*"), and the old "msg_"-prefix behavior still shipped that raw
+	// upstream id to the client -- see FromOAIResponse for the non-streaming
+	// twin of this fix.
+	t.messageID = "msg_" + uuid.New().String()
+	t.emitMessageStart()
 }
 
 // WriteErr returns the first write error the translator hit, if any.

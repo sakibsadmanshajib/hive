@@ -248,9 +248,11 @@ func (h *Handler) authorizeCountTokens(w http.ResponseWriter, r *http.Request) b
 	// (401 vs 403 vs 429 vs 503) stays the single implementation the rest of
 	// edge-api uses, then reshape the envelope for an Anthropic client. This
 	// never re-sanitizes: the authorizer's refusals are already customer-safe.
+	// reshapeInto, not a bare reshape, so the retry metadata WriteAuthFailure
+	// sets on a 429 or a 503 reaches the client instead of dying in the recorder.
 	rec := &headerlessRecorder{}
 	apierr.WriteAuthFailure(rec, authErr, headers)
-	reshapeToAnthropicError(w, rec.status, rec.body.Bytes())
+	rec.reshapeInto(w)
 	return false
 }
 

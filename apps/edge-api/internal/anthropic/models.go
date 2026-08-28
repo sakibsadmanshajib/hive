@@ -71,6 +71,15 @@ func IsAnthropicClient(r *http.Request) bool {
 // here, because a model list is small and never streamed.
 func ModelsCompat(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// One URL, two representations, chosen by request headers. Nothing on
+		// this route sets Cache-Control and the route needs a credential, so no
+		// correct cache stores it today, but any intermediary keying on URL
+		// alone (or an edge cache added in front of Caddy later) could hand an
+		// Anthropic-shaped body to an OpenAI-shaped caller and empty Open
+		// WebUI's model picker. Declared on both branches, before either
+		// writes, since a Vary set after WriteHeader is a Vary nobody sends.
+		w.Header().Set("Vary", "anthropic-version, x-api-key")
+
 		if !IsAnthropicClient(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -83,7 +92,11 @@ func ModelsCompat(next http.Handler) http.Handler {
 		}
 
 		if rec.status < 200 || rec.status > 299 {
-			reshapeToAnthropicError(w, rec.status, rec.body.Bytes())
+			// reshapeInto, not a bare reshape: a refusal from
+			// authorizeAliasRequest carries retry-after and the x-ratelimit-*
+			// family on the recorder, and an Anthropic client reads them for
+			// its backoff exactly as an OpenAI-shaped one does.
+			rec.reshapeInto(w)
 			return
 		}
 

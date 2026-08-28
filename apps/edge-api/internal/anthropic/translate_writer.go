@@ -33,6 +33,34 @@ func (r *headerlessRecorder) WriteHeader(status int) { r.status = status }
 
 func (r *headerlessRecorder) Write(p []byte) (int, error) { return r.body.Write(p) }
 
+// reshapeInto re-emits the recorded response to the real client writer in the
+// Anthropic error envelope, carrying over the headers the recorded writer set.
+//
+// The carry-over is the point of the method existing at all. apierr.WriteAuthFailure
+// delivers half of a refusal through the body and the other half through headers:
+// a 429 arrives with retry-after and the x-ratelimit-* family, and both the
+// degraded-limiter and upstream_unavailable branches arrive with retry-after.
+// Recording the body and dropping the headers turns a retryable refusal into one
+// the Anthropic SDK backs off from on its own default schedule, which is exactly
+// the collapse that shared writer exists to prevent. Pairing the copy with the
+// reshape in one call keeps a call site from taking one half without the other.
+//
+// Content-Type and Content-Length are deliberately not carried over: the
+// reshaped body is a different envelope of a different length, and a stale
+// Content-Length would truncate it on the wire. Everything else forwarded here
+// is retry metadata that carries no provider identity.
+func (r *headerlessRecorder) reshapeInto(w http.ResponseWriter) {
+	for key, values := range r.header {
+		if key == "Content-Type" || key == "Content-Length" {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	reshapeToAnthropicError(w, r.status, r.body.Bytes())
+}
+
 // maxTranslatedBodyBytes bounds how much of a buffered response the translator
 // holds in memory, matching the ceiling the OpenAI sync path already applies
 // when reading an upstream body.

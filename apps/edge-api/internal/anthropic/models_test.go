@@ -179,3 +179,90 @@ func TestIsAnthropicClient(t *testing.T) {
 		})
 	}
 }
+
+// TestModelsCompat_RefusalCarriesTheRetryHeaders is the regression guard for
+// the header half of a refusal. handleModels answers an unauthorized or
+// throttled API-key caller through apierrors.WriteAuthFailure, which delivers
+// the status and message in the body and the retry metadata in the headers.
+// Buffering the body for reshaping and dropping the headers would leave an
+// Anthropic SDK backing off on its own default schedule against a gateway that
+// just told it exactly how long to wait.
+func TestModelsCompat_RefusalCarriesTheRetryHeaders(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "30")
+		w.Header().Set("X-Ratelimit-Limit-Requests", "100")
+		w.Header().Set("X-Ratelimit-Remaining-Requests", "0")
+		// A stale length for the OpenAI-shaped body, which must not follow the
+		// shorter Anthropic envelope onto the wire.
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"Rate limit reached.","type":"rate_limit_error","code":"rate_limit_exceeded"}}`))
+	})
+
+	h := anthropic.ModelsCompat(upstream)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status: want 429 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Errorf("retry-after: want 30 got %q", got)
+	}
+	if got := rec.Header().Get("X-Ratelimit-Limit-Requests"); got != "100" {
+		t.Errorf("x-ratelimit-limit-requests: want 100 got %q", got)
+	}
+	if got := rec.Header().Get("X-Ratelimit-Remaining-Requests"); got != "0" {
+		t.Errorf("x-ratelimit-remaining-requests: want 0 got %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got == "4096" {
+		t.Errorf("content-length: the delegated body length must not describe the reshaped one, got %q", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type: want application/json got %q", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, rec.Body.String())
+	}
+	if body["type"] != "error" {
+		t.Errorf("envelope: want top-level type=error got %v", body["type"])
+	}
+}
+
+// TestModelsCompat_DeclaresVary pins the cache-correctness half of serving two
+// representations from one URL. Nothing on this route sets Cache-Control and
+// the route needs a credential, so no correct cache stores it today; the
+// declaration is what keeps a future edge cache, or an intermediary keying on
+// URL alone, from handing an Anthropic-shaped body to Open WebUI and emptying
+// its model picker.
+func TestModelsCompat_DeclaresVary(t *testing.T) {
+	h := anthropic.ModelsCompat(openAIModelsHandler(http.StatusOK, openAIModelListBody))
+
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{name: "anthropic client", headers: map[string]string{"x-api-key": "hk_live_test"}},
+		{name: "openai client", headers: map[string]string{"Authorization": "Bearer hk_live_test"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			got := rec.Header().Get("Vary")
+			if !strings.Contains(got, "anthropic-version") || !strings.Contains(got, "x-api-key") {
+				t.Errorf("vary: want both request headers that select the representation, got %q", got)
+			}
+		})
+	}
+}

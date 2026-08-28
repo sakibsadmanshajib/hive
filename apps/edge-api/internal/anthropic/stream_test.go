@@ -583,3 +583,73 @@ func TestSSETranslator_ToolUseBlockStartCarriesExplicitEmptyInput(t *testing.T) 
 		t.Fatal("no tool_use content_block_start was emitted at all")
 	}
 }
+
+// TestSSETranslator_EmptyStreamStillOpensTheMessage pins event ORDER on a
+// stream that yielded no parseable chunk, which the sibling
+// TestSSETranslator_EmptyStream does not: it asserts message_delta and
+// message_stop are present but not that anything precedes them. Finish used to
+// emit the terminal pair unconditionally, so a caller that got no chunk at all
+// received message_delta as the first event of the stream, and the SDK
+// accumulator raises an unexpected-event-order RuntimeError when a
+// message_delta arrives while its snapshot is still nil.
+func TestSSETranslator_EmptyStreamStillOpensTheMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "m")
+	if err := tr.Translate(strings.NewReader("data: [DONE]\n\n")); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+
+	events := parseSSEEvents(t, rec.Body.String())
+	if len(events) == 0 {
+		t.Fatal("no events emitted for an empty stream")
+	}
+	if events[0]["type"] != "message_start" {
+		t.Fatalf("first event: want message_start got %v (body=%s)", events[0]["type"], rec.Body.String())
+	}
+
+	var startAt, deltaAt = -1, -1
+	for i, ev := range events {
+		switch ev["type"] {
+		case "message_start":
+			if startAt == -1 {
+				startAt = i
+			} else {
+				t.Errorf("message_start emitted more than once, at %d and %d", startAt, i)
+			}
+		case "message_delta":
+			if deltaAt == -1 {
+				deltaAt = i
+			}
+		}
+	}
+	if deltaAt == -1 {
+		t.Fatal("missing message_delta on empty stream")
+	}
+	if startAt > deltaAt {
+		t.Errorf("message_start at %d must precede message_delta at %d", startAt, deltaAt)
+	}
+}
+
+// TestSSETranslator_FinishAfterAStartedStreamDoesNotRepeatMessageStart is the
+// other half of that guard: opening the message from Finish must not add a
+// second message_start to a stream that already carried one.
+func TestSSETranslator_FinishAfterAStartedStreamDoesNotRepeatMessageStart(t *testing.T) {
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-x","model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "m")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+
+	starts := 0
+	for _, ev := range parseSSEEvents(t, rec.Body.String()) {
+		if ev["type"] == "message_start" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Errorf("message_start count: want exactly 1 got %d (body=%s)", starts, rec.Body.String())
+	}
+}
