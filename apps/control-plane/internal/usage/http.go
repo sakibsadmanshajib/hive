@@ -127,6 +127,9 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		if event.APIKeyID != nil {
 			item["api_key_id"] = event.APIKeyID.String()
 		}
+		if event.LatencyMs != nil {
+			item["latency_ms"] = *event.LatencyMs
+		}
 		response = append(response, item)
 	}
 

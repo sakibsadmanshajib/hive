@@ -50,6 +50,31 @@ export function formatNumber(
 }
 
 /**
+ * Format a request's round-trip latency in milliseconds as a short duration
+ * string ("340ms" under one second, "1.2s" at or above it).
+ *
+ * Takes `number | null` because latency is genuinely unknown for a request
+ * whose attempt has no completed_at yet (still dispatching or streaming),
+ * not a measured zero. Callers render the em-dash returned here as the
+ * visible absence, same convention as formatPercent below.
+ */
+export function formatLatencyMs(
+  value: number | null,
+  locale: AppLocale = DEFAULT_LOCALE,
+): string {
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+  return `${new Intl.NumberFormat(intlTag(locale, "number"), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value / 1000)}s`;
+}
+
+/**
  * Format an ISO date string as a short day/month/year for tables — day-first
  * (e.g. "25 Apr 2026") for BD-market consistency. Returns an em-dash for
  * null/undefined/empty values so columns line up visually.

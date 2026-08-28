@@ -2394,6 +2394,11 @@ export interface UsageEventRow {
   error_type?: string;
   api_key_id?: string;
   created_at: string;
+  // Round-trip latency in milliseconds, derived server-side from the
+  // request's attempt row. Absent whenever the attempt has not reached a
+  // terminal completed_at yet (see decodeUsageEventRow below); never a
+  // fabricated zero.
+  latency_ms?: number;
 }
 
 export interface UsageEventsPage {
@@ -2508,6 +2513,7 @@ function decodeUsageEventRow(value: JsonValue): UsageEventRow | null {
     error_type: readStringField(value, "error_type") ?? undefined,
     api_key_id: apiKeyId ?? undefined,
     created_at: createdAt,
+    latency_ms: readNumberField(value, "latency_ms") ?? undefined,
   }
 }
 

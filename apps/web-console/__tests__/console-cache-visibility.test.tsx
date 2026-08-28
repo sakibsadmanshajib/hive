@@ -338,8 +338,16 @@ describe("request log cache token columns", () => {
       />,
     );
 
-    expect(screen.getByText("Cached in")).toBeDefined();
-    expect(screen.getByText("Cache write")).toBeDefined();
+    // Scoped to the columnheader role: the table's column-controls checklist
+    // also carries "Cached in"/"Cache write" as checkbox labels (same text
+    // shown twice by design, once as the header and once as the toggle), so
+    // a plain getByText is ambiguous once that checklist exists.
+    expect(
+      screen.getByRole("columnheader", { name: "Cached in" })
+    ).toBeDefined();
+    expect(
+      screen.getByRole("columnheader", { name: "Cache write" })
+    ).toBeDefined();
     expect(screen.getByText("12,345")).toBeDefined();
     expect(screen.getByText("678")).toBeDefined();
   });

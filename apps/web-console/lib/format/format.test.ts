@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCredits, formatShortDate } from "./credits";
+import { formatCredits, formatLatencyMs, formatShortDate } from "./credits";
 import { formatDateTime, formatLongDate } from "./datetime";
 import { formatCurrency, formatTakaSubunits } from "./money";
 import { intlTag, resolveLocale } from "@/lib/i18n/locales";
@@ -41,6 +41,27 @@ describe("formatCredits", () => {
 
   it("clamps non-finite input", () => {
     expect(formatCredits(Number.NaN)).toBe("0");
+  });
+});
+
+describe("formatLatencyMs", () => {
+  it("renders sub-second values in ms", () => {
+    expect(formatLatencyMs(340)).toBe("340ms");
+    expect(formatLatencyMs(0)).toBe("0ms");
+  });
+
+  it("renders one second and above in seconds", () => {
+    expect(formatLatencyMs(1200)).toBe("1.2s");
+    expect(formatLatencyMs(18450)).toBe("18.5s");
+  });
+
+  it("renders an em-dash for a genuinely unknown latency, never a fabricated zero", () => {
+    expect(formatLatencyMs(null)).toBe("—");
+  });
+
+  it("clamps non-finite and negative input to the em-dash", () => {
+    expect(formatLatencyMs(Number.NaN)).toBe("—");
+    expect(formatLatencyMs(-5)).toBe("—");
   });
 });
 

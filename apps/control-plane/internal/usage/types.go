@@ -70,6 +70,12 @@ type UsageEvent struct {
 	ErrorCode         string         `json:"error_code,omitempty"`
 	ErrorType         string         `json:"error_type,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
+	// LatencyMs is ListEvents-only: the request_attempts round trip in
+	// milliseconds (completed_at - started_at), nil until the attempt has a
+	// terminal completed_at. RecordEvent's own return never populates this
+	// field, since a just-recorded event's attempt has not necessarily
+	// completed yet.
+	LatencyMs *int64 `json:"latency_ms,omitempty"`
 }
 
 type StartAttemptInput struct {

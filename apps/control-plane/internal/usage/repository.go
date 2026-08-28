@@ -179,39 +179,55 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 	// Every predicate is parameterized; the placeholder numbers are derived
 	// from the running arg count so no user-controlled value is ever
 	// interpolated into the SQL text.
+	//
+	// LEFT JOINed against request_attempts for latency_ms only: the attempt
+	// row an event's request_attempt_id references (NOT NULL, FK-enforced),
+	// so the join never drops a usage_events row, it only ever adds one
+	// nullable column. latency_ms is NULL until the attempt has a
+	// completed_at (UpdateAttemptStatus sets it on every terminal outcome in
+	// accounting.FinalizeReservation), so an in-flight or still-streaming
+	// request reports latency as genuinely unknown rather than a fabricated
+	// zero. Every bare column in both SELECT and WHERE is prefixed ue./ra.
+	// because request_id, model_alias, api_key_id and status exist on both
+	// tables and an unprefixed reference is ambiguous once the join is in
+	// the query.
 	query := `
-		SELECT id, account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
-		FROM public.usage_events
-		WHERE account_id = $1
+		SELECT ue.id, ue.account_id, ue.request_attempt_id, ue.api_key_id, ue.request_id, ue.event_type, ue.endpoint, ue.model_alias, ue.status, ue.input_tokens, ue.output_tokens, ue.cache_read_tokens, ue.cache_write_tokens, ue.hive_credit_delta, ue.provider_request_id, ue.internal_metadata, ue.customer_tags, ue.error_code, ue.error_type, ue.created_at,
+		       CASE WHEN ra.completed_at IS NULL THEN NULL
+		            ELSE ROUND(EXTRACT(EPOCH FROM (ra.completed_at - ra.started_at)) * 1000)::bigint
+		       END AS latency_ms
+		FROM public.usage_events ue
+		LEFT JOIN public.request_attempts ra ON ra.id = ue.request_attempt_id
+		WHERE ue.account_id = $1
 	`
 	args := []any{filter.AccountID}
 	next := func() int { return len(args) + 1 }
 
 	if v := strings.TrimSpace(filter.RequestID); v != "" {
-		query += fmt.Sprintf(` AND request_id = $%d`, next())
+		query += fmt.Sprintf(` AND ue.request_id = $%d`, next())
 		args = append(args, v)
 	}
 	if v := strings.TrimSpace(filter.ModelAlias); v != "" {
-		query += fmt.Sprintf(` AND model_alias = $%d`, next())
+		query += fmt.Sprintf(` AND ue.model_alias = $%d`, next())
 		args = append(args, v)
 	}
 	if filter.APIKeyID != nil {
-		query += fmt.Sprintf(` AND api_key_id = $%d`, next())
+		query += fmt.Sprintf(` AND ue.api_key_id = $%d`, next())
 		args = append(args, *filter.APIKeyID)
 	}
 	if v := strings.TrimSpace(filter.Status); v != "" {
-		query += fmt.Sprintf(` AND status = $%d`, next())
+		query += fmt.Sprintf(` AND ue.status = $%d`, next())
 		args = append(args, v)
 	}
 	if filter.ErrorsOnly {
-		query += ` AND error_code IS NOT NULL AND error_code <> ''`
+		query += ` AND ue.error_code IS NOT NULL AND ue.error_code <> ''`
 	}
 	if !filter.From.IsZero() {
-		query += fmt.Sprintf(` AND created_at >= $%d`, next())
+		query += fmt.Sprintf(` AND ue.created_at >= $%d`, next())
 		args = append(args, filter.From)
 	}
 	if !filter.To.IsZero() {
-		query += fmt.Sprintf(` AND created_at < $%d`, next())
+		query += fmt.Sprintf(` AND ue.created_at < $%d`, next())
 		args = append(args, filter.To)
 	}
 	// Keyset pagination: the cursor is the id of the last row on the previous
@@ -220,11 +236,11 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 	// the page was read in. A cursor whose row has since been deleted yields
 	// an empty (not a wrong) page.
 	if filter.CursorID != nil && *filter.CursorID != uuid.Nil {
-		query += fmt.Sprintf(` AND (created_at, id) < (SELECT created_at, id FROM public.usage_events WHERE id = $%d)`, next())
+		query += fmt.Sprintf(` AND (ue.created_at, ue.id) < (SELECT created_at, id FROM public.usage_events WHERE id = $%d)`, next())
 		args = append(args, *filter.CursorID)
 	}
 
-	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, next())
+	query += fmt.Sprintf(` ORDER BY ue.created_at DESC, ue.id DESC LIMIT $%d`, next())
 	args = append(args, limit)
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -235,7 +251,7 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 
 	var events []UsageEvent
 	for rows.Next() {
-		event, err := scanUsageEvent(rows)
+		event, err := scanUsageEventWithLatency(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -464,13 +480,28 @@ func scanRequestAttempt(scanner rowScanner) (RequestAttempt, error) {
 }
 
 func scanUsageEvent(scanner rowScanner) (UsageEvent, error) {
+	return scanUsageEventRow(scanner, false)
+}
+
+// scanUsageEventWithLatency scans a ListEvents row, which carries one extra
+// trailing column (latency_ms) that RecordEvent's plain RETURNING clause
+// does not project. Kept as a separate entry point rather than a variadic
+// scanUsageEvent so a caller's column list and its scan target list always
+// match in count, which pgx enforces at Scan time.
+func scanUsageEventWithLatency(scanner rowScanner) (UsageEvent, error) {
+	return scanUsageEventRow(scanner, true)
+}
+
+func scanUsageEventRow(scanner rowScanner, withLatency bool) (UsageEvent, error) {
 	var event UsageEvent
 	var providerRequestID *string
 	var internalMetadata []byte
 	var customerTags []byte
 	var errorCode *string
 	var errorType *string
-	if err := scanner.Scan(
+	var latencyMs *int64
+
+	dest := []any{
 		&event.ID,
 		&event.AccountID,
 		&event.RequestAttemptID,
@@ -491,7 +522,12 @@ func scanUsageEvent(scanner rowScanner) (UsageEvent, error) {
 		&errorCode,
 		&errorType,
 		&event.CreatedAt,
-	); err != nil {
+	}
+	if withLatency {
+		dest = append(dest, &latencyMs)
+	}
+
+	if err := scanner.Scan(dest...); err != nil {
 		if err == pgx.ErrNoRows {
 			return UsageEvent{}, fmt.Errorf("usage: usage event not found")
 		}
@@ -509,6 +545,7 @@ func scanUsageEvent(scanner rowScanner) (UsageEvent, error) {
 	if errorType != nil {
 		event.ErrorType = *errorType
 	}
+	event.LatencyMs = latencyMs
 	if len(internalMetadata) > 0 {
 		if err := json.Unmarshal(internalMetadata, &event.InternalMetadata); err != nil {
 			return UsageEvent{}, fmt.Errorf("usage: decode internal metadata: %w", err)

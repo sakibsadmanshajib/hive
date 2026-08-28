@@ -5,7 +5,7 @@
  * mocked at fetch level so the real getUsageEvents decoder runs.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { UsageEventRow } from "@/lib/control-plane/client";
 
 vi.mock("next/navigation", () => ({
@@ -221,6 +221,70 @@ describe("UsageLogsTable", () => {
     expect(
       screen.getByText("No requests match these filters.")
     ).toBeTruthy();
+  });
+
+  it("renders a formatted latency column and an em-dash for an unmeasured request", async () => {
+    const { UsageLogsTable } = await import(
+      "@/components/logs/usage-logs-table"
+    );
+    render(
+      <UsageLogsTable
+        rows={[
+          eventRow({ id: "evt_lat", latency_ms: 1800 }),
+          eventRow({ id: "evt_unmeasured", request_id: "req_ccc" }),
+        ]}
+        keyNames={{}}
+      />
+    );
+
+    expect(screen.getByText("1.8s")).toBeTruthy();
+  });
+
+  it("shows latency in the per-row drill-in detail", async () => {
+    // Expanding a row fires the lifecycle fetch; stub it the same way the
+    // existing expand test does so the effect resolves inside act().
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, { entries: [], next_cursor: null }))
+    );
+
+    const { UsageLogsTable } = await import(
+      "@/components/logs/usage-logs-table"
+    );
+    render(
+      <UsageLogsTable
+        rows={[eventRow({ latency_ms: 340 })]}
+        keyNames={{}}
+      />
+    );
+
+    fireEvent.click(screen.getByText("hive-fast"));
+    const detail = screen.getByTestId("log-detail");
+    expect(detail.textContent).toContain("340ms");
+    await waitFor(() => {
+      expect(screen.getByText("No ledger activity for this request.")).toBeTruthy();
+    });
+  });
+
+  it("hides and restores a column through the column-controls checklist", async () => {
+    const { UsageLogsTable } = await import(
+      "@/components/logs/usage-logs-table"
+    );
+    render(<UsageLogsTable rows={baseRows} keyNames={{}} />);
+
+    const controls = screen.getByTestId("column-controls");
+    const latencyToggle = within(controls).getByLabelText("Latency");
+    expect((latencyToggle as HTMLInputElement).checked).toBe(true);
+    expect(screen.getAllByText("Latency").length).toBeGreaterThan(0);
+
+    fireEvent.click(latencyToggle);
+    expect((latencyToggle as HTMLInputElement).checked).toBe(false);
+    // "Latency" survives only in the checklist label once the column header
+    // is hidden.
+    expect(screen.getAllByText("Latency")).toHaveLength(1);
+
+    fireEvent.click(latencyToggle);
+    expect(screen.getAllByText("Latency").length).toBeGreaterThan(1);
   });
 });
 

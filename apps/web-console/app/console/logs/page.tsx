@@ -11,6 +11,7 @@ import {
 import type { UsageEventRow } from "@/lib/control-plane/client";
 import { UsageLogsCsv } from "@/components/logs/usage-logs-csv";
 import { LogsFilters } from "@/components/logs/logs-filters";
+import { UsageLogsHistogram } from "@/components/logs/usage-logs-histogram";
 import { UsageLogsTable } from "@/components/logs/usage-logs-table";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -150,6 +151,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
         <EmptyFirstRun />
       ) : (
         <>
+          <UsageLogsHistogram rows={events} />
           <UsageLogsTable rows={events} keyNames={keyNames} />
           {(cursor || nextCursor) ? (
             <div className="mt-4 flex items-center gap-2">
