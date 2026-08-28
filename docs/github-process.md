@@ -2,8 +2,12 @@
 
 This describes the process as it is practiced, not an aspirational target. It
 was written from a survey of the live repository state on 2026-08-28 (200 open
-issues, 16 open PRs, 4 milestones, ~110 labels). Update it when the practice
-changes; do not let it drift into describing a process nobody follows.
+issues, 16 open PRs, 4 milestones, 75 labels). Update it when the practice
+changes; do not let it drift into describing a process nobody follows. Given
+how fast this repo files and merges (a multi-agent burst can move the issue
+count by dozens within the hour this document was written in), read every
+count here as a shape, not a live number: re-run the `gh` queries in each
+section below for the current figure.
 
 ## Issue lifecycle
 
@@ -29,8 +33,9 @@ changes; do not let it drift into describing a process nobody follows.
    specialists (security, database, etc.) by diff shape. Findings post as
    inline PR comments; the ones worth a standalone issue get filed rather than
    silently fixed in the same PR, which is why one PR's review commonly
-   produces two or three new issues (the #1222 to #1235/#1237 to #1252 chain
-   is a representative example, not an outlier).
+   produces two or three new issues (#1222's review produced both #1235,
+   which chained into #1252, and the independent #1237 — see "Chained
+   findings" below for the #1235/#1252 thread specifically).
 6. **Merged.** Squash merge, branch deleted, once CI is green and every review
    thread is resolved. Full gate: `.github/MERGE-POLICY.md`.
 7. **Closed with a citation.** An issue is closed by referencing the PR (or
@@ -70,10 +75,18 @@ Plus GitHub's stock defaults (`bug`, `enhancement`, `documentation`,
 `duplicate`, `good first issue`, `help wanted`, `invalid`, `question`,
 `wontfix`), a handful of legacy pre-taxonomy labels still on old issues
 (`bug`, `security`, `enhancement` applied bare, without the `kind:`/`risk:`
-equivalent), and a set of narrow, single-purpose CI/ops labels
-(`ci-failure:*`, `verify-negative:*`, `run-*`, `dependencies`, `dummy-noop`,
-`javascript`, `go`, `docker`, `github_actions`) that exist to drive or record
-automated workflow behavior rather than to classify an issue for a human.
+equivalent), a set of narrow, single-purpose CI/ops labels (`ci-failure:*`,
+`verify-negative:*`, `run-*`, `dependencies`, `dummy-noop`, `javascript`,
+`go`, `docker`, `github_actions`) that exist to drive or record automated
+workflow behavior rather than to classify an issue for a human, and a
+smaller, looser tail of one-off or campaign labels (`agents`, `sandbox`,
+`edge`, `sovereign`, `pivot`, `quick-win`, `idea`, `roadmap`, `non-eng`,
+`audit-2026-07-19`, `deploy-drift-test:simulate-divergence`) that were never
+folded into the prefix scheme above. That tail is not a gap worth closing by
+renaming; most of those tags mark a single past sweep or a one-time
+initiative and are fine left as-is per the no-rename rule below. The table
+above is the scheme to use going forward, not a complete inventory of all 75
+labels the repo currently carries — run `gh label list` for that.
 
 **Do not rename any of these.** Every rename breaks a saved filter or a piece
 of automation keyed on the label's exact name. Extend the taxonomy by adding a
