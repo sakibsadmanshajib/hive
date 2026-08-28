@@ -27,6 +27,10 @@ import (
 // InputLine.LiteLLMModel and is passed verbatim as the model argument
 // here — no per-line route lookup, no risk of diverging from the
 // submitter's batch-time selection.
+// maxLocalInferenceResponseBytes caps a single batch line's completion
+// response.
+const maxLocalInferenceResponseBytes = 4 * 1024 * 1024
+
 type LiteLLMInferenceClient struct {
 	baseURL    string
 	apiKey     string
@@ -69,9 +73,31 @@ func (c *LiteLLMInferenceClient) ChatCompletion(ctx context.Context, model strin
 		return nil, nil, 0, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	// Read maxLocalInferenceResponseBytes+1, not the cap itself, so a
+	// response that actually exceeds the cap is DETECTED rather than
+	// silently truncated (issue #1255 finding #2): a plain
+	// io.LimitReader(resp.Body, N) truncates without signaling it
+	// happened, so a batch line whose completion exceeds this cap would
+	// otherwise write a truncated, likely-invalid response into the
+	// customer's batch output file, marked as a success, with nothing
+	// recording that truncation occurred. Same read-error handling and
+	// max+1 detection pattern as apps/edge-api/internal/auth/owui_unwrap.go
+	// and apps/edge-api/internal/rag/handler.go's readBodyCapped.
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxLocalInferenceResponseBytes+1))
+	if readErr != nil {
+		return nil, nil, 0, fmt.Errorf("read upstream response: %w", readErr)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, nil, resp.StatusCode, fmt.Errorf("upstream status %d", resp.StatusCode)
+	}
+	if len(respBody) > maxLocalInferenceResponseBytes {
+		// status is intentionally 0, not resp.StatusCode: a truncated
+		// response is not an upstream HTTP failure, and 0 is the existing
+		// "no usable status" convention the dispatcher's retry loop and
+		// codeForStatus already handle (the same shape a read/timeout
+		// error already produces above), rather than inventing a second
+		// failure convention.
+		return nil, nil, 0, fmt.Errorf("upstream response exceeded %d byte limit and was truncated", maxLocalInferenceResponseBytes)
 	}
 
 	usage := decodeUsage(respBody)

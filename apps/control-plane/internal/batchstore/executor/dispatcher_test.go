@@ -339,6 +339,42 @@ func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
 	}
 }
 
+// Test 8b: a truncated upstream response (InferencePort.ChatCompletion
+// detecting an over-cap body, issue #1255 finding #2) must never be
+// recorded as a successful line -- it settles as a failed line with an
+// honest reason via the existing errors.jsonl shape, not a second
+// convention.
+func TestDispatcher_TruncatedResponseIsNeverASuccess(t *testing.T) {
+	infer := &fakeInference{
+		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			// Mirrors LiteLLMInferenceClient.ChatCompletion's truncation
+			// shape: nil body, status 0, a non-nil error.
+			return nil, nil, 0, errors.New("upstream response exceeded 4194304 byte limit and was truncated")
+		},
+	}
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, infer, nil)
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	res := disp.Dispatch(context.Background(), InputLine{
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
+		Body:         mustBody(t, "customer-alias-1", ""),
+		Alias:        "customer-alias-1",
+		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+	})
+	if res.Output != nil {
+		t.Fatalf("truncated response recorded as a success: %+v", res.Output)
+	}
+	if res.Error == nil {
+		t.Fatalf("expected a failed line, got neither output nor error")
+	}
+	if res.ConsumedCredits != 0 {
+		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	}
+}
+
 // Test 7b: SanitizeMessage on direct strings.
 func TestSanitizeMessage(t *testing.T) {
 	cases := []struct {
