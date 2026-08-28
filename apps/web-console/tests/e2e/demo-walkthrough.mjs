@@ -13,11 +13,16 @@
 //   cd apps/web-console
 //   HIVE_QA_TESTER_EMAIL=... HIVE_QA_TESTER_PASSWORD=... \
 //   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
+//   HIVE_OWNER_SIGNUP_EMAIL=... \
 //   node tests/e2e/demo-walkthrough.mjs [--skip-owner-signup] [--skip-cowork]
 //
 // Never rotates any existing account's password (docs/live-test-auth.md).
 // The one password this script sets is on the brand-new owner account it
-// creates itself in step "owner-signup", which is not a shared account.
+// creates itself in step "owner-signup", which is not a shared account. That
+// step therefore requires HIVE_OWNER_SIGNUP_EMAIL to be named explicitly, with
+// no default: a fallback address would silently make every unconfigured run
+// write a password to the same inbox. Pass --skip-owner-signup to run without
+// it.
 //
 // Output: docs/proof/demo-walkthrough-<date>/ (numbered PNGs + report.md +
 // step-log.json), one directory per run so repeated runs never clobber a
@@ -25,8 +30,10 @@
 
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { redactSecrets } from "./support/e2e-fixture-seed.mjs";
+import { mdTableCell } from "./support/md-table.mjs";
 
 // --- config ------------------------------------------------------------
 const CHAT = process.env.HIVE_CHAT_BASE_URL ?? "https://chat-hive.scubed.co";
@@ -58,6 +65,20 @@ mkdirSync(OUT_DIR, { recursive: true });
 const results = [];
 let shotCounter = 0;
 
+// Live credentials this run creates for itself. `redactSecrets` only knows
+// about the service-role key by default, and this walkthrough mints a real
+// API key (step 11) and sets one brand-new account's password (owner-signup),
+// either of which would otherwise be written verbatim into a step log that is
+// committed under docs/proof/. Registered here the moment they exist, so the
+// single choke point below scrubs them out of every observation, error
+// message and report cell without each call site having to remember.
+const runSecrets = [];
+// Minted in step 11, consumed by step 12.
+let mintedApiKey = "";
+function redact(text) {
+  return redactSecrets(text, [process.env.SUPABASE_SERVICE_ROLE_KEY, ...runSecrets]);
+}
+
 function slug(label) {
   return label
     .toLowerCase()
@@ -73,7 +94,7 @@ async function shot(page, label) {
     await page.screenshot({ path: join(OUT_DIR, file), fullPage: true, timeout: 15000 });
     return file;
   } catch (error) {
-    console.error(redactSecrets(`screenshot failed for ${label}: ${error.message}`));
+    console.error(redact(`screenshot failed for ${label}: ${error.message}`));
     return "";
   }
 }
@@ -91,7 +112,7 @@ async function runStep(n, title, fn) {
     entry.observed = out.observed ?? entry.observed;
     entry.verdict = out.verdict ?? "PASS";
   } catch (error) {
-    entry.notes = redactSecrets(String(error?.message ?? error)).slice(0, 1500);
+    entry.notes = redact(String(error?.message ?? error)).slice(0, 1500);
     console.error(`[${n}] ${title} FAILED: ${entry.notes}`);
   }
   results.push(entry);
@@ -419,7 +440,8 @@ async function main() {
     const exists = (await fileInput.count()) > 0;
     let attached = false;
     if (exists) {
-      const fixture = join(OUT_DIR, "attach-test.txt");
+      // Scratch input, not evidence: OUT_DIR is committed under docs/proof/.
+      const fixture = join(tmpdir(), "hive-demo-walkthrough-attach-test.txt");
       writeFileSync(fixture, "Hive demo attachment test file.\n");
       await fileInput.setInputFiles(fixture).catch(() => {});
       await page.waitForTimeout(1500);
@@ -554,12 +576,37 @@ async function main() {
     const nicknameField = cpage.locator("#key-nickname");
     if (await waitVisible(nicknameField, 10000)) {
       await nicknameField.fill(`demo-walkthrough-${today}`);
+      // The form's own expiry field (api-key-create-form.tsx, #key-expires)
+      // rather than a revoke call at the end of the run: a run that dies
+      // mid-way never reaches its own cleanup, and this harness has already
+      // left a row of live keys behind on the fixture workspace. Tomorrow is
+      // past every timeout in this file and well short of a key that outlives
+      // the run that made it.
+      const expiresAt = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      await cpage.locator("#key-expires").fill(expiresAt).catch(() => {});
       await cpage.locator('button[type="submit"]').click().catch(() => {});
       await cpage.waitForTimeout(2000);
-      const keyText = await cpage.locator("body").innerText().catch(() => "");
-      const match = keyText.match(/hk_[A-Za-z0-9_-]{10,}/);
-      mintedKey = match ? match[0] : "";
+      // Read the secret from its own element, not by regexing the page text:
+      // the console shows a created key in full exactly once
+      // (data-testid="created-api-key-secret"), and this is the one element
+      // on the page that ever holds a live credential.
+      const secretEl = cpage.locator('[data-testid="created-api-key-secret"]').first();
+      if (await waitVisible(secretEl, 8000)) {
+        mintedKey = (await secretEl.innerText().catch(() => "")).trim();
+      }
+      if (mintedKey) runSecrets.push(mintedKey);
     }
+    // Mask the revealed secret in the DOM BEFORE the screenshot. This capture
+    // is committed under docs/proof/, and `npm run lint:proof-tokens` reads
+    // text files only: a key burned into a PNG has no automated backstop at
+    // all (.claude/rules/orchestrator.md, PR #578). Masking after upload is
+    // not a remedy, so it happens here, before the shutter.
+    await cpage
+      .locator('[data-testid="created-api-key-secret"]')
+      .evaluateAll((nodes) => {
+        for (const node of nodes) node.textContent = "hk_<redacted by demo-walkthrough>";
+      })
+      .catch(() => {});
     entry.screenshots.push(await shot(cpage, "11c-console-api-key-created"));
 
     await cpage.goto(`${CONSOLE}/console/logs`, { waitUntil: "domcontentloaded" }).catch(() => {});
@@ -569,7 +616,7 @@ async function main() {
     await cpage.goto(`${CONSOLE}/console/catalog`, { waitUntil: "domcontentloaded" }).catch(() => {});
     entry.screenshots.push(await shot(cpage, "11f-console-catalog"));
 
-    global.__mintedApiKey = mintedKey; // handed to step 12
+    mintedApiKey = mintedKey; // handed to step 12
     return {
       observed: `dashboard reached, api key minted=${!!mintedKey}, usage/billing/catalog pages loaded`,
       verdict: mintedKey ? "PASS" : "BROKEN",
@@ -579,7 +626,7 @@ async function main() {
   // --- 12. Raw curl against the API ----------------------------------------
   await runStep(12, "Raw curl: /v1/chat/completions and /v1/messages", async (entry) => {
     if (ONLY_COWORK || ONLY_OWNER_SIGNUP) return { observed: "skipped (--only-cowork/--only-owner-signup)", verdict: "UGLY" };
-    const key = global.__mintedApiKey;
+    const key = mintedApiKey;
     if (!key) return { observed: "no minted key from step 11, cannot test raw API", verdict: "BROKEN" };
     const results12 = {};
     for (const [name, url, body] of [
@@ -677,21 +724,33 @@ async function main() {
  * changes no password field.
  */
 async function createOwnerAccount(browser) {
-  const ownerEmail = process.env.HIVE_OWNER_SIGNUP_EMAIL ?? "sakibsadmanshajib+hiveowner@gmail.com";
+  // No default address, for the same reason E2E_RUN_KEY has none: this
+  // function sets a password on whatever address it resolves to, and a
+  // hardcoded fallback points every unconfigured run at one shared inbox
+  // (CLAUDE.md "Testing", docs/live-test-auth.md).
+  const ownerEmail = process.env.HIVE_OWNER_SIGNUP_EMAIL ?? "";
   const ownerPassword = process.env.HIVE_OWNER_SIGNUP_PASSWORD ?? `Hive-Owner-${Date.now()}-!Aa9`;
   const supabaseUrl = process.env.SUPABASE_URL ?? "";
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-  if (!supabaseUrl || !serviceRoleKey) {
+  const missing = [
+    ownerEmail ? "" : "HIVE_OWNER_SIGNUP_EMAIL",
+    supabaseUrl ? "" : "SUPABASE_URL",
+    serviceRoleKey ? "" : "SUPABASE_SERVICE_ROLE_KEY",
+  ].filter(Boolean);
+  if (missing.length > 0) {
     results.push({
       step: "owner-signup",
       title: "Owner account: self-service signup",
       verdict: "BROKEN",
-      observed: "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set, cannot activate the account after signup",
+      observed: `${missing.join(" / ")} not set, cannot create and activate an owner account (pass --skip-owner-signup to run the rest)`,
       notes: "",
       screenshots: [],
     });
     return null;
   }
+  // The one password this run sets, on an account it creates itself. Keep it
+  // out of every log and report cell; the caller still gets it in return.
+  runSecrets.push(ownerPassword);
 
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
@@ -789,7 +848,7 @@ async function createOwnerAccount(browser) {
     entry.observed = `account created + activated + verified. dashboard reached=${dashboardOK}, first chat turn worked=${chatTurnOK}`;
     return { ownerEmail, ownerPassword, verified: dashboardOK && chatTurnOK };
   } catch (error) {
-    entry.notes = redactSecrets(String(error?.message ?? error)).slice(0, 1500);
+    entry.notes = redact(String(error?.message ?? error)).slice(0, 1500);
     return null;
   } finally {
     results.push(entry);
@@ -804,11 +863,19 @@ function writeReport(ownerCreds) {
   lines.push("");
   lines.push("| # | Step | Verdict | Observed | Screenshots |");
   lines.push("| - | ---- | ------- | -------- | ----------- |");
+  // Every cell goes through both guards, not just the observation column:
+  // redact first (an observation can quote a live key or password back at
+  // us), then escape, because `<redacted>` carries neither a pipe nor a
+  // backslash and so cannot be broken by the escaper.
   for (const r of results) {
-    const shots = r.screenshots.filter(Boolean).join(", ");
-    lines.push(
-      `| ${r.step} | ${r.title} | ${r.verdict} | ${(r.observed || r.notes || "").replace(/\|/g, "\\|").slice(0, 300)} | ${shots} |`,
-    );
+    const cells = [
+      mdTableCell(r.step),
+      mdTableCell(r.title),
+      mdTableCell(r.verdict),
+      mdTableCell(redact(r.observed || r.notes || ""), { max: 300 }),
+      mdTableCell(r.screenshots.filter(Boolean).join(", ")),
+    ];
+    lines.push(`| ${cells.join(" | ")} |`);
   }
   lines.push("");
   if (ownerCreds) {
@@ -816,13 +883,16 @@ function writeReport(ownerCreds) {
     lines.push("");
     lines.push("Credentials recorded in the orchestrator report, not here (this file may be posted). See step `owner-signup` above for verdict.");
   }
-  writeFileSync(join(OUT_DIR, "report.md"), lines.join("\n") + "\n");
-  writeFileSync(join(OUT_DIR, "step-log.json"), JSON.stringify({ CHAT, CONSOLE, API, results }, null, 2));
+  writeFileSync(join(OUT_DIR, "report.md"), redact(lines.join("\n")) + "\n");
+  writeFileSync(
+    join(OUT_DIR, "step-log.json"),
+    redact(JSON.stringify({ CHAT, CONSOLE, API, results }, null, 2)),
+  );
   console.log(`\ndemo-walkthrough: wrote ${results.length} step results to ${OUT_DIR}`);
   for (const r of results) console.log(`  [${r.step}] ${r.verdict} — ${r.title}`);
 }
 
 main().catch((error) => {
-  console.error(redactSecrets(`demo-walkthrough: fatal: ${error?.stack ?? error}`));
+  console.error(redact(`demo-walkthrough: fatal: ${error?.stack ?? error}`));
   process.exit(1);
 });
