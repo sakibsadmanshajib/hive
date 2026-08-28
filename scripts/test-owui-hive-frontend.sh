@@ -40,14 +40,16 @@ cp "$ROOT/vendor/open-webui/src/app.html" "$WORK"/app.html
 # flattened, so the mirroring described above still holds.
 cp -R "$SRC"/. "$WORK"/lib/hive/
 
-# The settings declutter guard pins the rendered surface of chat components,
-# plus the layout/page files that also forward directConnections, by reading
-# their sources.
+# The settings declutter guard (plus the settings retitle/Usage-tab guard)
+# pins the rendered surface of chat components, plus the layout/page files
+# that also forward directConnections, by reading their sources.
 COMPONENT_SRC="$ROOT/vendor/open-webui/src/lib/components"
 for rel in \
 	chat/SettingsModal.svelte \
 	chat/ModelSelector/Selector.svelte \
 	chat/Settings/Account.svelte \
+	chat/Settings/General.svelte \
+	chat/Settings/Usage.svelte \
 	chat/Settings/Advanced/AdvancedParams.svelte \
 	chat/MessageInput.svelte \
 	chat/Chat.svelte \
