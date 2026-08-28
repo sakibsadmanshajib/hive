@@ -78,7 +78,9 @@ func ModelsCompat(next http.Handler) http.Handler {
 		// Anthropic-shaped body to an OpenAI-shaped caller and empty Open
 		// WebUI's model picker. Declared on both branches, before either
 		// writes, since a Vary set after WriteHeader is a Vary nobody sends.
-		w.Header().Set("Vary", "anthropic-version, x-api-key")
+		// Add rather than Set: an outer middleware may already have declared a
+		// Vary of its own (Origin, for a CORS layer), and Set would delete it.
+		w.Header().Add("Vary", "anthropic-version, x-api-key")
 
 		if !IsAnthropicClient(r) {
 			next.ServeHTTP(w, r)
@@ -129,6 +131,11 @@ func ModelsCompat(next http.Handler) http.Handler {
 		// catalog in one response and honours no pagination cursor, so
 		// claiming another page exists would send a client into a loop.
 
+		// The success path re-encodes rather than reshapes, but it owes the
+		// client the same headers the delegated handler set: this route is
+		// where a 2xx rate-limit budget would surface, and dropping those is
+		// the same defect as dropping a refusal's retry metadata.
+		rec.copyHeadersTo(w)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(out); err != nil {

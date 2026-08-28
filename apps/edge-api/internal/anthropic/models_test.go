@@ -266,3 +266,72 @@ func TestModelsCompat_DeclaresVary(t *testing.T) {
 		})
 	}
 }
+
+// TestModelsCompat_VaryDoesNotClobberAnExistingDeclaration keeps the wrapper
+// additive. Nothing in edge-api declares a Vary on this route today, so Set
+// would be harmless right now and wrong the moment a CORS layer or any other
+// outer middleware declares Vary: Origin ahead of it.
+func TestModelsCompat_VaryDoesNotClobberAnExistingDeclaration(t *testing.T) {
+	outer := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Vary", "Origin")
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	h := outer(anthropic.ModelsCompat(openAIModelsHandler(http.StatusOK, openAIModelListBody)))
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("x-api-key", "hk_live_test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	got := strings.Join(rec.Header().Values("Vary"), ", ")
+	for _, want := range []string{"Origin", "anthropic-version", "x-api-key"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("vary: want %q preserved, got %q", want, got)
+		}
+	}
+}
+
+// TestModelsCompat_SuccessCarriesTheDelegatedHeaders covers the 2xx half of the
+// same carry-over the refusal path needs. The success path re-encodes the body
+// rather than reshaping it, which made it easy to leave out, and a header a
+// delegated handler sets alongside a 200 is as much part of that response as
+// the body is.
+func TestModelsCompat_SuccessCarriesTheDelegatedHeaders(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Ratelimit-Remaining-Requests", "42")
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(openAIModelListBody))
+	})
+
+	h := anthropic.ModelsCompat(upstream)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("x-api-key", "hk_live_test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Ratelimit-Remaining-Requests"); got != "42" {
+		t.Errorf("x-ratelimit-remaining-requests: want 42 got %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got == "4096" {
+		t.Errorf("content-length: the delegated body length must not describe the re-encoded one, got %q", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type: want application/json got %q", got)
+	}
+	var body anthropic.ModelsListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, rec.Body.String())
+	}
+	if len(body.Data) != 2 {
+		t.Errorf("data: want 2 entries got %d", len(body.Data))
+	}
+}

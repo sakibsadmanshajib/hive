@@ -50,6 +50,15 @@ func (r *headerlessRecorder) Write(p []byte) (int, error) { return r.body.Write(
 // Content-Length would truncate it on the wire. Everything else forwarded here
 // is retry metadata that carries no provider identity.
 func (r *headerlessRecorder) reshapeInto(w http.ResponseWriter) {
+	r.copyHeadersTo(w)
+	reshapeToAnthropicError(w, r.status, r.body.Bytes())
+}
+
+// copyHeadersTo carries the recorded headers onto the real client writer. It is
+// separate from reshapeInto because a recorded 2xx is re-encoded rather than
+// reshaped and needs the same carry-over: whatever a delegated handler sets
+// alongside a success is as much part of that response as the body is.
+func (r *headerlessRecorder) copyHeadersTo(w http.ResponseWriter) {
 	for key, values := range r.header {
 		if key == "Content-Type" || key == "Content-Length" {
 			continue
@@ -58,7 +67,6 @@ func (r *headerlessRecorder) reshapeInto(w http.ResponseWriter) {
 			w.Header().Add(key, value)
 		}
 	}
-	reshapeToAnthropicError(w, r.status, r.body.Bytes())
 }
 
 // maxTranslatedBodyBytes bounds how much of a buffered response the translator
