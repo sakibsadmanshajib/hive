@@ -225,7 +225,13 @@
 <div class="flex flex-col h-full justify-between text-sm" id="tab-general">
 	<div class="  overflow-y-scroll max-h-[28rem] md:max-h-full">
 		<div class="">
-			<div class=" mb-1 text-sm font-medium">{$i18n.t('WebUI Settings')}</div>
+			<!-- hive: was "WebUI Settings" (parity review finding, this section
+			read as stock Open WebUI branding rather than Hive's own product).
+			Renamed the section header only; the key still equals its own
+			English text (i18next convention this file already relies on, see
+			"Help us translate Hive Chat!" a few lines down), so no locale
+			file needs touching for this to render correctly. -->
+			<div class=" mb-1 text-sm font-medium">{$i18n.t('Chat Preferences')}</div>
 
 			<div class="flex w-full justify-between">
 				<div class=" self-center text-xs font-medium">{$i18n.t('Theme')}</div>
