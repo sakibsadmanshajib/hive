@@ -49,6 +49,7 @@ Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY
 Optional env: EDGE_API_URL (default http://localhost:8080),
               RAG_CHAT_MODEL (default hive-fast)
 """
+import calendar
 import json
 import os
 import secrets
@@ -70,6 +71,13 @@ RAG_GATE = "ENABLE_RAG"
 INGEST_ATTEMPTS = 3
 QUERY_ATTEMPTS = 3
 INGEST_POLL_SECONDS = 180
+
+# Fixture housekeeping (see purge_stale_fixtures). The prefix is the name
+# ingest() uploads under. The window is comfortably longer than the slowest
+# observed run (ingest alone allows 180 seconds per attempt, three attempts)
+# so a concurrent run's document is never in scope for deletion.
+FIXTURE_NAME_PREFIX = "rag-roundtrip-"
+FIXTURE_STALE_SECONDS = 1800
 
 
 def env(name: str, default: str = "") -> str:
@@ -257,6 +265,73 @@ def ingest(edge: str, auth: dict, marker: str) -> str:
         if state == "embedded":
             return doc_id
     fail(f"document never reached status=embedded after {INGEST_ATTEMPTS} attempts")
+
+
+def parse_created_at(value: str) -> float:
+    """Epoch seconds from the API's created_at, or 0.0 when unparseable.
+
+    Deliberately tolerant: only the leading YYYY-MM-DDTHH:MM:SS is read, so a
+    trailing Z, an offset, or sub-second digits of any length all parse the
+    same. 0.0 (treated as ancient by the caller) is the right answer for a
+    shape this cannot read, because the only thing it drives is whether a
+    leftover fixture is old enough to delete.
+    """
+    try:
+        return calendar.timegm(time.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def purge_stale_fixtures(edge: str, auth: dict) -> None:
+    """Delete round-trip fixture documents left behind by earlier runs.
+
+    Not tidiness. Every run ingests a near-identical note whose only
+    difference is its codename, retrieval asks the same question every time,
+    and the search assertion reads top_k=3. So run four onwards competes with
+    its own history for those three slots and eventually loses: observed on
+    the demo box on 2026-08-28, where a correct pipeline reported "3 hits but
+    no marker" on all three attempts, and the grounded answer before that had
+    already started replying "there are multiple notes, each recording a
+    different pilot codename". A check that degrades into a false failure the
+    more often it runs is worse than no check, because the first few greens
+    teach everyone to trust it.
+
+    Only this script's own fixtures are touched (the rag-roundtrip- name
+    prefix, inside its own throwaway tenant), and only ones old enough that no
+    live run could still be using them, so two runs overlapping cannot delete
+    each other's document. Best effort throughout: a failure to list or delete
+    is reported and ignored, since it is housekeeping and not the thing under
+    test.
+    """
+    status, body = request(edge, auth, "GET", "/v1/rag/documents")
+    if status != 200:
+        print(f"  fixture purge: skipped, list returned http {status}")
+        return
+    docs = (body or {}).get("data", [])
+    cutoff = time.time() - FIXTURE_STALE_SECONDS
+    removed = 0
+    for doc in docs:
+        if not str(doc.get("name", "")).startswith(FIXTURE_NAME_PREFIX):
+            continue
+        if parse_created_at(doc.get("created_at", "")) > cutoff:
+            continue
+        del_status, _ = request(edge, auth, "DELETE", f"/v1/rag/documents/{doc['id']}")
+        if del_status in (200, 202, 204):
+            removed += 1
+        else:
+            print(f"  fixture purge: document {doc['id']} delete returned http {del_status}")
+    print(f"purged {removed} stale fixture document(s); tenant held {len(docs)} before the purge")
+
+
+def delete_document(edge: str, auth: dict, doc_id: str) -> None:
+    """Remove this run's own fixture. Best effort: the run's verdict is
+    already decided by the time this is called, and the purge above is the
+    backstop for anything this misses."""
+    status, _ = request(edge, auth, "DELETE", f"/v1/rag/documents/{doc_id}")
+    if status in (200, 202, 204):
+        print(f"removed this run's fixture document {doc_id}")
+    else:
+        print(f"could not remove fixture document {doc_id}: http {status}")
 
 
 def search(edge: str, auth: dict, marker: str) -> None:
@@ -494,16 +569,25 @@ def main() -> None:
     provision(supabase_url, service_key)
     auth = {"Authorization": f"Bearer {mint_session(supabase_url, service_key, anon_key)}"}
 
+    purge_stale_fixtures(edge, auth)
+
     print(f"ingesting document marked {marker}")
     doc_id = ingest(edge, auth, marker)
-    print(f"searching for the marker (document {doc_id})")
-    search(edge, auth, marker)
-    print(f"asking {model} to answer from the document")
-    grounded_chat(edge, auth, marker, model)
-    print(f"streaming {model} and checking for identity/post-finish leaks")
-    stream_leak_check(edge, auth, marker, model)
-    print(f"forcing an error path against {model} and checking it stays provider-blind")
-    error_path_check(edge, auth, model)
+    try:
+        print(f"searching for the marker (document {doc_id})")
+        search(edge, auth, marker)
+        print(f"asking {model} to answer from the document")
+        grounded_chat(edge, auth, marker, model)
+        print(f"streaming {model} and checking for identity/post-finish leaks")
+        stream_leak_check(edge, auth, marker, model)
+        print(f"forcing an error path against {model} and checking it stays provider-blind")
+        error_path_check(edge, auth, model)
+    finally:
+        # Runs on the failure path too, on purpose: a failed run that leaves
+        # its fixture behind makes the NEXT run likelier to fail for the same
+        # crowding reason, which is how one real defect turns into a
+        # permanently red check nobody trusts.
+        delete_document(edge, auth, doc_id)
 
     print("PASS: upload, embed, vector search, grounded answer, streaming leak-check, "
           "and error-path leak-check all verified")

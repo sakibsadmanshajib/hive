@@ -279,6 +279,21 @@ jobs:
         # directory, which root created. That would fail every later run of
         # this workflow at checkout, before any of its own logic. Observed on
         # the box while validating this step by hand, not theorised.
+        #
+        # `exec` on that tmpfs is load bearing: docker mounts a tmpfs noexec
+        # by default, and the file air puts there is the binary it then runs,
+        # so without it the container dies on "Permission denied" with exit
+        # 126 after a perfectly successful compile. Also observed on the box,
+        # for the same reason it is written down here.
+        #
+        # GOFLAGS=-buildvcs=false because the workspace IS a git repository
+        # (actions/checkout leaves .git in place) whose files belong to the
+        # runner user, while this container runs as root. Go stamps VCS
+        # information into the binary by default, git refuses to read a
+        # repository owned by another user without an explicit safe.directory,
+        # and the build dies on "error obtaining VCS status: exit status 128".
+        # Observed on run 33219175373. The stamp is metadata only, so dropping
+        # it changes nothing this check measures.
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
@@ -300,7 +315,8 @@ jobs:
             --env-file "$RUNNER_TEMP/edge-api-under-test.env" \
             --volumes-from "$live" \
             -v "$GITHUB_WORKSPACE:/app" \
-            --mount type=tmpfs,destination=/app/apps/edge-api/tmp \
+            --tmpfs /app/apps/edge-api/tmp:rw,exec,size=512m \
+            -e GOFLAGS=-buildvcs=false \
             "$image" >/dev/null
           rm -f "$RUNNER_TEMP/edge-api-under-test.env"
 
@@ -315,7 +331,16 @@ jobs:
             fi
             if [ -z "$(docker ps -q -f "name=^${PR_EDGE_CONTAINER}$")" ]; then
               echo "::error::$PR_EDGE_CONTAINER exited before becoming healthy"
-              docker logs --tail 50 "$PR_EDGE_CONTAINER" || true
+              docker logs --tail 80 "$PR_EDGE_CONTAINER" || true
+              exit 1
+            fi
+            # air stays alive after a failed compile, so without this the job
+            # would burn the whole ceiling above waiting for a binary that is
+            # never going to exist, and the compiler error would be scrolled
+            # off the tail by air's file-watch chatter.
+            if docker logs "$PR_EDGE_CONTAINER" 2>&1 | grep -q "failed to build"; then
+              echo "::error::this checkout's edge-api source does not compile"
+              docker logs "$PR_EDGE_CONTAINER" 2>&1 | grep -v '^watching ' | tail -40
               exit 1
             fi
             sleep 5

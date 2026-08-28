@@ -102,6 +102,19 @@ def main() -> None:
     violations = check_stream_frames(["not json"], alias)
     assert any("not valid JSON" in v for v in violations), violations
 
+    # parse_created_at drives which leftover fixtures the purge is allowed to
+    # delete, so a shape it silently mis-reads as recent would let the corpus
+    # grow again and bring back the crowding failure the purge exists to stop.
+    parse_created_at = verify_rag_roundtrip.parse_created_at
+    assert parse_created_at("2026-08-28T22:13:25.541365Z") == 1787955205, \
+        parse_created_at("2026-08-28T22:13:25.541365Z")
+    assert parse_created_at("2026-08-28T22:13:25Z") == 1787955205
+    assert parse_created_at("2026-08-28T22:13:25+00:00") == 1787955205
+    # Unreadable shapes must sort as ancient (0.0), never as recent, so the
+    # purge errs towards deleting a leftover rather than keeping it forever.
+    for unreadable in ("", "yesterday", None, 17870050):
+        assert parse_created_at(unreadable) == 0.0, unreadable
+
     print("ok: verify-rag-roundtrip.py check_stream_frames leak/post-finish assertions")
 
 
