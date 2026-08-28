@@ -253,16 +253,26 @@ func TestTenantUUIDLogsOnAccountNotProvisioned(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(orig)
 
-	s := AuthSnapshot{KeyID: "key-repro", AccountID: "acct-repro", TenantID: ""}
+	s := AuthSnapshot{KeyID: "key-repro", AccountID: "acct-repro", TenantID: "not-a-uuid-repro"}
 	if _, err := s.TenantUUID(); !errors.Is(err, ErrAccountNotProvisioned) {
 		t.Fatalf("expected ErrAccountNotProvisioned, got %v", err)
 	}
 
 	got := buf.String()
-	for _, want := range []string{"account_not_provisioned", "acct-repro", "key-repro"} {
+	for _, want := range []string{"account_not_provisioned", "acct-repro", "not-a-uuid-repro"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected log output to contain %q, got %q", want, got)
 		}
+	}
+	// CodeQL flagged KeyID as clear-text logging of sensitive information on
+	// an earlier commit (alert #31): KeyID is a surrogate api_keys.id UUID,
+	// never the bearer secret, but the field name alone is enough to trip
+	// the scanner, and repeatedly re-litigating a false positive on an auth
+	// path is worse than not logging a field AccountID+TenantID already
+	// make redundant for identifying the account. Guard the removal so it
+	// cannot silently come back.
+	if strings.Contains(got, "key-repro") {
+		t.Fatalf("expected KeyID to no longer appear in the log output, got %q", got)
 	}
 }
 

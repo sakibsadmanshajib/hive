@@ -168,7 +168,7 @@ func TestRoutingAdapterLogsAccountNotProvisioned(t *testing.T) {
 
 	_, err := adapter.SelectRoute(context.Background(), audio.RouteInput{
 		AliasID:   "hive-restricted",
-		TenantID:  "",
+		TenantID:  "not-a-uuid-repro",
 		AccountID: "acct-repro",
 		APIKeyID:  "key-repro",
 		NeedTTS:   true,
@@ -178,9 +178,14 @@ func TestRoutingAdapterLogsAccountNotProvisioned(t *testing.T) {
 	}
 
 	got := buf.String()
-	for _, want := range []string{"account_not_provisioned", "acct-repro", "key-repro"} {
+	for _, want := range []string{"account_not_provisioned", "acct-repro", "not-a-uuid-repro"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected log output to contain %q, got %q", want, got)
 		}
+	}
+	// CodeQL clear-text-logging alert #31: APIKeyID must never appear in
+	// this log line. See authz_test.go's matching guard for why.
+	if strings.Contains(got, "key-repro") {
+		t.Fatalf("expected APIKeyID to no longer appear in the log output, got %q", got)
 	}
 }

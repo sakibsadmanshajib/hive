@@ -88,12 +88,21 @@ type TenantLookup struct {
 // call sites go silent right alongside the three TenantUUID already covered
 // (found live 2026-08-28, same incident: a security reviewer's freshly
 // minted key 403'd with no operator-visible signal anywhere but the HTTP
-// response itself). AccountID and KeyID are internal identifiers, safe to
-// log; never log the raw key secret, which no caller of this function holds.
+// response itself). Only AccountID and the offending TenantID string are
+// logged, both internal, non-secret identifiers. KeyID is deliberately
+// NOT logged even though it too is a surrogate api_keys.id UUID and not
+// the bearer secret: CodeQL's clear-text-logging check flags any access to
+// a field named *Key* flowing into a log call (alert #31) regardless of
+// what the field actually holds, and AccountID plus the offending
+// TenantID already identify the account well enough to act on -- not
+// worth a permanent scanner alert on an auth path for one narrow
+// increment of diagnostic detail. TenantLookup still carries KeyID (kept
+// for callers that need it for something other than this log line); this
+// function simply never reads it.
 func ParseTenantID(lookup TenantLookup) (uuid.UUID, error) {
 	id, err := uuid.Parse(lookup.TenantID)
 	if err != nil || id == uuid.Nil {
-		log.Printf("authz: account_not_provisioned account_id=%s key_id=%s (no public.tenant_billing_accounts row)", lookup.AccountID, lookup.KeyID)
+		log.Printf("authz: account_not_provisioned account_id=%s tenant_id=%q (no public.tenant_billing_accounts row)", lookup.AccountID, lookup.TenantID)
 		return uuid.Nil, ErrAccountNotProvisioned
 	}
 	return id, nil
