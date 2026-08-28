@@ -127,6 +127,15 @@ detail: `deploy/apptainer/README.md`.
 
 ### Testing (always use Docker)
 
+In a git worktree checkout (anything under `.claude/worktrees/` or a sibling
+directory, not the canonical `hive` checkout), run
+`scripts/set-compose-project-name.sh` once before the commands below. Compose
+keys container identity on the project name, which defaults to `hive` for
+every checkout, so the same documented command run from two worktrees can
+recreate or crash each other's containers (issue #1242, PR #1249). The script
+is a no-op on the canonical `hive` checkout (what the demo box and CI use),
+so it never changes that project name.
+
 ```bash
 # Go unit tests. The toolchain image is Alpine with ENTRYPOINT ["/bin/sh","-c"],
 # so pass the command string directly. Wrapping it in `bash -c` or `sh -c`
