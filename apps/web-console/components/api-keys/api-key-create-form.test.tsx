@@ -180,3 +180,129 @@ describe("ApiKeyCreateForm validation and creation", () => {
     expect(screen.getByRole("button", { name: /^Copy$/i })).toBeTruthy();
   });
 });
+
+describe("ApiKeyCreateForm limit cadence feedback", () => {
+  const summary = () => screen.getByTestId("key-limit-summary").textContent ?? "";
+  const limitField = () => screen.getByLabelText(/credit limit/i);
+  const cadenceField = () => screen.getByLabelText(/reset limit every/i);
+
+  it("is usable before an amount is typed", () => {
+    render(<ApiKeyCreateForm />);
+    expect(cadenceField().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("changing the cadence restates what the amount field means", () => {
+    render(<ApiKeyCreateForm />);
+    expect(screen.queryByText(/per calendar month/i)).toBeNull();
+    fireEvent.change(cadenceField(), { target: { value: "monthly" } });
+    expect(screen.getByText(/per calendar month/i)).toBeTruthy();
+    expect(screen.queryByText(/for the key's lifetime/i)).toBeNull();
+  });
+
+  it("states the bound that will be enforced, not the field's name", () => {
+    render(<ApiKeyCreateForm />);
+    expect(summary()).toContain("No credit limit");
+    fireEvent.change(limitField(), { target: { value: "10" } });
+    expect(summary()).toContain("$10.00");
+    expect(summary()).toContain("spent in total");
+    fireEvent.change(cadenceField(), { target: { value: "monthly" } });
+    expect(summary()).toContain("current calendar month");
+    fireEvent.change(limitField(), { target: { value: "0" } });
+    expect(summary()).toContain("no limit will be applied");
+  });
+});
+
+describe("ApiKeyCreateForm credit limit on the wire", () => {
+  const POLICY_URL = `${CREATE_URL}/key-1/policy`;
+  const limitField = () => screen.getByLabelText(/credit limit/i);
+  const cadenceField = () => screen.getByLabelText(/reset limit every/i);
+  const limitCell = () => screen.getByTestId("created-api-key-limit").textContent;
+
+  function okFetch() {
+    return vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(createdKeyBody()), { status: 201 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
+      );
+  }
+
+  it("no limit typed sends the create call and nothing else", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "uncapped" } });
+    fireEvent.click(submitButton());
+    await screen.findByTestId("created-api-key-secret");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(limitCell()).toBe("Unlimited");
+  });
+
+  it("a lifetime cap reaches the wire as the exact integer the amount means", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "capped" } });
+    fireEvent.change(limitField(), { target: { value: "12.34" } });
+    fireEvent.click(submitButton());
+    await screen.findByTestId("created-api-key-secret");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe(POLICY_URL);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      budget_kind: "lifetime",
+      budget_limit_credits: 12_340_000_000,
+    });
+    expect(limitCell()).toContain("$12.34");
+    expect(limitCell()).toContain("never resets");
+  });
+
+  it("the monthly cadence changes the budget kind on the wire", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "monthly-capped" } });
+    fireEvent.change(limitField(), { target: { value: "10.00" } });
+    fireEvent.change(cadenceField(), { target: { value: "monthly" } });
+    fireEvent.click(submitButton());
+    await screen.findByTestId("created-api-key-secret");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      budget_kind: "monthly",
+      budget_limit_credits: 10_000_000_000,
+    });
+    expect(limitCell()).toContain("resets monthly");
+  });
+
+  it("an unparseable amount is refused before the key is created", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "bad-limit" } });
+    fireEvent.change(limitField(), { target: { value: "-5" } });
+    fireEvent.click(submitButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("positive dollar amount");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed policy call reports the key as uncapped, never as capped", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(createdKeyBody()), { status: 201 }),
+      )
+      .mockResolvedValueOnce(new Response("denied", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "half-applied" } });
+    fireEvent.change(limitField(), { target: { value: "5" } });
+    fireEvent.click(submitButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("credit limit could not be applied");
+    expect(limitCell()).toBe("Unlimited");
+  });
+});

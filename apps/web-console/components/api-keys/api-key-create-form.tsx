@@ -24,6 +24,49 @@ import { usdToCreditsInput } from "@/lib/api-keys";
 // not pull in.
 type ResetCadence = "never" | "monthly";
 
+// The cadence is not decoration on the amount, it changes what the amount
+// means, so it is spelled out on the amount field itself. Before this the
+// cadence select produced no visible consequence at all: a customer picked
+// "Every month", nothing on screen acknowledged it, and the interaction
+// coverage gate reported the control as having no proven effect, which was an
+// accurate reading of a money control that gave no feedback.
+const LIMIT_HINT: Record<ResetCadence, string> = {
+  never: "Total for the key's lifetime; blank for unlimited",
+  monthly: "Per calendar month; blank for unlimited",
+};
+
+const CADENCE_PHRASE: Record<ResetCadence, string> = {
+  never: "spent in total",
+  monthly: "spent in the current calendar month",
+};
+
+/**
+ * The exact bound this form is about to ask the control-plane to enforce.
+ *
+ * Worded against what edge-api actually does rather than what the field is
+ * called: `authz.CheckAccess` refuses a request when
+ * `consumed + reserved + estimated > budget_limit_credits`, so the limit is
+ * the point a request is refused for crossing, not a figure the key is
+ * allowed to reach and then stop at. Saying "stops at $10.00" would promise a
+ * different bound from the one the server enforces.
+ *
+ * A blank field says the cap is absent in the same sentence, because an
+ * unstated absence is how a customer ends up believing an uncapped key is
+ * capped.
+ */
+export function limitSummaryText(rawLimit: string, cadence: ResetCadence): string {
+  if (rawLimit.trim() === "") {
+    return "No credit limit: this key can spend the account balance.";
+  }
+  const credits = usdToCreditsInput(rawLimit);
+  if (credits === null) {
+    return "Credit limit must be a positive dollar amount, so no limit will be applied.";
+  }
+  return `Enforced: a request is refused once it would push this key past ${formatUsdFromCredits(
+    credits,
+  )} ${CADENCE_PHRASE[cadence]}.`;
+}
+
 interface CreateApiKeyResponse {
   id: string;
   nickname: string;
@@ -254,6 +297,8 @@ export function ApiKeyCreateForm() {
     );
   }
 
+  const limitSummary = limitSummaryText(creditLimit, resetCadence);
+
   return (
     <Card>
       <CardHeader>
@@ -294,7 +339,7 @@ export function ApiKeyCreateForm() {
           <Field
             label="Credit limit (USD)"
             htmlFor="key-credit-limit"
-            hint="Leave blank for unlimited"
+            hint={LIMIT_HINT[resetCadence]}
           >
             <Input
               id="key-credit-limit"
@@ -314,13 +359,18 @@ export function ApiKeyCreateForm() {
               id="key-reset-cadence"
               value={resetCadence}
               onChange={(e) => setResetCadence(e.target.value as ResetCadence)}
-              disabled={creditLimit.trim() === ""}
-              className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)]"
             >
               <option value="never">Never (lifetime cap)</option>
               <option value="monthly">Every month</option>
             </select>
           </Field>
+          <p
+            className="text-xs text-[var(--color-ink-3)] sm:col-span-3"
+            data-testid="key-limit-summary"
+          >
+            {limitSummary}
+          </p>
           <Button
             type="submit"
             variant="primary"
