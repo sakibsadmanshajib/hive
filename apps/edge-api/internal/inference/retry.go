@@ -3,9 +3,12 @@ package inference
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -66,10 +69,25 @@ const maxRetryPeekBytes = 8 << 10
 // that hands the upstream error to the customer, and a half-consumed body would
 // silently truncate the error they see.
 func isRouterExhaustion404(resp *http.Response) bool {
-	if resp == nil || resp.StatusCode != http.StatusNotFound || resp.Body == nil {
+	if resp == nil || resp.StatusCode != http.StatusNotFound {
 		return false
 	}
+	head, ok := peekBody(resp)
+	if !ok {
+		return false
+	}
+	return strings.Contains(strings.ToLower(head), litellmRouterExhaustionMarker)
+}
 
+// peekBody reads the first maxRetryPeekBytes of resp.Body and splices what it
+// read back in front of the remainder, so the caller still sees a complete,
+// unread body. Shared by every classifier in this file for that reason: this
+// runs on the path that hands the upstream error to the customer, and a
+// half-consumed body would silently truncate the error they see.
+func peekBody(resp *http.Response) (string, bool) {
+	if resp == nil || resp.Body == nil {
+		return "", false
+	}
 	orig := resp.Body
 	head, err := io.ReadAll(io.LimitReader(orig, maxRetryPeekBytes))
 	resp.Body = struct {
@@ -77,10 +95,95 @@ func isRouterExhaustion404(resp *http.Response) bool {
 		io.Closer
 	}{Reader: io.MultiReader(bytes.NewReader(head), orig), Closer: orig}
 	if err != nil {
-		return false
+		return "", false
 	}
+	return string(head), true
+}
 
-	return strings.Contains(strings.ToLower(string(head)), litellmRouterExhaustionMarker)
+// passthroughFields are the top-level request keys Hive forwards VERBATIM from
+// a non-OpenAI surface rather than translating: they have no equivalent in the
+// OpenAI chat-completions shape every request is lowered to before dispatch
+// (apps/edge-api/internal/anthropic/translate_request.go carries all four
+// through unchanged, deliberately, per issue #1153).
+//
+// Forwarding them is right when the resolved upstream understands them, and
+// fatal when it does not: a pooled alias like hive-free load balances across
+// providers with different tolerances, so the SAME request succeeds or dies on
+// a coin flip. Observed live on 2026-08-28: an Anthropic Messages call carrying
+// top_k drew the pool member that answers "property 'top_k' is unsupported"
+// with a hard 400, and the customer saw "hive-free is not available." for a
+// field the next member would have served.
+//
+// Only these four are ever stripped. A field the CALLER sent that is part of
+// the OpenAI surface proper (temperature, tools, response_format) is never
+// touched: dropping one of those would silently change what the caller asked
+// for, which is worse than surfacing the 400.
+var passthroughFields = map[string]bool{
+	"top_k":         true,
+	"thinking":      true,
+	"cache_control": true,
+	"session_id":    true,
+}
+
+// unsupportedParamPatterns are the wordings upstreams use to name the single
+// request field they refused. A list, because every provider phrases it
+// differently and the field name is the only part worth extracting.
+//
+//	property 'top_k' is unsupported
+//	Unrecognized request argument supplied: top_k
+//	Invalid JSON payload received. Unknown name "top_k"
+//	thinking: Extra inputs are not permitted
+var unsupportedParamPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)property '([a-z_]{1,32})' is unsupported`),
+	regexp.MustCompile(`(?i)unrecognized request argument supplied: ([a-z_]{1,32})`),
+	regexp.MustCompile(`(?i)unknown name \\?"([a-z_]{1,32})\\?"`),
+	regexp.MustCompile(`(?i)([a-z_]{1,32}): ?extra inputs are not permitted`),
+}
+
+// refusedPassthroughField reports which passthrough field an upstream 400
+// blamed, or "" when the refusal is about anything else. Scoped to 400, so a
+// success or a retryable status never pays to read a body, and scoped to
+// passthroughFields, so an upstream complaining about a field the caller
+// actually sent reaches that caller as the 400 it is.
+func refusedPassthroughField(resp *http.Response) string {
+	if resp == nil || resp.StatusCode != http.StatusBadRequest {
+		return ""
+	}
+	head, ok := peekBody(resp)
+	if !ok {
+		return ""
+	}
+	for _, re := range unsupportedParamPatterns {
+		m := re.FindStringSubmatch(head)
+		if len(m) != 2 {
+			continue
+		}
+		field := strings.ToLower(m[1])
+		if passthroughFields[field] {
+			return field
+		}
+	}
+	return ""
+}
+
+// stripTopLevelField removes one top-level key from a JSON request body,
+// reporting whether the body actually carried it. A body that does not parse,
+// or does not carry the key, comes back untouched so the caller falls through
+// to returning the upstream error unchanged.
+func stripTopLevelField(body []byte, field string) ([]byte, bool) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return body, false
+	}
+	if _, ok := fields[field]; !ok {
+		return body, false
+	}
+	delete(fields, field)
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 // retryDelays is the progressive backoff between attempts.
@@ -115,6 +218,11 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 		lastErr  error
 	)
 
+	// Each passthrough field is stripped at most once, so a provider that
+	// refuses a second one still gets a second chance, and a provider that
+	// keeps naming the same field cannot loop.
+	stripped := map[string]bool{}
+
 	for i, delay := range retryDelays {
 		if delay > 0 {
 			wait := delay + jitter(delay)
@@ -141,6 +249,24 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 				continue
 			}
 			return nil, err
+		}
+
+		// A 400 that names one of our own passthrough fields is not the
+		// caller's fault and not terminal: drop that field and try again. See
+		// passthroughFields for why this is narrow on purpose. Bounded to
+		// attempts that have a successor, so the last attempt still returns a
+		// real response rather than falling out of the loop with nothing.
+		if i < len(retryDelays)-1 {
+			if field := refusedPassthroughField(resp); field != "" && !stripped[field] {
+				if next, ok := stripTopLevelField(body, field); ok {
+					stripped[field] = true
+					body = next
+					slog.Warn("upstream refused a passthrough request field; retrying without it",
+						"field", field, "litellm_model", litellmModel)
+					drainAndClose(resp)
+					continue
+				}
+			}
 		}
 
 		// Success or non-retryable status → return immediately.
