@@ -519,6 +519,26 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 	if err := s.repo.UpdateMembershipRole(ctx, accountID, targetUserID, newRole); err != nil {
 		return err
 	}
+
+	// Best-effort propagation onto public.tenant_users (issue #1245):
+	// platform.WorkspaceAdminGate and egress.Service both authorize off that
+	// table, and nothing wrote to it after signup before this call existed,
+	// so a demotion here used to leave the demoted user's backend authority
+	// untouched. See signup.SyncTenantMembershipRole's doc for the full
+	// account_memberships-vs-tenant_users design (which store is
+	// authoritative, and why this syncs on write rather than reading through
+	// a join). Never fails the caller's request: account_memberships already
+	// committed above, which is the write this handler exists for, and an
+	// unmapped tenant or a missing tenant_users row are both ordinary
+	// transitional states, not faults.
+	if s.billing != nil {
+		if _, reason, sErr := signup.SyncTenantMembershipRole(ctx, s.billing, accountID, targetUserID, newRole); sErr != nil {
+			log.Printf("accounts: tenant_users role sync failed account=%s user=%s: %v", accountID, targetUserID, sErr)
+		} else if reason != "" {
+			log.Printf("accounts: tenant_users role sync skipped account=%s user=%s reason=%s", accountID, targetUserID, reason)
+		}
+	}
+
 	return nil
 }
 
