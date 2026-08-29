@@ -238,6 +238,28 @@ func headerSafe(value string) bool {
 // its own, including a second Bcc. The same value is also written into the SMTP
 // RCPT command, where a CRLF injects a command. This address originates in user
 // input, so both are live concerns rather than theoretical ones.
+//
+// Rejecting CRLF is not on its own enough, which is the second thing CodeQL was
+// right about. mail.ParseAddress accepts far more than an addr-spec and hands
+// back a value that is not what was parsed: it strips the quotes from a quoted
+// local part, so `"a,b"@example.test` comes back as the bare a,b@example.test,
+// and a display name is dropped entirely, so `Bob <bob@example.test>` comes back
+// as somebody else's address. Written unquoted into a To header, the first is
+// two mailboxes rather than one, which is content spoofing of the header a
+// recipient reads to decide whether the message was meant for them; written into
+// RCPT TO it is not a valid envelope either.
+//
+// So the parse has to round-trip: the address is accepted only when the
+// canonical form the parser produces is exactly the string that was asked for.
+// Everything this file then writes is a plain addr-spec, which is why the To
+// header and the RCPT command can concatenate it with no re-quoting at either
+// site. An address that needs quoting is refused rather than rewritten, because
+// the invitation it belongs to is matched on accept against a verified GoTrue
+// address (accounts.AcceptInvitation), which is never a quoted or display-name
+// form, so a rewritten one could not have been redeemed anyway.
+//
+// Equality also subsumes the old headerSafe check on the parsed value: `to` has
+// already been checked, and the two are now required to be identical.
 func validRecipient(raw string) (string, error) {
 	to := strings.TrimSpace(raw)
 	if to == "" || !headerSafe(to) {
@@ -247,19 +269,19 @@ func validRecipient(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: recipient address", ErrInvalidMessage)
 	}
-	// The parsed address rather than the raw string, so anything the parser
-	// tolerated but did not keep cannot reach a header or a command.
-	if !headerSafe(parsed.Address) {
+	if parsed.Address != to {
 		return "", fmt.Errorf("%w: recipient address", ErrInvalidMessage)
 	}
-	return parsed.Address, nil
+	return to, nil
 }
 
 // render builds a multipart/alternative message. Plain text first, HTML second:
 // a client picks the last part it can display, so this order gives HTML to
 // clients that render it and text to clients that do not.
 //
-// to must already have come through validRecipient.
+// to must already have come through validRecipient. The To header below
+// concatenates it unquoted, which is only correct because that function refuses
+// anything whose canonical form differs from what it was given.
 func (s *SMTPSender) render(msg Message, to string) ([]byte, error) {
 	if !headerSafe(msg.Subject) {
 		return nil, fmt.Errorf("%w: subject", ErrInvalidMessage)
