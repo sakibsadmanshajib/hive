@@ -21,7 +21,9 @@
     "workspaceMenu": "ওয়ার্কস্পেস পরিবর্তন করুন",
     "docs": "ডকুমেন্টেশন",
     "signOut": "সাইন আউট",
-    "primaryNav": "কনসোল বিভাগ"
+    "primaryNav": "কনসোল বিভাগ",
+    "openNav": "নেভিগেশন খুলুন",
+    "closeNav": "নেভিগেশন বন্ধ করুন"
   },
   "WorkspaceSwitcher": {
     "label": "ওয়ার্কস্পেস",

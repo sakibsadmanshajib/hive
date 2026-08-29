@@ -20,6 +20,7 @@ import {
 import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/cn";
+import { ConsoleFrame } from "@/components/app-shell/console-frame";
 import { HiveMark } from "@/components/brand/hive-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -130,9 +131,30 @@ export function ConsoleShell({
   })).filter((group) => group.items.length > 0);
 
   return (
-    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-[240px_1fr] bg-[var(--color-canvas)]">
-      <aside className="hidden lg:flex flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="px-5 py-5 border-b border-[var(--color-border)]">
+    <ConsoleFrame
+      openNavLabel={tShell("openNav")}
+      closeNavLabel={tShell("closeNav")}
+      topbar={topbar}
+      headerActions={
+        <>
+          {/*
+            In-product docs, not hivegpt.io. That host is off-product and
+            this link is in the shell on every console page, so it was the
+            most-seen dead end in the console (issues #883, #1179).
+          */}
+          <Link
+            href="/console/docs"
+            className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
+          >
+            {tShell("docs")}
+          </Link>
+          <LocaleSwitcher returnTo={active} />
+          <SignOutButton className="lg:hidden" />
+        </>
+      }
+      sidebar={
+        <>
+          <div className="px-5 py-5 border-b border-[var(--color-border)]">
           <Link
             href="/console"
             className="flex items-center gap-2.5 text-[var(--color-ink)] focus-visible:outline-none"
@@ -181,6 +203,10 @@ export function ConsoleShell({
                         href={item.href}
                         className={cn(
                           "flex items-center gap-2 rounded-md px-2 py-1.5",
+                          // 44px tall while the rail is a touch drawer;
+                          // unchanged at desktop widths where it is a
+                          // pointer-driven rail.
+                          "min-h-11 lg:min-h-0",
                           "text-sm transition-colors duration-[var(--duration-fast)]",
                           isActive
                             ? "bg-[var(--color-surface-inset)] text-[var(--color-ink)] font-medium"
@@ -222,40 +248,11 @@ export function ConsoleShell({
             <SignOutButton className="shrink-0" />
           </div>
         </div>
-      </aside>
-
-      <div className="flex flex-col min-w-0">
-        <header
-          className={cn(
-            "h-14 shrink-0 flex items-center justify-between gap-4",
-            "border-b border-[var(--color-border)] bg-[var(--color-surface)]",
-            "px-6",
-          )}
-        >
-          <div className="flex items-center gap-3 text-sm text-[var(--color-ink-2)]">
-            {topbar}
-          </div>
-          <div className="flex items-center gap-3">
-            {/*
-              In-product docs, not hivegpt.io. That host is off-product and
-              this link is in the shell on every console page, so it was the
-              most-seen dead end in the console (issues #883, #1179).
-            */}
-            <Link
-              href="/console/docs"
-              className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
-            >
-              {tShell("docs")}
-            </Link>
-            <LocaleSwitcher returnTo={active} />
-            <SignOutButton className="lg:hidden" />
-          </div>
-        </header>
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-6xl px-6 py-8">{children}</div>
-        </main>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {children}
+    </ConsoleFrame>
   );
 }
 

@@ -34,8 +34,22 @@ interface SummaryCardProps {
   sparklineCaption?: string;
 }
 
-function formatDeltaPercent(percent: number): string {
+// Product rule, not a bug fix: derivePeriodDelta is arithmetically right when
+// it returns 3549613%, because the prior period really was a small nonzero
+// number. It is the display that is wrong. A percentage informs a reader only
+// while the ratio still fits in their head; past roughly 10x, "3,549,613%"
+// and "998,004%" carry one and the same actionable fact -- the prior period
+// was next to nothing -- and the extra six digits buy the reader nothing
+// while costing a tile's whole width. At and above this magnitude the tile
+// states the bound instead of the figure. Increases only in practice: a
+// decrease cannot pass -100%.
+const DELTA_PERCENT_CAP = 1000;
+
+export function formatDeltaPercent(percent: number): string {
   const magnitude = Math.abs(percent);
+  if (magnitude >= DELTA_PERCENT_CAP) {
+    return `over ${DELTA_PERCENT_CAP.toLocaleString("en-US")}%`;
+  }
   const digits = magnitude >= 100 ? 0 : 1;
   return `${magnitude.toFixed(digits)}%`;
 }

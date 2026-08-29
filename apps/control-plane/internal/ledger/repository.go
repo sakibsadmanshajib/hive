@@ -236,8 +236,23 @@ func (r *pgxRepository) ListEntriesWithCursor(ctx context.Context, filter ListEn
 	args := []any{filter.AccountID}
 	next := func() int { return len(args) + 1 }
 
+	// Keyset on (created_at, id), not on id alone. `id` is a v4 UUID
+	// (gen_random_uuid, see supabase/migrations/20260330_01_credits_ledger.sql),
+	// so it carries no time order at all: ordering by it returned a customer's
+	// money history shuffled -- the console's billing overview showed five
+	// entries dated 11, 16, 26, 16, 24 August in that order, and the paginated
+	// Ledger tab was shuffled the same way, since both read this one query.
+	//
+	// The cursor stays the entry id, so the API contract in http.go and every
+	// cursor already in a customer's hands keep working; the row's sort key is
+	// looked up from it. Unknown id yields NULL, the row comparison is then
+	// unknown for every row, and the page comes back empty, which is the right
+	// answer for a cursor that names no row.
 	if filter.Cursor != nil {
-		query += fmt.Sprintf(` AND id < $%d`, next())
+		query += fmt.Sprintf(
+			` AND (created_at, id) < (SELECT created_at, id FROM public.credit_ledger_entries WHERE id = $%d)`,
+			next(),
+		)
 		args = append(args, *filter.Cursor)
 	}
 	if filter.EntryType != nil {
@@ -249,7 +264,11 @@ func (r *pgxRepository) ListEntriesWithCursor(ctx context.Context, filter ListEn
 		args = append(args, v)
 	}
 
-	query += fmt.Sprintf(` ORDER BY id DESC LIMIT $%d`, next())
+	// Newest first, with id breaking ties so the ordering is total and the
+	// keyset above cannot skip or repeat a row that shares a timestamp.
+	// idx_credit_ledger_entries_account_created_at already covers the leading
+	// columns.
+	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, next())
 	args = append(args, limit)
 
 	rows, err := r.pool.Query(ctx, query, args...)
