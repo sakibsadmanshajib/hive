@@ -32,6 +32,10 @@ describe("app/auth/sign-up/page.tsx", () => {
     mockSignUp.mockResolvedValue({ error: null });
     window.history.pushState({}, "", "/auth/sign-up");
     process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
+    // Every case in this describe exercises the form, which only renders
+    // where the deployment accepts self-serve signup. The flag fails
+    // closed, so it is set explicitly (issue #1328).
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "false";
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
@@ -122,5 +126,81 @@ describe("app/auth/sign-up/page.tsx", () => {
         "/invitations/accept?token=invite-token-9",
       )}`,
     );
+  });
+});
+
+/**
+ * Issue #1328: this deployment refuses POST /auth/v1/signup at the gateway
+ * and at the GoTrue flag, so the console must say accounts are created by
+ * invitation instead of shipping a form that cannot complete, and must report
+ * a refusal that does reach the endpoint as a refusal rather than an outage.
+ */
+describe("app/auth/sign-up/page.tsx self-serve gating", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSignUp.mockResolvedValue({ error: null });
+    window.history.pushState({}, "", "/auth/sign-up");
+    process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+    );
+  });
+
+  it("renders no sign-up form when the deployment refuses self-serve signup", () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "true";
+    render(<SignUpPage />);
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
+    expect(screen.queryByLabelText(/^password/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /create account/i })).toBeNull();
+  });
+
+  it("says accounts are created by invitation, and points at sign-in", async () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "true";
+    render(<SignUpPage />);
+    expect(
+      screen.getByRole("heading", { name: /accounts are created by invitation/i }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/sign-up is not available on this deployment/i),
+    ).toBeTruthy();
+    const link = await screen.findByRole("link", { name: /go to sign in/i });
+    expect(link.getAttribute("href")).toBe("/auth/sign-in");
+  });
+
+  it("carries an inbound next param into the sign-in link on the gated page", async () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "true";
+    window.history.pushState(
+      {},
+      "",
+      `/auth/sign-up?next=${encodeURIComponent(
+        "/oauth/consent?authorization_id=auth-req-123",
+      )}`,
+    );
+    render(<SignUpPage />);
+    const link = await screen.findByRole("link", { name: /go to sign in/i });
+    expect(link.getAttribute("href")).toBe(
+      `/auth/sign-in?next=${encodeURIComponent(
+        "/oauth/consent?authorization_id=auth-req-123",
+      )}`,
+    );
+  });
+
+  it("reports a gateway refusal as a refusal, not as an outage on our end", async () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "false";
+    mockSignUp.mockResolvedValue({
+      error: { name: "AuthUnknownError", message: "Unexpected end of JSON input" },
+    });
+    render(<SignUpPage />);
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password/i), {
+      target: { value: "hunter2hunter2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create account/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/sign-up is not available on this deployment/i);
+    expect(alert.textContent).not.toMatch(/something went wrong on our end/i);
   });
 });

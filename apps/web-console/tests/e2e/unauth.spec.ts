@@ -58,41 +58,32 @@ test("sign-in form renders and blocks empty or malformed submissions client-side
   expect((await readValidationMessage(email)).length).toBeGreaterThan(0);
 });
 
-test("sign-up form renders and blocks empty or malformed submissions client-side", async ({
+test("sign-up says accounts are created by invitation when self-serve is disabled", async ({
   page,
 }) => {
+  // The stack this runs against builds web-console with no
+  // NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP set, which the console reads as
+  // disabled (lib/auth/self-serve.ts fails closed), matching every deployment
+  // this repo ships: Caddyfile.supabase 404s /auth/v1/signup and GoTrue runs
+  // with signup off. Issue #1328 was the console shipping a form anyway and
+  // reporting the refusal as a server error.
   await page.goto("/auth/sign-up");
 
   await expect(
-    page.getByRole("heading", { level: 1, name: "Create your Hive account" })
+    page.getByRole("heading", { level: 1, name: "Accounts are created by invitation" })
   ).toBeVisible();
-  const email = page.getByLabel("Email");
-  const password = page.getByLabel("Password");
-  await expect(email).toBeVisible();
-  await expect(password).toBeVisible();
+  await expect(
+    page.getByText("Sign-up is not available on this deployment", { exact: false })
+  ).toBeVisible();
 
-  await submitForm(page);
+  // The form is absent, not merely disabled: nothing here can post to the
+  // signup endpoint the gateway refuses.
+  await expect(page.locator("#email")).toHaveCount(0);
+  await expect(page.locator("#password")).toHaveCount(0);
+  await expect(page.locator("button[type=submit]")).toHaveCount(0);
 
-  expect(await email.evaluate((element) => (element as HTMLInputElement).validity.valueMissing)).toBe(
-    true
-  );
-  expect(
-    await password.evaluate(
-      (element) => (element as HTMLInputElement).validity.valueMissing
-    )
-  ).toBe(true);
-  expect((await readValidationMessage(email)).length).toBeGreaterThan(0);
-  expect((await readValidationMessage(password)).length).toBeGreaterThan(0);
-  await expect(page).toHaveURL(/\/auth\/sign-up$/);
-
-  await email.fill("invalid-email");
-  await password.fill("password123");
-  await submitForm(page);
-
-  expect(await email.evaluate((element) => (element as HTMLInputElement).validity.typeMismatch)).toBe(
-    true
-  );
-  expect((await readValidationMessage(email)).length).toBeGreaterThan(0);
+  await page.getByRole("link", { name: "Go to sign in" }).click();
+  await expect(page).toHaveURL(/\/auth\/sign-in$/);
 });
 
 test("console redirects logged-out viewers to sign-in", async ({ page }) => {

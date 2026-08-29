@@ -2,13 +2,17 @@
 
 import { createClient } from "@/lib/supabase/browser";
 import { useState, useRef, useEffect, type FormEvent } from "react";
-import { Mail } from "lucide-react";
+import { Mail, ShieldCheck } from "lucide-react";
 
 import { AuthShell } from "@/components/app-shell/auth-shell";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
-import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
+import {
+  SIGN_UP_UNAVAILABLE_MESSAGE,
+  toUserFacingSignUpMessage,
+} from "@/lib/auth/auth-error";
 import { appendNextParam } from "@/lib/auth/next-target";
+import { isSelfServeSignupEnabled } from "@/lib/auth/self-serve";
 
 // Minimal ambient type for the Cloudflare Turnstile widget. The full SDK type
 // is not installed as a dev dependency; we only need the render/remove surface.
@@ -35,7 +39,85 @@ const TURNSTILE_SITE_KEY =
     ? process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? ""
     : "";
 
+/**
+ * Reads an inbound next= target post-mount (window is unavailable during SSR).
+ *
+ * Carries an OAuth consent round-trip started on chat through to the "Sign in"
+ * cross-link and into the verification-email redirect, so it survives the
+ * signup, confirm-email, callback chain instead of dropping the user onto the
+ * plain console dashboard (live UI/UX pass, 2026-07-26). Shared by both
+ * branches below: a visitor who lands here mid-consent needs the way back
+ * whether or not signup is open.
+ */
+function useNextParam(): string | null {
+  const [nextParam, setNextParam] = useState<string | null>(null);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    setNextParam(search.get("next"));
+  }, []);
+
+  return nextParam;
+}
+
+/**
+ * Route gate for issue #1328.
+ *
+ * Every deployment this repo ships refuses POST /auth/v1/signup, at the
+ * gateway and at the GoTrue flag both, so the form below could never be
+ * completed there and the gateway 404 read as an outage. The page is not
+ * deleted, because the refusal is a deployment posture rather than a property
+ * of this console: a deployment that opens self-serve signup gets the form
+ * back by setting one variable, with no code change.
+ */
 export default function SignUpPage() {
+  return isSelfServeSignupEnabled() ? <SignUpForm /> : <SignUpUnavailable />;
+}
+
+function SignUpUnavailable() {
+  const nextParam = useNextParam();
+  const signInHref = appendNextParam("/auth/sign-in", nextParam);
+
+  return (
+    <AuthShell
+      eyebrow="Get started"
+      title="Accounts are created by invitation"
+      subtitle="This Hive deployment does not open account creation to the public."
+      footer={
+        <>
+          Already have an account?{" "}
+          <a
+            href={signInHref}
+            className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+          >
+            Sign in
+          </a>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-4 py-3 text-sm text-[var(--color-ink-2)]"
+        >
+          <ShieldCheck
+            size={16}
+            className="mt-0.5 shrink-0 text-[var(--color-accent)]"
+          />
+          <span>{SIGN_UP_UNAVAILABLE_MESSAGE}</span>
+        </div>
+        <a
+          href={signInHref}
+          className={buttonVariants({ variant: "primary", size: "lg" })}
+        >
+          Go to sign in
+        </a>
+      </div>
+    </AuthShell>
+  );
+}
+
+function SignUpForm() {
   const supabase = createClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,13 +125,7 @@ export default function SignUpPage() {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
-  // Populated post-mount (window is unavailable during SSR). Carries an
-  // inbound ?next= target (e.g. an OAuth consent round-trip started on chat)
-  // through to the "Sign in" cross-link and into the verification-email
-  // redirect, so it survives the signup -> confirm-email -> callback chain
-  // instead of dropping the user onto the plain console dashboard (issue
-  // found in live UI/UX pass, 2026-07-26).
-  const [nextParam, setNextParam] = useState<string | null>(null);
+  const nextParam = useNextParam();
   // Same pre-hydration submit hazard as /auth/sign-in (see the comment there):
   // no form `action` and no input `name` attributes mean a submit fired before
   // onSubmit is attached does a native GET that wipes the query string, taking
@@ -61,7 +137,6 @@ export default function SignUpPage() {
   const widgetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setNextParam(new URLSearchParams(window.location.search).get("next"));
     setHydrated(true);
   }, []);
 
@@ -163,7 +238,10 @@ export default function SignUpPage() {
       });
 
       if (signUpError) {
-        setError(toUserFacingAuthMessage(signUpError.message));
+        // Not toUserFacingAuthMessage: a deployment that refuses signup at
+        // the gateway answers with a bare 404, and the generic branch
+        // reported that policy as an outage on our end (issue #1328).
+        setError(toUserFacingSignUpMessage(signUpError));
         return;
       }
 

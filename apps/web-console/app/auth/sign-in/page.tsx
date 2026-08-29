@@ -11,6 +11,7 @@ import { Field, Input } from "@/components/ui/input";
 import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 import { appendNextParam, resolveNextTarget } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
+import { isSelfServeSignupEnabled } from "@/lib/auth/self-serve";
 
 export default function SignInPage() {
   const supabase = createClient();
@@ -93,15 +94,22 @@ export default function SignInPage() {
           : "Manage API keys, credits, and usage analytics for your workspace."
       }
       footer={
-        <>
-          Don&rsquo;t have an account?{" "}
-          <a
-            href={appendNextParam("/auth/sign-up", nextParam)}
-            className="text-[var(--color-accent)] underline-offset-4 hover:underline"
-          >
-            Create one
-          </a>
-        </>
+        isSelfServeSignupEnabled() ? (
+          <>
+            Don&rsquo;t have an account?{" "}
+            <a
+              href={appendNextParam("/auth/sign-up", nextParam)}
+              className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+            >
+              Create one
+            </a>
+          </>
+        ) : (
+          // Issue #1328: every deployment this repo ships refuses self-serve
+          // signup, so a link to a page that cannot complete is a promise the
+          // gateway breaks.
+          <>Accounts on this deployment are created by invitation.</>
+        )
       }
     >
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">

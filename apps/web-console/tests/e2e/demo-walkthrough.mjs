@@ -784,6 +784,20 @@ async function createOwnerAccount(browser) {
       .locator('button[type="submit"]:not([disabled])')
       .waitFor({ state: "visible", timeout: 10000 })
       .catch(() => {});
+    // A deployment that refuses self-serve signup now says so on this page
+    // instead of shipping a form the gateway 404s (issue #1328). That is a
+    // posture, not a defect: report it and skip, rather than timing out on
+    // fields that are deliberately absent.
+    const invitationOnly = await page
+      .getByRole("heading", { name: "Accounts are created by invitation" })
+      .isVisible()
+      .catch(() => false);
+    if (invitationOnly) {
+      entry.verdict = "PASS";
+      entry.observed = "self-serve signup is disabled on this deployment, and the console says accounts are created by invitation instead of failing";
+      entry.screenshots.push(await shot(page, "owner-01-signup-by-invitation"));
+      return null;
+    }
     await page.locator("#email").fill(ownerEmail);
     await page.locator("#password").fill(ownerPassword);
     // Give the Turnstile widget time to resolve in non-interactive managed

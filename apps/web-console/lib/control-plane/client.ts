@@ -2041,41 +2041,6 @@ export async function revokeApiKey(keyId: string): Promise<ApiKey> {
   return key;
 }
 
-export async function rotateApiKey(
-  keyId: string,
-  nickname: string,
-  expiresAt?: string
-): Promise<ApiKey> {
-  const { baseUrl, headers } = await getRequestContext();
-  const body: { nickname: string; expires_at?: string } = { nickname };
-  if (expiresAt) {
-    body.expires_at = expiresAt;
-  }
-
-  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${keyId}/rotate`, {
-    method: "POST",
-    headers,
-    cache: "no-store",
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to rotate API key"));
-  }
-
-  const payload = parseJsonValue(await readResponseText(response));
-  if (!isJsonObject(payload)) {
-    throw new Error("Failed to parse API key response");
-  }
-
-  const key = decodeApiKey(payload);
-  if (!key) {
-    throw new Error("Failed to parse API key response");
-  }
-
-  return key;
-}
-
 // UpdateApiKeyBudgetInput is the per-key credit cap the New Key modal and the
 // limits page write via POST .../policy. budgetKind is constrained to what
 // api_key_policies.budget_kind actually supports server-side ("none" clears

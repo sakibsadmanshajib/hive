@@ -670,6 +670,10 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      # next dev reads NEXT_PUBLIC_* at runtime, so this one travels as
+      # environment rather than a build arg. Same source variable as
+      # web-console-prod below (issue #1328).
+      NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
     # Dev-only `next dev` server: publishes raw 0.0.0.0:3000 with no Caddy and
     # no TLS in front of it, unlike web-console-prod below which sits behind
@@ -747,6 +751,12 @@ services:
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
         NEXT_PUBLIC_APP_URL: ${CONSOLE_APP_URL:-https://console-hive.scubed.co}
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        # Same variable, same polarity, as the GoTrue flag in
+        # docker-compose.enterprise.yml, so the console cannot advertise a
+        # sign-up the auth service refuses (issue #1328). Defaulted here
+        # rather than left unset, because an unset build arg reaches
+        # next build as an empty string and this pair must agree.
+        NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
     profiles:
       - chat
       - enterprise

@@ -1,8 +1,5 @@
-import Link from "next/link";
-
 import type { ApiKey } from "@/lib/control-plane/client";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { formatShortDate } from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
@@ -117,12 +114,6 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
       cell: (row) =>
         row.status === "active" ? (
           <div className="flex items-center justify-end gap-3">
-            <Link
-              href={`/console/api-keys/${row.id}/rotate`}
-              className={buttonVariants({ variant: "ghost", size: "sm" })}
-            >
-              Rotate
-            </Link>
             <RevokeConfirmPanel keyId={row.id} keyNickname={row.nickname} />
           </div>
         ) : (

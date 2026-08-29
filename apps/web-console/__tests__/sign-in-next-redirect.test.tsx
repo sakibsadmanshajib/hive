@@ -45,6 +45,11 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
     vi.clearAllMocks();
     mockSignInWithPassword.mockResolvedValue({ error: null });
     window.history.pushState({}, "", "/auth/sign-in");
+    // The cross-link cases below are the self-serve-enabled shape. The
+    // flag fails closed (lib/auth/self-serve.ts), so it has to be set
+    // explicitly here or every link assertion would be testing the
+    // invitation-only footer instead (issue #1328).
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "false";
   });
 
   async function submitForm() {
@@ -288,5 +293,28 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await screen.findByText("Invalid credentials");
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("app/auth/sign-in/page.tsx sign-up cross-link gating", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.pushState({}, "", "/auth/sign-in");
+  });
+
+  it("offers the sign-up link when this deployment accepts self-serve signup", async () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "false";
+    render(<SignInPage />);
+    const link = await screen.findByRole("link", { name: /create one/i });
+    expect(link.getAttribute("href")).toBe("/auth/sign-up");
+  });
+
+  it("does not link to a sign-up page this deployment refuses (issue #1328)", () => {
+    process.env.NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP = "true";
+    render(<SignInPage />);
+    expect(screen.queryByRole("link", { name: /create one/i })).toBeNull();
+    expect(
+      screen.getByText(/accounts on this deployment are created by invitation/i),
+    ).toBeTruthy();
   });
 });

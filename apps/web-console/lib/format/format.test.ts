@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCredits, formatLatencyMs, formatShortDate } from "./credits";
+import {
+  CREDITS_PER_USD,
+  formatCredits,
+  formatLatencyMs,
+  formatShortDate,
+  formatUsdBalanceFromCredits,
+} from "./credits";
 import { formatDateTime, formatLongDate } from "./datetime";
 import { formatCurrency, formatTakaSubunits } from "./money";
 import { intlTag, resolveLocale } from "@/lib/i18n/locales";
@@ -116,5 +122,45 @@ describe("money formatting", () => {
   it("floors negative and unparseable totals", () => {
     expect(formatTakaSubunits("-1")).toBe("৳0.00");
     expect(formatTakaSubunits("abc")).toBe("৳0.00");
+  });
+});
+
+/**
+ * Issue #1332: the dashboard printed the balance as a bare integer while the
+ * API keys table printed the same quantity in dollars. The console settled on
+ * dollars, and a balance is spendable money, so this formatter truncates
+ * where the pricing formatter rounds.
+ */
+describe("formatUsdBalanceFromCredits", () => {
+  it("renders one dollar per billion credits", () => {
+    expect(formatUsdBalanceFromCredits(CREDITS_PER_USD)).toBe("$1.00");
+  });
+
+  it("never rounds a balance up to money the customer does not hold", () => {
+    expect(formatUsdBalanceFromCredits(99_996_364_207)).toBe("$99.99");
+  });
+
+  it("truncates in credits, so a float product cannot shave a cent off a real balance", () => {
+    // 8.29 times 100 is 828.9999999999999 in IEEE 754, so truncating in
+    // dollars would print $8.28 here.
+    expect(formatUsdBalanceFromCredits(8_290_000_000)).toBe("$8.29");
+    expect(formatUsdBalanceFromCredits(1_230_000_000)).toBe("$1.23");
+  });
+
+  it("keeps a sub-cent balance visible instead of printing zero", () => {
+    expect(formatUsdBalanceFromCredits(662_000)).toBe("$0.000662");
+  });
+
+  it("renders a single credit, the smallest unit there is", () => {
+    expect(formatUsdBalanceFromCredits(1)).toBe("$0.000000001");
+  });
+
+  it("renders an empty balance as zero dollars, not as an absence", () => {
+    expect(formatUsdBalanceFromCredits(0)).toBe("$0.00");
+  });
+
+  it("renders a non-finite value as an absence, never as an empty wallet", () => {
+    expect(formatUsdBalanceFromCredits(Number.NaN)).toBe("—");
+    expect(formatUsdBalanceFromCredits(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
