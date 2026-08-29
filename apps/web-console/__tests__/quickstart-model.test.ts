@@ -50,6 +50,14 @@ describe("pickQuickstartAlias", () => {
     expect(pickQuickstartAlias([liveOrder[0]])).toBe("hive-auto");
   });
 
+  it("keeps that fallback chat-capable when an embeddings alias sorts first", () => {
+    const embeddingsBeforeVariable: CatalogModel[] = [
+      model("hive-embedding-default", "fixed", ["stable", "embeddings"]),
+      model("hive-auto", "upstream_actual", ["stable", "chat", "responses"]),
+    ];
+    expect(pickQuickstartAlias(embeddingsBeforeVariable)).toBe("hive-auto");
+  });
+
   it("falls back to the seeded alias when the catalog could not be read", () => {
     expect(pickQuickstartAlias([])).toBe("hive-default");
   });

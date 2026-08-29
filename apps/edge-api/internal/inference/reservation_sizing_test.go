@@ -75,10 +75,22 @@ func TestASolventAccountIsNotRefusedForAnEnvelopeItIsNotUsing(t *testing.T) {
 			"The hold has to be sized from this request, not from the largest request the bounds allow.",
 			hold, qaBalanceCredits)
 	}
-	t.Logf("ordinary turn holds %d credits (%.4f USD) against a %d balance; the envelope hold was %d",
-		hold, float64(hold)/float64(CreditsPerUSD), qaBalanceCredits, envelopeHoldCredits)
+	// Exact, not float64: this is a credit figure, and nothing in this repo
+	// converts credits to money through a float, not even in a log line.
+	usd := new(big.Rat).SetFrac64(hold, CreditsPerUSD).FloatString(4)
+	t.Logf("ordinary turn holds %d credits (%s USD) against a %d balance; the envelope hold was %d",
+		hold, usd, qaBalanceCredits, envelopeHoldCredits)
 }
 
+// TestAnAccountThatCannotAffordTheRequestIsStillRefused and
+// TestTheSizedHoldStillCoversWhatTheRequestCanCost both PASS with this fix
+// reverted, and that is deliberate rather than a weak assertion. They guard the
+// under-reservation direction, and the old flat hold over-reserved, so
+// over-reserving has to satisfy them. Reverting is caught by
+// TestASolventAccountIsNotRefusedForAnEnvelopeItIsNotUsing above, which is the
+// only one of the three that can. Shrinking the hold too far is caught by these
+// two: halving the computed figure fails the coverage table on three of its
+// four cases (the fourth sits under the endpoint floor, which covers it).
 func TestAnAccountThatCannotAffordTheRequestIsStillRefused(t *testing.T) {
 	route := SelectRouteResult{
 		Pricing:   UpstreamActualPricing(envelopeHoldCredits),

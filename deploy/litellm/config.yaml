@@ -414,11 +414,18 @@ model_list:
   # other key from this file field by field (litellmconfig.mergeParams). A
   # provider_routes row alone therefore produced a live entry with no
   # usage.include and no max_price at all, which is what the box was running
-  # (verified 2026-08-29). Both absences are silent and both are expensive:
-  # without usage.include OpenRouter reports no cost and every request settles
-  # through the fail-closed path at the full hold, and without max_price the
-  # rate half of the credit hold's coverage proof simply does not exist, so the
-  # hold is a number rather than a bound (issue #1372).
+  # (verified 2026-08-29 by reading /etc/litellm/config.yaml inside the running
+  # container).
+  #
+  # max_price is the load-bearing one: without it the rate half of the credit
+  # hold's coverage proof simply does not exist, so the hold is a number rather
+  # than a bound (issue #1372).
+  #
+  # usage.include is belt and braces rather than a repair. A live hive-auto turn
+  # on 2026-08-29 settled with terminal_usage_confirmed true even without it, so
+  # a cost does reach us on this path today. Setting it explicitly means the
+  # charge does not depend on that continuing to be true by default, which is
+  # the same reason its beta twin sets it rather than leaving it to the client.
   - model_name: route-openrouter-auto-live
     litellm_params:
       model: openrouter/openrouter/auto

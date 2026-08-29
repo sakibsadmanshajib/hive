@@ -18,23 +18,25 @@ import type { CatalogModel } from "@/lib/control-plane/client";
  *     The chat capability check keeps an embeddings-only alias out of a
  *     /chat/completions snippet, which is the other way a first-id-wins pick
  *     produces a sample that cannot run.
- *  2. Any Hive routing alias. Hive's own aliases are the documented entry
- *     points, and an upstream model id happening to sort first would read as a
- *     recommendation to bypass them.
+ *  2. Any Hive routing alias that speaks chat. Hive's own aliases are the
+ *     documented entry points, and an upstream model id happening to sort first
+ *     would read as a recommendation to bypass them. The chat check repeats
+ *     here rather than only on rung 1: without it, a catalog that listed
+ *     hive-embedding-default ahead of every chat alias would put an
+ *     embeddings-only id into a /chat/completions snippet, which is the same
+ *     class of unrunnable quickstart this whole function exists to stop.
  *  3. Whatever the catalog listed first, then the alias seeded by
  *     supabase/migrations, so the snippets stay runnable even when the catalog
  *     could not be read at all.
  */
 export function pickQuickstartAlias(models: CatalogModel[]): string {
-  const isHiveAlias = (model: CatalogModel) => model.id.startsWith("hive-");
+  const speaksChat = (model: CatalogModel) =>
+    model.id.startsWith("hive-") && model.capability_badges.includes("chat");
   return (
     models.find(
-      (model) =>
-        isHiveAlias(model) &&
-        model.pricing.pricing_mode === "fixed" &&
-        model.capability_badges.includes("chat"),
+      (model) => speaksChat(model) && model.pricing.pricing_mode === "fixed",
     )?.id ??
-    models.find(isHiveAlias)?.id ??
+    models.find(speaksChat)?.id ??
     models[0]?.id ??
     "hive-default"
   );
