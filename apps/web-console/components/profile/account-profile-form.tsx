@@ -32,6 +32,7 @@ interface AccountProfileFormProps {
   action: AccountProfileFormAction;
   initialValues: AccountProfileFormValues;
   submitLabel: string;
+  justSaved: boolean;
 }
 
 const emptyErrors: AccountProfileFieldErrors = {};
@@ -49,6 +50,7 @@ export function AccountProfileForm({
   action,
   initialValues,
   submitLabel,
+  justSaved,
 }: AccountProfileFormProps) {
   const [state, formAction, isPending] = useActionState(action, {
     fieldErrors: emptyErrors,
@@ -57,9 +59,11 @@ export function AccountProfileForm({
   });
 
   const values = state.values;
+  const hasErrors = state.formError !== null || Object.keys(state.fieldErrors).length > 0;
+  const showSuccess = justSaved && !hasErrors;
 
   return (
-    <form action={formAction} className="grid gap-6">
+    <form action={formAction} noValidate className="grid gap-6">
       <input
         type="hidden"
         name="loginEmail"
@@ -179,6 +183,12 @@ export function AccountProfileForm({
           </Field>
         </CardContent>
       </Card>
+
+      {showSuccess ? (
+        <p role="status" className="text-sm text-[var(--color-success)]">
+          Profile saved.
+        </p>
+      ) : null}
 
       {state.formError ? (
         <p role="alert" className="text-sm text-[var(--color-danger)]">

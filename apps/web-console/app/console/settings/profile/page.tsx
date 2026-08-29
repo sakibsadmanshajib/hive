@@ -41,7 +41,15 @@ function readFormValues(formData: FormData): AccountProfileFormValues {
   };
 }
 
-export default async function ProfileSettingsPage() {
+interface ProfileSettingsPageProps {
+  searchParams: Promise<{ saved?: string }>;
+}
+
+export default async function ProfileSettingsPage({
+  searchParams,
+}: ProfileSettingsPageProps) {
+  const params = await searchParams;
+  const justSaved = params.saved === "1";
   const [viewer, profile] = await Promise.all([
     getViewer(),
     getAccountProfile(),
@@ -79,7 +87,7 @@ export default async function ProfileSettingsPage() {
       };
     }
 
-    redirect("/console/settings/profile");
+    redirect("/console/settings/profile?saved=1");
   }
 
   return (
@@ -115,6 +123,7 @@ export default async function ProfileSettingsPage() {
           action={saveProfile}
           initialValues={initialValues}
           submitLabel="Save profile"
+          justSaved={justSaved}
         />
       </div>
     </ConsoleShell>
