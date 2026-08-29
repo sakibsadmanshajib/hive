@@ -315,9 +315,11 @@ func (r *pgxRepository) GetUsageSummary(ctx context.Context, filter AnalyticsFil
 	var results []UsageSummaryRow
 	for rows.Next() {
 		var row UsageSummaryRow
-		if err := rows.Scan(&row.GroupKey, &row.TotalInputTokens, &row.TotalOutputTokens, &row.TotalCreditsSpent, &row.RequestCount); err != nil {
+		var groupKey *string
+		if err := rows.Scan(&groupKey, &row.TotalInputTokens, &row.TotalOutputTokens, &row.TotalCreditsSpent, &row.RequestCount); err != nil {
 			return nil, fmt.Errorf("usage: scan usage summary row: %w", err)
 		}
+		row.GroupKey = groupKeyOrUnattributed(groupKey)
 		results = append(results, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -371,9 +373,11 @@ func (r *pgxRepository) GetSpendSummary(ctx context.Context, filter AnalyticsFil
 	var results []SpendSummaryRow
 	for rows.Next() {
 		var row SpendSummaryRow
-		if err := rows.Scan(&row.GroupKey, &row.TotalCredits, &row.EntryCount); err != nil {
+		var groupKey *string
+		if err := rows.Scan(&groupKey, &row.TotalCredits, &row.EntryCount); err != nil {
 			return nil, fmt.Errorf("usage: scan spend summary row: %w", err)
 		}
+		row.GroupKey = groupKeyOrUnattributed(groupKey)
 		results = append(results, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -429,9 +433,11 @@ func (r *pgxRepository) GetErrorSummary(ctx context.Context, filter AnalyticsFil
 	var results []ErrorSummaryRow
 	for rows.Next() {
 		var row ErrorSummaryRow
-		if err := rows.Scan(&row.GroupKey, &row.ErrorCount, &row.TotalRequests, &row.ErrorRate); err != nil {
+		var groupKey *string
+		if err := rows.Scan(&groupKey, &row.ErrorCount, &row.TotalRequests, &row.ErrorRate); err != nil {
 			return nil, fmt.Errorf("usage: scan error summary row: %w", err)
 		}
+		row.GroupKey = groupKeyOrUnattributed(groupKey)
 		results = append(results, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -572,4 +578,28 @@ func nullableString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+// UnattributedGroupKey is the group_key the analytics summaries report for
+// rows whose grouping column is NULL (issue #1347).
+//
+// usage_events.api_key_id is the only nullable grouping column: endpoint and
+// model_alias are both NOT NULL, so group_by=model and group_by=endpoint can
+// never produce this bucket. It goes NULL for two real reasons, and neither
+// is a data defect: the request failed before a key was resolved, and the FK
+// is ON DELETE SET NULL, so an attributed row loses its key when that key is
+// deleted. Those rows are aggregated here rather than dropped, because a
+// pre-auth error is exactly the kind an operator most wants to see, and a
+// silent undercount is a worse failure than a visible bucket. The literal
+// cannot collide with a real group key, which renders as a UUID.
+const UnattributedGroupKey = "unattributed"
+
+// groupKeyOrUnattributed collapses a nullable group_key scan destination.
+// Scanning straight into a string instead failed the whole summary query on
+// the first unattributable row, which the console rendered as a 500.
+func groupKeyOrUnattributed(raw *string) string {
+	if raw == nil {
+		return UnattributedGroupKey
+	}
+	return *raw
 }

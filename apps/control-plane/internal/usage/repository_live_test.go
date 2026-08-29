@@ -551,3 +551,185 @@ func TestUpdateAttemptStatus_PersistsStatusAndCompletedAt(t *testing.T) {
 		t.Fatal("expected completed_at to be persisted, got nil")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Nullable grouping key (issue #1347).
+//
+// usage_events.api_key_id is the only nullable grouping column (endpoint and
+// model_alias are NOT NULL), and it goes NULL for two real reasons: the
+// request failed before a key was resolved, and the FK is ON DELETE SET NULL,
+// so an attributed row loses its key when that key row is deleted. Every
+// summary that can group by api_key has to return those rows under an
+// explicit unattributed bucket. Scanning group_key into a plain string
+// instead failed the entire query with a NULL scan error, which surfaced as
+// a 500 on the console overview page.
+//
+// The fixture below deliberately mixes one attributed row with one
+// unattributed row. A fixture of fully attributed rows cannot fail, which is
+// how the defect shipped in the first place, and asserting only the
+// unattributed bucket would not catch a fix that collapsed every row into it.
+// -----------------------------------------------------------------------------
+
+func seedUsageAPIKey(t *testing.T, pool *pgxpool.Pool, accountID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var keyID uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO public.api_keys (account_id, nickname, token_hash, redacted_suffix, created_by_user_id)
+		 SELECT $1, $2, $3, $4, a.owner_user_id FROM public.accounts a WHERE a.id = $1
+		 RETURNING id`,
+		accountID, "usage summary test", "usage-summary-test-"+uuid.NewString(), "wxyz",
+	).Scan(&keyID); err != nil {
+		t.Fatalf("seed api key: %v", err)
+	}
+	return keyID
+}
+
+func TestSummariesByAPIKey_NullKeyGroupsAsUnattributed(t *testing.T) {
+	pool := newUsageTestPool(t)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+	accountID := seedUsageAccount(t, pool)
+	keyID := seedUsageAPIKey(t, pool, accountID)
+
+	from := time.Now().UTC().Add(-1 * time.Hour)
+
+	// Attributed: an ordinary successful request charged to a real key.
+	attributedAttempt := seedUsageAttempt(t, ctx, repo, accountID)
+	if _, err := repo.RecordEvent(ctx, RecordEventInput{
+		AccountID:        accountID,
+		RequestAttemptID: attributedAttempt,
+		APIKeyID:         &keyID,
+		RequestID:        "req-" + uuid.NewString(),
+		EventType:        UsageEventCompleted,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "gpt-null-key-test",
+		Status:           "completed",
+		InputTokens:      100,
+		OutputTokens:     50,
+		HiveCreditDelta:  -1000,
+		InternalMetadata: map[string]any{},
+		CustomerTags:     map[string]any{},
+	}); err != nil {
+		t.Fatalf("seed attributed event: %v", err)
+	}
+
+	// Unattributed: an error recorded before a key was resolved. This is the
+	// exact row shape that used to fail the whole summary query.
+	unattributedAttempt := seedUsageAttempt(t, ctx, repo, accountID)
+	if _, err := repo.RecordEvent(ctx, RecordEventInput{
+		AccountID:        accountID,
+		RequestAttemptID: unattributedAttempt,
+		APIKeyID:         nil,
+		RequestID:        "req-" + uuid.NewString(),
+		EventType:        UsageEventCompleted,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "gpt-null-key-test",
+		Status:           "failed",
+		ErrorCode:        "unauthorized",
+		ErrorType:        "authentication_error",
+		InputTokens:      7,
+		OutputTokens:     3,
+		HiveCreditDelta:  -500,
+		InternalMetadata: map[string]any{},
+		CustomerTags:     map[string]any{},
+	}); err != nil {
+		t.Fatalf("seed unattributed event: %v", err)
+	}
+
+	// Guard the fixture itself: if that row is not actually NULL, every
+	// assertion below would pass against a defect that is still present.
+	var nullRows int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM public.usage_events WHERE account_id = $1 AND api_key_id IS NULL`,
+		accountID,
+	).Scan(&nullRows); err != nil {
+		t.Fatalf("count null api_key_id rows: %v", err)
+	}
+	if nullRows != 1 {
+		t.Fatalf("fixture must contain exactly one NULL api_key_id row, got %d", nullRows)
+	}
+
+	to := time.Now().UTC().Add(1 * time.Hour)
+	filter := AnalyticsFilter{AccountID: accountID, GroupBy: "api_key", From: from, To: to}
+
+	t.Run("error summary", func(t *testing.T) {
+		rows, err := repo.GetErrorSummary(ctx, filter)
+		if err != nil {
+			t.Fatalf("GetErrorSummary must tolerate a NULL group key: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 groups (one key, one unattributed), got %d: %#v", len(rows), rows)
+		}
+		byKey := make(map[string]ErrorSummaryRow, len(rows))
+		for _, row := range rows {
+			byKey[row.GroupKey] = row
+		}
+		attributed, ok := byKey[keyID.String()]
+		if !ok {
+			t.Fatalf("expected a group keyed by the real api key %s, got %#v", keyID, rows)
+		}
+		if attributed.ErrorCount != 0 || attributed.TotalRequests != 1 {
+			t.Fatalf("attributed group: expected 0 errors of 1 request, got %d of %d",
+				attributed.ErrorCount, attributed.TotalRequests)
+		}
+		unattributed, ok := byKey[UnattributedGroupKey]
+		if !ok {
+			t.Fatalf("expected the NULL key to group as %q, got %#v", UnattributedGroupKey, rows)
+		}
+		if unattributed.ErrorCount != 1 || unattributed.TotalRequests != 1 {
+			t.Fatalf("unattributed group: expected 1 error of 1 request, got %d of %d",
+				unattributed.ErrorCount, unattributed.TotalRequests)
+		}
+		if unattributed.ErrorRate < 0.999 || unattributed.ErrorRate > 1.001 {
+			t.Fatalf("unattributed group: expected error_rate 1.0, got %v", unattributed.ErrorRate)
+		}
+	})
+
+	t.Run("usage summary", func(t *testing.T) {
+		rows, err := repo.GetUsageSummary(ctx, filter)
+		if err != nil {
+			t.Fatalf("GetUsageSummary must tolerate a NULL group key: %v", err)
+		}
+		byKey := make(map[string]UsageSummaryRow, len(rows))
+		for _, row := range rows {
+			byKey[row.GroupKey] = row
+		}
+		if _, ok := byKey[keyID.String()]; !ok {
+			t.Fatalf("expected a group keyed by the real api key %s, got %#v", keyID, rows)
+		}
+		unattributed, ok := byKey[UnattributedGroupKey]
+		if !ok {
+			t.Fatalf("expected the NULL key to group as %q, got %#v", UnattributedGroupKey, rows)
+		}
+		if unattributed.RequestCount != 1 || unattributed.TotalInputTokens != 7 || unattributed.TotalOutputTokens != 3 {
+			t.Fatalf("unattributed group: expected 1 request with 7 input and 3 output tokens, got %d with %d and %d",
+				unattributed.RequestCount, unattributed.TotalInputTokens, unattributed.TotalOutputTokens)
+		}
+	})
+
+	t.Run("spend summary", func(t *testing.T) {
+		rows, err := repo.GetSpendSummary(ctx, filter)
+		if err != nil {
+			t.Fatalf("GetSpendSummary must tolerate a NULL group key: %v", err)
+		}
+		byKey := make(map[string]SpendSummaryRow, len(rows))
+		for _, row := range rows {
+			byKey[row.GroupKey] = row
+		}
+		attributed, ok := byKey[keyID.String()]
+		if !ok {
+			t.Fatalf("expected a group keyed by the real api key %s, got %#v", keyID, rows)
+		}
+		if attributed.TotalCredits != 1000 {
+			t.Fatalf("attributed group: expected 1000 credits, got %d", attributed.TotalCredits)
+		}
+		unattributed, ok := byKey[UnattributedGroupKey]
+		if !ok {
+			t.Fatalf("expected the NULL key to group as %q, got %#v", UnattributedGroupKey, rows)
+		}
+		if unattributed.TotalCredits != 500 || unattributed.EntryCount != 1 {
+			t.Fatalf("unattributed group: expected 500 credits over 1 entry, got %d over %d",
+				unattributed.TotalCredits, unattributed.EntryCount)
+		}
+	})
+}
