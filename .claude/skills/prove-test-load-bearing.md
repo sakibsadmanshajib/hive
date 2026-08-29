@@ -1,6 +1,6 @@
 ---
 name: Prove Test Is Load-Bearing
-description: Use when writing or reviewing a regression test or any pre-merge gate for a bug fix, especially on a money, accounting, or serialization path. A test that never actually fails against the unfixed code is not a regression guard, it's decoration — this repo has shipped that exact shape twice on the same table. Also covers asserting on serialized wire bytes rather than the in-memory struct, and confirming a gate's scope actually includes the file you changed.
+description: Use when writing or reviewing a regression test or any pre-merge gate for a bug fix, especially on a money, accounting, or serialization path. A test that never actually fails against the unfixed code is not a regression guard, it's decoration, and this repo has shipped that exact shape twice on the same table. Also covers asserting on serialized wire bytes rather than the in-memory struct, and confirming a gate's scope actually includes the file you changed.
 ---
 
 # Prove Test Is Load-Bearing
@@ -75,8 +75,8 @@ Concretely, that means one of:
   which fails when a key is missing rather than silently zero-valuing it the
   way unmarshalling into the same typed struct would.
 
-A struct-level assertion is structurally blind to all of these, and every one
-of them has shipped a wrong body while a test stayed green:
+A struct-level assertion is structurally blind to every one of the following,
+any of which ships a wrong body while the struct-level test stays green:
 
 - A missing or misspelled `json:"..."` tag, so the field ships under a
   different name or not at all.
@@ -136,7 +136,10 @@ Two shapes of this, both from real merges here:
   real cases and no caller for its whole life, which is how a secrets scanner
   blind to every `MultiEdit` payload survived (issues #1333, #1339). PR #1337
   wired it into `ci.yml`. An unexecuted test file is not a weaker gate than a
-  passing one, it is no gate.
+  passing one, it is no gate. This has now happened at least twice here: the
+  `make test-scripts` target had the same problem, existing with no workflow
+  invoking it, which is what let the OWUI shim seed ship without a
+  `tenant_billing_accounts` mapping (issue #717, `ci.yml` around line 785).
 
 The check to actually run, phrased so it cannot be answered by "it passed":
 
