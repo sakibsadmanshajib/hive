@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -162,12 +163,22 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.storage.Upload(r.Context(), h.bucket, storagePath, file, size, contentType); err != nil {
+		// The customer gets a deliberately blind message, so this log line is
+		// the ONLY place the real reason exists. Without it a storage refusal
+		// (wrong bucket, expired key, refused egress) is indistinguishable
+		// from every other 500 and cannot be diagnosed from a running system
+		// at all: the live SDK conformance suite hit exactly that on
+		// 2026-08-28 and the compose logs had nothing to say.
+		slog.Error("file upload to object storage failed",
+			"bucket", h.bucket, "size", size, "content_type", contentType, "error", err)
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to store file", nil)
 		return
 	}
 
 	created, err := h.fileClient.CreateFile(r.Context(), auth.AccountID, purpose, filename, size, storagePath)
 	if err != nil {
+		slog.Error("file metadata creation failed after a successful upload",
+			"purpose", purpose, "size", size, "error", err)
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to create file metadata", nil)
 		return
 	}

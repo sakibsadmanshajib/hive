@@ -1,0 +1,72 @@
+name: OpenAI SDK live conformance
+
+# This exercises the real, deployed production gateway (api-hive.scubed.co)
+# with the genuine `openai` npm SDK, using the same long-lived HIVE_API_KEY
+# secret deploy-demo-box.yml's post-deploy sdk-replay job already sends real
+# traffic through. Two triggers, same shape as ci.yml's live-integration job:
+# `workflow_dispatch` for an on-demand run once this file is on the default
+# branch, and a `run-openai-sdk-live-conformance`-labelled pull_request (same
+# repo only, so a fork PR never receives secrets) so a suite change can be
+# proven against production before merge, without one more job competing for
+# the shared session-mode Postgres pool on every ordinary PR. The always-on
+# regression coverage for this same suite already runs against a throwaway
+# local stack in ci.yml's sdk-tests-js job.
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: "vitest path filter (default: run the whole suite)"
+        required: false
+        default: ""
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: openai-sdk-live-conformance
+  cancel-in-progress: false
+
+jobs:
+  live-conformance:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'run-openai-sdk-live-conformance'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: packages/sdk-tests/js/package.json
+
+      - name: Install SDK test dependencies
+        working-directory: packages/sdk-tests/js
+        run: npm install
+
+      - name: Run the OpenAI SDK conformance suite against the live gateway
+        working-directory: packages/sdk-tests/js
+        env:
+          HIVE_BASE_URL: https://api-hive.scubed.co/v1
+          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          HIVE_FIXTURES_DIR: ${{ github.workspace }}/packages/sdk-tests/fixtures/golden
+        run: |
+          set -euo pipefail
+          if [ -z "${HIVE_API_KEY:-}" ]; then
+            echo "::error::HIVE_API_KEY secret is not set — this run cannot exercise the live gateway. Failing loudly rather than skipping."
+            exit 1
+          fi
+          npx vitest run --reporter=verbose ${{ inputs.test_path }} 2>&1 | tee live-conformance-output.log
+
+      - name: Upload full test output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openai-sdk-live-conformance-log
+          path: packages/sdk-tests/js/live-conformance-output.log
+          retention-days: 14

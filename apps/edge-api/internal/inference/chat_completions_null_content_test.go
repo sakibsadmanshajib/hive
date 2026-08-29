@@ -76,3 +76,45 @@ func TestNormalizeChatCompletion_NullContentPreservedWithToolCalls(t *testing.T)
 			*resp.Choices[0].Message.Content)
 	}
 }
+
+
+// TestNormalizeChatCompletion_UsageDetailsAlwaysPresent guards a field that
+// used to come and go. prompt_tokens_details and completion_tokens_details
+// are part of the shape an OpenAI SDK caller is entitled to, and an upstream
+// that omits them made the same assertion pass in one live conformance run
+// and fail in the next on the same alias. normalizeReasoningUsage existed for
+// this and had no caller anywhere, so nothing was normalized; this test is
+// what notices if that call goes missing again.
+func TestNormalizeChatCompletion_UsageDetailsAlwaysPresent(t *testing.T) {
+	body := []byte(`{"id":"gen-nodetails","object":"chat.completion","created":0,"model":"route-x","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`)
+
+	normalized, usage, err := normalizeChatCompletion(body, "hive-small")
+	if err != nil {
+		t.Fatalf("normalizeChatCompletion: %v", err)
+	}
+	if usage == nil || usage.PromptTokensDetails == nil || usage.CompletionTokensDetails == nil {
+		t.Fatalf("usage details are nil: %+v", usage)
+	}
+
+	var out struct {
+		Usage struct {
+			PromptTokensDetails *struct {
+				CachedTokens int64 "json:\"cached_tokens\""
+			} "json:\"prompt_tokens_details\""
+			CompletionTokensDetails *struct {
+				ReasoningTokens int64 "json:\"reasoning_tokens\""
+			} "json:\"completion_tokens_details\""
+		} "json:\"usage\""
+	}
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		t.Fatalf("unmarshal normalized: %v", err)
+	}
+	if out.Usage.PromptTokensDetails == nil {
+		t.Error("prompt_tokens_details missing from the serialized response")
+	} else if out.Usage.PromptTokensDetails.CachedTokens != 0 {
+		t.Errorf("cached_tokens = %d, want 0", out.Usage.PromptTokensDetails.CachedTokens)
+	}
+	if out.Usage.CompletionTokensDetails == nil {
+		t.Error("completion_tokens_details missing from the serialized response")
+	}
+}

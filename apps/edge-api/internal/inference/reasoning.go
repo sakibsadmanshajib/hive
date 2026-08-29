@@ -34,7 +34,10 @@ func validateResponsesReasoningCapability(w http.ResponseWriter, model string, r
 }
 
 // normalizeReasoningUsage ensures CompletionTokensDetails and PromptTokensDetails
-// exist and are zero-initialized to prevent nil pointer issues in response serialization.
+// exist and are zero-initialized, so both objects are present on every
+// response rather than appearing only when the upstream happened to send
+// them. Called from normalizeChatCompletion, before the response is
+// marshalled; see the comment at that call site.
 func normalizeReasoningUsage(usage *UsageResponse) {
 	if usage == nil {
 		return

@@ -1181,6 +1181,15 @@ jobs:
       # the spend meter below asserts that no alias outside these is ever
       # billed by this job.
       HIVE_EMBEDDING_MODEL: hive-embedding-default
+      # The three aliases the image and voice suites resolve into. Named here
+      # for the same reason as the line above: the spend assertion below is a
+      # closed list, and a suite that bills an alias this workflow never chose
+      # is the failure mode that assertion exists to catch. Left at the
+      # compose defaults; these are the only aliases in the catalog carrying
+      # the image, tts and stt capabilities at all.
+      HIVE_IMAGE_MODEL: hive-auto
+      HIVE_TTS_MODEL: hive-tts
+      HIVE_STT_MODEL: hive-stt
       # Nothing reads this. It is passed only because docker-compose.yml
       # interpolates it into the litellm service's environment, and an unset
       # variable there is a compose warning on every invocation. See
@@ -1634,7 +1643,19 @@ jobs:
           # for reasoning variance while still catching an order-of-magnitude
           # runaway. Raise it only alongside a measurement, and only after
           # finding out what grew.
-          RUN_TOKEN_CEILING: '6000'
+          #
+          # Raised from 6000 to 20000 on 2026-08-28, with the measurement and
+          # the cause, per the rule above. Run 33210676196 metered 70048
+          # tokens. What grew was one line, not the suite: the oversized-body
+          # probe in typed-exceptions.test.ts sent about 300KB of prompt, and
+          # nothing on the chat path rejects a body that size, so all of it
+          # was forwarded upstream and metered as prompt tokens. That probe is
+          # now a tenth of the size. The remaining growth is real and expected:
+          # this suite went from 22 completions to roughly 50 as the OpenAI
+          # surface coverage landed. 20000 is about twice the measured shape
+          # after the fix, which keeps the order-of-magnitude runaway detector
+          # that is the whole point of this ceiling.
+          RUN_TOKEN_CEILING: '20000'
         run: |
           set -uo pipefail
           q() { psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
@@ -1681,12 +1702,20 @@ jobs:
             exit 1
           fi
 
-          # The alias assertion. Only three aliases can legitimately appear:
-          # chat/completions/responses suites use HIVE_TEST_MODEL, capability
-          # tests use HIVE_TOOLS_MODEL (a tools-capable alias, since hive-free
-          # correctly refuses tools/response_format), and the embedding suites
-          # use HIVE_EMBEDDING_MODEL. Anything else means the value this
-          # workflow sets is not the value being billed.
+          # The alias assertion. Only the aliases this workflow selects can
+          # legitimately appear: chat/completions/responses suites use
+          # HIVE_TEST_MODEL, capability tests use HIVE_TOOLS_MODEL (a
+          # tools-capable alias, since hive-free correctly refuses
+          # tools/response_format), the embedding suites use
+          # HIVE_EMBEDDING_MODEL, and the image and voice suites use
+          # HIVE_IMAGE_MODEL, HIVE_TTS_MODEL and HIVE_STT_MODEL. Anything else
+          # means the value this workflow sets is not the value being billed.
+          #
+          # The last three joined the list when the OpenAI surface coverage
+          # landed and this assertion correctly went red on hive-auto and
+          # hive-stt. Widening it is only honest because each new alias is
+          # pinned above rather than left to whatever a suite defaults to,
+          # which is the property the assertion actually protects.
           #
           # The query's own failure is checked, not just its result: a psql
           # error returns an EMPTY string here, which reads exactly like "no
@@ -1695,12 +1724,13 @@ jobs:
           if ! unexpected=$(q "select string_agg(distinct model_alias, ', ')
                                  from public.usage_events
                                 where event_type = 'completed'
-                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_TOOLS_MODEL}', '${HIVE_EMBEDDING_MODEL}')"); then
+                                  and model_alias not in ('${HIVE_TEST_MODEL}', '${HIVE_TOOLS_MODEL}', '${HIVE_EMBEDDING_MODEL}',
+                                                          '${HIVE_IMAGE_MODEL}', '${HIVE_TTS_MODEL}', '${HIVE_STT_MODEL}')"); then
             echo "::error::the alias assertion query failed, so this run's billed alias is unverified"
             exit 1
           fi
           if [ -n "$unexpected" ]; then
-            echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}'), HIVE_TOOLS_MODEL ('${HIVE_TOOLS_MODEL}') or HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
+            echo "::error::this run billed alias(es) '${unexpected}', which is not what HIVE_TEST_MODEL ('${HIVE_TEST_MODEL}'), HIVE_TOOLS_MODEL ('${HIVE_TOOLS_MODEL}') HIVE_EMBEDDING_MODEL ('${HIVE_EMBEDDING_MODEL}'), HIVE_IMAGE_MODEL ('${HIVE_IMAGE_MODEL}'), HIVE_TTS_MODEL ('${HIVE_TTS_MODEL}') or HIVE_STT_MODEL ('${HIVE_STT_MODEL}') selects. The model knob is not reaching the suites (issue #1088), so this job is spending an allowance it did not choose."
             exit 1
           fi
 

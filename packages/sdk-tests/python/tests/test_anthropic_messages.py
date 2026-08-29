@@ -245,11 +245,10 @@ def test_tool_choice_named_tool_forces_that_tool(client: Anthropic) -> None:
     assert tool_use.name == "get_weather"
 
 
-@pytest.mark.xfail(
-    reason="issue #1260: empty completions serialize content as JSON null, not [], "
-    "breaking any client (including this SDK) that assumes content is iterable",
-    strict=True,
-)
+# Was xfail on issue #1260 (empty completions serialized content as JSON null
+# rather than []). That issue is closed and run 33225363432 reported this as a
+# strict XPASS, which is the marker doing its job: it goes red when the defect
+# it tracks stops happening. Marker removed, assertion kept.
 def test_tool_choice_none_forbids_tool_use(client: Anthropic) -> None:
     msg = client.messages.create(
         model=TOOLS_MODEL,
@@ -359,22 +358,17 @@ def test_vision_image_block_is_translated_and_dispatched(client: Anthropic) -> N
 # --- count_tokens and models.list --------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="issue #1261: count_tokens requires a session principal and 401s "
-    "every valid API-key caller, unlike every other endpoint on this surface",
-    strict=True,
-)
+# Was xfail on issue #1261 (count_tokens accepted only a session principal and
+# 401d every API-key caller). Closed, and reported as a strict XPASS on run
+# 33225363432.
 def test_count_tokens(client: Anthropic) -> None:
     result = client.messages.count_tokens(model=MODEL, messages=[{"role": "user", "content": "hello world"}])
     assert result.input_tokens > 0
 
 
-@pytest.mark.xfail(
-    reason="issue #1259: GET /v1/models does not accept the SDK's default "
-    "x-api-key header and answers with the OpenAI error envelope instead of "
-    "the Anthropic one",
-    strict=True,
-)
+# Was xfail on issue #1259 (the Anthropic models endpoint rejected the SDK
+# default x-api-key header and answered in the OpenAI error envelope). Closed,
+# and reported as a strict XPASS on run 33225363432.
 def test_models_list(client: Anthropic) -> None:
     page = client.models.list()
     ids = [m.id for m in page.data]

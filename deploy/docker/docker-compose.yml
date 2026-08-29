@@ -379,6 +379,16 @@ services:
       # 32665985618); if it recurs the suite fails loudly and this var gets
       # repointed.
       HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-deepseek-v4-flash}
+      # images/images.test.ts, audio/audio.test.ts: same propagation rule
+      # (tools/lint-sdk-test-env-propagation.mjs) applies to every new
+      # HIVE_* knob a suite reads. hive-auto is the only alias carrying
+      # provider_capabilities.supports_image_generation=true today (see that
+      # test file's header comment on why, and why that flag is not a
+      # working guarantee); hive-tts/hive-stt are the real Groq-backed voice
+      # routes from 20260717_02_voice_groq_stt_tts.sql.
+      HIVE_IMAGE_MODEL: ${HIVE_IMAGE_MODEL:-hive-auto}
+      HIVE_TTS_MODEL: ${HIVE_TTS_MODEL:-hive-tts}
+      HIVE_STT_MODEL: ${HIVE_STT_MODEL:-hive-stt}
 
   sdk-tests-py:
     image: hive-sdk-tests-py:ci
