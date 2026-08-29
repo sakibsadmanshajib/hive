@@ -1,47 +1,28 @@
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { getAccountProfile, getViewer } from "@/lib/control-plane/client";
 import {
-  getAccountProfile,
-  getAnalyticsErrors,
-  getAnalyticsSpend,
-  getAnalyticsUsage,
-  getUsageEvents,
-  getViewer,
-} from "@/lib/control-plane/client";
-import type {
-  ErrorSummaryRow,
-  SpendSummaryRow,
-  UsageEventRow,
-  UsageSummaryRow,
-} from "@/lib/control-plane/client";
+  fetchOverviewData,
+  type GroupBy,
+  type TabName,
+} from "@/lib/analytics/overview-fetch";
+import { deriveOverviewTiles } from "@/lib/analytics/cache-metrics";
 import {
-  deriveBlendedCreditsPerMillion,
-  deriveCacheHitRate,
-} from "@/lib/analytics/cache-metrics";
+  ANALYTICS_WINDOW_SPAN_MS,
+  hasWindowSpan,
+} from "@/lib/analytics/windows";
 import { AnalyticsControls } from "@/components/analytics/analytics-controls";
+import { AnalyticsOverviewSection } from "@/components/analytics/analytics-overview-section";
 import { ObservabilityTiles } from "@/components/analytics/observability-tiles";
 import { AnalyticsTable } from "@/components/analytics/analytics-table";
+import { ChartCard } from "@/components/analytics/chart-card";
 import { ErrorChart } from "@/components/analytics/error-chart";
 import { SpendChart } from "@/components/analytics/spend-chart";
 import { UsageChart } from "@/components/analytics/usage-chart";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/cn";
-import {
-  formatCredits,
-  formatNumber,
-  formatPercent,
-} from "@/lib/format/credits";
-import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 interface AnalyticsPageProps {
   searchParams: Promise<{
@@ -50,9 +31,6 @@ interface AnalyticsPageProps {
     window?: string;
   }>;
 }
-
-type TabName = "overview" | "usage" | "spend" | "errors";
-type GroupBy = "model" | "api_key" | "endpoint";
 
 function isValidTab(tab: string | undefined): tab is TabName {
   return (
@@ -67,62 +45,31 @@ function isValidGroupBy(value: string | undefined): value is GroupBy {
   return value === "model" || value === "api_key" || value === "endpoint";
 }
 
+// `window` is user controlled and reaches two backends that quietly serve
+// their own 7d default for anything they do not recognize
+// (parseAnalyticsFilter, apps/control-plane/internal/usage/http.go). An
+// unrecognized value therefore rendered 7d rows under a heading naming a
+// different window, on every panel at once, including the top keys panel,
+// which carries no window note of its own. The Custom control that used to
+// reach this with a "custom:from:to" value is gone (issue #1338), so what is
+// left here is a crafted or stale query string, and it resolves to 7d with
+// the picker showing 7d rather than a heading naming a window nothing
+// fetched.
+// Resolve the value once, here, and hand the resolved window to the fetches,
+// the tab links and the picker alike, so what the page says and what it
+// fetched are the same window.
+function resolveWindow(requested: string | undefined): string {
+  return requested && hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, requested)
+    ? requested
+    : "7d";
+}
+
 const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "usage", label: "Usage" },
   { id: "spend", label: "Spend" },
   { id: "errors", label: "Errors" },
 ];
-
-interface SummaryCardProps {
-  label: string;
-  value: string;
-  // Says what the number above actually covers. Required on any tile whose
-  // value is derived rather than read straight off the server aggregate, so
-  // the sample or the formula is never left implicit.
-  note?: string;
-  testId?: string;
-}
-
-function SummaryCard({ label, value, note, testId }: SummaryCardProps) {
-  return (
-    <Card>
-      <CardContent className="flex flex-col gap-1 px-5 py-5">
-        <p className="text-2xs font-medium uppercase tracking-wider text-[var(--color-ink-3)]">
-          {label}
-        </p>
-        <p
-          className="metric text-2xl text-[var(--color-ink)]"
-          data-numeric
-          data-testid={testId}
-        >
-          {value}
-        </p>
-        {note ? (
-          <p className="text-2xs leading-tight text-[var(--color-ink-3)]">
-            {note}
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-// Windows the usage-events endpoint accepts as a preset. The analytics
-// controls also offer 90d and a custom range, which parseListEventsFilter
-// (apps/control-plane/internal/usage/http.go) rejects with a 400. Rather than
-// fire a request that is known to fail, or quietly substitute a different
-// window and label the answer as though it covered the one on screen, the
-// cache tile says it has no sample for those windows.
-//
-// ponytail: preset windows only. Widening it means teaching getUsageEvents to
-// pass explicit from/to bounds, which the endpoint already accepts.
-const EVENT_SAMPLE_WINDOWS: ReadonlyArray<string> = ["1h", "24h", "7d", "30d"];
-
-// The usage-events endpoint caps a page at 100 rows (maxEventsPageLimit), so
-// the cache sample is the most recent 100 requests in the window and every
-// tile built from it says so.
-const CACHE_SAMPLE_LIMIT = 100;
 
 export default async function AnalyticsPage({
   searchParams,
@@ -137,99 +84,34 @@ export default async function AnalyticsPage({
   const groupBy: GroupBy = isValidGroupBy(params.group_by)
     ? params.group_by
     : "model";
-  const timeWindow = params.window ?? "7d";
+  const timeWindow = resolveWindow(params.window);
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  // Independent round trips, so they run together: the profile only feeds
+  // the shell's user menu and nothing in the tab body reads it.
+  const [profile, bundle] = await Promise.all([
+    getAccountProfile().catch((): { owner_name: string } => ({ owner_name: "" })),
+    fetchOverviewData({
+      activeTab,
+      groupBy,
+      timeWindow,
+      now: new Date(),
+    }),
+  ]);
 
-  const fetchParams = { group_by: groupBy, window: timeWindow };
+  const fetchError = bundle.main === null;
+  const usageData = bundle.main?.usage ?? [];
+  const spendData = bundle.main?.spend ?? [];
+  const errorData = bundle.main?.errors ?? [];
 
-  let usageData: UsageSummaryRow[] = [];
-  let spendData: SpendSummaryRow[] = [];
-  let errorData: ErrorSummaryRow[] = [];
-  let fetchError = false;
-
-  try {
-    if (activeTab === "overview") {
-      [usageData, spendData, errorData] = await Promise.all([
-        getAnalyticsUsage(fetchParams),
-        getAnalyticsSpend(fetchParams),
-        getAnalyticsErrors(fetchParams),
-      ]);
-    } else if (activeTab === "usage") {
-      usageData = await getAnalyticsUsage(fetchParams);
-    } else if (activeTab === "spend") {
-      spendData = await getAnalyticsSpend(fetchParams);
-    } else if (activeTab === "errors") {
-      errorData = await getAnalyticsErrors(fetchParams);
-    }
-  } catch {
-    fetchError = true;
-  }
-
-  const totalRequests = usageData.reduce(
-    (sum, r) => sum + r.request_count,
-    0,
-  );
-  const totalInputTokens = usageData.reduce(
-    (sum, r) => sum + r.total_input_tokens,
-    0,
-  );
-  const totalOutputTokens = usageData.reduce(
-    (sum, r) => sum + r.total_output_tokens,
-    0,
-  );
-  const totalCreditsSpent = usageData.reduce(
-    (sum, r) => sum + r.total_credits_spent,
-    0,
-  );
-
-  // Cache hit rate has no server-side aggregate to read (GetUsageSummary sums
-  // input, output, credits and count only), so it is derived here from real
-  // usage_events rows. The sample is bounded by the endpoint's page cap, and
-  // the tile prints the sample size rather than implying it covered the whole
-  // window.
-  let cacheSample: UsageEventRow[] | null = null;
-  let cacheSampleTruncated = false;
-  if (activeTab === "overview" && EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
-    try {
-      const page = await getUsageEvents({
-        limit: CACHE_SAMPLE_LIMIT,
-        window: timeWindow,
-      });
-      cacheSample = page.events;
-      cacheSampleTruncated = page.next_cursor !== null;
-    } catch {
-      // Leave cacheSample null: the tile renders as unavailable rather than
-      // as a zero-percent hit rate nobody measured.
-      cacheSample = null;
-    }
-  }
-
-  const cacheHitRate = cacheSample ? deriveCacheHitRate(cacheSample) : null;
-  const blendedCreditsPerMillion = deriveBlendedCreditsPerMillion(
-    totalCreditsSpent,
-    totalInputTokens + totalOutputTokens,
-  );
-
-  function cacheHitNote(): string {
-    if (!EVENT_SAMPLE_WINDOWS.includes(timeWindow)) {
-      return "No sample for this window. Pick 1h, 24h, 7d or 30d.";
-    }
-    if (!cacheHitRate) {
-      return "Request sample unavailable.";
-    }
-    if (cacheHitRate.sampleSize === 0) {
-      return "No requests in this window.";
-    }
-    if (cacheHitRate.promptTokens === 0) {
-      return `No prompt tokens across the last ${cacheHitRate.sampleSize} requests.`;
-    }
-    return cacheSampleTruncated
-      ? `Cached prompt tokens over the last ${cacheHitRate.sampleSize} requests, the most this window returns in one page.`
-      : `Cached prompt tokens over all ${cacheHitRate.sampleSize} requests in this window.`;
-  }
+  const tiles = deriveOverviewTiles({
+    timeWindow,
+    usage: usageData,
+    previousUsage: bundle.previousUsage,
+    cacheSample: bundle.cacheSample?.events ?? null,
+    cacheSampleTruncated: bundle.cacheSample?.truncated ?? false,
+    previousCacheSample: bundle.previousCacheSample,
+    topKeys: bundle.topKeys,
+  });
 
   return (
     <ConsoleShell
@@ -295,49 +177,7 @@ export default async function AnalyticsPage({
       ) : (
         <>
           {activeTab === "overview" ? (
-            <div className="flex flex-col gap-6">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <SummaryCard
-                  label="Total requests"
-                  value={formatCredits(totalRequests)}
-                />
-                <SummaryCard
-                  label="Input tokens"
-                  value={formatCredits(totalInputTokens)}
-                />
-                <SummaryCard
-                  label="Output tokens"
-                  value={formatCredits(totalOutputTokens)}
-                />
-                <SummaryCard
-                  label="Credits spent"
-                  value={formatCredits(totalCreditsSpent)}
-                />
-                <SummaryCard
-                  label="Cache hit rate"
-                  value={formatPercent(cacheHitRate?.rate ?? null)}
-                  note={cacheHitNote()}
-                  testId="cache-hit-rate"
-                />
-                <SummaryCard
-                  label="Blended price / 1M"
-                  value={
-                    blendedCreditsPerMillion === null
-                      ? "—"
-                      : formatUsdFromCredits(blendedCreditsPerMillion)
-                  }
-                  note={
-                    blendedCreditsPerMillion === null
-                      ? "No tokens served in this window."
-                      : `${formatNumber(blendedCreditsPerMillion)} credits. Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in.`
-                  }
-                  testId="blended-credits-per-million"
-                />
-              </section>
-              <ChartCard title="Usage" description="Requests and tokens.">
-                <UsageChart data={usageData} />
-              </ChartCard>
-            </div>
+            <AnalyticsOverviewSection tiles={tiles} usageData={usageData} />
           ) : null}
 
           {activeTab === "usage" ? (
@@ -414,23 +254,5 @@ export default async function AnalyticsPage({
         </>
       )}
     </ConsoleShell>
-  );
-}
-
-interface ChartCardProps {
-  title: string;
-  description?: string;
-  children: ReactNode;
-}
-
-function ChartCard({ title, description, children }: ChartCardProps) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        {description ? <CardDescription>{description}</CardDescription> : null}
-      </CardHeader>
-      <CardContent className="px-5 py-5">{children}</CardContent>
-    </Card>
   );
 }

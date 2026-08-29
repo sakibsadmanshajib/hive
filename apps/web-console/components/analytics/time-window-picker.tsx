@@ -1,9 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
-import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 
 interface TimeWindowPickerProps {
@@ -23,99 +19,42 @@ const PRESET_WINDOWS: ReadonlyArray<PresetWindow> = [
   { value: "90d", label: "90d" },
 ];
 
+// Presets only, and deliberately the four the analytics summary endpoint's
+// own window enum recognizes (parseAnalyticsFilter,
+// apps/control-plane/internal/usage/http.go). A Custom control used to sit
+// here and emit "custom:from:to", which no fetch on this page understood: the
+// page fell back to 7d and rendered seven days of data under a heading naming
+// the range the user picked. A control that discards the input it collects is
+// worse than no control, so it is gone until the range is threaded through
+// the fetches for real. Tracked in issue #1338.
 export function TimeWindowPicker({
   currentWindow,
   onWindowChange,
 }: TimeWindowPickerProps) {
-  const customParts = currentWindow.startsWith("custom:")
-    ? currentWindow.split(":")
-    : null;
-  const [showCustom, setShowCustom] = useState(Boolean(customParts));
-  const [fromDate, setFromDate] = useState(customParts?.[1] ?? "");
-  const [toDate, setToDate] = useState(customParts?.[2] ?? "");
-
-  function handlePresetClick(value: string) {
-    setShowCustom(false);
-    onWindowChange(value);
-  }
-
-  function handleCustomApply() {
-    if (fromDate && toDate) {
-      onWindowChange(`custom:${fromDate}:${toDate}`);
-    }
-  }
-
-  const isCustomActive = currentWindow.startsWith("custom:");
-
   return (
-    <div className="flex flex-col gap-3">
-      <div
-        className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5"
-        role="group"
-        aria-label="Time window"
-      >
-        {PRESET_WINDOWS.map((preset) => {
-          const isActive = currentWindow === preset.value;
-          return (
-            <button
-              key={preset.value}
-              type="button"
-              onClick={() => handlePresetClick(preset.value)}
-              className={cn(
-                "h-7 rounded px-3 text-xs transition-colors",
-                isActive
-                  ? "bg-[var(--color-ink)] text-[var(--color-canvas)]"
-                  : "text-[var(--color-ink-2)] hover:bg-[var(--color-surface-2)]",
-              )}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => setShowCustom(true)}
-          className={cn(
-            "h-7 rounded px-3 text-xs transition-colors",
-            isCustomActive
-              ? "bg-[var(--color-ink)] text-[var(--color-canvas)]"
-              : "text-[var(--color-ink-2)] hover:bg-[var(--color-surface-2)]",
-          )}
-        >
-          Custom
-        </button>
-      </div>
-      {showCustom ? (
-        <div className="flex flex-wrap items-end gap-2">
-          <Field label="From" htmlFor="window-from">
-            <Input
-              id="window-from"
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="w-40"
-            />
-          </Field>
-          <Field label="To" htmlFor="window-to">
-            <Input
-              id="window-to"
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="w-40"
-            />
-          </Field>
-          <Button
+    <div
+      className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5"
+      role="group"
+      aria-label="Time window"
+    >
+      {PRESET_WINDOWS.map((preset) => {
+        const isActive = currentWindow === preset.value;
+        return (
+          <button
+            key={preset.value}
             type="button"
-            variant="primary"
-            size="sm"
-            onClick={handleCustomApply}
-            disabled={!fromDate || !toDate}
+            onClick={() => onWindowChange(preset.value)}
+            className={cn(
+              "h-7 rounded px-3 text-xs transition-colors",
+              isActive
+                ? "bg-[var(--color-ink)] text-[var(--color-canvas)]"
+                : "text-[var(--color-ink-2)] hover:bg-[var(--color-surface-2)]",
+            )}
           >
-            Apply
-          </Button>
-        </div>
-      ) : null}
+            {preset.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

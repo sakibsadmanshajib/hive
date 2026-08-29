@@ -2467,11 +2467,28 @@ export interface UsageLogsFilters {
   apiKeyId?: string;
   errorsOnly?: boolean;
   cursor?: string;
+  // Explicit ISO8601 bounds, for callers that need a specific past window
+  // (a prior-period comparison, say) rather than a preset relative to now.
+  // parseListEventsFilter (apps/control-plane/internal/usage/http.go)
+  // already accepts these; it 400s if both a window preset and from/to are
+  // set, so callers must pick one or the other, never both.
+  from?: string;
+  to?: string;
 }
 
 export async function getUsageEvents(
   filters: UsageLogsFilters,
 ): Promise<UsageEventsPage> {
+  // The two time filters are mutually exclusive upstream: parseListEventsFilter
+  // 400s on a request carrying both a window preset and explicit bounds. Fail
+  // here rather than shipping a request that comes back as
+  // an opaque bad request the caller then renders as an unavailable tile.
+  if (filters.window && (filters.from || filters.to)) {
+    throw new Error(
+      "usage events: a window preset and explicit from/to bounds are mutually exclusive",
+    );
+  }
+
   const { baseUrl, headers } = await getRequestContext();
 
   const qs = new URLSearchParams();
@@ -2484,6 +2501,8 @@ export async function getUsageEvents(
   if (filters.apiKeyId) qs.set("api_key_id", filters.apiKeyId);
   if (filters.errorsOnly) qs.set("errors", "true");
   if (filters.cursor) qs.set("cursor", filters.cursor);
+  if (filters.from) qs.set("from", filters.from);
+  if (filters.to) qs.set("to", filters.to);
 
   const response = await fetch(
     `${baseUrl}/api/v1/accounts/current/usage-events?${qs.toString()}`,
