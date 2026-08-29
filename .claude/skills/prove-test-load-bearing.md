@@ -1,6 +1,6 @@
 ---
 name: Prove Test Is Load-Bearing
-description: Use when writing or reviewing a regression test for a bug fix, especially on a money or accounting path. A test that never actually fails against the unfixed code is not a regression guard, it's decoration — this repo has shipped that exact shape twice on the same table.
+description: Use when writing or reviewing a regression test or any pre-merge gate for a bug fix, especially on a money, accounting, or serialization path. A test that never actually fails against the unfixed code is not a regression guard, it's decoration — this repo has shipped that exact shape twice on the same table. Also covers asserting on serialized wire bytes rather than the in-memory struct, and confirming a gate's scope actually includes the file you changed.
 ---
 
 # Prove Test Is Load-Bearing
@@ -60,6 +60,96 @@ canned value, appends to a call-count, but never stores or asserts on the
 payload), any test relying on it for correctness is decoration. Either the
 mock needs to capture and assert on its arguments, or the test needs to hit
 the real code path (against a bootstrapped test DB) instead of the mock.
+
+## Assert on the wire, not on the struct
+
+For anything that crosses an HTTP or SSE boundary, assert on the serialized
+bytes. Never on the in-memory value the handler built.
+
+Concretely, that means one of:
+
+- `httptest.ResponseRecorder` and then reading `rec.Body.String()` or
+  `rec.Body.Bytes()`.
+- The literal SSE frame text, `event:` line and `data:` payload together.
+- `json.Unmarshal` into `map[string]any` and asserting on the decoded keys,
+  which fails when a key is missing rather than silently zero-valuing it the
+  way unmarshalling into the same typed struct would.
+
+A struct-level assertion is structurally blind to all of these, and every one
+of them has shipped a wrong body while a test stayed green:
+
+- A missing or misspelled `json:"..."` tag, so the field ships under a
+  different name or not at all.
+- A custom `MarshalJSON` that drops, renames, or reshapes the field.
+- An `omitempty` that erases a legitimate zero. A required-by-spec field
+  serialized as absent is not the same as a field serialized as `0`, and only
+  the bytes can tell them apart.
+- Any downstream layer that rewrites the body after the struct is built.
+
+That last one is not hypothetical here. This repo has three layers that rewrite
+a request or response body after the caller's struct exists, and a struct
+assertion upstream of any of them cannot see what actually goes out:
+
+- `injectMemoryBlock` (`apps/edge-api/internal/chat/memory.go`), which splices a
+  recall system message into a raw request body.
+- The Anthropic request translator
+  (`apps/edge-api/internal/anthropic/translate_request.go`), which converts the
+  Anthropic wire shape into the internal OpenAI shape.
+- `buildMessagesFromInput` (`apps/edge-api/internal/inference/responses.go`),
+  which converts a Responses-API `Input` plus `Instructions` into a chat
+  messages array.
+
+### The worked example (issue #1329, PR #1334)
+
+`StreamUsage` (`apps/edge-api/internal/anthropic/types.go`) carried `omitempty`
+on every field. Every `message_start` this gateway relays is emitted before any
+usage-bearing upstream frame arrives, so both counts were zero, so both
+vanished, so the frame went out as:
+
+```
+"usage":{}
+```
+
+An object with no required member at all. A typed client validating the
+Anthropic Usage model gets a parse failure rather than a zero. No assertion on
+the `StreamUsage` value could have seen it: the struct was correct, the
+serialization was not. The guard that catches it reads the emitted SSE frame
+text and asserts the `input_tokens` and `output_tokens` keys are present
+(`apps/edge-api/internal/anthropic/usage_wire_test.go`).
+
+## The gate's scope is not the gate's name
+
+A gate can report green because it never examined the thing you changed. Before
+trusting any pre-merge check, confirm its **scope** covers the file you touched.
+Passing is not the question; having looked is.
+
+Two shapes of this, both from real merges here:
+
+- **A scope narrower than its name.** `scripts/test-owui-hive-frontend.sh`
+  compiles Svelte components with `node owui-hive-svelte-compile-check.mjs
+  lib/hive`, so its coverage stops at that one directory. A component living
+  anywhere else in the vendored tree is never compiled. Three simultaneous
+  mutations, including a hard parse error, left the suite reporting
+  `16 passed / 208 passed / 13/13 components compiled` and exit 0 (PR #1298).
+  The counts were all true. None of them counted the broken file.
+- **A gate nothing ever runs.** `.claude/hooks/hooks.selfcheck.js` existed with
+  real cases and no caller for its whole life, which is how a secrets scanner
+  blind to every `MultiEdit` payload survived (issues #1333, #1339). PR #1337
+  wired it into `ci.yml`. An unexecuted test file is not a weaker gate than a
+  passing one, it is no gate.
+
+The check to actually run, phrased so it cannot be answered by "it passed":
+
+1. Name the file you changed.
+2. Read the gate's invocation, not its title, and find the path, glob, or
+   directory argument it is given.
+3. Confirm your file is inside that argument's reach. If it is not, the green
+   result says nothing about your change, and you need either a wider gate or a
+   different one.
+
+A useful negative control: break the file you changed on purpose and rerun the
+gate. If it still passes, the gate never saw it. That is the same discipline as
+step 2 above, applied to the gate instead of the test.
 
 ## Exact commands for this repo (Go)
 

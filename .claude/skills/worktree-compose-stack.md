@@ -33,6 +33,14 @@ is literally `hive` (the demo box, CI, or a plain single-checkout dev setup),
 it writes nothing and the stack keeps the `hive` project name it has always
 had.
 
+Re-run it with `--check` after you create or copy the repo-root `.env`, not just
+once at worktree creation: `scripts/set-compose-project-name.sh:103-107` writes
+`deploy/docker/.env` unconditionally but touches `<repo-root>/.env` **only if
+that file already exists**, so a worktree namespaced before its `.env` was
+copied in ends up with the namespace on one file and the default `hive` project
+name on the other, and the `--env-file ../../.env` command shapes then recreate
+another checkout's containers exactly as if the script had never run.
+
 Verify there's no live collision before trusting a run, without writing
 anything:
 

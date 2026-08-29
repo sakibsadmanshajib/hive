@@ -68,7 +68,7 @@ a working-memory hit on a decision/rule question as provisional until
 that check runs.
 
 1. Working: `.wolf/anatomy.md`. Already known this session? (Provisional on decision/rule questions, see above.)
-2. Episodic: `openwolf bug search <term>` or grep `.wolf/buglog.jsonl` for a repo-tracked incident; `mem-search` (claude-mem, if installed) for older cross-session history the buglog doesn't carry. Happened before?
+2. Episodic: `openwolf bug search <term>` or grep `.wolf/buglog.jsonl` for a repo-tracked incident. For history predating 2026-06-12 that the buglog doesn't carry, query the read-only claude-mem sqlite archive at `~/.claude-mem/claude-mem.db` directly; there is no `mem-search` command and no MCP server for it any more. Happened before?
 3. Procedural: `.wolf/cerebrum.md` Do-Not-Repeat. Standing rule?
 4. Semantic: grep `.wolf/decisions.md`, then MEMORY.md. Decision or fact? `decisions.md` is authoritative; MEMORY.md/cerebrum.md are mirrors that can lag it.
 5. Entity: MEMORY.md `user_*.md`. Anything specific to this person?
