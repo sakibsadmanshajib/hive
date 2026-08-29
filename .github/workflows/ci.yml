@@ -1888,12 +1888,29 @@ jobs:
         # logs carry OAuth callbacks, bearer headers and API keys verbatim.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose.log || true
 
+      # The object store is a plain container, not a compose service, so the
+      # dump above does not include it. Without this, a Storage-side 500 leaves
+      # the run with edge-api's client-side view and nothing from the server
+      # that produced it, which is the same blind failure this job was
+      # rebuilt to stop having. Same redactor for the same reason.
+      - name: Dump object store logs on failure
+        if: failure()
+        run: |
+          { df -h; echo; docker logs --timestamps hive-ci-storage 2>&1; } \
+            | python3 scripts/redact-log-credentials.py > /tmp/object-store.log || true
+          # Disk first, deliberately. This job builds five images and loads two
+          # cached tarballs after the fixture's own round-trip check has already
+          # passed, so a runner that runs out of space produces a Storage 500
+          # that looks like a credential or a routing fault and is neither.
+
       - name: Upload compose logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: compose-logs
-          path: /tmp/compose.log
+          path: |
+            /tmp/compose.log
+            /tmp/object-store.log
           retention-days: 5
           if-no-files-found: ignore
 
