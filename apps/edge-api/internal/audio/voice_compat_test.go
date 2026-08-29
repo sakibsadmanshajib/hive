@@ -96,6 +96,12 @@ func TestSpeechTranslatesOpenAIStockVoices(t *testing.T) {
 // GET /v1/audio/voices and the speech validator: a client that reads the
 // roster and sends one back must never be refused, and the name must reach
 // the upstream unchanged.
+//
+// It sends each id UPPERCASED, which is what keeps it able to go red
+// (Antigravity review finding on this pull request). Sent verbatim, an
+// advertised name would arrive at the mock unchanged with the guard deleted
+// entirely, so the test would pass over a removed guard. Only a name the
+// handler had to normalize proves the resolution step ran at all.
 func TestSpeechAcceptsEveryAdvertisedVoice(t *testing.T) {
 	for _, id := range advertisedVoiceIDs(t) {
 		t.Run(id, func(t *testing.T) {
@@ -103,7 +109,7 @@ func TestSpeechAcceptsEveryAdvertisedVoice(t *testing.T) {
 			defer mock.Close()
 			h := buildAudioHandler(mock.server.URL)
 
-			body, err := json.Marshal(map[string]any{"model": "hive-tts", "input": "hello", "voice": id})
+			body, err := json.Marshal(map[string]any{"model": "hive-tts", "input": "hello", "voice": strings.ToUpper(id)})
 			if err != nil {
 				t.Fatalf("marshal request: %v", err)
 			}
