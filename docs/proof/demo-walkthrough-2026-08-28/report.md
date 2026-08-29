@@ -4,15 +4,25 @@ Chat: https://chat-hive.scubed.co | Console: https://console-hive.scubed.co | AP
 
 Box commit at session start: `c177972f4` (deploy run 33189658519, 2026-08-28T16:22:29Z, success).
 
-This directory holds screenshots from several script invocations run back to
-back on the same date (full runs, a `--only-cowork` run, and an
-`--only-owner-signup` run), because `deploy-demo-box.yml` fired three times
-during this session (20:19:10Z, 20:25:31Z, 21:02:06Z) and repeatedly
-recreated the live stack's containers mid-run, which is documented as its own
-finding below rather than hidden. This file is the curated, cross-run
-synthesis; `step-log.json` in this directory reflects only the LAST script
-invocation (the `--only-owner-signup` run) since the script overwrites it
-each run — read this file for the consolidated picture, not that one alone.
+The 63 screenshots this report's table references came from several script
+invocations run back to back on the same date (full runs, a `--only-cowork`
+run, and an `--only-owner-signup` run), because `deploy-demo-box.yml` fired
+three times during this session (20:19:10Z, 20:25:31Z, 21:02:06Z) and
+repeatedly recreated the live stack's containers mid-run, which is
+documented as its own finding below rather than hidden. This file is the
+curated, cross-run synthesis; `step-log.json` in this directory reflects
+only the LAST script invocation (the `--only-owner-signup` run) since the
+script overwrites it each run: read this file for the consolidated
+picture, not that one alone.
+
+The screenshots themselves are not committed in this directory (this repo's
+squash-and-delete-branch merge policy would 404 a `raw.githubusercontent.com`
+link pinned to this branch the instant it merges). They are posted, inline,
+in the pull request's own "Visual proof" comment
+(https://github.com/sakibsadmanshajib/hive/pull/1294#issuecomment-5459388982),
+hosted on the permanent `visual-proof-assets` release via
+`scripts/post-pr-visual-proof.sh`. Each image's filename there matches the
+name used in the "Screenshots" column below.
 
 | # | Step | Verdict | Observed | Screenshots |
 | - | ---- | ------- | -------- | ----------- |
