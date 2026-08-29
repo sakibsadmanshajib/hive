@@ -488,8 +488,14 @@ services:
       # Storage itself serves /s3 at its own root. Two earlier versions
       # of this comment named the service directly, one of them with an
       # /object/s3 path that no listener answers.
-      #   S3_ACCESS_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
-      #   S3_SECRET_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      # The two S3 credentials are a dedicated pair, NOT the service_role
+      # key: Storage compares them against its own
+      # S3_PROTOCOL_ACCESS_KEY_ID/SECRET, which the enterprise compose file
+      # feeds from these same variables. A service_role JWT here is refused,
+      # and the two halves must differ from each other because SigV4 sends
+      # the access key id in the clear.
+      #   S3_ACCESS_KEY=<openssl rand -hex 16>
+      #   S3_SECRET_KEY=<openssl rand -base64 32>
       #   S3_REGION=local
       #   S3_USE_SSL=false  (internal compose network, no TLS)
       S3_ENDPOINT: ${S3_ENDPOINT}

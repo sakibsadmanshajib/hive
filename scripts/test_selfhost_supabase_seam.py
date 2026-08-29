@@ -284,6 +284,45 @@ def test_open_webui_pgvector_dsn_comes_from_the_libpq_flavour() -> None:
     assert not re.search(r"SUPABASE_DB_POOL_URL(?!_LIBPQ)", dsn), dsn
 
 
+def test_storage_accepts_the_s3_credentials_the_consumers_sign_with() -> None:
+    """Storage verifies an S3 request by recomputing the SigV4 signature from
+    S3_PROTOCOL_ACCESS_KEY_ID and S3_PROTOCOL_ACCESS_KEY_SECRET. With neither
+    set it refuses every request with 403 AccessDenied and "Missing S3 Protocol
+    Access Key ID or Secret Key Environment variables", which is a 500 on POST
+    /v1/files, on every Batches object and on RAG document upload while the
+    container stays healthy and the bucket rows exist (issue #1282).
+
+    They must come from the SAME two variables edge-api and control-plane sign
+    with. A separate pair would let the signing half and the verifying half
+    drift with no boot error on either side, and the only symptom is a 403 from
+    a service that looks configured."""
+    storage = ENT_SERVICES["supabase-storage"]
+    key_id = env_value(storage, "S3_PROTOCOL_ACCESS_KEY_ID")
+    secret = env_value(storage, "S3_PROTOCOL_ACCESS_KEY_SECRET")
+    assert "${S3_ACCESS_KEY" in key_id, key_id
+    assert "${S3_SECRET_KEY" in secret, secret
+    for consumer in ("edge-api", "control-plane"):
+        block = BASE_SERVICES[consumer]
+        assert "${S3_ACCESS_KEY" in env_value(block, "S3_ACCESS_KEY"), consumer
+        assert "${S3_SECRET_KEY" in env_value(block, "S3_SECRET_KEY"), consumer
+
+
+def test_the_storage_s3_prefix_matches_the_prefix_the_gateway_strips() -> None:
+    """The consumers sign the path they send to the gateway, and the gateway's
+    `handle_path` strips its prefix before Storage sees the request. Storage
+    puts S3_PROTOCOL_PREFIX back before recomputing the signature, so an empty
+    or mismatched value fails every request with SignatureDoesNotMatch, which
+    reads as a wrong key rather than a wrong path. Three places have to agree:
+    this variable, S3_ENDPOINT, and the Caddyfile route."""
+    prefix = env_value(ENT_SERVICES["supabase-storage"], "S3_PROTOCOL_PREFIX")
+    assert prefix == "/storage/v1", prefix
+    caddy = (ROOT / "deploy" / "docker" / "Caddyfile.supabase").read_text()
+    assert f"handle_path {prefix}/*" in caddy, prefix
+    # The endpoint the consumers are told to use, in the file that documents it.
+    example = (ROOT / ".env.example").read_text()
+    assert f"S3_ENDPOINT=http://caddy-supabase{prefix}/s3" in example
+
+
 def test_no_hosted_supabase_host_is_hardcoded_in_the_data_plane() -> None:
     """The data plane IS the replacement for the hosted project. A hosted
     hostname appearing here is either a stale copy-paste or a repointing that
