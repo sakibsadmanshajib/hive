@@ -142,8 +142,39 @@ import (
 // through the arm this function controls: whenever the row is found at all,
 // a tenant_users OWNER whose account_memberships row is not an active owner
 // is demoted regardless of tenant type or tenant_users status.
+//
+// Issue #896: this statement joins public.account_memberships (am), which
+// carries its own hive_app RLS policy since
+// 20260829_04_account_memberships_hive_app_scope.sql. That policy is an OR
+// of two session-variable-scoped predicates (app.current_actor_user_id,
+// app.current_account_id -- see accounts.pgxRepository's withActorTx /
+// withAccountTx doc comments for the full shape enumeration); this
+// statement's own WHERE/ON clauses already pin the row it needs to exactly
+// one (account_id, user_id) pair, which is BOTH shapes at once, so both
+// variables are set before running it. Without this, the am join would be
+// RLS-invisible regardless of whether a real active membership row exists,
+// the INNER JOIN would produce zero rows for every call, and every
+// promotion AND demotion this function exists to perform (issue #1245)
+// would silently report reason == "no_match" -- indistinguishable from the
+// three genuinely benign no-match cases this function's doc already
+// documents. LOCAL scope inside an explicit transaction is required, not
+// incidental: see egress/repository.go's withTenantTx comment for why a
+// bare Exec then a separate statement loses it.
 func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID, userID uuid.UUID) (synced bool, reason string, err error) {
-	tag, err := pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return false, "", fmt.Errorf("signup: begin tenant role sync tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID.String()); err != nil {
+		return false, "", fmt.Errorf("signup: set account scope: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", userID.String()); err != nil {
+		return false, "", fmt.Errorf("signup: set actor scope: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE public.tenant_users tu
 		   SET role = CASE
 		                WHEN am.role = 'owner'
@@ -168,6 +199,9 @@ func SyncTenantMembershipRole(ctx context.Context, pool *pgxpool.Pool, accountID
 	}
 	if tag.RowsAffected() == 0 {
 		return false, "no_match", nil
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, "", fmt.Errorf("signup: commit tenant role sync tx: %w", err)
 	}
 	return true, "", nil
 }
