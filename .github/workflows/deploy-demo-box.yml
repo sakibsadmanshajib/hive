@@ -858,6 +858,62 @@ jobs:
           set -euo pipefail
           docker compose $HIVE_COMPOSE_FLAGS up -d --build --remove-orphans
 
+      - name: Remove containers for services outside the active profile set
+        # `--remove-orphans` on the step above removes a container whose
+        # service is gone from the compose file entirely. It does not touch a
+        # container whose service still exists but sits in a profile this
+        # deploy did not enable, so moving a service behind a profile stops it
+        # being STARTED and never stops it RUNNING. Nothing else in this
+        # workflow closes that gap either, which makes a profile gate look like
+        # a control and behave like a comment.
+        #
+        # `web-console` is what proved it. PR #605 moved the `next dev` server
+        # into the `dev` profile on 2026-07-31, and `hive-web-console-1` was
+        # still up four weeks later on 2026-08-29: restart policy
+        # `unless-stopped`, publishing 0.0.0.0:3000, answering /auth/sign-in in
+        # 5.56 seconds from a development build. That service's own comment in
+        # docker-compose.yml describes the port it publishes as an
+        # unauthenticated LAN-reachable surface, because Docker's published
+        # ports bypass ufw's default-deny. Roughly thirty deploys ran in that
+        # window and every one of them left it alone (issue #967).
+        #
+        # `docker compose config --services` under this deploy's own flags is
+        # exactly the set of services this deploy is allowed to run, so a
+        # container in the project whose service is absent from that set is
+        # stale by definition and needs no per-service list here to name it.
+        # A future service gated out of a profile is evicted by the same
+        # mechanism without anyone remembering to add it.
+        #
+        # Fail closed. If compose cannot produce the list the step removes
+        # nothing and fails loudly, because an empty list would otherwise read
+        # as "no service is active" and delete the entire deployment.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          active="$(docker compose $HIVE_COMPOSE_FLAGS config --services)"
+          if [ -z "$active" ]; then
+            echo "::error::docker compose config --services returned nothing; refusing to remove any container"
+            exit 1
+          fi
+          # Captured before the loop rather than piped into it: a pipeline runs
+          # its right-hand side in a subshell, where a failing `docker rm`
+          # cannot fail this step.
+          running="$(docker ps --filter label=com.docker.compose.project=hive \
+            --format '{{.Label "com.docker.compose.service"}}={{.Names}}')"
+          removed=0
+          for entry in $running; do
+            service="${entry%%=*}"
+            container="${entry#*=}"
+            [ -n "$service" ] && [ -n "$container" ] || continue
+            if printf '%s\n' "$active" | grep -qxF -- "$service"; then
+              continue
+            fi
+            echo "removing $container: service '$service' is not in this deploy's profile set"
+            docker rm -f "$container"
+            removed=$((removed + 1))
+          done
+          echo "stale containers removed: $removed"
+
       - name: Assert the running containers are on the images just built
         # Issue #1103: a compose deploy reports success while serving old
         # images. The step above prints `Image hive-edge-api:ci Built` followed
