@@ -3,6 +3,8 @@ package inference
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Zero-content guard (issue #1171).
@@ -103,10 +105,41 @@ func isEmptyLengthCompletion(normalized []byte) bool {
 // What is still open at that point is the money: a stream that carried no
 // assistant-visible text is not charged for.
 //
+// THE RULE IS ABOUT THE STREAM, NEVER ABOUT THE SOCKET. Emptiness is decided by
+// two facts and nothing else: what the relay DELIVERED, and whether the
+// upstream stream COMPLETED. Whether the caller's connection is still open at
+// settlement time is not one of them, and an earlier draft of this guard that
+// consulted it (a clientGone argument read from reqCtx.Err() inside the
+// settlement defer) failed in both directions:
+//
+//   - A client that closes the moment it receives [DONE] is the NORMAL ending
+//     of a blank stream, since a blank stream is exactly what a caller hangs up
+//     on. That close cancels r.Context() while the settlement defer is still
+//     running, so the clientGone test suppressed the guard precisely in the
+//     case the guard exists for, and billed the burn.
+//   - A Caddy or Cloudflare reset, an http.Server WriteTimeout, or a graceful
+//     shutdown cancels the same context for a reason that has nothing to do
+//     with the caller at all. Same wrong charge, no user action anywhere.
+//   - A proxy that buffers and does not propagate a real client close promptly
+//     leaves the context live, so the same test served a genuine abandonment
+//     for free. Lower stakes, opposite direction, same broken discriminator.
+//
+// StreamCompleted is the discriminator instead, and the relay sets it rather
+// than settlement inferring it: a stream that reached its upstream's own end of
+// stream is complete however the socket behaved afterwards, and a stream cut
+// off mid-flight is not complete however healthy the socket looks. So a
+// completed stream with zero visible text is a burn even if the caller has
+// already gone, and a truncated stream bills even if the caller is still
+// connected, which is the fail-closed direction (D-034).
+//
 // ZERO VISIBLE CONTENT means exactly that: no assistant-visible text. content
-// is what the caller's own client rendered -- delta.content plus delta.refusal
-// on the chat relay, the translated output text on the Responses relay -- and
-// nothing else counts. Consequences worth stating rather than leaving to be
+// is what the caller's own client rendered, and nothing else counts. The two
+// relays do not accumulate the same fields: AccumulateContent folds
+// delta.refusal into content on the chat relay, while the Responses
+// translator's currentContent is written only from delta.content, because that
+// same builder is what its caller-visible output_text events are emitted from.
+// HasVisibleRefusal closes that gap for both relays without changing what
+// either one emits. Consequences worth stating rather than leaving to be
 // rediscovered:
 //
 //   - REASONING-ONLY streams are empty. Hidden reasoning costs Hive real money
@@ -121,19 +154,101 @@ func isEmptyLengthCompletion(normalized []byte) bool {
 //     is an upstream calling a response complete, which the sync guard has
 //     always declined to second-guess, and no finish_reason at all means the
 //     relay was cut off before anything was known. Both bill (D-034).
-//
-// clientGone is checked first and wins outright. A caller that closed the tab
-// after two tokens is not a reasoning burn: it received what it received, and
-// it pays for that. It is also the case the gateway is least able to reason
-// about, since a cancelled request context tears the upstream read down exactly
-// like a real upstream fault, so it fails closed to billing rather than
-// guessing.
-func isZeroContentStream(acc *UsageAccumulator, content string, clientGone bool) bool {
-	if clientGone || content != "" || acc == nil {
+//   - A relay that ABORTED (bufio.ErrTooLong on a single oversized upstream
+//     line, or a dead upstream connection) is not complete, even when the
+//     finish_reason frame had already arrived before the abort. The frame that
+//     failed to scan is by definition the one whose contents are unknown, and
+//     it could have carried the entire visible answer. StreamCompleted stays
+//     false on that path, so the stream bills.
+func isZeroContentStream(acc *UsageAccumulator, content string) bool {
+	if acc == nil || content != "" {
 		return false
 	}
-	if acc.HasToolCall {
+	if acc.HasToolCall || acc.HasVisibleRefusal {
+		return false
+	}
+	if !acc.StreamCompleted {
 		return false
 	}
 	return acc.SawFinish && !acc.SawNonLengthFinish
+}
+
+// Outcome label values for streamZeroContentAbsorbedCredits. Both series are
+// created at registration so a dashboard can tell "no burns" apart from "this
+// code never ran"; see RegisterZeroContentMetrics.
+const (
+	// zeroContentOutcomeReleased: the hold was handed back and the customer
+	// was charged nothing. This series IS the absorbed-cost answer.
+	zeroContentOutcomeReleased = "released"
+	// zeroContentOutcomeReleaseFailed: the burn was detected but the release
+	// call did not reach control-plane, so the hold sits until the TTL reaper
+	// reclaims it under its own reason. Counted apart so a settlement that
+	// failed can never be read as an absorption that landed cleanly.
+	zeroContentOutcomeReleaseFailed = "release_failed"
+)
+
+// streamZeroContentAbsorbedCredits is the money half of the zero-content
+// signal, and the single series an operator reads to answer "how much did we
+// absorb yesterday":
+//
+//	increase(hive_stream_zero_content_absorbed_credits_total{outcome="released"}[1d])
+//
+// It exists because the stream counter beside it
+// (hive_stream_zero_content_released_total) counts events, and no number of
+// events converts to credits without a per-request price lookup that no
+// durable row carries.
+//
+// WHAT THE FIGURE IS. The credits the request would have been charged, taken
+// from the settlement that had already been computed before the guard fired:
+// for a variable-price alias that is the upstream's OWN reported cost, decoded
+// by UpstreamActualSettlement out of the terminal usage chunk, and for a
+// catalog-priced alias it is the catalog price of the tokens the upstream
+// reported burning. Both are computed in int64 credits (1 USD =
+// 1,000,000,000 credits) and converted to float64 only here, at the Prometheus
+// boundary, which every counter in this package crosses. Nothing reads the
+// value back into a charge, so the conversion cannot reach money.
+//
+// WHY A COUNTER IS THE RECORD RATHER THAN A COLUMN. The release call persists a
+// reason and the released hold and nothing else; carrying the amount would put
+// it on ReleaseReservationInput and require control-plane's accounting service
+// to write it, which is a cross-service contract change and not this PR's to
+// make. usage_events.hive_credit_delta is the customer's signed spend
+// (negative for spend, and "these are counts, never credits" per
+// accounting/service.go), while an absorbed burn is Hive's cost and not the
+// customer's, so writing it there would report a charge that never happened.
+// Until that contract change lands, this counter plus the per-request
+// stream_zero_content log line, which carries absorbed_credits, request_id and
+// (for a variable-price alias) the generation_id that identifies the pool
+// member, are the operator-side record of the money.
+//
+// WHAT A RISE MEANS. It is a ROUTING signal, not a billing curiosity. Every
+// credit here is inference Hive paid an upstream for and deliberately did not
+// bill, because the customer received nothing readable. A rising figure means
+// the pool is dispatching work to members that spend the caller's whole ceiling
+// on hidden reasoning, and the fix is upstream in routing (drop or
+// deprioritize that member), never in settlement.
+var streamZeroContentAbsorbedCredits = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "hive_stream_zero_content_absorbed_credits_total",
+	Help: "Credits Hive absorbed on streams that relayed a well-formed sequence of chunks carrying no assistant-visible text at all and were therefore not billed (issue #1326), by outcome. outcome=released is the absorbed total: sum it over a window to get what the absorption cost, with no join and no price lookup. outcome=release_failed is a burn whose hold release never reached control-plane, so its settlement trail is incomplete and the TTL reaper reclaims the hold under a different reason. Both series exist from process start, so zero reads as zero and an absent series means the recording path itself is broken. A rising released total is a routing signal: the pool is sending work to members that burn the caller's ceiling on hidden reasoning.",
+}, []string{"outcome"})
+
+// RegisterZeroContentMetrics registers the streaming zero-content guard's money
+// counter and creates both of its series at zero.
+//
+// The initialisation is the point. A CounterVec emits no series at all until
+// its first increment, which makes "nobody burned anything yesterday", "this
+// branch was never reached", "ObserveShape stopped being called" and "the
+// collector was dropped from registration" byte-identical on a dashboard: the
+// silent-absence shape, where a broken pipeline and a healthy quiet day look
+// the same. Creating both series here means a zero reads as a genuine zero, and
+// only a genuinely broken build makes the metric disappear.
+//
+// Separate from NewStageMetrics deliberately. That function is the package's
+// other registration site and is being edited concurrently by PR #1513; a
+// second registration site costs one call in main.go and avoids a guaranteed
+// conflict on a shared MustRegister line.
+func RegisterZeroContentMetrics(reg prometheus.Registerer) {
+	reg.MustRegister(streamZeroContentAbsorbedCredits)
+	streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleased).Add(0)
+	streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleaseFailed).Add(0)
 }

@@ -75,7 +75,25 @@ type UsageAccumulator struct {
 	// neither, which is what keeps the guard from firing where nothing is known.
 	SawFinish          bool
 	SawNonLengthFinish bool
-	Content            strings.Builder
+	// HasVisibleRefusal records that a relayed chunk carried a non-empty
+	// delta.refusal. A refusal is generated assistant output the caller can
+	// read and act on, so it is visible content and never a burn. It is
+	// tracked on the accumulator rather than left to the content builder
+	// because the two relays disagree about that builder: AccumulateContent
+	// folds refusal into Content on the chat relay, while the Responses
+	// translator accumulates only delta.content, since the same builder is
+	// what its caller-visible output_text events are emitted from. This flag
+	// gives both relays the same answer without changing what either emits.
+	HasVisibleRefusal bool
+	// StreamCompleted records that the relay reached the upstream's own end of
+	// stream: the [DONE] sentinel, or a clean end of body with no scanner error
+	// and a live request context. It is what settlement uses to tell a finished
+	// stream from a truncated one, and it is deliberately NOT the caller's
+	// socket state: a blank stream is exactly what a caller hangs up on, so
+	// reading r.Context() at settlement time disabled the zero-content guard in
+	// the case it exists for. See isZeroContentStream.
+	StreamCompleted bool
+	Content         strings.Builder
 	// RawUsageChunk is the VERBATIM bytes of the last streamed chunk that
 	// carried a usage object. It exists because ChatCompletionChunk is a typed
 	// struct and unmarshalling into it silently discards every field we did
@@ -132,6 +150,9 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 	for _, choice := range chunk.Choices {
 		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
 			a.HasToolCall = true
+		}
+		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
+			a.HasVisibleRefusal = true
 		}
 		if choice.FinishReason == nil || *choice.FinishReason == "" {
 			continue
@@ -406,6 +427,10 @@ func (o *Orchestrator) executeStreaming(
 
 		if line == "data: [DONE]" {
 			sawDone = true
+			// The upstream ended its own stream. Settlement judges emptiness
+			// on this, never on whether the caller's socket outlived it
+			// (#1326); see isZeroContentStream.
+			accumulator.StreamCompleted = true
 			break
 		}
 
@@ -596,6 +621,18 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
+	// 9c. The relay ran to the upstream's own end rather than being cut off
+	// (#1326). Reaching here past the abort branch means one of two things:
+	// scanner.Err() is nil, so the upstream closed its body cleanly (some
+	// providers end a stream that way, with no [DONE] sentinel at all), or the
+	// read failed BECAUSE the request context was cancelled, which is a
+	// truncation and not a completion. Only the first is a completed stream.
+	// A [DONE] already seen stands regardless, since the frames after it are
+	// nobody's response.
+	if scanner.Err() == nil && ctx.Err() == nil {
+		accumulator.StreamCompleted = true
+	}
+
 	// 10. Synthesize a terminal usage chunk when the caller asked for one and
 	// the upstream sent none, then close the stream. Both writes happen here,
 	// in this order, so the sentinel is always last and always singular:
@@ -763,6 +800,13 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// raw bytes themselves must never be counted directly (issue #602).
 	var credits int64
 	var confirmed, delivered bool
+	// generationID is the upstream's audit handle for this request, and on a
+	// variable-price alias it is the only thing that recovers WHICH pool member
+	// served it. It is hoisted out of the branch below so an absorbed burn can
+	// name the member in its log line: a rising absorbed total is a routing
+	// signal, and a routing signal nobody can attribute to a member is not
+	// actionable (#1326).
+	var generationID string
 	if route.Pricing.IsUpstreamActual() {
 		// No catalog price exists for this alias, since the charge comes from the
 		// cost the upstream reported in its terminal usage chunk. A failed
@@ -772,6 +816,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			acc.RawUsageChunk, reservation.Held(),
 			acc.HasUsage, acc.InputTokens, acc.OutputTokens, content)
 		credits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
+		generationID = settled.GenerationID
 		if delivered {
 			// generation_id is the audit handle for this charge: it is what
 			// recovers the model the router actually chose, which the response
@@ -802,16 +847,23 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// the outcome the other branches reached, rather than woven into any of
 	// them. See isZeroContentStream for what "zero visible content" means and
 	// what it deliberately excludes.
-	zeroContent := isZeroContentStream(acc, content, reqCtx.Err() != nil)
+	//
+	// absorbedCredits is captured here, before delivered is cleared, because
+	// this is the only point at which the burn's price exists: for a
+	// variable-price alias credits holds the upstream's own reported cost, and
+	// for a catalog-priced alias it holds the catalog price of the tokens the
+	// upstream reported. Every later branch either discards it or is not
+	// reached at all on this path.
+	zeroContent := isZeroContentStream(acc, content)
+	absorbedCredits := int64(0)
 	if zeroContent {
+		absorbedCredits = credits
 		delivered = false
 	}
 
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		switch {
-		case reqCtx.Err() != nil:
-			reason, eventType = "client_disconnect", "interrupted"
 		case zeroContent:
 			// A distinct release reason so the ledger can tell a burn apart
 			// from an upstream that died: both hand the hold back, and only one
@@ -820,10 +872,19 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			// upstream_error, which is the closest value in the usage_events
 			// CHECK constraint and honest enough -- an upstream that delivers
 			// nothing readable did fault, whatever it reported about itself.
+			//
+			// Ahead of the disconnect arm, not behind it. The guard already
+			// requires a COMPLETED stream, so anything reaching here finished
+			// upstream before the socket did; labelling that client_disconnect
+			// because the caller closed the tab on a blank answer would file
+			// the commonest ending of a burn as an abandonment and lose the
+			// absorbed cost with it.
 			reason = "zero_content"
-			streamZeroContentReleased.WithLabelValues(model, endpoint).Inc()
-			log.Printf("inference: stream_zero_content request_id=%s reservation_id=%s endpoint=%s model=%s upstream_prompt_tokens=%d upstream_completion_tokens=%d upstream_reasoning_tokens=%d: every chunk was well formed and none carried visible text, releasing the hold instead of charging (#1326)",
-				requestID, reservation.ID, endpoint, model, acc.InputTokens, acc.OutputTokens, acc.ReasoningTokens)
+			log.Printf("inference: stream_zero_content request_id=%s reservation_id=%s endpoint=%s model=%s absorbed_credits=%d generation_id=%s client_gone=%v upstream_prompt_tokens=%d upstream_completion_tokens=%d upstream_reasoning_tokens=%d: every chunk was well formed and none carried visible text, releasing the hold instead of charging (#1326)",
+				requestID, reservation.ID, endpoint, model, absorbedCredits, generationID, reqCtx.Err() != nil,
+				acc.InputTokens, acc.OutputTokens, acc.ReasoningTokens)
+		case reqCtx.Err() != nil:
+			reason, eventType = "client_disconnect", "interrupted"
 		}
 		// Say so. The synchronous path already logs this case; the streaming
 		// path released the hold in silence, and a request that was served for
@@ -851,12 +912,31 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			cancelRelease()
 			if err != nil {
 				log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+				if zeroContent {
+					// Counted, but as its own outcome. The absorption was
+					// detected and did not settle: the hold stays open until
+					// the TTL reaper reclaims it under the reaper's reason, and
+					// no usage event is written for it at all, so an
+					// absorbed-total that swallowed this would over-report
+					// clean absorptions while the durable trail under-reports
+					// them, from the same event.
+					streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleaseFailed).Add(float64(absorbedCredits))
+				}
 				return false
 			}
 		}
+		if zeroContent {
+			// After the release, never before it. These count OUTCOMES: an
+			// increment here means the hold really was handed back (or there
+			// was no hold to hand back, because CreateReservation had failed
+			// earlier and reservation.ID is empty), so the customer was
+			// charged nothing and Hive carried the cost.
+			streamZeroContentReleased.WithLabelValues(model, endpoint).Inc()
+			streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleased).Add(float64(absorbedCredits))
+		}
 		eventCtx, cancelEvent := freshSettlementCtx()
 		defer cancelEvent()
-		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
+		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, eventType, zeroContent)
 		return true
 	}
 
@@ -939,7 +1019,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		log.Printf("inference: settle finalize failed, released reservation instead request_id=%s reservation_id=%s", requestID, reservation.ID)
 		eventCtx, cancelEvent := freshSettlementCtx()
 		defer cancelEvent()
-		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, "finalize_failed")
+		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, "finalize_failed", false)
 		return true
 	}
 	eventCtx, cancelEvent := freshSettlementCtx()
@@ -973,7 +1053,10 @@ func freshSettlementCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), accountingTimeout)
 }
 
-func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator, eventType string) {
+// zeroContent marks the absorbed-burn class (#1326) so the customer's credit
+// delta on this row stays 0. Every other caller keeps the pre-existing
+// behaviour untouched.
+func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator, eventType string, zeroContent bool) {
 	input := RecordEventInput{
 		AccountID:        snapshot.AccountID,
 		RequestAttemptID: attempt.ID,
@@ -987,7 +1070,19 @@ func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot auth
 	if acc != nil && acc.HasUsage {
 		input.InputTokens = acc.InputTokens
 		input.OutputTokens = acc.OutputTokens
+		// hive_credit_delta is the CUSTOMER's signed spend, negative for spend,
+		// and counts are never credits (control-plane accounting/service.go).
+		// acc.TotalTokens is a positive token count, so this line has always
+		// been the wrong unit and the wrong sign; it is pre-existing and out of
+		// scope here, EXCEPT for the class this PR newly routes onto this
+		// writer. An absorbed burn charged the customer nothing, so the
+		// customer's delta for it is 0, and the cost Hive carried is recorded
+		// as Hive's, in streamZeroContentAbsorbedCredits and the
+		// stream_zero_content log line, not in a customer spend column.
 		input.HiveCreditDelta = acc.TotalTokens
+		if zeroContent {
+			input.HiveCreditDelta = 0
+		}
 		input.CacheReadTokens = acc.CachedTokens
 		input.CacheWriteTokens = acc.CacheWriteTokens
 	}

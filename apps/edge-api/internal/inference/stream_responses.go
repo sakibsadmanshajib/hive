@@ -236,6 +236,10 @@ func (o *Orchestrator) executeResponsesStreaming(
 		line := scanner.Text()
 
 		if line == "data: [DONE]" {
+			// The upstream ended its own stream. Settlement judges emptiness on
+			// this, never on whether the caller's socket outlived it (#1326);
+			// see isZeroContentStream.
+			acc.StreamCompleted = true
 			// Emit response.completed event instead of [DONE].
 			translator.emitCompleted(w, flusher, acc, req)
 			break
@@ -396,6 +400,15 @@ func (o *Orchestrator) executeResponsesStreaming(
 			requestID, model, err)
 		streamRelayAborted.WithLabelValues(model, EndpointResponses).Inc()
 		translator.emitFailed(w, flusher)
+		return
+	}
+
+	// The relay ran to the upstream's own end rather than being cut off
+	// (#1326), same rule as the chat relay: a clean end of body with a live
+	// request context is a completed stream even without a [DONE] sentinel, and
+	// a read that failed because the context was cancelled is a truncation.
+	if scanner.Err() == nil && ctx.Err() == nil {
+		acc.StreamCompleted = true
 	}
 }
 

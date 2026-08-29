@@ -165,6 +165,11 @@ func main() {
 	litellmClient := inference.NewLiteLLMClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
 	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient).
 		WithStageMetrics(inference.NewStageMetrics(promRegistry))
+	// Registered apart from NewStageMetrics so the zero-content money counter's
+	// two series exist from process start: an absorbed total that only appears
+	// once a burn happens cannot tell a quiet day from a broken recording path
+	// (#1326).
+	inference.RegisterZeroContentMetrics(promRegistry)
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
 		Pool:    dbPool,
