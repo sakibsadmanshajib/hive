@@ -248,7 +248,9 @@ describe('the composer banner wiring', () => {
 			fileURLToPath(new URL('./CreditsBanner.svelte', import.meta.url)),
 			'utf8'
 		);
-		expect(src).toContain('remaining: formatUsdBalanceFromCredits(balance?.available_credits ?? 0)');
+		expect(src).toContain(
+			'remaining: formatUsdBalanceFromCredits(balance?.available_credits ?? 0)'
+		);
 		expect(src).toContain('used: formatUsdFromCredits(balance?.usage_today_credits ?? 0)');
 	});
 });
