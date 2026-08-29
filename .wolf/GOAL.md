@@ -1,30 +1,27 @@
 # Hive North Star Goal (owner-set, orchestrator-executed)
 
-**STATUS 2026-08-25: This file targets 2026-06-20 milestones and is out of date. Planning ground truth (current milestone state, timeline, requirements traceability, UAT results) lives in the Obsidian vault (hive/ MOCs and timeline). Do not use this file as a readiness signal; check the vault instead.**
+**Last refreshed 2026-08-29.** This file is the terse goal index. Planning ground truth (milestone detail, timeline, requirements traceability, UAT results, deferred scope) lives in the Obsidian vault (hive/ MOCs and timeline), and issue-level truth lives on GitHub. Refresh or retire this file whenever it stops matching either; a document that lies is a defect.
 
 ## Mission
-Be the AI platform of Bangladesh: chat workstation plus OpenAI-compatible developer API, prepaid BDT, one product in two SKUs (Hive Cloud hosted, EnterpriseEdge self-hosted one-liner), built to investor-demo quality on <$50/month.
+Be the AI platform of Bangladesh and a credible data-sovereign option for regulated buyers: a chat workstation plus an OpenAI-compatible developer API, prepaid BDT billing, one product in two modes. Hive is the hosted SaaS; Hive Enterprise is the customer-hosted, data-sovereign deployment. Built to investor-demo quality on a CTO operating budget under $50 per month.
 
-## Goal history (archived): MVP DEMO-READY by 2026-06-20
+## Current goal: demo readiness against the six locked capabilities
+The owner locked demo scope on 2026-08-11 to six capabilities: chat functionality, embeddings, voice to text, knowledge work, Cowork, and the coding agent. Parity between Cowork and the chat surface is part of that requirement, not polish. Anything outside the list is not a demo blocker; anything inside it is. Full entry and its consequences: `.wolf/decisions.md` D-061.
 
-Definition of done, every box checkable by a command or URL:
+## How work is tracked
+The phase-numbering frame (phases 1 through 20) is retired. v1.0 developer-api-core shipped 2026-04-21; v1.1 closed out in late July 2026. Work now tracks through GitHub issues and pull requests against four milestones:
 
-- [x] Staging live: api-hive.scubed.co and control-hive.scubed.co return 200 on /health behind Cloudflare (cp-hive.scubed.co was retired and no longer resolves, see D-026)
-- [x] Full deploy pipeline green end to end (Go images, VM, Workers console, SDK replay)
-- [x] One-line installer on main (curl raw install.sh, hardware advisor included)
-- [x] Tool-call routing merged (#206): SDK tools requests succeed on capable aliases
-- [x] Tool-call live proof: chat completion with tools returns tool_calls on staging (verified 2026-06-12, finish_reason tool_calls via SDK replay log)
-- [ ] Phase 20 fully merged (#204, #205 remaining) plus wave 4 VERIFICATION.md
-- [x] hive.scubed.co marketing site live (verified externally via r.jina.ai server-side fetch: 200, title Hive Bangladesh AI platform. Owner-local browser needs DNS cache flush, stale negative TTL)
-- [ ] Chat workstation happy path on staging: signup, chat, file RAG, history (Phase 25 re-audit)
-- [ ] bn-BD translation submitted upstream (owner 10-min action) and tracked
-- [x] Demo script written: 10-minute investor walkthrough touching chat, API, installer, billing (.planning/demo/INVESTOR-DEMO.md, PR #210 merged)
-- [ ] Budget intact: cost ledger shows <$50/month run rate
+- `v1.2.1 demo readiness hotfixes` (due 2026-09-05)
+- `v1.2 agentic surface` (due 2026-09-12)
+- `Hive Enterprise edge-first v1` (due 2026-10-31)
+- `v1.3 device era` (due 2026-12-15)
 
-## Next goal after: v1.1 SHIPPED by 2026-06-30 (board target), then v1.2 agentic surface per roadmap.
+Roadmap board: https://github.com/users/sakibsadmanshajib/projects/3. For live counts read the milestones themselves; this file deliberately carries no numbers that go stale between sessions.
+
+The MVP checklist this file used to carry targeted 2026-06-20 and is retired. Git history has it if anyone needs the record.
 
 ## Operating commitments (how the orchestrator does not get stuck)
-1. fleet.json updated on EVERY dispatch, completion, AND failure (state: failed, reason, relaunched-as). No silent deaths.
-2. Every turn opens with a ground-truth sweep when any agent is in flight; stalled >20 min in a wait state = presumed dead, relaunch.
-3. Goal checkboxes updated as they flip; owner can ask "goal status" anytime and get this file's truth.
-4. INCIDENT 2026-06-12: .wolf/ wiped by agent git clean on shared checkout. Rule: every subagent brief forbids git clean; .wolf/ backed up to ~/.hive-wolf-backup.tar after every memory write.
+1. `.wolf/fleet.json` updated on every dispatch, completion, and failure (state, reason, relaunched-as). No silent deaths.
+2. Every turn opens with a ground-truth sweep when any agent is in flight. Stalled longer than 20 minutes in a wait state is presumed dead; relaunch. Verify against remote refs and `gh` state, never against a delivered message alone.
+3. This file states the current goal; the owner can ask "goal status" at any time and get its truth. If the answer would be wrong, fix the file first.
+4. No agent runs `git clean`, `git reset --hard`, or any destructive git operation on the shared checkout. This rule exists because `.wolf/` was wiped by exactly that on 2026-06-12. Since D-025 the directory splits by writer: curated files are tracked and reviewed in pull requests, hook-written telemetry is gitignored and must never be committed.
