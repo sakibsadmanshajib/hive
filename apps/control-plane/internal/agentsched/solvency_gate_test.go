@@ -218,6 +218,66 @@ func TestNewScheduler_PanicsOnNilSolvency(t *testing.T) {
 	NewScheduler(newFakeRepo(), &fakeTasks{}, nil, SchedulerConfig{Logger: quietLogger()})
 }
 
+// TestSolventAtCreationInsolventAtLaunchIsStillRefused is the case that makes
+// two gates necessary rather than one, and it is the only test here that spans
+// both. It runs the real Service and the real Scheduler over one repository
+// and one gate, so the schedule the tick refuses is the same row the create
+// legitimately wrote.
+//
+// The two failure modes stack, and either fix alone leaves the other live.
+// Gating only creation admits this launch, because the tenant was solvent when
+// the routine was created and nothing looks again; the routine then launches a
+// sandbox on every cadence, forever, which is issue #1490's actual complaint.
+// Gating only the launch refuses it, but the tenant is told nothing at the
+// moment they act and discovers it as a last_error a day later. So this
+// asserts the create SUCCEEDED and the later launch was still refused, in one
+// sequence, rather than proving each half against its own fixture where the
+// gap between them cannot appear.
+func TestSolventAtCreationInsolventAtLaunchIsStillRefused(t *testing.T) {
+	created := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	repo := newFakeRepo()
+	gate := solvent()
+	svc := NewService(repo, gate, fixedClock(created))
+	tasks := &fakeTasks{}
+	sched := newSchedulerWithSolvency(repo, tasks, gate)
+	ctx := context.Background()
+
+	row, err := svc.Create(ctx, tenantA, userA, validCreateInput())
+	if err != nil {
+		t.Fatalf("create while solvent: %v", err)
+	}
+	if len(repo.created) != 1 {
+		t.Fatalf("repo.Create called %d times, want 1: the launch refusal below only means something if this row was really written", len(repo.created))
+	}
+
+	// The balance runs out somewhere between the routine being created and its
+	// first run. Nothing in the system is watching for that; the launch gate is
+	// what notices.
+	gate.goInsolvent()
+
+	due := created.Add(24 * time.Hour)
+	if fired := sched.RunOnce(ctx, due); fired != 0 {
+		t.Fatalf("fired=%d for a tenant that went insolvent after creating the routine, want 0", fired)
+	}
+	tasks.mu.Lock()
+	calls := tasks.calls
+	tasks.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("CreateTask called %d times, want 0: gating creation alone lets every later launch through", calls)
+	}
+
+	got, err := repo.Get(ctx, tenantA, userA, row.ID)
+	if err != nil {
+		t.Fatalf("get schedule after refused launch: %v", err)
+	}
+	if got.LastError != insufficientCreditsMessage {
+		t.Fatalf("last_error = %q, want the credit message", got.LastError)
+	}
+	if gate.callCount() != 2 {
+		t.Fatalf("solvency checked %d times across create plus one launch, want 2", gate.callCount())
+	}
+}
+
 // --- wire mapping --------------------------------------------------------
 
 func postCreate(t *testing.T, sol Solvency) *httptest.ResponseRecorder {

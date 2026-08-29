@@ -49,5 +49,14 @@ func (f *fakeSolvency) callCount() int {
 	return f.calls
 }
 
+// goInsolvent flips a gate that has been answering solvent, so one test can
+// span the two moments a tenant's balance is consulted: creation, then a
+// launch some cadences later.
+func (f *fakeSolvency) goInsolvent() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.insufficient = true
+}
+
 // solvent is the default gate for tests whose subject is not the gate.
 func solvent() *fakeSolvency { return &fakeSolvency{} }
