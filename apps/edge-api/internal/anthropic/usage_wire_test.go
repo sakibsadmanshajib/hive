@@ -176,17 +176,45 @@ func TestMessagesWire_StreamingMessageDeltaCarriesRealUsage(t *testing.T) {
 	wire := messagesWire(t, `{"model":"hive-free","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"say quietwalk ok"}]}`)
 
 	var deltaUsage *StreamUsage
+	var startUsageKeys map[string]json.RawMessage
 	for _, line := range strings.Split(wire, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
+		payload := strings.TrimPrefix(line, "data: ")
 		var ev StreamEvent
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			t.Fatalf("streamed event is not valid JSON: %s", line)
 		}
 		if ev.Type == "message_delta" {
 			deltaUsage = ev.Usage
+		}
+		if ev.Type == "message_start" {
+			// Read the raw keys, not the decoded struct: decoding fills an
+			// absent key with the same zero a present one carries, so a struct
+			// read here could not tell the two apart, which is the whole point
+			// of the assertion below.
+			var raw struct {
+				Message struct {
+					Usage map[string]json.RawMessage `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+				t.Fatalf("message_start is not valid JSON: %s", line)
+			}
+			startUsageKeys = raw.Message.Usage
+		}
+	}
+
+	// message_start is flushed before any upstream usage frame arrives, so its
+	// counts are zero. They must still be PRESENT: the Anthropic Usage model
+	// declares input_tokens and output_tokens as required, and an omitempty on
+	// either sends "usage":{}, which a typed client cannot parse into that
+	// model at all. This is what pins the omitempty removal in types.go.
+	for _, key := range []string{"input_tokens", "output_tokens"} {
+		if _, ok := startUsageKeys[key]; !ok {
+			t.Errorf("message_start usage must carry %s explicitly, got keys %v; stream was:\n%s", key, startUsageKeys, wire)
 		}
 	}
 
