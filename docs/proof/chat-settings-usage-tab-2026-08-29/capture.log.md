@@ -111,3 +111,25 @@ Test Files  16 passed (16)
 The same gate, with each of the reviewer's three mutations applied one at a
 time: compile error red, transposed figures red on three assertions, emptied
 click handler red on one assertion, exit 2 in every case.
+
+## Recaptured after the second review round
+
+The screenshots above were first taken at commit `6a30d39`, then retaken
+unchanged in appearance at `338b699`, the head that answers the second review
+round. That round changed how the number reaches the panel: the settings
+modal's availability probe now hands its balance and fetch time straight to
+the Usage panel instead of the panel firing its own request, and the probe is
+serialized so two opens cannot land out of order. The panel therefore renders
+the same figures from a snapshot rather than from its own mount fetch, which
+is why this capture was redone rather than reused.
+
+Same run, read back from the live DOM at that head:
+
+```
+Usage | Organization credit balance | $12.50 | Organization usage today |
+$0.34 | Top up | Last updated: 11:30:24 PM | Refresh
+```
+
+The image build for that container reported `Test Files 16 passed (16)` and
+`Tests 221 passed (221)` from its in place `npm run test:frontend -- --run`
+stage, against the same commit.
