@@ -147,7 +147,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 		ModelAlias:    model,
 		// A variable-price alias raises this from its catalog row; a fixed
 		// one keeps the flat endpoint default. See ReservationCredits.
-		EstimatedCredits: ReservationCredits(route, estimatedCredits),
+		EstimatedCredits: ReservationCredits(route, estimatedCredits, EndpointResponses, body),
 		PolicyMode:       "strict",
 	})
 	if err != nil && refuseOnReservationFailure(w, EndpointResponses, model, err) {

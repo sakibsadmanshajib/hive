@@ -96,6 +96,7 @@ func (h *Handler) startSettlement(
 	route inference.SelectRouteResult,
 	alias string,
 	requestID uuid.UUID,
+	body []byte,
 ) (*settlement, bool) {
 	if h.deps.Accounting == nil || h.deps.Billing == nil {
 		// A gateway that cannot charge must not serve. Reaching here means
@@ -151,10 +152,15 @@ func (h *Handler) startSettlement(
 		slog.Warn("session chat start attempt failed", "err", err, "request_id", requestID)
 	}
 
-	// A variable-price alias raises the flat session hold from its catalog
-	// row: a router can resolve to a model far dearer than the flat figure
-	// assumes, and the hold is the only solvency gate in front of it.
-	held := inference.ReservationCredits(route, sessionHoldCredits)
+	// A variable-price alias raises the flat session hold: a router can resolve
+	// to a model far dearer than the flat figure assumes, and the hold is the
+	// only solvency gate in front of it. How far it raises it is sized from
+	// this turn's own bounded body rather than from the largest turn the
+	// bounds allow, which is what made the alias unusable below 2.00 USD of
+	// credit (issue #1372). The caller has already run
+	// EnforceVariablePriceBounds over that body; sizing a hold from an
+	// unbounded one would be a number with nothing behind it.
+	held := inference.ReservationCredits(route, sessionHoldCredits, inference.EndpointChatCompletions, body)
 	reservation, err := h.deps.Accounting.CreateReservation(ctx, inference.CreateReservationInput{
 		AccountID:        accountID,
 		RequestID:        requestID.String(),
@@ -290,10 +296,20 @@ func writeBillingNotConfigured(w http.ResponseWriter) {
 		"This workspace is not set up for usage yet. Contact your administrator to complete workspace setup.", &code)
 }
 
+// The wording says what happened and what the customer can do about it.
+// OpenAI's canonical insufficient_quota sentence ("You exceeded your current
+// quota, please check your plan and billing details") was wrong twice over on
+// this path: the customer has credit, and there is no plan to check. What
+// actually happened is that the up-front hold for this turn did not fit inside
+// the available balance, and a smaller turn will (issue #1372).
+//
+// The machine-readable half, status 429 with type and code insufficient_quota,
+// is deliberately unchanged: SDKs branch on those, and this is still a quota
+// verdict. Only the human sentence moves.
 func writeInsufficientQuota(w http.ResponseWriter) {
 	code := "insufficient_quota"
 	apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
-		"You exceeded your current quota, please check your plan and billing details.", &code)
+		"Your available credit does not cover this request. Add credits, or send a shorter request, and try again.", &code)
 }
 
 func writeReservationUnavailable(w http.ResponseWriter) {

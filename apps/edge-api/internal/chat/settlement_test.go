@@ -464,9 +464,19 @@ func TestSessionChatRefusesWhenTheAccountCannotPay(t *testing.T) {
 	_, finalized, released := accounting.calls()
 	require.Empty(t, finalized, "a refused request charges nothing")
 	require.Empty(t, released, "a reservation that was never created cannot be stranded")
-	// No currency, no balance, no exchange language in a customer-facing refusal.
+	// No provider identity, no route name, no currency figure, no balance in a
+	// customer-facing refusal.
+	//
+	// "credit" is deliberately NOT on this list any more. It is Hive's own
+	// billing unit, the word the console itself uses, and naming it is the
+	// whole point of the message: the sentence this used to allow was OpenAI's
+	// "You exceeded your current quota, please check your plan and billing
+	// details", which told a customer with money on the account to go check a
+	// plan Hive does not sell (issue #1372). The leak classes that actually
+	// matter, the provider, the upstream route, and any currency amount, are
+	// unchanged.
 	body := strings.ToLower(rec.Body.String())
-	for _, leak := range []string{"credit", "balance", "usd", "bdt", "route-", "provider"} {
+	for _, leak := range []string{"balance", "usd", "bdt", "route-", "provider"} {
 		require.NotContains(t, body, leak)
 	}
 }

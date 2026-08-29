@@ -149,7 +149,7 @@ func TestEnforceVariablePriceBounds_RefusesAnUnparseableBody(t *testing.T) {
 // This is a real cross-file guard, not a restatement. Raise the ceiling in the
 // YAML, or either cap here, without re-deriving the hold, and it fails.
 func TestTheHoldProvablyCoversTheWorstBoundedRequest(t *testing.T) {
-	promptCeiling, completionCeiling := readMaxPriceCeiling(t)
+	promptCeiling, completionCeiling := readMaxPriceCeiling(t, "route-openrouter-auto-beta")
 	hold := readReservationEstimate(t)
 
 	// Worst case, in USD, as an exact rational:
@@ -181,9 +181,9 @@ func TestTheHoldProvablyCoversTheWorstBoundedRequest(t *testing.T) {
 		worstCredits, hold, hold-worstCredits)
 }
 
-// readMaxPriceCeiling pulls provider.max_price for the variable-price route out
-// of the real LiteLLM config, in USD per million tokens.
-func readMaxPriceCeiling(t *testing.T) (prompt, completion *big.Rat) {
+// readMaxPriceCeiling pulls provider.max_price for a named variable-price route
+// out of the real LiteLLM config, in USD per million tokens.
+func readMaxPriceCeiling(t *testing.T, routeName string) (prompt, completion *big.Rat) {
 	t.Helper()
 	const path = "../../../../deploy/litellm/config.yaml"
 	raw, err := os.ReadFile(path)
@@ -191,9 +191,9 @@ func readMaxPriceCeiling(t *testing.T) (prompt, completion *big.Rat) {
 		t.Fatalf("cannot read %s, which this guard depends on: %v", path, err)
 	}
 
-	idx := strings.Index(string(raw), "model_name: route-openrouter-auto-beta")
+	idx := strings.Index(string(raw), "model_name: "+routeName)
 	if idx < 0 {
-		t.Fatal("route-openrouter-auto-beta is not in deploy/litellm/config.yaml; if it was renamed, move this guard with it")
+		t.Fatalf("%s is not in deploy/litellm/config.yaml; if it was renamed, move this guard with it", routeName)
 	}
 	block := string(raw)[idx:]
 

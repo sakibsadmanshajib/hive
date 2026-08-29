@@ -27,6 +27,24 @@ import (
 // 20260823_40_credit_unit_rescale_billion.sql).
 var openrouterAutoPricing = UpstreamActualPricing(2_000_000_000)
 
+// autoHoldForAnEmptyBody is the hold these tests expect, in credits. Every one
+// of them dispatches the body `{}`, which EnforceVariablePriceBounds turns into
+// a 50-byte body carrying both completion-ceiling spellings at 16384. Sized at
+// the route's own rate ceiling (3.00 and 15.00 USD per million, see
+// deploy/litellm/config.yaml and VariablePricePromptCeilingUSD):
+//
+//	prompt:     50 bytes, a rigorous upper bound on prompt tokens
+//	                       50 x 3.00 / 1e6            = 0.000150 USD
+//	completion: 16384 x 15.00 / 1e6                   = 0.245760 USD
+//	total 0.245910 USD x 1.4 margin x 1e9 credits/USD = 344,274,000
+//
+// It is asserted as an exact figure rather than "not the endpoint default", so
+// a change to either bound or either ceiling fails here and has to be
+// re-derived rather than sliding through. It is nowhere near the flat endpoint
+// default (10000 in these fixtures), the token count, or the catalog's
+// whole-envelope hold (2e9), so a regression to any of those shapes fails too.
+const autoHoldForAnEmptyBody = 344_274_000
+
 // newRoutingMockVariable answers route selection with a variable-price alias.
 func newRoutingMockVariable() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,14 +164,16 @@ func TestVariablePriceStreaming_SettlesAtTheReportedUpstreamCost(t *testing.T) {
 	done, _ := runVariableStreaming(orch)
 	waitDone(t, done)
 
-	// The hold must come from the catalog row, not from the flat 10000 the
-	// endpoint passes in. If ReservationCredits were skipped this reads 10000.
+	// The hold must be sized from the variable-price bounds, not from the flat
+	// 10000 the endpoint passes in. If ReservationCredits were skipped this
+	// reads 10000. See autoHoldForAnEmptyBody for the arithmetic.
 	reservation, ok := rec.find("/internal/accounting/reservations")
 	if !ok {
 		t.Fatalf("no reservation was created; calls: %+v", rec.calls)
 	}
-	if held, _ := reservation["estimated_credits"].(float64); int64(held) != 2_000_000_000 {
-		t.Errorf("hold = %v, want the catalog figure 2000000000; a router request cannot be held at the flat endpoint default", reservation["estimated_credits"])
+	if held, _ := reservation["estimated_credits"].(float64); int64(held) != autoHoldForAnEmptyBody {
+		t.Errorf("hold = %v, want %d; a router request cannot be held at the flat endpoint default",
+			reservation["estimated_credits"], autoHoldForAnEmptyBody)
 	}
 
 	body, ok := rec.find("/internal/accounting/reservations/finalize")
@@ -208,8 +228,8 @@ func TestVariablePriceStreaming_MissingCostChargesTheHoldNotZero(t *testing.T) {
 			if int64(actual) == 0 {
 				t.Fatal("settled at ZERO with no readable upstream cost: this is the free-serve bug")
 			}
-			if int64(actual) != 2_000_000_000 {
-				t.Errorf("actual_credits = %v, want the full hold 2000000000", body["actual_credits"])
+			if int64(actual) != autoHoldForAnEmptyBody {
+				t.Errorf("actual_credits = %v, want the full hold %d", body["actual_credits"], autoHoldForAnEmptyBody)
 			}
 			if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 				t.Error("a charge with no readable cost must NOT be flagged as measured truth")

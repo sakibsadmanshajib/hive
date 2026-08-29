@@ -336,7 +336,7 @@ func TestReservationCreditsCannotUnderReserve(t *testing.T) {
 	const endpointDefault = DefaultHoldText
 
 	fixed := SelectRouteResult{Pricing: FixedPricing(10_500, 42_000)}
-	if got := ReservationCredits(fixed, endpointDefault); got != endpointDefault {
+	if got := ReservationCredits(fixed, endpointDefault, EndpointChatCompletions, []byte(`{"messages":[]}`)); got != endpointDefault {
 		t.Fatalf("a fixed-price alias must keep the endpoint default, got %d", got)
 	}
 
@@ -345,16 +345,24 @@ func TestReservationCreditsCannotUnderReserve(t *testing.T) {
 	// default. If the catalog figure were ignored this reads the flat
 	// default, and a router request that resolved to an expensive model would
 	// be held against a hold far too small to cover it.
+	//
+	// The body here is over VariablePriceMaxRequestBytes, so no per-request
+	// bound can be computed for it and the catalog figure is what stands. That
+	// is the fallback direction on purpose: a request nobody could size falls
+	// back to the whole-envelope hold, never to something smaller. The
+	// per-request sizing that applies to an ordinary request instead is in
+	// reservation_sizing_test.go (issue #1372).
 	variable := SelectRouteResult{Pricing: UpstreamActualPricing(2_000_000_000)}
-	if got := ReservationCredits(variable, endpointDefault); got != 2_000_000_000 {
-		t.Fatalf("a variable-price alias must hold its catalog figure 2000000000, got %d", got)
+	unsizable := []byte(`{"messages":"` + strings.Repeat("x", VariablePriceMaxRequestBytes) + `"}`)
+	if got := ReservationCredits(variable, endpointDefault, EndpointChatCompletions, unsizable); got != 2_000_000_000 {
+		t.Fatalf("a variable-price alias must fall back to its catalog figure 2000000000, got %d", got)
 	}
 
 	// The endpoint default is a FLOOR, never a ceiling: a catalog row that
 	// somehow carried a smaller hold must not lower the hold below what the
 	// endpoint already reserves.
 	tooSmall := SelectRouteResult{Pricing: UpstreamActualPricing(5)}
-	if got := ReservationCredits(tooSmall, endpointDefault); got != endpointDefault {
+	if got := ReservationCredits(tooSmall, endpointDefault, EndpointChatCompletions, []byte(`{"messages":[]}`)); got != endpointDefault {
 		t.Fatalf("the endpoint default must floor the hold, got %d", got)
 	}
 }
