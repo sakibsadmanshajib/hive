@@ -315,21 +315,44 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	unusedCredits := releasableCredits(reservation, actualCredits)
 
 	if actualCredits > 0 {
-		// The charge key still carries the amount. Flattening it to
-		// "reservation:<id>:charge", the way issue #652 flattened the release
-		// key, needs a migration normalizing the 1866 existing
-		// "charge-<credits>" entries first (issue #663 is the same lesson for
-		// the release key), because until they are normalized a retry after a
-		// crossed deploy would post a SECOND charge under the new key shape
-		// instead of deduplicating against the old one. Tracked separately;
-		// capture-exactly-once rests meanwhile on the reservationOpen status
-		// guard above plus the per-account lock, as it always has.
-		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", actualCredits)), actualCredits, map[string]any{
+		// Idempotency key is "charge", not "charge-<credits>" (issue #917),
+		// for the reason issue #652 flattened the release key: a key that
+		// varies with the amount can only deduplicate a retry that computes
+		// the SAME number, which is the retry that never needed protecting. A
+		// retry that computes a different one writes a different key and
+		// therefore a second charge, taking a prepaid customer's credits twice
+		// for inference they received once.
+		//
+		// The window is not theoretical. This call posts the charge BEFORE
+		// repo.FinalizeReservation updates the row below, so anything failing
+		// in between (a dropped connection, a cancelled context, the release
+		// assertion, the process dying) leaves a committed charge beside a
+		// reservation still in an open state, which the reservationOpen guard
+		// above then lets a retry walk straight back into. Production
+		// reservation 9d422064 sits in exactly that shape. And the caller most
+		// likely to arrive with a different number is batchstore's worker,
+		// which recomputes actualCredits from the upstream completed-request
+		// count on every poll.
+		//
+		// The historical "charge-<credits>" rows are normalized to this shape
+		// by 20260829_03, in BOTH credit_idempotency_keys and
+		// credit_ledger_entries (issue #663's lesson: the two tables that are
+		// supposed to agree on one key must be migrated together). Without
+		// that migration this flatten would be a regression rather than a fix,
+		// because a retry crossing the deploy would miss the old-shape entry
+		// and insert beside it. deploy-demo-box.yml's deploy job `needs:
+		// migrate`, so the schema is always ahead of the code that depends
+		// on it.
+		entry, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "charge"), actualCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
-		}); err != nil {
+		})
+		if err != nil {
 			return Reservation{}, fmt.Errorf("accounting: charge usage: %w", err)
+		}
+		if err := assertChargedInFull(reservation.ID, entry, actualCredits); err != nil {
+			return Reservation{}, err
 		}
 	}
 
@@ -710,13 +733,27 @@ func reservationOpen(status ReservationStatus) bool {
 // alerting to key on. No reconciliation job is written: nothing drains that
 // table today (issue #600) and the reaper would insert a fresh row every 15
 // minutes for the same stuck reservation.
+// Operation names which half of settlement diverged, "release" or "charge",
+// because both halves can now raise this and an operator reading the log needs
+// to know which one without inferring it from the caller. Empty means release,
+// so a value constructed before this field existed still reads correctly.
+//
+// PostedCredits and WantCredits are both POSITIVE credit magnitudes, never raw
+// ledger deltas. A release is stored positive and a charge negative, so the
+// charge side negates before filling these in; an operator comparing two
+// numbers in an alert should not have to know the sign convention of the table
+// they came from.
 type SettlementDivergenceError struct {
 	ReservationID uuid.UUID
+	Operation     string
 	PostedCredits int64
 	WantCredits   int64
 }
 
 func (e *SettlementDivergenceError) Error() string {
+	if e.Operation == "charge" {
+		return fmt.Sprintf("accounting: reservation %s already carries a %d-credit charge, refusing to capture %d credits against it", e.ReservationID, e.PostedCredits, e.WantCredits)
+	}
 	return fmt.Sprintf("accounting: reservation %s already carries a %d-credit release, refusing to settle against a %d-credit hold", e.ReservationID, e.PostedCredits, e.WantCredits)
 }
 
@@ -724,7 +761,42 @@ func assertReleasedInFull(reservationID uuid.UUID, entry ledger.LedgerEntry, wan
 	if entry.CreditsDelta == want {
 		return nil
 	}
-	return &SettlementDivergenceError{ReservationID: reservationID, PostedCredits: entry.CreditsDelta, WantCredits: want}
+	return &SettlementDivergenceError{ReservationID: reservationID, Operation: "release", PostedCredits: entry.CreditsDelta, WantCredits: want}
+}
+
+// assertChargedInFull refuses to settle a reservation whose committed charge is
+// not the amount this attempt meant to capture.
+//
+// The flat key stops the second charge from being WRITTEN. This stops the
+// divergence from being silently accepted afterwards. PostEntry deduplicates on
+// (account_id, entry_type, idempotency_key) and hands back the FIRST entry, so
+// without this check a retry that recomputed a different number would sail on
+// to repo.FinalizeReservation and stamp consumed_credits with a figure the
+// ledger contradicts: a reservation row and a ledger that disagree about what
+// the customer was billed, with nothing downstream ever noticing. The charge
+// half of what assertReleasedInFull (issue #616) does for the release half.
+//
+// Compared against NEGATED want, because a charge is stored negative:
+// ledger.ChargeUsage posts -credits where ReleaseReservedCredits posts
+// +credits. Getting that sign backwards would fire this on every successful
+// settlement instead of only on a divergent one, so the live test drives a real
+// settlement through it rather than calling this function directly.
+//
+// Failing here leaves the reservation open, so the reaper keeps seeing it and
+// reporting it rather than a wrong number being written once and disappearing.
+// Like the release side, this cannot self-heal: the charge is already
+// committed, and every settlement path recomputes from the same inputs and hits
+// the same deduplicated entry. The error is typed so alerting and the batch
+// worker can distinguish a permanent divergence from an ordinary lost race. No
+// reconciliation job is written, for the same reason assertReleasedInFull
+// writes none: nothing drains that table today (issue #600, issue #925) and the
+// reaper would insert a fresh row every 15 minutes for the same stuck
+// reservation.
+func assertChargedInFull(reservationID uuid.UUID, entry ledger.LedgerEntry, want int64) error {
+	if entry.CreditsDelta == -want {
+		return nil
+	}
+	return &SettlementDivergenceError{ReservationID: reservationID, Operation: "charge", PostedCredits: -entry.CreditsDelta, WantCredits: want}
 }
 
 func remainingHeldCredits(reservation Reservation) int64 {

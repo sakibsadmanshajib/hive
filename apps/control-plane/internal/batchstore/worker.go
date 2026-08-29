@@ -269,7 +269,7 @@ func (w *BatchWorker) settleTerminalReservation(ctx context.Context, payload Bat
 			TerminalUsageConfirmed: true,
 			Status:                 status,
 		}); err != nil {
-			return fmt.Errorf("batchstore: finalize reservation: %w", err)
+			return parkOnSettlementDivergence("finalize reservation", parsedReservationID, parsedAccountID, err)
 		}
 		return nil
 	}
@@ -280,9 +280,40 @@ func (w *BatchWorker) settleTerminalReservation(ctx context.Context, payload Bat
 		ReservationID: parsedReservationID,
 		Reason:        reason,
 	}); err != nil {
-		return fmt.Errorf("batchstore: release reservation: %w", err)
+		return parkOnSettlementDivergence("release reservation", parsedReservationID, parsedAccountID, err)
 	}
 	return nil
+}
+
+// parkOnSettlementDivergence wraps a settlement failure for Asynq, stopping the
+// retry loop when the failure is permanent.
+//
+// This poll handler recomputes actualCredits from the upstream completed-request
+// count on EVERY poll (see settleTerminalReservation above), so it is the caller
+// most likely to arrive at a settlement with a different number from the last
+// attempt. Once the ledger has refused one of those as divergent, no later poll
+// can clear it: the charge is already committed, and every attempt recomputes
+// from the same inputs and hits the same deduplicated entry. Returning a plain
+// error would re-enqueue the task to fail identically until the retry budget
+// drains, which delays the operator signal behind a wall of repeats and burns
+// the queue on work that cannot succeed (issue #917, item 4).
+//
+// asynq.SkipRetry parks the task in the archive instead, where it stays visible
+// for the manual reconciliation a divergence actually needs. Every other
+// settlement failure keeps the ordinary retry, because those are usually
+// transient.
+//
+// Logged at the point of parking rather than left to the caller: the reservation
+// and account ids are what an operator needs to reconcile, and neither survives
+// into Asynq's archived-task error string.
+func parkOnSettlementDivergence(op string, reservationID, accountID uuid.UUID, err error) error {
+	var divergence *accounting.SettlementDivergenceError
+	if errors.As(err, &divergence) {
+		log.Printf("batchstore: %s refused as divergent, parking this batch poll for manual reconciliation: reservation_id=%s account_id=%s operation=%s posted_credits=%d want_credits=%d",
+			op, reservationID, accountID, divergence.Operation, divergence.PostedCredits, divergence.WantCredits)
+		return fmt.Errorf("batchstore: %s: %w: %w", op, err, asynq.SkipRetry)
+	}
+	return fmt.Errorf("batchstore: %s: %w", op, err)
 }
 
 func resolveTerminalBatchContext(batch *filestore.Batch, payload BatchPollPayload) terminalBatchContext {
