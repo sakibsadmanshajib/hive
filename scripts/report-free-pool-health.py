@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
 
 def _load_redactor():
@@ -57,8 +58,39 @@ def _load_redactor():
 
 ERROR_EXCERPT_CHARS = 300
 
+# A member answering 429 is rate limited, not gone. The distinction decides the
+# remedy and the two remedies are opposites: a retired model needs its row
+# replaced, a rate-limited one needs the window to pass or the account funded,
+# and replacing its row would delete a member that is coming back. On
+# 2026-08-29 the Gemini member was 429 for at least six consecutive runs while
+# this script advised replacing it.
+RATE_LIMITED = re.compile(r"RateLimitError|\b429\b|quota|RESOURCE_EXHAUSTED", re.I)
 
-def report(payload: dict, redact) -> int:
+# The one fact that decides whether a rerun can pass. Google puts it in a
+# `quotaId` like `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, and pairs
+# it with a `retryDelay`. Both sit past the excerpt cap, so they are pulled out
+# of the FULL error text and printed separately rather than being truncated
+# away: the whole point of this line is that the reader can tell a per-minute
+# window from a spent daily allowance without opening a log artifact.
+WINDOW_HINT = re.compile(
+    r"(?:quotaId'?\s*:?\s*'?)([A-Za-z0-9_.-]*Per(?:Day|Minute|Hour)[A-Za-z0-9_.-]*)"
+    r"|(PerDay|PerMinute|PerHour|tokens per day|requests per day|TPD|RPD|RPM)"
+    r"|(?:retryDelay'?\s*:?\s*'?)(\d+(?:\.\d+)?[smh])",
+    re.I,
+)
+
+
+def _window_hint(error_text: str) -> str:
+    """Pull the quota window and retry hint out of the full provider message."""
+    found: list[str] = []
+    for match in WINDOW_HINT.finditer(error_text):
+        token = next((g for g in match.groups() if g), None)
+        if token and token not in found:
+            found.append(token)
+    return ", ".join(found)
+
+
+def _render(payload: dict, redact) -> list[str]:
     endpoints_healthy = payload.get("healthy_endpoints") or []
     endpoints_unhealthy = payload.get("unhealthy_endpoints") or []
     # Prefer the explicit counts, fall back to the lists. A payload that
@@ -70,7 +102,7 @@ def report(payload: dict, redact) -> int:
     if not isinstance(unhealthy, int):
         unhealthy = len(endpoints_unhealthy)
 
-    print(f"free pool members: {healthy} healthy, {unhealthy} unhealthy")
+    lines = [f"free pool members: {healthy} healthy, {unhealthy} unhealthy"]
 
     for endpoint in endpoints_unhealthy:
         if not isinstance(endpoint, dict):
@@ -78,24 +110,48 @@ def report(payload: dict, redact) -> int:
         # `model` is the upstream model id, which is the thing that gets retired
         # and therefore the thing worth printing by name.
         model = endpoint.get("model") or "unknown"
-        detail = str(endpoint.get("error") or "no error text")[:ERROR_EXCERPT_CHARS]
-        print(redact(f"  DEAD MEMBER: {model} -- {detail}"))
-        print(
-            redact(
-                f"::warning::free pool member '{model}' is not answering. If its "
-                "provider no longer lists that model, it is RETIRED: replace the "
-                "member row in supabase/migrations/ rather than waiting for it to "
-                "come back. The pool routes around it for now."
+        error_text = str(endpoint.get("error") or "no error text")
+        detail = error_text[:ERROR_EXCERPT_CHARS]
+
+        if RATE_LIMITED.search(error_text):
+            lines.append(redact(f"  RATE LIMITED MEMBER: {model} -- {detail}"))
+            hint = _window_hint(error_text)
+            if hint:
+                lines.append(redact(f"    quota window: {hint}"))
+            lines.append(
+                redact(
+                    f"::warning::free pool member '{model}' is RATE LIMITED, not "
+                    "gone. Do NOT replace its row: the model still exists and the "
+                    "member returns when the window resets or the account is "
+                    "funded. Read the quota window above to tell a transient "
+                    "per-minute limit from a spent daily allowance. The pool "
+                    "routes around it meanwhile."
+                )
             )
-        )
+        else:
+            lines.append(redact(f"  DEAD MEMBER: {model} -- {detail}"))
+            lines.append(
+                redact(
+                    f"::warning::free pool member '{model}' is not answering. If "
+                    "its provider no longer lists that model, it is RETIRED: "
+                    "replace the member row in supabase/migrations/ rather than "
+                    "waiting for it to come back. The pool routes around it for now."
+                )
+            )
 
     if healthy == 0:
-        print(
+        lines.append(
             "::error::every free pool member is down, so hive-free can serve "
             "nothing. This is an outage of the free tier, not a degraded pool."
         )
-        return 1
-    return 0
+    return lines
+
+
+def report(payload: dict, redact) -> int:
+    lines = _render(payload, redact)
+    for line in lines:
+        print(line)
+    return 1 if any(line.startswith("::error::") for line in lines) else 0
 
 
 def _selfcheck() -> int:
@@ -121,6 +177,64 @@ def _selfcheck() -> int:
 
     all_healthy = {"healthy_count": 4, "unhealthy_count": 0}
     assert report(all_healthy, plain) == 0
+
+    # A RATE LIMITED member is not a retired one, and telling the reader to
+    # replace its row would delete a member that is coming back. Text taken
+    # from the real 2026-08-29 probe (runs 33243396287 and 33244166031), with
+    # Google's quota detail restored: the shipped 300-character excerpt cut it
+    # off, so six consecutive red runs could not say whether the window was
+    # per minute or per day. That is the exact question the failure raised.
+    rate_limited = {
+        "healthy_count": 3,
+        "unhealthy_count": 1,
+        "unhealthy_endpoints": [
+            {
+                "model": "openai/gemini-flash-latest",
+                "error": (
+                    "litellm.RateLimitError: RateLimitError: OpenAIException - "
+                    "Error code: 429 - [{'error': {'code': 429, 'message': 'You "
+                    "exceeded your current quota, please check your plan and "
+                    "billing details. For more information on this error, head "
+                    "to: https://ai.google.dev/gemini-api/docs/rate-limits. To "
+                    "monitor your usage see the console.', 'status': "
+                    "'RESOURCE_EXHAUSTED', 'details': [{'@type': "
+                    "'type.googleapis.com/google.rpc.QuotaFailure', "
+                    "'violations': [{'quotaMetric': 'generativelanguage.googleapis"
+                    ".com/generate_content_free_tier_requests', 'quotaId': "
+                    "'GenerateRequestsPerDayPerProjectPerModel-FreeTier'}]}, "
+                    "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', "
+                    "'retryDelay': '34s'}]}}]"
+                ),
+            }
+        ],
+    }
+    lines = _render(rate_limited, plain)
+    joined = "\n".join(lines)
+    assert "RATE LIMITED" in joined, joined
+    assert "RETIRED" not in joined, (
+        "a rate-limited member must not be reported as retired: acting on that "
+        "advice deletes a member that is not gone"
+    )
+    assert "PerDay" in joined, (
+        "the quota window must survive into the log, or nobody can tell a "
+        "transient per-minute limit from a spent daily allowance"
+    )
+    assert "34s" in joined, "the provider's own retry hint must survive too"
+
+    # A retired member keeps the original advice, which is correct for a 404.
+    retired = {
+        "healthy_count": 3,
+        "unhealthy_count": 1,
+        "unhealthy_endpoints": [
+            {
+                "model": "openrouter/some/retired-model:free",
+                "error": "litellm.NotFoundError: Error code: 404 - model not found",
+            }
+        ],
+    }
+    joined = "\n".join(_render(retired, plain))
+    assert "RETIRED" in joined, joined
+    assert "RATE LIMITED" not in joined, joined
 
     # Counts missing entirely: fall back to the lists rather than reading as
     # "0 healthy" and failing a perfectly good pool.

@@ -30,6 +30,8 @@ test-scripts:
 	python3 scripts/test_owui_tenant_role.py
 	python3 scripts/test_owui_knowledge_authz.py
 	python3 scripts/owui-promote-instance-admin.py --self-check
+	python3 scripts/classify-upstream-refusal.py --selfcheck
+	python3 scripts/report-free-pool-health.py --selfcheck
 	python3 scripts/test_caddy_owui_blocklist.py
 	python3 scripts/test_owui_model_picker_filter.py
 	python3 scripts/generate-enterprise-jwt-keys.py --self-check
