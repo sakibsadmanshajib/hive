@@ -39,7 +39,23 @@ func newAuthenticatedRLSPool(t *testing.T) *pgxpool.Pool {
 	})
 	if _, err := pool.Exec(context.Background(), "SET ROLE authenticated"); err != nil {
 		pool.Close()
-		t.Skipf("SET ROLE authenticated failed (is the authenticated role provisioned on this test DB?): %v", err)
+		// Fail, never skip. A failed SET ROLE means the role under test is
+		// not provisioned, so nothing below this line exercises the guard,
+		// and a skip inside a green check is indistinguishable from a pass.
+		// That is the exact shape of issue #1469, where CI granted a
+		// hive_app role membership production never grants and this
+		// package's RLS suites read as covered for months while proving
+		// nothing; a silent skip here would be the same failure twice in
+		// the same file.
+		//
+		// The local opt-out is deliberately a different path and cannot be
+		// reached from CI: leave HIVE_TEST_DB_URL unset and
+		// dbtest.RequireURL above skips the suite (and fails instead when
+		// CI is set and the run is not -short, see packages/dbtest). Once a
+		// DSN is configured the run is a required integration run, so a
+		// role that cannot be assumed is a provisioning defect rather than
+		// an opt-out.
+		t.Fatalf("SET ROLE authenticated failed on a configured integration database (issue #1469: a skip here would report coverage this suite did not provide). Apply .github/ci/test-db-bootstrap.sql to provision the role, or unset HIVE_TEST_DB_URL to opt out locally: %v", err)
 	}
 	return pool
 }
