@@ -39,14 +39,21 @@ function silentWav(seconds: number): Buffer {
 describe("Audio", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  // Issue #1318 is fixed and this is no longer an expected failure. The edge
-  // now translates the OpenAI stock voice names onto the roster the upstream
-  // accepts, so an unmodified SDK call works, and a name in neither set is a
-  // 400 naming the voice parameter rather than a 500. The voice below stays
-  // the OpenAI default rather than one the current upstream happens to accept:
-  // the point of this suite is what an unmodified OpenAI SDK can do, and
-  // swapping in a provider-specific voice would stop measuring that.
-  it("audio.speech.create returns non-empty binary audio", async () => {
+  // EXPECTED FAILURE, issue #1381, which is what was underneath #1318.
+  //
+  // The voice half of #1318 is fixed and proven live: this call now gets past
+  // the voice check, and the upstream complains about the next thing instead,
+  // which is that the OpenAI SDK omits response_format, the OpenAI default is
+  // mp3, and the Groq Orpheus route accepts only wav. LiteLLM classifies that
+  // as a BadRequestError and still answers 500, so the caller sees a 500 for a
+  // request-shaped refusal and the 400 relabelling from PR #1371 cannot reach
+  // it.
+  //
+  // The voice below stays the OpenAI default rather than one the current
+  // upstream happens to accept: the point of this suite is what an unmodified
+  // OpenAI SDK can do, and swapping in a provider-specific voice would stop
+  // measuring that.
+  it.fails("audio.speech.create returns non-empty binary audio", async () => {
     const response = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
@@ -70,9 +77,11 @@ describe("Audio", () => {
     expect(typeof transcription.text).toBe("string");
   });
 
-  // Unblocked by the same #1318 fix: this round trip needs the speech call
-  // above to produce audio before it has anything to transcribe.
-  it("audio.transcriptions.create round-trips speech back to text", async () => {
+  // EXPECTED FAILURE, issue #1381: blocked on the same speech synthesis above,
+  // which this round trip needs before it has anything to transcribe. The
+  // transcription half is exercised independently by the test above it, so a
+  // defect there cannot hide behind this marker.
+  it.fails("audio.transcriptions.create round-trips speech back to text", async () => {
     const speech = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",

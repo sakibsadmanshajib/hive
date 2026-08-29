@@ -17,11 +17,18 @@ const IMAGE_MODEL = process.env.HIVE_IMAGE_MODEL ?? "hive-auto";
 describe("Images", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  // Issue #1319 is fixed and this is no longer an expected failure. The route
-  // still cannot produce an image (its capability flag is a carried-forward
-  // legacy flag, see the comment on IMAGE_MODEL above), so the call takes the
-  // error branch below: a structured, provider-blind 502 rather than the empty
-  // 200 that every SDK reported to the caller as a success.
+  // Issue #1319 is fixed: the empty 200 is gone, proven live on the deployed
+  // box, where the guard logged the upstream empty data array and answered a
+  // provider-blind 502 instead of a success (issue #1382 carries the log line).
+  //
+  // The route still cannot produce an image, so this call takes the error
+  // branch below rather than the success branch. maxRetries is 0 deliberately:
+  // a 5xx is retryable by definition and this SDK retries twice by default,
+  // but a route whose capability flag is a carried-forward legacy flag can
+  // never succeed on a retry. Measured on run 33240963131, the first attempt
+  // refused correctly in about four seconds and the test still hit its 60
+  // second ceiling because the later attempts hung upstream. One attempt is
+  // what this test is actually about.
   //
   // The success assertions moved OUT of the try block, and that is a fix in
   // its own right, not cosmetics: a failed expect() is itself a thrown
@@ -31,11 +38,14 @@ describe("Images", () => {
   it("images.generate either returns a real image or fails with a structured, provider-blind error (never an empty success)", async () => {
     let response: Awaited<ReturnType<typeof client.images.generate>>;
     try {
-      response = await client.images.generate({
-        model: IMAGE_MODEL,
-        prompt: "a single red circle on a white background",
-        n: 1,
-      });
+      response = await client.images.generate(
+        {
+          model: IMAGE_MODEL,
+          prompt: "a single red circle on a white background",
+          n: 1,
+        },
+        { maxRetries: 0 },
+      );
     } catch (err) {
       // The support matrix declares POST /v1/images/generations
       // supported_now (phase 6). If the catalog cannot actually serve an
