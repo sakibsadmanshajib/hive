@@ -45,6 +45,20 @@ describe("DataTable pending and empty states", () => {
     );
   });
 
+  it("keeps rows on screen while a refresh is in flight", () => {
+    render(
+      <DataTable
+        rows={[{ id: "r1", name: "Existing row" }]}
+        columns={columns}
+        rowKey={rowKey}
+        loading
+      />,
+    );
+
+    expect(screen.getByText("Existing row")).toBeTruthy();
+    expect(screen.queryByText("Loading...")).toBeNull();
+  });
+
   it("scrolls a wide table horizontally instead of clipping it", () => {
     const { container } = render(
       <DataTable rows={[]} columns={columns} rowKey={rowKey} />,
@@ -53,5 +67,7 @@ describe("DataTable pending and empty states", () => {
     const wrapper = container.firstElementChild;
     expect(wrapper?.className).toContain("overflow-x-auto");
     expect(wrapper?.className).not.toContain("overflow-hidden");
+    // A scrollable region a keyboard-only user cannot reach is not scrollable.
+    expect(wrapper?.getAttribute("tabindex")).toBe("0");
   });
 });

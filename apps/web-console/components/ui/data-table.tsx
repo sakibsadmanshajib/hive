@@ -17,7 +17,9 @@ export interface DataTableProps<T> {
   rowKey: (row: T) => string;
   empty?: React.ReactNode;
   // While true the body shows a pending row instead of the empty state, so a
-  // table that is still fetching does not read as an empty account.
+  // table that is still fetching does not read as an empty account. Rows that
+  // are already on screen stay on screen: a background refresh should not
+  // blank a populated table.
   loading?: boolean;
   className?: string;
   // Optional expandable detail row: when expandedKey matches a row's key,
@@ -58,6 +60,11 @@ export function DataTable<T>({
     // Making the scroller a containing block takes it to 0 (issue #1367,
     // second half; /console/catalog was the same defect and the same fix).
     <div
+      // Focusable so a keyboard-only user can scroll the overflow region at
+      // all (WCAG 2.1.1). No role is set with it: a region without an
+      // accessible name is worse than none, and the table inside already
+      // carries the semantics.
+      tabIndex={0}
       className={cn(
         "relative overflow-x-auto rounded-lg border border-[var(--color-border)]",
         "bg-[var(--color-surface)]",
@@ -86,7 +93,7 @@ export function DataTable<T>({
           </tr>
         </thead>
         <tbody aria-busy={loading}>
-          {loading ? (
+          {loading && rows.length === 0 ? (
             <tr>
               <td
                 colSpan={columns.length}
