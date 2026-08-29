@@ -214,9 +214,10 @@ func collapsedByteLen(text string) int {
 }
 
 // clampZeroCompletionUsage rewrites usage.CompletionTokens when the upstream
-// provider returned 0 but the response actually carried output text. It then
-// recomputes total_tokens. A warning is logged so the billing team can track
-// upstream flake rate.
+// provider returned 0 but the response actually carried output text. A warning
+// is logged so the billing team can track upstream flake rate. It then hands
+// the object to enforceUsageIdentity, which is what recomputes total_tokens --
+// on every shape, not only this one.
 //
 // outputTexts must contain every choice's text content (chat: message.content;
 // legacy completions: choice.text). Empty entries are ignored — they represent
@@ -227,23 +228,76 @@ func clampZeroCompletionUsage(usage *UsageResponse, outputTexts []string, upstre
 	if usage == nil {
 		return
 	}
-	if usage.CompletionTokens > 0 {
+	if usage.CompletionTokens == 0 {
+		var total int64
+		for _, t := range outputTexts {
+			total += estimateCompletionTokens(t)
+		}
+		// total == 0 is a legit empty completion (e.g. tool-call only): leave
+		// the component alone. The identity below still applies to it.
+		if total > 0 {
+			log.Printf("inference: usage clamp engaged endpoint=%s alias=%s upstream_id=%s upstream_ct=0 estimated_ct=%d",
+				endpoint, aliasID, upstreamID, total)
+			usage.CompletionTokens = total
+		}
+	}
+	enforceUsageIdentity(usage, upstreamID, aliasID, endpoint)
+}
+
+// enforceUsageIdentity makes total_tokens equal prompt_tokens plus
+// completion_tokens, which the OpenAI wire contract defines as an identity
+// rather than an independently reported figure, and which every
+// OpenAI-compatible client assumes (issue #1472).
+//
+// Why the correction goes to the TOTAL and never to the components. The charge
+// is priced from the components: settlementCredits and ChatSettlementCredits
+// pass prompt and completion (split into their cache classes) into
+// CreditsForTokens, and nothing anywhere prices total_tokens. So rewriting the
+// total moves no money in either direction, while folding an unaccounted
+// remainder into completion_tokens would start billing a class that has never
+// been billed, which D-055 forbids without an owner ruling. When the gap is
+// reasoning tokens a thinking model spent (the shape behind #1472: Google
+// reports totalTokenCount inclusive of thoughtsTokenCount while
+// candidatesTokenCount excludes it), whether Hive should bill them is a
+// pricing decision for the owner, and the log line below is what puts the
+// quantity in front of that decision instead of burying it.
+//
+// The decision is keyed on the numbers alone, never on a provider or model
+// family: OpenRouter reports OpenAI-inclusive usage even for Claude models, so
+// wire shape is the only sound discriminator here (see NormalizeCacheUsage,
+// which keys on field presence for the same reason).
+//
+// A discrepancy is corrected loudly, never silently. A silent correction would
+// hide a provider changing its accounting under us, which is exactly how this
+// defect reached production unnoticed.
+func enforceUsageIdentity(usage *UsageResponse, upstreamID, aliasID, endpoint string) {
+	if usage == nil {
+		return
+	}
+	sum := usage.PromptTokens + usage.CompletionTokens
+	if usage.TotalTokens == sum {
 		return
 	}
 
-	var total int64
-	for _, t := range outputTexts {
-		total += estimateCompletionTokens(t)
+	// Signed: positive means the upstream's total exceeded its own components
+	// (tokens it counted and did not attribute), negative means it fell short.
+	unaccounted := usage.TotalTokens - sum
+	direction := "over"
+	if unaccounted < 0 {
+		direction = "under"
 	}
-	if total == 0 {
-		// Legit empty completion (e.g. tool-call only). Leave usage alone.
-		return
+	var reportedReasoning int64
+	if usage.CompletionTokensDetails != nil {
+		reportedReasoning = usage.CompletionTokensDetails.ReasoningTokens
 	}
+	log.Printf("inference: usage identity violated endpoint=%s alias=%s upstream_id=%s prompt_tokens=%d completion_tokens=%d "+
+		"upstream_total_tokens=%d corrected_total_tokens=%d unaccounted_tokens=%d reported_reasoning_tokens=%d: "+
+		"the upstream's total disagrees with its own components; reporting the component sum, and the charge is unchanged because it prices the components",
+		endpoint, aliasID, upstreamID, usage.PromptTokens, usage.CompletionTokens,
+		usage.TotalTokens, sum, unaccounted, reportedReasoning)
+	usageIdentityViolations.WithLabelValues(aliasID, endpoint, direction).Inc()
 
-	log.Printf("inference: usage clamp engaged endpoint=%s alias=%s upstream_id=%s upstream_ct=0 estimated_ct=%d",
-		endpoint, aliasID, upstreamID, total)
-	usage.CompletionTokens = total
-	usage.TotalTokens = usage.PromptTokens + total
+	usage.TotalTokens = sum
 }
 
 // chatChoiceTexts returns the text content of every chat completion choice.

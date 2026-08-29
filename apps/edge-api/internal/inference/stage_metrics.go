@@ -62,6 +62,10 @@ var (
 		Name: "hive_stream_zero_content_released_total",
 		Help: "Streams that relayed a well-formed sequence of chunks carrying no assistant-visible text at all, and had their reservation hold released instead of charged (issue #1326). The reasoning-burn signature: the upstream spent the caller's ceiling on hidden reasoning and finished on length. Every increment is inference Hive paid for and did not bill, so a rising rate is a provider to pull from the pool, not a billing regression.",
 	}, []string{"alias", "endpoint"})
+	usageIdentityViolations = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_usage_identity_violations_total",
+		Help: "Upstream usage objects whose total_tokens disagreed with prompt_tokens plus completion_tokens and were corrected to the component sum (issue #1472), by alias, endpoint and direction (over: the upstream counted tokens it did not attribute, the signature of a thinking model whose reasoning tokens sit outside completion_tokens; under: it reported fewer than its own components). A rising over rate is a provider changing its token accounting, and the amount is in the accompanying log line.",
+	}, []string{"alias", "endpoint", "direction"})
 	streamRelayAborted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_stream_relay_aborted_total",
 		Help: "SSE relay loops (chat completions and Responses API) that ended on a genuine scanner read/token error rather than [DONE] or a client disconnect -- most commonly bufio.ErrTooLong, a single upstream line over the scanner's buffer limit (issue #1255). A client disconnect never increments this: ctx.Err() != nil is excluded so routine cancellations, the overwhelming majority of stream endings, do not bury the signal this counter exists to surface.",
@@ -101,7 +105,7 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 	// pre-existing state (declared but never registered), out of this PR's
 	// scope to change. streamRelayAborted is added here, alongside the
 	// counters that already were.
-	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased)
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased, usageIdentityViolations)
 	return m
 }
 

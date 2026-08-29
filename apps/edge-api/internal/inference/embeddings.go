@@ -79,12 +79,12 @@ func normalizeEmbeddings(respBody []byte, aliasID string) ([]byte, *UsageRespons
 		resp.Data[i].Object = "embedding"
 	}
 
-	normalized, err := json.Marshal(resp)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Convert EmbeddingsUsage to UsageResponse for the orchestrator.
+	// Convert EmbeddingsUsage to UsageResponse for the orchestrator, and hold
+	// both to the same identity every other endpoint is held to (#1472). An
+	// embeddings response has no completion side at all, so the identity
+	// reduces to total_tokens == prompt_tokens; a disagreeing total is written
+	// back onto resp before the marshal below, so the caller and the ledger
+	// read the same number rather than two.
 	var usage *UsageResponse
 	if resp.Usage != nil {
 		usage = &UsageResponse{
@@ -92,6 +92,13 @@ func normalizeEmbeddings(respBody []byte, aliasID string) ([]byte, *UsageRespons
 			CompletionTokens: 0,
 			TotalTokens:      resp.Usage.TotalTokens,
 		}
+		enforceUsageIdentity(usage, "", aliasID, EndpointEmbeddings)
+		resp.Usage.TotalTokens = usage.TotalTokens
+	}
+
+	normalized, err := json.Marshal(resp)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return normalized, usage, nil
