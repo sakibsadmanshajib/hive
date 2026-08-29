@@ -4,12 +4,13 @@
 	import { config, models, settings, user } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
 	import { getModels as _getModels } from '$lib/apis';
+	import { fetchCreditBalance } from '$lib/hive/credits';
 
 	import Modal from '../common/Modal.svelte';
 	import Account from './Settings/Account.svelte';
 	import About from './Settings/About.svelte';
 	import General from './Settings/General.svelte';
-	import Usage from './Settings/Usage.svelte';
+	import Usage from '$lib/hive/SettingsUsage.svelte';
 	import Interface from './Settings/Interface.svelte';
 	import Audio from './Settings/Audio.svelte';
 	import DataControls from './Settings/DataControls.svelte';
@@ -36,6 +37,12 @@
 			selectedTab = show;
 			show = true;
 		}
+		// Hive: Usage is a hosted-SaaS surface, so the rail entry only appears
+		// once the credits endpoint actually answers. Probed on open rather
+		// than on mount because this component stays mounted for the whole
+		// session and a user who never opens Settings should not pay for a
+		// request they never see.
+		void probeCredits();
 		addScrollListener();
 	} else {
 		selectedTab = 'general';
@@ -57,6 +64,8 @@
 				'advancedparameters',
 				'advanced params',
 				'advanced parameters',
+				'chat preferences',
+				'chatpreferences',
 				'configuration',
 				'defaultparameters',
 				'default parameters',
@@ -462,11 +471,31 @@
 	let availableSettings = [];
 	let filteredSettings = [];
 
+	/*
+	 * Hive: whether this deployment has a credits surface at all. Enterprise
+	 * deployments never wire the chat container's credits proxy, which then
+	 * fails closed with a 404 (deploy/docker/owui-patches/hive_credits.py), and
+	 * silent absence is that posture's documented behavior. A Usage tab that is
+	 * permanently stuck on "Usage isn't available on this deployment." would
+	 * invert it, so the tab is gated on a balance actually answering.
+	 */
+	let creditsAvailable = false;
+
+	const probeCredits = async () => {
+		creditsAvailable = (await fetchCreditBalance()) !== null;
+		availableSettings = getAvailableSettings();
+		setFilteredSettings();
+	};
+
 	let search = '';
 	let searchDebounceTimeout;
 
 	const getAvailableSettings = () => {
 		return allSettings.filter((tab) => {
+			if (tab.id === 'usage') {
+				return creditsAvailable;
+			}
+
 			if (tab.id === 'tools') {
 				return (
 					$user?.role === 'admin' ||

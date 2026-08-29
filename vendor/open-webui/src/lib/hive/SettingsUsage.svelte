@@ -3,55 +3,93 @@
 
 	import {
 		creditState,
-		fetchCreditBalance,
 		formatUsdFromCredits,
+		refreshCreditSnapshot,
 		type CreditBalance
-	} from '$lib/hive/credits';
+	} from './credits';
 
 	const i18n: any = getContext('i18n');
 
 	/*
-	 * Settings > Usage. The chat frontend's only per-account consumption
-	 * surface (parity finding: the settings pane had none at all).
+	 * Settings > Usage. The chat frontend's only consumption surface (parity
+	 * finding: the settings pane had none at all).
+	 *
+	 * Lives in lib/hive rather than beside the upstream Settings tabs because
+	 * this is Hive authored code and the pre-merge compile guard
+	 * (scripts/owui-hive-svelte-compile-check.mjs, run by
+	 * scripts/test-owui-hive-frontend.sh) covers this directory only. A Hive
+	 * component parked under lib/components is compiled by nothing before
+	 * merge, which is the 2026-08-23 AgentSchedules incident that guard was
+	 * written to prevent, replayed. SettingsModal imports this the same way
+	 * Chat.svelte imports CreditsBanner.
 	 *
 	 * Deliberately narrower than the Claude Desktop reference this parity-
-	 * matches: that surface shows session/weekly quota bars with reset
+	 * matches: that surface shows session and weekly quota bars with reset
 	 * timers, because its plan is a rate-limited allowance. Hive bills
 	 * prepaid credits with no session window and no reset clock (D-046,
 	 * D-031), so a reset timer here would be fabricated data on a screen
 	 * whose whole job is telling the truth about money. What carries over
 	 * from the reference is the shape: a dedicated Usage destination with a
-	 * clear number, a manual refresh, and a "last updated" stamp.
-	 *
-	 * Reuses `$lib/hive/credits` (the composer banner's own module) rather
-	 * than re-fetching or re-formatting: one source of truth for what the
-	 * signed-in user's balance means and how it prints, so this tab and the
-	 * banner can never say two different things about the same account.
-	 * `formatUsdFromCredits` is itself a faithful port of
-	 * `apps/web-console/lib/format/model-pricing.ts`'s `formatUsdFromCredits`
-	 * (see that module's own header comment for why the two cannot share
-	 * code across the Next.js console and this SvelteKit build) and carries
-	 * the same honesty invariant: a real balance, zero included, always
-	 * renders as a dollar figure, and never as the bare integer credit
-	 * count a prior defect once put in front of a customer ("9,789,478,244
-	 * remaining").
+	 * clear number, a manual refresh, and a last-updated stamp.
 	 */
 
-	let balance: CreditBalance | null = null;
-	let loading = true;
+	/*
+	 * Both figures are TENANT scope, and the labels now say so. The schema has
+	 * no per-user allowance at all (see the "Scope is deliberately TENANT
+	 * balance" note in apps/control-plane/internal/ledger/chat_balance.go), so
+	 * the previous bare "Used today" printed the whole organization's spend
+	 * under a personal label. On a money surface that is a correctness bug,
+	 * not a copy nit.
+	 *
+	 * Reuses ./credits, the composer banner's own module, rather than
+	 * re-fetching or re-formatting: one source of truth for what the
+	 * signed-in user's balance means and how it prints, so this tab and the
+	 * banner can never say two different things about the same account.
+	 * formatUsdFromCredits is itself a faithful port of
+	 * apps/web-console/lib/format/model-pricing.ts and carries the same
+	 * honesty invariant: a real balance, zero included, always renders as a
+	 * dollar figure, never as the bare integer credit count a prior defect
+	 * once put in front of a customer.
+	 */
+
+	/*
+	 * Starting balance. Null in the app: SettingsModal renders this component
+	 * with no balance and the mount fetch below fills it in. Exported so the
+	 * rendered surface can be asserted with a known balance and no network,
+	 * no database and no DOM, which is what makes transposing the two money
+	 * figures a failing test rather than a code review question. See the
+	 * server-side render assertions in settings-usage-tab.test.ts.
+	 */
+	export let balance: CreditBalance | null = null;
+
+	/*
+	 * Whether a first load is still in flight. Exported for the same reason as
+	 * balance: it is initial state, and the no-data branch (enterprise posture
+	 * or a failed first fetch) has to be assertable without waiting on a
+	 * network. It only gates the empty case; once a balance exists the figures
+	 * render regardless.
+	 */
+	export let loading = true;
+
 	let lastUpdated: Date | null = null;
 
 	$: state = balance === null ? null : creditState(balance.available_credits);
 
 	async function load() {
 		loading = true;
-		balance = await fetchCreditBalance();
+		// A failed refresh keeps the last known good balance and its original
+		// stamp; refreshCreditSnapshot owns that policy so it is executable in
+		// a test. A transient network blip must not blank a number the
+		// customer is reading, and the stamp must never advance on a refresh
+		// that learned nothing.
+		const next = await refreshCreditSnapshot({ balance, lastUpdated });
+		balance = next.balance;
+		lastUpdated = next.lastUpdated;
 		loading = false;
-		lastUpdated = new Date();
 	}
 
 	onMount(() => {
-		void load();
+		if (balance === null) void load();
 	});
 </script>
 
@@ -69,7 +107,9 @@
 			</div>
 		{:else}
 			<div class="flex w-full justify-between py-1">
-				<div class="self-center text-xs font-medium">{$i18n.t('Credit balance')}</div>
+				<div class="self-center text-xs font-medium">
+					{$i18n.t('Organization credit balance')}
+				</div>
 				<div class="flex items-center gap-2">
 					{#if state === 'empty'}
 						<span
@@ -91,7 +131,9 @@
 			</div>
 
 			<div class="flex w-full justify-between py-1">
-				<div class="self-center text-xs font-medium">{$i18n.t('Used today')}</div>
+				<div class="self-center text-xs font-medium">
+					{$i18n.t('Organization usage today')}
+				</div>
 				<span class="text-sm" data-testid="usage-today-credits">
 					{formatUsdFromCredits(balance.usage_today_credits)}
 				</span>

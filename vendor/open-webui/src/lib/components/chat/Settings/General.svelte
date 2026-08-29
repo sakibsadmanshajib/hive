@@ -227,10 +227,14 @@
 		<div class="">
 			<!-- hive: was "WebUI Settings" (parity review finding, this section
 			read as stock Open WebUI branding rather than Hive's own product).
-			Renamed the section header only; the key still equals its own
-			English text (i18next convention this file already relies on, see
-			"Help us translate Hive Chat!" a few lines down), so no locale
-			file needs touching for this to render correctly. -->
+			The key equals its own English text, the i18next convention this
+			file already relies on, so every locale renders something
+			immediately. That is a fallback, not a translation: the old key was
+			translated in bn-BD and 61 other locales and the rename drops those
+			translations, so the new key is added to en-US and translated in
+			bn-BD (the first market) in this same change. The remaining locales
+			fall back to English until their own translators reach it, which is
+			how every other untranslated key in this fork already behaves. -->
 			<div class=" mb-1 text-sm font-medium">{$i18n.t('Chat Preferences')}</div>
 
 			<div class="flex w-full justify-between">

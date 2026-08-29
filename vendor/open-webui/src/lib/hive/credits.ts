@@ -116,3 +116,41 @@ export function dismissCredits(): void {
 		/* storage unavailable: banner simply reappears next mount */
 	}
 }
+
+/**
+ * What the Usage tab holds between refreshes: the last balance that actually
+ * arrived, and the moment it arrived.
+ */
+export interface CreditSnapshot {
+	balance: CreditBalance | null;
+	lastUpdated: Date | null;
+}
+
+/**
+ * The Usage tab's refresh policy, kept in this module rather than inline in
+ * the component so it is executable in a test rather than only readable in a
+ * diff.
+ *
+ * Two invariants, both learned the hard way on a money surface:
+ *
+ *   * A failed refresh must never wipe a balance already on screen.
+ *     fetchCreditBalance returns null for every failure, including a network
+ *     blip and an expired session, and blanking a real number on a transient
+ *     failure tells the customer their credits vanished.
+ *   * The last-updated stamp must never advance on a refresh that learned
+ *     nothing. A stamp that moves on failure is a lie about how fresh the
+ *     number beside it is, which is worse than a visibly old stamp.
+ *
+ * fetchBalance and now are injectable purely so the two invariants above can
+ * be asserted without a network or a clock; the app always takes the
+ * defaults.
+ */
+export async function refreshCreditSnapshot(
+	previous: CreditSnapshot,
+	fetchBalance: () => Promise<CreditBalance | null> = fetchCreditBalance,
+	now: () => Date = () => new Date()
+): Promise<CreditSnapshot> {
+	const fetched = await fetchBalance();
+	if (fetched === null) return previous;
+	return { balance: fetched, lastUpdated: now() };
+}
