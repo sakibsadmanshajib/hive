@@ -231,8 +231,14 @@ if (contentAgeHours > hours) {
   );
 }
 
+// Clamped for display only. Ageing newest_day from the END of its UTC day means
+// today's date reads as a negative number of hours until midnight, and a
+// monitor's own green line saying "-1.0 hours old" reads as a bug in the
+// monitor. The comparison above deliberately keeps the raw value.
+const displayContentAge = Math.max(0, contentAgeHours);
+
 console.log(
   `OK: last verified off-box backup pull was ${ageHours.toFixed(1)} hours ago ` +
-    `(pulled_at=${pulledAt}, newest day pulled ${newestDay} at ` +
-    `${contentAgeHours.toFixed(1)} hours old, threshold ${hours} hours).`,
+    `(pulled_at=${pulledAt}, newest day pulled ${newestDay}, ` +
+    `${displayContentAge.toFixed(1)} hours of data behind, threshold ${hours} hours).`,
 );
