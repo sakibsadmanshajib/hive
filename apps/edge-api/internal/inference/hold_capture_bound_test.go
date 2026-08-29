@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,6 +149,54 @@ func TestExecuteStreaming_NoCallerCeiling_CaptureIsPricedNotTheFlatHold(t *testi
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("a delivered stream must never release its hold")
+	}
+}
+
+// TestExecuteSync_ZeroContentLength_UpstreamActual_KeepsTheReportedCost covers
+// a variable-price alias reaching the zero-content guard.
+//
+// UpstreamActualSettlement has already produced the charge for such a route:
+// the cost the upstream itself reported, times the margin. The zero-content
+// branch then overwrote it with capCaptureAtCeiling, whose contract is to
+// return its credits argument untouched for an upstream-actual route, and that
+// argument is reservation.Held(). So a readable upstream cost was discarded in
+// favour of the whole authorization hold, which is the same overcharge shape
+// #1198 is about, on the one alias family (hive-auto, openrouter-auto) that has
+// no catalog price to fall back on.
+func TestExecuteSync_ZeroContentLength_UpstreamActual_KeepsTheReportedCost(t *testing.T) {
+	// content null, finish_reason length (so the guard trips), and a usage
+	// block carrying both real token counts and the upstream's reported cost.
+	const emptyWithCost = `{"id":"gen-upstream-empty","object":"chat.completion","created":1,"model":"route",` +
+		`"choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"length"}],` +
+		`"usage":{"prompt_tokens":76,"completion_tokens":512,"total_tokens":588,"cost":0.0004}}`
+	litellm := newScriptedLiteLLM(t, []string{emptyWithCost, emptyWithCost})
+	defer litellm.server.Close()
+	routing := newRoutingMockUpstreamActual()
+	defer routing.Close()
+	rec := &accountingRecorder{}
+	acct := newAccountingMockWithHold(rec, DefaultHoldText)
+	defer acct.Close()
+
+	orch := newAuthorizedOrchestrator(acct.URL, routing.URL, litellm.server.URL)
+	body := []byte(`{"model":"hive-auto","messages":[{"role":"user","content":"Say hello"}]}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, body, "hive-auto",
+		NeedFlags{NeedChatCompletions: true}, DefaultHoldText, orch.litellm.ChatCompletion, normalizeChatCompletion)
+
+	finalize, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("no finalize call recorded; calls: %v", rec.calls)
+	}
+	want, err := CreditsForUpstreamCost(big.NewRat(4, 10000))
+	if err != nil {
+		t.Fatalf("CreditsForUpstreamCost: %v", err)
+	}
+	credits := finalizeInt64(t, finalize, "actual_credits")
+	if credits != want {
+		t.Errorf("actual_credits = %d, want %d: the upstream reported its own cost for this generation, so the charge is that cost and never the %d credit authorization hold (#1198)",
+			credits, want, int64(DefaultHoldText))
 	}
 }
 

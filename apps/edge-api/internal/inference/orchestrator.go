@@ -432,7 +432,20 @@ func (o *Orchestrator) executeSync(
 		// pricing it is what charges for it. Where the provider reported
 		// nothing at all there is no output to price and the prompt carries the
 		// charge on its own.
-		if zeroContentCaptured {
+		//
+		// A variable-price alias is excluded outright, and the exclusion is
+		// written here rather than left to capCaptureAtCeiling's own early
+		// return. That early return hands back its credits argument untouched,
+		// and the argument this call site passes is reservation.Held(), so
+		// routing an upstream-actual route through it REPLACED the cost the
+		// upstream reported with the whole authorization hold: measured in
+		// test, a reported 560,000 credits became 100,000,000, a 178x
+		// overcharge on the one alias family that has no catalog price to fall
+		// back on. UpstreamActualSettlement above is already fail-closed for
+		// this route (a cost it cannot read settles at the hold, and a
+		// generation that delivered nothing releases), so there is nothing left
+		// for this branch to add.
+		if zeroContentCaptured && !route.Pricing.IsUpstreamActual() {
 			actualCredits = capCaptureAtCeiling(route, ceiling,
 				captureInputTokens(hasUsage, cache.FreshInputTokens, endpoint, body),
 				cache.CacheReadTokens, cache.CacheWriteTokens,
