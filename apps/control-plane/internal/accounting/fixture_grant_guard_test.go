@@ -33,9 +33,17 @@ import (
 // them here, is what makes this guard track the shipped values instead of a
 // snapshot of them.
 
-// minimumHoldsPerFixtureGrant is the margin the seeder's own comment asks
-// for: a spec that sends more than one turn must not fail on a later one.
-const minimumHoldsPerFixtureGrant = 10
+// documentedHoldsPerFixtureGrant is the margin the seeder's comment states
+// outright, so a spec that sends more than one turn does not fail on a later
+// one. It is the documented figure rather than a loose floor on purpose: a
+// looser bound would let a regression land anywhere between one hold and this
+// one while a guard that promised a hundred stayed green, which is the same
+// class of silent drift this file exists to catch.
+//
+// If the flat hold is deliberately raised, this goes red, and the fix is to
+// re-tune FIXTURE_GRANT_CREDITS in the seeder rather than to lower the number
+// here.
+const documentedHoldsPerFixtureGrant = 100
 
 // readInt64Constant pulls a single integer constant out of a source file as
 // shipped, so this guard tracks the real value rather than a copy of it.
@@ -93,11 +101,13 @@ func TestFixtureGrantCoversTheFlatChatHold(t *testing.T) {
 			grant, hold, err)
 	}
 
-	// Margin: several turns, per the seeder's own stated intent.
-	if grant/hold < minimumHoldsPerFixtureGrant {
+	// Margin: the seeder documents a hundred holds' worth, so hold it to that
+	// rather than to a floor it could quietly fall through.
+	if grant/hold < documentedHoldsPerFixtureGrant {
 		t.Errorf("fixture grant covers only %d whole holds (grant=%d hold=%d), want at least %d: "+
-			"a spec that sends more than one turn would start failing partway through",
-			grant/hold, grant, hold, minimumHoldsPerFixtureGrant)
+			"a spec that sends more than one turn would start failing partway through. "+
+			"Re-tune FIXTURE_GRANT_CREDITS in the seeder rather than lowering this bound.",
+			grant/hold, grant, hold, documentedHoldsPerFixtureGrant)
 	}
 }
 
