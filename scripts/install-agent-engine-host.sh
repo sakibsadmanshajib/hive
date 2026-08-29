@@ -102,7 +102,7 @@ docker run --rm \
   -w /workspace \
   -e CGO_ENABLED=0 \
   golang:1.26-alpine \
-  go build -o /out/agent-engine.next ./apps/agent-engine/cmd/agent-engine
+  go build -buildvcs=false -o /out/agent-engine.next ./apps/agent-engine/cmd/agent-engine
 # `go build` already emits 0755, so this is belt and braces for an odd umask.
 # It is allowed to fail: under rootful Docker (every GitHub-hosted runner) the
 # build ran as root and the binary is not ours to chmod, which used to abort
@@ -215,9 +215,37 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
 # Content hashes only. The env file holds the model API key and the internal
-# token, so nothing here ever prints or stores the file itself.
-want_fingerprint=$(sha256sum "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY" | awk '{print $1}' | sha256sum | cut -d' ' -f1)
-have_fingerprint=$(cat "$FINGERPRINT_PATH" 2>/dev/null || true)
+# token, so nothing here ever prints or stores the file itself. Paths are
+# folded out deliberately (only the first column survives), so a staged
+# artifact and its installed counterpart hash the same when their bytes match.
+fingerprint_of() {
+  local f
+  for f in "$@"; do
+    # Prints nothing when anything is missing, so a half-finished install can
+    # never compare equal to a complete one.
+    [ -f "$f" ] || return 0
+  done
+  sha256sum "$@" | awk '{print $1}' | sha256sum | cut -d' ' -f1
+}
+
+want_fingerprint=$(fingerprint_of "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY")
+# Hash what is actually INSTALLED, not just the note the last run left behind.
+# The question that has to be answered here is "does what the daemon is running
+# match what I am about to install", and only the installed files can answer
+# it. Comparing the staged artifacts against $FINGERPRINT_PATH alone answers
+# "does my staging area match a note I wrote last time", which stays true after
+# the installed files drift, are corrupted, are edited by hand, or are left
+# half-written by an earlier run that failed between two of the three `mv`s.
+# Skipping on that is exactly the false confidence this change exists to
+# remove, so the installed bytes are re-read on every run.
+installed_fingerprint=$(fingerprint_of "$BIN_PATH" "$ENV_FILE" "$RUN_ENTRY")
+# Still consulted, for the one thing the installed files cannot tell us on
+# their own: this is written only after a freshly started unit answered
+# /health, so it is the evidence that the running process was started FROM
+# those files rather than merely sitting next to them. Without it, a run that
+# installed new artifacts and then died before restarting would look identical
+# to a healthy box.
+recorded_fingerprint=$(cat "$FINGERPRINT_PATH" 2>/dev/null || true)
 
 daemon_healthy() {
   systemctl --user is-active --quiet "$UNIT_NAME.service" || return 1
@@ -225,7 +253,10 @@ daemon_healthy() {
   curl -sS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health >/dev/null 2>&1
 }
 
-if [ -n "$have_fingerprint" ] && [ "$have_fingerprint" = "$want_fingerprint" ] && daemon_healthy; then
+if [ -n "$installed_fingerprint" ] \
+  && [ "$installed_fingerprint" = "$want_fingerprint" ] \
+  && [ "$recorded_fingerprint" = "$want_fingerprint" ] \
+  && daemon_healthy; then
   rm -f "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY"
   running_pid=$(systemctl --user show "$UNIT_NAME.service" -p MainPID --value 2>/dev/null || echo "?")
   echo "binary: $BIN_PATH (unchanged)"
@@ -271,4 +302,9 @@ echo
 # what is running. The next deploy compares against this and skips the restart
 # when nothing changed.
 printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH"
+# 0600 like $ENV_FILE and 0700 like $RUN_ENTRY and $SOCKET_DIR: this is the
+# only file the script leaves in $RUNTIME_DIR that the surrounding umask 022
+# would otherwise make world readable, and nothing outside this script and the
+# unit it starts has any business reading it.
+chmod 0600 "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"

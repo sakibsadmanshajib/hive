@@ -191,11 +191,31 @@ if [ ! -S "$SOCKET_UNDER_TEST" ]; then
 fi
 [ $failures -eq 0 ] && echo "ok   [A] first install starts the daemon"
 
+# --- case A2: the build must not be allowed to depend on the git revision ----
+#
+# `go build` stamps the VCS revision into the binary whenever it can, which
+# would make the fingerprint below differ on every deploy from a different
+# commit even when not one byte of apps/agent-engine changed, and the skip in
+# case B would never fire again. This is a static contract check on the
+# installer's own command line, not a measurement of the toolchain: what the
+# toolchain actually does with and without the flag was measured by building
+# the real binary from two commits that changed no agent-engine source, and is
+# recorded in the pull request body because it needs a real Go toolchain, a
+# real git repository and several minutes, none of which belong in a lint job.
+# What this check is for is the regression the measurement cannot cover: the
+# flag being dropped from the command line later.
+before_a2=$failures
+if ! grep -q -- '-buildvcs=false' "$STATE/calls"; then
+  fail "[A2] the installer's go build does not pass -buildvcs=false" "$(grep '^docker ' "$STATE/calls" || true)"
+fi
+[ $failures -eq "$before_a2" ] && echo "ok   [A2] the build is pinned to the sources with -buildvcs=false"
+
 # --- case B: THE GUARD. Unchanged artifacts must not kill an in-flight task ---
 
 pid_before=$(incarnation)
 printf 'task-in-flight' > "$STATE/session"
 
+before_b=$failures
 run_installer "B unchanged" baseline openai/hive-default
 if [ ! -f "$STATE/session" ]; then
   fail "[B] the in-flight session was killed by an install that changed nothing" "$(cat "$STATE/calls")"
@@ -209,7 +229,7 @@ fi
 if [ "$(incarnation)" != "$pid_before" ]; then
   fail "[B] the daemon process was replaced ($pid_before -> $(incarnation))"
 fi
-[ $failures -eq 0 ] && echo "ok   [B] unchanged artifacts leave the daemon and its in-flight session alone"
+[ $failures -eq "$before_b" ] && echo "ok   [B] unchanged artifacts leave the daemon and its in-flight session alone"
 
 # --- case C: a real launcher change must still restart -----------------------
 
@@ -265,6 +285,56 @@ if [ "$(incarnation)" != "$pid_before" ]; then
   fail "[F] the daemon was replaced on an unchanged install"
 fi
 [ $failures -eq "$before_f" ] && echo "ok   [F] the skip decision holds on the next unchanged install"
+
+# --- case G: the skip must be decided against the INSTALLED artifacts --------
+#
+# The decision the previous shape of this script made was "do my freshly staged
+# artifacts match the note I wrote at the end of the last successful run", which
+# stays true no matter what happened to the installed files in between. So an
+# installed binary that drifted, was corrupted, was edited by hand, or was left
+# half-written by an earlier run that died between two of the three `mv`s still
+# reported "unchanged" and skipped, leaving the box running something nobody
+# had verified. Mutating an installed artifact behind the script's back is the
+# only way to tell the two questions apart: a script that hashes its staging
+# area passes this vacuously, a script that hashes what is installed restarts.
+before_g=$failures
+pid_before=$(incarnation)
+printf 'drifted-behind-the-scripts-back' > "$runtime/bin/agent-engine"
+run_installer "G installed-drift" rebuilt-different-bytes openai/some-other-alias
+if ! stopped; then
+  fail "[G] a drifted installed binary was reported unchanged and skipped" "$(cat "$STATE/calls")"
+fi
+if ! started; then
+  fail "[G] a drifted installed binary did not start a new daemon" "$(cat "$STATE/calls")"
+fi
+if [ "$(incarnation)" = "$pid_before" ]; then
+  fail "[G] the daemon process was not replaced despite a drifted installed binary"
+fi
+if [ "$(cat "$runtime/bin/agent-engine")" != "rebuilt-different-bytes" ]; then
+  fail "[G] the drifted binary was not overwritten by the freshly built one" "$(cat "$runtime/bin/agent-engine")"
+fi
+[ $failures -eq "$before_g" ] && echo "ok   [G] drift in an installed artifact restarts instead of skipping"
+
+# --- case H: and the same for the installed env file -------------------------
+#
+# Same defect, different artifact, and worth its own case because this is the
+# one that carries the API key and the internal token: a hand-edited or
+# truncated engine.env left the daemon running the old credentials while the
+# script reported the box up to date.
+before_h=$failures
+pid_before=$(incarnation)
+printf 'HIVE_AGENT_ENGINE_LLM_MODEL=tampered\n' > "$runtime/engine.env"
+run_installer "H env-drift" rebuilt-different-bytes openai/some-other-alias
+if ! stopped; then
+  fail "[H] a drifted installed env file was reported unchanged and skipped" "$(cat "$STATE/calls")"
+fi
+if ! grep -q 'openai/some-other-alias' "$runtime/engine.env"; then
+  fail "[H] the drifted env file was not re-rendered"
+fi
+if [ "$(incarnation)" = "$pid_before" ]; then
+  fail "[H] the daemon process was not replaced despite a drifted env file"
+fi
+[ $failures -eq "$before_h" ] && echo "ok   [H] drift in the installed env file restarts instead of skipping"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"
