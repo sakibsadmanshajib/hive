@@ -233,6 +233,13 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
 
   const columns = allColumns.filter((col) => !hiddenColumns.has(col.key));
 
+  // The last visible column cannot be hidden. Disabling its checkbox is
+  // what says so, rather than leaving the click a silent no-op that
+  // springs the box back with no reason given; toggleColumn below still
+  // carries the guard, because a disabled input is only unclickable in a
+  // real browser and the handler is what actually holds the invariant.
+  const atColumnFloor = columns.length <= 1;
+
   function toggleColumn(key: string) {
     setHiddenColumns((prev) => {
       const next = new Set(prev);
@@ -240,7 +247,10 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
         next.delete(key);
       } else {
         // Never let the toggle empty the table entirely: a header row with
-        // zero columns is a broken layout, not a valid preference.
+        // zero columns is a broken layout, not a valid preference. The
+        // disabled checkbox above is the explanation a viewer sees; this
+        // is the enforcement behind it, and it is reachable, so it is
+        // covered rather than decorative.
         if (allColumns.length - next.size <= 1) return prev;
         next.add(key);
       }
@@ -273,6 +283,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
                 <input
                   type="checkbox"
                   checked={!hiddenColumns.has(col.key)}
+                  disabled={atColumnFloor && !hiddenColumns.has(col.key)}
                   onChange={() => toggleColumn(col.key)}
                 />
                 {col.label}

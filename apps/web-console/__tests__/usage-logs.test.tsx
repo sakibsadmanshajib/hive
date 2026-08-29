@@ -104,6 +104,21 @@ function eventRow(overrides: Partial<UsageEventRow> = {}): UsageEventRow {
   };
 }
 
+
+// Read one row's Latency cell by resolving the column position from the
+// header row. Matching on the rendered text alone would be a false pin:
+// both cache columns and the API-key column also print an em-dash when
+// their field is absent, so a bare text query for one passes no matter
+// what the Latency column renders. rowIndex 0 is the header row.
+function latencyCellText(rowIndex: number): string {
+  const rows = screen.getAllByRole("row");
+  const column = within(rows[0])
+    .getAllByRole("columnheader")
+    .findIndex((header) => header.textContent === "Latency");
+  if (column === -1) throw new Error("no Latency column is rendered");
+  return within(rows[rowIndex]).getAllByRole("cell")[column].textContent ?? "";
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.CONTROL_PLANE_BASE_URL = "http://localhost:8081";
@@ -237,7 +252,13 @@ describe("UsageLogsTable", () => {
       />
     );
 
-    expect(screen.getByText("1.8s")).toBeTruthy();
+    // The first row carries latency_ms, the second carries none at all.
+    // The unmeasured one must print the em-dash and never a fabricated
+    // 0ms: the control-plane omits latency_ms until the attempt has both
+    // a started_at and a completed_at, so a zero here would assert a
+    // measurement that was never taken.
+    expect(latencyCellText(1)).toBe("1.8s");
+    expect(latencyCellText(2)).toBe("—");
   });
 
   it("shows latency in the per-row drill-in detail", async () => {
@@ -285,6 +306,40 @@ describe("UsageLogsTable", () => {
 
     fireEvent.click(latencyToggle);
     expect(screen.getAllByText("Latency").length).toBeGreaterThan(1);
+  });
+
+  it("refuses to hide the last remaining column, and says so", async () => {
+    const { UsageLogsTable } = await import(
+      "@/components/logs/usage-logs-table"
+    );
+    render(<UsageLogsTable rows={baseRows} keyNames={{}} />);
+
+    const controls = screen.getByTestId("column-controls");
+    for (const label of [
+      "Model",
+      "Tokens in",
+      "Tokens out",
+      "Cached in",
+      "Cache write",
+      "Credits",
+      "Latency",
+      "Status",
+      "API key",
+    ]) {
+      fireEvent.click(within(controls).getByLabelText(label));
+    }
+
+    const last = within(controls).getByLabelText("Time") as HTMLInputElement;
+    expect(screen.getAllByRole("columnheader")).toHaveLength(1);
+    expect(last.disabled).toBe(true);
+
+    // jsdom still dispatches a click on a disabled input where a browser
+    // would not, which is convenient here: it reaches the guard inside
+    // toggleColumn, so both halves are pinned. Drop the disabled
+    // attribute and the assertion above goes red; drop the guard and this
+    // one does, because the table renders a header row with no columns.
+    fireEvent.click(last);
+    expect(screen.getAllByRole("columnheader")).toHaveLength(1);
   });
 });
 
@@ -353,8 +408,13 @@ describe("app/console/logs/page.tsx wiring", () => {
           return jsonResponse(200, { models: [] });
         }
         if (url.includes("/usage-events")) {
+          // latency_ms is on this payload deliberately: this is the one
+          // test that runs the real getUsageEvents decoder, so it is the
+          // only place the field is pinned end to end from JSON body to
+          // rendered cell. Drop the decoder line and the latency
+          // assertion below goes red.
           return jsonResponse(200, {
-            events: [eventRow({ api_key_id: "key_abc" })],
+            events: [eventRow({ api_key_id: "key_abc", latency_ms: 1800 })],
             next_cursor: "",
           });
         }
@@ -372,6 +432,7 @@ describe("app/console/logs/page.tsx wiring", () => {
     // "Prod key" renders twice: once as a filter <option>, once in the table
     // row's API-key column.
     expect(screen.getAllByText("Prod key").length).toBeGreaterThan(0);
+    expect(latencyCellText(1)).toBe("1.8s");
     expect(screen.queryByText("No requests yet")).toBeNull();
   });
 
