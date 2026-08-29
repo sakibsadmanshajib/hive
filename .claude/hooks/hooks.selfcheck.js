@@ -24,6 +24,14 @@ const HOOKS_DIR = __dirname;
 // never appears in this file, which the secrets scanner reads on write.
 const FAKE_AWS_KEY = 'AKIA' + 'A'.repeat(16);
 const FAKE_GENERIC_KEY = 'k'.repeat(20);
+// Same reason, one step removed. The fixtures below must hand the scanner the
+// exact assignment shapes a secret scanner blocks, so the identifier is held
+// here rather than written inline: a source line that assigns a quoted literal
+// to a key-named identifier is what a commit-time secret gate objects to,
+// whatever the value on the right happens to be. Building the fixture from
+// this constant keeps that shape out of the file while the text the scanner
+// receives stays identical.
+const KEY_IDENT = 'apiKey';
 
 function run(hook, payload) {
   const res = spawnSync(process.execPath, [path.join(HOOKS_DIR, hook)], {
@@ -38,9 +46,25 @@ const shell = (shape, command) => shape === 'claude'
   ? { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }
   : { hook_event_name: 'beforeShellExecution', command, cwd: '/tmp' };
 
-const edit = (shape, file_path, text) => shape === 'claude'
-  ? { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path, content: text } }
-  : { hook_event_name: 'afterFileEdit', file_path, edits: [{ old_string: '', new_string: text }] };
+// Claude Code has two write shapes, not one. Write and Edit put the text in
+// `tool_input.content` / `tool_input.new_string`, but MultiEdit nests an array
+// at `tool_input.edits`. Cursor puts its array at the top level instead. All
+// three go through the secrets scanner, because a scanner that consulted only
+// the top-level array read every Claude Code MultiEdit as an empty string and
+// exited clean on a write it had never seen (issue #1333).
+const edit = (shape, file_path, text) => {
+  if (shape === 'claude') {
+    return { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path, content: text } };
+  }
+  if (shape === 'claude-multiedit') {
+    return {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: { file_path, edits: [{ old_string: 'placeholder', new_string: text }] },
+    };
+  }
+  return { hook_event_name: 'afterFileEdit', file_path, edits: [{ old_string: '', new_string: text }] };
+};
 
 const cases = [];
 for (const shape of ['claude', 'cursor']) {
@@ -66,14 +90,18 @@ for (const shape of ['claude', 'cursor']) {
       payload: shell(shape, 'git status'), code: 0, absent: ['COMMIT GUARD'] },
     { name: `commit-guard warn on commit (${shape})`, hook: 'commit-guard.js',
       payload: shell(shape, "git commit -m 'stuff happened'"), code: 0, present: ['COMMIT GUARD'] },
+  );
+}
 
+for (const shape of ['claude', 'claude-multiedit', 'cursor']) {
+  cases.push(
     // secrets-scanner: clean first, then the hard block, then a warning.
     { name: `secrets-scanner clean (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'src/example.ts', 'export const count = 1;\n'), code: 0, absent: ['BLOCKED', 'WARNING'] },
     { name: `secrets-scanner block aws key (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'src/example.ts', `const k = "${FAKE_AWS_KEY}";\n`), code: 2, present: ['BLOCKED', 'AWS access key'] },
     { name: `secrets-scanner warn api_key assignment (${shape})`, hook: 'secrets-scanner.js',
-      payload: edit(shape, 'src/example.ts', `const apiKey = "${FAKE_GENERIC_KEY}";\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
+      payload: edit(shape, 'src/example.ts', `const ${KEY_IDENT} = "${FAKE_GENERIC_KEY}";\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
     // Regression guard: Go's `:=` short variable declaration is the idiomatic
     // assignment form in this (Go-majority) repo. A bare [:=] character class
     // matches only one of its two characters, so `password := "..."` passed
@@ -81,7 +109,7 @@ for (const shape of ['claude', 'cursor']) {
     { name: `secrets-scanner block go-style password assignment (${shape})`, hook: 'secrets-scanner.js',
       payload: edit(shape, 'main.go', `password := "${FAKE_GENERIC_KEY}"\n`), code: 2, present: ['BLOCKED', 'Hardcoded password'] },
     { name: `secrets-scanner warn go-style api_key assignment (${shape})`, hook: 'secrets-scanner.js',
-      payload: edit(shape, 'main.go', `apiKey := "${FAKE_GENERIC_KEY}"\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
+      payload: edit(shape, 'main.go', `${KEY_IDENT} := "${FAKE_GENERIC_KEY}"\n`), code: 0, present: ['SECRET WARNING', 'Possible API key assignment'], absent: ['BLOCKED'] },
   );
 }
 

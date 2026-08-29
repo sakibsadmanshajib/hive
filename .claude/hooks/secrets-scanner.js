@@ -22,9 +22,15 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input);
     const ti = data.tool_input || {};
     const filePath = ti.file_path || data.file_path || '';
-    const editsContent = Array.isArray(data.edits)
-      ? data.edits.map(e => (e || {}).new_string || '').join('\n')
-      : '';
+    // MultiEdit carries its edits as an array, and the two harnesses put that
+    // array in different places: Claude Code nests it at `tool_input.edits`,
+    // Cursor's file-edit payload puts it at the top level. Consulting only the
+    // top-level shape meant every Claude Code MultiEdit was scanned as an empty
+    // string, so the hook reported clean on a write it had never read (#1333).
+    const editsSource = Array.isArray(ti.edits) ? ti.edits
+      : Array.isArray(data.edits) ? data.edits
+      : [];
+    const editsContent = editsSource.map(e => (e || {}).new_string || '').join('\n');
     const content = ti.content || ti.new_string || editsContent || '';
 
     if (!content || !filePath) process.exit(0);

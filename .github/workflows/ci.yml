@@ -693,6 +693,17 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-set-compose-project-name.sh
 
+      # Regression guard for the PreToolUse guards in .claude/hooks/. It
+      # feeds each guard both harness payload shapes plus Claude Code's
+      # MultiEdit shape, which nests its edit array at `tool_input.edits`
+      # rather than at the top level. The secrets scanner read only the
+      # top-level array, so it scanned an empty string on every MultiEdit
+      # and exited clean on a write it had never seen (issue #1333). The
+      # self-check existed before that bug and did not catch it because
+      # nothing ran it, so it is wired into a required check here.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .claude/hooks/hooks.selfcheck.js
+
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:tenant-setting
       - if: needs.changes.outputs.run != 'false'
