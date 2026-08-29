@@ -74,7 +74,11 @@ function statusSummary(status: number): string {
 function codeSummary(code: string | null): string | null {
   switch (code) {
     case "account_not_provisioned":
-      return "This workspace is not connected to billing yet, so a key created here would be rejected by the API. If you have more than one workspace, switch to the one that carries your billing and create the key there. Otherwise reload this page to finish workspace setup, then try again.";
+      // No "try again" in this wording, on purpose. Anyone who can reach this
+      // page already holds a tenant claim, and nothing the console renders
+      // re-attempts the billing mapping for such a user, so an invitation to
+      // retry would be a loop with no exit.
+      return "This workspace is not connected to billing, so a key created here would be rejected by the API. Only one of your workspaces can carry billing: if you have another one, switch to it with the workspace picker and create the key there. If this is your only workspace, it has to be linked before it can issue keys; contact support and quote account_not_provisioned.";
     default:
       return null;
   }
@@ -83,10 +87,16 @@ function codeSummary(code: string | null): string | null {
 function errorResponse(err: unknown, fallback: string): Response {
   if (err instanceof ControlPlaneError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
-    return NextResponse.json(
-      { error: codeSummary(err.code) ?? statusSummary(status) },
-      { status },
-    );
+    const explained = codeSummary(err.code);
+    if (explained !== null) {
+      // The code is echoed only on the branch this route recognised, never
+      // passed through from whatever the upstream happened to send. A caller
+      // reading `code` therefore knows the accompanying message is this
+      // route's own customer-facing wording and is safe to show, rather than
+      // a status word like "Conflict" that means nothing to a customer.
+      return NextResponse.json({ error: explained, code: err.code }, { status });
+    }
+    return NextResponse.json({ error: statusSummary(status) }, { status });
   }
   return NextResponse.json({ error: fallback }, { status: 502 });
 }

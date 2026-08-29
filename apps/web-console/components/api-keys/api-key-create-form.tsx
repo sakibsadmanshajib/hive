@@ -89,26 +89,32 @@ interface CreateApiKeyResponse {
 
 const CREATE_FAILED = "Failed to create key. Please try again.";
 
-function isErrorBody(value: unknown): value is { error: string } {
+function isExplainedError(value: unknown): value is { error: string; code: string } {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.error === "string" && candidate.error.trim() !== "";
+  return (
+    typeof candidate.error === "string" &&
+    candidate.error.trim() !== "" &&
+    typeof candidate.code === "string" &&
+    candidate.code.trim() !== ""
+  );
 }
 
 /**
- * A 409 is the one refusal on this endpoint the customer can act on: the
- * workspace has no billing link, so the key would have been rejected by the API
- * on its first request (issue #1330). Discarding that sentence and printing
- * "please try again" would send them round a loop that cannot succeed.
+ * Show the server's sentence only when the proxy route named a machine code
+ * alongside it. That pairing is the route's signal that the wording is its own
+ * customer-facing copy for a refusal it recognised, such as the workspace with
+ * no billing link that would have produced a key the API refuses (issue #1330).
+ * Printing "please try again" over that sends the customer round a loop that
+ * cannot succeed.
  *
- * Every other status keeps the generic wording, because the proxy route answers
- * those with a status class ("Upstream service error", "Forbidden") that tells
- * a customer nothing and reads like a leak.
+ * Without a code the body carries only a status class ("Conflict", "Upstream
+ * service error"), which tells a customer nothing, so those keep the generic
+ * wording this form has always used.
  */
-export async function createKeyErrorMessage(response: Response): Promise<string> {
-  if (response.status !== 409) return CREATE_FAILED;
+async function createKeyErrorMessage(response: Response): Promise<string> {
   const body: unknown = await response.json().catch(() => null);
-  return isErrorBody(body) ? body.error : CREATE_FAILED;
+  return isExplainedError(body) ? body.error : CREATE_FAILED;
 }
 
 function isApiKeyResponse(value: unknown): value is CreateApiKeyResponse {

@@ -45,13 +45,19 @@ Create key pressed.
 Observed:
 
 ```
-ALERT: This workspace is not connected to billing yet, so a key created here
-would be rejected by the API. If you have more than one workspace, switch to
-the one that carries your billing and create the key there. Otherwise reload
-this page to finish workspace setup, then try again.
+ALERT: This workspace is not connected to billing, so a key created here would
+be rejected by the API. Only one of your workspaces can carry billing: if you
+have another one, switch to it with the workspace picker and create the key
+there. If this is your only workspace, it has to be linked before it can issue
+keys; contact support and quote account_not_provisioned.
 copy-it-now secret panels rendered: 0
 api_keys rows for that account after the attempt: 0
 ```
+
+The wording deliberately does not invite a retry. Every principal that can
+reach this page already holds a tenant claim, and nothing on the console's
+render path re-attempts the billing mapping for such a user, so "reload and try
+again" would have been a loop with no exit.
 
 The screenshot shows the refusal under the form, the form still filled in and
 usable, and the key table still reading "No API keys yet". Before this change

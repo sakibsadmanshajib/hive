@@ -136,6 +136,15 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 // ever carry the tenant. Refusing at mint time is what turns that permanent
 // state into something the customer can be told about while they still have a
 // choice.
+//
+// The read and the insert that follows it are not one transaction, and
+// deliberately so. Nothing in this repository ever deletes a
+// tenant_billing_accounts row (both writers only INSERT, and the migrations
+// only backfill), so the only state this window could miss is a mapping that
+// appeared, which is the harmless direction. If one ever were deleted mid
+// flight the resulting key would fail closed at the API boundary exactly as it
+// did before this gate existed, so the worst case is the old behaviour, not a
+// usable credential on an unbillable account.
 func (s *Service) requireBillingTenant(ctx context.Context, accountID uuid.UUID) error {
 	tenantID, err := s.repo.GetTenantIDByAccountID(ctx, accountID)
 	if err != nil {
