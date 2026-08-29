@@ -61,6 +61,23 @@ inert until someone hand-copied the new version into
 `/home/sakib/hive-backups/bin`. Only encrypted artifacts still cross the
 network; the marker is a timestamp and a date and involves no credential.
 
+Use a dedicated token for that write, not the ambient `gh auth login`. The dev
+machine holds the only off-box copy of the production database; before the
+marker existed its compromise yielded encrypted backups, and an ambient
+`repo`-scoped login in reach of the same machine turns that into repository
+write as well. Mint a fine-grained PAT scoped to `sakibsadmanshajib/hive` with
+`Variables: read and write` and nothing else, and pass it as `GH_TOKEN` for this
+one script.
+
+The marker is an honesty marker, not proof. Anyone who can write repository
+variables can set it to a recent timestamp with no pull behind it, and the check
+would then report green indefinitely. No `GITHUB_TOKEN` can do that (there is no
+Actions permission scope for variables at all, and no workflow in this
+repository writes one), so the actor would be an insider or whoever compromised
+the dev machine's token, which is the same threat the paragraph above is about.
+Every direction that is not a claim of freshness fails closed: absent, empty,
+unparseable, offset-less, duplicated and future-dated markers are all stale.
+
 ## Schedule, retention, capacity
 
 - systemd USER timer `hive-box-backup.timer`: 03:15 and 15:15 UTC daily,
@@ -101,6 +118,26 @@ or the alarm gets muted and the gap goes unobserved again. It stays well inside
 the box's own 14-day retention, so when it does fire every missing day is still
 recoverable from the box, and it is far tighter than the six days that actually
 elapsed unnoticed on 2026-08-29.
+
+That threshold governs both halves of the marker. `pulled_at` says how recently
+somebody ran the pull; `newest_day` says how recent the data that pull copied
+actually is. They come apart with nobody at fault: a box that stops publishing
+new daily sets leaves every later pull transferring nothing, verifying the days
+already present, and refreshing `pulled_at`, so a check reading only `pulled_at`
+would report green over a copy weeks behind. `newest_day` is aged from the end
+of that UTC day, since the value has date granularity and the box's second daily
+run lands at 15:15 UTC.
+
+Two things a responder should know before chasing the wrong half:
+
+- A stale `newest_day` under a fresh `pulled_at` means the pull is working and
+  the box has published nothing new. Read `~/hive-backups/status/STATUS.txt` and
+  `systemctl --user list-timers hive-box-backup.timer` on the box first.
+- The pull verifies every day it holds, not only the newest, so one corrupted
+  old local day directory (bitrot on a ten-day-old artifact) fails the whole run
+  and leaves the marker unchanged, and the alarm then stays red even though
+  today's pull was perfect. That is deliberate. Delete the bad day directory
+  locally and pull again; the box still holds it.
 
 At-a-glance checks, newest line tells the story:
 

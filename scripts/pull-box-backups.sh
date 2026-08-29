@@ -28,6 +28,16 @@
 # Requires: rsync, the gh CLI authenticated against $MARKER_REPO, and the ssh
 # host alias $BOX (default hive-demo) in ~/.ssh/config on this machine. Do not
 # add one for this script's sake.
+#
+# Use a dedicated fine-grained token for the gh call, not the ambient login.
+# This machine holds the only off-box copy of the production database; before
+# the marker existed it needed one credential, an ssh key to the box, and its
+# compromise yielded encrypted backups. An ambient `gh auth login` carries repo
+# scope, so leaving it in reach here turns the same compromise into repository
+# write as well. Mint a fine-grained PAT scoped to $MARKER_REPO with
+# "Variables: read and write" and nothing else, and pass it as GH_TOKEN:
+#
+#   GH_TOKEN=<fine-grained PAT> scripts/pull-box-backups.sh
 set -euo pipefail
 
 BOX="${BOX:-hive-demo}"
@@ -75,6 +85,18 @@ for d in "$DEST"/daily/*/; do
     STATUS=1
     continue
   fi
+  # sha256sum -c verifies exactly the lines it is given, so a SHA256SUMS naming
+  # two of the four artifacts would pass while saying nothing about the other
+  # two: a green that cannot go red for half the set. The publisher always
+  # writes four lines (backup-box.sh regenerates it from the staging directory
+  # before its atomic rename), so this asserts a property that holds today
+  # rather than tolerating one that does not.
+  SUMS=$(wc -l < "$d/SHA256SUMS" | tr -d '[:space:]')
+  if [[ "$SUMS" != "4" ]]; then
+    echo "FAIL: $d has a SHA256SUMS listing $SUMS files, expected 4" >&2
+    STATUS=1
+    continue
+  fi
   (cd "$d" && sha256sum -c SHA256SUMS --quiet) || STATUS=1
   # The day directories glob in sorted order and every name is YYYY-MM-DD, so
   # the last one reached is the newest. Only read below when STATUS is 0, i.e.
@@ -101,6 +123,10 @@ echo "OK: all pulled days verified"
 # scheduled check and will read as staleness until someone runs this again.
 # Reporting success over that would put the silence straight back.
 # ---------------------------------------------------------------------------
+# Belt and braces, not a live guard: an empty NEWEST_DAY means either the glob
+# matched nothing or every day hit a `continue`, and both set STATUS=1, which
+# already exited above. It stays so that a future refactor of the loop cannot
+# reach the marker write with nothing to record.
 if [[ -z "$NEWEST_DAY" ]]; then
   echo "FAIL: no verified day directories under $DEST/daily, nothing to record" >&2
   exit 1
@@ -117,7 +143,14 @@ MARKER="pulled_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) newest_day=$NEWEST_DAY"
 if ! gh variable set "$MARKER_VAR" --repo "$MARKER_REPO" --body "$MARKER"; then
   echo "FAIL: the artifacts pulled and verified, but recording the freshness marker" >&2
   echo "($MARKER_VAR on $MARKER_REPO) failed. The scheduled staleness check will keep" >&2
-  echo "reporting the previous pull until this succeeds." >&2
+  echo "reporting the previous pull until this succeeds, and it will go on telling you" >&2
+  echo "to run this script, which cannot clear it until the write works." >&2
+  echo >&2
+  echo "Almost always this is the token, not the network: writing a repository" >&2
+  echo "variable needs a classic token with repo scope or a fine-grained token with" >&2
+  echo "'Variables: read and write' on $MARKER_REPO. Check with:" >&2
+  echo "  gh auth status" >&2
+  echo "  gh variable list --repo $MARKER_REPO" >&2
   exit 1
 fi
 echo "recorded off-box pull marker $MARKER_VAR: $MARKER"

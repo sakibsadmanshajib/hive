@@ -463,11 +463,19 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Narrower than the file-level block this would otherwise inherit: unlike
+    # the deploy-drift job above, this one runs no `gh run list`, so it has no
+    # use for `actions: read`.
+    permissions:
+      contents: read
+      issues: write
     env:
       GH_TOKEN: ${{ github.token }}
       # Written by scripts/pull-box-backups.sh, and by nothing else, after a
       # verified pull. Unset is a legitimate state and the checker treats it as
-      # stale, never as "unknown, assume fine".
+      # stale, never as "unknown, assume fine". Passed through `env:` rather
+      # than interpolated into a `run:` body, so its content reaches the shell
+      # as a process environment variable and can never be parsed as shell.
       LAST_OFFBOX_BACKUP_PULL: ${{ vars.LAST_OFFBOX_BACKUP_PULL }}
     steps:
       - uses: actions/checkout@v7
@@ -484,8 +492,24 @@ jobs:
         # the default shell here is `bash -e` without pipefail, so putting it on
         # the left of a `| tee` would take tee's status instead and print a
         # success line over a real failure.
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -uo pipefail
+          # Label-gated proof hook, the same shape and for the same reason as
+          # this workflow's own deploy-drift-test:simulate-divergence label:
+          # workflow_dispatch is unusable until the file exists on the default
+          # branch, so the pull request that adds this job needs a way to prove
+          # the alert actually fires before merge, not just that the unit tests
+          # say it would. Squeezing the threshold rather than faking the marker
+          # keeps the run honest: it reads the real repository variable and
+          # measures it, only against an interval nothing can satisfy.
+          # Unreachable on a schedule run, where PR_LABELS is null.
+          case "${PR_LABELS:-}" in
+            *'"offbox-backup-test:simulate-stale"'*)
+              export OFFBOX_PULL_STALE_AFTER_HOURS=0.0001
+              echo "simulating staleness: threshold squeezed to 0.0001 hours" ;;
+          esac
           if node .github/ci/check-offbox-backup-freshness.mjs > offbox-check.txt 2>&1; then
             stale=false
           else
@@ -521,14 +545,50 @@ jobs:
             "This is issue #1491's failure mode. Where the durable off-box copy should" \
             "ultimately live is a separate, open owner decision (#1492); this check only" \
             "makes the staleness of whatever copy exists visible.")
-          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
-                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
-                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          # Deduplicate on title AND author, not title alone. This repository is
+          # public with issues enabled, so anyone at all can open an issue with
+          # this exact title; matching the title by itself would let a stranger
+          # suppress the alert channel indefinitely while detection kept
+          # working, which is the quietest possible way to break a monitor. The
+          # server-side `--search` also keeps the match independent of how many
+          # open issues the repository has, which a bare `--limit 200` against
+          # several hundred open issues is not.
+          #
+          # A failed listing does not abort the step. The default shell here is
+          # `bash -e`, so an unguarded command substitution would end the run
+          # before the ::error:: and the exit 1 below ever execute, replacing
+          # the designed alert with a bare shell failure. It falls through to
+          # filing instead, because a duplicate alert is recoverable and a
+          # missing one is the thing being fixed.
+          num=""
+          if listing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                         --search "in:title \"$TITLE\"" --json number,title,author \
+                         -q '.[] | [(.number|tostring), .author.login, .title] | @tsv' 2>&1); then
+            # `app/github-actions` is what gh actually reports for an issue
+            # filed by GITHUB_TOKEN, confirmed against this repository's own
+            # bot-filed issues #1247 and #1248 rather than assumed. The two
+            # other spellings are accepted so a gh release that changes the
+            # rendering degrades into a duplicate issue rather than into
+            # silence. Getting this wrong in the tightening direction is the
+            # expensive way round: it would file a fresh issue every 30
+            # minutes, which is how a monitor gets muted.
+            num=$(printf '%s\n' "$listing" \
+              | awk -F'\t' -v t="$TITLE" \
+                  '($2 == "app/github-actions" || $2 == "github-actions" || $2 == "github-actions[bot]") && $3 == t { print $1; exit }')
+          else
+            echo "::warning::could not list open issues to deduplicate ($listing), filing anyway"
+          fi
           if [ -n "${num:-}" ]; then
             echo "tracking issue #$num is already open, not commenting again"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+          elif gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"; then
             echo "opened the tracking issue"
+          else
+            # Saying "opened the tracking issue" after a failed create would be a
+            # success line printed over a failure, which is the exact shape this
+            # whole change exists to remove. The job still exits 1 below, so the
+            # run is red either way; this only stops the log from claiming a
+            # notification that was never delivered.
+            echo "::warning::gh issue create FAILED, so no tracking issue was filed for this stale marker"
           fi
           echo "::error::the off-box backup copy is stale, run scripts/pull-box-backups.sh"
           exit 1

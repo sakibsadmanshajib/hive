@@ -146,6 +146,44 @@ else
   pass "$name"
 fi
 
+# --- 3a. a short artifact count FAILS --------------------------------------
+name='a day holding three of the four artifacts FAILS'
+dest="$work/case-three-artifacts"
+log="$dest/gh-calls.txt"
+mkdir -p "$dest"
+make_day "$dest" 2026-08-29
+rm -f "$dest/daily/2026-08-29/storage.tgz.enc"
+status=0
+run_script "$dest" "$log" || status=$?
+if (( status == 0 )); then
+  fail "$name" "expected a non-zero exit, got 0"
+elif [[ -s "$log" ]]; then
+  fail "$name" "gh was invoked over a partial set: $(cat "$log")"
+else
+  pass "$name"
+fi
+
+# --- 3b. a short SHA256SUMS is a vacuous pass, not a pass -------------------
+name='a SHA256SUMS listing fewer than four artifacts FAILS'
+dest="$work/case-short-sums"
+log="$dest/gh-calls.txt"
+mkdir -p "$dest"
+make_day "$dest" 2026-08-29
+# Every artifact is present and intact; only the checksum file is short. Without
+# the line-count guard `sha256sum -c` verifies the two lines it was given, says
+# nothing at all about the other two, and exits 0.
+head -2 "$dest/daily/2026-08-29/SHA256SUMS" > "$dest/sums.tmp"
+mv "$dest/sums.tmp" "$dest/daily/2026-08-29/SHA256SUMS"
+status=0
+run_script "$dest" "$log" || status=$?
+if (( status == 0 )); then
+  fail "$name" "expected a non-zero exit, got 0"
+elif [[ -s "$log" ]]; then
+  fail "$name" "gh was invoked over a half-verified set: $(cat "$log")"
+else
+  pass "$name"
+fi
+
 # --- 4. a failed marker write is loud --------------------------------------
 name='a failed marker write FAILS the run rather than reporting success'
 dest="$work/case-gh-down"

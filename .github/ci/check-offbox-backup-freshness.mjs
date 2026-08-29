@@ -58,6 +58,14 @@
 // threshold, because a marginal firing costs almost nothing and a missed one
 // costs the database.
 //
+// The same threshold governs BOTH halves of the marker, deliberately. pulled_at
+// says how recently somebody ran the pull; newest_day says how recent the data
+// that pull copied actually is. They come apart with no attacker involved: a box
+// that stops publishing new daily sets leaves every later pull transferring
+// nothing, verifying the days already present, and refreshing pulled_at, so a
+// check reading only pulled_at would report OK over a copy weeks behind. That is
+// this issue's own defect one level up.
+//
 // ── Absent marker is STALE ───────────────────────────────────────────────
 //
 // Never "unknown, assume fine". An unset variable, an unparseable value and a
@@ -77,10 +85,28 @@ const REMEDY =
 
 const marker = (process.env.LAST_OFFBOX_BACKUP_PULL ?? '').trim();
 
+// The marker is echoed back in some failure messages, and those messages reach
+// a public GitHub issue body and a public run log. Anything a runner would
+// interpret as a workflow command (`::add-mask::`, `::stop-commands::`) or that
+// would flood the log is stripped here rather than trusted to the writer's
+// discipline. Setting the variable already requires repository admin, so this
+// is defence in depth, not a live exploit.
+const echoable = (value) =>
+  value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/::/g, "<colon><colon>")
+    .slice(0, 200);
+
 const rawHours = process.env.OFFBOX_PULL_STALE_AFTER_HOURS ?? '72';
-const hours = Number(rawHours);
+// Plain decimal only, checked before Number(). Number() also accepts '0x10'
+// (16), '1e3' and '0b1010', so an operator typo in a workflow could silently
+// configure a threshold nothing intended, and a monitor running at a threshold
+// nobody chose is barely better than no monitor.
+const hours = /^\d+(\.\d+)?$/.test(rawHours) ? Number(rawHours) : NaN;
 if (!Number.isFinite(hours) || hours <= 0) {
-  console.error(`FATAL: OFFBOX_PULL_STALE_AFTER_HOURS is '${rawHours}', which is not a positive number`);
+  console.error(
+    `FATAL: OFFBOX_PULL_STALE_AFTER_HOURS is '${rawHours}', which is not a positive decimal number of hours`,
+  );
   process.exit(1);
 }
 
@@ -113,13 +139,36 @@ if (marker === '') {
 
 // Format written by scripts/pull-box-backups.sh:
 //   pulled_at=2026-08-29T22:40:11Z newest_day=2026-08-29
-const pulledAt = /(?:^|\s)pulled_at=(\S+)/.exec(marker)?.[1];
-const newestDay = /(?:^|\s)newest_day=(\S+)/.exec(marker)?.[1] ?? '(not recorded)';
+const pulledAtMatches = [...marker.matchAll(/(?:^|\s)pulled_at=(\S+)/g)].map((m) => m[1]);
+const newestDay = /(?:^|\s)newest_day=(\S+)/.exec(marker)?.[1] ?? '';
 
-if (!pulledAt) {
+if (pulledAtMatches.length === 0) {
   stale(
     `the marker does not carry a pulled_at timestamp, so it proves nothing. ` +
-      `Value seen: '${marker}'.`,
+      `Value seen: '${echoable(marker)}'.`,
+  );
+}
+
+// Two timestamps means a hand-edit, and picking one of them silently would be
+// this check deciding which claim to believe. It has no basis to.
+if (pulledAtMatches.length > 1) {
+  stale(
+    `the marker carries ${pulledAtMatches.length} pulled_at values, so there is no single ` +
+      `time it attests to. Value seen: '${marker}'.`,
+  );
+}
+
+const pulledAt = pulledAtMatches[0];
+
+// An offset-less timestamp such as 2026-08-29T22:32:51 is parsed as LOCAL time
+// by Date.parse, not UTC, so the same marker would mean different things on two
+// runners. The writer always emits a trailing Z; anything else is a hand-edit
+// whose intended zone this check cannot know, which makes it exactly as
+// worthless as no marker.
+if (!/(Z|[+-]\d{2}:?\d{2})$/.test(pulledAt)) {
+  stale(
+    `the marker's pulled_at value '${pulledAt}' carries no UTC designator or offset, so the ` +
+      'time it means depends on the reader. scripts/pull-box-backups.sh writes a trailing Z.',
   );
 }
 
@@ -143,12 +192,47 @@ if (ageMs < 0) {
 if (ageHours > hours) {
   stale(
     `the last verified off-box backup pull was ${ageHours.toFixed(1)} hours ago ` +
-      `(pulled_at=${pulledAt}, newest day pulled ${newestDay}), older than the ${hours}-hour ` +
-      'threshold. Everything the box has produced since then exists on exactly one disk.',
+      `(pulled_at=${pulledAt}, newest day pulled ${newestDay || 'not recorded'}), older than the ` +
+      `${hours}-hour threshold. Everything the box has produced since then exists on exactly ` +
+      'one disk.',
+  );
+}
+
+// pulled_at alone measures how recently somebody RAN the script, not how recent
+// the data it copied is. Those come apart with no attacker and no malice: if the
+// box stops publishing new daily sets, every later pull still transfers nothing,
+// still verifies the days already present, and still refreshes pulled_at. A job
+// named "the off-box backup copy is not stale" would then report OK over a copy
+// that is weeks behind, which is this issue's own defect one level up. So the
+// content gets the same threshold as the act.
+//
+// Measured from the END of newest_day because the value has date granularity and
+// the box's second daily run lands at 15:15 UTC: measuring from the start would
+// charge up to a day of age the copy does not have.
+if (!/^\d{4}-\d{2}-\d{2}$/.test(newestDay)) {
+  stale(
+    `the marker carries no usable newest_day (saw '${echoable(newestDay) || 'nothing'}'), so it ` +
+      'says when someone last ran the pull but nothing about how recent the data it copied is.',
+  );
+}
+
+const contentMs = Date.parse(`${newestDay}T23:59:59Z`);
+if (Number.isNaN(contentMs)) {
+  stale(`the marker's newest_day value '${echoable(newestDay)}' is not a real date.`);
+}
+
+const contentAgeHours = (nowMs - contentMs) / 3_600_000;
+if (contentAgeHours > hours) {
+  stale(
+    `the off-box copy was refreshed ${ageHours.toFixed(1)} hours ago but its newest day is ` +
+      `${newestDay}, ${contentAgeHours.toFixed(1)} hours old, past the ${hours}-hour threshold. ` +
+      'Pulling is happening and the box has published nothing new, so check the box\'s own ' +
+      'backup timer and status file before assuming the copy is fine.',
   );
 }
 
 console.log(
   `OK: last verified off-box backup pull was ${ageHours.toFixed(1)} hours ago ` +
-    `(pulled_at=${pulledAt}, newest day pulled ${newestDay}, threshold ${hours} hours).`,
+    `(pulled_at=${pulledAt}, newest day pulled ${newestDay} at ` +
+    `${contentAgeHours.toFixed(1)} hours old, threshold ${hours} hours).`,
 );

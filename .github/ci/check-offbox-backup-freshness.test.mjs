@@ -31,7 +31,10 @@ const SCRIPT = join(HERE, 'check-offbox-backup-freshness.mjs');
 const REPO_ROOT = join(HERE, '..', '..');
 const WATCHDOG = join(REPO_ROOT, '.github', 'workflows', 'deploy-drift-watchdog.yml');
 
-const NOW_EPOCH = 1_777_000_000; // fixed "now" so no case depends on wall clock
+// Fixed "now" so no case depends on the wall clock: 2026-08-29T22:00:00Z, the
+// evening the six-day gap was found, which is why the literal dates below read
+// as they do.
+const NOW_EPOCH = 1_788_040_800;
 const iso = (epochSeconds) => new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const hoursAgo = (h) => iso(NOW_EPOCH - h * 3600);
 
@@ -66,6 +69,29 @@ check('a marker from 71 hours ago still passes (a weekend must not cry wolf)', (
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
 });
 
+check('a fresh pull over a box that stopped publishing FAILS', () => {
+  // The fail-open with no attacker and no malice: the box stops producing new
+  // daily sets, somebody keeps running the pull, every run transfers nothing,
+  // verifies the days already there, and refreshes pulled_at. Checking only
+  // pulled_at would report OK over a copy that is weeks behind.
+  const r = run(`pulled_at=${hoursAgo(1)} newest_day=2026-08-10`);
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /newest day is 2026-08-10/);
+  assert.match(r.stderr, /scripts\/pull-box-backups\.sh/);
+});
+
+check('a marker with no newest_day FAILS', () => {
+  const r = run(`pulled_at=${hoursAgo(1)}`);
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /no usable newest_day/);
+});
+
+check('a malformed newest_day FAILS', () => {
+  const r = run(`pulled_at=${hoursAgo(1)} newest_day=last-tuesday`);
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /no usable newest_day/);
+});
+
 check('a marker older than the 72 hour threshold FAILS and names the fix', () => {
   const r = run(`pulled_at=${hoursAgo(80)} newest_day=2026-08-26`);
   assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
@@ -98,8 +124,17 @@ check('a marker with no pulled_at FAILS', () => {
   assert.match(r.stderr, /does not carry a pulled_at/);
 });
 
-check('an unparseable pulled_at FAILS', () => {
+check('a prose pulled_at FAILS', () => {
   const r = run('pulled_at=yesterday-ish newest_day=2026-08-29');
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /STALE:/);
+  assert.match(r.stderr, /scripts\/pull-box-backups\.sh/);
+});
+
+check('a Z-suffixed but impossible pulled_at FAILS', () => {
+  // Carries the UTC designator, so it gets past that guard and has to be
+  // caught by Date.parse returning NaN.
+  const r = run('pulled_at=2026-99-99T99:99:99Z newest_day=2026-08-29');
   assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
   assert.match(r.stderr, /not a parseable timestamp/);
 });
@@ -122,6 +157,39 @@ check('a nonsense threshold FAILS rather than silently defaulting', () => {
   assert.match(r.stderr, /FATAL/);
 });
 
+check('a hex or exponential threshold FAILS rather than silently meaning something else', () => {
+  // Number('0x10') is 16 and Number('1e3') is 1000, so without a decimal-only
+  // guard an operator typo configures a threshold nobody chose.
+  const marker = `pulled_at=${hoursAgo(20)} newest_day=2026-08-29`;
+  for (const bad of ['0x10', '1e3', '0b1010', ' 72 ']) {
+    const r = run(marker, { OFFBOX_PULL_STALE_AFTER_HOURS: bad });
+    assert.equal(r.status, 1, `threshold '${bad}' should be rejected, got exit ${r.status}`);
+    assert.match(r.stderr, /FATAL/);
+  }
+});
+
+check('a timestamp with no UTC designator FAILS rather than being read as local time', () => {
+  // Date.parse treats an offset-less date-time as LOCAL time, so this marker
+  // would mean different things on two runners in different zones.
+  const r = run('pulled_at=2026-08-29T22:32:51 newest_day=2026-08-29');
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /no UTC designator/);
+});
+
+check('an explicit numeric offset is accepted', () => {
+  const iso8601WithOffset = new Date((NOW_EPOCH - 3600) * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, '+00:00');
+  const r = run(`pulled_at=${iso8601WithOffset} newest_day=2026-08-29`);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+});
+
+check('two pulled_at values FAIL rather than one being picked silently', () => {
+  const r = run(`pulled_at=${hoursAgo(1)} pulled_at=${hoursAgo(200)} newest_day=2026-08-29`);
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+  assert.match(r.stderr, /2 pulled_at values/);
+});
+
 check('deploy-drift-watchdog.yml actually runs this check on its schedule', () => {
   const yml = readFileSync(WATCHDOG, 'utf8');
   assert.match(
@@ -141,6 +209,17 @@ check('deploy-drift-watchdog.yml actually runs this check on its schedule', () =
     /schedule:/,
     'deploy-drift-watchdog.yml no longer runs on a schedule, so nothing periodically ' +
       'evaluates the off-box backup marker',
+  );
+  // The job-level `if:` is its own way for this check to disappear silently: a
+  // gate that no longer admits `schedule` leaves the job permanently skipped,
+  // which reports nothing at all rather than failing.
+  const job = /^ {2}offbox-backup-staleness:\n(?: {4}.*\n| *\n)*/m.exec(yml)?.[0] ?? '';
+  assert.notEqual(job, '', 'the offbox-backup-staleness job is gone from deploy-drift-watchdog.yml');
+  assert.match(
+    job,
+    /github\.event_name == 'schedule'/,
+    "the offbox-backup-staleness job's own if: no longer admits the schedule event, so it would " +
+      'be skipped on every scheduled run and report nothing',
   );
 });
 
