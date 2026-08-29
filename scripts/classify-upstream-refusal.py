@@ -46,6 +46,8 @@ Self-check: python3 scripts/classify-upstream-refusal.py --selfcheck
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -198,7 +200,15 @@ def report(text: str) -> int:
     # it is real and occasionally it IS the cause; it just stops being the
     # headline and stops being written as UPSTREAM_FAILURE_CLASS, which is
     # what the tracking issue calls "the cause".
-    named = os.environ.get("SDK_FAILED_TESTS", "").strip()
+    #
+    # SDK_NAMED_TEST_FAILURES and not SDK_FAILED_TESTS, deliberately. The
+    # latter is non-empty whenever a suite failed at all, including the
+    # wholesale-death case where extract-sdk-failures.py names no test and
+    # writes "exited <rc> with no named test failure". Keying on it demoted a
+    # genuine spent daily token budget to a note, which is issue #1088's
+    # misreport restored in the scenario #1088 was opened for. The flag is
+    # written only when a real test name was parsed out of a suite log.
+    named = os.environ.get("SDK_NAMED_TEST_FAILURES", "").strip()
 
     if verdict is None:
         print(
@@ -472,38 +482,79 @@ def _selfcheck() -> int:
             os.environ["GITHUB_ENV"] = previous
         os.unlink(env_path)
 
-    # Issue #1374's precedence rule. With named SDK failures present, the same
-    # real 429 must stop being reported as THE cause: it is written under a
-    # context key the tracking issue prints second, not under the class key it
-    # prints as the cause. This is the difference between the six comments
-    # that said "the provider rate limited us" over a storage defect and a
-    # report that names the storage defect.
-    with tempfile.NamedTemporaryFile("w+", delete=False) as handle:
-        env_path = handle.name
-    previous_named = os.environ.get("SDK_FAILED_TESTS")
-    os.environ["GITHUB_ENV"] = env_path
-    os.environ["SDK_FAILED_TESTS"] = "sdk-tests-js: tests/files/files.test.ts > uploads"
-    try:
-        assert report(REAL_UPSTREAM_429) == 0
-        written = pathlib.Path(env_path).read_text(encoding="utf-8")
-    finally:
-        if previous is None:
-            os.environ.pop("GITHUB_ENV", None)
-        else:
-            os.environ["GITHUB_ENV"] = previous
-        if previous_named is None:
-            os.environ.pop("SDK_FAILED_TESTS", None)
-        else:
-            os.environ["SDK_FAILED_TESTS"] = previous_named
-        os.unlink(env_path)
+    # Issue #1374's precedence rule, in both directions, because the two are
+    # different states and a rule that cannot tell them apart reverses issue
+    # #1088 in #1088's own scenario.
+    #
+    # Direction one: a genuinely named test failure. The same real 429 stops
+    # being THE cause: it goes under a context key the tracking issue prints
+    # second, not under the class key it prints as the cause. This is the
+    # difference between the six comments that said "the provider rate limited
+    # us" over a storage defect and a report that names the storage defect.
+    out, written = _report_with_env(
+        REAL_UPSTREAM_429, {"SDK_NAMED_TEST_FAILURES": "1"}
+    )
     assert written.startswith("UPSTREAM_FAILURE_CONTEXT="), written
     assert "UPSTREAM_FAILURE_CLASS=" not in written, (
         "a refusal alongside named test failures must not be written as the "
         "cause; that is the misreport issue #1374 is about: " + written
     )
+    assert "::notice::" in out, out
+    assert "::error::" not in out, (
+        "the annotation severity is half the rule; an error annotation still "
+        "headlines the run page: " + out
+    )
+
+    # Direction two: SDK_FAILED_TESTS is non-empty but names no test at all.
+    # extract-sdk-failures.py writes exactly this sentence when a suite dies
+    # wholesale, and that is the one case where an upstream refusal really is
+    # the likely cause. Keying on SDK_FAILED_TESTS instead of the flag demoted
+    # a spent daily allowance, the one cause no rerun can fix, to a note.
+    wholesale = (
+        "sdk-tests-js: exited 125 with no named test failure, so it died "
+        "wholesale rather than failing an assertion."
+    )
+    out, written = _report_with_env(
+        REAL_UPSTREAM_429, {"SDK_FAILED_TESTS": wholesale}
+    )
+    assert written.startswith("UPSTREAM_FAILURE_CLASS="), (
+        "no test was named, so the refusal IS the cause and must be reported "
+        "as one; anything else reverses issue #1088: " + written
+    )
+    assert "UPSTREAM_FAILURE_CONTEXT=" not in written, written
+    assert "::error::UPSTREAM REFUSAL" in out, out
+    assert "::notice::" not in out, out
 
     print("ok: classify-upstream-refusal verdicts")
     return 0
+
+
+def _report_with_env(text: str, env: dict[str, str]) -> tuple[str, str]:
+    """report() under a temporary $GITHUB_ENV and exactly the given env keys.
+
+    The precedence keys are popped rather than left ambient, so a shell that
+    happens to export one cannot flip a branch and leave the contract untested.
+    """
+    keys = ("SDK_FAILED_TESTS", "SDK_NAMED_TEST_FAILURES", "GITHUB_ENV")
+    previous = {key: os.environ.get(key) for key in keys}
+    with tempfile.NamedTemporaryFile("w+", delete=False) as handle:
+        env_path = handle.name
+    buffer = io.StringIO()
+    try:
+        for key in keys:
+            os.environ.pop(key, None)
+        os.environ["GITHUB_ENV"] = env_path
+        os.environ.update(env)
+        with contextlib.redirect_stdout(buffer):
+            assert report(text) == 0
+        return buffer.getvalue(), pathlib.Path(env_path).read_text(encoding="utf-8")
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        os.unlink(env_path)
 
 
 def main(argv: list[str]) -> int:

@@ -37,6 +37,8 @@ Self-check: python3 scripts/extract-sdk-failures.py --selfcheck
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -71,7 +73,13 @@ VITEST_REASON = re.compile(
 # From the "short test summary info" section:
 #   `FAILED tests/test_anthropic_messages.py::test_x - [XPASS(strict)] issue ...`
 #   `ERROR tests/test_y.py::test_z`
-PYTEST_FAIL = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)(?:\s+-\s+(.*))?$")
+#   `FAILED tests/test_aliases.py::test_alias[deepseek v4 flash] - Assertion...`
+# The id is taken lazily up to the ` - ` reason separator rather than as `\S+`,
+# because a parameterized case's id contains spaces and the `\S+` form then
+# matched the line not at all: the failure vanished, the suite looked like it
+# had named nothing, and collect() below called a plain assertion failure a
+# suite that died wholesale.
+PYTEST_FAIL = re.compile(r"^(?:FAILED|ERROR)\s+(.+?)(?:\s+-\s+(.*))?$")
 # pytest truncates the summary line's reason to the terminal width and often
 # drops it entirely. The FAILURES section above it carries the full text under
 # a rule naming the bare function:
@@ -79,7 +87,11 @@ PYTEST_FAIL = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)(?:\s+-\s+(.*))?$")
 #   `[XPASS(strict)] issue #1274: content_block_start omits an empty text ...`
 # That reason is the most useful fact in the whole log for the recurring
 # stale-marker cause, since it names the issue the marker refers to.
-PYTEST_SECTION = re.compile(r"^_{3,}\s+(\S+)\s+_{3,}$")
+# The header names a class-based test as `TestChat.test_x` and a parameterized
+# one as `test_x[a b]`, so neither the class prefix nor a space may break it.
+PYTEST_SECTION = re.compile(r"^_{3,}\s+(.+?)\s+_{3,}$")
+# Lines under that rule that are the failing source rather than the reason.
+PYTEST_SOURCE = ("def ", ">", "@", "self ", "self=", "_", "=", "E ")
 
 # ── gradle / junit ──────────────────────────────────────────────────────────
 #   `com.hive.ChatCompletionsTest > basicCompletion() FAILED`
@@ -126,16 +138,30 @@ def parse_pytest(text: str) -> list[tuple[str, str]]:
 
 
 def _pytest_details(lines: list[str]) -> dict[str, str]:
-    """Bare test function name -> the first reason line under its rule."""
+    """Bare test function name -> the reason under its rule in the FAILURES block.
+
+    Two shapes reach this. A strict XPASS puts its reason on the first line
+    under the rule, and an ordinary assertion puts source there and the reason
+    on the `E ` line further down. Taking the first non-blank line
+    unconditionally recovered `def test_count_tokens(client):` as the "reason"
+    for every ordinary failure, which reads as a reason and is not one.
+    """
     found: dict[str, str] = {}
     for i, line in enumerate(lines):
         match = PYTEST_SECTION.match(line.strip())
         if not match:
             continue
-        for follow in lines[i + 1 : i + 3]:
-            if follow.strip():
-                found.setdefault(match.group(1), follow.strip())
-                break
+        window = [follow.strip() for follow in lines[i + 1 : i + 12] if follow.strip()]
+        error = next((text for text in window if text.startswith("E ")), "")
+        reason = (
+            error[1:].strip()
+            if error
+            else next((t for t in window if not t.startswith(PYTEST_SOURCE)), "")
+        )
+        if reason:
+            # The rule names `TestChat.test_x`, while the node id's last
+            # segment is `test_x`, so a class-based test recovered nothing.
+            found.setdefault(match.group(1).rsplit(".", 1)[-1], reason)
     return found
 
 
@@ -175,9 +201,19 @@ def _read(path: pathlib.Path) -> str:
         return ""
 
 
-def collect(log_dir: pathlib.Path) -> list[str]:
-    """One human line per failure, across all three suites, in suite order."""
+def collect(log_dir: pathlib.Path) -> tuple[list[str], bool]:
+    """(one human line per failure in suite order, whether any test was named).
+
+    The second value exists because the two states differ and the reader of
+    this list cannot tell them apart. Every line here is a failure, but a
+    wholesale-death line names no test, and classify-upstream-refusal.py
+    demotes a provider refusal to a footnote whenever a test was named. Keying
+    that on "this list is non-empty" demoted a spent daily token budget, the
+    one cause no rerun can fix, in precisely the scenario issue #1088 was
+    written for.
+    """
     named: list[str] = []
+    real = False
     for suite in SUITES:
         rc_text = _read(log_dir / f"{suite}.rc").strip()
         if rc_text == "0":
@@ -185,6 +221,7 @@ def collect(log_dir: pathlib.Path) -> list[str]:
         rc = rc_text or "unknown"
         found = failures_for(suite, _read(log_dir / f"{suite}.log"))
         if found:
+            real = True
             for name, reason in found:
                 named.append(f"{suite}: {name}" + (f" -- {reason}" if reason else ""))
             continue
@@ -198,11 +235,11 @@ def collect(log_dir: pathlib.Path) -> list[str]:
             "wholesale rather than failing an assertion. Look at the tail "
             "above and at the compose-logs artifact."
         )
-    return named
+    return named, real
 
 
 def report(log_dir: pathlib.Path) -> int:
-    named = collect(log_dir)
+    named, real = collect(log_dir)
     if not named:
         # Every suite exited 0. The step that calls this only runs when the
         # job is failing, so a caller reaching here failed somewhere else,
@@ -225,18 +262,24 @@ def report(log_dir: pathlib.Path) -> int:
         for line in named[MAX_ANNOTATIONS:]:
             print(line)
 
-    _write_env(named)
+    _write_env(named, real)
     _write_summary(named)
     return 0
 
 
-def _write_env(named: list[str]) -> None:
+def _write_env(named: list[str], real: bool) -> None:
     """Hand the list to later steps, which file the tracking issue with it.
 
     A heredoc, because the value is multi-line: the single-line `K=V` form
     that classify-upstream-refusal.py uses would corrupt every later entry.
     The delimiter is random per invocation so no test name can close the
     block early.
+
+    SDK_NAMED_TEST_FAILURES is separate and deliberately not derived from the
+    list being non-empty. It is the switch classify-upstream-refusal.py uses to
+    decide whether a provider refusal is the cause or the weather, and the
+    wholesale-death line is a failure that names no test, so a list-emptiness
+    test answers the wrong question.
     """
     github_env = os.environ.get("GITHUB_ENV")
     if not github_env:
@@ -245,17 +288,25 @@ def _write_env(named: list[str]) -> None:
     body = "\n".join(line for line in named if line.strip() != delimiter)
     with open(github_env, "a", encoding="utf-8") as handle:
         handle.write(f"SDK_FAILED_TESTS<<{delimiter}\n{body}\n{delimiter}\n")
+        if real:
+            handle.write("SDK_NAMED_TEST_FAILURES=1\n")
 
 
 def _write_summary(named: list[str]) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary:
         return
+    # Fenced, because reasons come partly from upstream provider error bodies
+    # and a message containing markdown rendered as markdown here. Cosmetic
+    # rather than an injection path (GitHub sanitizes HTML in step summaries),
+    # but a summary that silently swallows part of an error message is the
+    # same class of quiet loss this script exists to remove. A four-backtick
+    # fence cannot be closed by a three-backtick run inside an error message.
     with open(summary, "a", encoding="utf-8") as handle:
-        handle.write("### Live integration: failing SDK tests\n\n")
+        handle.write("### Live integration: failing SDK tests\n\n````text\n")
         for line in named:
-            handle.write(f"- {line}\n")
-        handle.write("\n")
+            handle.write(line.replace("````", "'''") + "\n")
+        handle.write("````\n\n")
 
 
 # ── Fixtures, copied from the runs on issue #1374 ───────────────────────────
@@ -318,12 +369,48 @@ FAILED tests/test_anthropic_messages.py::test_streaming_event_sequence_integrity
 ======================== 1 failed, 35 passed in 30.85s =========================
 """
 
+# Synthetic, and the only two in this file that are. No parameterized case and
+# no test class exists in packages/sdk-tests/python/tests/ yet, so no run has
+# ever produced either shape. They are here because the first one added would
+# otherwise parse to nothing at all and be reported as a suite that died
+# wholesale, which is this script's own failure mode in the opposite direction.
+PYTEST_PARAMETERIZED = """
+=========================== short test summary info ============================
+FAILED tests/test_aliases.py::test_alias[deepseek v4 flash] - AssertionError: expected 31 to be 5
+FAILED tests/test_aliases.py::test_alias[gpt oss 20b]
+======================== 2 failed, 34 passed in 24.11s =========================
+"""
+
+PYTEST_CLASS_TRACEBACK = """
+=================================== FAILURES ===================================
+____________________ TestChat.test_streaming_integrity _____________________
+
+self = <tests.test_chat.TestChat object at 0x7f2a1c0>
+
+    def test_streaming_integrity(self, client):
+        response = client.chat.completions.create(**payload)
+>       assert response.usage.total_tokens == 5
+E       AssertionError: assert 31 == 5
+
+tests/test_chat.py:28: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chat.py::TestChat::test_streaming_integrity
+======================== 1 failed, 35 passed in 30.85s =========================
+"""
+
+# Synthetic, and the third of the three. Unlike the vitest and pytest fixtures
+# above, no red sdk-tests-java run exists to capture: the Java suite has not
+# failed in the window issue #1374 covers. build.gradle sets useJUnitPlatform()
+# with no testLogging block, so this is Gradle's default failed-test console
+# shape, with the class and package names this repository actually uses
+# (packages/sdk-tests/java/src/test/java/com/hive/sdktests/). Replace it with a
+# capture the first time that suite goes red.
 GRADLE_FAILURE = """
 > Task :compileTestJava
 > Task :test
 
-com.hive.sdk.ChatCompletionsTest > basicCompletionReturnsAlias() FAILED
-    org.opentest4j.AssertionFailedError at ChatCompletionsTest.java:42
+com.hive.sdktests.ErrorShapeTest > rejectsUnknownModelWithStructuredError() FAILED
+    org.opentest4j.AssertionFailedError at ErrorShapeTest.java:42
 
 > Task :test FAILED
 
@@ -372,10 +459,23 @@ def _selfcheck() -> int:
     assert "#1274" in found[0][1], found
     assert found[0][1].startswith("[XPASS(strict)]"), found
 
+    # A class-based test's rule header carries the class, while the summary
+    # line's node id does not, and the first line under the rule is source
+    # rather than a reason. Both silently recovered nothing useful.
+    found = parse_pytest(PYTEST_CLASS_TRACEBACK)
+    assert len(found) == 1, found
+    assert found[0][0] == "tests/test_chat.py::TestChat::test_streaming_integrity", found
+    assert found[0][1] == "AssertionError: assert 31 == 5", (
+        "the recovered reason must be the reason, not the source line above it: "
+        + repr(found[0][1])
+    )
+
     # A gradle task line is not a test and must never be named as one.
     found = parse_gradle(GRADLE_FAILURE)
     assert len(found) == 1, found
-    assert found[0][0] == "com.hive.sdk.ChatCompletionsTest > basicCompletionReturnsAlias()", found
+    assert found[0][0] == (
+        "com.hive.sdktests.ErrorShapeTest > rejectsUnknownModelWithStructuredError()"
+    ), found
     assert parse_gradle(GRADLE_PASS) == [], parse_gradle(GRADLE_PASS)
 
     # Nothing at all must not invent a failure.
@@ -390,29 +490,39 @@ def _selfcheck() -> int:
         for suite in SUITES:
             (root / f"{suite}.rc").write_text("0\n", encoding="utf-8")
             (root / f"{suite}.log").write_text(VITEST_ASSERTION, encoding="utf-8")
-        assert collect(root) == [], collect(root)
+        assert collect(root) == ([], False), collect(root)
 
         # The 12:09 run's real shape: js red on one assertion, py and java green.
         (root / "sdk-tests-js.rc").write_text("1\n", encoding="utf-8")
-        named = collect(root)
+        named, real = collect(root)
         assert len(named) == 1, named
         assert named[0].startswith("sdk-tests-js: "), named
         assert "expected 31 to be 5" in named[0], named
+        assert real is True, "a parsed test name is a named failure"
 
         # A suite that died wholesale says so, and does NOT claim a test
         # failed. This is the case where an upstream refusal really is the
         # likely cause, which is why the wording sends the reader there.
         (root / "sdk-tests-py.rc").write_text("125\n", encoding="utf-8")
         (root / "sdk-tests-py.log").write_text("Cannot start container\n", encoding="utf-8")
-        named = collect(root)
+        named, real = collect(root)
         assert len(named) == 2, named
         assert "exited 125 with no named test failure" in named[1], named
+        assert real is True, "one suite still named a test, so the flag holds"
 
         # A missing .rc file must not be read as a pass.
         (root / "sdk-tests-java.rc").unlink()
-        named = collect(root)
+        named, real = collect(root)
         assert len(named) == 3, named
         assert "exited unknown" in named[2], named
+
+        # Every suite dead and nothing named: three failure lines and no claim
+        # that a test failed, which is what lets a real refusal stay the cause.
+        (root / "sdk-tests-js.log").write_text("Cannot start container\n", encoding="utf-8")
+        (root / "sdk-tests-java.log").write_text("Cannot start container\n", encoding="utf-8")
+        named, real = collect(root)
+        assert len(named) == 3, named
+        assert real is False, named
 
     # The cross-step contract: the tracking-issue step reads SDK_FAILED_TESTS
     # out of $GITHUB_ENV. Multi-line values need the heredoc form; the plain
@@ -423,7 +533,7 @@ def _selfcheck() -> int:
         previous = os.environ.get("GITHUB_ENV")
         os.environ["GITHUB_ENV"] = str(env_path)
         try:
-            _write_env(["sdk-tests-js: a > b -- Error: x", "sdk-tests-py: c::d"])
+            _write_env(["sdk-tests-js: a > b -- Error: x", "sdk-tests-py: c::d"], True)
             written = env_path.read_text(encoding="utf-8")
         finally:
             if previous is None:
@@ -432,12 +542,147 @@ def _selfcheck() -> int:
                 os.environ["GITHUB_ENV"] = previous
         assert written.startswith("SDK_FAILED_TESTS<<SDK_FAILURES_"), written
         assert written.endswith("\n"), written
-        delimiter = written.splitlines()[0].split("<<", 1)[1]
-        assert written.splitlines()[-1] == delimiter, written
+        lines = written.splitlines()
+        delimiter = lines[0].split("<<", 1)[1]
+        # The heredoc must be closed before the flag, or the flag lands inside
+        # the value and SDK_NAMED_TEST_FAILURES is never set at all.
+        assert lines[-2] == delimiter, written
+        assert lines[-1] == "SDK_NAMED_TEST_FAILURES=1", written
         assert "sdk-tests-py: c::d" in written, written
+
+    # A parameterized case's node id contains spaces. The `$`-anchored pattern
+    # that only accepted `\S+` matched nothing at all here, so the suite fell
+    # through to the wholesale branch and the report confidently called a plain
+    # assertion failure a container that never started.
+    found = parse_pytest(PYTEST_PARAMETERIZED)
+    assert len(found) == 2, found
+    assert found[0][0] == "tests/test_aliases.py::test_alias[deepseek v4 flash]", found
+    assert found[0][1] == "AssertionError: expected 31 to be 5", found
+    assert found[1][0] == "tests/test_aliases.py::test_alias[gpt oss 20b]", found
+    assert found[1][1] == "", "an id with spaces and no reason must still parse"
+
+    # The one fixture in this file that is a committed capture rather than an
+    # excerpt retyped from a run page. If the parser only ever sees strings
+    # written to match its own regexes it proves nothing about real output.
+    real = _captured_log("run-33251802900-sdk-tests-js.log")
+    found = parse_vitest(real)
+    assert len(found) == 1, found
+    assert found[0][0].endswith(
+        "prompt_tokens_details.cached_tokens is present with a numeric value"
+    ), found
+    assert found[0][1] == "AssertionError: expected 31 to be 5 // Object.is equality", found
+
+    # report() itself, which is the deliverable: the annotations, the overflow
+    # warning, the job summary and the two $GITHUB_ENV keys. None of this was
+    # exercised before, so deleting the `::error::` prefix left this green.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        for suite in SUITES:
+            (root / f"{suite}.rc").write_text("0\n", encoding="utf-8")
+            (root / f"{suite}.log").write_text("", encoding="utf-8")
+        (root / "sdk-tests-js.rc").write_text("1\n", encoding="utf-8")
+        (root / "sdk-tests-js.log").write_text(real, encoding="utf-8")
+        out, env, summary = _run_report(root)
+
+    assert "::error::sdk-tests-js: " in out, out
+    assert "expected 31 to be 5" in out, out
+    assert "::warning::" not in out, "one failure must not claim an overflow"
+    assert "SDK_FAILED_TESTS<<" in env, env
+    assert "SDK_NAMED_TEST_FAILURES=1\n" in env, (
+        "a genuinely named test failure must set the flag the refusal "
+        "classifier keys its precedence rule on: " + env
+    )
+    assert "### Live integration: failing SDK tests" in summary, summary
+    assert "expected 31 to be 5" in summary, summary
+
+    # A wholesale death names no test, so the flag must stay unset. This is the
+    # CRITICAL of issue #1374's review: with the flag set here, a real spent
+    # daily allowance is demoted to a note and issue #1088 is reversed in its
+    # own scenario.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        for suite in SUITES:
+            (root / f"{suite}.rc").write_text("125\n", encoding="utf-8")
+            (root / f"{suite}.log").write_text(
+                "Error response from daemon: cannot start container\n", encoding="utf-8"
+            )
+        out, env, summary = _run_report(root)
+
+    assert out.count("::error::") == 3, out
+    assert "died wholesale" in out, out
+    assert "SDK_FAILED_TESTS<<" in env, env
+    assert "SDK_NAMED_TEST_FAILURES" not in env, (
+        "no test was named, so nothing may claim one was; that claim is what "
+        "suppresses a genuine refusal from being reported as the cause: " + env
+    )
+
+    # Over MAX_ANNOTATIONS the run page gets the cap plus one warning, and the
+    # remainder still reaches the step log and the summary.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        for suite in SUITES:
+            (root / f"{suite}.rc").write_text("0\n", encoding="utf-8")
+            (root / f"{suite}.log").write_text("", encoding="utf-8")
+        (root / "sdk-tests-js.rc").write_text("1\n", encoding="utf-8")
+        (root / "sdk-tests-js.log").write_text(
+            "\n".join(f" FAIL  tests/a.test.ts > case {n}" for n in range(25)),
+            encoding="utf-8",
+        )
+        out, env, summary = _run_report(root)
+
+    assert out.count("::error::") == MAX_ANNOTATIONS, out
+    assert "::warning::5 further failure(s) not annotated" in out, out
+    assert "case 24" in out, "the uncapped remainder still belongs in the step log"
+    assert summary.count("case ") == 25, summary
+
+    # Every suite green: say so, write nothing, invent nothing.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        for suite in SUITES:
+            (root / f"{suite}.rc").write_text("0\n", encoding="utf-8")
+            (root / f"{suite}.log").write_text(real, encoding="utf-8")
+        out, env, summary = _run_report(root)
+
+    assert "no SDK suite reported a non-zero exit" in out, out
+    assert "::error::" not in out, out
+    assert env == "", env
+    assert summary == "", summary
 
     print("ok: extract-sdk-failures parsers")
     return 0
+
+
+def _captured_log(name: str) -> str:
+    return (pathlib.Path(__file__).parent / "fixtures" / "sdk-failures" / name).read_text(
+        encoding="utf-8"
+    )
+
+
+def _run_report(root: pathlib.Path) -> tuple[str, str, str]:
+    """report() under a temporary $GITHUB_ENV and $GITHUB_STEP_SUMMARY."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env_path = pathlib.Path(tmp) / "env"
+        summary_path = pathlib.Path(tmp) / "summary"
+        env_path.write_text("", encoding="utf-8")
+        summary_path.write_text("", encoding="utf-8")
+        previous = {k: os.environ.get(k) for k in ("GITHUB_ENV", "GITHUB_STEP_SUMMARY")}
+        os.environ["GITHUB_ENV"] = str(env_path)
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary_path)
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                assert report(root) == 0
+            return (
+                buffer.getvalue(),
+                env_path.read_text(encoding="utf-8"),
+                summary_path.read_text(encoding="utf-8"),
+            )
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def main(argv: list[str]) -> int:

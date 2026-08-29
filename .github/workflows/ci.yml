@@ -1743,8 +1743,16 @@ jobs:
           # it, which the probe step above already reports.
           #
           # This names the tests instead. It changes nothing about what passes.
+          #
+          # Loud on its own failure rather than `|| true`. It must not add a
+          # second failure to a step that has already failed, but a silent
+          # swallow means a missing python3 or a changed log layout drops
+          # SDK_FAILED_TESTS, the refusal classifier takes its no-named-failures
+          # branch, and the lane reverts to headlining an incidental 429 with
+          # nothing anywhere saying it did.
           if [ "$fail" != "0" ]; then
-            python3 ../../scripts/extract-sdk-failures.py "$log" || true
+            python3 ../../scripts/extract-sdk-failures.py "$log" \
+              || echo "::warning::extract-sdk-failures.py failed, so no test is named below; whatever cause the refusal classifier reports is its guess, not a named test"
           fi
           exit $fail
 
@@ -2009,9 +2017,19 @@ jobs:
             // incidental provider 429 sends every reader to the wrong place,
             // which is what happened for a full day on issue #1374.
             const named = (process.env.SDK_FAILED_TESTS || '').trim();
-            const tests = named
+            // Capped at the same 20 the run-page annotations are capped at.
+            // A broad outage fails on the order of a hundred cases, and this
+            // comment is posted again on every subsequent red run, so the
+            // uncapped list is both unreadable and a walk towards GitHub's
+            // 65536-character body limit.
+            const MAX_LISTED = 20;
+            const lines = named ? named.split('\n') : [];
+            const overflow = lines.length - MAX_LISTED;
+            const tests = lines.length
               ? '**Failing tests:**\n' +
-                named.split('\n').map((line) => `- ${line}`).join('\n') + '\n\n'
+                lines.slice(0, MAX_LISTED).map((line) => `- ${line}`).join('\n') +
+                (overflow > 0 ? `\n- and ${overflow} more, see the run page` : '') +
+                '\n\n'
               : '';
             const context_ = process.env.UPSTREAM_FAILURE_CONTEXT
               ? `Also in the container logs, as context rather than cause: ${process.env.UPSTREAM_FAILURE_CONTEXT}\n\n`
