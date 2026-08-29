@@ -113,6 +113,40 @@ for (const shape of ['claude', 'claude-multiedit', 'cursor']) {
   );
 }
 
+// Two payload shapes that no harness is documented to send, pinned anyway
+// because this guard fails silently when it fails at all: it exits 0 with no
+// output, which is byte-identical to a clean scan. Both were raised in the
+// pre-merge review of issue #1333.
+cases.push(
+  // A payload carrying BOTH a content field and an edits array. Under a
+  // first-truthy-wins fallback chain the array is never reached, so a secret
+  // in the edits hides behind an innocuous content field.
+  { name: 'secrets-scanner scans edits even when content is also present', hook: 'secrets-scanner.js',
+    payload: {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: 'src/example.ts',
+        content: 'export const count = 1;\n',
+        edits: [{ old_string: 'placeholder', new_string: `const k = "${FAKE_AWS_KEY}";\n` }],
+      },
+    },
+    code: 2, present: ['BLOCKED', 'AWS access key'] },
+
+  // A new_string that is not a string. Default coercion turns an object into
+  // "[object Object]", which hides whatever it holds from every pattern.
+  { name: 'secrets-scanner scans a non-string new_string', hook: 'secrets-scanner.js',
+    payload: {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: 'src/example.ts',
+        edits: [{ old_string: 'placeholder', new_string: { key: FAKE_AWS_KEY } }],
+      },
+    },
+    code: 2, present: ['BLOCKED', 'AWS access key'] },
+);
+
 let failed = 0;
 for (const c of cases) {
   const { code, out } = run(c.hook, c.payload);

@@ -30,8 +30,18 @@ process.stdin.on('end', () => {
     const editsSource = Array.isArray(ti.edits) ? ti.edits
       : Array.isArray(data.edits) ? data.edits
       : [];
-    const editsContent = editsSource.map(e => (e || {}).new_string || '').join('\n');
-    const content = ti.content || ti.new_string || editsContent || '';
+    // Nothing here trusts a payload field to be a string. An unexpected shape
+    // is serialized rather than coerced, because the default coercion of an
+    // object is "[object Object]", which would hide any credential nested
+    // inside it from every pattern below.
+    const asText = v => (typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v));
+    const editsContent = editsSource.map(e => asText((e || {}).new_string)).join('\n');
+    // Every source is scanned, rather than the first truthy one winning. A
+    // fallback chain lets a payload that carries both a content field and an
+    // edits array hide the array behind the field.
+    const content = [asText(ti.content), asText(ti.new_string), editsContent]
+      .filter(Boolean)
+      .join('\n');
 
     if (!content || !filePath) process.exit(0);
 
