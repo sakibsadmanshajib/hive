@@ -267,7 +267,13 @@ func main() {
 
 	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
 	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
-	filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, storageCfg.FilesBucket)
+	// TEMPORARY, REVERTED IN THE NEXT COMMIT. Deliberate break for PR #1390's
+	// acceptance criterion: prove the restored file-upload coverage can go
+	// red. A bucket that does not exist is a real storage-path defect and is
+	// the shape of the family issue #1282 belongs to, where the request
+	// reaches a live server and is refused. If this line is still here on a
+	// merged commit, that is the bug.
+	filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, "hive-files-deliberately-wrong")
 
 	batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
 	batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
