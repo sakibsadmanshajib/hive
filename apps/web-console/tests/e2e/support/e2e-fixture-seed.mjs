@@ -390,12 +390,53 @@ async function seedTenantsAndMemberships(admin, ids, users) {
   }
 }
 
-// The credits each fixture tenant is funded with. Session chat takes a flat
-// 10000 credit hold before it dispatches, so an account below that figure is
-// refused on quota and never reaches a provider. This is deliberately several
-// holds' worth: a spec that sends more than one turn must not start failing on
-// the second.
-const FIXTURE_GRANT_CREDITS = 1_000_000;
+// The credits each fixture tenant is funded with, stated in the current
+// credit unit: 1 USD = 1,000,000,000 credits since the 2026-08-23 rescale
+// (D-046, supabase/migrations/20260823_40_credit_unit_rescale_billion.sql).
+// This is 10.00 USD.
+//
+// Session chat takes a flat 100,000,000 credit hold (0.10 USD,
+// inference.DefaultHoldText) before it dispatches, so an account below that
+// figure is refused on quota and never reaches a provider. The hold is flat
+// and is taken before the alias price is consulted, so a cheap alias does not
+// lower it. This grant is deliberately a hundred holds' worth: a spec that
+// sends more than one turn must not start failing on the second.
+//
+// The rescale migration multiplied stored credit columns by 10,000 but could
+// not reach this constant, so it silently became 0.001 USD and every fixture
+// seeded after it was refused at its first turn (issue #1441). Restating it
+// in any future unit is guarded by TestFixtureGrantCoversTheFlatChatHold in
+// apps/control-plane/internal/accounting.
+const FIXTURE_GRANT_CREDITS = 10_000_000_000;
+
+// fixtureGrantIdempotencyKey carries the AMOUNT, not just the account.
+//
+// The key used to be `e2e-fixture-grant:<account_id>` with no amount in it,
+// and the grant is upserted with ignoreDuplicates. That combination makes a
+// corrected amount unreachable: an account seeded during the broken window
+// between the 2026-08-23 rescale and this fix is parked at 0.001 USD, and
+// re-seeding it matches the existing key and silently skips the correction,
+// so it stays broken forever. CI never notices, because it provisions a
+// throwaway Postgres per run, but the demo box is persistent and several
+// fixture accounts were seeded there inside that window.
+//
+// Putting the amount in the key means a changed FIXTURE_GRANT_CREDITS is a
+// different key, so the seeder appends a fresh grant at the corrected figure
+// instead of skipping. Re-running with an unchanged amount still matches and
+// is still a no-op, so this is idempotent on the corrected amount rather than
+// merely on the existence of some grant, and it needs no version constant
+// anyone has to remember to bump.
+//
+// The ledger is append only, so the stale row is never rewritten. An account
+// that already holds the old grant ends up with both rows and a balance a
+// little above the intended figure, which for a test fixture is harmless and
+// is the only correction an append-only ledger allows.
+export function fixtureGrantIdempotencyKey(
+  accountId,
+  credits = FIXTURE_GRANT_CREDITS
+) {
+  return `e2e-fixture-grant:${accountId}:${credits}`;
+}
 
 // seedBilling maps each fixture tenant to the account it settles against and
 // funds that account.
@@ -410,9 +451,12 @@ const FIXTURE_GRANT_CREDITS = 1_000_000;
 //
 // Both writes are upserts on their natural keys, so a re-seed of the fixed
 // local identity is idempotent and never double funds an account. The grant's
-// idempotency key is per account and carries no run entropy for exactly that
-// reason: the unique index on (account_id, entry_type, idempotency_key) is
-// what makes a repeated seed a no-op instead of a second million credits.
+// idempotency key carries the account and the amount but no run entropy, for
+// exactly that reason: the unique index on (account_id, entry_type,
+// idempotency_key) is what makes a repeated seed at an unchanged amount a
+// no-op instead of a second grant, while a CHANGED amount is a different key
+// and so tops the account up rather than being silently skipped. See
+// fixtureGrantIdempotencyKey above for why the amount has to be in there.
 //
 // Runs after seedAccountsAndMemberships and seedTenantsAndMemberships, because
 // tenant_billing_accounts has a foreign key into each.
@@ -434,7 +478,7 @@ async function seedBilling(admin, ids) {
       account_id: pair.account_id,
       entry_type: "grant",
       credits_delta: FIXTURE_GRANT_CREDITS,
-      idempotency_key: `e2e-fixture-grant:${pair.account_id}`,
+      idempotency_key: fixtureGrantIdempotencyKey(pair.account_id),
       metadata: { source: "e2e-fixture-seed" },
     })),
     { onConflict: "account_id,entry_type,idempotency_key", ignoreDuplicates: true }

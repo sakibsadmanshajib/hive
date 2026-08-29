@@ -26,6 +26,10 @@ import {
   type Control,
   type Result,
 } from "../../e2e/chat-coverage/lib";
+import {
+  assertSkillsSurfaceLanded,
+  STATIC_SURFACES,
+} from "../../e2e/chat-coverage/surfaces";
 
 const COVERAGE_DIR = join(__dirname, "../../e2e/chat-coverage");
 
@@ -346,5 +350,91 @@ describe("the data-file validators", () => {
     for (const entry of parsed) {
       expect(entry.id).not.toBe("");
     }
+  });
+});
+
+// The skills library shipped in PR #1388 as a Hive route at /skills with its
+// own navigation row. Nothing swept it, so it sat outside the denominator
+// entirely: a bundle regression, a new proxy rule, or `workspace.skills`
+// flipping back to false would have emptied the surface with every gate still
+// reporting green. That is the failure shape this repository keeps paying for,
+// a quiet absence where a loud failure belonged, so the surface is swept and
+// floored.
+//
+// A presence bar rather than a pinned count, because the index renders one row
+// per skill the account owns, which is account data in exactly the way the
+// chat list is. A floor of 1 still fails when the surface stops rendering at
+// all, and a floor key a run never sweeps fails too, so deleting the entry
+// point is caught rather than quietly shrinking the denominator.
+describe("the skills surface is inside the denominator", () => {
+  const floorsFile = JSON.parse(
+    readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8"),
+  );
+
+  it("is swept by the live run", () => {
+    const ids = STATIC_SURFACES.map((surface) => surface.id);
+    expect(ids, "the /skills route must be swept or it leaves the denominator").toContain(
+      "skills",
+    );
+  });
+
+  // Without this the whole application shell that (app)/+layout.svelte renders
+  // around the index lands in this surface's count, re-counting controls the
+  // sweep already attributes to home and the sidebar. `workspace`, the other
+  // full-page navigation, sits at 12 while a bare enumeration of /skills reads
+  // in the forties, which is the shell showing up in the number.
+  it("counts only what the route adds, not the shell around it", () => {
+    const skills = STATIC_SURFACES.find((surface) => surface.id === "skills");
+    expect(skills?.delta).toBe(true);
+  });
+
+  it("carries a presence bar, not a pinned count", () => {
+    expect(parseDataDriven(floorsFile).has("skills")).toBe(true);
+    expect(parseFloors(floorsFile).skills).toBe(1);
+  });
+
+  it("fails the gate when the surface is emptied or its entry point deleted", () => {
+    const floors = parseFloors(floorsFile);
+    // Emptied: the spec appends to `swept` before it checks for zero controls,
+    // so this shape does reach floorFailures.
+    expect(
+      floorFailures(floors, [{ surface: "skills", enumerated: 0 }], (s) => s === "skills"),
+    ).toHaveLength(1);
+    // Entry point deleted: never swept at all, which is the other way a
+    // surface leaves the denominator without a word in the report.
+    expect(floorFailures(floors, [], (surface) => surface === "skills")).toHaveLength(1);
+    expect(
+      floorFailures(floors, [{ surface: "skills", enumerated: 3 }], (s) => s === "skills"),
+    ).toEqual([]);
+  });
+});
+
+/*
+ * The floor alone does not catch the failure this surface exists to catch.
+ *
+ * `skills/+layout.svelte` calls `goto('/')` when `workspace.skills` is false,
+ * which is exactly the state a persisted config row reverts to when nothing
+ * reconciles it (#722). An opener that only navigates would then land on the
+ * chat home, enumerate it under the id `skills`, clear the floor, and prove a
+ * page full of genuinely working home controls. Green gate, absent surface,
+ * and the miss lands on the one failure mode the surface was added for.
+ *
+ * The assertion is a pure function so this can be proved able to go red
+ * without a browser and without a deployment.
+ */
+describe("the skills surface opener refuses a redirect", () => {
+  it("throws when the permission bounced the page to home", () => {
+    expect(() => assertSkillsSurfaceLanded("/", false)).toThrow(/redirected to \//);
+    // The bounce lands on a page that renders plenty, so a control count can
+    // never distinguish it. Only the pathname can.
+    expect(() => assertSkillsSurfaceLanded("/", true)).toThrow(/workspace\.skills/);
+  });
+
+  it("throws when the route resolves but renders nothing", () => {
+    expect(() => assertSkillsSurfaceLanded("/skills", false)).toThrow(/rendered nothing/);
+  });
+
+  it("passes only when the index is actually on screen", () => {
+    expect(() => assertSkillsSurfaceLanded("/skills", true)).not.toThrow();
   });
 });

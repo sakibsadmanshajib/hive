@@ -166,7 +166,15 @@ func (s *accountsRepoStub) GetAccountByID(_ context.Context, id uuid.UUID) (*acc
 	return acct, nil
 }
 
-func (s *accountsRepoStub) CreateInvitation(_ context.Context, _ accounts.Invitation) error {
+func (s *accountsRepoStub) CreateInvitation(_ context.Context, inv accounts.Invitation) (uuid.UUID, error) {
+	return inv.ID, nil
+}
+
+func (s *accountsRepoStub) ListOutstandingInvitations(_ context.Context, _ uuid.UUID) ([]accounts.Invitation, error) {
+	return nil, nil
+}
+
+func (s *accountsRepoStub) DeleteInvitation(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
 

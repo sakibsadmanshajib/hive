@@ -172,11 +172,28 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		// Fails the launch when the policy cannot be resolved, exactly as
 		// the in-process wiring does: never launch with an unknown egress
 		// policy.
-		ResolveEgressHosts:     resolveEgressHosts,
-		LLMModel:               llmModel,
-		LLMBaseURL:             llmBaseURL,
-		LLMAPIKey:              os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
-		BrowserTools:           browserTools,
+		ResolveEgressHosts: resolveEgressHosts,
+		LLMModel:           llmModel,
+		LLMBaseURL:         llmBaseURL,
+		LLMAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
+		BrowserTools:       browserTools,
+		// Unset is the normal state and is the pre-existing behaviour: no
+		// agent_context reaches the sandbox at all and the vendored SDK's
+		// default preset produces the system prompt exactly as it did
+		// before this variable existed.
+		//
+		// Deliberately not trimmed, though not for the reason it would be
+		// natural to assume. The suffix does NOT need a leading newline to
+		// separate it from the preset: the SDK's prompt registry joins every
+		// section with its own "\n\n"
+		// (context/prompts/registry.py's _SECTION_SEPARATOR), and the suffix
+		// is a dynamic-tier section rather than a string appended to the
+		// static one. It is left alone because trimming would silently edit
+		// text an operator wrote to be sent to a model, and because the SDK
+		// already strips before deciding whether to render at all
+		// (context/prompts/sections/dynamic.py's CustomSuffixSection.guard),
+		// so a whitespace-only value renders nothing either way.
+		SystemMessageSuffix:    os.Getenv("HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX"),
 		SessionAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
 		QuotaTenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
 		QuotaUserConcurrency:   envInt("HIVE_QUOTA_USER_CONCURRENCY", 2),

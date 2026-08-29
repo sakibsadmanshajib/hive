@@ -809,6 +809,86 @@ func TestSandboxEngine_Launch_SendsInlineAgentSettingsWhenLLMConfigured(t *testi
 	}
 }
 
+// launchAgentContext returns the agent_context object the launch body carried,
+// or nil when the body had no such key at all. Read out of the raw bytes for
+// the same reason launchLLMFields is: decoding into the Go struct and back
+// through the same tags is symmetric, so it stays green even if the JSON name
+// the agent-server actually reads is renamed or dropped.
+func (f *fakeAgentServer) launchAgentContext(t *testing.T) map[string]json.RawMessage {
+	t.Helper()
+	f.mu.Lock()
+	raw := append([]byte(nil), f.startBody...)
+	f.mu.Unlock()
+
+	var body struct {
+		AgentSettings struct {
+			AgentContext map[string]json.RawMessage `json:"agent_context"`
+		} `json:"agent_settings"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode launch body: %v", err)
+	}
+	return body.AgentSettings.AgentContext
+}
+
+// The sandbox agent's system prompt was not set by Hive at all: the launch
+// payload carried agent_kind, llm and optionally tools, and nothing else, so
+// the prompt was whatever the vendored OpenHands default preset produced and
+// there was no knob anywhere to shape it.
+//
+// This is the delivery assertion for that knob. It runs the real Launch path
+// against the fake agent-server and reads the bytes that server received, so
+// it fails if the configured value stops reaching the sandbox for any reason:
+// a missed assignment in Launch, a wrong or dropped JSON tag, or a field
+// silently omitted. Asserting that engine.Config has the field would prove
+// none of that.
+func TestSandboxEngine_Launch_SendsConfiguredSystemMessageSuffix(t *testing.T) {
+	const suffix = "Always cite the file you changed."
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.cfg.LLMModel = "openai/hive-test-model"
+	e.cfg.SystemMessageSuffix = suffix
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	ctxFields := fake.launchAgentContext(t)
+	if ctxFields == nil {
+		t.Fatal("launch body carried no agent_settings.agent_context at all")
+	}
+	var got string
+	if err := json.Unmarshal(ctxFields["system_message_suffix"], &got); err != nil {
+		t.Fatalf(`agent_context has no "system_message_suffix" on the wire; fields sent: %v`,
+			slices.Sorted(maps.Keys(ctxFields)))
+	}
+	if got != suffix {
+		t.Fatalf("system_message_suffix = %q, want %q", got, suffix)
+	}
+}
+
+// The default, and the one that protects every task launched today. The
+// sandbox's OpenHandsAgentSettings.agent_context has default_factory=AgentContext
+// (vendor/openhands/openhands-sdk/openhands/sdk/settings/model.py), so an
+// omitted key reproduces exactly the agent Hive launches now. Sending an
+// explicit empty context instead would start shaping every launch on the
+// strength of a variable nobody set, and a system prompt reaches every user of
+// the surface.
+func TestSandboxEngine_Launch_OmitsAgentContextWhenNoSuffixConfigured(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.cfg.LLMModel = "openai/hive-test-model"
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	if ctxFields := fake.launchAgentContext(t); ctxFields != nil {
+		t.Fatalf("expected no agent_context when none is configured, got fields %v",
+			slices.Sorted(maps.Keys(ctxFields)))
+	}
+}
+
 // The profile path stays intact for a deployment that does persist profiles.
 func TestSandboxEngine_Launch_SendsProfileIDWhenNoLLMConfigured(t *testing.T) {
 	var fake *fakeAgentServer

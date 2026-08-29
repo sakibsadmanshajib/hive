@@ -32,10 +32,12 @@ test-scripts:
 	python3 scripts/test_owui_chat_delete_authz.py
 	python3 scripts/test_shared_demo_account.py
 	python3 scripts/test_owui_skill_group_grants.py
+	python3 scripts/test_owui_skill_tenant_scope.py
 	python3 scripts/owui-promote-instance-admin.py --self-check
 	python3 scripts/classify-upstream-refusal.py --selfcheck
 	python3 scripts/report-free-pool-health.py --selfcheck
 	python3 scripts/test_caddy_owui_blocklist.py
+	python3 scripts/test_caddy_one_front_door.py
 	python3 scripts/test_caddy_upstream_retry.py
 	python3 scripts/test_owui_model_picker_filter.py
 	python3 scripts/generate-enterprise-jwt-keys.py --self-check

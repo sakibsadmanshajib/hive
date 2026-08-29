@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
@@ -48,6 +49,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleUpdateMemberRole(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/accounts/current/invitations":
 		h.handleCreateInvitation(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/accounts/current/invitations/revoke":
+		h.handleRevokeInvitation(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/invitations/accept":
 		h.handleAcceptInvitation(w, r)
 	default:
@@ -142,7 +145,101 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 			Status: m.Status,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"members": items})
+
+	// Outstanding invitations ride along on the members payload rather than on a
+	// second endpoint. They are the same question ("who is in this workspace, and
+	// who is on the way in") behind the same permission, and an invited address
+	// appearing nowhere is half of why an undeliverable invitation went unnoticed
+	// for so long (issue #1440).
+	invitations, err := h.svc.ListInvitations(r.Context(), vc.CurrentAccount.ID, viewer)
+	if err != nil {
+		writeInternal(w, r, "could not list workspace invitations", err)
+		return
+	}
+	type invitationItem struct {
+		ID        string `json:"id"`
+		Email     string `json:"email"`
+		Role      string `json:"role"`
+		Status    string `json:"status"`
+		ExpiresAt string `json:"expires_at"`
+		CreatedAt string `json:"created_at"`
+	}
+	invitationItems := make([]invitationItem, 0, len(invitations))
+	for _, inv := range invitations {
+		invitationItems = append(invitationItems, invitationItem{
+			ID:        inv.ID.String(),
+			Email:     inv.Email,
+			Role:      inv.Role,
+			Status:    inv.Status,
+			ExpiresAt: inv.ExpiresAt.UTC().Format(time.RFC3339),
+			CreatedAt: inv.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"members":     items,
+		"invitations": invitationItems,
+	})
+}
+
+// handleRevokeInvitation implements POST /api/v1/accounts/current/invitations/revoke
+//
+// POST rather than DELETE on an id path, because the console reaches this
+// through a plain HTML form and a form can only issue GET or POST.
+func (h *Handler) handleRevokeInvitation(w http.ResponseWriter, r *http.Request) {
+	viewer, ok := auth.ViewerFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invitation id is required"})
+		return
+	}
+	invitationID, err := uuid.Parse(strings.TrimSpace(body.ID))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invitation id is not valid"})
+		return
+	}
+
+	requestedAccountID := parseAccountHeader(r)
+	vc, err := h.svc.EnsureViewerContext(r.Context(), viewer, requestedAccountID)
+	if err != nil {
+		writeInternal(w, r, "could not load your workspace", err)
+		return
+	}
+
+	if err := h.svc.RevokeInvitation(r.Context(), vc.CurrentAccount.ID, viewer, invitationID); err != nil {
+		var gateErr *GateError
+		switch {
+		case AsGateError(err, &gateErr):
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": gateErr.Message,
+				"code":  gateErr.Code,
+			})
+		case errors.Is(err, ErrNotFound):
+			// Also the answer for an invitation on another workspace, because
+			// the repository scopes its delete by account. A caller learns
+			// nothing about invitations it cannot see.
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "this invitation no longer exists",
+				"code":  "invitation_not_found",
+			})
+		default:
+			slog.ErrorContext(r.Context(), "accounts: revoke invitation failed",
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "could not revoke the invitation",
+			})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"revoked": true})
 }
 
 // handleCreateInvitation implements POST /api/v1/accounts/current/invitations
@@ -194,12 +291,17 @@ func (h *Handler) handleCreateInvitation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// delivered and delivery describe what actually happened to the message.
+	// The console derives every user-visible string from them, so no surface can
+	// report a send that did not occur (issue #1440).
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":         result.ID.String(),
 		"email":      result.Email,
 		"role":       result.Role,
 		"token":      result.Token,
 		"expires_at": result.ExpiresAt,
+		"delivered":  result.Delivered,
+		"delivery":   result.Delivery,
 	})
 }
 

@@ -110,6 +110,43 @@ export interface AccountMember {
   status: string;
 }
 
+// PendingInvitation is an invitation that has been issued and not yet accepted.
+//
+// It carries no token. The raw acceptance token exists exactly once, in the
+// create response, and the database keeps only its hash, so a listing has
+// nothing to hand out and must not pretend otherwise.
+export interface PendingInvitation {
+  id: string;
+  email: string;
+  role: string;
+  // "pending" while it can still be accepted, "expired" once it cannot. An
+  // expired invitation is still listed: it is the reason somebody never joined.
+  status: string;
+  expires_at: string;
+  created_at: string;
+}
+
+// MemberRoster is who is in the workspace plus who is on the way in.
+export interface MemberRoster {
+  members: AccountMember[];
+  invitations: PendingInvitation[];
+}
+
+// InvitationDelivery says what actually happened to the invitation message.
+//
+// "sent" only ever comes from a transport that ran and returned success. The
+// console derives every user-visible string from this value, which is what
+// stops it claiming a send that never occurred (issue #1440).
+export type InvitationDelivery = "sent" | "not_configured" | "failed";
+
+export interface InvitationCreated {
+  id: string | null;
+  // The raw acceptance token, returned once and never stored anywhere.
+  token: string | null;
+  delivered: boolean;
+  delivery: InvitationDelivery;
+}
+
 interface ViewerResponse {
   user: ViewerUser;
   current_account: {
@@ -429,6 +466,36 @@ function decodeBillingProfile(payload: JsonObject): BillingProfile | null {
     country_code: countryCode,
     state_region: stateRegion,
   };
+}
+
+function decodeInvitations(payload: JsonObject): PendingInvitation[] {
+  const values = readArrayField(payload, "invitations");
+  if (!values) {
+    return [];
+  }
+
+  const invitations: PendingInvitation[] = [];
+  for (const value of values) {
+    if (!isJsonObject(value)) {
+      continue;
+    }
+    const id = readStringField(value, "id");
+    const email = readStringField(value, "email");
+    const role = readStringField(value, "role");
+    const status = readStringField(value, "status");
+    if (!id || !email || !role || !status) {
+      continue;
+    }
+    invitations.push({
+      id,
+      email,
+      role,
+      status,
+      expires_at: readStringField(value, "expires_at") ?? "",
+      created_at: readStringField(value, "created_at") ?? "",
+    });
+  }
+  return invitations;
 }
 
 function decodeMembers(payload: JsonObject): AccountMember[] {
@@ -1172,20 +1239,25 @@ export async function updateAccountProfile(
   return profile;
 }
 
-// createInvitation sends a workspace invite for the given email. It runs only
-// server-side (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never
-// rendered into client HTML (issue #111). Throws ControlPlaneError so the route
-// can map the upstream status (403 no-permission, 409 already-member, etc.) to a
-// generic, customer-safe message instead of collapsing everything to 500.
+// createInvitation issues a workspace invitation. It runs only server-side
+// (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never rendered into
+// client HTML (issue #111). Throws ControlPlaneError so the route can map the
+// upstream status (403 no-permission, 409 already-member, etc.) to a generic,
+// customer-safe message instead of collapsing everything to 500.
 //
-// The control-plane returns the raw acceptance token in its 201 body. We return
-// it here so a server-side caller (e.g. an invite mailer) can use it, but it is
-// deliberately NOT surfaced in any client-facing redirect/URL — the token is
-// bearer-equivalent and must not leak into browser history or logs.
+// The control-plane returns the raw acceptance token in its 201 body, plus what
+// actually happened to the invitation message. Both matter to the caller: the
+// delivery outcome decides what the interface is allowed to claim, and the token
+// is what lets the inviting user deliver the invitation themselves when nothing
+// was mailed.
+//
+// The token is bearer-equivalent. It may be rendered to the inviting user, who
+// is already authorised to issue it, and it must never travel in a redirect URL,
+// a cookie, a log line, or browser history.
 export async function createInvitation(
   email: string,
   role: string,
-): Promise<{ token: string | null }> {
+): Promise<InvitationCreated> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/invitations`, {
     method: "POST",
@@ -1199,8 +1271,62 @@ export async function createInvitation(
   }
 
   const payload = parseJsonValue(await readResponseText(response));
-  const token = isJsonObject(payload) ? readStringField(payload, "token") : null;
-  return { token };
+  if (!isJsonObject(payload)) {
+    // A response we cannot read is not evidence of a delivery. Treating an
+    // unreadable body as a send is precisely the class of assumption this
+    // change exists to remove.
+    return { id: null, token: null, delivered: false, delivery: "failed" };
+  }
+  const delivered = payload.delivered === true;
+  return {
+    id: readStringField(payload, "id"),
+    token: readStringField(payload, "token"),
+    delivered,
+    delivery: parseInvitationDelivery(readStringField(payload, "delivery"), delivered),
+  };
+}
+
+// parseInvitationDelivery refuses to invent "sent".
+//
+// An unrecognised or absent value falls back to "failed" rather than to the
+// happy path, so a control-plane that stops reporting delivery degrades into
+// telling the user to send the link themselves rather than into claiming an
+// email that nothing sent.
+function parseInvitationDelivery(
+  raw: string | null,
+  delivered: boolean,
+): InvitationDelivery {
+  switch (raw) {
+    case "sent":
+      // Cross-checked against the boolean. The two fields disagreeing means the
+      // response is not trustworthy, and "sent" is the claim that has to earn it.
+      return delivered ? "sent" : "failed";
+    case "not_configured":
+      return "not_configured";
+    case "failed":
+      return "failed";
+    default:
+      return "failed";
+  }
+}
+
+// revokeInvitation withdraws an outstanding invitation. The control-plane scopes
+// the delete by account, so an id belonging to another workspace is a 404 rather
+// than a cross-workspace revoke.
+export async function revokeInvitation(id: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/invitations/revoke`,
+    {
+      method: "POST",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({ id }),
+    },
+  );
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to revoke invitation");
+  }
 }
 
 // updateMemberRole changes an existing member's workspace role. Server-side only
@@ -1833,12 +1959,17 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
     }
   }
 
-  // Fallbacks are one-cent steps at the current credit unit (1 USD = 1e9
-  // credits since the 2026-08-23 rescale); the server normally supplies all
-  // three.
-  const creditIncrement = readNumberField(payload, "credit_increment") ?? 10_000_000;
-  const minCredits = readNumberField(payload, "min_credits") ?? 10_000_000;
-  const maxCredits = readNumberField(payload, "max_credits") ?? 1_000_000_000;
+  // Read the purchase bounds RAW. Defaulting first would fabricate a coherent
+  // range out of an omitted field and let it through the check below, so the
+  // guard would catch a loudly wrong response and miss a silently incomplete
+  // one. That is the same shape as the defect this guard exists for, and it is
+  // how issue #1386 happened: an absent ceiling was silently replaced with
+  // 1,000,000,000 credits (1.00 USD) against a real Stripe ceiling of 100.00
+  // USD, and nothing complained. Judge what the server actually sent, then
+  // default.
+  const rawCreditIncrement = readNumberField(payload, "credit_increment");
+  const rawMinCredits = readNumberField(payload, "min_credits");
+  const rawMaxCredits = readNumberField(payload, "max_credits");
   // FX-17-04 regulatory: pricing primitive must be in minor units of a
   // declared currency, priced per `credit_block_size` credits. Reject
   // payload without these fields rather than defaulting to a USD
@@ -1860,6 +1991,39 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   ) {
     throw new Error("Failed to parse checkout rails response");
   }
+  // A purchase range whose ceiling sits below its floor is not renderable: it
+  // reached the live amount input as min="10000000" max="0", an invalid HTML5
+  // number range, because the console wrote the server's value straight into
+  // the attribute. An omitted bound is the quiet version of the same fault and
+  // is refused here too, rather than papered over with a fallback.
+  //
+  // The guard is conditional on a rail the payer can actually select, because
+  // `max_credits: 0` alongside no selectable rail is not corruption. The
+  // control plane computes that field as the most restrictive ceiling among
+  // ENABLED rails (`MostRestrictiveMaxCredits`), and 0 is its documented
+  // answer for a deployment that registered no rail credentials. That case is
+  // a real state the modal explains to the user, not a server error to raise,
+  // and nothing there is purchasable so the bounds do not matter.
+  const anyRailSelectable = rails.some((rail) => rail.enabled);
+  const boundsUsable =
+    rawMinCredits !== null &&
+    Number.isFinite(rawMinCredits) &&
+    rawMinCredits > 0 &&
+    rawMaxCredits !== null &&
+    Number.isFinite(rawMaxCredits) &&
+    rawMaxCredits >= rawMinCredits &&
+    rawCreditIncrement !== null &&
+    Number.isFinite(rawCreditIncrement) &&
+    rawCreditIncrement > 0;
+  if (anyRailSelectable && !boundsUsable) {
+    throw new Error("Failed to parse checkout rails response");
+  }
+  // Defaults apply only once the response has been judged, and only on the
+  // path where nothing is purchasable, so they can never stand in for a bound
+  // the server failed to send while the payer can still reach a checkout.
+  const creditIncrement = rawCreditIncrement ?? 10_000_000;
+  const minCredits = rawMinCredits ?? 10_000_000;
+  const maxCredits = rawMaxCredits ?? 1_000_000_000;
   return {
     rails,
     credit_increment: creditIncrement,
@@ -2631,7 +2795,14 @@ export async function dismissBudgetAlert(): Promise<void> {
   }
 }
 
-export async function getMembers(accessToken: string): Promise<AccountMember[]> {
+// getMembers returns the workspace roster: active and invited members, plus the
+// invitations that have been issued and not yet accepted.
+//
+// Invitations ride on this response rather than on a separate call because they
+// answer the same question behind the same permission, and because an invited
+// address showing up nowhere in the console is half of why a broken invitation
+// went unnoticed (issue #1440).
+export async function getMembers(accessToken: string): Promise<MemberRoster> {
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
   if (!baseUrl) {
     throw new Error("CONTROL_PLANE_BASE_URL is not configured");
@@ -2654,10 +2825,13 @@ export async function getMembers(accessToken: string): Promise<AccountMember[]> 
 
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) {
-    return [];
+    return { members: [], invitations: [] };
   }
 
-  return decodeMembers(payload);
+  return {
+    members: decodeMembers(payload),
+    invitations: decodeInvitations(payload),
+  };
 }
 
 // =============================================================================

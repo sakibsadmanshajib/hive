@@ -202,6 +202,39 @@ export function CheckoutModal({
   const minCredits = options?.min_credits ?? 10_000_000;
   const maxCredits = options?.max_credits ?? 1_000_000_000;
 
+  // A deployment with no rail credentials registered returns every rail
+  // disabled, and with it a purchase ceiling of 0 (the control plane's
+  // documented "nothing is selectable" answer). Rendering the purchase form
+  // anyway produced the live defect: an empty Payment method fieldset, a
+  // permanently disabled Continue button that explained nothing, and
+  // min="10000000" max="0" on the amount input.
+  //
+  // The range check is defence in depth. getCheckoutRails already refuses an
+  // incoherent range whenever a rail is selectable, so this branch is what
+  // keeps an invalid range out of the DOM if the modal is ever fed one
+  // directly.
+  // The step is part of the same predicate, not a separate concern: a zero or
+  // absent `credit_increment` survives the `??` above as a literal 0, renders
+  // as step="0", and freezes both stepper buttons on an amount the payer
+  // cannot change. A field nobody can move is the same dead control this
+  // change exists to remove.
+  const selectableRails = options?.rails.filter((rail) => rail.enabled) ?? [];
+  const boundsAreCoherent =
+    Number.isFinite(minCredits) &&
+    minCredits > 0 &&
+    Number.isFinite(maxCredits) &&
+    maxCredits >= minCredits &&
+    Number.isFinite(increment) &&
+    increment > 0;
+  const canPurchase = selectableRails.length > 0 && boundsAreCoherent;
+  // Both messages name the state and then the next move. A dead end that only
+  // says it is a dead end still leaves the user guessing, which is the
+  // complaint this change exists to answer.
+  const unavailableReason =
+    selectableRails.length === 0
+      ? "No payment method is available for this account yet, so credits cannot be bought here. Your balance and your existing API keys are unaffected. Contact support to have a payment method enabled for this account."
+      : "The payment options for this account came back unusable, so credits cannot be bought here right now. Your balance and your existing API keys are unaffected. Refresh in a moment, and contact support if it keeps happening.";
+
   function decrementAmount() {
     setCreditAmount((prev) => Math.max(minCredits, prev - increment));
   }
@@ -249,7 +282,16 @@ export function CheckoutModal({
           </p>
         ) : null}
 
-        {options ? (
+        {options && !canPurchase ? (
+          <p
+            role="status"
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-4 py-3 text-sm text-[var(--color-ink-2)]"
+          >
+            {unavailableReason}
+          </p>
+        ) : null}
+
+        {options && canPurchase ? (
           <>
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-xs font-medium text-[var(--color-ink-2)]">
@@ -356,16 +398,15 @@ export function CheckoutModal({
                 {checkoutError}
               </p>
             ) : null}
+          </>
+        ) : null}
 
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="md"
-                onClick={onClose}
-              >
-                Keep balance
-              </Button>
+        {options ? (
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" size="md" onClick={onClose}>
+              Keep balance
+            </Button>
+            {canPurchase ? (
               <Button
                 type="button"
                 variant="accent"
@@ -375,8 +416,8 @@ export function CheckoutModal({
               >
                 {loading ? "Loading…" : "Continue to payment"}
               </Button>
-            </div>
-          </>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>

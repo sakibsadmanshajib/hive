@@ -108,6 +108,7 @@ export default async function SetupPage() {
         action={saveProfile}
         initialValues={initialValues}
         submitLabel="Save and continue"
+        justSaved={false}
       />
     </ConsoleShell>
   );

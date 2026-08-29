@@ -1,0 +1,146 @@
+Visual proof capture for issue #550 / PR #1430
+Date: 2026-08-29
+
+WHAT WAS RUNNING
+----------------
+Console under test : http://127.0.0.1:3011, this branch's code, `next dev`
+Auth service       : https://console-hive.scubed.co/auth/v1 (demo box, live)
+Control plane      : https://control-hive.scubed.co (demo box, live)
+Gateway            : https://api-hive.scubed.co/v1 (demo box, live)
+Signed in as       : qa-tester@hive.test, through the ordinary sign-in form.
+                     No password was set, reset or rotated.
+
+The console is the only part running locally, because the change under test is
+in the console and it is not deployed yet. Everything it talks to is the real
+demo box: the key below was minted by the live control plane and the request
+below was answered by the live gateway.
+
+REDACTION
+---------
+Every API key value in this log and in both screenshots is replaced with
+"sk-hive-REDACTED-BEFORE-CAPTURE". The replacement happens in the DOM before
+any pixel is captured, so no real key ever reached an image. Nothing else in
+the captures is altered.
+
+All three keys minted for these captures were revoked immediately afterwards,
+and the revocation was verified by re-running the generated command:
+  {"error":{"message":"Incorrect API key provided: API key is revoked",
+   "type":"invalid_request_error","param":null,"code":"invalid_api_key"}}
+
+CAPTURE 1 — panel-default.png, HIVE_PUBLIC_API_BASE_URL unset
+-------------------------------------------------------------
+This is the hosted configuration, and what the demo box will render.
+
+key nickname: issue-550-proof-1788023573048
+base URL rendered by the panel: https://api-hive.scubed.co/v1
+curl rendered by the panel:
+
+  curl 'https://api-hive.scubed.co/v1/chat/completions' \
+    -H 'Authorization: Bearer sk-hive-REDACTED-BEFORE-CAPTURE' \
+    -H 'Content-Type: application/json' \
+    -d '{
+    "model": "hive-default",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello in one sentence."
+      }
+    ]
+  }'
+
+ACCEPTANCE TEST — that command, run verbatim, unedited
+------------------------------------------------------
+The text above was copied out of the panel and executed as-is against the live
+gateway with the real key in place of the placeholder. Response, in full:
+
+  {"id":"chatcmpl-f73953ff-fa56-4ceb-97cf-36bfad0c0b28","object":"chat.completion",
+   "created":1788023595,"model":"hive-default","choices":[{"index":0,
+   "message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],
+   "usage":{"prompt_tokens":89,"completion_tokens":17,"total_tokens":106,
+   "completion_tokens_details":{"reasoning_tokens":13,
+   "accepted_prediction_tokens":0,"rejected_prediction_tokens":0},
+   "prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}
+
+HTTP 200, a real completion. Worth stating explicitly, because it is a standing
+rule rather than an accident: the response names no provider, carries no
+provider id, and has no system_fingerprint field, so nothing on this path leaks
+one to a customer.
+
+An earlier run of the same acceptance test, before the review round that added
+shell quoting, also returned 200 with content "Hello, I hope you are having a
+wonderful day!". The quoting change did not alter what the command does.
+
+CAPTURE 2 — panel-enterprise.png, HIVE_PUBLIC_API_BASE_URL set
+---------------------------------------------------------------
+Same code, same box, one variable changed, to show the base URL is derived from
+configuration rather than compiled in. This is the Hive Enterprise case.
+
+HIVE_PUBLIC_API_BASE_URL=https://ai.example-bank.internal/v1
+
+key nickname: issue-550-proof-1788023640340
+base URL rendered by the panel: https://ai.example-bank.internal/v1
+curl rendered by the panel:
+
+  curl 'https://ai.example-bank.internal/v1/chat/completions' \
+    -H 'Authorization: Bearer sk-hive-REDACTED-BEFORE-CAPTURE' \
+    -H 'Content-Type: application/json' \
+    -d '{
+    "model": "hive-default",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello in one sentence."
+      }
+    ]
+  }'
+
+That hostname does not resolve and is not meant to. The point of this capture is
+that the panel prints what the deployment was configured with, which is the half
+of issue #550 that a hardcoded constant got wrong for every self-hosted install.
+
+WHAT THE MODEL ID IS, AND A CORRECTION
+--------------------------------------
+An earlier version of this log said "hive-default" was the seeded fallback and
+that the QA tester's catalog read returned nothing. That was an inference from
+the rendered id, not a measurement, and it was wrong. Correcting it here rather
+than quietly editing it away, because a reviewer built a finding on it.
+
+Measured directly afterwards, read only, as the same QA tester account:
+
+  GET https://control-hive.scubed.co/api/v1/catalog/models -> HTTP 200
+  11 models, including: deepseek-v4-flash, deepseek-v4-pro, hive-auto,
+  hive-default, hive-embedding-default, hive-fast, hive-free, hive-medium
+
+So the catalog does answer for a non-admin viewer, and "hive-default" is what
+rung 1 of pickQuickstartAlias selects from that list: the first fixed-price
+Hive alias that speaks chat. hive-auto sorts ahead of it and is deliberately
+skipped, because it is variable-price and takes a credit hold a fresh account
+may not cover (issue #1372). The rendered id is the same either way, which is
+exactly why the two cases were indistinguishable from the screenshot alone.
+
+The bounded catalog read added after review stands regardless. Its purpose is
+not that the read fails, it is that this page is where an operator goes to
+revoke a leaked key and must not wait on a lookup whose only consumer is a
+string in a snippet.
+
+INSTALLER VERIFICATION (added after review)
+-------------------------------------------
+The `ecc:code-review` stream found that the new installer prompt wrote the
+operator's answer to a shell variable that `setup_env` never persisted, so a
+self-hosted operator would have been asked for the gateway base URL, answered
+it, and still had the empty line from `.env.example` in their `.env`. That is
+the exact defect issue #550 exists to remove, and worse than the state before
+this change, because the operator would believe they had answered it.
+
+Fixed by adding the missing `_write_env_var "HIVE_PUBLIC_API_BASE_URL"` call
+beside the others, and verified by running `setup_env` for real against a
+throwaway HIVE_HOME with the answer supplied non-interactively:
+
+  with the fix:     HIVE_PUBLIC_API_BASE_URL=https://ai.example-bank.internal/v1
+                    PASS: the answered value was persisted
+
+  fix removed:      HIVE_PUBLIC_API_BASE_URL=
+                    FAIL: the line is present but does not carry the answered value
+
+The second run is the point: the check goes red against the code as it stood
+before the fix, so it is measuring something.

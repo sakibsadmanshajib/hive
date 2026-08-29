@@ -27,7 +27,7 @@
     "/auth/reset-password": ["input|#password", "input|#confirm", "button|Update password"],
     "/no-workspace": ["a|Check again", "button|Sign out"],
     "/console/api-keys": ["button|Create key", "input|#key-nickname"],
-    "/console/members": ["input|#invite-email", "select|#invite-role", "button|Send invite"],
+    "/console/members": ["input|#invite-email", "select|#invite-role", "button|Create invitation"],
     "/console/billing": ["a|Invoices", "a|Ledger", "input|#threshold-credits"],
     "/console/billing/alerts": ["input|#alert-email", "button|Create alert"],
     "/console/billing/budget": [

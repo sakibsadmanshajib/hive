@@ -36,12 +36,15 @@ function readSingle(value: string | string[] | undefined): string | null {
 export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const params = await searchParams;
   const authorizationId = readSingle(params.authorization_id);
-  const signInAlreadyAttempted =
-    readSingle(params[CONSENT_RETRIED_PARAM]) !== null;
+  // Presence of the key, not a parsed single value. `?retried=` with an empty
+  // value, or a repeated `?retried=1&retried=1`, both make readSingle answer
+  // null, and reading the marker through it would let either spelling disarm
+  // the hop bound this marker exists to enforce.
+  const signInAlreadyAttempted = CONSENT_RETRIED_PARAM in params;
 
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
-  const { data } = await supabase.auth.getSession();
+  const { data, error: sessionError } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token ?? null;
 
   // A config gap (either Supabase var unset) is not an auth failure: skip the
@@ -61,6 +64,11 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
 
   const decision = decideConsentLanding({
     hasSession: Boolean(accessToken),
+    // A failed read is not an absent session. supabase-js reports an expired
+    // token whose refresh could not complete as {session: null, error}, so
+    // without this the server would send a signed-in user to the password
+    // form because GoTrue was briefly unreachable.
+    sessionReadFailed: Boolean(sessionError),
     authorizationId,
     lookup,
     signInAlreadyAttempted,
@@ -89,5 +97,10 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     );
   }
 
-  return <ConsentPanel authorizationId={authorizationId} />;
+  return (
+    <ConsentPanel
+      authorizationId={authorizationId}
+      signInAlreadyAttempted={signInAlreadyAttempted}
+    />
+  );
 }

@@ -60,6 +60,15 @@ export type ConsentLandingDecision =
 
 export interface ConsentLandingInput {
   hasSession: boolean;
+  /**
+   * True when reading the session itself failed, which is a different fact
+   * from having no session. supabase-js reports an expired token whose refresh
+   * could not complete as `{session: null, error}`, so collapsing the two
+   * would ask a signed-in user for a password because GoTrue was briefly
+   * unreachable. Optional so existing callers and tests that never had a
+   * failure to report keep compiling; absent means the read succeeded.
+   */
+  sessionReadFailed?: boolean;
   authorizationId: string | null;
   lookup: GoTrueLookup | null;
   /**
@@ -79,14 +88,43 @@ export interface ConsentLandingInput {
 export function decideConsentLanding(
   input: ConsentLandingInput,
 ): ConsentLandingDecision {
-  const { hasSession, authorizationId, lookup, signInAlreadyAttempted } = input;
+  const {
+    hasSession,
+    sessionReadFailed = false,
+    authorizationId,
+    lookup,
+    signInAlreadyAttempted,
+  } = input;
 
-  // No session (or no request id): fall through to the existing client panel,
-  // which routes an unauthenticated visitor to sign-in exactly once and shows
-  // its painted error state when the request id is missing. Unchanged from
-  // pre-wave-1 behavior.
-  if (!hasSession || !authorizationId) {
+  // No request id at all: the panel owns that error state and paints it.
+  // Unchanged from pre-wave-1 behavior.
+  if (!authorizationId) {
     return { action: "render-panel" };
+  }
+
+  // No session is the ordinary first-time case, not a failure: it is every
+  // visitor who arrives from the chat front end without having signed in yet.
+  // The client panel used to make that discovery in the browser and then
+  // navigate to the very URL named here, which cost a full render of the
+  // consent panel and its bundle before anything moved. Measured on the demo
+  // box on 2026-08-29, that was 1984 ms of a 5518 ms cold sign-in journey,
+  // the single largest segment in the trace (issues #967 and #945).
+  //
+  // The server may decide this because it cannot be less informed than the
+  // browser: lib/supabase/server.ts and lib/supabase/browser.ts are both
+  // @supabase/ssr clients reading the same session from the same cookies, so
+  // "no session" cannot mean one thing here and another there.
+  //
+  // Two cases keep the panel. A session-less request that already spent one
+  // sign-in hop, so the hop count stays bounded at one; and a session read
+  // that FAILED rather than came back empty, since a transient refresh error
+  // is not evidence that this visitor has no session, and treating it as one
+  // asks a signed-in user for a password because GoTrue blinked.
+  if (!hasSession) {
+    if (signInAlreadyAttempted || sessionReadFailed) {
+      return { action: "render-panel" };
+    }
+    return { action: "sign-in", url: buildSignInRedirect(authorizationId) };
   }
 
   if (!lookup) {

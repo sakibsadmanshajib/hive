@@ -85,7 +85,7 @@ func TestAcceptInvitation_ConsumesAnInvitationOnce(t *testing.T) {
 		ExpiresAt:       time.Now().Add(time.Hour),
 		InvitedByUserID: inviterID,
 	}
-	if err := repo.CreateInvitation(ctx, inv); err != nil {
+	if _, err := repo.CreateInvitation(ctx, inv); err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
 

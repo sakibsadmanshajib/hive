@@ -45,9 +45,47 @@ describe("decideConsentLanding", () => {
     expect(decision).toEqual({ action: "render-panel" });
   });
 
-  it("falls through to the panel when there is no session", () => {
+  it("redirects to sign-in on the server when there is no session", () => {
     const decision = decideConsentLanding({
       hasSession: false,
+      signInAlreadyAttempted: false,
+      authorizationId: AUTH_ID,
+      lookup: null,
+    });
+    expect(decision).toEqual({
+      action: "sign-in",
+      url: buildSignInRedirect(AUTH_ID),
+    });
+  });
+
+  it("falls through to the panel when there is no session and no request id", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      signInAlreadyAttempted: false,
+      authorizationId: null,
+      lookup: null,
+    });
+    expect(decision).toEqual({ action: "render-panel" });
+  });
+
+  it("does not bounce a session-less visitor twice", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      signInAlreadyAttempted: true,
+      authorizationId: AUTH_ID,
+      lookup: null,
+    });
+    expect(decision).toEqual({ action: "render-panel" });
+  });
+
+  // A refresh that failed is not the same fact as "this visitor has no
+  // session", and sending the second where the first is true asks a signed-in
+  // user for a password because GoTrue was briefly unreachable. The client
+  // panel has always separated the two; the server decision has to as well.
+  it("never redirects on a failed session read, only on a genuinely absent one", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      sessionReadFailed: true,
       signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: null,

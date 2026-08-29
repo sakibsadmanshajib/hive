@@ -107,6 +107,21 @@ describe("ConsentPanel", () => {
     expect(mockGetAuthorizationDetails).not.toHaveBeenCalled();
   });
 
+  // The retried marker is what bounds the sign-in hop count at one, and until
+  // now only the server landing consulted it: the panel bounced on every
+  // session-less render regardless, so a visitor whose session never lands
+  // could be sent around the loop indefinitely. The marker has to be honoured
+  // on both sides or it bounds nothing.
+  it("paints instead of bouncing again when a sign-in hop has already been spent", async () => {
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+
+    render(<ConsentPanel authorizationId={AUTH_ID} signInAlreadyAttempted />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/could not be completed|start again/i);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it("surfaces a getSession error instead of redirecting to sign-in (avoids a refresh-failure loop)", async () => {
     mockGetSession.mockResolvedValue({
       data: { session: null },

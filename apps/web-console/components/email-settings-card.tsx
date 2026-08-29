@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
+import { resolveClientOrigin } from "@/lib/http/client-origin";
 
 interface EmailSettingsCardProps {
   email: string;
@@ -36,11 +37,11 @@ export function EmailSettingsCard({
     setNotice(null);
     setResending(true);
 
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ??
-      (typeof window !== "undefined"
-        ? window.location.origin
-        : "http://localhost:3000");
+    // Loopback-demoted (issue #487). `.env.example` ships
+    // NEXT_PUBLIC_APP_URL=http://localhost:3000 and the value is baked into
+    // this bundle at build time, so a build that carries the example default
+    // forward would otherwise mail a link to the recipient's own machine.
+    const appUrl = resolveClientOrigin();
 
     const { error: resendError } = await supabase.auth.signInWithOtp({
       email,

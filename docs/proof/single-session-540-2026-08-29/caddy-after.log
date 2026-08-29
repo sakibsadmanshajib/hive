@@ -1,0 +1,28 @@
+# Caddyfile.owui matcher probe for issue #540, label=after
+# file under test: sha256=0d5e2e50fcb50493
+# upstream: one stub answering 200 to everything, reached through this
+# file's own reverse_proxy lines via docker network aliases.
+# 404 = refused by Caddy. 200 = reached the (stubbed) backend.
+
+## the second front door
+/agent-workspace                                         404
+/agent-workspace/                                        404
+/agent-workspace/tasks                                   404
+/agent-workspace/auth/sign-in                            404
+//agent-workspace                                        404
+/Agent-Workspace/tasks                                   404
+
+## the chat shell and the native agent surface, which must keep working
+/                                                        200
+/agents                                                  200
+/api/config                                              200
+/api/v1/hive/agent/tasks                                 200
+/api/v1/hive/credits/balance                             200
+/v1/agent/tasks                                          200
+/v1/featuregate                                          200
+/_app/immutable/nodes/7.js                               200
+/agent-workspaces                                        200
+
+# caddy container log (config load):
+{"level":"info","ts":1788029118.9816291,"logger":"tls","msg":"cleaning storage unit","storage":"FileStorage:/data/caddy"}
+{"level":"info","ts":1788029118.9885266,"logger":"tls","msg":"finished cleaning storage units"}

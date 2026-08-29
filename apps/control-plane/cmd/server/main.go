@@ -45,6 +45,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/mailer"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
@@ -384,6 +385,32 @@ func main() {
 		// tenant_billing_accounts mapping right after it lands — the other
 		// half of the creation-path race fix in signup.EnsureTenantBillingAccount.
 		accountsSvc = accountsSvc.WithBillingPool(pool)
+
+		// Invitation email. Optional: without a relay or without a public
+		// console origin the invitation is still issued, and the create
+		// response reports delivery "not_configured" so the console can hand
+		// the link to the inviting user rather than claiming a send that never
+		// happened (issue #1440).
+		//
+		// The origin is server configuration and is resolved once here.
+		// requestIsLoopback is false because there is no request in scope at
+		// boot, which also means a loopback-only configuration is refused
+		// rather than baked into a link that is mailed to a stranger.
+		if mailCfg := mailer.ConfigFromEnv(); mailCfg.Configured() {
+			if consoleURL := payments.ResolveConsoleBaseURL(false); consoleURL != "" {
+				accountsSvc = accountsSvc.WithInvitationMailer(
+					accounts.NewInvitationMailer(mailer.NewSMTPSender(mailCfg), consoleURL),
+				)
+				log.Printf("invitation mailer ready (relay %s, sender %s)", mailCfg.Host, mailCfg.FromAddress)
+			} else {
+				log.Println("WARN invitation mailer disabled: no public console origin configured " +
+					"(set WEB_CONSOLE_PUBLIC_URL or CONSOLE_APP_URL); invitations are issued with a copyable link instead")
+			}
+		} else {
+			log.Println("WARN invitation mailer disabled: set HIVE_SMTP_HOST and HIVE_MAIL_FROM to send " +
+				"invitation email; invitations are issued with a copyable link instead")
+		}
+
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
 		// Hot-path read cache (Redis): wraps the repositories behind

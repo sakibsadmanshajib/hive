@@ -61,4 +61,17 @@ describe("pickQuickstartAlias", () => {
   it("falls back to the seeded alias when the catalog could not be read", () => {
     expect(pickQuickstartAlias([])).toBe("hive-default");
   });
+
+  // The returned id is printed in a command on the API keys page and on
+  // /console/docs. Upstream ids name the provider, and provider names never
+  // reach a customer-facing surface in this product. Before this, a catalog
+  // holding no Hive chat alias returned whatever sorted first, which is an
+  // upstream id by definition of having got that far.
+  it("never names an upstream model id, whatever the catalog holds", () => {
+    const upstreamOnly: CatalogModel[] = [
+      model("openai/gpt-4o-mini", "fixed", ["stable", "chat"]),
+      model("groq/llama-3.3-70b", "fixed", ["stable", "chat"]),
+    ];
+    expect(pickQuickstartAlias(upstreamOnly)).toBe("hive-default");
+  });
 });

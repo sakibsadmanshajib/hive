@@ -421,6 +421,22 @@ setup_env() {
     printf '  Open WebUI persisted config, then restart open-webui)\n'
     prompt_value OWUI_SHIM_KEY "Open WebUI shim key" required "$_default_owui_shim" secret
 
+    # ── Gateway base URL shown to developers ──
+    #
+    # The console prints this on the API keys page under a freshly minted key
+    # and pastes it into the curl and SDK snippets it shows (issue #550). Left
+    # unset it falls back to the hosted deployment's own gateway, which is the
+    # right answer for Hive Cloud and the wrong one for every self-hosted
+    # install: the customer's first action after minting a key is to copy that
+    # command, and it would send their key to a gateway that is not theirs.
+    # Asking here is what keeps that from happening silently.
+    printf '%s-- Gateway base URL --%s\n' "${BOLD}" "${RESET}"
+    printf '  The address your own developers call, including the /v1 suffix.\n'
+    printf '  This is the base URL printed in the console next to a new API key.\n'
+    printf '  Example: https://ai.your-domain.com/v1\n'
+    prompt_value HIVE_PUBLIC_API_BASE_URL "Public gateway base URL" required \
+        "http://$(hostname -I 2>/dev/null | awk '{print $1}' | grep . || printf '127.0.0.1'):8080/v1"
+
     # ── Optional: Headscale relay ──
     if [ "$WITH_RELAY" = "true" ]; then
         printf '%s-- Headscale relay (--with-relay) --%s\n' "${BOLD}" "${RESET}"
@@ -503,6 +519,7 @@ setup_env() {
     _write_env_var "OWUI_SHIM_KEY" "${OWUI_SHIM_KEY:-}"
     _write_env_var "GRAFANA_ADMIN_USER" "${GRAFANA_ADMIN_USER:-admin}"
     _write_env_var "GRAFANA_ADMIN_PASSWORD" "${GRAFANA_ADMIN_PASSWORD:-}"
+    _write_env_var "HIVE_PUBLIC_API_BASE_URL" "${HIVE_PUBLIC_API_BASE_URL:-}"
     if [ "$WITH_RELAY" = "true" ]; then
         _write_env_var "HEADSCALE_SERVER_URL" "${HEADSCALE_SERVER_URL:-}"
     fi

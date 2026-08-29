@@ -35,18 +35,23 @@ const maxPollerBackoff = 5 * time.Minute
 // RunOnce fails the task immediately instead of leaving it queued/running
 // forever or charging it against its failure budget first.
 //
-// The routine producer of this path on the demo box is a DEPLOY, not a rare
-// crash: deploy-demo-box.yml runs scripts/install-agent-engine-host.sh
-// unconditionally on every merge to main, which always stops and restarts
-// the launcher unit, and every in-flight session's registry entry dies with
-// it. So a merge to main now terminally fails every in-flight Cowork task
-// within one poll interval of the restart completing, including one whose
-// sandbox had already finished successfully but whose result the poller had
-// not yet read — the truthful state there is "outcome unrecoverable," not
-// "the task failed," which is why engineSessionGoneMessage below is worded
-// the way it is rather than asserting failure. Mitigating this (a drain, or
-// a registry that survives a restart) is tracked separately, issue #921;
-// this fix intentionally does not build it.
+// The routine producer of this path on the demo box USED TO BE a DEPLOY, not
+// a rare crash: deploy-demo-box.yml runs scripts/install-agent-engine-host.sh
+// on every merge to main, and that script stopped and restarted the launcher
+// unit unconditionally, so every in-flight session's registry entry died with
+// it — measured at ten restarts in eight hours on 2026-08-29. Issue #921
+// closed that producer: the installer now compares the built binary, the
+// rendered env file and the entry script against what the running daemon was
+// started with, and leaves a healthy daemon running identical artifacts
+// alone. A restart still happens when the launcher itself genuinely changed,
+// so this path is not dead, it is rare.
+//
+// It also stays reachable for a launcher that crashed or was restarted by
+// hand, and either way the task whose session vanished may well have finished
+// its work before the reference to it was lost — the truthful state is
+// "outcome unrecoverable," not "the task failed," which is why
+// engineSessionGoneMessage below is worded the way it is rather than
+// asserting failure.
 var ErrEngineSessionGone = errors.New("agenttask: engine has no memory of this session")
 
 // engineSessionGoneMessage is the customer-visible error_message persisted

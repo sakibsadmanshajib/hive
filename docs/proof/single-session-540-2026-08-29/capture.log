@@ -1,0 +1,18 @@
+# issue #540 sequence proof, live demo box
+# captured 2026-08-29T18:40:53.909Z
+
+PART A  clean browser, no session anywhere
+  chat redirected straight into the identity provider
+  url: https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3D<redacted-authorization-id>%26retried%3D1
+  chat-origin cookies: owui-session
+  screenshot: 01-the-one-credential-prompt.png
+  no "Continue with Hive" button to click: Open WebUI had already
+  redirected into the identity provider on its own, which is the
+  same single prompt reached one click sooner.
+  (stopping here: no password is typed and none is changed)
+
+PART B  the account's session on the console origin, and nothing else
+  seeded cookies: sb-console-hive-auth-token@console-hive.scubed.co
+  chat reached at: https://chat-hive.scubed.co/
+  navigation chain: https://chat-hive.scubed.co/  ->  https://chat-hive.scubed.co/  ->  https://chat-hive.scubed.co/  ->  https://chat-hive.scubed.co/auth?redirect=%2F  ->  https://chat-hive.scubed.co/  ->  https://chat-hive.scubed.co/  ->  https://chat-hive.scubed.co/
+  chat asked for credentials again: false

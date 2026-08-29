@@ -98,12 +98,102 @@ afterEach(() => {
 });
 
 describe("CheckoutModal behavior", () => {
-  it("pay button is gated until a rail is selectable (no enabled rails renders it disabled)", async () => {
-    stubFetch({ rails: optionsFixture({ rails: [{ rail: "bkash", currency: "BDT", label: "bKash", enabled: false }] }) });
+  // The deployed box serves exactly this: one rail, disabled, and the server's
+  // "nothing is selectable" ceiling of 0 alongside a minimum of 10,000,000.
+  // The modal used to render an empty rail fieldset, a permanently disabled
+  // Continue button with no explanation, and `min="10000000" max="0"` on the
+  // amount input.
+  const noRailFixture = () =>
+    optionsFixture({
+      rails: [{ rail: "stripe", currency: "USD", label: "Card", enabled: false }],
+      min_credits: 10_000_000,
+      max_credits: 0,
+    });
+
+  it("no selectable rail explains itself instead of offering a dead button", async () => {
+    stubFetch({ rails: noRailFixture() });
     render(<CheckoutModal accountCountryCode="US" onClose={vi.fn()} />);
-    await screen.findByText("Payment method");
-    const pay = screen.getByRole("button", { name: /continue to payment/i });
-    expect(buttonDisabled(pay)).toBe(true);
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/no payment method is available/i);
+    // Nothing to select, so nothing pretends to be selectable.
+    expect(screen.queryByText("Payment method")).toBeNull();
+    expect(screen.queryByRole("button", { name: /continue to payment/i })).toBeNull();
+    // The user can still leave the modal.
+    expect(screen.getByRole("button", { name: /keep balance/i })).toBeTruthy();
+  });
+
+  it("an inverted or zero purchase range never reaches the DOM", async () => {
+    // The healthy case is in this list on purpose. Without it the attribute
+    // assertion below would only ever iterate an empty NodeList, which is a
+    // green that cannot go red: it would pass just as happily against a modal
+    // that renders no input for any payload at all. With it, the loop runs
+    // against a real node on one case and stays the tripwire for a regression
+    // that starts rendering the field again on the broken ones.
+    const cases = [
+      { name: "nothing selectable, zero ceiling", rails: noRailFixture(), purchasable: false },
+      {
+        name: "selectable rail, ceiling below floor",
+        rails: optionsFixture({ min_credits: 10_000_000, max_credits: 0 }),
+        purchasable: false,
+      },
+      {
+        name: "selectable rail, zero floor and ceiling",
+        rails: optionsFixture({ min_credits: 0, max_credits: 0 }),
+        purchasable: false,
+      },
+      {
+        // step="0" freezes both stepper buttons on an amount the payer cannot
+        // change, which is the same dead control in a different disguise.
+        name: "selectable rail, zero increment",
+        rails: optionsFixture({ credit_increment: 0 }),
+        purchasable: false,
+      },
+      {
+        // A NEGATIVE step is the same fault with a sign: the decrement button
+        // would raise the amount. An ABSENT one is deliberately not here,
+        // because the `??` fallback substitutes a real one-cent step and the
+        // decoder already refuses an absent increment upstream whenever a rail
+        // is selectable, so the modal never sees that case from the real path.
+        name: "selectable rail, negative increment",
+        rails: optionsFixture({ credit_increment: -500 }),
+        purchasable: false,
+      },
+      { name: "healthy range", rails: optionsFixture(), purchasable: true },
+    ];
+
+    for (const { name, rails, purchasable } of cases) {
+      stubFetch({ rails });
+      const { unmount } = render(
+        <CheckoutModal accountCountryCode="US" onClose={vi.fn()} />,
+      );
+      if (purchasable) {
+        await screen.findByText("Payment method");
+      } else {
+        await screen.findByRole("status");
+      }
+
+      const numberInputs = Array.from(
+        document.querySelectorAll<HTMLInputElement>("input[type=number]"),
+      );
+      for (const input of numberInputs) {
+        const min = Number(input.min);
+        const max = Number(input.max);
+        expect(
+          Number.isFinite(min) && Number.isFinite(max) && max >= min && min > 0,
+        ).toBe(true);
+      }
+      // The purchasable case must actually have produced a field, or the
+      // attribute loop above proves nothing about it.
+      expect({ case: name, inputs: numberInputs.length > 0 }).toEqual({
+        case: name,
+        inputs: purchasable,
+      });
+      expect(screen.queryByRole("spinbutton") !== null).toBe(purchasable);
+
+      unmount();
+      cleanup();
+    }
   });
 
   it("increase and decrease step by credit_increment and clamp to min/max", async () => {
