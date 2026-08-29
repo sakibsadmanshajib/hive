@@ -68,7 +68,12 @@ describe('the composer control row wraps rather than overlapping (#1349)', () =>
 		);
 
 	it('the control row is allowed to wrap', () => {
-		expect(row()).toContain('flex flex-wrap');
+		// The parent's own class list, whole. A substring match anywhere in the
+		// block would still pass if `flex-wrap` were moved onto a child, which
+		// wraps nothing here and brings the overlap straight back.
+		expect(row()).toContain(
+			'class=" flex flex-wrap gap-y-1.5 justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full"'
+		);
 	});
 
 	it('the left group takes a full line below sm, so the model chip wraps under it', () => {

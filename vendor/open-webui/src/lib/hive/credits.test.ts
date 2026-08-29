@@ -69,7 +69,16 @@ describe('formatUsdFromCredits', () => {
 		const samples = [1, 858, 999, 395_640, 4_999_999, 9_789_478_244, 123_456_789_012];
 		for (const credits of samples) {
 			const shown = formatUsdFromCredits(credits);
-			if (shown === SUB_CENT_BALANCE) continue;
+			// Which side of the bound each sample belongs on is asserted, not
+			// skipped. Skipping every sample that came back as the bound would
+			// let a formatter that returns the bound for a ten-dollar spend
+			// pass this loop without a single assertion running. This one
+			// rounds, so the boundary is half a cent.
+			if (credits < CREDITS_PER_USD / 200) {
+				expect(shown).toBe(SUB_CENT_BALANCE);
+				continue;
+			}
+			expect(shown).not.toBe(SUB_CENT_BALANCE);
 			expect(shown).toMatch(/^\$[\d,]+\.\d{2}$/);
 		}
 	});
@@ -230,12 +239,15 @@ describe('formatUsdBalanceFromCredits', () => {
 		];
 		for (const credits of samples) {
 			const rendered = formatUsdBalanceFromCredits(credits);
-			if (rendered === SUB_CENT_BALANCE) {
+			if (credits > 0 && credits < CREDITS_PER_USD / 100) {
 				// The bound claims only that the balance is under a cent, which
 				// is a weaker claim than any figure, so it cannot overstate.
-				expect(credits / CREDITS_PER_USD).toBeLessThan(0.01);
+				// Pinned to the samples that are genuinely sub-cent rather than
+				// to whichever samples happened to render the bound.
+				expect(rendered).toBe(SUB_CENT_BALANCE);
 				continue;
 			}
+			expect(rendered).not.toBe(SUB_CENT_BALANCE);
 			const shown = Number(rendered.replace(/[$,]/g, ''));
 			expect(shown).toBeLessThanOrEqual(credits / CREDITS_PER_USD);
 		}
@@ -278,7 +290,11 @@ describe('formatUsdBalanceFromCredits', () => {
 		];
 		for (const credits of samples) {
 			const shown = formatUsdBalanceFromCredits(credits);
-			if (shown === SUB_CENT_BALANCE) continue;
+			if (credits > 0 && credits < CREDITS_PER_USD / 100) {
+				expect(shown).toBe(SUB_CENT_BALANCE);
+				continue;
+			}
+			expect(shown).not.toBe(SUB_CENT_BALANCE);
 			expect(shown).toMatch(/^-?\$[\d,]+\.\d{2}$/);
 		}
 	});
