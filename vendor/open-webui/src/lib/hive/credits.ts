@@ -44,16 +44,22 @@ export function creditState(available: number): CreditState {
 }
 
 /**
- * Render a credit balance as US dollars for the composer banner, rather than
- * the raw billions-scale integer the credit unit rescale (D-046) turned every
- * balance into ("9,789,478,244 remaining" told a customer nothing).
+ * Render a credit figure that is NOT a balance (today's spend, on the banner
+ * and in the Usage tab) as US dollars, rather than the raw billions-scale
+ * integer the credit unit rescale (D-046) turned every figure into
+ * ("9,789,478,244 remaining" told a customer nothing).
  *
  * Ported from `apps/web-console/lib/format/model-pricing.ts`'s
- * `formatUsdFromCredits`, including its honesty invariant: an explicit zero
- * renders as the literal `$0`, and precision scales with magnitude so a real,
- * non-zero balance never rounds down to that same string. Source of truth is
- * the ported function; keep the two in sync by hand, see the module comment
- * above for why they cannot share code.
+ * `formatUsdFromCredits`, the console's PRICE formatter, and it keeps that
+ * function's round to nearest along with its honesty invariant: an explicit
+ * zero renders as the literal `$0`, and precision scales with magnitude so a
+ * real, non-zero figure never rounds down to that same string.
+ *
+ * A BALANCE does not go through this. It rounds down instead, through
+ * formatUsdBalanceFromCredits below, because a figure that rounds up tells a
+ * customer they hold money they cannot spend. Source of truth is the ported
+ * function; keep the two in sync by hand, see the module comment above for
+ * why they cannot share code.
  */
 export function formatUsdFromCredits(credits: number): string {
 	if (!Number.isFinite(credits) || credits === 0) {
@@ -68,6 +74,60 @@ export function formatUsdFromCredits(credits: number): string {
 		minimumFractionDigits: 2,
 		maximumFractionDigits
 	}).format(usd);
+}
+
+/**
+ * Render a credit BALANCE as US dollars for the composer banner and the
+ * Usage tab.
+ *
+ * Rounded down, never up, which is the one behavioural difference from
+ * formatUsdFromCredits above. A catalog rate is a published price and rounds
+ * to the nearest cent; an available balance is spendable money, and rounding
+ * 9,996,364,207 credits up to "$10.00" tells a customer they hold more than
+ * they can spend. Down rather than toward zero, so that a balance driven
+ * negative by reservations overstates the hole rather than flattering it:
+ * `available = posted - reserved` has no clamp
+ * (apps/control-plane/internal/ledger/repository.go), so an account whose
+ * holds exceed its posted credits reads negative.
+ *
+ * Ported from `apps/web-console/lib/format/credits.ts`'s
+ * `formatUsdBalanceFromCredits`, same name and same rounding on purpose: the
+ * two builds cannot share a module (see the module comment above), and the
+ * first port took the PRICE formatter's name and rounding for a balance,
+ * which is the defect this replaces. Keep them in sync by hand.
+ *
+ * Precision follows the pricing formatter's rule (three significant digits,
+ * at least two decimals, at most the nine that one credit occupies), so a
+ * small real balance renders as "$0.000662" rather than a "$0.00" that reads
+ * as empty.
+ */
+export function formatUsdBalanceFromCredits(credits: number): string {
+	// Zero is a real, readable balance. A non-finite value is not: it can only
+	// come from a decode that failed, and rendering that as "$0.00" would
+	// assert an empty wallet where nothing was read at all.
+	if (!Number.isFinite(credits)) {
+		return '—';
+	}
+	if (credits === 0) {
+		return '$0.00';
+	}
+	const usd = credits / CREDITS_PER_USD;
+	const magnitude = Math.floor(Math.log10(Math.abs(usd)));
+	const digits = Math.min(9, Math.max(2, 2 - magnitude));
+	// Round in credits rather than in dollars. The dollar product is a float:
+	// 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
+	// 828.9999999999999, and rounding that down prints $8.28, understating a
+	// real balance by a cent. CREDITS_PER_USD is a power of ten and digits
+	// never exceeds nine, so creditsPerStep is an exact integer and this is
+	// exact for every integer balance.
+	const creditsPerStep = CREDITS_PER_USD / 10 ** digits;
+	const rounded = (Math.floor(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
+	return new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		minimumFractionDigits: 2,
+		maximumFractionDigits: digits
+	}).format(rounded);
 }
 
 /**

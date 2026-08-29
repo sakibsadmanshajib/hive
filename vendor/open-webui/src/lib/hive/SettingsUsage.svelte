@@ -3,6 +3,7 @@
 
 	import {
 		creditState,
+		formatUsdBalanceFromCredits,
 		formatUsdFromCredits,
 		refreshCreditSnapshot,
 		type CreditBalance,
@@ -46,11 +47,14 @@
 	 * re-fetching or re-formatting: one source of truth for what the
 	 * signed-in user's balance means and how it prints, so this tab and the
 	 * banner can never say two different things about the same account.
-	 * formatUsdFromCredits is itself a faithful port of
-	 * apps/web-console/lib/format/model-pricing.ts and carries the same
-	 * honesty invariant: a real balance, zero included, always renders as a
-	 * dollar figure, never as the bare integer credit count a prior defect
-	 * once put in front of a customer.
+	 * Both figures print through ./credits, and through the formatter each
+	 * one needs: the balance through formatUsdBalanceFromCredits, which
+	 * rounds DOWN so the number never claims more money than the account
+	 * holds, and today's spend through formatUsdFromCredits, the port of the
+	 * console's price formatter. Both carry the same honesty invariant: a
+	 * real figure, zero included, always renders as a dollar amount, never as
+	 * the bare integer credit count a prior defect once put in front of a
+	 * customer.
 	 */
 
 	/*
@@ -127,7 +131,7 @@
 						</span>
 					{/if}
 					<span class="text-sm font-medium" data-testid="usage-available-credits">
-						{formatUsdFromCredits(balance.available_credits)}
+						{formatUsdBalanceFromCredits(balance.available_credits)}
 					</span>
 				</div>
 			</div>
