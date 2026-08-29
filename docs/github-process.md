@@ -2,7 +2,7 @@
 
 This describes the process as it is practiced, not an aspirational target. It
 was written from a survey of the live repository state on 2026-08-28 and its
-counts were re-checked on 2026-08-29 (343 open issues, 5 open PRs, 4
+counts were re-checked on 2026-08-29 (344 open issues, 8 open PRs, 4
 milestones, 76 labels). Update it when the practice changes; do not let it
 drift into describing a process nobody follows. Given how fast this repo files
 and merges (a multi-agent burst can move the issue count by dozens within the
@@ -94,17 +94,23 @@ of automation keyed on the label's exact name. Extend the taxonomy by adding a
 new value under an existing prefix; retire a label by simply no longer
 applying it, not by deleting or renaming it out from under open issues.
 
-As of the 2026-08-29 re-check, 126 of 343 open issues carried no label at all
-and a further 45 carried only legacy/stock labels with none of the
+As of the 2026-08-29 re-check, 129 of 344 open issues carried no label at all
+and a further 44 carried only legacy/stock labels with none of the
 `kind:`/`area:`/`risk:` scheme. That is the real coverage gap: roughly half the
 open backlog is not classified in a way that supports filtering by area or
-kind. Re-derive both figures rather than trusting the numbers printed here,
-which are a snapshot of a backlog that moves by dozens in a day:
+kind. Re-derive all three figures rather than trusting the numbers printed
+here, which are one snapshot of a backlog that moves by dozens in a day (it
+moved by one issue and three pull requests during the hour this paragraph was
+rewritten in):
 
 ```sh
 gh issue list --state open --limit 1000 --json number --jq 'length'
 gh issue list --state open --limit 1000 --json labels \
   --jq '[.[] | select(.labels | length == 0)] | length'
+gh issue list --state open --limit 1000 --json labels \
+  --jq '[.[] | select((.labels | length > 0) and ([.labels[].name
+        | select(startswith("kind:") or startswith("area:")
+        or startswith("risk:"))] | length == 0))] | length'
 ```
 
 This document does not close that gap by itself; it names it so the next pass
