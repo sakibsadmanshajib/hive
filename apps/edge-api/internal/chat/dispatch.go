@@ -353,6 +353,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"upstream_error", fmt.Sprintf("%.512s", upstream))
 				sanitized = replacement
 			}
+			// Hold the frame's own usage block to total_tokens equal to
+			// prompt plus completion, on the bytes the customer actually
+			// receives, for the same reason the four API-key endpoints hold
+			// it at their clamp boundary (issue #1472). This relay never
+			// builds a typed usage object -- the sseEnvelope decode below
+			// happens after the write and exists for billing -- so before
+			// this line a violating total reached the Open WebUI front end
+			// verbatim while every API-key surface was corrected. The charge
+			// is untouched: it prices prompt and completion, which this never
+			// rewrites. Frames carrying no usage member, which is every frame
+			// of a stream but the last, come back byte-identical.
+			sanitized = inference.EnforceUsageIdentityInFrame(sanitized, requestID.String(), clientModel, inference.EndpointChatCompletions)
 			_, _ = w.Write([]byte("data: "))
 			_, _ = w.Write(sanitized)
 			_, _ = w.Write([]byte("\n"))

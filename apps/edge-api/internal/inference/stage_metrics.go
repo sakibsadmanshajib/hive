@@ -66,6 +66,10 @@ var (
 		Name: "hive_usage_identity_violations_total",
 		Help: "Upstream usage objects whose total_tokens disagreed with prompt_tokens plus completion_tokens and were corrected to the component sum (issue #1472), by alias, endpoint and direction (over: the upstream counted tokens it did not attribute, the signature of a thinking model whose reasoning tokens sit outside completion_tokens; under: it reported fewer than its own components). A rising over rate is a provider changing its token accounting, and the amount is in the accompanying log line.",
 	}, []string{"alias", "endpoint", "direction"})
+	usageIdentityUnaccountedTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_usage_identity_unaccounted_tokens_total",
+		Help: "TOKENS, not occurrences: the magnitude of every total_tokens disagreement corrected under issue #1472, summed. direction=\"over\" is the quantity an upstream counted and did not attribute to either component, which on a thinking model is the reasoning it charged us for and Hive did not bill; direction=\"under\" is the shortfall in the other direction. increase(hive_usage_identity_unaccounted_tokens_total{direction=\"over\"}[24h]) answers \"how many tokens went unaccounted yesterday\" on its own, with no join against the occurrence counter beside it.",
+	}, []string{"direction"})
 	streamRelayAborted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_stream_relay_aborted_total",
 		Help: "SSE relay loops (chat completions and Responses API) that ended on a genuine scanner read/token error rather than [DONE] or a client disconnect -- most commonly bufio.ErrTooLong, a single upstream line over the scanner's buffer limit (issue #1255). A client disconnect never increments this: ctx.Err() != nil is excluded so routine cancellations, the overwhelming majority of stream endings, do not bury the signal this counter exists to surface.",
@@ -105,7 +109,19 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 	// pre-existing state (declared but never registered), out of this PR's
 	// scope to change. streamRelayAborted is added here, alongside the
 	// counters that already were.
-	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased, usageIdentityViolations)
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased, usageIdentityViolations, usageIdentityUnaccountedTokens)
+	// Both direction series of the unaccounted-token counter are created here,
+	// at zero, rather than on the first violation. A CounterVec child does not
+	// exist until WithLabelValues creates it, so without this an operator
+	// asking "how many tokens went unaccounted yesterday" reads an empty query
+	// result whether the honest answer is zero or the recording never ran at
+	// all -- which is the same pair zeroContentCaptureTrips confuses one
+	// comment up, arrived at from the other side. Registered and present at
+	// zero means absence of the series is a registration defect, not a quiet
+	// clean bill of health. The label set is two fixed values, so pre-creating
+	// both costs two series in total.
+	usageIdentityUnaccountedTokens.WithLabelValues(usageIdentityOver)
+	usageIdentityUnaccountedTokens.WithLabelValues(usageIdentityUnder)
 	return m
 }
 

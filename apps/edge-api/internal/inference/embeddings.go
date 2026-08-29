@@ -92,7 +92,7 @@ func normalizeEmbeddings(respBody []byte, aliasID string) ([]byte, *UsageRespons
 			CompletionTokens: 0,
 			TotalTokens:      resp.Usage.TotalTokens,
 		}
-		enforceUsageIdentity(usage, "", aliasID, EndpointEmbeddings)
+		EnforceUsageIdentity(usage, "", aliasID, EndpointEmbeddings)
 		resp.Usage.TotalTokens = usage.TotalTokens
 	}
 

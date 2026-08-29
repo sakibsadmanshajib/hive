@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // --- issue #1472: total_tokens must equal prompt_tokens plus completion_tokens ---
@@ -20,10 +23,25 @@ import (
 //
 // Hive's own adapters never computed that 31. They passed it through, because
 // clampZeroCompletionUsage only recomputed the total on the one shape where
-// completion_tokens was zero. These tests pin the general rule instead: every
-// usage object this gateway hands a customer satisfies the identity, whatever
-// the upstream reported, and the correction is keyed on the numbers themselves
-// rather than on any provider or model family.
+// completion_tokens was zero. These tests pin the general rule instead, and
+// the scope of that rule is stated rather than implied, because the first
+// version of this comment claimed the whole gateway and meant four endpoints.
+//
+// Covered here and by the sibling tests in apps/edge-api/internal/chat and
+// apps/edge-api/internal/rag: /v1/chat/completions, /v1/completions,
+// /v1/responses and /v1/embeddings at the clamp boundary every normalizer
+// calls; session chat, which serves the Open WebUI front end; and both halves
+// of /v1/rag/chat. The correction is keyed on the numbers themselves rather
+// than on any provider or model family.
+//
+// NOT covered, and deliberately: an upstream frame the sanitizer cannot parse
+// is dropped rather than corrected, since its contents are unknown; and the
+// /v1/batches output lines, which decode the raw LiteLLM body in
+// apps/control-plane/internal/batchstore and never cross this package. That
+// path also PRICES total_tokens
+// (batchstore/executor/dispatcher.go:55-61), which makes the same shape an
+// overcharge there rather than a reporting defect, and it is corrected in
+// issue #1473 rather than here.
 //
 // What is NOT changed, and is asserted here so a future change has to argue
 // with a test: the CHARGE. Settlement prices the components (prompt and
@@ -312,5 +330,312 @@ func TestStreamingRelay_TerminalUsageFrameSatisfiesIdentity(t *testing.T) {
 		if u.CompletionTokens != 1 {
 			t.Errorf("completion_tokens = %d, want 1: reasoning tokens are not folded into the billed component (D-055)", u.CompletionTokens)
 		}
+		// The other half of the same object, which this test used to be
+		// silent on. The fixture reports reasoning_tokens 26 inside a
+		// completion of 1, so a payload that corrects only the total still
+		// hands the caller a breakdown larger than the component it breaks
+		// down. See TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal
+		// for which side of that invariant is right and why.
+		if u.CompletionTokensDetails == nil {
+			t.Fatalf("relayed usage frame at position %d dropped completion_tokens_details entirely", f.position)
+		}
+		if u.CompletionTokensDetails.ReasoningTokens > u.CompletionTokens {
+			t.Errorf("relayed usage frame at position %d reports reasoning_tokens=%d inside completion_tokens=%d",
+				f.position, u.CompletionTokensDetails.ReasoningTokens, u.CompletionTokens)
+		}
+	}
+}
+
+// --- the shapes the first round of review found uncovered ---
+
+// TestUsageIdentity_ToolCallOnlyTurnCorrectsTheTotalAndRecordsTheGap covers
+// the fall-through this change opened at the top of clampZeroCompletionUsage:
+// completion_tokens is 0 AND there is no output text to estimate from, so the
+// estimate branch does nothing and the identity now runs on the object
+// regardless. That is the tool-call-only shape D-055 names by hand
+// (chatChoiceTexts reads content and refusal and skips tool_calls), and an
+// upstream reporting prompt 200, completion 0, total 260 on it is describing
+// 60 tokens of tool-call arguments it counted and attributed to neither
+// component.
+//
+// The intended reading, asserted rather than left to inference: the response
+// is corrected DOWN to the component sum, so the 60 leave the customer-facing
+// payload as well as the ledger, and the quantity is carried operator-side by
+// the log line and the unaccounted-token counter instead. It is an unmeasured
+// quantity recorded elsewhere, never a verified zero of tool-call output,
+// which is the reading D-056 documents as the trap.
+func TestUsageIdentity_ToolCallOnlyTurnCorrectsTheTotalAndRecordsTheGap(t *testing.T) {
+	u := &UsageResponse{PromptTokens: 200, CompletionTokens: 0, TotalTokens: 260}
+	logs := captureLogs(t, func() {
+		// No output text at all: the turn emitted tool calls only.
+		clampZeroCompletionUsage(u, nil, "gen-tool", "hive-fast", EndpointChatCompletions)
+	})
+	if u.CompletionTokens != 0 {
+		t.Errorf("completion_tokens = %d, want 0: an estimate of zero is not evidence of output, and inventing one here would bill it", u.CompletionTokens)
+	}
+	if u.TotalTokens != 200 {
+		t.Errorf("total_tokens = %d, want 200 (prompt 200 + completion 0)", u.TotalTokens)
+	}
+	if strings.Contains(logs, "usage clamp engaged") {
+		t.Errorf("the zero-completion estimate must not fire on a turn with no output text; logs: %q", logs)
+	}
+	if !strings.Contains(logs, usageIdentityLogPrefix) || !strings.Contains(logs, "unaccounted_tokens=60") {
+		t.Errorf("the 60 unattributed tokens must be recorded, not merely erased; logs: %q", logs)
+	}
+}
+
+// TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal pins which side
+// of the reasoning-versus-completion invariant is correct.
+//
+// completion_tokens_details is "the breakdown of completion tokens"
+// (types.go:175-180), so reasoning_tokens 26 against completion_tokens 1 is
+// arithmetically impossible under the same OpenAI contract this file exists to
+// enforce: a client computing visible output as completion minus reasoning
+// gets -25. clampUsageToCeiling (completion_ceiling.go:240-241) already caps
+// the breakdown for exactly that stated reason, and it is the side that is
+// right; EnforceUsageIdentity was the side that was wrong. Neither number is
+// priced, so this moves no money (CreditsForTokens, pricing.go:209, takes four
+// token arguments and reasoning is not among them).
+//
+// The 26 is not destroyed, it is relocated: both the reported and the
+// corrected figure are on the log line, so the quantity stays recoverable
+// operator-side while the payload stops asserting two token conventions at
+// once.
+func TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal(t *testing.T) {
+	u := &UsageResponse{
+		PromptTokens:            4,
+		CompletionTokens:        1,
+		TotalTokens:             31,
+		CompletionTokensDetails: &CompletionTokensDetails{ReasoningTokens: 26},
+	}
+	logs := captureLogs(t, func() {
+		EnforceUsageIdentity(u, "gen-abc", "hive-free", EndpointChatCompletions)
+	})
+	if u.TotalTokens != 5 || u.CompletionTokens != 1 || u.PromptTokens != 4 {
+		t.Fatalf("components or total wrong after the correction: %+v", u)
+	}
+	if u.CompletionTokensDetails.ReasoningTokens != 1 {
+		t.Errorf("reasoning_tokens = %d, want 1: a breakdown may not exceed the component it breaks down",
+			u.CompletionTokensDetails.ReasoningTokens)
+	}
+	for _, want := range []string{"reported_reasoning_tokens=26", "corrected_reasoning_tokens=1"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the log must carry %q so the reported quantity survives the correction; logs: %q", want, logs)
+		}
+	}
+}
+
+// TestUsageIdentity_ReasoningBreakdownSurvivesAnUnderReportedTotal is the
+// guard for the deliberate asymmetry above, and it is a guard rather than
+// coverage: it passes before and after this change.
+//
+// The cap applies in the OVER direction only. An over-reporting total is the
+// upstream stating, in its own arithmetic, that it counts a class outside
+// completion_tokens. An UNDER-reporting one states no such thing, and the live
+// shape there is the zero-completion estimate, where completion_tokens is
+// Hive's own guess from the output text and reasoning_tokens is the upstream's
+// measurement; capping a measurement to fit a guess would delete the better
+// number. TestClampZeroCompletionUsage_ReasoningTokensPreserved covers that
+// path end to end; this covers the rule directly.
+func TestUsageIdentity_ReasoningBreakdownSurvivesAnUnderReportedTotal(t *testing.T) {
+	u := &UsageResponse{
+		PromptTokens:            4,
+		CompletionTokens:        1,
+		TotalTokens:             3,
+		CompletionTokensDetails: &CompletionTokensDetails{ReasoningTokens: 26},
+	}
+	captureLogs(t, func() {
+		EnforceUsageIdentity(u, "gen-abc", "hive-free", EndpointChatCompletions)
+	})
+	if u.TotalTokens != 5 {
+		t.Errorf("total_tokens = %d, want 5", u.TotalTokens)
+	}
+	if u.CompletionTokensDetails.ReasoningTokens != 26 {
+		t.Errorf("reasoning_tokens = %d, want 26 preserved: an under-reported total is not the outside-completion convention",
+			u.CompletionTokensDetails.ReasoningTokens)
+	}
+}
+
+// TestUsageIdentity_EmbeddingsWithZeroPromptTokensZeroesTheTotal puts the
+// zeroing behaviour on the record as a decision rather than a side effect.
+//
+// Some embedding providers count only a total. Under the identity, which for
+// embeddings reduces to total_tokens == prompt_tokens, the correction has
+// nowhere to go but down, because raising prompt_tokens to meet the total
+// would begin billing tokens nobody metered (D-055). The result is a usage
+// block reporting zero for a call that really consumed something. The money
+// does not move: settlement already read PromptTokens and already priced the
+// 0. The quantity is carried by the log line and the unaccounted-token
+// counter, which is the whole reason both exist.
+func TestUsageIdentity_EmbeddingsWithZeroPromptTokensZeroesTheTotal(t *testing.T) {
+	body := []byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"route","usage":{"prompt_tokens":0,"total_tokens":97}}`)
+	var normalized []byte
+	var usage *UsageResponse
+	logs := captureLogs(t, func() {
+		var err error
+		normalized, usage, err = normalizeEmbeddings(body, "hive-embedding-default")
+		if err != nil {
+			t.Fatalf("normalizeEmbeddings: %v", err)
+		}
+	})
+	if usage == nil || usage.TotalTokens != 0 || usage.PromptTokens != 0 {
+		t.Errorf("accounting usage = %+v, want both zero", usage)
+	}
+	var resp EmbeddingsResponse
+	if err := json.Unmarshal(normalized, &resp); err != nil {
+		t.Fatalf("decode normalized embeddings: %v", err)
+	}
+	if resp.Usage == nil || resp.Usage.TotalTokens != 0 {
+		t.Errorf("customer-facing embeddings usage = %+v, want total_tokens 0", resp.Usage)
+	}
+	if !strings.Contains(logs, "unaccounted_tokens=97") {
+		t.Errorf("the deleted 97 must be recorded operator-side, not silently zeroed; logs: %q", logs)
+	}
+}
+
+// --- the counters ---
+
+// TestUsageIdentity_CorrectionRecordsOccurrenceAndQuantity closes the half of
+// the loud-never-silent pair that had no test: the metrics.
+//
+// Two assertions, because the two counters answer different questions and only
+// one of them was here. usageIdentityViolations answers "how often did a total
+// disagree"; usageIdentityUnaccountedTokens answers "how many tokens went
+// unaccounted", which is the question the correction itself made harder to
+// answer by rewriting the total that usage_events.hive_credit_delta used to
+// carry (orchestrator.go:586, stream.go:918).
+//
+// Asserting the label values incidentally pins the direction split, which
+// nothing else does on the over side.
+func TestUsageIdentity_CorrectionRecordsOccurrenceAndQuantity(t *testing.T) {
+	NewStageMetrics(prometheus.NewRegistry())
+
+	occurrences := usageIdentityViolations.WithLabelValues("hive-free", EndpointChatCompletions, usageIdentityOver)
+	quantity := usageIdentityUnaccountedTokens.WithLabelValues(usageIdentityOver)
+	occurrencesBefore := testutil.ToFloat64(occurrences)
+	quantityBefore := testutil.ToFloat64(quantity)
+
+	u := &UsageResponse{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 31}
+	captureLogs(t, func() {
+		EnforceUsageIdentity(u, "gen-abc", "hive-free", EndpointChatCompletions)
+	})
+
+	if got := testutil.ToFloat64(occurrences); got != occurrencesBefore+1 {
+		t.Errorf("occurrence counter = %v, want %v: a declared-but-unincremented counter is indistinguishable from a clean run",
+			got, occurrencesBefore+1)
+	}
+	if got := testutil.ToFloat64(quantity); got != quantityBefore+26 {
+		t.Errorf("unaccounted-token counter = %v, want %v: this is the series an operator reads to price the gap, so it carries tokens rather than events",
+			got, quantityBefore+26)
+	}
+}
+
+// TestUsageIdentity_UnaccountedTokenSeriesExistBeforeAnyViolation is the
+// absent-reads-as-absent guard.
+//
+// A CounterVec child does not exist until WithLabelValues creates it, so a
+// quantity counter left to appear on first use reports nothing at all until
+// the first violation, and "no data" then means either zero violations or a
+// counter that was never registered. That is the pair zeroContentCaptureTrips
+// already confuses from the other side: declared, incremented on a live path,
+// absent from MustRegister, and indistinguishable from a working counter at
+// the call site. Both direction series are therefore created at registration,
+// so their absence from a scrape is a registration defect rather than a quiet
+// clean bill of health.
+func TestUsageIdentity_UnaccountedTokenSeriesExistBeforeAnyViolation(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	NewStageMetrics(reg)
+	got, err := testutil.GatherAndCount(reg, "hive_usage_identity_unaccounted_tokens_total")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("the unaccounted-token metric exposes %d series at boot, want 2 (over and under): an operator querying it must not read \"no data\" and take it for zero violations", got)
+	}
+}
+
+// --- the relays that hand raw frame bytes to a customer ---
+
+// TestUsageIdentityInFrame_CorrectsTheTotalAndLeavesEveryOtherMemberAlone
+// covers the helper both SSE relays use: session chat (which serves the Open
+// WebUI front end) and RAG chat. Neither builds a typed usage object, so
+// before this helper existed the identity held on four API-key endpoints and
+// on neither of those two surfaces.
+//
+// The untouched-member assertion is the point of patching keys rather than
+// re-marshalling a typed UsageResponse: packages/sanitize deliberately keeps
+// usage as an open map minus three cost fields, so a round trip through this
+// package's struct would silently drop any member it does not declare, which
+// would turn a correction helper into a second, invisible sanitiser.
+func TestUsageIdentityInFrame_CorrectsTheTotalAndLeavesEveryOtherMemberAlone(t *testing.T) {
+	frame := []byte(`{"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],` +
+		`"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":31,` +
+		`"completion_tokens_details":{"reasoning_tokens":26,"accepted_prediction_tokens":3},` +
+		`"an_upstream_member_this_package_does_not_declare":7}}`)
+
+	var out []byte
+	logs := captureLogs(t, func() {
+		out = EnforceUsageIdentityInFrame(frame, "gen-abc", "hive-free", EndpointChatCompletions)
+	})
+
+	var decoded struct {
+		Usage map[string]json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("corrected frame is not valid JSON: %v (%s)", err, out)
+	}
+	if string(decoded.Usage["total_tokens"]) != "5" {
+		t.Errorf("total_tokens = %s, want 5", decoded.Usage["total_tokens"])
+	}
+	if string(decoded.Usage["an_upstream_member_this_package_does_not_declare"]) != "7" {
+		t.Errorf("an undeclared usage member was dropped: %s", out)
+	}
+	var details map[string]json.RawMessage
+	if err := json.Unmarshal(decoded.Usage["completion_tokens_details"], &details); err != nil {
+		t.Fatalf("completion_tokens_details is not an object: %v", err)
+	}
+	if string(details["reasoning_tokens"]) != "1" {
+		t.Errorf("reasoning_tokens = %s, want 1", details["reasoning_tokens"])
+	}
+	if string(details["accepted_prediction_tokens"]) != "3" {
+		t.Errorf("a sibling breakdown member was dropped: %s", out)
+	}
+	if !strings.Contains(logs, usageIdentityLogPrefix) {
+		t.Errorf("a frame correction must be as loud as a typed one; logs: %q", logs)
+	}
+}
+
+// TestUsageIdentityInFrame_LeavesAFrameWithoutUsageByteIdentical is the
+// hot-path guard: every frame of a stream but the last carries no usage
+// member, and a helper that re-encoded them all would rewrite key order and
+// number formatting across the entire relay for nothing.
+func TestUsageIdentityInFrame_LeavesAFrameWithoutUsageByteIdentical(t *testing.T) {
+	frame := []byte(`{"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"}}]}`)
+	logs := captureLogs(t, func() {
+		if got := EnforceUsageIdentityInFrame(frame, "gen-abc", "hive-free", EndpointChatCompletions); string(got) != string(frame) {
+			t.Errorf("a frame with no usage member was rewritten:\n got %s\nwant %s", got, frame)
+		}
+	})
+	if strings.Contains(logs, usageIdentityLogPrefix) {
+		t.Errorf("a frame with no usage member logged a discrepancy; logs: %q", logs)
+	}
+}
+
+// TestUsageIdentityInFrame_UnparseableInputIsReturnedUnchanged: a failed
+// cosmetic rewrite must never break a frame already committed to the wire.
+// Both callers write this return value straight to the client.
+func TestUsageIdentityInFrame_UnparseableInputIsReturnedUnchanged(t *testing.T) {
+	for name, in := range map[string][]byte{
+		"empty":            nil,
+		"not json":         []byte(`{"usage":`),
+		"null frame":       []byte(`null`),
+		"null usage":       []byte(`{"usage":null}`),
+		"usage not object": []byte(`{"usage":42}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := EnforceUsageIdentityInFrame(in, "id", "alias", EndpointChatCompletions); string(got) != string(in) {
+				t.Errorf("returned %q, want the original %q", got, in)
+			}
+		})
 	}
 }

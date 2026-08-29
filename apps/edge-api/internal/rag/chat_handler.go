@@ -319,10 +319,24 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	var usage *ChatUsage
 	var promptTokens, completionTokens, totalTokens int64
 	if upstream.Usage != nil {
-		usage = &ChatUsage{
+		// Held to the same identity the four API-key endpoints are held to
+		// (issue #1472), through the same function rather than a second copy
+		// of the rule written here: total_tokens is derived in the OpenAI
+		// wire contract, not independently reported, and this handler used to
+		// forward whatever the upstream said. It rewrites only the total, so
+		// the settlement below, which prices prompt and completion, cannot
+		// move. The counterpart correction for this handler's streaming half
+		// is EnforceUsageIdentityInFrame in the relay loop.
+		held := inference.UsageResponse{
 			PromptTokens:     upstream.Usage.PromptTokens,
 			CompletionTokens: upstream.Usage.CompletionTokens,
 			TotalTokens:      upstream.Usage.TotalTokens,
+		}
+		inference.EnforceUsageIdentity(&held, "", req.Model, inference.EndpointChatCompletions)
+		usage = &ChatUsage{
+			PromptTokens:     held.PromptTokens,
+			CompletionTokens: held.CompletionTokens,
+			TotalTokens:      held.TotalTokens,
 		}
 		promptTokens, completionTokens, totalTokens = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
 	}
@@ -610,6 +624,16 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 				log.Printf("rag: replaced an upstream error frame alias=%q upstream_error=%.512s", alias, upstream)
 				sanitized = replacement
 			}
+			// Same correction the session-chat relay applies one package
+			// over, and for the same reason (issue #1472): this loop hands
+			// raw frame bytes to the customer and builds no typed usage
+			// object, so a total that disagrees with its own components used
+			// to reach a /v1/rag/chat client verbatim. Applied before the
+			// read below so the audit counts and the bytes on the wire carry
+			// one number rather than two. It rewrites only total_tokens (and
+			// a reasoning breakdown that exceeds its own component), never
+			// prompt or completion, so the charge below cannot move.
+			sanitized = inference.EnforceUsageIdentityInFrame(sanitized, requestID.String(), alias, inference.EndpointChatCompletions)
 			// TOKEN COUNTS are read back off the sanitized frame rather than
 			// the raw one: VariablePriceFrame keeps usage (minus the upstream
 			// cost fields), so this is the same number, read from the bytes the
