@@ -60,7 +60,22 @@ type UsageAccumulator struct {
 	// visible content. Without it both shapes settle at zero and get filed as
 	// upstream_error over a fully delivered response (#1215).
 	HasForwardedChunk bool
-	Content           strings.Builder
+	// HasToolCall records that at least one relayed chunk carried a tool-call
+	// or legacy function-call delta. A tool-call-only turn is a complete,
+	// billable response that accumulates no visible text at all, so the
+	// zero-content guard needs this to tell it apart from a stream that
+	// delivered nothing (issue #1326).
+	HasToolCall bool
+	// SawFinish records that at least one relayed chunk carried a non-empty
+	// finish_reason, and SawNonLengthFinish that at least one of those said
+	// anything other than "length". Together they are the streaming spelling of
+	// the sync guard's reasoning-burn signature: an upstream that ran out of
+	// ceiling mid-reasoning finishes every choice on "length", and an upstream
+	// that never finished at all (a truncated relay, a dead connection) sets
+	// neither, which is what keeps the guard from firing where nothing is known.
+	SawFinish          bool
+	SawNonLengthFinish bool
+	Content            strings.Builder
 	// RawUsageChunk is the VERBATIM bytes of the last streamed chunk that
 	// carried a usage object. It exists because ChatCompletionChunk is a typed
 	// struct and unmarshalling into it silently discards every field we did
@@ -103,6 +118,27 @@ func (a *UsageAccumulator) AccumulateContent(chunk ChatCompletionChunk) {
 		}
 		if choice.Delta.Refusal != nil {
 			a.Content.WriteString(*choice.Delta.Refusal)
+		}
+	}
+}
+
+// ObserveShape records the delivery shape of one relayed chunk: whether it
+// carried a tool call, and what finish_reason it closed on. Kept separate from
+// AccumulateContent because the two streaming relays disagree about where
+// visible text lands -- the Responses translator accumulates into its own
+// builder and never calls AccumulateContent at all -- while both need the same
+// shape signals for settlement. See isZeroContentStream.
+func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
+	for _, choice := range chunk.Choices {
+		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
+			a.HasToolCall = true
+		}
+		if choice.FinishReason == nil || *choice.FinishReason == "" {
+			continue
+		}
+		a.SawFinish = true
+		if !strings.EqualFold(*choice.FinishReason, "length") {
+			a.SawNonLengthFinish = true
 		}
 	}
 }
@@ -414,6 +450,8 @@ func (o *Orchestrator) executeStreaming(
 
 				// Track output content so the usage clamp has ground truth.
 				accumulator.AccumulateContent(chunk)
+				// And the shape settlement judges emptiness by (#1326).
+				accumulator.ObserveShape(chunk)
 				// Clamp upstream-zero completion_tokens against the
 				// content streamed so far. Usage typically arrives in
 				// the terminal chunk once all deltas are flushed.
@@ -755,10 +793,37 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		delivered = true
 	}
 
+	// Zero-content guard, streaming half (issue #1326). Every branch above can
+	// call a stream delivered on evidence that has nothing to do with what the
+	// customer could read: a confirmed usage block, a forwarded frame, an
+	// upstream-reported cost. A reasoning burn produces all three and no text,
+	// which is how a well-formed stream saying nothing settled at full catalog
+	// price with nothing anywhere signalling a fault. So it is applied last, to
+	// the outcome the other branches reached, rather than woven into any of
+	// them. See isZeroContentStream for what "zero visible content" means and
+	// what it deliberately excludes.
+	zeroContent := isZeroContentStream(acc, content, reqCtx.Err() != nil)
+	if zeroContent {
+		delivered = false
+	}
+
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
-		if reqCtx.Err() != nil {
+		switch {
+		case reqCtx.Err() != nil:
 			reason, eventType = "client_disconnect", "interrupted"
+		case zeroContent:
+			// A distinct release reason so the ledger can tell a burn apart
+			// from an upstream that died: both hand the hold back, and only one
+			// of them means a provider is quietly spending the customer's
+			// ceiling on reasoning nobody sees. The usage event stays
+			// upstream_error, which is the closest value in the usage_events
+			// CHECK constraint and honest enough -- an upstream that delivers
+			// nothing readable did fault, whatever it reported about itself.
+			reason = "zero_content"
+			streamZeroContentReleased.WithLabelValues(model, endpoint).Inc()
+			log.Printf("inference: stream_zero_content request_id=%s reservation_id=%s endpoint=%s model=%s upstream_prompt_tokens=%d upstream_completion_tokens=%d upstream_reasoning_tokens=%d: every chunk was well formed and none carried visible text, releasing the hold instead of charging (#1326)",
+				requestID, reservation.ID, endpoint, model, acc.InputTokens, acc.OutputTokens, acc.ReasoningTokens)
 		}
 		// Say so. The synchronous path already logs this case; the streaming
 		// path released the hold in silence, and a request that was served for
@@ -767,8 +832,15 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		// that only called tools accumulates no content, because
 		// AccumulateContent ignores tool-call deltas, so a real billable turn
 		// can land here and be filed as an upstream error with nothing said.
-		log.Printf("inference: settle stream delivered nothing, releasing hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s: upstream returned no usage and no output",
-			requestID, reservation.ID, endpoint, model, reason)
+		//
+		// Skipped for a zero-content release, which logged its own line above:
+		// this one asserts the upstream returned no usage, and the whole point
+		// of a reasoning burn is that it returned a confident usage block for
+		// tokens the customer never saw.
+		if !zeroContent {
+			log.Printf("inference: settle stream delivered nothing, releasing hold request_id=%s reservation_id=%s endpoint=%s model=%s reason=%s: upstream returned no usage and no output",
+				requestID, reservation.ID, endpoint, model, reason)
+		}
 		if reservation.ID != "" {
 			releaseCtx, cancelRelease := freshSettlementCtx()
 			err := o.accounting.ReleaseReservation(releaseCtx, ReleaseReservationInput{

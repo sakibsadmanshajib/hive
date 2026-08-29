@@ -93,3 +93,47 @@ func isEmptyLengthCompletion(normalized []byte) bool {
 	}
 	return true
 }
+
+// isZeroContentStream is the streaming half of the same guard (issue #1326).
+//
+// The sync guard can retry, because on that path emptiness is known before a
+// single byte has left the gateway. A stream has already shipped its chunks by
+// the time the terminal frame proves there was nothing in them, so there is
+// nothing left to retry and nothing honest to say in a contract-shaped frame.
+// What is still open at that point is the money: a stream that carried no
+// assistant-visible text is not charged for.
+//
+// ZERO VISIBLE CONTENT means exactly that: no assistant-visible text. content
+// is what the caller's own client rendered -- delta.content plus delta.refusal
+// on the chat relay, the translated output text on the Responses relay -- and
+// nothing else counts. Consequences worth stating rather than leaving to be
+// rediscovered:
+//
+//   - REASONING-ONLY streams are empty. Hidden reasoning costs Hive real money
+//     upstream and is exactly the shape this guard exists for: the customer
+//     received nothing they can read, so the customer does not pay. The loss is
+//     deliberate and lands on Hive, not on the caller.
+//   - TOOL-CALL-ONLY streams are NOT empty. A turn that emitted only tool-call
+//     frames is a complete, useful response with no text in it, and it bills
+//     normally. HasToolCall, not the text, is what carries that.
+//   - A stream that never finished, or finished on anything other than
+//     "length", is NOT empty for this purpose. finish_reason=stop with no text
+//     is an upstream calling a response complete, which the sync guard has
+//     always declined to second-guess, and no finish_reason at all means the
+//     relay was cut off before anything was known. Both bill (D-034).
+//
+// clientGone is checked first and wins outright. A caller that closed the tab
+// after two tokens is not a reasoning burn: it received what it received, and
+// it pays for that. It is also the case the gateway is least able to reason
+// about, since a cancelled request context tears the upstream read down exactly
+// like a real upstream fault, so it fails closed to billing rather than
+// guessing.
+func isZeroContentStream(acc *UsageAccumulator, content string, clientGone bool) bool {
+	if clientGone || content != "" || acc == nil {
+		return false
+	}
+	if acc.HasToolCall {
+		return false
+	}
+	return acc.SawFinish && !acc.SawNonLengthFinish
+}

@@ -275,8 +275,10 @@ func (o *Orchestrator) executeResponsesStreaming(
 			}
 		}
 
-		// Accumulate usage if present.
+		// Accumulate usage if present, and the shape settlement judges
+		// emptiness by (#1326).
 		acc.Accumulate(chunk, model)
+		acc.ObserveShape(chunk)
 
 		// Emit response.created on first chunk.
 		if !translator.started {
