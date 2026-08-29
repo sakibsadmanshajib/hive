@@ -587,6 +587,7 @@ services:
       # content export on takes a reviewed edit to this file rather than a
       # line in an operator's .env, which is the right bar for that decision.
       # .env.example says the same thing next to the variable.
+      #
       # Tenant BYOK credential encryption (AES-256-GCM at rest). Read only by
       # control-plane, which owns every read and write of
       # public.tenant_provider_keys; deliberately NOT given to edge-api, which
