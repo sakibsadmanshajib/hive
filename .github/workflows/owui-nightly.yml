@@ -54,6 +54,41 @@ jobs:
               exit 1
             fi
           done
+          # Issue #1370: resolve the host before anything tries to use it.
+          #
+          # Every scheduled run of this workflow since at least 2026-08-09 has
+          # failed, and the reason was never in the visible red. It dies at the
+          # NEXT step with a Python traceback ending in `socket.gaierror:
+          # [Errno -2] Name or service not known`, because the Supabase secrets
+          # this job reads were last written on 2026-04-21 and name the hosted
+          # project deleted during the August self-hosted cutover. Steps 6
+          # through 15, including the entire Playwright suite this job exists
+          # to run, are then skipped, and the only thing that goes red is the
+          # phase-19 step failing on `browserType.launch: Executable doesn't
+          # exist`, because the step that installs browsers was one of the
+          # skipped ones. A reader who opens the run sees a Playwright error
+          # and no mention of a dead hostname, which is why a week of failures
+          # read as flake.
+          #
+          # This check does not fix that. It names it, at the top, in seconds.
+          # The fix is to stop reading those secrets at all and stand up a
+          # per-run stack the way ci.yml's browser jobs do
+          # (scripts/ci-throwaway-db.sh, scripts/ci-supabase-stack.sh and
+          # scripts/ci-object-store.sh), which is what issue #1055 asks for and
+          # what closes #1370. The database host is checked rather than
+          # SUPABASE_URL only because that value is already read here, and
+          # tools/lint-no-dead-supabase-secrets.mjs pins the exact number of
+          # dead-secret references this file carries: adding one more to
+          # improve an error message would widen an exemption that is only ever
+          # supposed to shrink. Both names come from the same deleted project,
+          # so either one answers the question.
+          #
+          # The hostname itself is not printed: it names the project ref.
+          if ! getent hosts "$SUPABASE_DB_HOST" >/dev/null 2>&1; then
+            echo "::error::the host named by the SUPABASE_DB_HOST secret does not resolve in DNS. That secret, and SUPABASE_URL which the seeding step below reads, were last written on 2026-04-21 and still name the Supabase Cloud project this repository left during the August self-hosted cutover, which has since been deleted. That is why every scheduled run of this workflow has failed since at least 2026-08-09, and why the visible failure is a missing Playwright browser rather than a dead hostname. Repointing the secrets is not the fix: the self-hosted stack's auth and storage surfaces are on an in-network listener that is deliberately not published. See issues #1370 and #1055."
+            exit 1
+          fi
+
           # The script URL-encodes the password, which is stored in its raw
           # decoded form, and emits both DSNs: a capped session-mode
           # SUPABASE_DB_URL for control-plane, which needs session state, and a
@@ -174,6 +209,25 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # These six are dead and are LEFT dead deliberately, which needs
+          # saying so the next person does not read them as working.
+          #
+          # `S3_ENDPOINT` was last written 2026-04-21 and names the Supabase
+          # Cloud project deleted in the August cutover (issue #1324). ci.yml's
+          # live-integration job solved the same problem by standing up its own
+          # throwaway object store (scripts/ci-object-store.sh), and that is
+          # the right answer here too, but it is not available yet: the fixture
+          # runs against a throwaway Postgres, and this workflow has none. It
+          # still points at the hosted project for its database as well, which
+          # is the #1370 blocker the preflight above names, and the two have to
+          # be fixed together or not at all. Stubbing these at the discard port
+          # instead would be worse than leaving them: unlike the jobs that do
+          # get the stub, this one boots Open WebUI, whose knowledge and
+          # document surfaces do write objects, so a stub would convert a
+          # blocked suite into a suite that runs and fails on storage.
+          #
+          # Nothing here has run since 2026-08-09, so this is a statement about
+          # what the next fix has to do, not a live configuration.
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
           S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
           S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}

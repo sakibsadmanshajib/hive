@@ -32,13 +32,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, "../../../..");
-const WORKFLOW = resolve(REPO_ROOT, ".github/workflows/ci.yml");
+import {
+  blockForDisplayName,
+  isComment,
+  jobBlocks,
+  readCiWorkflow,
+} from "./support/ci-workflow";
 
 // The display names, not the YAML keys: the display name is what branch
 // protection lists as a required context, so it is the stable handle.
@@ -47,56 +46,8 @@ const SECRET_FREE_JOBS = [
   "Interaction coverage (console controls)",
 ];
 
-/**
- * Slices ci.yml into top-level job blocks without a YAML parser, which keeps
- * this test free of a dependency and, more usefully, keeps it reading the same
- * bytes a reviewer reads. A job starts at a two-space-indented key and runs
- * until the next one.
- */
-function jobBlocks(source: string): Map<string, string[]> {
-  const lines = source.split("\n");
-  const blocks = new Map<string, string[]>();
-  let current: string[] | null = null;
-  let inJobs = false;
-
-  for (const line of lines) {
-    if (/^jobs:\s*$/.test(line)) {
-      inJobs = true;
-      continue;
-    }
-    if (!inJobs) continue;
-    // A key back at column zero ends the jobs mapping.
-    if (/^\S/.test(line)) break;
-
-    const jobKey = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-    if (jobKey) {
-      current = [];
-      blocks.set(jobKey[1], current);
-      continue;
-    }
-    current?.push(line);
-  }
-  return blocks;
-}
-
-function blockForDisplayName(
-  blocks: Map<string, string[]>,
-  displayName: string
-): { key: string; lines: string[] } {
-  for (const [key, lines] of blocks) {
-    if (lines.some((l) => l.trim() === `name: ${displayName}`)) {
-      return { key, lines };
-    }
-  }
-  throw new Error(
-    `no job in .github/workflows/ci.yml declares \`name: ${displayName}\`. ` +
-      "If the job was renamed, rename it here too; if it was deleted, it was " +
-      "a required context and its deletion needs saying out loud."
-  );
-}
-
 describe("ci.yml browser jobs are secret-free", () => {
-  const source = readFileSync(WORKFLOW, "utf8");
+  const source = readCiWorkflow();
   const blocks = jobBlocks(source);
 
   it("finds the jobs it is asserting about", () => {
@@ -123,7 +74,3 @@ describe("ci.yml browser jobs are secret-free", () => {
     });
   }
 });
-
-function isComment(line: string): boolean {
-  return line.trim().startsWith("#");
-}

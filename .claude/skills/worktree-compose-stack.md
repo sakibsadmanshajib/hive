@@ -1,6 +1,6 @@
 ---
 name: Worktree Compose Stack
-description: Use before running any `docker compose` command from a worktree checkout of this repo, and when a full local stack won't start at all (control-plane can't reach a database, `.env` points somewhere dead). Covers the per-worktree compose-project-name collision and the current dead-Supabase-host blocker, with the fallback commands agents actually use.
+description: Use before running any `docker compose` command from a worktree checkout of this repo, and when a full local stack won't start at all (control-plane exits at boot on `storage unavailable`, or warns `database unreachable`). Covers the per-worktree compose-project-name collision and the current empty-`.env` blocker that makes a full local stack impossible from this sandbox, with the fallback commands agents actually use.
 ---
 
 # Worktree Compose Stack
@@ -71,23 +71,54 @@ grep -H COMPOSE_PROJECT_NAME .env deploy/docker/.env
 
 ## The full local stack currently cannot start on this machine
 
-This machine's `.env` (and any worktree `.env` copied from it) still points
-at a Supabase Cloud project that no longer exists (issue #1254):
-`SUPABASE_URL=https://yimgflllgdsbcibnaxqe.supabase.co` and siblings resolve
-NXDOMAIN, not a timeout or auth error — the project itself is gone since the
-self-hosted cutover. `docker compose --profile local up` brings
-`control-plane` up, but it logs a generic-looking connectivity warning
-(`database unreachable after 6 attempt(s)`) that gives no hint the real cause
-is a deleted upstream project, and easily sends you chasing a transient
-network blip instead. There is also no way to reach the self-hosted
-replacement from outside the box's internal docker network by design (no
-public hostname for `caddy-supabase`), so this isn't fixable by editing
-`.env` to point somewhere else reachable from a sandbox.
+Verified 2026-08-29. **Do not grep `.env` for a Supabase hostname to confirm
+this. There is no longer one to find, and its absence is not good news.**
 
-Practical consequence: no full local stack, no local sign-in, no local E2E
-run, from this environment, until `.env` is repointed at the self-hosted
-stack or the sandbox gains a reachable route to it. Check whether #1254 is
-still open before assuming this; if it's closed, this section is stale.
+The blocker did not go away when issue #1254 closed. It changed shape. The
+keys are still there and they are now **empty**: `SUPABASE_URL`,
+`SUPABASE_DB_URL`, `S3_ENDPOINT` and `NEXT_PUBLIC_SUPABASE_URL` are all
+present in this machine's `.env` with a zero-length value. That is a
+different failure from the one this section used to describe, it produces a
+different error message, and it needs a different fix, so an agent that reads
+the old text, greps for the old hostname, finds nothing and concludes the
+stack should now work is worse off than one who read nothing.
+
+What the two shapes look like, so you can tell which you are in:
+
+- **Then** (a hostname that resolves to nothing, issue #1254, now closed):
+  `control-plane` came up and logged `database unreachable after 6
+  attempt(s)`, a generic connectivity warning that named no cause.
+- **Now** (empty values): `control-plane` never reaches the database check.
+  It exits at boot, because `loadStorageConfigFromEnv` requires the S3 names
+  to be non-empty and `log.Fatalf`s otherwise:
+  `storage unavailable: missing S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY,
+  S3_REGION`. `edge-api` refuses for the same reason. This is a configuration
+  failure, not a network one, and no amount of waiting or retrying helps.
+
+Repointing `.env` at the real stack is not available either, and that part is
+unchanged and is deliberate. `deploy/docker/Caddyfile.supabase` serves
+`/rest/v1` and `/storage/v1` on the in-network listener only, and states that
+ports 80 and 443 are the in-network surface and must never be exposed; the
+public listener carries `/auth/v1` minus its admin routes and nothing else.
+There is no public hostname for `caddy-supabase`, by design, so no value you
+can write into `.env` from a sandbox reaches the self-hosted data plane.
+
+Practical consequence, unchanged: no full local stack, no local sign-in, no
+local E2E run from this environment. What changed is only the error you will
+see on the way to learning that. Use the fallbacks below instead of trying to
+make the stack come up.
+
+If you need a real Supabase-shaped surface rather than a fallback, the repo
+already has one that does not depend on `.env` at all:
+`scripts/ci-supabase-stack.sh` boots GoTrue, PostgREST and a gateway on a
+throwaway Postgres, and `scripts/ci-object-store.sh` boots a real Storage API
+next to it. That pair is what ci.yml's own jobs use, and it works from a
+sandbox because it depends on nothing outside the machine.
+
+This same deleted project is still referenced in more than one place. The
+CI-side instance is the `S3_ENDPOINT` repository secret, last written
+2026-04-21, which is issue #1324. If you find a third, say so rather than
+working around it locally.
 
 ### Known-good fallbacks (from PR #1243)
 
