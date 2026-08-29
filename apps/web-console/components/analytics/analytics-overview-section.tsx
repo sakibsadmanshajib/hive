@@ -229,7 +229,11 @@ export function AnalyticsOverviewSection({
           testId="blended-credits-per-million"
         />
       </section>
-      <ChartCard title="Usage" description="Requests and tokens.">
+      <ChartCard
+        title="Usage"
+        description="Requests and tokens."
+        rows={usageData}
+      >
         <UsageChart data={usageData} />
       </ChartCard>
       <div className="grid gap-6 lg:grid-cols-2">

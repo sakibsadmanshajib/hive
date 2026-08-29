@@ -210,8 +210,6 @@
 			if (localStorage.getItem('token')) {
 				// Emit user-join event with auth token
 				_socket.emit('user-join', { auth: { token: localStorage.token } });
-			} else {
-				console.warn('No token found in localStorage, user-join event not emitted');
 			}
 		});
 

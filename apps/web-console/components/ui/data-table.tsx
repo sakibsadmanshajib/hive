@@ -16,6 +16,9 @@ export interface DataTableProps<T> {
   columns: ReadonlyArray<Column<T>>;
   rowKey: (row: T) => string;
   empty?: React.ReactNode;
+  // While true the body shows a pending row instead of the empty state, so a
+  // table that is still fetching does not read as an empty account.
+  loading?: boolean;
   className?: string;
   // Optional expandable detail row: when expandedKey matches a row's key,
   // renderDetail fills a full-width row directly beneath it and the row is
@@ -31,6 +34,7 @@ export function DataTable<T>({
   columns,
   rowKey,
   empty,
+  loading = false,
   className,
   expandedKey = null,
   renderDetail,
@@ -81,8 +85,17 @@ export function DataTable<T>({
             ))}
           </tr>
         </thead>
-        <tbody>
-          {rows.length === 0 ? (
+        <tbody aria-busy={loading}>
+          {loading ? (
+            <tr>
+              <td
+                colSpan={columns.length}
+                className="px-4 py-10 text-center text-sm text-[var(--color-ink-3)]"
+              >
+                Loading...
+              </td>
+            </tr>
+          ) : rows.length === 0 ? (
             <tr>
               <td
                 colSpan={columns.length}

@@ -1,13 +1,14 @@
 # How Hive actually tracks work on GitHub
 
 This describes the process as it is practiced, not an aspirational target. It
-was written from a survey of the live repository state on 2026-08-28 (200 open
-issues, 16 open PRs, 4 milestones, 75 labels). Update it when the practice
-changes; do not let it drift into describing a process nobody follows. Given
-how fast this repo files and merges (a multi-agent burst can move the issue
-count by dozens within the hour this document was written in), read every
-count here as a shape, not a live number: re-run the `gh` queries in each
-section below for the current figure.
+was written from a survey of the live repository state on 2026-08-28 and its
+counts were re-checked on 2026-08-29 (343 open issues, 5 open PRs, 4
+milestones, 76 labels). Update it when the practice changes; do not let it
+drift into describing a process nobody follows. Given how fast this repo files
+and merges (a multi-agent burst can move the issue count by dozens within the
+hour this document was written in), read every count here as a shape, not a
+live number: re-run the `gh` queries in each section below for the current
+figure.
 
 ## Issue lifecycle
 
@@ -85,7 +86,7 @@ smaller, looser tail of one-off or campaign labels (`agents`, `sandbox`,
 folded into the prefix scheme above. That tail is not a gap worth closing by
 renaming; most of those tags mark a single past sweep or a one-time
 initiative and are fine left as-is per the no-rename rule below. The table
-above is the scheme to use going forward, not a complete inventory of all 75
+above is the scheme to use going forward, not a complete inventory of all 76
 labels the repo currently carries — run `gh label list` for that.
 
 **Do not rename any of these.** Every rename breaks a saved filter or a piece
@@ -93,11 +94,21 @@ of automation keyed on the label's exact name. Extend the taxonomy by adding a
 new value under an existing prefix; retire a label by simply no longer
 applying it, not by deleting or renaming it out from under open issues.
 
-As of this survey, 98 of 200 open issues carried no label at all and a further
-32 carried only legacy/stock labels with none of the `kind:`/`area:` scheme.
-That is the real coverage gap: roughly two-thirds of the open backlog is not
-classified in a way that supports filtering by area or kind. This document
-does not close that gap by itself; it names it so the next pass has a target.
+As of the 2026-08-29 re-check, 126 of 343 open issues carried no label at all
+and a further 45 carried only legacy/stock labels with none of the
+`kind:`/`area:`/`risk:` scheme. That is the real coverage gap: roughly half the
+open backlog is not classified in a way that supports filtering by area or
+kind. Re-derive both figures rather than trusting the numbers printed here,
+which are a snapshot of a backlog that moves by dozens in a day:
+
+```sh
+gh issue list --state open --limit 1000 --json number --jq 'length'
+gh issue list --state open --limit 1000 --json labels \
+  --jq '[.[] | select(.labels | length == 0)] | length'
+```
+
+This document does not close that gap by itself; it names it so the next pass
+has a target.
 
 ## Milestones
 
@@ -123,9 +134,10 @@ push, use `theme:` or `horizon:` labels for that instead.
 **Note on drift:** the Obsidian vault's roadmap MOC records milestone open
 counts from 2026-08-22 (`v1.2 agentic surface` 14 open, `Hive Enterprise
 edge-first v1` 7 open). Six days later those stood at 129 and 101 open
-respectively. The vault MOC already flags itself as stale and points to
-GitHub as the live source; this doc is the confirmation that the pointer is
-correct: GitHub, not the vault, is where milestone state should be read from.
+respectively, and 121 and 95 the day after that. The vault MOC already flags
+itself as stale and points to GitHub as the live source; this doc is the
+confirmation that the pointer is correct: GitHub, not the vault, is where
+milestone state should be read from.
 
 ## Board
 

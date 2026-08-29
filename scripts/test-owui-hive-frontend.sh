@@ -51,6 +51,7 @@ for rel in \
 	chat/Settings/General.svelte \
 	chat/Settings/Advanced/AdvancedParams.svelte \
 	chat/MessageInput.svelte \
+	channel/MessageInput.svelte \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
 	chat/Settings/Interface.svelte

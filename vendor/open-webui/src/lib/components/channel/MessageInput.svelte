@@ -695,8 +695,6 @@
 			on:change={async () => {
 				if (inputFiles && inputFiles.length > 0) {
 					inputFilesHandler(Array.from(inputFiles));
-				} else {
-					toast.error($i18n.t(`File not found.`));
 				}
 
 				filesInputElement.value = '';

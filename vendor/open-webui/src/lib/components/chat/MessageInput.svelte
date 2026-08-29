@@ -1311,8 +1311,6 @@
 							if (inputFiles && inputFiles.length > 0) {
 								const _inputFiles = Array.from(inputFiles);
 								inputFilesHandler(_inputFiles);
-							} else {
-								toast.error($i18n.t(`File not found.`));
 							}
 
 							filesInputElement.value = '';
