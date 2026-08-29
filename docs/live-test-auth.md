@@ -127,7 +127,7 @@ shape they now share is the one to copy:
 | --- | --- | --- |
 | `scripts/seed-demo-owner.py` | `demo@hive-demo.invalid` | `password_to_set` leaves an existing account alone unless `HIVE_DEMO_PASSWORD` is set. Creation still generates one. |
 | `scripts/seed-owui-e2e-user.py` | `owui-e2e@…`, `owui-e2e-bootstrap@…` | Same helper. Prints a `PASSWORD` line only for a password it actually set. `OWUI_E2E_RUN_KEY` namespaces both addresses per run, which is how the nightly gets a usable credential without touching a shared one, and `sweep_stale_fixture_users` clears what earlier runs left. |
-| `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Signs in with `RAG_VERIFY_PASSWORD` and refuses to rotate. The run that creates the account generates one and prints it on stderr, once. Save it. |
+| `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Never had a password to begin with: signs in through the admin one-time-token mint (same protocol as `live-auth.mjs`, reimplemented in Python since the script has no other reason to depend on a browser or `@supabase/ssr`). No `RAG_VERIFY_PASSWORD` and nothing to save. |
 
 The shim API key that `seed-owui-e2e-user.py` mints is a separate hazard with
 the same shape. Its billing account stays shared (a tenant bills to exactly one

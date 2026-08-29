@@ -41,9 +41,12 @@ func idPrefixForEndpoint(endpoint string) string {
 	return "chatcmpl"
 }
 
-// chunkFinished reports whether chunk carries a non-empty finish_reason on
-// any choice.
-func chunkFinished(chunk ChatCompletionChunk) bool {
+// ChunkFinished reports whether chunk carries a non-empty finish_reason on
+// any choice. Exported so a second SSE relay outside this package (the RAG
+// streaming path, apps/edge-api/internal/rag/chat_handler.go) can apply the
+// same post-finish-chunk suppression rule as executeStreaming below, rather
+// than duplicating this pure predicate.
+func ChunkFinished(chunk ChatCompletionChunk) bool {
 	for _, choice := range chunk.Choices {
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
 			return true
@@ -52,7 +55,7 @@ func chunkFinished(chunk ChatCompletionChunk) bool {
 	return false
 }
 
-// shouldSuppressPostFinishChunk reports whether a streamed chunk must be
+// ShouldSuppressPostFinishChunk reports whether a streamed chunk must be
 // dropped from the wire rather than relayed to the client, because a
 // terminal finish_reason has already been relayed on an earlier chunk of
 // this same response. The one exception is a genuine usage-only terminal
@@ -65,8 +68,9 @@ func chunkFinished(chunk ChatCompletionChunk) bool {
 // Exists because DeepSeek-family streams via OpenRouter emit one extra
 // empty role/content chunk after finish_reason=stop, before [DONE] -- a
 // strict SSE client that already closed the message on the real finish
-// frame chokes on anything more (parity finding, 2026-08-26).
-func shouldSuppressPostFinishChunk(finishSeen bool, chunk ChatCompletionChunk) bool {
+// frame chokes on anything more (parity finding, 2026-08-26). Exported for
+// the same reason as ChunkFinished above.
+func ShouldSuppressPostFinishChunk(finishSeen bool, chunk ChatCompletionChunk) bool {
 	if !finishSeen {
 		return false
 	}

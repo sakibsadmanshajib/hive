@@ -1,0 +1,449 @@
+name: rag-demo-readiness
+
+# On-demand readiness check for the RAG capability on the demo surface.
+#
+# ENABLE_RAG defaults to false for every tenant with no explicit
+# tenant_settings row -- opt-in by design, not a bug (see
+# supabase/migrations/20260824_01_cowork_gate_default_enabled.sql's header:
+# "RAG, voice, relay, SSO, billing, and audit keys keep their current opt-in
+# behavior because their default stays false"). A tenant answering 403 on
+# /v1/rag/chat is expected default state, not a deploy regression, so this
+# workflow is deliberately NOT wired into deploy-demo-box.yml or
+# post-deploy-verify.yml's automatic triggers. It exists to (1) enable the
+# gate for the two identities the demo actually needs it on, then (2) prove
+# the RAG pipeline (upload, embed, vector search, grounded answer) and (3)
+# the /v1/rag/chat streaming leak-check (PR #1222's id/system_fingerprint
+# fixes, plus this same change's RAG-path post-finish-chunk follow-up) both
+# hold live, on demand, rather than assuming either from unit tests alone.
+#
+# Runs on the box itself ([self-hosted, hive-demo]): reaching Supabase's
+# admin surface needs the docker compose network -- Caddyfile.supabase's
+# public listener explicitly refuses the admin API -- which only a job
+# running where the compose project already lives can join, via
+# `docker compose exec`/`run`. There is no SSH path to this box from an
+# agent session (post-deploy-verify.yml's own header comment says so
+# explicitly), so a self-hosted workflow is the only way anything short of
+# the owner's own keyboard reaches it.
+
+on:
+  workflow_dispatch: {}
+  # Same trust model as post-deploy-verify.yml: a label is a maintainer
+  # action, but this job runs on a self-hosted runner that IS the demo box
+  # with its own docker socket, so a mislabelled fork pull request would be
+  # arbitrary code execution there. The head-repo check below is the actual
+  # trust boundary; the label is only the intent gate.
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: Enable + verify RAG on the demo box
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch'
+        || (github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-rag-demo-readiness'))
+      }}
+    runs-on: [self-hosted, hive-demo]
+    timeout-minutes: 15
+    env:
+      # Exact flags deploy-demo-box.yml deploys with (HIVE_COMPOSE_FLAGS at
+      # the top of that file). A narrower set here would resolve a different
+      # compose project than the one actually serving the demo.
+      HIVE_COMPOSE_FLAGS: >-
+        --env-file ../../.env
+        -f docker-compose.yml
+        -f docker-compose.enterprise.yml
+        --profile local
+        --profile chat
+        --profile monitoring
+        --profile selfhost
+      # Ephemeral edge-api built from the checkout under test (see the step
+      # that starts it). Named per run so two concurrent runs cannot collide
+      # on the box, and so a leaked container is traceable to a run.
+      PR_EDGE_CONTAINER: hive-edge-api-under-test-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Apply the service_role public-schema grant fix ahead of the normal deploy migration
+        # Root-caused live (this PR, run 33209756779, see the diagnostic step
+        # below): service_role has USAGE on the public schema and BYPASSRLS,
+        # but deploy/supabase/init/00-extensions.sql only backfilled table
+        # grants for the storage schema, never public, so every PostgREST
+        # call authenticated as service_role against a public-schema table
+        # fails with "permission denied for table X" (42501) -- independent
+        # of RLS, since BYPASSRLS only skips row policies, not the base
+        # GRANT system. supabase/migrations/20260828_01_service_role_public_
+        # schema_grant.sql is this PR's real fix (same GRANT + ALTER DEFAULT
+        # PRIVILEGES pattern the init file already uses for storage,
+        # confirmed locally: reproduced the exact error against a throwaway
+        # postgres+pgvector container, then confirmed the same migration
+        # clears it).
+        #
+        # Applied here, ahead of the normal deploy-time migrate step,
+        # because this PR cannot merge itself (merge is the orchestrator's)
+        # and this check needs real evidence now, not after a merge that
+        # hasn't happened. Idempotent (GRANT/ALTER DEFAULT PRIVILEGES are
+        # no-ops on a repeat), so deploy-demo-box.yml's own migrate step
+        # re-applying the identical file after merge is a harmless no-op,
+        # not a double-apply risk. Reads the migration file from the PR's
+        # own checkout ($GITHUB_WORKSPACE), not the box's persistent
+        # /home/sakib/hive clone, since the file does not exist there until
+        # this PR merges.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
+
+          migration="$GITHUB_WORKSPACE/supabase/migrations/20260828_01_service_role_public_schema_grant.sql"
+          if [ ! -f "$migration" ]; then
+            echo "::error::$migration not found in this checkout"
+            exit 1
+          fi
+          cat "$migration" | docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+            psql -U "$db_user" -d "$db_name" --no-psqlrc -v ON_ERROR_STOP=1
+
+      - name: Enable ENABLE_RAG for the demo owner tenant and the QA tester tenant
+        # Idempotent upsert straight against the stack's own database, the
+        # same `docker compose exec supabase-db psql` idiom
+        # deploy-demo-box.yml's migration-target-identity step already uses.
+        # Not routed through control-plane's admin feature-gate HTTP API:
+        # scripts/seed-demo-owner.py and scripts/verify-rag-roundtrip.py
+        # already write tenant_settings directly the same way, and neither
+        # tenant here is guaranteed to have an OWNER-role session on hand
+        # for this job to authenticate as.
+        # Absolute, not checkout-relative: `docker compose` here must resolve
+        # the demo box's own persistent clone and its real .env (this is the
+        # running stack), not the ephemeral per-run checkout under
+        # _work/hive/hive that actions/checkout produces. Same absolute path
+        # post-deploy-verify.yml's freshness step uses for the same reason;
+        # first live run of this workflow used the checkout-relative form and
+        # failed with "couldn't find env file:
+        # /home/sakib/actions-runner/_work/hive/hive/.env" (PR #1257).
+        working-directory: /home/sakib/hive/deploy/docker
+        env:
+          QA_TESTER_EMAIL: ${{ secrets.HIVE_QA_TESTER_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${QA_TESTER_EMAIL:-}" ]; then
+            echo "::warning::HIVE_QA_TESTER_EMAIL is not set; only the demo owner tenant (slug hive-demo) will be enabled"
+          fi
+
+          if ! db_user=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_USER) \
+            || ! db_name=$(docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db printenv POSTGRES_DB); then
+            echo "::error::could not reach the running supabase-db container"
+            exit 1
+          fi
+          db_user=$(printf '%s' "$db_user" | tr -d '[:space:]')
+          db_name=$(printf '%s' "$db_name" | tr -d '[:space:]')
+
+          # <<-'SQL' (not <<'SQL'): the plain form requires the closing
+          # delimiter at column 0, which a YAML block scalar's indentation
+          # cannot express. The dash form strips leading TABS from the body
+          # (none used here, spaces only) and allows an indented delimiter
+          # line, so both bash and this workflow's YAML indentation agree.
+          sql=$(cat <<-'SQL'
+          	WITH targets AS (
+          	  SELECT id AS tenant_id FROM public.tenants WHERE slug = :'demo_slug'
+          	  UNION
+          	  SELECT tu.tenant_id
+          	    FROM auth.users u
+          	    JOIN public.tenant_users tu ON tu.user_id = u.id
+          	   WHERE :'qa_email' <> '' AND lower(u.email) = lower(:'qa_email')
+          	)
+          	INSERT INTO public.tenant_settings (tenant_id, key, enabled)
+          	SELECT tenant_id, 'ENABLE_RAG'::public.tenant_setting_key, true FROM targets
+          	ON CONFLICT (tenant_id, key) DO UPDATE SET enabled = true, updated_at = now()
+          	RETURNING tenant_id;
+          	SQL
+          )
+
+          # Piped via stdin, NOT `-c "$sql"`: confirmed live (run 33207901293,
+          # reproduced locally against a throwaway postgres:16-alpine
+          # container) that psql's `-c` argument mode does NOT run the
+          # `:'var'` client-side variable substitution -- only stdin/`-f`
+          # input goes through that scanner. `-c` sent the SQL to the server
+          # completely literally, and the server itself has no idea what a
+          # psql variable is, hence "syntax error at or near ':'".
+          result=$(printf '%s\n' "$sql" | docker compose $HIVE_COMPOSE_FLAGS exec -T supabase-db \
+            psql -U "$db_user" -d "$db_name" --no-psqlrc -tAXq -v ON_ERROR_STOP=1 \
+              -v demo_slug=hive-demo -v qa_email="${QA_TESTER_EMAIL:-}")
+          echo "ENABLE_RAG upserted for tenant id(s):"
+          echo "$result"
+          if [ -z "$(printf '%s' "$result" | tr -d '[:space:]')" ]; then
+            echo "::error::no tenant matched (neither slug 'hive-demo' nor HIVE_QA_TESTER_EMAIL resolved a tenant) -- nothing was enabled"
+            exit 1
+          fi
+
+      - name: Diagnose whether SUPABASE_SERVICE_ROLE_KEY actually carries service_role
+        # PR #1257's first live run of the next step failed with "permission
+        # denied for table tenants" (42501) on a call authenticated with
+        # SUPABASE_SERVICE_ROLE_KEY, which should bypass RLS entirely as
+        # service_role. Root-cause this with evidence instead of guessing:
+        # decode the JWT's own "role" claim and compare the key byte-for-byte
+        # against ENTERPRISE_SERVICE_ROLE_KEY (the value
+        # docker-compose.enterprise.yml actually configures PostgREST/GoTrue
+        # with -- see .env.example's self-host recipe:
+        # "SUPABASE_SERVICE_ROLE_KEY=<same value as ENTERPRISE_SERVICE_ROLE_KEY
+        # below>", a manual mirror an operator can leave stale). Prints only
+        # the decoded role claim and a match/mismatch boolean -- never the key
+        # material itself, since this repository is public.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          read_env() {
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+          decode_jwt_role() {
+            local token="$1" payload b64
+            payload=$(printf '%s' "$token" | cut -d. -f2)
+            b64=$(printf '%s' "$payload" | tr '_-' '/+')
+            case $(( ${#b64} % 4 )) in
+              2) b64="${b64}==" ;;
+              3) b64="${b64}=" ;;
+            esac
+            printf '%s' "$b64" | base64 -d 2>/dev/null \
+              | grep -oE '"role"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+              || echo "<could not decode as a JWT>"
+          }
+
+          supabase_key=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          enterprise_key=$(read_env ENTERPRISE_SERVICE_ROLE_KEY)
+
+          echo "SUPABASE_SERVICE_ROLE_KEY length: ${#supabase_key}"
+          echo "SUPABASE_SERVICE_ROLE_KEY decoded role claim: $(decode_jwt_role "$supabase_key")"
+          echo "ENTERPRISE_SERVICE_ROLE_KEY length: ${#enterprise_key}"
+          if [ -n "$enterprise_key" ]; then
+            echo "ENTERPRISE_SERVICE_ROLE_KEY decoded role claim: $(decode_jwt_role "$enterprise_key")"
+          else
+            echo "ENTERPRISE_SERVICE_ROLE_KEY is not set in $env_file"
+          fi
+          if [ "$supabase_key" = "$enterprise_key" ] && [ -n "$supabase_key" ]; then
+            echo "MATCH: SUPABASE_SERVICE_ROLE_KEY == ENTERPRISE_SERVICE_ROLE_KEY"
+          else
+            echo "MISMATCH: SUPABASE_SERVICE_ROLE_KEY != ENTERPRISE_SERVICE_ROLE_KEY (or one is empty)"
+          fi
+
+      - name: Start an edge-api running THIS checkout's source
+        # The stack's own hive-edge-api-1 serves whatever main was at the last
+        # deploy, so pointing the leak-check at it measures the deployed build
+        # and never the change under review. That is not a hypothetical: this
+        # workflow's first green-everything-else run (33215191600) failed on
+        # exactly two post-finish frames, which is the defect this PR fixes,
+        # reported against code that does not contain the fix. A pre-merge
+        # gate that can only pass after merge is not a gate.
+        #
+        # So: run a second edge-api from the checkout under test, on the same
+        # compose network, and point the verification at that one. Everything
+        # else it talks to (control-plane, LiteLLM, Redis, Postgres, the
+        # embedder) is the box's real running stack, so this stays a live
+        # check rather than a local mock -- only the binary under test is
+        # swapped for the one being reviewed.
+        #
+        # No image build: hive-edge-api:ci runs `air`, which compiles from
+        # /app at container start, so bind-mounting the checkout over /app is
+        # enough to run this PR's source under the deployed runtime. The
+        # runtime configuration is copied from the live container rather than
+        # re-derived (--env-file from its own Config.Env, --volumes-from for
+        # its module/build caches and the Supabase CA it verifies JWKS
+        # against), so a drift between .env and what is actually running
+        # cannot silently produce a different edge-api here. The env file is
+        # written with umask 077 and deleted as soon as docker has read it;
+        # nothing from it is ever echoed.
+        #
+        # The live container is only read from. It is never restarted,
+        # rebuilt, exec'd into or otherwise touched.
+        #
+        # tmpfs over apps/edge-api/tmp because air writes its compiled binary
+        # there as root, and that path is inside the bind-mounted workspace.
+        # Left on disk it would be a root-owned file under a root-owned
+        # directory in the runner's own workspace, and the NEXT run's
+        # actions/checkout (which git-cleans ignored files too) cannot unlink
+        # it as the runner user: deletion needs write permission on the parent
+        # directory, which root created. That would fail every later run of
+        # this workflow at checkout, before any of its own logic. Observed on
+        # the box while validating this step by hand, not theorised.
+        #
+        # `exec` on that tmpfs is load bearing: docker mounts a tmpfs noexec
+        # by default, and the file air puts there is the binary it then runs,
+        # so without it the container dies on "Permission denied" with exit
+        # 126 after a perfectly successful compile. Also observed on the box,
+        # for the same reason it is written down here.
+        #
+        # GOFLAGS=-buildvcs=false because the workspace IS a git repository
+        # (actions/checkout leaves .git in place) whose files belong to the
+        # runner user, while this container runs as root. Go stamps VCS
+        # information into the binary by default, git refuses to read a
+        # repository owned by another user without an explicit safe.directory,
+        # and the build dies on "error obtaining VCS status: exit status 128".
+        # Observed on run 33219175373. The stamp is metadata only, so dropping
+        # it changes nothing this check measures.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          live=$(docker compose $HIVE_COMPOSE_FLAGS ps -q edge-api)
+          if [ -z "$live" ]; then
+            echo "::error::the demo stack's edge-api container is not running, so there is no live configuration to copy"
+            exit 1
+          fi
+          network=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$live")
+          image=$(docker inspect -f '{{.Config.Image}}' "$live")
+          echo "live edge-api: image $image on network $network"
+
+          # This whole mechanism rests on the image compiling from /app at
+          # start, which is what air does. Against an image that instead runs
+          # a binary baked in at build time, the bind mount below would be
+          # inert, the job would verify the deployed build, and it would say
+          # PASS while measuring the wrong thing. Refuse loudly instead: this
+          # step would need to build an image from the checkout at that point.
+          if ! docker inspect -f '{{json .Config.Cmd}}' "$image" | grep -q '"air"'; then
+            echo "::error::$image no longer starts air, so bind-mounting the checkout over /app would not change what runs; this step needs to build an image from the checkout instead"
+            exit 1
+          fi
+
+          docker rm -f "$PR_EDGE_CONTAINER" >/dev/null 2>&1 || true
+          umask 077
+          # Strict KEY=VALUE lines only. A value containing a newline would
+          # otherwise leave a bare fragment on its own line, which docker
+          # reads as "inherit this name from the host environment" and can
+          # echo back at you, putting part of a secret in the job log. Nothing
+          # is currently shaped like that, so a dropped line means the live
+          # container's configuration changed shape and this needs looking at
+          # rather than silently running with a truncated value. The count is
+          # reported; the content never is.
+          live_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" | grep -c '^[A-Za-z_][A-Za-z0-9_]*=' || true)
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" \
+            | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$RUNNER_TEMP/edge-api-under-test.env"
+          total_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$live" | grep -c . || true)
+          if [ "$live_env" != "$total_env" ]; then
+            echo "::error::$((total_env - live_env)) of $total_env environment lines on the live container are not plain KEY=VALUE, so this step refuses to copy a partial configuration"
+            rm -f "$RUNNER_TEMP/edge-api-under-test.env"
+            exit 1
+          fi
+          # Create air's tmp directory as the runner user before docker can
+          # create it as root. It is inside the bind-mounted workspace, and
+          # while an empty root-owned directory is still removable by the
+          # runner (the parent is runner-owned), not creating it at all is one
+          # fewer thing for a later change to get wrong.
+          mkdir -p "$GITHUB_WORKSPACE/apps/edge-api/tmp"
+          docker run -d --name "$PR_EDGE_CONTAINER" \
+            --network "$network" \
+            --env-file "$RUNNER_TEMP/edge-api-under-test.env" \
+            --volumes-from "$live" \
+            -v "$GITHUB_WORKSPACE:/app" \
+            --tmpfs /app/apps/edge-api/tmp:rw,exec,size=512m \
+            -e GOFLAGS=-buildvcs=false \
+            "$image" >/dev/null
+          rm -f "$RUNNER_TEMP/edge-api-under-test.env"
+
+          # air recompiles the whole edge-api module on first start. Warm
+          # build cache (shared with the live container through
+          # --volumes-from) makes that about ten seconds; a cold one is
+          # minutes, hence the generous ceiling.
+          for _ in $(seq 1 60); do
+            if docker exec "$PR_EDGE_CONTAINER" wget -q -O /dev/null http://localhost:8080/health 2>/dev/null; then
+              echo "$PR_EDGE_CONTAINER is healthy and serving this checkout's source"
+              exit 0
+            fi
+            if [ -z "$(docker ps -q -f "name=^${PR_EDGE_CONTAINER}$")" ]; then
+              echo "::error::$PR_EDGE_CONTAINER exited before becoming healthy"
+              docker logs --tail 80 "$PR_EDGE_CONTAINER" || true
+              exit 1
+            fi
+            # air stays alive after a failed compile, so without this the job
+            # would burn the whole ceiling above waiting for a binary that is
+            # never going to exist, and the compiler error would be scrolled
+            # off the tail by air's file-watch chatter.
+            if docker logs "$PR_EDGE_CONTAINER" 2>&1 | grep -q "failed to build"; then
+              echo "::error::this checkout's edge-api source does not compile"
+              docker logs "$PR_EDGE_CONTAINER" 2>&1 | grep -v '^watching ' | tail -40
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::$PR_EDGE_CONTAINER never answered /health"
+          docker logs --tail 50 "$PR_EDGE_CONTAINER" || true
+          exit 1
+
+      - name: Run the RAG round-trip + streaming leak-check + error-path check
+        # scripts/verify-rag-roundtrip.py owns its own throwaway tenant
+        # (rag-verify-e2e, upserted with ENABLE_RAG=true on every run) and
+        # never touches the demo or QA tester tenant enabled above -- this
+        # step proves the pipeline and the leak fixes work at all, the step
+        # above proves the two demo-relevant tenants can reach it.
+        # Absolute, not checkout-relative -- see the previous step's comment.
+        #
+        # No password anywhere in this step: scripts/verify-rag-roundtrip.py
+        # signs in through GoTrue's admin one-time-token (magic link) mint
+        # (apps/web-console/tests/e2e/support/live-auth.mjs's protocol,
+        # reimplemented in Python -- see mint_session in that script and
+        # docs/live-test-auth.md), so it needs no RAG_VERIFY_PASSWORD secret
+        # and there is no credential to leak into this log. Only
+        # SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY, already read from the
+        # box's own .env below, are needed.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          env_file=/home/sakib/hive/.env
+          read_env() {
+            local raw
+            raw=$(grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- || true)
+            raw=${raw%\"}; raw=${raw#\"}
+            raw=${raw%\'}; raw=${raw#\'}
+            printf '%s' "$raw"
+          }
+
+          # The internal, unrefused caddy-supabase listener (port 80): the
+          # public one refuses the admin API this script's provisioning step
+          # needs (Caddyfile.supabase). Resolvable only from inside the
+          # compose network, which is exactly why this whole job runs here.
+          supabase_admin_url="http://caddy-supabase"
+          anon_key=$(read_env NEXT_PUBLIC_SUPABASE_ANON_KEY)
+          [ -n "$anon_key" ] || anon_key=$(read_env SUPABASE_ANON_KEY)
+          service_key=$(read_env SUPABASE_SERVICE_ROLE_KEY)
+          if [ -z "$anon_key" ] || [ -z "$service_key" ]; then
+            echo "::error::SUPABASE_ANON_KEY/NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY missing from $env_file"
+            exit 1
+          fi
+
+          # toolchain's own volume (docker-compose.yml: `../../:/workspace`,
+          # relative to THIS compose file) mounts the BOX's persistent
+          # /home/sakib/hive checkout, not this PR's -- it is still on
+          # whatever main was at the last deploy. Confirmed live (run
+          # 33212925653): without the override below, this step ran the
+          # pre-this-PR script and failed on the password branch this PR had
+          # already deleted. The extra -v layers this PR's own copy of the
+          # one file that matters on top, read-only, so the container
+          # actually exercises the change under review rather than
+          # whatever's currently deployed. Once this PR merges and deploys,
+          # the box's own checkout carries this file and the override is
+          # redundant, not wrong -- safe to leave in place permanently.
+          docker compose $HIVE_COMPOSE_FLAGS --profile tools run --rm -T \
+            -v "$GITHUB_WORKSPACE/scripts/verify-rag-roundtrip.py:/workspace/scripts/verify-rag-roundtrip.py:ro" \
+            -e SUPABASE_URL="$supabase_admin_url" \
+            -e SUPABASE_SERVICE_ROLE_KEY="$service_key" \
+            -e SUPABASE_ANON_KEY="$anon_key" \
+            -e EDGE_API_URL="http://$PR_EDGE_CONTAINER:8080" \
+            toolchain "cd /workspace && python3 scripts/verify-rag-roundtrip.py"
+
+      - name: Remove the edge-api under test
+        if: always()
+        run: |
+          docker rm -f "$PR_EDGE_CONTAINER" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/edge-api-under-test.env"

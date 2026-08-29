@@ -42,7 +42,31 @@ DO $$
 DECLARE
   r text;
 BEGIN
-  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'authenticated', 'supabase_auth_admin'] LOOP
+  -- service_role and anon added for
+  -- 20260828_01_service_role_public_schema_grant.sql: that migration GRANTs
+  -- to service_role and REVOKEs from all three API roles, and a GRANT or
+  -- REVOKE naming a role that does not exist is a hard error, so the whole
+  -- chain would fail on this leg without them. (Nothing before that
+  -- migration named either role in a GRANT, which is why neither had to
+  -- exist here until now.) The other CI paths get all three from
+  -- deploy/supabase/init/00-extensions.sql, which this leg does not run.
+  --
+  -- NOLOGIN only, and service_role deliberately WITHOUT BYPASSRLS, unlike
+  -- the real one 00-extensions.sql creates: the migration only needs the
+  -- role to exist as a GRANT/REVOKE target, and no suite here runs as it,
+  -- so the extra privilege would be untested surface rather than a
+  -- requirement.
+  --
+  -- Read that as a hard constraint, not a detail: because this
+  -- service_role does NOT bypass RLS, a suite that does SET ROLE
+  -- service_role here would watch RLS apply, see its isolation assertions
+  -- pass, and have proven nothing whatsoever about the role that actually
+  -- bypasses RLS in production. That is a green that cannot go red. Do not
+  -- use these roles to assert isolation behaviour. If a suite ever genuinely
+  -- needs production-shaped role behaviour, give this file the real
+  -- BYPASSRLS attribute in the same change that adds the suite, so the two
+  -- move together.
+  FOREACH r IN ARRAY ARRAY['hive_app', 'auditor_ro', 'anon', 'authenticated', 'supabase_auth_admin', 'service_role'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('CREATE ROLE %I NOLOGIN', r);
     END IF;

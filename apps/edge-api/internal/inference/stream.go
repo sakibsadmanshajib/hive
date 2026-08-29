@@ -393,8 +393,8 @@ func (o *Orchestrator) executeStreaming(
 				// 2026-08-26). Still folded into the accumulator below so
 				// billing never silently drops content -- only the write to
 				// the client is skipped.
-				suppressPostFinish := shouldSuppressPostFinishChunk(finishSeen, chunk)
-				if chunkFinished(chunk) {
+				suppressPostFinish := ShouldSuppressPostFinishChunk(finishSeen, chunk)
+				if ChunkFinished(chunk) {
 					finishSeen = true
 				}
 
