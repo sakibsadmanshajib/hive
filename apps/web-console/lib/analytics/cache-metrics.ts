@@ -23,7 +23,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
-import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/contract";
+import { apiKeysById, resolveApiKeyGroup } from "./api-key-labels";
 import {
   ANALYTICS_WINDOW_SPAN_MS,
   EVENT_SAMPLE_WINDOWS,
@@ -556,27 +556,19 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
   const topKeysFailed = topKeys === null;
   const topKeysRows = topKeys?.spend ?? [];
   const apiKeys = topKeys?.keys ?? [];
-  const apiKeyById = new Map(apiKeys.map((key) => [key.id, key] as const));
+  // resolveApiKeyGroup is shared with the Usage, Spend and Errors tabs, which
+  // had no id-to-nickname join at all until issue #1403. The unattributed
+  // bucket's handling (never "Deleted key", since the bucket also holds
+  // traffic that carried no key) lives inside that helper.
+  const keyById = apiKeysById(apiKeys);
   const topKeysList: TopKeyRow[] = [...topKeysRows]
     .sort((a, b) => b.total_credits - a.total_credits)
     .slice(0, TOP_KEYS_LIMIT)
-    .map((row) => {
-      // A NULL api_key_id groups here. The bucket mixes causes that the row
-      // itself cannot tell apart (traffic that carried no key, an error
-      // before a key was resolved, a key deleted under ON DELETE SET NULL),
-      // so both the label and the suffix have to be true of all three. What
-      // is certainly false for the first two is "Deleted key", which is how
-      // the bucket rendered on the qa-tester workspace before this fix, whose
-      // spend in that bucket was chat traffic that never carried a key.
-      const unattributed = row.group_key === UNATTRIBUTED_GROUP_KEY;
-      const key = unattributed ? undefined : apiKeyById.get(row.group_key);
-      return {
-        id: row.group_key,
-        label: unattributed ? "Unattributed" : key ? key.nickname : "Deleted key",
-        suffix: unattributed ? "no key on record" : (key?.redacted_suffix ?? row.group_key.slice(0, 8)),
-        credits: row.total_credits,
-      };
-    });
+    .map((row) => ({
+      id: row.group_key,
+      ...resolveApiKeyGroup(row.group_key, keyById),
+      credits: row.total_credits,
+    }));
 
   return {
     totalRequests,

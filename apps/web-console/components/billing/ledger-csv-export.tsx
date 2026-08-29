@@ -4,6 +4,7 @@ import { Download } from "lucide-react";
 
 import type { LedgerEntry } from "@/lib/control-plane/client";
 import { Button } from "@/components/ui/button";
+import { toCsv } from "@/lib/csv";
 
 interface LedgerCsvExportProps {
   entries: LedgerEntry[];
@@ -11,18 +12,19 @@ interface LedgerCsvExportProps {
 
 export function LedgerCsvExport({ entries }: LedgerCsvExportProps) {
   function handleExport() {
-    const header = "date,type,credits_delta,idempotency_key\n";
-    const rows = entries
-      .map((entry) => {
-        const date = entry.created_at;
-        const type = entry.entry_type;
-        const delta = String(entry.credits_delta);
-        const key = entry.idempotency_key.replace(/,/g, "");
-        return `${date},${type},${delta},${key}`;
-      })
-      .join("\n");
-
-    const csv = header + rows;
+    // Escaping lives in lib/csv so this export and the usage-logs export
+    // neutralise a formula-leading cell the same way (issue #1401).
+    const csv = toCsv(
+      ["date", "type", "credits_delta", "idempotency_key"],
+      entries.map((entry) => [
+        entry.created_at,
+        entry.entry_type,
+        // A number, not a string, so the writer leaves it unprefixed and the
+        // column still sums in a spreadsheet.
+        entry.credits_delta,
+        entry.idempotency_key,
+      ])
+    );
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

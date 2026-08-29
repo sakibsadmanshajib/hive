@@ -215,25 +215,64 @@ async function fetchTopKeys(
   }
 }
 
+/**
+ * The key list the Usage, Spend and Errors tabs need to turn an api_key
+ * group key into a nickname (issue #1403). Only fetched when it is actually
+ * needed: the Overview tab gets its own copy through fetchTopKeys, and no
+ * other grouping has an id to resolve.
+ *
+ * Null means the fetch failed, and the caller leaves the raw id on screen
+ * rather than labelling every row "Deleted key", which an empty array would
+ * otherwise produce. That distinction is the same one every other fetch in
+ * this file maintains.
+ */
+async function fetchGroupKeys(
+  input: OverviewFetchInput,
+): Promise<ApiKey[] | null> {
+  if (input.activeTab === "overview" || input.groupBy !== "api_key") {
+    return [];
+  }
+  try {
+    return await getApiKeys();
+  } catch {
+    return null;
+  }
+}
+
 export interface OverviewFetchBundle {
   main: MainFetchResult | null;
   previousUsage: UsageSummaryRow[] | null;
   cacheSample: CacheSampleResult | null;
   previousCacheSample: UsageEventRow[] | null;
   topKeys: TopKeysResult | null;
+  groupKeys: ApiKey[] | null;
 }
 
 /** Runs every fetch above concurrently and returns the raw bundle. */
 export async function fetchOverviewData(
   input: OverviewFetchInput,
 ): Promise<OverviewFetchBundle> {
-  const [main, previousUsage, cacheSample, previousCacheSample, topKeys] =
-    await Promise.all([
-      fetchMain(input),
-      fetchPreviousUsage(input),
-      fetchCacheSample(input),
-      fetchPreviousCacheSample(input),
-      fetchTopKeys(input),
-    ]);
-  return { main, previousUsage, cacheSample, previousCacheSample, topKeys };
+  const [
+    main,
+    previousUsage,
+    cacheSample,
+    previousCacheSample,
+    topKeys,
+    groupKeys,
+  ] = await Promise.all([
+    fetchMain(input),
+    fetchPreviousUsage(input),
+    fetchCacheSample(input),
+    fetchPreviousCacheSample(input),
+    fetchTopKeys(input),
+    fetchGroupKeys(input),
+  ]);
+  return {
+    main,
+    previousUsage,
+    cacheSample,
+    previousCacheSample,
+    topKeys,
+    groupKeys,
+  };
 }

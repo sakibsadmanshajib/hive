@@ -12,6 +12,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { ApiKeyCreateForm } from "./api-key-create-form";
+import { MAX_KEY_NICKNAME_LEN } from "@/lib/api-keys";
 
 const CREATE_URL = "/api/v1/accounts/current/api-keys";
 
@@ -67,6 +68,61 @@ describe("ApiKeyCreateForm validation and creation", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Nickname is required.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("caps what the nickname field will accept at all", () => {
+    // Issue #1400. The browser stops typing past the cap; the two assertions
+    // below cover a value that arrives some other way (a paste handler, a
+    // programmatic fill, a direct POST).
+    render(<ApiKeyCreateForm />);
+    expect(nicknameInput().maxLength).toBe(MAX_KEY_NICKNAME_LEN);
+  });
+
+  it("an over-long nickname is refused client side without a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), {
+      target: { value: "A".repeat(MAX_KEY_NICKNAME_LEN + 1) },
+    });
+    fireEvent.click(submitButton());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(String(MAX_KEY_NICKNAME_LEN));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a nickname exactly at the cap is sent", async () => {
+    const atCap = "A".repeat(MAX_KEY_NICKNAME_LEN);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(createdKeyBody()), { status: 201 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: atCap } });
+    fireEvent.click(submitButton());
+
+    await screen.findByTestId("created-api-key-secret");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      nickname: atCap,
+    });
+  });
+
+  it("an expiry already in the past is refused client side", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "dead-on-arrival" } });
+    const expires = screen.getByLabelText(/expires/i);
+    fireEvent.change(expires, { target: { value: "2020-01-01" } });
+    fireEvent.click(submitButton());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("future");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
@@ -240,34 +241,64 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})
 }
 
-func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
-	if !ok {
-		return
-	}
-
+// decodeMintBody reads and validates the body shared by the two routes that
+// mint a credential, create and rotate. Both used to carry their own copy of
+// this block and both were missing the same two checks (issue #1400), so the
+// validation lives here once rather than in each caller.
+func decodeMintBody(w http.ResponseWriter, r *http.Request) (string, *time.Time, bool) {
 	var body struct {
 		Nickname  string  `json:"nickname"`
 		ExpiresAt *string `json:"expires_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-	if body.Nickname == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nickname is required"})
-		return
+		return "", nil, false
 	}
 
-	input := CreateKeyInput{Nickname: body.Nickname}
+	nickname := strings.TrimSpace(body.Nickname)
+	if nickname == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nickname is required"})
+		return "", nil, false
+	}
+	if utf8.RuneCountInString(nickname) > MaxNicknameLen {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("nickname must be %d characters or fewer", MaxNicknameLen),
+		})
+		return "", nil, false
+	}
+
+	var expiresAt *time.Time
 	if body.ExpiresAt != nil {
 		t, err := time.Parse(time.RFC3339, *body.ExpiresAt)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expires_at must be RFC3339"})
-			return
+			return "", nil, false
 		}
-		input.ExpiresAt = &t
+		// A key whose expiry has already passed is inert the moment it is
+		// minted and lists as Expired straight away. Refuse it rather than
+		// hand back a credential that never worked.
+		if !t.After(time.Now()) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expires_at must be in the future"})
+			return "", nil, false
+		}
+		expiresAt = &t
 	}
+
+	return nickname, expiresAt, true
+}
+
+func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
+	if !ok {
+		return
+	}
+
+	nickname, expiresAt, ok := decodeMintBody(w, r)
+	if !ok {
+		return
+	}
+
+	input := CreateKeyInput{Nickname: nickname, ExpiresAt: expiresAt}
 
 	result, err := h.svc.CreateKey(r.Context(), vc.CurrentAccount.ID, vc.User.ID, input)
 	if err != nil {
@@ -301,30 +332,12 @@ func (h *Handler) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Nickname  string  `json:"nickname"`
-		ExpiresAt *string `json:"expires_at"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-	if body.Nickname == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nickname is required"})
+	nickname, expiresAt, ok := decodeMintBody(w, r)
+	if !ok {
 		return
 	}
 
-	var expiresAt *time.Time
-	if body.ExpiresAt != nil {
-		t, err := time.Parse(time.RFC3339, *body.ExpiresAt)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expires_at must be RFC3339"})
-			return
-		}
-		expiresAt = &t
-	}
-
-	result, err := h.svc.RotateKey(r.Context(), vc.CurrentAccount.ID, vc.User.ID, keyID, body.Nickname, expiresAt)
+	result, err := h.svc.RotateKey(r.Context(), vc.CurrentAccount.ID, vc.User.ID, keyID, nickname, expiresAt)
 	if err != nil {
 		handleKeyError(w, err)
 		return

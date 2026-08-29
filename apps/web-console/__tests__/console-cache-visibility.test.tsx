@@ -852,7 +852,10 @@ describe("request log cache token columns", () => {
 });
 
 describe("usage CSV export", () => {
-  async function exportedCsv(rows: UsageEventRow[]): Promise<string> {
+  async function exportedCsv(
+    rows: UsageEventRow[],
+    keyNames: Record<string, string> = {},
+  ): Promise<string> {
     let captured = "";
     const createObjectURL = vi
       .spyOn(URL, "createObjectURL")
@@ -868,7 +871,7 @@ describe("usage CSV export", () => {
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    render(<UsageLogsCsv rows={rows} keyNames={{}} />);
+    render(<UsageLogsCsv rows={rows} keyNames={keyNames} />);
     fireEvent.click(screen.getByText("Export CSV"));
 
     // Blob.text() resolves on a microtask; flush before asserting.
@@ -882,7 +885,7 @@ describe("usage CSV export", () => {
   it("carries both cache token columns in the header", async () => {
     const csv = await exportedCsv([event({ cache_read_tokens: 900 })]);
 
-    const [header] = csv.split("\n");
+    const [header] = csv.split("\r\n");
     expect(header.split(",")).toEqual([
       "created_at",
       "request_id",
@@ -902,7 +905,7 @@ describe("usage CSV export", () => {
   it("exports an absent cache count as an empty cell rather than a zero", async () => {
     const csv = await exportedCsv([event({ cache_read_tokens: 900 })]);
 
-    const [, row] = csv.split("\n");
+    const [, row] = csv.split("\r\n");
     const cells = row.split(",");
     expect(cells[6]).toBe("900");
     expect(cells[7]).toBe("");
@@ -918,8 +921,30 @@ describe("usage CSV export", () => {
       event({ id: "e2" }),
     ]);
 
-    const [, measured, unmeasured] = csv.split("\n");
+    const [, measured, unmeasured] = csv.split("\r\n");
     expect(measured.split(",")[9]).toBe("1800");
     expect(unmeasured.split(",")[9]).toBe("");
+  });
+
+  it("neutralises an api key nickname that opens with a formula character", async () => {
+    // The api_key column carries the key's nickname, which is free text a
+    // workspace member chose. Excel evaluates a cell that starts with "=",
+    // and the person who opens the export is not the person who named the
+    // key (issue #1401).
+    const csv = await exportedCsv([event({ api_key_id: "k-1" })], {
+      "k-1": '=HYPERLINK("http://qa.invalid")',
+    });
+
+    const [, row] = csv.split("\r\n");
+    expect(row.endsWith('"\'=HYPERLINK(""http://qa.invalid"")"')).toBe(true);
+  });
+
+  it("keeps a comma-bearing value intact instead of blanking the comma out", async () => {
+    const csv = await exportedCsv([event({ api_key_id: "k-1" })], {
+      "k-1": "billing, prod",
+    });
+
+    const [, row] = csv.split("\r\n");
+    expect(row.endsWith('"billing, prod"')).toBe(true);
   });
 });

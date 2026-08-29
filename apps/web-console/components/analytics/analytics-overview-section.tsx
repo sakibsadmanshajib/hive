@@ -10,7 +10,8 @@ import { TopApiKeysCard } from "@/components/analytics/top-api-keys-card";
 import { UsageChart } from "@/components/analytics/usage-chart";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
-import { formatCredits, formatNumber, formatPercent } from "@/lib/format/credits";
+import { blendedPriceNote } from "@/components/analytics/blended-price-note";
+import { formatCredits, formatPercent } from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 
 interface SummaryCardProps {
@@ -165,16 +166,25 @@ export function AnalyticsOverviewSection({
   tiles,
   usageData,
 }: AnalyticsOverviewSectionProps) {
-  const blendedNote =
-    tiles.blendedNoteKind === "no-tokens"
-      ? "No tokens served in this window."
-      : tiles.blendedNoteKind === "window-unsupported"
-        ? (tiles.windowUnsupportedNote ?? "No comparison for this window.")
-        : `${formatNumber(tiles.blendedCreditsPerMillion as number)} credits. Credits spent divided by input plus output tokens, per million. Effective, so cache reads are already priced in.`;
+  const blendedNote = blendedPriceNote({
+    kind: tiles.blendedNoteKind,
+    creditsPerMillion: tiles.blendedCreditsPerMillion,
+    windowUnsupportedNote: tiles.windowUnsupportedNote,
+  });
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {/*
+        [&>*]:min-w-0 on both grids below is load bearing, and it is the same
+        fix DataTable's wrapper already carries for tables. A grid item's
+        default min-width is `auto`, which is its min-content width, so a
+        single card whose contents will not wrap (a key nickname beside a
+        masked tail beside a dollar amount) sizes the whole auto track past
+        the container and every sibling card stretches to match. Measured on
+        the deployed console at 375: cards 411 wide, main scrollWidth 427,
+        the page itself scrolling sideways (issue #1406).
+      */}
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
         <SummaryCard
           label="Total requests"
           value={formatCredits(tiles.totalRequests)}
@@ -236,7 +246,7 @@ export function AnalyticsOverviewSection({
       >
         <UsageChart data={usageData} />
       </ChartCard>
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
         <CachedVsUncachedCard
           cachedTokens={tiles.cachedTokens}
           uncachedTokens={tiles.uncachedTokens}

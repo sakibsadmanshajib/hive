@@ -16,7 +16,7 @@ import {
 import { Field, Input } from "@/components/ui/input";
 import { formatShortDate } from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
-import { usdToCreditsInput } from "@/lib/api-keys";
+import { MAX_KEY_NICKNAME_LEN, usdToCreditsInput } from "@/lib/api-keys";
 
 // Mirrors UpdateApiKeyBudgetInput["budgetKind"] in lib/control-plane/client.ts.
 // Duplicated as a literal union rather than imported: that type lives in a
@@ -141,8 +141,20 @@ export function ApiKeyCreateForm() {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!nickname.trim()) {
+    const trimmedNickname = nickname.trim();
+    if (!trimmedNickname) {
       setError("Nickname is required.");
+      return;
+    }
+    // The maxLength attribute stops typing past the cap, but a paste handler
+    // or a programmatic fill can still get past it, and the control plane is
+    // the boundary that actually refuses the value (issue #1400).
+    if ([...trimmedNickname].length > MAX_KEY_NICKNAME_LEN) {
+      setError(`Nickname must be ${MAX_KEY_NICKNAME_LEN} characters or fewer.`);
+      return;
+    }
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+      setError("Expiry must be a date in the future.");
       return;
     }
     const limitCredits = usdToCreditsInput(creditLimit);
@@ -157,7 +169,7 @@ export function ApiKeyCreateForm() {
 
     try {
       const body: { nickname: string; expires_at?: string } = {
-        nickname: nickname.trim(),
+        nickname: trimmedNickname,
       };
       if (expiresAt) {
         body.expires_at = new Date(expiresAt).toISOString();
@@ -363,6 +375,7 @@ export function ApiKeyCreateForm() {
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
               placeholder="production-server"
+              maxLength={MAX_KEY_NICKNAME_LEN}
               required
             />
           </Field>

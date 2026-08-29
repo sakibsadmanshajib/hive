@@ -4,6 +4,7 @@ import { Download } from "lucide-react";
 
 import type { UsageEventRow } from "@/lib/control-plane/client";
 import { Button } from "@/components/ui/button";
+import { toCsv } from "@/lib/csv";
 
 interface UsageLogsCsvProps {
   rows: UsageEventRow[];
@@ -25,40 +26,50 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
     // export as an empty cell rather than a fabricated 0. Raw
     // milliseconds, not the table's "1.8s", because the export exists to
     // be sorted and charted.
-    const header =
-      "created_at,request_id,model_alias,status,input_tokens,output_tokens," +
-      "cache_read_tokens,cache_write_tokens,hive_credit_delta,latency_ms," +
-      "error_code,api_key\n";
+    const header = [
+      "created_at",
+      "request_id",
+      "model_alias",
+      "status",
+      "input_tokens",
+      "output_tokens",
+      "cache_read_tokens",
+      "cache_write_tokens",
+      "hive_credit_delta",
+      "latency_ms",
+      "error_code",
+      "api_key",
+    ];
+    // Escaping lives in lib/csv so this export and the billing ledger export
+    // neutralise a formula-leading cell the same way (issue #1401). The
+    // api_key column carries a nickname, which is free text a workspace
+    // member chose, and it used to have its quotes and commas replaced with
+    // spaces while a leading "=" passed straight through.
     const lines = rows.map((row) => {
       const key = row.api_key_id
         ? (keyNames[row.api_key_id] ?? `…${row.api_key_id.slice(-6)}`)
         : "—";
-      const cell = (value: string) => value.replace(/[",\n]/g, " ");
+      // Counts travel as numbers rather than strings so the writer leaves them
+      // unprefixed and the columns still sum and chart in a spreadsheet. An
+      // absent value stays an empty string, which is the whole point of the
+      // comment above.
       return [
         row.created_at,
         row.request_id,
         row.model_alias,
         row.status,
-        String(row.input_tokens),
-        String(row.output_tokens),
-        row.cache_read_tokens === undefined
-          ? ""
-          : String(row.cache_read_tokens),
-        row.cache_write_tokens === undefined
-          ? ""
-          : String(row.cache_write_tokens),
-        String(row.hive_credit_delta),
-        row.latency_ms === undefined || row.latency_ms < 0
-          ? ""
-          : String(row.latency_ms),
+        row.input_tokens,
+        row.output_tokens,
+        row.cache_read_tokens ?? "",
+        row.cache_write_tokens ?? "",
+        row.hive_credit_delta,
+        row.latency_ms === undefined || row.latency_ms < 0 ? "" : row.latency_ms,
         row.error_code ?? "",
         key,
-      ]
-        .map(cell)
-        .join(",");
+      ];
     });
 
-    const csv = header + lines.join("\n");
+    const csv = toCsv(header, lines);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
