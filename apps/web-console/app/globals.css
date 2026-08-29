@@ -157,6 +157,26 @@
     --color-accent-solid: oklch(0.72 0.14 38);
     --color-accent-solid-hover: oklch(0.78 0.14 38);
 
+    /* Solid tokens, never redefined before (issue #491): dark mode fell
+       through to the light-mode values via the cascade, which fail WCAG AA
+       against these dark backgrounds (worst case: danger badge text on
+       danger-soft measured 2.65:1). Lightness raised to 0.72, matching
+       --color-accent's dark value above; hue unchanged so hue identity is
+       preserved. Danger's chroma is lowered from the light theme's 0.18
+       to 0.17: at L 0.72 the original chroma puts the sRGB red channel past
+       1.0 (linear R roughly 1.02), so a real browser would silently
+       gamut-map it anyway (found in review, CodeRabbit). 0.17 is inside the
+       sRGB gamut at this lightness/hue with no perceptible saturation loss,
+       so the rendered color and the token now agree exactly. Measured
+       (WCAG 2.x, sRGB, post gamut fix): danger badge text 2.65:1 -> 5.27:1,
+       success badge text 3.12:1 -> 6.06:1, field-error text on canvas
+       3.65:1 -> 7.26:1. See button.tsx's danger variant for the paired fix
+       this required: its label flips to --color-canvas, since
+       white-on-danger drops to 2.67:1 once danger lightens here. */
+    --color-success: oklch(0.72 0.12 150);
+    --color-warning: oklch(0.72 0.13 75);
+    --color-danger: oklch(0.72 0.17 25);
+
     --color-success-soft: oklch(0.28 0.05 150);
     --color-warning-soft: oklch(0.30 0.06 75);
     --color-danger-soft: oklch(0.30 0.08 25);

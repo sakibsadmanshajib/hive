@@ -39,8 +39,13 @@ const buttonVariants = cva(
           "bg-transparent text-[var(--color-ink-2)]",
           "hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]",
         ],
+        // Label is --color-canvas, not white: dark mode's danger token is
+        // lightened for text-on-canvas AA (issue #491), and white-on-danger
+        // measured 2.67:1 there, under AA on this destructive-action control.
+        // Same pairing the accent variant above already uses; see the
+        // --color-danger dark override in globals.css for the measurements.
         danger: [
-          "bg-[var(--color-danger)] text-white",
+          "bg-[var(--color-danger)] text-[var(--color-canvas)]",
           "hover:brightness-110",
         ],
         link: [
