@@ -330,11 +330,67 @@ func captureInputTokens(hasUsage bool, freshInputTokens int64, endpoint string, 
 	return estimateCompletionTokens(promptText(endpoint, requestBody))
 }
 
-func capCaptureAtCeiling(route SelectRouteResult, ceiling, freshInputTokens, cacheReadTokens, cacheWriteTokens, credits int64) int64 {
-	if ceiling <= 0 || route.Pricing.IsUpstreamActual() {
+// captureCompletionTokens is captureInputTokens' twin for the output half: the
+// provider's own completion count when it reported one, an estimate from the
+// text it actually produced when it did not. Zero is a legitimate answer here,
+// and means exactly what it says: nothing visible came back, so the prompt is
+// the only quantity anything can price.
+func captureCompletionTokens(hasUsage bool, outputTokens int64, content string) int64 {
+	if hasUsage && outputTokens > 0 {
+		return outputTokens
+	}
+	return estimateCompletionTokens(content)
+}
+
+// capCaptureAtCeiling bounds a hold capture by the catalog price of the tokens
+// the request actually involved.
+//
+// It used to return the hold untouched whenever the caller set no max_tokens,
+// which is the shape of ordinary chat traffic and of any bare SDK call. The
+// capture then WAS the flat authorization floor. Measured on the live demo box
+// on 2026-08-29 (issue #1198): seventeen reservations charged exactly
+// DefaultHoldText, 100,000,000 credits, against a median confirmed charge of
+// 281 credits on hive-free, 26,838 on deepseek-v4-flash and 37,905 on
+// hive-small. That is 355,872x, 3,726x and 2,638x respectively, and it is the
+// same mistake orchestrator.go's own settlement comment warns about forty lines
+// above the call site: "estimatedCredits is a hold size, an authorization floor
+// picked before the request ran; billing it as though it were a measurement"
+// (issue #636). Issues #1171 and #1215 reintroduced it one layer up, where
+// #636's guard could not see it.
+//
+// So the bound applies always, and it is built from what is knowable:
+//
+//   - the input half from captureInputTokens, the upstream's own count when it
+//     reported one and a prompt estimate when it did not, because both capture
+//     branches are reached precisely BECAUSE no usable usage block arrived, so
+//     the metered count in the accumulator is 0 and passing it straight through
+//     would serve a large prompt for nothing (review round two, finding 3);
+//   - the completion half from captureCompletionTokens, capped by the caller's
+//     own ceiling when they set one, since a request may never be billed for
+//     more completion than it authorized (issue #1283).
+//
+// The result is floored at one credit and capped at the hold, so the capture
+// stays fail-closed: it still always charges, it can never become the free
+// serve D-034 exists to prevent, and it can never exceed what was authorized.
+//
+// A variable-price alias is left alone: CreditsForTokens has no catalog price to
+// read there and says so loudly, so there is no catalog bound to compare. Its
+// charge comes from UpstreamActualSettlement instead.
+func capCaptureAtCeiling(route SelectRouteResult, ceiling, freshInputTokens, cacheReadTokens, cacheWriteTokens, completionTokens, credits int64) int64 {
+	if route.Pricing.IsUpstreamActual() {
 		return credits
 	}
-	bound := CreditsForTokens(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, ceiling)
+	billedCompletion := completionTokens
+	if ceiling > 0 && ceiling < billedCompletion {
+		billedCompletion = ceiling
+	}
+	bound := CreditsForTokens(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, billedCompletion)
+	if bound < 1 {
+		// CreditsForTokens already floors any positive token count at one
+		// credit. This covers the one case it cannot: every count zero, which
+		// would otherwise turn a served response into a free one.
+		bound = 1
+	}
 	if bound < credits {
 		return bound
 	}

@@ -166,11 +166,21 @@ func TestExecuteSync_ZeroContentLength_Twice_CapturesHold(t *testing.T) {
 	if confirmed, _ := finalize["terminal_usage_confirmed"].(bool); confirmed {
 		t.Errorf("terminal_usage_confirmed = true on a captured hold; want false so reconciliation still sees it")
 	}
-	// The capture is at reservation.Held(): the hold the control-plane
-	// actually confirmed in its CreateReservation answer (the accounting
-	// mock's EstimatedCredits of 10,000), not the pre-dispatch floor.
-	if credits, _ := finalize["actual_credits"].(float64); credits != 10000 {
-		t.Errorf("actual_credits = %v, want a capture at the confirmed hold (10000)", credits)
+	// The capture is the catalog price of the tokens the provider reported,
+	// capped by the hold (#1198). The upstream answered with usage
+	// prompt_tokens 76 and completion_tokens 512, all of the latter spent on
+	// hidden reasoning, and reasoning is real inference we paid for, so pricing
+	// that count is what charges for it. Charging the flat hold instead is what
+	// produced the 355,872x overcharge measured on the live box.
+	wantCredits := CreditsForTokens(
+		SelectRouteResult{AliasID: "gpt-4o", Provider: "openrouter", Pricing: catalogHiveFast, PriceUnit: PriceUnitTokens},
+		76, 0, 0, 512)
+	credits := finalizeInt64(t, finalize, "actual_credits")
+	if credits != wantCredits {
+		t.Errorf("actual_credits = %d, want %d: the capture is the catalog price of the reported tokens, never the flat authorization floor (#1198)", credits, wantCredits)
+	}
+	if credits < 1 {
+		t.Errorf("actual_credits = %d: an empty-content turn that burned reasoning is never free (#1171, D-034)", credits)
 	}
 }
 

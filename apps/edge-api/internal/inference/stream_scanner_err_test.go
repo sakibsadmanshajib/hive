@@ -86,10 +86,10 @@ func TestExecuteStreaming_OversizedUpstreamLine_ClientGetsHonestErrorFrame(t *te
 	if !ok {
 		t.Fatalf("expected FinalizeReservation despite the aborted stream; calls seen: %+v", rec.calls)
 	}
-	actual, _ := fbody["actual_credits"].(float64)
-	if int64(actual) != 10000 {
-		t.Errorf("actual_credits = %v, want 10000 (reservation hold captured in full, unconfirmed)", fbody["actual_credits"])
-	}
+	// Captured and unconfirmed, at the catalog price of what was involved
+	// rather than the flat hold (#1198). Nothing priceable survived the abort,
+	// so the floor is the answer.
+	assertPricedCapture(t, fbody, minimumCapture)
 	if confirmed, _ := fbody["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: no real usage arrived before the abort")
 	}

@@ -53,10 +53,9 @@ func TestExecuteResponsesStreaming_ClientDisconnect_SettlesDeliveredTokensDespit
 	if !ok {
 		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled context; calls seen: %+v", rec.calls)
 	}
-	actual, _ := body["actual_credits"].(float64)
-	if int64(actual) != 10000 {
-		t.Errorf("actual_credits = %v, want 10000: with actuals unavailable the reservation hold is captured in full (#1215), never an undercharge", body["actual_credits"])
-	}
+	// Charges, but at the catalog price rather than the flat hold (#1198).
+	// Nothing priceable reached settlement here, so the floor is the answer.
+	assertPricedCapture(t, body, minimumCapture)
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: no real usage arrived")
 	}
