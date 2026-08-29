@@ -44,13 +44,23 @@ The patch scripts come in two shapes:
 - **A rewrite of an upstream file**, an `apply_*_patch.py` that locates an
   anchor and edits around it.
 
-Both are idempotent (a marker check returns early if already applied) and both
-**assert their own effect and fail the build loudly**: an anchor that does not
-match exactly once prints what it expected and exits 1, and Python splices are
-`ast.parse`d before writing so a broken edit never reaches the image. Follow
-that pattern in any new patch. A patch that silently no-ops when its anchor
-moves is the failure mode the assertions exist to prevent, and it surfaces at
-deploy rather than at build.
+What every one of them has in common is that it **asserts its own effect and
+fails the build loudly**. Two styles are in use, and both are fine:
+
+- A marker check plus an explicit count, returning early when already applied
+  and printing what it expected before `exit 1` when the anchor does not match
+  exactly once (`apply_credits_patch.py`). Python splices are `ast.parse`d
+  before writing, so a broken edit never reaches the image.
+- Bare `assert` statements over the source text, checking that the anchor
+  appears exactly once, that the fragment landed, and that what was meant to be
+  removed is genuinely gone from the patched text
+  (`apply_tenant_role_patch.py`).
+
+Follow one of them in any new patch, and assert the negative as well as the
+positive: the second style checks the old admin-promotion branches are absent
+from the output, not merely that the new code is present. A patch that silently
+no-ops when its anchor moves is the failure mode these assertions exist to
+prevent, and without them it surfaces at deploy rather than at build.
 
 ## Layer 3: `deploy/docker/Caddyfile.owui`
 
