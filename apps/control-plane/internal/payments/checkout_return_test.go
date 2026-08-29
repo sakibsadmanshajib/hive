@@ -321,7 +321,7 @@ func TestInitiateCheckoutPassesBothOriginsToTheRail(t *testing.T) {
 	svc := NewService(repo, led, prof, fx, map[Rail]PaymentRail{RailStripe: rail})
 
 	if _, err := svc.InitiateCheckout(
-		context.Background(), uuid.New(), RailStripe, CreditIncrement,
+		context.Background(), uuid.New(), RailStripe, MinPurchaseCredits,
 		"https://cp.example.com", "https://console.example.com", "idem-1",
 	); err != nil {
 		t.Fatalf("InitiateCheckout: %v", err)

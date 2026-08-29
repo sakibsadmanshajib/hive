@@ -51,9 +51,46 @@ const (
 	// multiple of it).
 	CreditIncrement int64 = CreditsPerUSD / 100
 
+	// ChatHoldCredits mirrors the authorization hold the data plane takes
+	// before it dispatches a chat request: edge-api's
+	// inference.DefaultHoldText, $0.10 equivalent. It is a hold and never a
+	// charge, and settlement replaces it with the catalog price of what was
+	// actually metered, but it is the amount a buyer must be holding before
+	// their first message is allowed through at all.
+	//
+	// It is mirrored rather than imported because the hold is declared in
+	// apps/edge-api and this is apps/control-plane: separate Go modules with
+	// no dependency edge, and neither plane should acquire one to share a
+	// literal. purchase_floor_test.go reads the real declaration out of
+	// edge-api's source and fails if this mirror drifts from it, in either
+	// direction.
+	ChatHoldCredits int64 = CreditsPerUSD / 10 // 100,000,000
+
+	// MinPurchaseHoldMultiple is how many chat holds the smallest purchase
+	// must cover (issue #1450).
+	//
+	// Ten, not one. A minimum of exactly one hold is the same defect with a
+	// smaller radius: it funds a single message in flight and refuses the
+	// second concurrent one, and it does not cover a variable-price alias at
+	// all, because ChatHoldCredits is the endpoint FLOOR that edge-api's
+	// ReservationCredits raises per request for hive-auto from that request's
+	// own bounds (issue #1372). Ten holds is a session rather than a message:
+	// roughly ten ordinary turns of headroom, or at least two of the larger
+	// variable-price holds. It also puts the smallest purchase above Stripe's
+	// own $0.50 USD minimum charge, which the previous one-cent minimum was
+	// below, so the smallest quantity the product offered was one the default
+	// rail would have rejected outright.
+	MinPurchaseHoldMultiple int64 = 10
+
 	// MinPurchaseCredits is the minimum credits purchasable in a single
-	// transaction: one cent.
-	MinPurchaseCredits int64 = CreditIncrement // 10,000,000
+	// transaction, derived from the hold it has to clear rather than picked
+	// independently of it: $1.00 equivalent.
+	//
+	// Before issue #1450 this was one cent, one tenth of a single hold, so a
+	// customer who bought the minimum was refused with "Your available credit
+	// does not cover this request" on their first message. The two constants
+	// were each individually correct and had simply never been compared.
+	MinPurchaseCredits int64 = ChatHoldCredits * MinPurchaseHoldMultiple // 1,000,000,000
 
 	// MaxPurchaseCreditsStripe: 100 USD equiv (100 * CreditsPerUSD).
 	MaxPurchaseCreditsStripe int64 = 100 * CreditsPerUSD
@@ -65,14 +102,21 @@ const (
 	MaxPurchaseCreditsBkash int64 = 300_000_000_000
 )
 
-// PredefinedTiers are the suggested credit purchase amounts:
-// $0.01, $0.05, $0.10, $0.50 and $1.00 equivalents.
+// PredefinedTiers are the suggested credit purchase amounts: $1.00, $2.00,
+// $5.00, $10.00 and $20.00 equivalents.
+//
+// Multiples of MinPurchaseCredits rather than five independent literals, so no
+// suggestion can sit below the floor by construction. Two of the five used to:
+// the $0.01 and $0.05 tiers could not cover one chat hold, and the $0.10 tier
+// covered exactly one with nothing left for a second concurrent message
+// (issue #1450). A tier below the floor is worse than a permissive floor,
+// because the product is actively proposing the amount that will not work.
 var PredefinedTiers = []int64{
-	10_000_000,    // $0.01
-	50_000_000,    // $0.05
-	100_000_000,   // $0.10
-	500_000_000,   // $0.50
-	1_000_000_000, // $1.00
+	1 * MinPurchaseCredits,  // $1.00
+	2 * MinPurchaseCredits,  // $2.00
+	5 * MinPurchaseCredits,  // $5.00
+	10 * MinPurchaseCredits, // $10.00
+	20 * MinPurchaseCredits, // $20.00
 }
 
 // Sentinel errors for the payments domain.
@@ -235,8 +279,16 @@ type RailEvent struct {
 }
 
 // ValidatePurchaseAmount verifies credits are positive, a whole number of
-// one-cent steps (CreditIncrement), and no larger than the ceiling this rail
-// already advertises through GetCheckoutOptions.
+// one-cent steps (CreditIncrement), at least the floor and no larger than the
+// ceiling this rail already advertises through GetCheckoutOptions.
+//
+// The floor is enforced here for the same reason the ceiling is, and it was
+// missing until issue #1450: MinPurchaseCredits was published as min_credits
+// and clamped only by the console, so a caller reaching InitiateCheckout
+// directly could still buy an amount the first request would refuse to spend.
+// An advertised minimum and an enforced minimum that are allowed to differ are
+// the same two-uncoupled-numbers defect one layer up from the one this floor
+// exists to fix.
 //
 // The ceiling is enforced here rather than only in a client, because a caller
 // that skips the console reaches InitiateCheckout directly. Credits is an int64
@@ -251,6 +303,9 @@ func ValidatePurchaseAmount(credits int64, rail Rail) error {
 	}
 	if credits%CreditIncrement != 0 {
 		return fmt.Errorf("payments: credits must be a multiple of %d, got %d", CreditIncrement, credits)
+	}
+	if credits < MinPurchaseCredits {
+		return fmt.Errorf("payments: credits must be at least %d, got %d", MinPurchaseCredits, credits)
 	}
 	if maxCredits := maxCreditsForRail(rail); credits > maxCredits {
 		return fmt.Errorf("payments: credits must be at most %d for the selected payment method, got %d", maxCredits, credits)

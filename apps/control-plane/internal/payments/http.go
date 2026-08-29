@@ -478,6 +478,8 @@ func classifyInitiateError(err error) (int, string) {
 		return http.StatusBadRequest, "credits must be positive"
 	case strings.Contains(msg, "credits must be a multiple of"):
 		return http.StatusBadRequest, fmt.Sprintf("credits must be a multiple of %d", CreditIncrement)
+	case strings.Contains(msg, "credits must be at least"):
+		return http.StatusBadRequest, fmt.Sprintf("credits must be at least %d", MinPurchaseCredits)
 	case strings.Contains(msg, "credits must be at most"):
 		return http.StatusBadRequest, "credits exceed the maximum for the selected payment method"
 	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):
