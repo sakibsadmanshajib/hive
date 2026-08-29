@@ -29,7 +29,7 @@ function parseTokens(block: string): Record<string, Oklch> {
 function loadTokens(): { light: Record<string, Oklch>; dark: Record<string, Oklch> } {
   const css = readFileSync(CSS_PATH, "utf8");
   const themeMatch = css.match(/@theme\s*\{([\s\S]*?)\n\}/);
-  const darkMatch = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([\s\S]*?)\n  \}\n\}/);
+  const darkMatch = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([\s\S]*?)\n\s*\}\n\}/);
   if (!themeMatch || !darkMatch) {
     throw new Error("could not locate @theme or dark :root block in globals.css");
   }
@@ -96,7 +96,7 @@ describe("dark mode solid semantic tokens clear WCAG AA (issue #491)", () => {
     expect(contrastRatio(dark[name], dark[softName])).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
   });
 
-  it("danger button label (canvas-on-danger) clears 4.5:1 in both themes", () => {
+  it("canvas-on-danger pairing clears 4.5:1 in both themes (paired with the button.tsx literal check below, which confirms the component actually uses this pairing)", () => {
     expect(contrastRatio(dark["color-canvas"], dark["color-danger"])).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
     expect(contrastRatio(light["color-canvas"], light["color-danger"])).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
   });
@@ -108,7 +108,7 @@ describe("dark mode solid semantic tokens clear WCAG AA (issue #491)", () => {
 
   it.each(SOLID_TOKENS)("dark :root block explicitly redefines --%s (not just its -soft variant)", (name) => {
     const css = readFileSync(CSS_PATH, "utf8");
-    const darkMatch = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([\s\S]*?)\n  \}\n\}/);
+    const darkMatch = css.match(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([\s\S]*?)\n\s*\}\n\}/);
     const darkBlock = darkMatch ? darkMatch[1] : "";
     expect(darkBlock).toContain("--" + name + ": oklch(");
   });

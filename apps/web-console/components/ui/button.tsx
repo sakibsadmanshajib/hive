@@ -41,7 +41,7 @@ const buttonVariants = cva(
         ],
         // Label is --color-canvas, not white: dark mode's danger token is
         // lightened for text-on-canvas AA (issue #491), and white-on-danger
-        // measured 2.72:1 there, under AA on this destructive-action control.
+        // measured 2.67:1 there, under AA on this destructive-action control.
         // Same pairing the accent variant above already uses; see the
         // --color-danger dark override in globals.css for the measurements.
         danger: [
