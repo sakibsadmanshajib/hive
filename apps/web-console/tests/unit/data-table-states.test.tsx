@@ -67,7 +67,10 @@ describe("DataTable pending and empty states", () => {
     const wrapper = container.firstElementChild;
     expect(wrapper?.className).toContain("overflow-x-auto");
     expect(wrapper?.className).not.toContain("overflow-hidden");
-    // A scrollable region a keyboard-only user cannot reach is not scrollable.
-    expect(wrapper?.getAttribute("tabindex")).toBe("0");
+    // Not focusable on purpose: see the comment in data-table.tsx and
+    // issue #1385. Pinned so the next attempt at the keyboard fix is a
+    // deliberate change to this assertion rather than a silent one that
+    // fails the interaction coverage gate on three routes.
+    expect(wrapper?.hasAttribute("tabindex")).toBe(false);
   });
 });

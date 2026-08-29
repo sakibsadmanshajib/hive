@@ -60,11 +60,15 @@ export function DataTable<T>({
     // Making the scroller a containing block takes it to 0 (issue #1367,
     // second half; /console/catalog was the same defect and the same fix).
     <div
-      // Focusable so a keyboard-only user can scroll the overflow region at
-      // all (WCAG 2.1.1). No role is set with it: a region without an
-      // accessible name is worse than none, and the table inside already
-      // carries the semantics.
-      tabIndex={0}
+      // Deliberately not focusable, though a scrollable region that a
+      // keyboard user cannot reach is a real WCAG 2.1.1 gap. tabIndex={0}
+      // here turns every table wrapper into a control as far as the
+      // interaction coverage gate is concerned (tests/interaction/lib/
+      // enumerate.ts matches on [tabindex]), and the gate then fails three
+      // routes for a control whose activation does nothing. Registering
+      // them as inert does not work either: the gate keys a div control on
+      // its rendered text, so the entry would carry a credit amount and a
+      // date and go stale with the fixture. Tracked in issue #1385.
       className={cn(
         "relative overflow-x-auto rounded-lg border border-[var(--color-border)]",
         "bg-[var(--color-surface)]",
