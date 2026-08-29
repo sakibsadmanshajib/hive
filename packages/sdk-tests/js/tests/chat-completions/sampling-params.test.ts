@@ -62,6 +62,20 @@ describe("Chat Completions sampling parameters", () => {
   // answer that only stops early because the ceiling stopped it.
   const LONG_ANSWER_PROMPT = "Count from 1 to 200, one number per line.";
 
+  // Why the assertions below check CONTENT LENGTH and not only usage: the
+  // gateway clamps usage.completion_tokens to the caller ceiling on every
+  // fixed-price alias (clampUsageToCeiling in
+  // apps/edge-api/internal/inference/completion_ceiling.go), deliberately, so
+  // the number a customer reads matches the number they are billed. Both of
+  // these aliases are fixed price. A usage-only assertion is therefore
+  // incapable of failing: drop max_tokens entirely, let the provider write two
+  // hundred tokens, and the clamp rewrites the block to 8 on the way out. The
+  // visible text is the one thing the clamp does not touch, so it is what
+  // actually proves the ceiling reached the provider. 400 characters is far
+  // above what 8 tokens can hold and far below the several thousand a full
+  // count to 200 would produce.
+  const MAX_CHARS_FOR_EIGHT_TOKENS = 400;
+
   it("honors max_tokens on the pooled alias", async () => {
     const response = await client.chat.completions.create({
       model: MODEL,
@@ -71,6 +85,9 @@ describe("Chat Completions sampling parameters", () => {
 
     expect(response.usage).toBeDefined();
     expect(response.usage!.completion_tokens).toBeLessThanOrEqual(8);
+    expect((response.choices[0].message.content ?? "").length).toBeLessThanOrEqual(
+      MAX_CHARS_FOR_EIGHT_TOKENS,
+    );
   });
 
   it("honors max_tokens on the pinned single-route alias", async () => {
@@ -89,6 +106,9 @@ describe("Chat Completions sampling parameters", () => {
     // allowance of 32 here would pass a route that quietly capped at 32
     // instead of 8, which is the same defect this test exists to catch.
     expect(response.usage!.completion_tokens).toBeLessThanOrEqual(8);
+    expect((response.choices[0].message.content ?? "").length).toBeLessThanOrEqual(
+      MAX_CHARS_FOR_EIGHT_TOKENS,
+    );
   });
 
   it("honors stop sequences", async () => {
