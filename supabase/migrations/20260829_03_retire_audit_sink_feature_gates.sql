@@ -78,12 +78,16 @@
 --
 -- Residual, stated rather than left to be discovered. Deleting the registry
 -- row closes the SANCTIONED write path: settings.Resolver.Set checks
--- feature_gate_keys and the admin route turns its refusal into a 400. It does
--- not close the RLS-permitted path, because public.tenant_settings grants
--- INSERT to the authenticated role and tenant_settings_insert_own (added by
--- 20260518_04) checks only tenant_id and role, never the registry. A tenant
--- OWNER or ADMIN can therefore still write a row for one of these labels
--- straight through the REST layer. That row is inert: nothing reads it, and
+-- feature_gate_keys and the admin route turns its refusal into a 400. Two
+-- other paths stay open. First, public.tenant_settings grants INSERT to the
+-- authenticated role and tenant_settings_insert_own (20260518_04) checks only
+-- tenant_id and role, never the registry, so a tenant OWNER or ADMIN can
+-- write a row for one of these labels straight through the REST layer.
+-- Second, scripts/seed-demo-owner.py upserts gate rows through PostgREST with
+-- the service-role key, and tools/lint-no-direct-tenant-setting.mjs covers Go
+-- and SQL, not Python; that script writes none of these keys today, but "Set
+-- is the only writer" is true of the Go code rather than of the repository.
+-- Rows written either way are inert: nothing reads them, and
 -- every registry-driven read (Registry, AllEnabled, ClientVisibleEnabled) is
 -- a join FROM feature_gate_keys, so an unregistered key can never appear on
 -- any surface. It is not fixed here with a foreign key from
