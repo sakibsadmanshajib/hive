@@ -186,8 +186,14 @@ path as unverified until someone gets a real completion back through it.
   configured providers (OpenRouter, Groq) supports Anthropic's native versions
   of these, so this is a provider-capability gap, not an oversight. Sending
   these fields is silently ignored rather than erroring.
-- **`top_k` is not passed through.** OpenAI-shaped chat completions (what
-  every request is lowered to before dispatch) has no equivalent field.
+- **`top_k` is forwarded verbatim, and dropped only when an upstream refuses
+  it.** OpenAI-shaped chat completions (what every request is lowered to
+  before dispatch) has no `top_k` field, so the value rides along as an extra
+  key. An upstream that understands it honours it; one that answers
+  `property 'top_k' is unsupported` gets a single automatic retry with the
+  field removed rather than a hard 400, so a mixed pool cannot turn the same
+  request into a coin flip (apps/edge-api/internal/inference/retry.go). The
+  same treatment covers `thinking`, `cache_control` and `session_id`.
 - **`stop_reason` is never `"stop_sequence"` and `stop_sequence` is always
   null**, even when a custom stop sequence was actually what stopped
   generation. The underlying OpenAI-shaped `finish_reason` never distinguishes
