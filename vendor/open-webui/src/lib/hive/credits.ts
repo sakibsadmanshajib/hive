@@ -37,6 +37,15 @@ export const CREDITS_PER_USD = 1_000_000_000;
  */
 export const LOW_CREDITS_THRESHOLD = 500_000_000;
 
+/**
+ * What a positive figure below one cent reads as. A bound, not a figure: at
+ * two decimals such an amount would render "$0.00", which is what an empty
+ * wallet renders, and the point of saying anything at all is that the wallet
+ * is not empty. Twin of the console's constant of the same name in
+ * `apps/web-console/lib/format/credits.ts`.
+ */
+export const SUB_CENT_BALANCE = '< $0.01';
+
 export function creditState(available: number): CreditState {
 	if (!Number.isFinite(available) || available <= 0) return 'empty';
 	if (available < LOW_CREDITS_THRESHOLD) return 'low';
@@ -49,31 +58,41 @@ export function creditState(available: number): CreditState {
  * integer the credit unit rescale (D-046) turned every figure into
  * ("9,789,478,244 remaining" told a customer nothing).
  *
- * Ported from `apps/web-console/lib/format/model-pricing.ts`'s
- * `formatUsdFromCredits`, the console's PRICE formatter, and it keeps that
- * function's round to nearest along with its honesty invariant: an explicit
- * zero renders as the literal `$0`, and precision scales with magnitude so a
- * real, non-zero figure never rounds down to that same string.
+ * Rounds to nearest, which is the one behavioural difference from
+ * formatUsdBalanceFromCredits below: a spend figure is not a claim about what
+ * is left to spend, so nothing is overstated by rounding it either way.
  *
- * A BALANCE does not go through this. It rounds down instead, through
+ * Two decimals, always. This used to carry the console PRICE formatter's
+ * per-value precision, which is right for a published per-million rate and
+ * wrong here: a day whose spend was 858 credits printed "$0.000000858" on the
+ * composer banner and again in Settings, Usage, nine significant figures in
+ * permanent chrome that no reader can act on. What that precision was
+ * protecting is kept: a real, non-zero figure still never renders as the
+ * literal `$0` an explicit zero renders, because a sub-cent amount reads as
+ * SUB_CENT_BALANCE, a bound rather than a figure.
+ *
+ * A BALANCE does not go through this. It floors instead, through
  * formatUsdBalanceFromCredits below, because a figure that rounds up tells a
- * customer they hold money they cannot spend. Source of truth is the ported
- * function; keep the two in sync by hand, see the module comment above for
- * why they cannot share code.
+ * customer they hold money they cannot spend.
  */
 export function formatUsdFromCredits(credits: number): string {
 	if (!Number.isFinite(credits) || credits === 0) {
 		return '$0';
 	}
-	const usd = credits / CREDITS_PER_USD;
-	const magnitude = Math.floor(Math.log10(Math.abs(usd)));
-	const maximumFractionDigits = Math.min(9, Math.max(2, 2 - magnitude));
+	const creditsPerCent = CREDITS_PER_USD / 100;
+	const cents = Math.round(credits / creditsPerCent);
+	if (cents === 0) {
+		// Only a sub-cent figure lands here, and usage is never negative, but
+		// the sign is honoured rather than assumed: a bound pointing the wrong
+		// way would be worse than the raw number it replaced.
+		return credits > 0 ? SUB_CENT_BALANCE : '> -$0.01';
+	}
 	return new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
 		minimumFractionDigits: 2,
-		maximumFractionDigits
-	}).format(usd);
+		maximumFractionDigits: 2
+	}).format(cents / 100);
 }
 
 /**
@@ -90,44 +109,45 @@ export function formatUsdFromCredits(credits: number): string {
  * (apps/control-plane/internal/ledger/repository.go), so an account whose
  * holds exceed its posted credits reads negative.
  *
- * Ported from `apps/web-console/lib/format/credits.ts`'s
- * `formatUsdBalanceFromCredits`, same name and same rounding on purpose: the
- * two builds cannot share a module (see the module comment above), and the
- * first port took the PRICE formatter's name and rounding for a balance,
- * which is the defect this replaces. Keep them in sync by hand.
+ * Two decimals, always, for the reason given on formatUsdFromCredits above. A
+ * real, non-zero balance still never renders as the "$0.00" an empty wallet
+ * renders: a positive balance under one cent reads as SUB_CENT_BALANCE. A
+ * negative one needs no such case, because flooring moves it away from zero,
+ * so one credit overdrawn already floors to "-$0.01".
  *
- * Precision follows the pricing formatter's rule (three significant digits,
- * at least two decimals, at most the nine that one credit occupies), so a
- * small real balance renders as "$0.000662" rather than a "$0.00" that reads
- * as empty.
+ * This is a byte-identical twin of the console's function of the same name in
+ * `apps/web-console/lib/format/credits.ts`. The two builds cannot share a
+ * module (see the module comment above), so
+ * tools/lint-credit-balance-formatter-parity.mjs fails the build when the two
+ * stop matching, which is how they diverged into #1344 and #1345.
  */
 export function formatUsdBalanceFromCredits(credits: number): string {
 	// Zero is a real, readable balance. A non-finite value is not: it can only
-	// come from a decode that failed, and rendering that as "$0.00" would
-	// assert an empty wallet where nothing was read at all.
+	// come from a decode that failed, and rendering that as "$0.00" would assert
+	// an empty wallet where nothing was read at all. Same policy, and the same
+	// em dash, as formatPercent above.
 	if (!Number.isFinite(credits)) {
 		return '—';
 	}
 	if (credits === 0) {
 		return '$0.00';
 	}
-	const usd = credits / CREDITS_PER_USD;
-	const magnitude = Math.floor(Math.log10(Math.abs(usd)));
-	const digits = Math.min(9, Math.max(2, 2 - magnitude));
-	// Round in credits rather than in dollars. The dollar product is a float:
+	// Floor in credits rather than in dollars. The dollar product is a float:
 	// 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
-	// 828.9999999999999, and rounding that down prints $8.28, understating a
-	// real balance by a cent. CREDITS_PER_USD is a power of ten and digits
-	// never exceeds nine, so creditsPerStep is an exact integer and this is
-	// exact for every integer balance.
-	const creditsPerStep = CREDITS_PER_USD / 10 ** digits;
-	const rounded = (Math.floor(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
+	// 828.9999999999999, and flooring that prints $8.28, understating a real
+	// balance by a cent. CREDITS_PER_USD is a power of ten, so creditsPerCent is
+	// an exact integer and this is exact for every integer balance.
+	const creditsPerCent = CREDITS_PER_USD / 100;
+	const cents = Math.floor(credits / creditsPerCent);
+	if (cents === 0) {
+		return SUB_CENT_BALANCE;
+	}
 	return new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
 		minimumFractionDigits: 2,
-		maximumFractionDigits: digits
-	}).format(rounded);
+		maximumFractionDigits: 2
+	}).format(cents / 100);
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   formatLatencyMs,
   formatShortDate,
   formatUsdBalanceFromCredits,
+  SUB_CENT_BALANCE,
 } from "./credits";
 import { formatDateTime, formatLongDate } from "./datetime";
 import { formatCurrency, formatTakaSubunits } from "./money";
@@ -148,11 +149,56 @@ describe("formatUsdBalanceFromCredits", () => {
   });
 
   it("keeps a sub-cent balance visible instead of printing zero", () => {
-    expect(formatUsdBalanceFromCredits(662_000)).toBe("$0.000662");
+    // A bound rather than a figure. It used to print the exact amount at up
+    // to nine decimals, which is the width of one credit: "$0.000000858" is
+    // arithmetically true and carries nothing a reader can act on, and it sat
+    // in chrome the customer cannot dismiss. What the nine decimals were
+    // there to prevent still holds, since the bound is not the string an
+    // empty wallet renders.
+    expect(formatUsdBalanceFromCredits(662_000)).toBe(SUB_CENT_BALANCE);
+    expect(formatUsdBalanceFromCredits(858)).toBe(SUB_CENT_BALANCE);
+    expect(formatUsdBalanceFromCredits(858)).not.toBe("$0.00");
   });
 
   it("renders a single credit, the smallest unit there is", () => {
-    expect(formatUsdBalanceFromCredits(1)).toBe("$0.000000001");
+    expect(formatUsdBalanceFromCredits(1)).toBe(SUB_CENT_BALANCE);
+  });
+
+  it("never prints more than two decimal places, at any magnitude", () => {
+    // The general rule behind the two cases above, asserted across
+    // magnitudes so a future precision change cannot reintroduce a
+    // nine-significant-figure balance somewhere the named cases do not look.
+    const samples = [
+      1, 858, 999, 395_640, 499_999_999, 500_000_000, 8_290_000_000,
+      99_996_364_207, 123_456_789_012, -8_295_000_000,
+    ];
+    for (const credits of samples) {
+      const shown = formatUsdBalanceFromCredits(credits);
+      if (shown === SUB_CENT_BALANCE) {
+        continue;
+      }
+      expect(shown).toMatch(/^-?\$[\d,]+\.\d{2}$/);
+    }
+  });
+
+  it("never renders more dollars than the balance holds, at any magnitude", () => {
+    // The floor property PR #1343 and PR #1346 established, re-pinned against
+    // the precision change: a displayed balance is never above the real one.
+    const samples = [
+      1, 858, 999, 395_640, 499_999_999, 500_000_000, 8_290_000_000,
+      9_996_364_207, 99_996_364_207, 123_456_789_012,
+    ];
+    for (const credits of samples) {
+      const rendered = formatUsdBalanceFromCredits(credits);
+      if (rendered === SUB_CENT_BALANCE) {
+        // The bound claims only that the balance is under a cent, which is a
+        // weaker claim than any figure, so it cannot overstate.
+        expect(credits / CREDITS_PER_USD).toBeLessThan(0.01);
+        continue;
+      }
+      const shown = Number(rendered.replace(/[$,]/g, ""));
+      expect(shown).toBeLessThanOrEqual(credits / CREDITS_PER_USD);
+    }
   });
 
   it("rounds a negative balance down, so an overdrawn account is not flattered", () => {

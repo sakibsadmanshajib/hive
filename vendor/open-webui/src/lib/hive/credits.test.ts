@@ -12,7 +12,8 @@ import {
 	formatUsdBalanceFromCredits,
 	formatUsdFromCredits,
 	refreshCreditSnapshot,
-	LOW_CREDITS_THRESHOLD
+	LOW_CREDITS_THRESHOLD,
+	SUB_CENT_BALANCE
 } from './credits';
 
 describe('creditState', () => {
@@ -49,6 +50,28 @@ describe('formatUsdFromCredits', () => {
 		const result = formatUsdFromCredits(395_640);
 		expect(result).not.toBe('$0.00');
 		expect(result).not.toBe('$0');
+	});
+
+	it('reports a sub-cent spend as a bound, not as nine significant figures', () => {
+		// The defect: 858 credits of spend rendered "$0.000000858" on the
+		// composer banner and again in Settings, Usage, in chrome the customer
+		// cannot dismiss. Nine decimals is the width of one credit, which is
+		// the right precision for a published per-million rate and carries
+		// nothing a reader of a spend figure can act on.
+		expect(formatUsdFromCredits(858)).toBe(SUB_CENT_BALANCE);
+		expect(formatUsdFromCredits(395_640)).toBe(SUB_CENT_BALANCE);
+	});
+
+	it('never prints more than two decimal places, at any magnitude', () => {
+		// The general rule behind the case above. Asserted across magnitudes
+		// so a future precision change cannot reintroduce a nine-digit figure
+		// somewhere the named cases happen not to look.
+		const samples = [1, 858, 999, 395_640, 4_999_999, 9_789_478_244, 123_456_789_012];
+		for (const credits of samples) {
+			const shown = formatUsdFromCredits(credits);
+			if (shown === SUB_CENT_BALANCE) continue;
+			expect(shown).toMatch(/^\$[\d,]+\.\d{2}$/);
+		}
 	});
 
 	it('never throws on non-finite input, and treats it as $0', () => {
@@ -191,7 +214,7 @@ describe('formatUsdBalanceFromCredits', () => {
 		// threshold figure while creditState called the same balance low, so
 		// the pill and the number contradicted each other by one credit.
 		expect(creditState(LOW_CREDITS_THRESHOLD - 1)).toBe('low');
-		expect(formatUsdBalanceFromCredits(LOW_CREDITS_THRESHOLD - 1)).toBe('$0.499');
+		expect(formatUsdBalanceFromCredits(LOW_CREDITS_THRESHOLD - 1)).toBe('$0.49');
 		expect(creditState(LOW_CREDITS_THRESHOLD)).toBe('healthy');
 		expect(formatUsdBalanceFromCredits(LOW_CREDITS_THRESHOLD)).toBe('$0.50');
 	});
@@ -202,11 +225,18 @@ describe('formatUsdBalanceFromCredits', () => {
 		// overstatement somewhere the named cases happen not to look, which is
 		// how the first port shipped: every value it pinned divided exactly.
 		const samples = [
-			1, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
+			1, 858, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
 			123_456_789_012
 		];
 		for (const credits of samples) {
-			const shown = Number(formatUsdBalanceFromCredits(credits).replace(/[$,]/g, ''));
+			const rendered = formatUsdBalanceFromCredits(credits);
+			if (rendered === SUB_CENT_BALANCE) {
+				// The bound claims only that the balance is under a cent, which
+				// is a weaker claim than any figure, so it cannot overstate.
+				expect(credits / CREDITS_PER_USD).toBeLessThan(0.01);
+				continue;
+			}
+			const shown = Number(rendered.replace(/[$,]/g, ''));
 			expect(shown).toBeLessThanOrEqual(credits / CREDITS_PER_USD);
 		}
 	});
@@ -231,9 +261,26 @@ describe('formatUsdBalanceFromCredits', () => {
 	});
 
 	it('keeps a tiny real balance visible rather than collapsing it to zero', () => {
-		// Nine decimals is the exact width of one credit, so no non-zero
-		// balance can floor to the same string an empty wallet renders.
-		expect(formatUsdBalanceFromCredits(1)).toBe('$0.000000001');
+		// A sub-cent balance is still not an empty wallet, so it must not
+		// render the string an empty wallet renders. It reads as a bound
+		// instead of as the nine-decimal figure it used to print: nine
+		// decimals is the width of one credit, which carried nothing a reader
+		// could act on and sat in chrome the customer cannot dismiss.
+		expect(formatUsdBalanceFromCredits(1)).toBe(SUB_CENT_BALANCE);
+		expect(formatUsdBalanceFromCredits(858)).toBe(SUB_CENT_BALANCE);
+		expect(formatUsdBalanceFromCredits(1)).not.toBe('$0.00');
+	});
+
+	it('never prints more than two decimal places, at any magnitude', () => {
+		const samples = [
+			1, 858, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
+			123_456_789_012, -8_295_000_000
+		];
+		for (const credits of samples) {
+			const shown = formatUsdBalanceFromCredits(credits);
+			if (shown === SUB_CENT_BALANCE) continue;
+			expect(shown).toMatch(/^-?\$[\d,]+\.\d{2}$/);
+		}
 	});
 });
 

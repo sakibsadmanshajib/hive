@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { CreditBalance } from "@/components/billing/credit-balance";
+import { SUB_CENT_BALANCE } from "@/lib/format/credits";
 
 // The workspace balance observed live on the demo box, 2026-08-29.
 const balance = {
@@ -39,6 +40,11 @@ describe("CreditBalance", () => {
   it("draws posted and reserved in the same denomination as the headline", () => {
     render(<CreditBalance balance={balance} />);
     expect(screen.getByText("$100.00")).toBeTruthy();
-    expect(screen.getByText("$0.00363")).toBeTruthy();
+    // The reserved figure is 3,635,793 credits, a third of a cent. It used to
+    // render "$0.00363", one of the nine-significant-figure amounts the
+    // formatter produced below a cent. Money reads in cents, so a sub-cent
+    // amount now reads as a bound, which still distinguishes it from the
+    // "$0.00" that nothing reserved would render.
+    expect(screen.getByText(SUB_CENT_BALANCE)).toBeTruthy();
   });
 });
