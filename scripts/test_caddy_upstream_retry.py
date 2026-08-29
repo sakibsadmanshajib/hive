@@ -6,11 +6,11 @@ a deploy. Over the 24 hours to 2026-08-29T10:00Z the chat origin served 55 and
 the console origin 3, in bursts of 4 to 40 seconds, every burst inside a
 `deploy-demo-box.yml` run window and none of them against a healthy upstream.
 They arrive as two different error strings depending on where in a container
-recreate the request landed -- `lookup <name> on 127.0.0.11:53: server
-misbehaving` while the old container's name is deregistered, and
+recreate the request landed. `lookup <name> on 127.0.0.11:53: server
+misbehaving` comes while the old container's name is deregistered, and
 `connect: connection refused` once the new one has registered but is not
-listening yet -- but they are one defect, and one bounded retry across the
-recreate covers both.
+listening yet. They are one defect, and one bounded retry across the recreate
+covers both.
 
 What this test is for is the recurrence, not the original fix. `Caddyfile.owui`
 has grown three reverse_proxy routes since it was written (the agent console,

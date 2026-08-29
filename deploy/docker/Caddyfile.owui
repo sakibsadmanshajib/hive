@@ -291,7 +291,7 @@
   # request never turns into a 524 instead of the 502 it replaces. A genuinely
   # broken upstream still returns a real 502, 30 seconds later rather than
   # immediately: a bounded delay, not a masked success. The cost is accepted
-  # deliberately, and it is real -- while an upstream is crash-looping, every
+  # deliberately, and it is real: while an upstream is crash-looping, every
   # request waits the full window before erroring.
   #
   # 1s rather than the 250ms default because at 250ms a single held request
