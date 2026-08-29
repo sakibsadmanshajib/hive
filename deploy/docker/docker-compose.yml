@@ -705,9 +705,23 @@ services:
 
   # Blueprint Step 3.1 (#311, #305) — standalone agent console sidecar.
   # Ratified 2026-07-16: extends nothing in Open WebUI; OWUI stays a pinned
-  # upstream image. Reached only through caddy-owui's /agent-workspace/*
-  # route (Caddyfile.owui) alongside OWUI on port 3003 -- no direct host
-  # port here, same posture as open-webui below.
+  # upstream image.
+  #
+  # NOT REACHABLE FROM ANY ORIGIN THIS DEPLOYMENT SERVES, since issue #540.
+  # It used to be reached through caddy-owui's /agent-workspace/* route, which
+  # is deleted: this container ran a second @supabase/ssr session of its own on
+  # the public chat origin and so presented every chat visitor with a second
+  # sign in page. That path now answers 404 (Caddyfile.owui, @removedSurfaces),
+  # and D-045 rules the app itself goes away rather than being restyled.
+  #
+  # It is still built and still started here for two reasons, both temporary.
+  # `Agent console (type + unit + build)` is a required status check on main,
+  # so deleting the app needs a branch protection change, and
+  # .github/workflows/agent-visual-proof.yml boots this service by name behind
+  # its own CI-only listener (Caddyfile.agent-proof). Retiring the app, this
+  # service, that workflow and the dispatch-only agent-workspace-coverage job
+  # is tracked as one piece of work in issue #1464. Until then it holds no
+  # host port and no route, same posture as open-webui below.
   agent-console:
     image: hive-agent-console:ci
     build:
