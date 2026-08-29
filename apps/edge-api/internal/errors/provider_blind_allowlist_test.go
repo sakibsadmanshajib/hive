@@ -219,8 +219,14 @@ func TestWriteProviderBlindUpstreamErrorVetoesMixedMessages(t *testing.T) {
 					t.Fatalf("account detail rode out on an actionable token: %q in %q", forbidden, resp.Error.Message)
 				}
 			}
-			if resp.Error.Message != "hive-auto request failed." {
-				t.Fatalf("message = %q, want the collapsed fallback", resp.Error.Message)
+			// The collapsed fallback for a request-shaped status, which changed
+			// with the fix for issue 1348: a 400 now says the REQUEST was
+			// invalid instead of the neutral "request failed", because the
+			// old sentence read as a fault on our side of a call that means
+			// the opposite. What this test exists to pin, the leak assertions
+			// above, is unchanged.
+			if resp.Error.Message != "Invalid request for hive-auto. Check the request parameters." {
+				t.Fatalf("message = %q, want the collapsed request-shaped fallback", resp.Error.Message)
 			}
 		})
 	}

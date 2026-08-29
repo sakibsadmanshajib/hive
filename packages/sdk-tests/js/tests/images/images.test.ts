@@ -17,15 +17,18 @@ const IMAGE_MODEL = process.env.HIVE_IMAGE_MODEL ?? "hive-auto";
 describe("Images", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  // EXPECTED FAILURE, issue #1319: the call answers 200 with an empty data
-  // array, which is neither an image nor an error a caller can act on.
+  // Issue #1319 is fixed and this is no longer an expected failure. The route
+  // still cannot produce an image (its capability flag is a carried-forward
+  // legacy flag, see the comment on IMAGE_MODEL above), so the call takes the
+  // error branch below: a structured, provider-blind 502 rather than the empty
+  // 200 that every SDK reported to the caller as a success.
   //
   // The success assertions moved OUT of the try block, and that is a fix in
   // its own right, not cosmetics: a failed expect() is itself a thrown
   // exception, so inside the try the catch below caught this suite own
   // assertion and re-reported it as "not an APIError". The real defect was
   // invisible behind a confusing message about instanceof.
-  it.fails("images.generate either returns a real image or fails with a structured, provider-blind error (never a 5xx)", async () => {
+  it("images.generate either returns a real image or fails with a structured, provider-blind error (never a 5xx)", async () => {
     let response: Awaited<ReturnType<typeof client.images.generate>>;
     try {
       response = await client.images.generate({

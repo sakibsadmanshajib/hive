@@ -30,6 +30,12 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 		writeMissingFieldError(w, "messages")
 		return
 	}
+	// An empty array, a non-object entry and an unknown role are all the
+	// caller payload, so they are refused here instead of being forwarded and
+	// coming back as an availability verdict about the model (#1348).
+	if !validateChatMessages(w, req.Messages) {
+		return
+	}
 	// n other than 1 is refused rather than silently truncated to one choice
 	// (issue #1283). See writeUnsupportedChoiceCountError.
 	if unsupportedChoiceCount(req.N) {

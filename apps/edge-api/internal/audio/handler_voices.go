@@ -3,14 +3,18 @@ package audio
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // Voice catalog for the hive-tts alias (groq/orpheus-v1-english). These are
-// the only voice ids the upstream model accepts; OpenAI's stock names (alloy,
-// echo, ...) are rejected with an upstream 400 that today surfaces as a
-// sanitized 500 (#996), so every client we control must offer exactly these.
+// the only voice ids the upstream model accepts, and the roster this gateway
+// advertises. The OpenAI stock names are accepted as well: resolveVoice below
+// translates them onto this roster (#1318). They are deliberately not listed
+// here, because they are aliases of these six voices rather than six more
+// distinct voices, and listing them would fill every client voice dropdown
+// with duplicates.
 //
 // ponytail: static slice rather than a config knob or DB table. The list
 // changes only when the provider swaps its voice roster, at which point this
@@ -47,4 +51,73 @@ func VoicesHandler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"voices": orpheusVoices})
 	}
+}
+
+// openAIStockVoices maps the OpenAI published voice names onto the roster
+// above.
+//
+// Hive presents an OpenAI-compatible surface and every example in every OpenAI
+// SDK sends the voice name alloy, so forwarding the name verbatim made
+// /v1/audio/speech uncallable by an unmodified SDK: the upstream refused it
+// and the caller received a 500 (#1318, #1285, #996). Translating is the
+// friendlier half of the compatibility promise and it costs the caller
+// nothing. Refusing with a list naming the roster would have been honest too,
+// but it leaves every stock SDK example broken.
+//
+// The pairing is by rough timbre (six targets, eleven sources, so some share a
+// target). It is arbitrary but STABLE: a caller asking for the same OpenAI
+// voice twice must never get a different voice the second time. Nothing here
+// claims the synthesized voice sounds like the OpenAI one.
+//
+// ponytail: a map beside the roster it maps onto, not catalog data. Issue
+// #1318 asks for the voice list to live next to the route, and it should the
+// day a second TTS route with a different roster exists. Today there is
+// exactly one TTS alias, and a table for eleven fixed strings is a schema to
+// keep in sync with no second reader.
+var openAIStockVoices = map[string]string{
+	"alloy":   "autumn",
+	"ash":     "austin",
+	"ballad":  "daniel",
+	"coral":   "diana",
+	"echo":    "troy",
+	"fable":   "hannah",
+	"nova":    "autumn",
+	"onyx":    "daniel",
+	"sage":    "hannah",
+	"shimmer": "diana",
+	"verse":   "troy",
+}
+
+// resolveVoice maps a caller-supplied voice name onto the voice id the
+// upstream accepts. It reports false for a name in neither set, which the
+// speech handler answers with a 400 naming the supported voices rather than
+// forwarding a name the upstream is going to reject.
+//
+// Case and surrounding whitespace are normalized. An OpenAI SDK always sends
+// lowercase; a hand-written client sending Alloy made no meaningful mistake.
+func resolveVoice(requested string) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(requested))
+	if name == "" {
+		return "", false
+	}
+	for _, v := range orpheusVoices {
+		if v.ID == name {
+			return v.ID, true
+		}
+	}
+	mapped, ok := openAIStockVoices[name]
+	return mapped, ok
+}
+
+// supportedVoiceNames is the comma-separated roster the refusal message names,
+// so a caller who sent something unrecognized can act on the error without
+// reading documentation. It is built from orpheusVoices, so the message cannot
+// drift from what GET /v1/audio/voices advertises or from what resolveVoice
+// accepts.
+func supportedVoiceNames() string {
+	names := make([]string, 0, len(orpheusVoices))
+	for _, v := range orpheusVoices {
+		names = append(names, v.ID)
+	}
+	return strings.Join(names, ", ")
 }

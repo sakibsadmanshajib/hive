@@ -268,6 +268,22 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the voice before anything else costs money. The caller sends an
+	// OpenAI voice name, the upstream roster is entirely different, and
+	// forwarding the name verbatim earned a 400 from the upstream that reached
+	// the caller as a sanitized 500 (#1318). A name in neither set is the
+	// caller mistake it looks like, so it is answered as one: a 400 that names
+	// the parameter and the roster, never a 5xx, and never after a reservation
+	// has been taken for a request that cannot succeed.
+	upstreamVoice, voiceOK := resolveVoice(speechReq.Voice)
+	if !voiceOK {
+		code := "invalid_value"
+		apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+			fmt.Sprintf("Unsupported voice. Supported voices are: %s.", supportedVoiceNames()),
+			&code, "voice")
+		return
+	}
+
 	// Select route based on model alias and TTS capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:   speechReq.Model,
@@ -317,6 +333,12 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bodyMap["model"] = route.LiteLLMModelName
+	// Rewrite the voice as well, so the upstream receives a name from its own
+	// roster whatever the caller sent (#1318). Writing it unconditionally, not
+	// only when a translation happened: resolveVoice already normalized case
+	// and whitespace, and a body that disagrees with the value the guard above
+	// accepted is the kind of drift this rewrite exists to prevent.
+	bodyMap["voice"] = upstreamVoice
 	rewrittenBody, err := json.Marshal(bodyMap)
 	if err != nil {
 		h.releaseHold(auth.AccountID, reservationID, "request_error", "/v1/audio/speech")

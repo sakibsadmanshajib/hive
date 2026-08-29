@@ -39,14 +39,14 @@ function silentWav(seconds: number): Buffer {
 describe("Audio", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  // EXPECTED FAILURE, issue #1318: every OpenAI voice name is refused by the
-  // configured speech route, which names six of its own, and the refusal
-  // arrives as a 500 rather than a 4xx. The voice below is deliberately the
-  // OpenAI default rather than one the current upstream happens to accept:
+  // Issue #1318 is fixed and this is no longer an expected failure. The edge
+  // now translates the OpenAI stock voice names onto the roster the upstream
+  // accepts, so an unmodified SDK call works, and a name in neither set is a
+  // 400 naming the voice parameter rather than a 500. The voice below stays
+  // the OpenAI default rather than one the current upstream happens to accept:
   // the point of this suite is what an unmodified OpenAI SDK can do, and
-  // swapping in a provider-specific voice would hide the gap instead of
-  // measuring it.
-  it.fails("audio.speech.create returns non-empty binary audio", async () => {
+  // swapping in a provider-specific voice would stop measuring that.
+  it("audio.speech.create returns non-empty binary audio", async () => {
     const response = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
@@ -70,9 +70,9 @@ describe("Audio", () => {
     expect(typeof transcription.text).toBe("string");
   });
 
-  // EXPECTED FAILURE, issue #1318: blocked on the same speech synthesis
-  // above, which this round trip needs before it has anything to transcribe.
-  it.fails("audio.transcriptions.create round-trips speech back to text", async () => {
+  // Unblocked by the same #1318 fix: this round trip needs the speech call
+  // above to produce audio before it has anything to transcribe.
+  it("audio.transcriptions.create round-trips speech back to text", async () => {
     const speech = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
