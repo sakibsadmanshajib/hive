@@ -79,13 +79,16 @@ UUIDs, which is the explicit bucket this fix introduces.
 
 Top API keys by spend, row 3, reads:
 
-  3  Unattributed                                    no key    $0.000481
+  3  Unattributed                          no key on record    $0.000481
 
 Before the console change in the second commit on this branch, that same row
 read "Deleted key" with the suffix "unattrib", because the widget labels any
 group key missing from the account key list as a deleted key. No key was
 deleted here. That spend is console and chat traffic that never carried a key,
-so the old label asserted something untrue about the account.
+so the old label asserted something untrue about the account. The suffix says
+"no key on record" rather than "no key" because the same bucket also collects
+rows whose key was genuinely deleted afterwards, and nothing in the row says
+which case it is.
 
 PAGE URLS
 ---------
