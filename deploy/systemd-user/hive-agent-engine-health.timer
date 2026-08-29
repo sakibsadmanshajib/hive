@@ -13,14 +13,33 @@ Description=Hive agent-engine launcher health probe schedule (every five minutes
 
 [Timer]
 # Monotonic rather than OnCalendar, and so deliberately without
-# Persistent=true, which systemd honours only for calendar timers and would
-# be a decorative no-op here. OnBootSec does the job Persistent= would have
-# been reached for: after a boot the first probe runs a minute in, once,
-# giving the launcher time to come up so a reboot does not post a spurious
-# down alert. OnUnitActiveSec then paces every later run from the end of the
-# previous one rather than from a wall clock, so a slow run cannot stack
-# against its own next slot.
-OnBootSec=1min
+# Persistent=true, which systemd honours only for calendar timers and would be
+# a decorative no-op here.
+#
+# OnActiveSec, not OnBootSec, and that distinction was measured rather than
+# reasoned about. OnBootSec is relative to the manager starting, so on a box
+# that booted days ago it is already in the past and the first probe fires the
+# instant the timer starts. The installer restarts this timer on every run, and
+# on a run that also restarts the launcher those two collide: the probe ran
+# inside the launcher's own restart window on the demo box on 2026-08-29 and
+# posted a HiveAgentEngineDown alert about a launcher that was mid-redeploy and
+# healthy nine seconds later. A monitor that cries wolf on an ordinary deploy
+# gets muted within a day, and a muted monitor is worse than none because it
+# still reads as coverage.
+#
+# OnActiveSec is relative to this timer's own activation instead, so every
+# start, install or boot alike, gets a one minute grace period before the first
+# probe. That is comfortably longer than the twenty seconds a full launcher
+# reinstall takes and short enough that a launcher which genuinely fails to
+# come back is reported within the minute.
+OnActiveSec=1min
+
+# Paces every later run from the end of the previous PROBE rather than from
+# this timer's activation, so a slow run cannot stack against its own next
+# slot. It also means a box being redeployed repeatedly cannot starve the
+# probe: systemd takes the earliest of the configured elapse points, so the
+# five minute bound from the last actual run survives any number of timer
+# restarts resetting OnActiveSec above.
 OnUnitActiveSec=5min
 
 Unit=hive-agent-engine-health.service

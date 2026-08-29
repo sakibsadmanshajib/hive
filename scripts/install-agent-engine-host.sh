@@ -377,7 +377,11 @@ if [ -n "$installed_fingerprint" ] \
   && daemon_healthy; then
   rm -f "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY"
   running_pid=$(systemctl --user show "$UNIT_NAME.service" -p MainPID --value 2>/dev/null || echo "?")
-  echo "supervision: $UNIT_PATH enabled, $HEALTH_NAME.timer running"
+  # Read back rather than asserted. A line that prints the word "enabled"
+  # unconditionally would report a healthy install on a box where the enable
+  # silently did not take, which is the whole failure this change exists to
+  # end.
+  echo "supervision: $UNIT_PATH is $(systemctl --user is-enabled "$UNIT_NAME.service"), $HEALTH_NAME.timer is $(systemctl --user is-active "$HEALTH_NAME.timer")"
   echo "binary: $BIN_PATH (unchanged)"
   echo "agent-engine daemon already runs these exact artifacts; leaving PID $running_pid and its in-flight sessions alone"
   exit 0
@@ -446,4 +450,4 @@ echo
 (umask 077; printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH")
 chmod 0600 "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"
-echo "supervision: $UNIT_PATH ($(systemctl --user is-enabled "$UNIT_NAME.service")), $HEALTH_NAME.timer running"
+echo "supervision: $UNIT_PATH is $(systemctl --user is-enabled "$UNIT_NAME.service"), $HEALTH_NAME.timer is $(systemctl --user is-active "$HEALTH_NAME.timer")"
