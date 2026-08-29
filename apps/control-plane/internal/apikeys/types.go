@@ -196,6 +196,16 @@ type KeyView struct {
 	ExpirationSummary ExpirationSummary
 	BudgetSummary     BudgetSummary
 	AllowlistSummary  AllowlistSummary
+	// SpendCredits is the key's lifetime consumed credits, read unconditionally
+	// off api_key_usage_rollups (Repository.GetLifetimeSpend) regardless of
+	// whether a budget cap is configured. It is a raw integer for the wire;
+	// web-console renders it through lib/format/model-pricing.ts, never as a
+	// bare number.
+	SpendCredits int64
+	// BudgetLimitCredits mirrors KeyPolicy.BudgetLimitCredits (nil = no cap).
+	// BudgetSummary.Label already renders a human sentence for the kind, but
+	// carried no machine-readable limit for a UI to reformat or edit against.
+	BudgetLimitCredits *int64
 }
 
 // AuthSnapshot is the control-plane-owned, Redis-projected authorization

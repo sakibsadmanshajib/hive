@@ -25,6 +25,14 @@ type Repository interface {
 	ListGroupMembers(ctx context.Context, groupNames []string) ([]string, error)
 	ListAllAliases(ctx context.Context) ([]string, error)
 	GetBudgetWindow(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, at time.Time) (BudgetWindow, error)
+	// GetLifetimeSpend sums consumed_credits across every model_alias row in
+	// the key's 'lifetime' api_key_usage_rollups window. Unlike GetBudgetWindow
+	// (which only ever gets written when the key carries a non-"none" budget
+	// policy, see ApplyReservationDelta's early return), RecordUsageFinalization
+	// writes the lifetime rollup unconditionally on every settled request, so
+	// this is the one source that reports real spend for a key that has never
+	// had a cap configured.
+	GetLifetimeSpend(ctx context.Context, apiKeyID uuid.UUID) (int64, error)
 	GetKeyRatePolicy(ctx context.Context, apiKeyID uuid.UUID) (RatePolicy, error)
 	GetAccountRatePolicy(ctx context.Context, accountID uuid.UUID) (RatePolicy, error)
 	GetLimits(ctx context.Context, accountID, keyID uuid.UUID) (KeyLimits, error)
@@ -380,6 +388,23 @@ func (r *pgxRepository) GetBudgetWindow(ctx context.Context, apiKeyID uuid.UUID,
 		return BudgetWindow{}, err
 	}
 	return window, nil
+}
+
+// GetLifetimeSpend sums consumed_credits across every model_alias row in the
+// key's 'lifetime' rollup window. window_start is the zero time for every
+// lifetime row (RecordUsageFinalization never varies it), so this aggregates
+// every model the key has ever been billed against.
+func (r *pgxRepository) GetLifetimeSpend(ctx context.Context, apiKeyID uuid.UUID) (int64, error) {
+	var spend int64
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(consumed_credits), 0)
+		FROM public.api_key_usage_rollups
+		WHERE api_key_id = $1 AND window_kind = 'lifetime'
+	`, apiKeyID).Scan(&spend)
+	if err != nil {
+		return 0, err
+	}
+	return spend, nil
 }
 
 func (r *pgxRepository) GetKeyRatePolicy(ctx context.Context, apiKeyID uuid.UUID) (RatePolicy, error) {

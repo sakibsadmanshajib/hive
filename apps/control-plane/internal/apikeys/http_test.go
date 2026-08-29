@@ -250,6 +250,43 @@ func TestPolicyRouteUpdatesSummaries(t *testing.T) {
 	if allowlistSummary["mode"] != "all" || allowlistSummary["label"] != "All models" {
 		t.Fatalf("unexpected allowlist summary after policy update: %#v", allowlistSummary)
 	}
+
+	// The raw machine-readable limit, not just budgetSummary's rendered
+	// sentence, must round-trip -- it is what a console edit form pre-fills.
+	if body["budget_limit_credits"].(float64) != 900 {
+		t.Fatalf("expected raw budget_limit_credits 900, got %#v", body["budget_limit_credits"])
+	}
+}
+
+func TestListKeysExposeSpendAndNullBudgetLimit(t *testing.T) {
+	h, _ := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "spend-visible"})
+
+	rr := doRequest(t, h, http.MethodGet, base, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := decodeBody(t, rr)
+	items := body["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	item := items[0].(map[string]interface{})
+
+	// A brand-new key with no budget policy set: spend must still be a
+	// present, real zero (not absent, not a "no data" marker), and the
+	// limit must be JSON null so the console renders "Unlimited" rather
+	// than a fabricated number.
+	if item["spend_credits"].(float64) != 0 {
+		t.Fatalf("expected spend_credits 0 for a fresh key, got %#v", item["spend_credits"])
+	}
+	if limit, ok := item["budget_limit_credits"]; !ok {
+		t.Fatal("budget_limit_credits must be present even when null")
+	} else if limit != nil {
+		t.Fatalf("expected budget_limit_credits null for a capless key, got %#v", limit)
+	}
 }
 
 func TestRotateKeyRevokesOnlyTarget(t *testing.T) {
