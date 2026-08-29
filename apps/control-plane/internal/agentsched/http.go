@@ -182,6 +182,14 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 		errors.Is(err, ErrInvalidInstructions),
 		errors.Is(err, ErrInvalidSchedule):
 		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
+	case errors.Is(err, ErrInsufficientCredits):
+		writeJSON(w, http.StatusPaymentRequired, errBody("insufficient credits to create a scheduled task"))
+	case errors.Is(err, ErrSolvencyUnavailable):
+		// 503, not 402 and not 500. The balance is unknown, so the honest
+		// answer is "ask again", and a fixed string is written rather than
+		// err.Error() because the wrapped cause is a driver message that can
+		// carry an internal host and port (#1490).
+		writeJSON(w, http.StatusServiceUnavailable, errBody("could not verify the account credit balance; try again"))
 	default:
 		writeJSON(w, http.StatusInternalServerError, errBody("agent schedule request failed"))
 	}

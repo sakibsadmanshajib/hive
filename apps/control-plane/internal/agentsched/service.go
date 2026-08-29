@@ -2,6 +2,7 @@ package agentsched
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,17 +14,27 @@ import (
 // Service validates schedule CRUD at the boundary and owns cadence math.
 // Handler never talks to Repository directly, mirroring agenttask.Service.
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo     Repository
+	solvency Solvency
+	now      func() time.Time
 }
 
 // NewService constructs a Service. A nil now defaults to time.Now; tests
 // inject a fake clock.
-func NewService(repo Repository, now func() time.Time) *Service {
+//
+// solvency is required and panics when nil rather than defaulting to a
+// permissive no-op. Creating a routine commits the tenant to recurring
+// sandbox launches, so a deployment that forgot to wire the gate must fail at
+// boot where an operator sees it, not silently admit every tenant (issue
+// #1490).
+func NewService(repo Repository, solvency Solvency, now func() time.Time) *Service {
+	if solvency == nil {
+		panic("agentsched: nil solvency")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{repo: repo, now: now}
+	return &Service{repo: repo, solvency: solvency, now: now}
 }
 
 // CreateInput is the validated-shape input for Service.Create. The wire
@@ -141,6 +152,24 @@ func validate(name, instructions, schedule string) (string, string, error) {
 	return name, instructions, nil
 }
 
+// checkSolvency asks the gate whether tenantID may commit to work that costs
+// credits, and normalizes the two refusal shapes the wire layer has to tell
+// apart: ErrInsufficientCredits passes through untouched, and anything else is
+// wrapped in ErrSolvencyUnavailable with its cause still attached for the log.
+// A nil error is the only outcome that lets the caller proceed, so a lookup
+// that failed refuses rather than admits.
+func (s *Service) checkSolvency(ctx context.Context, tenantID uuid.UUID) error {
+	err := s.solvency.Check(ctx, tenantID, launchFloor)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrInsufficientCredits):
+		return err
+	default:
+		return fmt.Errorf("%w: %w", ErrSolvencyUnavailable, err)
+	}
+}
+
 // Create persists a new enabled schedule whose first run is one full cadence
 // out from now — never immediately, so creating a routine does not fire a
 // surprise task before the user has reviewed it.
@@ -153,6 +182,21 @@ func (s *Service) Create(ctx context.Context, tenantID, userID uuid.UUID, in Cre
 	if err != nil {
 		return Schedule{}, err
 	}
+
+	// Solvency gate (#1490), before the insert so no row survives a refusal.
+	// A routine is a standing commitment to launch sandboxes on a cadence, so
+	// a tenant that cannot cover one launch today is told now rather than
+	// discovering it as a silent last_error a day later. This is the fast-fail
+	// half only: the tick re-asks the same question at every launch, because
+	// a tenant solvent here can be insolvent by the tenth run.
+	//
+	// Validation runs first on purpose. A malformed body is a 400 whether or
+	// not the tenant is funded, and answering 402 to it would send the tenant
+	// to top up an account that was never the problem.
+	if err := s.checkSolvency(ctx, tenantID); err != nil {
+		return Schedule{}, err
+	}
+
 	next := s.now().Add(cad)
 	out, err := s.repo.Create(ctx, Schedule{
 		TenantID:     tenantID,

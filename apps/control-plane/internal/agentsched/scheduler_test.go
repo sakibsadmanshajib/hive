@@ -48,7 +48,11 @@ func quietLogger() *slog.Logger {
 }
 
 func newScheduler(repo Repository, tasks TaskCreator) *Scheduler {
-	return NewScheduler(repo, tasks, SchedulerConfig{Logger: quietLogger()})
+	return newSchedulerWithSolvency(repo, tasks, solvent())
+}
+
+func newSchedulerWithSolvency(repo Repository, tasks TaskCreator, sol Solvency) *Scheduler {
+	return NewScheduler(repo, tasks, sol, SchedulerConfig{Logger: quietLogger()})
 }
 
 func TestScheduler_FiresDueScheduleOncePerTick(t *testing.T) {

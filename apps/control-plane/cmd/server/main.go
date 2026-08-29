@@ -1205,11 +1205,18 @@ func main() {
 		// scheduled run would fail into last_error and burn a cadence per
 		// deployment restart for nothing.
 		scheduleRepo := agentsched.NewPgxRepository(pool)
-		scheduleSvc := agentsched.NewService(scheduleRepo, nil)
+		// Solvency gate (#1490). Both the CRUD surface and the tick take it:
+		// creating a routine is refused outright for a tenant that cannot cover
+		// the floor, and every launch re-asks, because a tenant solvent when
+		// the routine was created can be insolvent by its tenth run.
+		// ledgerSvc is assigned in the same pool != nil arm above, so it is
+		// non-nil wherever this line runs.
+		scheduleSolvency := agentsched.NewPgxSolvency(pool, ledgerSvc)
+		scheduleSvc := agentsched.NewService(scheduleRepo, scheduleSolvency, nil)
 		agentScheduleHandler = agentsched.NewHandler(scheduleSvc)
 
 		if agentEngineStatus != nil {
-			scheduler := agentsched.NewScheduler(scheduleRepo, agentTaskSvc, agentsched.SchedulerConfig{
+			scheduler := agentsched.NewScheduler(scheduleRepo, agentTaskSvc, scheduleSolvency, agentsched.SchedulerConfig{
 				Interval: parseDurationEnv("HIVE_AGENT_SCHEDULER_INTERVAL", time.Minute),
 				Logger:   slog.Default(),
 			})
