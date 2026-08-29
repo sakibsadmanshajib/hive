@@ -250,8 +250,63 @@
   # under it. The bare path proxies straight to the Next.js app's own root
   # route, which (via basePath) redirects to /agent-workspace/tasks itself
   # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
+  #
+  # Every reverse_proxy on this listener carries the same bounded dial retry,
+  # for the reason written out once here (#1407).
+  #
+  # All 55 502s this origin served in the 24 hours to 2026-08-29T10:00Z fell
+  # inside a deploy-demo-box.yml run window, in nine bursts of 4 to 40 seconds.
+  # None happened against a healthy upstream. They are one defect wearing two
+  # error strings, depending on where in a container recreate the request
+  # landed:
+  #
+  #   * 17 read `lookup open-webui on 127.0.0.11:53: server misbehaving`. The
+  #     old container is gone and its name is deregistered, so Docker's
+  #     embedded DNS no longer holds the record and forwards the query to the
+  #     host resolver named in this container's resolv.conf (systemd-resolved
+  #     at 127.0.0.53), which refuses a single-label name with SERVFAIL. Go
+  #     reports SERVFAIL as "server misbehaving". Confirmed directly:
+  #     `nslookup nosuchcontainer 127.0.0.11` from inside this container
+  #     returns SERVFAIL, not NXDOMAIN.
+  #   * 38 read `connect: connection refused`. The new container has
+  #     registered its name but uvicorn is not listening yet.
+  #
+  # So the fix is not a different resolver. #1407 suggests `resolvers
+  # 127.0.0.11`, which would point Caddy at the very resolver returning the
+  # SERVFAIL; during the gap no resolver holds the record, because the
+  # container genuinely does not exist. Nor is per-request resolution itself
+  # the defect: resolving at dial time is what lets this proxy follow the new
+  # container's IP across a recreate. A proxy that resolved once at startup
+  # would hold a dead IP after every deploy and fail permanently.
+  #
+  # What is missing is patience across the recreate. Caddy retries a request
+  # only while the connection to the upstream was never established, so
+  # nothing is retried once any response byte has been read, and both classes
+  # above are dial failures. A request already talking to the upstream is
+  # untouched.
+  #
+  # 30s is the bound. It covers the observed central mass of recreate windows
+  # (4s, 8s, 12s, 12s, 29s) whole and shortens the two long ones (37s, 40s),
+  # while staying well under Cloudflare's 100s origin timeout, so a held
+  # request never turns into a 524 instead of the 502 it replaces. A genuinely
+  # broken upstream still returns a real 502, 30 seconds later rather than
+  # immediately: a bounded delay, not a masked success. The cost is accepted
+  # deliberately, and it is real: while an upstream is crash-looping, every
+  # request waits the full window before erroring.
+  #
+  # 1s rather than the 250ms default because at 250ms a single held request
+  # issues 120 DNS queries across the window, and a burst of concurrent held
+  # requests multiplies that against the same embedded resolver that is
+  # already failing. Recovery is detected at most one second later.
+  #
+  # This does not fix the outage itself. Every deploy that recreates
+  # open-webui still takes chat down for seconds, and there were more than
+  # forty deploys in the measured day. A health-gated cutover would remove
+  # that window and is a separate change.
   @agentConsole path /agent-workspace /agent-workspace/*
   reverse_proxy @agentConsole agent-console:3000 {
+    lb_try_duration 30s
+    lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s
@@ -289,6 +344,10 @@
   # /v1/agent/* on purpose -- the rest of the gateway API stays off this host.
   @agentApi path /v1/agent/*
   reverse_proxy @agentApi edge-api:8080 {
+    # Bounded dial retry across a container recreate, #1407. Reasoning at the
+    # @agentConsole block above.
+    lb_try_duration 30s
+    lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s
@@ -302,6 +361,10 @@
   # single path on purpose -- the rest of /v1/* stays off this host.
   @featureGate path /v1/featuregate /v1/featuregate/
   reverse_proxy @featureGate edge-api:8080 {
+    # Bounded dial retry across a container recreate, #1407. Reasoning at the
+    # @agentConsole block above.
+    lb_try_duration 30s
+    lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s
@@ -327,6 +390,11 @@
   header @immutableAssets Cache-Control "public, max-age=31536000, immutable"
 
   reverse_proxy open-webui:8080 {
+    # Bounded dial retry across a container recreate, #1407. Reasoning at the
+    # @agentConsole block above. This is the block the 55 measured 502s were
+    # served from.
+    lb_try_duration 30s
+    lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s

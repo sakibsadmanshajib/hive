@@ -1,0 +1,268 @@
+Issue #1407 -- chat and console 502s. Measurement, root cause, and A/B proof.
+Captured 2026-08-29 against the demo box (ssh hive-demo), which was serving
+commit 7e68b645e04ab57ffb0898166b8d4ff14bc9ee13 at the start of the session.
+No credential appears in any URL below, so nothing required redaction.
+
+================================================================================
+1. RE-MEASUREMENT (the issue's counts were right, its attribution was not)
+================================================================================
+
+$ docker logs --since 24h hive-caddy-owui-1 2>&1 | grep -c '"status":502'
+55
+
+$ docker logs --since 24h hive-caddy-owui-1 2>&1 \
+    | grep -o 'lookup [a-z-]* on 127.0.0.11:53: [a-z ]*' | sort | uniq -c
+     17 lookup open-webui on 127.0.0.11:53: server misbehaving
+
+$ docker logs --since 24h hive-caddy-owui-1 2>&1 | grep -c 'connect: connection refused'
+38
+
+Other origins over the same window:
+  hive-caddy-console-1    502s=3
+  hive-caddy-supabase-1   502s=0
+  hive-caddy-artifacts-1  502s=0
+
+================================================================================
+2. THE 502s ARE NOT SPREAD OUT. THEY ARE NINE DEPLOY WINDOWS.
+================================================================================
+
+$ docker logs --since 24h -t hive-caddy-owui-1 2>&1 | grep '"status":502' \
+    | awk '{print $1}' | cut -c1-19 | sort
+
+  burst                    duration   deploy run covering it
+  20:39:28 -> 20:40:08       40s      yes
+  21:24:21 -> 21:24:58       37s      yes
+  22:11:40 -> 22:11:48        8s      yes
+  22:35:46 -> 22:35:58       12s      yes
+  02:33:11 -> 02:33:23       12s      yes
+  02:49:33                 single     yes
+  08:05:11                 single     33242252839, 08:03:27Z -> 08:07:27Z
+  09:33:02 -> 09:33:31       29s      33245684859, 09:31:20Z -> 09:35:35Z
+  09:52:57 -> 09:53:01        4s      33246425110, 09:50:35Z -> 09:55:16Z
+
+Zero 502s outside a deploy window. The container serving chat at capture time
+confirms the last of those exactly:
+
+$ docker inspect hive-open-webui-1 --format 'created={{.Created}} started={{.State.StartedAt}}'
+created=2026-08-29T09:52:55.347821652Z started=2026-08-29T09:53:10.893215947Z
+
+The 09:52:57 -> 09:53:01 burst sits between those two timestamps.
+
+================================================================================
+3. MECHANISM: THE EMBEDDED RESOLVER SERVFAILS A NAME IT NO LONGER HOLDS
+================================================================================
+
+$ docker exec hive-caddy-owui-1 cat /etc/resolv.conf
+nameserver 127.0.0.11
+search .
+options edns0 trust-ad ndots:0
+# Based on host file: '/etc/resolv.conf' (internal resolver)
+# ExtServers: [host(127.0.0.53)]
+
+$ docker exec hive-caddy-owui-1 nslookup -type=a open-webui 127.0.0.11
+Name:	open-webui
+Address: 172.18.0.19
+
+$ docker exec hive-caddy-owui-1 nslookup -type=a nosuchcontainer 127.0.0.11
+** server can't find nosuchcontainer: SERVFAIL
+
+SERVFAIL, not NXDOMAIN: Docker's embedded DNS forwards a name it does not hold
+to the host resolver named above (systemd-resolved at 127.0.0.53), which
+refuses a single-label name. Go's resolver reports SERVFAIL as "server
+misbehaving". So while the old container is gone and the new one has not
+registered, the lookup fails; once it has registered but uvicorn is not
+listening yet, the dial is refused. Two error strings, one recreate window.
+
+================================================================================
+4. A/B ON THE REAL ARTIFACT (red first, then green)
+================================================================================
+
+Harness: a throwaway user-defined Docker network, `caddy502test`, holding no
+containers, so `open-webui` is exactly the unresolvable single-label name the
+recreate window produces. The repo's own Caddyfile.owui is mounted unchanged
+into caddy:2-alpine at the digest docker-compose.yml pins.
+
+--- RED: Caddyfile.owui as it stands on main -----------------------------------
+$ /tmp/caddy502/ab502.sh pre 18099
+--- pre container status ---
+Up 3 seconds
+--- pre: 5 requests to / ---
+code=502 time=0.003772
+code=502 time=0.003772
+code=502 time=0.003526
+code=502 time=0.003418
+code=502 time=0.003365
+--- pre caddy error log (last 2) ---
+"msg":"dial tcp: lookup open-webui on 127.0.0.11:53: server misbehaving"
+"msg":"dial tcp: lookup open-webui on 127.0.0.11:53: server misbehaving"
+
+The error string is character-for-character the one production logged.
+
+--- GREEN: same file with lb_try_duration 30s / lb_try_interval 1s -------------
+$ /tmp/caddy502/ab502.sh post 18098
+--- post container status ---
+Up 3 seconds
+--- post: 5 requests to / ---
+code=502 time=30.095174
+code=502 time=30.094721
+code=502 time=30.094784
+code=502 time=30.093050
+code=502 time=30.096884
+--- post caddy error log (last 2) ---
+"msg":"dial tcp: lookup open-webui on 127.0.0.11:53: server misbehaving"
+"msg":"dial tcp: lookup open-webui on 127.0.0.11:53: server misbehaving"
+
+This is the half that matters for the "do not mask a real failure" rule. An
+upstream that never comes back still gets a real 502, at the stated bound
+(30.09s against a declared 30s) and not a second longer, and the underlying
+error is still logged verbatim. Nothing is hidden; the failure is delayed.
+
+--- GREEN: transient outage, which is what a deploy actually is ----------------
+The request is issued while the upstream does not exist, and the upstream
+container is started while the request is still in flight.
+
+$ /tmp/caddy502/recover502.sh pre 18099
+=== pre: upstream absent at request time, appears after 8s ===
+code=502 time=0.003064
+
+$ /tmp/caddy502/recover502.sh post 18098
+=== post: upstream absent at request time, appears after 8s ===
+code=200 time=9.044268
+
+502 in 3ms becomes 200 in 9s. That is the whole defect and the whole fix.
+
+--- NO REGRESSION: patched config against the LIVE chat upstream ---------------
+Same patched Caddyfile, this time on the real compose network, fronting the
+running hive-open-webui-1 container, bound to loopback only and mounting
+nothing the real stack shares:
+
+$ /tmp/caddy502/liveharness.sh
+--- live harness status ---
+Up 3 seconds
+--- real chat upstream through the patched config ---
+code=200 time=0.012091
+
+12ms. The retry costs a healthy request nothing, because a retry loop that
+never fails never iterates.
+
+--- CONFIG VALIDITY ------------------------------------------------------------
+$ docker run --rm -v .../Caddyfile.post:/etc/caddy/Caddyfile:ro caddy:2-alpine \
+    caddy validate --config /etc/caddy/Caddyfile
+Valid configuration
+
+$ (same for the patched Caddyfile.console)
+Valid configuration
+
+================================================================================
+5. SCREENSHOTS (uploaded to the visual-proof release, linked on the PR)
+================================================================================
+
+02-before-502.png
+  http://127.0.0.1:18099/ -> HTTP 502 in 0.11s
+  Caddyfile.owui as it stands on main, upstream unresolvable. A browser
+  navigating during a recreate gets an error page.
+
+03-after-recovered.png
+  http://127.0.0.1:18098/ -> HTTP 200 in 4.17s
+  Same file with the retry, same unresolvable upstream at request time, the
+  container appearing mid-hold. The browser gets the page.
+
+The upstream behind 03 is a deliberately labelled throwaway `caddy file-server`
+standing in for open-webui, not the Hive product, and the page says so in its
+own body. The real chat UI could not be photographed through this harness for a
+reason unrelated to the change: Open WebUI redirects to SSO and Supabase
+rejects a redirect_uri on a loopback harness origin with HTTP 400, so the SPA
+never renders on any origin but the real one. The live-upstream check in
+section 4 covers that half at the HTTP level instead.
+
+Both URLs are loopback harness ports with no query string. No credential,
+token, invite or callback value appears in either image or in this log.
+
+================================================================================
+6. WHAT IS NOT PROVEN HERE
+================================================================================
+
+The after-rate on the real box cannot be measured before this merges, because
+the Caddyfile only takes effect on the next deploy. The before-rate is section
+1 (55 on chat, 3 on console, 24h). The claim this change makes is section 4: a
+request arriving in a recreate window is served rather than refused. The rate
+should be re-counted with the section 1 commands over a comparable window once
+this has been deployed for a day.
+
+This change does not remove the outage. Every deploy that recreates open-webui
+still takes chat down for 4 to 40 seconds, and there were more than forty
+deploys in the measured day. It makes that window invisible to most requests. A
+health-gated cutover is the thing that would remove it, and it is a separate
+and much larger change.
+
+================================================================================
+7. BOX HYGIENE
+================================================================================
+
+Disk was at 15G (the deploy floor) when the session started; `docker builder
+prune -f` reclaimed 7.2G to 23G. No image, container or volume prune was run.
+Every harness container and the throwaway network were removed afterwards:
+
+--- remaining harness containers (expect none) ---
+--- real stack still up ---
+hive-open-webui-1 Up 12 minutes (healthy)
+hive-web-console-prod-1 Up 12 minutes
+hive-caddy-owui-1 Up 3 days
+/dev/mapper/ubuntu--vg-ubuntu--lv   98G   71G   23G  76% /
+
+================================================================================
+8. FOLLOW-UP MEASUREMENTS RAISED IN REVIEW (2026-08-29)
+================================================================================
+
+An adversarial review claimed that enabling lb_try_duration forces Caddy to
+buffer every request body before proxying, which would delay and add I/O to
+every document upload on the chat origin, and that it would let a non-idempotent
+POST be replayed if an upstream crashed mid-request. Both were measured rather
+than argued.
+
+--- Does the directive change body streaming? A/B, not a single reading -------
+Upstream is a Caddy that answers immediately without reading the request body
+and logs when it answers. The client sends a chunked POST whose body pauses for
+six seconds mid-stream. A buffering proxy would not reach the upstream until the
+body completed, so the upstream would log at t>=6s; a streaming one logs at
+about t=0.
+
+  === variant: pre ===
+    client start: 10:40:46.377
+    client done: 5.995642s http=200
+    upstream saw the request at 2026-08-29T10:40:46.057Z
+    upstream request count: 1
+
+  === variant: post ===
+    client start: 10:40:56.571
+    client done: 5.997501s http=200
+    upstream saw the request at 2026-08-29T10:40:56.584Z
+    upstream request count: 1
+
+The upstream saw the request immediately in BOTH variants, six seconds before
+the client finished sending. No buffering, with or without the directive, and
+no measurable difference between them. `request_buffers` is the separate,
+explicit, opt-in directive that would cause buffering, and this change does not
+set it.
+
+`upstream request count: 1` in both is the other half: the request reached the
+upstream exactly once, so nothing was replayed.
+
+--- Can a POST be replayed after the upstream received it? --------------------
+Caddy's documented rule: "If the connection to the upstream failed, a retry is
+always allowed", and after a connection succeeded a retry happens only if the
+request matches `retry_match`, whose default allows GET only. This change does
+not set `retry_match`, so a POST that reaches an upstream and then fails is
+never retried, and a GET has no body to replay. Both classes measured in
+section 1 are pre-connection failures.
+
+--- Connection pile-up blast radius -------------------------------------------
+$ docker exec hive-caddy-owui-1 sh -c 'cat /proc/1/limits | grep -i "open files"'
+Max open files            524287               524288               files
+
+Each public origin is its own Caddy container (hive-caddy-owui-1,
+hive-caddy-console-1, hive-caddy-supabase-1, hive-caddy-artifacts-1), so held
+connections on the chat origin cannot exhaust descriptors for the console,
+Supabase or artifacts origins. The largest burst measured in section 2 was
+eight requests across forty seconds, against a per-container ceiling of 524287
+descriptors.
