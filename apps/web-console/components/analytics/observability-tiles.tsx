@@ -40,7 +40,7 @@ export function ObservabilityTiles() {
       </h2>
       <Link
         href="/console/logs"
-        className="group rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-4 transition-colors hover:bg-[var(--color-surface-inset)] sm:max-w-sm"
+        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-4 transition-colors hover:bg-[var(--color-surface-inset)] sm:max-w-sm"
       >
         <div className="flex flex-col gap-1">
           <span className="flex items-center gap-2 text-sm font-medium text-[var(--color-ink)]">
