@@ -99,7 +99,12 @@ describe("console mobile navigation (issue #1367)", () => {
     }
   });
 
-  it("closes when a nav link is followed, so the drawer never covers the page it opened", () => {
+  // Named for what this asserts, not for what the browser would go on to do:
+  // jsdom does not navigate on an anchor click, so what is proven here is that
+  // activating a nav link dismisses the drawer. The reason that matters is
+  // that the navigation follows, and the drawer would otherwise cover the page
+  // it just opened.
+  it("closes when a nav link is activated", () => {
     renderShell();
 
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
@@ -109,6 +114,29 @@ describe("console mobile navigation (issue #1367)", () => {
     expect(
       screen.getByRole("button", { name: "Open navigation" }).getAttribute("aria-expanded"),
     ).toBe("false");
+  });
+
+  it("takes focus, inerts the page behind it, and locks background scroll while open", () => {
+    renderShell();
+    const main = document.querySelector("main");
+    if (!main) {
+      throw new Error("main element not found");
+    }
+
+    expect(main.hasAttribute("inert")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+
+    // Without inert, tabbing past the last drawer entry walked into page
+    // content sitting behind the scrim, and a screen reader read all of it.
+    expect(main.hasAttribute("inert")).toBe(true);
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.activeElement).toBe(sidebar());
+
+    fireEvent.click(screen.getByRole("button", { name: "Close navigation" }));
+
+    expect(main.hasAttribute("inert")).toBe(false);
+    expect(document.body.style.overflow).not.toBe("hidden");
   });
 
   it("closes on Escape", () => {

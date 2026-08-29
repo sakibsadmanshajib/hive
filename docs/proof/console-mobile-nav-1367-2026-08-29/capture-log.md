@@ -166,6 +166,38 @@ The console renders whatever order the API returns; the ordering itself is
 fixed in `apps/control-plane/internal/ledger/repository.go` and proven by three
 live Postgres tests (see the pull request body), not by this screenshot.
 
+## 7. Re-capture after review, covering the accessibility fixes
+
+The adversarial review round added focus management, `inert` on `<main>`,
+a background scroll lock, and closing the drawer when the viewport crosses up
+past `lg`. The drawer screenshots above were retaken against that code, and the
+new behaviour was measured in the same browser session:
+
+```
+closed:               pageScrollsRightBy 0  mainInert false  bodyOverflow (unset)
+                      focusedIsDrawer false  toggleExpanded false
+open:                 pageScrollsRightBy 0  mainInert true   bodyOverflow hidden
+                      focusedIsDrawer true   toggleExpanded true
+after Escape:         mainInert false  bodyOverflow (unset)  focus back on "Open navigation"
+after resize to 1280: mainInert false  bodyOverflow (unset)  toggleExpanded false
+```
+
+Tab order from the open drawer, 24 presses, checking at every stop whether
+focus landed inside `<main>`:
+
+```
+Hive, Overview, API keys, Model catalog, Logs, Analytics, Billing, Members,
+Privacy, Settings, Providers, Feature gates, Marketplace, Sign out,
+Close navigation, Documentation, Switch to EN, Switch to বাংলা, Sign out,
+NEXTJS-PORTAL, (body), Hive, Overview, API keys
+
+reached page content behind scrim: false
+```
+
+Focus cycles through the drawer and the header, then wraps. It never reaches
+the page sitting behind the scrim. (`NEXTJS-PORTAL` is the `next dev` error
+overlay and exists only in development.)
+
 ## Cleanup performed
 
 - `rm -rf apps/web-console/app/proofharness` (never committed; `git status`
