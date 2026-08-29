@@ -99,8 +99,22 @@ export async function ensureSidebar(page: Page, open: boolean): Promise<void> {
   // while it is closed. So the button that ends the call visible is the
   // opposite one, and its absence means the sidebar is in neither state the
   // harness can name.
-  const actionNow = page.getByRole("button", { name: open ? /open sidebar/i : /close sidebar/i });
-  const actionAfter = page.getByRole("button", { name: open ? /close sidebar/i : /open sidebar/i });
+  //
+  // `.first()` on both, and it is load bearing rather than defensive. The
+  // collapsed Hive shell renders TWO controls named "Open Sidebar", measured
+  // live on 2026-08-29: `count()` returns 2 the moment the sidebar closes.
+  // Playwright's strict mode makes `isVisible()` on a two-element locator
+  // throw, the `.catch(() => false)` below swallows that into "not visible",
+  // and this function then reported a sidebar it had just successfully
+  // collapsed as impossible to pin. Every surface that pins the sidebar shut
+  // inherited the failure, which is most of the sweep, so the live gate could
+  // not complete against the shipped shell at all.
+  const actionNow = page
+    .getByRole("button", { name: open ? /open sidebar/i : /close sidebar/i })
+    .first();
+  const actionAfter = page
+    .getByRole("button", { name: open ? /close sidebar/i : /open sidebar/i })
+    .first();
   if (await actionNow.isVisible().catch(() => false)) {
     await actionNow.click().catch(() => {});
     await page.waitForTimeout(SETTLE);
