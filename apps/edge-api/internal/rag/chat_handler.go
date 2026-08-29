@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // ErrRouteNotFound signals the requested model alias has no route. Wiring
@@ -419,27 +420,45 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		}
 
 		if strings.HasPrefix(line, "data: ") {
+			payload := []byte(line[6:])
+			// Provider blindness on this relay is the shared sanitizer's job,
+			// not this handler's. It used to be hand-rolled here: rewrite
+			// model, rewrite id, delete system_fingerprint, forward every
+			// other key of a parseable frame. A top-level "error" key is such
+			// a key, so an upstream failure delivered inside a committed 200
+			// went to a chat customer whole, brand and top-up URL included
+			// (PR #1303 review, measured on /v1/rag/chat: "openrouter",
+			// "settings/credits" and "exceeded your current quota" all
+			// reached the client). Two implementations of one sanitizer is
+			// how they drift; this one now routes through the same
+			// allowlisting copy the other two relays use.
+			sanitized, ok := sanitize.VariablePriceFrame(payload, alias, mintedID)
+			if !ok {
+				// Same choice the chat relay makes: render a gateway-owned
+				// error rather than truncate the answer silently, since the
+				// 200 was committed before the failure existed. Anything the
+				// sanitizer refused for another reason stays dropped.
+				replacement, upstream, isErrorFrame := sanitize.ReplaceErrorFrame(
+					payload, apierrors.UpstreamUnavailableMessage(alias))
+				if !isErrorFrame {
+					continue
+				}
+				// Only place the upstream text survives. %.512s truncates on
+				// a rune boundary, unlike a byte slice.
+				log.Printf("rag: replaced an upstream error frame alias=%q upstream_error=%.512s", alias, upstream)
+				sanitized = replacement
+			}
+			// Usage is read back off the sanitized frame rather than the raw
+			// one: VariablePriceFrame keeps usage (minus the upstream cost
+			// fields), so this is the same number, read from the bytes the
+			// customer actually gets.
 			var chunk map[string]any
-			if err := json.Unmarshal([]byte(line[6:]), &chunk); err != nil {
-				// Never forward an unparseable upstream data frame: it could
-				// carry unsanitized provider fields. Drop it.
-				continue
-			}
-			if _, ok := chunk["model"]; ok {
-				chunk["model"] = alias
-			}
-			if _, ok := chunk["id"]; ok {
-				chunk["id"] = mintedID
-			}
-			delete(chunk, "system_fingerprint")
-			if usage, ok := chunk["usage"].(map[string]any); ok {
-				promptTokens = asInt64(usage["prompt_tokens"])
-				completionTokens = asInt64(usage["completion_tokens"])
-				totalTokens = asInt64(usage["total_tokens"])
-			}
-			sanitized, err := json.Marshal(chunk)
-			if err != nil {
-				continue
+			if err := json.Unmarshal(sanitized, &chunk); err == nil {
+				if usage, ok := chunk["usage"].(map[string]any); ok {
+					promptTokens = asInt64(usage["prompt_tokens"])
+					completionTokens = asInt64(usage["completion_tokens"])
+					totalTokens = asInt64(usage["total_tokens"])
+				}
 			}
 			fmt.Fprintf(w, "data: %s\n\n", sanitized)
 			flusher.Flush()

@@ -175,15 +175,35 @@ func TestProviderBlindLooksLikeRoutingInternalsRequiresSpecificToken(t *testing.
 	w := httptest.NewRecorder()
 
 	// "retried:" alone, with none of LiteLLM's specific bookkeeping tokens,
-	// must NOT trigger the routing-internals collapse: a legitimate upstream
-	// message can plausibly use ordinary English like this, and over-collapsing
-	// it would throw away real detail for no safety gain (security review
-	// finding on this PR).
+	// must NOT trigger the routing-internals collapse: that rule is specific
+	// to LiteLLM's own vocabulary and over-firing it would mislabel unrelated
+	// failures (security review finding on the PR that added it).
+	//
+	// The assertion changed with PR #1303 and the rule it names did not. That
+	// PR inverted the tail of sanitizeProviderBlindMessage to an allowlist, so
+	// an unrecognized upstream sentence is no longer forwarded verbatim; it
+	// collapses to the status fallback. The two outcomes stay distinguishable,
+	// which is what keeps this test able to go red: the routing-internals rule
+	// answers "is not available." and the fallback answers "request failed."
+	//
+	// The earlier verbatim assertion rested on a security review's judgement
+	// that collapsing unmatched text threw away real detail for no safety
+	// gain. Measurement overtook that: with forward-by-default, five separate
+	// upstream billing shapes reached customers word for word (see
+	// provider_blind_allowlist_test.go). The detail lost here is "retried: 3
+	// times before giving up", which is our retry bookkeeping and not
+	// something the caller can act on.
 	WriteProviderBlindUpstreamError(w, "hive-default", http.StatusBadGateway, "request failed, retried: 3 times before giving up")
 
 	resp := decodeOpenAIError(t, w)
-	if resp.Error.Message != "request failed, retried: 3 times before giving up" {
-		t.Fatalf("expected message to pass through unchanged, got %q", resp.Error.Message)
+	if resp.Error.Message == "hive-default is not available." {
+		t.Fatalf("routing-internals rule fired on a message with none of its tokens: %q", resp.Error.Message)
+	}
+	if resp.Error.Message != "hive-default request failed." {
+		t.Fatalf("expected the status fallback, got %q", resp.Error.Message)
+	}
+	if strings.Contains(resp.Error.Message, "retried") {
+		t.Fatalf("retry bookkeeping reached the customer: %q", resp.Error.Message)
 	}
 }
 

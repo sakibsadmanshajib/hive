@@ -23,6 +23,7 @@ package sanitize
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -100,7 +101,16 @@ func VariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool)
 	// through. Nothing else in this function inspects "error", so without
 	// this check that shape would sanitize cleanly and be stored as a
 	// completed line (issue #1253 review).
-	if _, present := frame["error"]; present {
+	//
+	// The test is on the VALUE, not on the key's presence. Several
+	// OpenAI-compatible upstreams declare "error" on every chunk of a
+	// perfectly healthy stream and leave it empty, and keying on presence
+	// alone rejected all of those: a provider that streams
+	// {"error":null,"choices":[{"delta":{"content":"hi"}}]} had every
+	// content frame dropped by the SSE relays and every batch line refused
+	// here, with no error shown to anyone (PR #1303 review). null, "", {},
+	// [] and false all mean the same thing an absent key means.
+	if raw, present := frame["error"]; present && !emptyJSONValue(raw) {
 		return nil, false
 	}
 
@@ -198,4 +208,73 @@ func VariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byte, bool)
 		return nil, false
 	}
 	return out, true
+}
+
+// emptyJSONValue reports whether raw carries no information: JSON null, an
+// empty or blank string, an empty object, an empty array, or false. Used for
+// the "error" field, which upstreams declare-and-zero rather than omit.
+//
+// Parsed rather than string-compared so whitespace, "{ }" and "\u0020" are
+// all handled by encoding/json instead of by a literal list this package
+// would have to keep complete.
+func emptyJSONValue(raw json.RawMessage) bool {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case bool:
+		return !typed
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	}
+	return false
+}
+
+// ReplaceErrorFrame reports whether payload is a parseable frame carrying a
+// non-empty top-level "error" and, if so, returns a gateway-owned replacement
+// frame carrying message, plus the raw upstream error value for the operator
+// log. Nothing upstream survives into the replacement, including keys this
+// package does not model.
+//
+// Opt-in at the call site, deliberately NOT folded into VariablePriceFrame.
+// That function's ok == false means "drop this frame", and
+// apps/control-plane's batch dispatcher depends on it to refuse storing an
+// error-carrying line as a completed 2xx output line and charging credits for
+// it (batchstore/executor/dispatcher.go, issue #1235). An SSE relay wants the
+// opposite: a customer whose stream dies mid-answer is better served by a
+// rendered error than by a silent truncation, because the status was
+// committed as 200 before the failure existed and there is no other way left
+// to tell them. Two behaviours, two calls, rather than one changed default
+// that would turn a refused batch line into a billed one (PR #1303 review).
+//
+// The frame is REPLACED, never scrubbed field by field: mid-stream there is
+// no HTTP status to classify by, there is no finite list of ways a provider
+// can phrase a refusal, and a scrub forwards whatever the next one writes.
+func ReplaceErrorFrame(payload []byte, message string) (replacement []byte, upstream string, ok bool) {
+	var frame map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &frame); err != nil || frame == nil {
+		return nil, "", false
+	}
+	raw, present := frame["error"]
+	if !present || emptyJSONValue(raw) {
+		return nil, "", false
+	}
+	out, err := json.Marshal(map[string]any{
+		"error": map[string]string{
+			"message": message,
+			"type":    "api_error",
+			"code":    "upstream_error",
+		},
+	})
+	if err != nil {
+		return nil, "", false
+	}
+	return out, string(raw), true
 }
