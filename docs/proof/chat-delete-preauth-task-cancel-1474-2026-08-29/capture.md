@@ -89,17 +89,19 @@ post-fix source: the full chain the image runs
   ok: the owner's DELETE succeeds
   ok: the owner's DELETE deletes their row
   ok: the owner's DELETE still cancels their own in-flight tasks, exactly once
+  ok: the owner's DELETE cancels BEFORE it deletes, so no task outlives the row it is writing to (observed ['cancel', 'delete'])
   ok: the admin arm answers 404 for a chat that does not exist
   ok: the admin arm cancels nothing when the row does not resolve
   ok: the admin arm deletes a chat that does resolve
   ok: the admin arm still cancels that chat's in-flight tasks, exactly once
+  ok: the admin arm also cancels BEFORE it deletes (observed ['cancel', 'delete'])
 
 PASS
 ```
 
 Zero cancellations for every refused caller. The owner's own cancellation
-survives, exactly once, in both arms. The leak was not closed by removing the
-cancellation.
+survives, exactly once, in both arms, and the interleaving is pinned rather than
+just the count.
 
 ## 3. The test can go red
 
@@ -217,3 +219,94 @@ No token, key, password or session appears in any line above or in the posted
 image, which is a rendering of exactly the transcripts reproduced here. Nothing
 required redaction, and nothing was redacted, which is stated so that the absence
 of a redaction note is not read as an oversight.
+
+## 7. The ordering is pinned, not just the counts
+
+Adversarial and security review both landed the same finding independently: the
+first version of this suite kept `cancelled` and `deleted` as two separate lists,
+so their interleaving was unobservable, and a patch that cancelled BELOW the
+delete passed every check. That mutant is real, not hypothetical. It matters
+because a streaming task that outlives the row delete goes on writing to a chat
+that no longer exists, which is the orphaned-request case the upstream comment
+this patch removes existed to prevent.
+
+The recorder now keeps one ordered event log, and both owner legs assert
+`["cancel", "delete"]`. Re-running the reviewer's mutant, which moves the
+cancellation below the delete in both arms while keeping all three markers and
+every count identical:
+
+```
+post-fix source: the full chain the image runs
+  chain: apply_router_authz_family_patch.py, apply_authz_residuals_1191_patch.py, apply_chat_delete_task_cancel_1474_patch.py
+  ok: the #1474 patch applied: 3 # hive (#1474) markers in the patched router (found 3)
+  ok: a non-owner's DELETE is refused with 404
+  ok: a non-owner's DELETE deletes nothing
+  ok: a non-owner's refused DELETE cancels NOTHING (observed 0 cancellation(s))
+  ok: a caller without the chat.delete permission is refused with 401
+  ok: a caller refused for lack of the permission cancels nothing
+  ok: the owner's DELETE succeeds
+  ok: the owner's DELETE deletes their row
+  ok: the owner's DELETE still cancels their own in-flight tasks, exactly once
+  FAIL: the owner's DELETE cancels BEFORE it deletes, so no task outlives the row it is writing to (observed ['delete', 'cancel'])
+  ok: the admin arm answers 404 for a chat that does not exist
+  ok: the admin arm cancels nothing when the row does not resolve
+  ok: the admin arm deletes a chat that does resolve
+  ok: the admin arm still cancels that chat's in-flight tasks, exactly once
+  FAIL: the admin arm also cancels BEFORE it deletes (observed ['delete', 'cancel'])
+
+FAILED: 2 check(s)
+  - the owner's DELETE cancels BEFORE it deletes, so no task outlives the row it is writing to (observed ['delete', 'cancel'])
+  - the admin arm also cancels BEFORE it deletes (observed ['delete', 'cancel'])
+```
+
+Two red, and only the two ordering assertions. Every count-based check stays
+green, which is exactly the point: those checks cannot see this defect, and now
+something can.
+
+The patch script gained the same property as a build-time backstop, asserted per
+arm over that arm's own span rather than "somewhere above", since a whole-handler
+count would let the admin arm's cancellation satisfy the non-admin arm's
+assertion. That backstop is defensive rather than mutation tested, and is
+described here as such; the behavioural assertion above is the one with a
+demonstrated mutant.
+
+## 8. The vendored tree is asserted to be the shipped tree
+
+Also from review: everything here patches `vendor/open-webui` and then reasons
+about the source the image runs, which holds only while the vendored frontend
+version and the pinned backend image tag agree. They are bumped independently by
+design, and nothing asserted they agree, so a drift would have left every patch
+test green while exercising source the image never runs.
+
+Both scripts now compare `vendor/open-webui/package.json` against the
+`FROM ghcr.io/open-webui/open-webui:v<tag>` line in `Dockerfile.open-webui`.
+Bumping the vendored version to `0.11.0` in a scratch copy:
+
+```
+vendored frontend tree vs pinned backend image
+  ok: both the vendored version and the pinned image tag are readable (vendor=0.11.0, pinned=0.10.2)
+  FAIL: vendor/open-webui is the same open-webui version as the backend image pinned in Dockerfile.open-webui, so patching the vendored tree really does describe the source the image runs (vendor=0.11.0, pinned=0.10.2)
+
+chat delete task cancellation ordering (issue #1474)
+  FAIL: the vendored tree and the pinned backend image are the same open-webui version, so the patched source is the shipped source (vendor=0.11.0, pinned=0.10.2)
+```
+
+## 9. What review found that this PR does NOT fix
+
+Two siblings of the same primitive, both verified in the source and both filed
+rather than folded in:
+
+* **#1508, `socket/main.py` `ydoc:document:update`.** Cancels tasks for any
+  document id that does not begin with `note:`, with no ownership resolution at
+  all, reachable by any verified user over the websocket. Wider than #1474,
+  which needed a DELETE. Not fixed here because there is no existing ownership
+  boundary to move the call below: adding one is a design question about the Yjs
+  namespace, with its own blast radius on note collaboration and chat sync.
+* **#1511, `main.py` `/api/tasks/chat/{chat_id}` and `/stop`.** Correctly
+  ordered, but the admin arm is a bare `user.role != 'admin'` that
+  `ENABLE_ADMIN_CHAT_ACCESS` does not gate, because `main.py` is outside the
+  #1186 family patch's file set. Needs the administrator role rather than any
+  verified session, and on this instance every tenant OWNER holds one.
+
+The PR body's original claim that the two sibling callers were "already correct"
+was wrong on both counts and has been corrected rather than quietly dropped.

@@ -147,6 +147,38 @@ CHATS_PATCHES = (
 )
 
 
+VENDOR_PACKAGE_JSON = REPO_ROOT / "vendor/open-webui/package.json"
+DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
+
+
+def vendored_and_pinned_versions() -> tuple[str | None, str | None]:
+    """The vendored frontend's version and the pinned backend image's tag.
+
+    Everything below patches the VENDORED tree and then claims to be describing
+    the source the IMAGE runs. That holds only while these two agree, and they
+    are bumped independently by design: the vendored tree exists to build the
+    frontend, the digest at Dockerfile.open-webui pins the backend. Nothing else
+    in the repository asserts they agree, so if they ever drift, every patch
+    test here stays green while asserting on source the image never runs, and an
+    anchor that no longer matches the real backend becomes a silent no-op rather
+    than a red test. The only surviving signal would then be the Dockerfile
+    drift guard, which runs on push to main, so the first sign of trouble would
+    be a failed deploy after merge rather than a failed check before it.
+    """
+    vendored = re.search(
+        r'"version"\s*:\s*"([^"]+)"', VENDOR_PACKAGE_JSON.read_text(encoding="utf-8")
+    )
+    pinned = re.search(
+        r"^FROM ghcr\.io/open-webui/open-webui:v([^@\s]+)",
+        DOCKERFILE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    return (
+        vendored.group(1) if vendored else None,
+        pinned.group(1) if pinned else None,
+    )
+
+
 def patched_chats_router(patches: tuple[str, ...] = CHATS_PATCHES) -> str:
     """routers/chats.py as the image runs it, not as the vendor ships it.
 
@@ -671,6 +703,24 @@ def main() -> int:
         if not path.exists():
             print(f"  FAIL: missing {path.relative_to(REPO_ROOT)}")
             return 1
+
+    # --- 0. The tree being patched is the tree that ships ---------------------
+    # Asserted before anything else, because every check below is worthless if
+    # this is false and none of them can tell.
+    print("\nvendored frontend tree vs pinned backend image")
+    vendored_version, pinned_version = vendored_and_pinned_versions()
+    check(
+        vendored_version is not None and pinned_version is not None,
+        "both the vendored version and the pinned image tag are readable "
+        f"(vendor={vendored_version}, pinned={pinned_version})",
+    )
+    check(
+        vendored_version == pinned_version,
+        "vendor/open-webui is the same open-webui version as the backend image "
+        f"pinned in Dockerfile.open-webui, so patching the vendored tree really "
+        f"does describe the source the image runs (vendor={vendored_version}, "
+        f"pinned={pinned_version})",
+    )
 
     # --- 1. The route handler, as the image runs it --------------------------
     print("\nrouters/chats.py DELETE /{id} (after owui-patches)")

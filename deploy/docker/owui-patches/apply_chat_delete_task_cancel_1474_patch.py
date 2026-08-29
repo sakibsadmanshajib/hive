@@ -24,13 +24,27 @@ established as entitled to delete this chat:
 Both arms are treated deliberately. docker-compose.yml sets
 ENABLE_ADMIN_CHAT_ACCESS to "false", so on this deployment every caller including
 an administrator takes the non-admin arm and only the second edit ever executes.
-The first is not therefore dead code: it is what keeps the boundary correct if
-that flag is ever turned on, and a fix that holds only because an unrelated flag
-happens to be off is not a fix, it is a coincidence.
+The first is not therefore dead code, but be precise about what it buys, because
+the first draft of this paragraph overclaimed and review was right to say so.
+With that flag on, the admin arm's lookup is unscoped BY DESIGN: an administrator
+may delete anyone's chat, so an administrator may cancel anyone's tasks, and no
+placement of this call changes that. What the admin-arm edit removes is the
+reach of a NON-entitled caller, since before it the cancellation ran above the
+role split and so was reachable by every verified user on both arms. Patching
+only the arm this deployment happens to use would have left the fix resting on a
+flag that has nothing to do with it.
 
-The cancellation still precedes the delete in both arms, so an owner deleting
-their own chat cancels their own in-flight tasks exactly as before. Closing the
-leak by removing the cancellation would have traded one defect for another.
+The cancellation still precedes the delete in both arms, so an owner whose delete
+SUCCEEDS cancels their own in-flight tasks exactly as before. Closing the leak by
+removing the cancellation would have traded one defect for another, and the test
+pins the interleaving rather than just the count.
+
+One behaviour does change beyond the leak, and it is intended: a caller who is
+REFUSED no longer cancels anything, including when that caller is the owner. An
+owner without the chat.delete permission used to have their own tasks cancelled
+by a DELETE that then answered 401. A refused request performing a side effect
+is the whole defect, so this is the fix reaching a case the issue did not
+enumerate rather than a regression smuggled in beside it.
 
 Not a vendored edit, because a vendored edit would ship nothing:
 Dockerfile.open-webui builds only the frontend from vendor/open-webui and keeps
@@ -195,6 +209,31 @@ def main():
         "delete_chat_by_id still cancels at handler top level (four-space indent), "
         "so the pre-authorisation call was not removed"
     )
+
+    # Each arm must cancel BEFORE it deletes. Counting the calls cannot see this:
+    # a rewrite that put the cancellation below the delete keeps both counts, both
+    # marker totals and the two assertions above exactly as they are. The ordering
+    # is load bearing, because a streaming task that outlives the row delete goes
+    # on writing to a chat that no longer exists, which is the orphaned-request
+    # case the comment removed by edit 1 existed to prevent.
+    # Checked per arm over its own span, not "somewhere above". A count taken
+    # from the start of the handler would let the admin arm's cancellation
+    # satisfy the non-admin arm's assertion, which is the same shape of
+    # false-green this file exists to refuse.
+    admin_delete_at = handler.index("Chats.delete_chat_by_id(id, db=db)")
+    scoped_delete_at = handler.index("Chats.delete_chat_by_id_and_user_id(id, user.id, db=db)")
+    assert admin_delete_at < scoped_delete_at, (
+        "the admin arm no longer precedes the non-admin arm; the spans below "
+        "would be measuring the wrong arms"
+    )
+    for arm, start, end in (
+        ("admin", 0, admin_delete_at),
+        ("non-admin", admin_delete_at, scoped_delete_at),
+    ):
+        assert handler.count(CANCEL_CALL, start, end) == 1, (
+            f"the {arm} arm does not cancel exactly once before its delete; it "
+            "would delete the row before stopping the tasks still writing to it"
+        )
 
     for filename, expected in EXPECTED_MARKERS.items():
         count = (ROUTERS / filename).read_text().count(MARKER)

@@ -128,21 +128,39 @@ on 2026-08-29, per surface:
     this deployment nobody reaches the unscoped path and every delete resolves
     through `get_chat_by_id_and_user_id`. Turn the flag on and the admin arm is
     cross-account again.
-  * **The task cancellation in front of the delete is scoped too, since
-    #1474.** It was not. `stop_item_tasks(request.app.state.redis, id)` was the
-    first statement in the handler, above the role split and above any ownership
-    resolution, so any verified user holding another user's chat id could cancel
-    that chat's in-flight completion and title generation by issuing a DELETE
-    they were then refused. The 404 was real, but it arrived after the side
-    effect, and a 404 that has cancelled the victim's streaming response is not
-    a denial. `owui-patches/apply_chat_delete_task_cancel_1474_patch.py` moves
-    the call into each arm, in both cases immediately after that arm's 404, so a
-    refused caller reaches no cancellation and an owner still cancels their own
-    in-flight tasks ahead of the delete. Both arms are patched even though the
-    admin one is unreachable while `ENABLE_ADMIN_CHAT_ACCESS` is `"false"`.
+  * **The task cancellation in front of the delete is NOT scoped on the
+    currently deployed image. The fix is merged but not yet deployed (#1474).**
+    Written in that order deliberately: the rest of this section is measured
+    against the running stack, and this bullet is not, so it says which is which
+    rather than letting the surrounding tense carry a claim it has not earned.
+
+    `stop_item_tasks(request.app.state.redis, id)` is the first statement in the
+    handler on the image the box runs today, above the role split and above any
+    ownership resolution, so any verified user holding another user's chat id
+    can cancel that chat's in-flight completion and title generation by issuing
+    a DELETE they are then refused. The 404 is real, but it arrives after the
+    side effect, and a 404 that has cancelled the victim's streaming response is
+    not a denial.
+
+    `owui-patches/apply_chat_delete_task_cancel_1474_patch.py` moves the call
+    into each arm, in both cases immediately after that arm's 404. Because it is
+    a build-time rewrite rather than a runtime change, it takes effect when
+    `deploy-demo-box.yml` next rebuilds the chat image, not when it merges.
+    Until that build runs, the paragraph above describes the deployed
+    behaviour. Both arms are patched even though the admin one is unreachable
+    while `ENABLE_ADMIN_CHAT_ACCESS` is `"false"`.
+
     `scripts/test_owui_chat_delete_task_cancel.py` executes the patched handler
     and counts the cancellations, against the patch chain both with and without
     that patch, so the pre-fix behaviour stays reproduced rather than described.
+    That is a claim about the patched source, not about the box.
+
+    Two siblings of the same primitive are still open and are NOT closed by
+    #1474: `socket/main.py`'s `ydoc:document:update` cancels tasks for any
+    non-`note:` document id with no ownership resolution at all (#1508, reachable
+    by any verified user), and `main.py`'s `/api/tasks/chat/{chat_id}` and its
+    `/stop` sibling carry a bare `user.role != 'admin'` bypass that
+    `ENABLE_ADMIN_CHAT_ACCESS` does not gate (#1511).
 
   Measured live: a second signed-in non-admin identity is refused (401 on the
   read, 404 on the delete) and the owner's row survives.

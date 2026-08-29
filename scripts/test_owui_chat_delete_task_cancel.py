@@ -61,6 +61,7 @@ from test_owui_chat_delete_authz import (  # noqa: E402
     CHATS_PATCHES,
     patched_chats_router,
     route_handler,
+    vendored_and_pinned_versions,
 )
 
 HANDLER = "delete_chat_by_id"
@@ -122,17 +123,29 @@ class StubChat:
 
 
 class Recorder:
-    """Every collaborator the handler reaches, and what it was asked to do."""
+    """Every collaborator the handler reaches, and what it was asked to do.
+
+    `events` is a single ordered log rather than a second pair of counters,
+    because the interleaving is itself a claimed property and two separate
+    lists cannot show it. Moving the cancellation to below the delete leaves
+    every count identical, and that mutant passed this suite until the log went
+    in. The ordering is load bearing: a streaming task that outlives the row
+    delete goes on writing to a chat that no longer exists, which is the
+    orphaned-request case the upstream comment removed by the #1474 patch
+    existed to prevent.
+    """
 
     def __init__(self, stored: StubChat | None):
         self.stored = stored
         self.cancelled: list[str] = []
         self.deleted: list[tuple[str, str | None]] = []
+        self.events: list[str] = []
         self.permitted = True
 
     # open_webui.tasks.stop_item_tasks
     async def stop_item_tasks(self, redis, item_id):
         self.cancelled.append(item_id)
+        self.events.append("cancel")
         return {"stopped": True}
 
     # open_webui.utils.access_control.has_permission
@@ -159,10 +172,12 @@ class StubChats:
 
     async def delete_chat_by_id(self, chat_id, db=None):
         self._r.deleted.append((chat_id, None))
+        self._r.events.append("delete")
         return True
 
     async def delete_chat_by_id_and_user_id(self, chat_id, user_id, db=None):
         self._r.deleted.append((chat_id, user_id))
+        self._r.events.append("delete")
         return True
 
 
@@ -180,6 +195,13 @@ def compile_handler(source: str, admin_access: bool, recorder: Recorder):
     Decorators are dropped (there is no FastAPI router here) and every free name
     the body reaches is bound to a stub. Nothing about the body itself is
     rewritten, so what runs is the source the image runs.
+
+    Executing vendored code in CI is deliberate here, and bounded. Only the one
+    `FunctionDef` node is compiled, so `chats.py`'s module-level imports and
+    top-level statements never run, and the body executes only when a scenario
+    below calls the handler. The trust assumption is the same one the image
+    build already makes on this tree, so it is not a new boundary; it is written
+    down so the next reader does not have to re-derive it from the `noqa`.
     """
     tree = ast.parse(source)
     func = route_handler(tree)
@@ -293,6 +315,11 @@ def run_leg(source: str, *, expect_leak: bool) -> None:
         recorder.cancelled == [CHAT_ID],
         "the owner's DELETE still cancels their own in-flight tasks, exactly once",
     )
+    check(
+        recorder.events == ["cancel", "delete"],
+        "the owner's DELETE cancels BEFORE it deletes, so no task outlives the "
+        f"row it is writing to (observed {recorder.events})",
+    )
 
     # 4. Admin arm, unreachable on this deployment (ENABLE_ADMIN_CHAT_ACCESS is
     #    "false"), driven anyway so the fix does not depend on that flag.
@@ -319,10 +346,28 @@ def run_leg(source: str, *, expect_leak: bool) -> None:
         recorder.cancelled == [CHAT_ID],
         "the admin arm still cancels that chat's in-flight tasks, exactly once",
     )
+    check(
+        recorder.events == ["cancel", "delete"],
+        "the admin arm also cancels BEFORE it deletes "
+        f"(observed {recorder.events})",
+    )
 
 
 def main() -> int:
     print("chat delete task cancellation ordering (issue #1474)")
+
+    # Everything below patches the VENDORED tree and then reasons about the
+    # source the IMAGE runs. That is only true while the vendored frontend
+    # version and the pinned backend image tag agree, and they are bumped
+    # independently. If they drift, both legs stay green while exercising source
+    # the image never runs, so this is asserted before either leg.
+    vendored_version, pinned_version = vendored_and_pinned_versions()
+    check(
+        vendored_version is not None and vendored_version == pinned_version,
+        "the vendored tree and the pinned backend image are the same open-webui "
+        f"version, so the patched source is the shipped source "
+        f"(vendor={vendored_version}, pinned={pinned_version})",
+    )
 
     print("\npre-fix source: patch chain WITHOUT the #1474 patch")
     print(f"  chain: {', '.join(PRE_FIX_PATCHES)}")
