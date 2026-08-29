@@ -1,0 +1,12 @@
+Synthetic capture log for the issue #1409 acceptance demonstration.
+
+The value below is NOT a credential. It is sixty-two characters of a cycled
+hex alphabet, the same synthetic constant tools/lint-no-token-in-proof-captures.mjs
+uses in its own MUST_CATCH fixtures. It exists so that this pull request, whose
+changed paths are all under docs/proof/ and therefore classified docs-only,
+turns the Repo policy lints check RED. It is removed in the next commit on this
+same branch, and neither this file nor this branch is part of the pull request
+that merges.
+
+step 3: navigated to http://web-console:3000/invitations/accept?token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
+step 4: invitation accepted, redirected to /dashboard
