@@ -12,11 +12,20 @@ import (
 )
 
 // Issue #896: public.account_memberships RLS was a blanket
-// `FOR ALL TO hive_app USING (true) WITH CHECK (true)`, so hive_app -- the
-// control-plane's own DB role, NOT BYPASSRLS in production -- saw every
-// tenant's membership rows regardless of what any Go WHERE clause said. A Go
-// query missing an account_id/user_id predicate would have returned every
-// tenant's rows. Proven live against a throwaway Postgres before writing the
+// `FOR ALL TO hive_app USING (true) WITH CHECK (true)`, so hive_app -- the DB
+// role this repository's migrations have been building toward, and which is
+// not BYPASSRLS -- saw every tenant's membership rows regardless of what any
+// Go WHERE clause said. A Go query missing an account_id/user_id predicate
+// would have returned every tenant's rows.
+//
+// What this file does and does not prove (issue #1444). Every test here opts
+// into the role under test with an explicit SET ROLE hive_app below, which is
+// exactly what the deployed system does NOT do: hive_app is NOLOGIN with zero
+// role members, no production code path sets that role, and control-plane
+// connects as postgres, which is BYPASSRLS. So these tests prove the policy is
+// correct and that the Go call sites set the session variables it needs. They
+// do not prove that anything is enforced in production today, and issue #896
+// stays open until the connecting role changes. Proven live against a throwaway Postgres before writing the
 // fix: with the old policy, `SET ROLE hive_app; SELECT * FROM
 // account_memberships` with NO session scope set returned both of two
 // unrelated fixture accounts' rows.

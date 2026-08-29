@@ -1,12 +1,43 @@
 -- supabase/migrations/20260829_04_account_memberships_hive_app_scope.sql
 --
+-- DEPLOYMENT POSTURE, READ THIS FIRST (issue #1444)
+--
+-- The two hive_app policies this file creates do NOT bind on the system as
+-- currently deployed, and this file does not change that. Verified live
+-- against the deployed database rather than inferred: hive_app is NOLOGIN and
+-- has zero role members (pg_auth_members returns nothing for it), no
+-- production code path anywhere in this repository issues SET ROLE hive_app
+-- (the only occurrences are in tests), and control-plane's SUPABASE_DB_URL
+-- connects as postgres, which is rolsuper = t and rolbypassrls = t. A
+-- BYPASSRLS role skips policy evaluation entirely, so control-plane's Go
+-- WHERE predicates remain the only enforcement on this table today, exactly
+-- as they were before this migration.
+--
+-- What this file is, then: the correct least-privilege policy shape, written
+-- and tested ahead of the connection-posture change that would make it load
+-- bearing. Issue #1444 owns that change, which is a deployment change and not
+-- a migration change, and it is the blocker on this table actually being
+-- protected. Issue #1446 tracks the 31 sibling tables in
+-- 20260529_01_rls_tenant_tables.sql that still carry the blanket
+-- USING (true) shape removed here. Every hive_app scoped policy merged in
+-- this repository since 20260516 shares the same gap; it is not introduced
+-- here, and issue #896 is therefore NOT closed by this migration.
+--
+-- Read every "hive_app is NOT BYPASSRLS" remark below, and in the older
+-- migrations it cites, as a statement about that role's attributes only.
+-- None of them is evidence that hive_app is the role that connects.
+--
 -- Issue #896: public.account_memberships RLS was a blanket
 -- `FOR ALL TO hive_app USING (true) WITH CHECK (true)`
 -- (20260529_01_rls_tenant_tables.sql), so the control-plane's own Go WHERE
 -- predicates were the only enforcement of tenancy for the control-plane's DB
 -- role. hive_app is NOT BYPASSRLS
--- (20260518_04_phase19_audit_rls_and_indexes.sql), so a query missing an
--- account_id/user_id predicate would have returned every tenant's rows.
+-- (20260518_04_phase19_audit_rls_and_indexes.sql), so under a connection that
+-- actually ran as hive_app, a query missing an account_id/user_id predicate
+-- would return every tenant's rows. That conditional is load bearing: per the
+-- posture note above, no such connection exists yet, so the exposure this
+-- paragraph describes is latent rather than live, and closing it is gated on
+-- #1444.
 --
 -- Direct PostgREST access (anon/authenticated) was already zero rows before
 -- this migration and stays that way: this table has never granted or
@@ -15,10 +46,13 @@
 -- against a throwaway Postgres, unchanged by this migration. This migration
 -- narrows the hive_app policy only.
 --
--- This is the same session-scoped RLS pattern already proven in production
--- for public.egress_policies, public.marketplace_tenant_entries,
+-- This is the same session-scoped RLS pattern already used for
+-- public.egress_policies, public.marketplace_tenant_entries,
 -- public.agent_tasks, public.user_memories, public.agent_task_schedules and
--- public.tenant_users itself (20260726_01_tenant_users_hive_app_grant.sql):
+-- public.tenant_users itself (20260726_01_tenant_users_hive_app_grant.sql).
+-- Consistency with those is the reason to write it this way; it is not
+-- evidence of enforcement, since the posture note above applies to all of
+-- them equally:
 -- set_config('app.current_*', value, true) inside an explicit transaction
 -- (LOCAL scope, required -- see egress/repository.go's withTenantTx comment
 -- for the two ways a bare Exec+separate Query gets this wrong), read back by

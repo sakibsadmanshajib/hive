@@ -56,6 +56,20 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 // CreateMembership, ActivateMembership, and the account_memberships reads and
 // writes inside ProvisionDefaultWorkspace.
 //
+// Posture caveat (issue #1444), the canonical statement of it for this
+// package: that policy does not bind on the system as currently deployed, and
+// this scoping does not make it bind. hive_app is NOLOGIN with zero role
+// members, no production code path anywhere in this repository issues
+// SET ROLE hive_app, and control-plane connects as postgres, which is
+// BYPASSRLS and skips policy evaluation entirely. So the Go predicates in the
+// callers below remain the only tenancy enforcement today, exactly as before.
+// What the session scoping buys is that the policy is correct and exercised
+// by tests ahead of the connection-posture change that makes it load bearing;
+// issue #1444 owns that change and is the blocker. Full evidence in the header
+// of supabase/migrations/20260829_04_account_memberships_hive_app_scope.sql.
+// Read every "hive_app is NOT BYPASSRLS" remark in this package as a statement
+// about the role's attributes, never as evidence that hive_app connects.
+//
 // LOCAL scope inside an explicit transaction is required, not incidental --
 // see egress/repository.go's withTenantTx comment for the two ways this was
 // gotten wrong before: a bare Exec followed by a separate Query loses the
@@ -83,7 +97,8 @@ func (r *pgxRepository) withActorTx(ctx context.Context, actorUserID uuid.UUID, 
 
 // withAccountTx is withActorTx's counterpart for the "members of one account
 // I already administer" access shape (issue #896): app.current_account_id,
-// read by the same migration's second hive_app policy. Used by
+// read by the same migration's second hive_app policy, and subject to the same
+// issue #1444 posture caveat spelled out on withActorTx above. Used by
 // ListMembersByAccountID (the member-list page, which by design reads every
 // member's row, not just the caller's own) and UpdateMembershipRole
 // (including its embedded last-owner-count subquery, which reads every owner
@@ -267,6 +282,7 @@ func (r *pgxRepository) ProvisionDefaultWorkspace(ctx context.Context, acct Acco
 	// hive_app is NOT BYPASSRLS, and the account_memberships hive_app policy
 	// (20260829_04_account_memberships_hive_app_scope.sql) requires this
 	// setting for both the pre-check read and the owner-membership insert.
+	// Dormant today for the reason withActorTx documents (issue #1444).
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", membership.UserID.String()); err != nil {
 		return uuid.Nil, false, fmt.Errorf("accounts: set actor scope: %w", err)
 	}

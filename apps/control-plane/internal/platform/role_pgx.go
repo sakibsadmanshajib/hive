@@ -68,7 +68,11 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 	// every call site passes the caller's own userID here, never a target
 	// user's). See apps/control-plane/internal/accounts/repository.go's
 	// withActorTx doc comment for why this needs an explicit transaction
-	// rather than a bare set_config + separate query.
+	// rather than a bare set_config + separate query, and for the issue #1444
+	// posture caveat: the policy this scoping satisfies is dormant on the
+	// deployed system, because control-plane connects as a BYPASSRLS role and
+	// never as hive_app, so the WHERE clause below is still the only tenancy
+	// enforcement today.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("platform: begin membership role tx: %w", err)
@@ -151,9 +155,11 @@ func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.
 // platform-admin account held both from the moment the membership row was
 // written, without ever accepting the invitation.
 func (s *pgxRoleStore) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
-	// Issue #896: same actor-scope requirement as GetMembershipRole above.
-	// Every call site (WorkspaceAdminGate.Require, accounts.Service twice)
-	// passes viewer.UserID, the caller's own id, never a target user's.
+	// Issue #896: same actor-scope requirement as GetMembershipRole above,
+	// and the same issue #1444 caveat that it is dormant until the connecting
+	// role changes. Every call site (WorkspaceAdminGate.Require,
+	// accounts.Service twice) passes viewer.UserID, the caller's own id,
+	// never a target user's.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("platform: begin platform admin tx: %w", err)

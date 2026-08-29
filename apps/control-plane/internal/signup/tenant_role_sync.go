@@ -145,7 +145,12 @@ import (
 //
 // Issue #896: this statement joins public.account_memberships (am), which
 // carries its own hive_app RLS policy since
-// 20260829_04_account_memberships_hive_app_scope.sql. That policy is an OR
+// 20260829_04_account_memberships_hive_app_scope.sql. That policy is dormant
+// on the deployed system (issue #1444: control-plane connects as a BYPASSRLS
+// role, never as hive_app), so setting the variables below changes nothing
+// today; it is what keeps this call site correct for the moment the
+// connecting role changes, and it is exercised by tests that do run as
+// hive_app. That policy is an OR
 // of two session-variable-scoped predicates (app.current_actor_user_id,
 // app.current_account_id -- see accounts.pgxRepository's withActorTx /
 // withAccountTx doc comments for the full shape enumeration); this
