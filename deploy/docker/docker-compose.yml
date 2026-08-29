@@ -1325,8 +1325,8 @@ services:
       # writes are denied there, so before this the only lever was a
       # hand-written SQLite UPDATE inside the owui-data volume on a live box.
       #
-      # Every one defaults to EMPTY, here and on every profile, and empty means
-      # "not set" rather than "set to blank", so the reconcile skips it and the
+      # Every one ships unset, here and on every profile, and unset means "not
+      # set" rather than "set to blank", so the reconcile skips it and the
       # deployment keeps Open WebUI's own prompt text byte for byte. That is
       # deliberate and this file is the wrong place to change it: a prompt
       # reaches every user of a surface, this compose file is shared with the
@@ -1335,18 +1335,43 @@ services:
       # operator changes one by setting the variable in the box's own .env, or
       # in the deploy workflow's env for a versioned change.
       #
+      # These use compose's NULL form (a bare `VAR:`) rather than the
+      # `${VAR:-}` form every other passthrough here uses, and the difference
+      # is load bearing rather than stylistic. `${VAR:-}` always DEFINES the
+      # variable in the container, as the empty string, even when nobody set
+      # it. The null form resolves from the environment and, when the variable
+      # is set nowhere, leaves it out of the container entirely. Both still
+      # pick up a real value from --env-file and from the shell, which are the
+      # two paths an operator uses; all three behaviours were measured against
+      # a running container rather than assumed.
+      #
+      # It matters because of exactly one of these ten. Upstream reads
+      # `RAG_TEMPLATE = os.getenv('RAG_TEMPLATE', DEFAULT_RAG_TEMPLATE)`, and
+      # os.getenv returns its default only when the key is ABSENT, while
+      # present-and-empty yields "". Defining it unconditionally would make
+      # DEFAULT_CONFIG['rag.template'] evaluate to "" at import, so a FRESH
+      # volume would seed a blank row in place of upstream's real default
+      # text, and the reconcile could not repair it because blank means unset
+      # there. Nothing would break at the model, since `rag_template()`
+      # substitutes the default for a blank value at request time, which is
+      # precisely what would have kept it invisible while every new Enterprise
+      # install diverged from its own configuration. The other nine default to
+      # "" upstream today and are unaffected, and are written this way anyway
+      # so a digest bump that gives one of them a real default cannot
+      # reintroduce this quietly.
+      #
       # Names are upstream's own, so Open WebUI's documentation for each of
       # these applies unchanged.
-      RAG_TEMPLATE: ${RAG_TEMPLATE:-}
-      TITLE_GENERATION_PROMPT_TEMPLATE: ${TITLE_GENERATION_PROMPT_TEMPLATE:-}
-      TAGS_GENERATION_PROMPT_TEMPLATE: ${TAGS_GENERATION_PROMPT_TEMPLATE:-}
-      IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE: ${IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE:-}
-      FOLLOW_UP_GENERATION_PROMPT_TEMPLATE: ${FOLLOW_UP_GENERATION_PROMPT_TEMPLATE:-}
-      QUERY_GENERATION_PROMPT_TEMPLATE: ${QUERY_GENERATION_PROMPT_TEMPLATE:-}
-      AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE: ${AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE:-}
-      VOICE_MODE_PROMPT_TEMPLATE: ${VOICE_MODE_PROMPT_TEMPLATE:-}
-      TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: ${TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE:-}
-      CONTEXT_COMPACTION_PROMPT_TEMPLATE: ${CONTEXT_COMPACTION_PROMPT_TEMPLATE:-}
+      RAG_TEMPLATE:
+      TITLE_GENERATION_PROMPT_TEMPLATE:
+      TAGS_GENERATION_PROMPT_TEMPLATE:
+      IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE:
+      FOLLOW_UP_GENERATION_PROMPT_TEMPLATE:
+      QUERY_GENERATION_PROMPT_TEMPLATE:
+      AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE:
+      VOICE_MODE_PROMPT_TEMPLATE:
+      TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE:
+      CONTEXT_COMPACTION_PROMPT_TEMPLATE:
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
       # first-boot-wins reason as the RAG keys above.

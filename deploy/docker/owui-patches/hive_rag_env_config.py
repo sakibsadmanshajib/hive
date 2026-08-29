@@ -304,11 +304,19 @@ LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 #
 # Every other key in this module is stripped on the way in, which is right for
 # a model id or a URL and wrong for a prompt: leading indentation and a
-# trailing newline are part of what the model receives, and upstream's own read
-# of these variables is a bare `os.getenv` with no strip at all. Stripping here
-# would persist a value that differs from the one a first boot would have
-# seeded, which is the class of mismatch that made `ui.enable_login_form` wrong
-# before.
+# trailing newline are part of what most of these consumers hand to the model,
+# and upstream's own read of these variables is a bare `os.getenv` with no
+# strip at all. Stripping here would persist a value that differs from the one
+# a first boot would have seeded, which is the class of mismatch that made
+# `ui.enable_login_form` wrong before.
+#
+# Two of the ten do strip again at the point of use, so for those this is
+# merely harmless rather than load bearing: `rag_template` (utils/task.py) and
+# the context-compaction prompt (utils/context_compaction.py) each test the
+# stripped value before falling back to their own default. Named rather than
+# glossed over, because "nothing downstream strips" would be a tidier claim
+# and an inaccurate one, and an inaccurate comment is what the next person
+# builds a wrong assumption on.
 #
 # The strip still decides whether the variable was SET, so an all-whitespace
 # value stays "unset" exactly like every other key here rather than persisting

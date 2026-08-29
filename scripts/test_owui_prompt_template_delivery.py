@@ -81,6 +81,14 @@ PROOF_TEMPLATE = (
 # the control assertion unfalsifiable.
 UPSTREAM_DEFAULT_FRAGMENT = "Generate a concise, 3-5 word title"
 
+# A second volume, used only by the seeding pair below, so it cannot disturb
+# the delivery run's own volume.
+SEED_VOLUME = "hive-owui-prompt-delivery-proof-seed"
+
+# A fragment of upstream's DEFAULT_RAG_TEMPLATE, the one default among the ten
+# that is real text rather than the empty string.
+UPSTREAM_RAG_DEFAULT_FRAGMENT = "Respond to the user query using the provided context"
+
 
 def log(message: str) -> None:
     print(f"[delivery-proof] {message}", flush=True)
@@ -195,15 +203,15 @@ def build_image() -> None:
         raise RuntimeError(f"docker build failed:\n{proc.stdout}")
 
 
-def start(capture: CaptureServer, env: dict) -> int:
-    """Boot Open WebUI against the shared volume and return its host port."""
+def start(capture: CaptureServer, env: dict, volume: str = VOLUME) -> int:
+    """Boot Open WebUI against a volume and return its host port."""
     port = free_port()
     argv = [
         "docker", "run", "-d", "--rm",
         "--name", CONTAINER,
         "--add-host", "host.docker.internal:host-gateway",
         "-p", f"127.0.0.1:{port}:8080",
-        "-v", f"{VOLUME}:/app/backend/data",
+        "-v", f"{volume}:/app/backend/data",
         "-e", "WEBUI_SECRET_KEY=hive-prompt-delivery-proof",
         "-e", "ENABLE_SIGNUP=true",
         "-e", "ENABLE_OLLAMA_API=false",
@@ -234,7 +242,7 @@ def stop() -> None:
     run("docker", "rm", "-f", CONTAINER, check=False)
 
 
-def persisted(key: str):
+def persisted(key: str, volume: str = VOLUME):
     """Read one config row straight out of the volume, the same way this was
     read off the demo box. Sentinel object when the row is absent, so "absent"
     and "the empty string" can be told apart: they mean very different things
@@ -246,7 +254,7 @@ def persisted(key: str):
         "print(json.dumps({'present': r is not None, 'value': (json.loads(r[0]) if r else None)}))"
     )
     out = run(
-        "docker", "run", "--rm", "-v", f"{VOLUME}:/data", IMAGE_TAG,
+        "docker", "run", "--rm", "-v", f"{volume}:/data", IMAGE_TAG,
         "python3", "-c", script,
     )
     return json.loads(out.strip().splitlines()[-1])
@@ -350,8 +358,35 @@ def main() -> int:
     capture = CaptureServer()
     try:
         run("docker", "volume", "rm", "-f", VOLUME, check=False)
+        run("docker", "volume", "rm", "-f", SEED_VOLUME, check=False)
         stop()
         build_image()
+
+        # Seeding pair. `rag.template` is the ONE key of the ten whose upstream
+        # default is real text rather than the empty string
+        # (`os.getenv('RAG_TEMPLATE', DEFAULT_RAG_TEMPLATE)`), and os.getenv
+        # returns that default only when the key is ABSENT. So how compose
+        # passes the variable through decides what a FRESH volume seeds, and
+        # the two shapes are measured here against real containers rather than
+        # reasoned about.
+        #
+        # This pair is why the delivery run below uses the title template but
+        # this one does not: the title template's own upstream default is
+        # already "", so it is structurally incapable of showing this failure.
+        # Picking it as the sole representative would have been a check that
+        # cannot go red for the thing it appears to cover.
+        log("seeding pair: what a fresh volume persists for rag.template")
+        port = start(capture, {"RAG_TEMPLATE": ""}, volume=SEED_VOLUME)
+        stop()
+        defined_blank = persisted("rag.template", volume=SEED_VOLUME)
+        assert defined_blank["value"] == "", (
+            "a container that DEFINES RAG_TEMPLATE as empty was expected to "
+            "seed a blank rag.template row, which is the hazard this guards "
+            f"against; it seeded {str(defined_blank['value'])[:80]!r} instead. "
+            "If upstream changed, this pair no longer proves anything."
+        )
+        log("  RAG_TEMPLATE defined-but-empty seeds a BLANK row (the hazard)")
+        run("docker", "volume", "rm", "-f", SEED_VOLUME, check=False)
 
         # 1. First boot, nothing configured. This both seeds the row, which is
         #    the whole reason a compose change alone cannot reach an
@@ -367,6 +402,37 @@ def main() -> int:
             "reproduced and the rest of this proof would prove nothing"
         )
         log(f"  persisted row after boot 1: {seeded['value']!r}")
+
+        # `rag.template` is the one key of the ten that can exhibit the
+        # seeding defect at all, and therefore the one worth booting a
+        # container to check. Upstream reads it as
+        # `os.getenv('RAG_TEMPLATE', DEFAULT_RAG_TEMPLATE)`, so unlike the
+        # other nine its default is real text rather than the empty string,
+        # and os.getenv falls back to that default only when the key is
+        # ABSENT from the environment. A compose passthrough that defines the
+        # variable unconditionally, which `${VAR:-}` does, would therefore
+        # make a fresh volume seed a blank row in place of that text.
+        #
+        # Nothing would break at the model, because `rag_template()`
+        # substitutes the default for a blank value at request time. That
+        # masking is the reason this assertion has to look at the persisted
+        # row rather than at an outbound request: the defect is invisible in
+        # behaviour and visible only here.
+        #
+        # The title template above cannot show any of this, because its own
+        # upstream default is already the empty string. Picking it as the sole
+        # representative would have been a test that structurally cannot fail
+        # for the thing it appears to cover.
+        seeded_rag = persisted("rag.template")
+        assert seeded_rag["present"], "the first boot persisted no rag.template row at all"
+        assert UPSTREAM_RAG_DEFAULT_FRAGMENT in (seeded_rag["value"] or ""), (
+            "a fresh volume seeded rag.template as "
+            f"{(seeded_rag['value'] or '')[:80]!r} instead of upstream's own default "
+            "text. The container environment defines RAG_TEMPLATE when nobody "
+            "set it, which defeats os.getenv's fallback. Compose must pass "
+            "these through in its null form, not as ${VAR:-}."
+        )
+        log("  fresh volume seeded rag.template with upstream's real default text")
 
         before_body = title_request(capture, port, token)
         before_sent = outbound_text(before_body)
@@ -418,6 +484,7 @@ def main() -> int:
     finally:
         stop()
         run("docker", "volume", "rm", "-f", VOLUME, check=False)
+        run("docker", "volume", "rm", "-f", SEED_VOLUME, check=False)
         capture.close()
 
 

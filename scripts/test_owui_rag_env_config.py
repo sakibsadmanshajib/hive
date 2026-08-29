@@ -983,17 +983,81 @@ def test_prompt_templates_persist_as_strings() -> None:
     assert isinstance(applied["rag.template"], str), applied
 
 
-def test_compose_ships_every_prompt_template_unset() -> None:
-    """The knob ships off. docker-compose.yml is shared with the enterprise
-    profile and with local dev, so a value baked in here would change the
-    prompts of every deployment that never asked for one. The passthrough has
-    to be present, because an absent variable cannot be set without editing a
-    tracked file on the box, and it has to default to empty."""
+def test_compose_passes_prompt_templates_through_without_defining_them() -> None:
+    """The knob ships off, and the shape of "off" is load bearing here.
+
+    Compose's null form (`VAR:` with no value) resolves from the environment
+    and, when the variable is set nowhere, leaves it OUT of the container
+    entirely. The `${VAR:-}` form does not: it always defines the variable,
+    with the empty string. Measured both ways against a running container
+    rather than assumed, and both still resolve a real value from --env-file
+    and from the shell, which are the two paths an operator actually uses.
+
+    That difference is the whole of `test_an_always_present_rag_template_would_
+    break_upstreams_own_default` below. It applies to only one of the ten
+    today, and the null form is used for all ten anyway, because the same
+    upstream default could be added to any of the others on a digest bump and
+    nothing would fail if the difference were left to chance."""
     compose = _compose_text()
     for variable in PROMPT_TEMPLATE_KEYS.values():
+        assert re.search(
+            rf"^      {variable}:$", compose, re.MULTILINE
+        ), f"docker-compose.yml must pass {variable} through in compose's null form"
         assert (
-            f"{variable}: ${{{variable}:-}}" in compose
-        ), f"docker-compose.yml must pass {variable} through with an empty default"
+            f"{variable}: ${{{variable}:-}}" not in compose
+        ), (
+            f"{variable} uses the ${{VAR:-}} form, which defines it as the empty "
+            f"string in the container even when nobody set it"
+        )
+
+
+def test_an_always_present_rag_template_would_break_upstreams_own_default() -> None:
+    """The one key of the ten whose upstream default is not the empty string,
+    and the reason the test above insists on the null form.
+
+    `RAG_TEMPLATE = os.getenv('RAG_TEMPLATE', DEFAULT_RAG_TEMPLATE)`, and
+    os.getenv returns its default only when the key is ABSENT: present and
+    empty yields ''. So defining the variable unconditionally would make
+    DEFAULT_CONFIG['rag.template'] evaluate to '' at import, and a FRESH
+    volume's seed_defaults would persist that blank row instead of upstream's
+    real default text. The reconcile cannot repair it either, because blank
+    means unset there, so it never touches the row.
+
+    Nothing breaks at the model today, because `rag_template()` substitutes
+    DEFAULT_RAG_TEMPLATE for a blank value at request time. That masking is
+    exactly why this needs a test: the defect would be invisible in behaviour
+    while the persisted row silently diverged from what a first boot should
+    have written, and the next reader of that row without the same fallback
+    (a restored admin panel, an export or diff tool, a migration) would be the
+    one to find it.
+
+    Asserted against the vendored source, so a digest bump that gives any of
+    the other nine a non-empty default fails here instead of quietly widening
+    the hazard."""
+    config_py = (
+        Path(__file__).resolve().parents[1]
+        / "vendor"
+        / "open-webui"
+        / "backend"
+        / "open_webui"
+        / "config.py"
+    ).read_text(encoding="utf-8")
+    with_real_defaults = []
+    for variable in PROMPT_TEMPLATE_KEYS.values():
+        match = re.search(
+            rf"^{re.escape(variable)} = os\.getenv\(\s*'{re.escape(variable)}',\s*([^)]+)\)",
+            config_py,
+            re.MULTILINE,
+        )
+        assert match, f"upstream no longer reads {variable} in the expected shape"
+        if match.group(1).strip() not in ("''", '""'):
+            with_real_defaults.append(variable)
+    assert with_real_defaults == ["RAG_TEMPLATE"], (
+        "the set of prompt variables whose upstream default is not the empty "
+        f"string changed to {with_real_defaults}. Every one of them seeds a "
+        "real default that an always-present empty environment variable would "
+        "silently replace with a blank row on a fresh volume."
+    )
 
 
 def test_no_prompt_template_default_is_baked_into_the_repo() -> None:

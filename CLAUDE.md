@@ -125,7 +125,17 @@ Under docker compose this arm cannot succeed regardless of the variables.
 Optional, all defaulted: `HIVE_AGENT_ENGINE_SESSION_API_KEY`,
 `HIVE_QUOTA_TENANT_CONCURRENCY` (4), `HIVE_QUOTA_USER_CONCURRENCY` (2),
 `HIVE_SANDBOX_MEMORY_LIMIT` (4G), `HIVE_SANDBOX_CPU_LIMIT` (2),
-`HIVE_SANDBOX_PIDS_LIMIT` (512).
+`HIVE_SANDBOX_PIDS_LIMIT` (512), `HIVE_AGENT_ENGINE_BROWSER_TOOLS` (off), and
+`HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX` (empty).
+
+That last one is the only knob on the sandboxed agent's system prompt. Empty,
+which is the default, sends no `agent_context` on the launch payload at all and
+the vendored OpenHands preset produces the prompt unchanged; set, it is
+appended to that prompt. It is read by the host launcher, not by any compose
+service, so it belongs in the launcher's environment
+(`scripts/install-agent-engine-host.sh`, or the repository variable the deploy
+workflow passes) and setting it on a container does nothing. Both are ignored
+on the in-process arm's `AgentProfileID` path, which carries its own profile.
 
 `HIVE_AGENT_SIF_PATH` gates nothing. It survives only as the `-sif` flag default
 for the standalone `agent-engine` binary
