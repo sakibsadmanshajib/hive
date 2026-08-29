@@ -1360,6 +1360,15 @@ services:
       # so a digest bump that gives one of them a real default cannot
       # reintroduce this quietly.
       #
+      # The null form fixes the default path, not every path: an operator who
+      # writes a bare `RAG_TEMPLATE=` in the box's .env still hands the
+      # container a defined-and-empty variable and reopens the same hole on a
+      # fresh volume. That is documented next to the variables in .env.example,
+      # where an operator would be when they do it. Not defended in code here
+      # because the repair would have to live in the reconcile, and a module
+      # that silently rewrites a row an operator did not ask it to touch is a
+      # worse thing to own than a documented footgun.
+      #
       # Names are upstream's own, so Open WebUI's documentation for each of
       # these applies unchanged.
       RAG_TEMPLATE:
