@@ -336,11 +336,27 @@ setup_env() {
     prompt_value SUPABASE_SERVICE_ROLE_KEY "Supabase Service Role Key" required "" secret
     prompt_value SUPABASE_DB_URL       "Supabase DB URL (postgres://...)" required "" secret
 
-    # ── Storage (required) ──
+    # ── Storage ──
+    # This installer starts the enterprise profile, which brings up
+    # supabase-storage in the stack, so all three values describe that
+    # in-stack service and none of them come from a hosted project. The
+    # endpoint is the gateway form because Caddy is what restores the
+    # /storage/v1 prefix Storage's own routes do not carry.
+    #
+    # The credential pair is generated rather than prompted for blank. It is
+    # a shared secret between the client and the server halves of one stack,
+    # which the compose file wires from these same two variables, so there is
+    # nothing for an operator to look up. Asking produced the failure this
+    # block now prevents: the prompt named a hosted project, so the value
+    # people reached for was the service_role key, which Storage does not
+    # accept as an S3 credential and which SigV4 would then have sent in the
+    # clear inside every Authorization header (issue #1282).
     printf '%s-- Supabase Storage (S3) --%s\n' "${BOLD}" "${RESET}"
-    prompt_value S3_ENDPOINT  "S3 Endpoint (e.g. https://<ref>.supabase.co/storage/v1/s3)" required
-    prompt_value S3_ACCESS_KEY "S3 Access Key" required "" secret
-    prompt_value S3_SECRET_KEY "S3 Secret Key" required "" secret
+    _default_s3_access="$(command -v openssl >/dev/null 2>&1 && openssl rand -hex 16 || printf 'change-me-generate-with-openssl-rand-hex-16')"
+    _default_s3_secret="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'change-me-generate-with-openssl-rand-base64-32')"
+    prompt_value S3_ENDPOINT  "S3 Endpoint" optional "http://caddy-supabase/storage/v1/s3"
+    prompt_value S3_ACCESS_KEY "S3 Access Key" optional "$_default_s3_access" secret
+    prompt_value S3_SECRET_KEY "S3 Secret Key" optional "$_default_s3_secret" secret
     prompt_value S3_REGION    "S3 Region" optional "us-east-1"
 
     # ── LLM Provider (at least one required) ──
