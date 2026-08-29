@@ -67,17 +67,21 @@ function hasMeasuredLatency(
 export function bucketLatencies(
   rows: ReadonlyArray<LatencySample>,
 ): LatencyBucket[] {
+  // Keying the map on the attempt is the whole deduplication: every event
+  // of one attempt carries the same derived latency, so which of them wins
+  // the slot does not matter and a first-wins guard here would be a branch
+  // no test could ever turn red.
   const byAttempt = new Map<string, number>();
   for (const row of rows) {
     if (!hasMeasuredLatency(row)) continue;
-    if (byAttempt.has(row.request_attempt_id)) continue;
     byAttempt.set(row.request_attempt_id, row.latency_ms);
   }
 
+  // No -1 fallback: the last bucket is unbounded, so findIndex always
+  // matches. Give any bucket a finite maxMs and that stops being true.
   const counts = BUCKETS.map(() => 0);
   for (const latency of byAttempt.values()) {
-    const idx = BUCKETS.findIndex((bucket) => latency <= bucket.maxMs);
-    counts[idx === -1 ? BUCKETS.length - 1 : idx] += 1;
+    counts[BUCKETS.findIndex((bucket) => latency <= bucket.maxMs)] += 1;
   }
   return BUCKETS.map((bucket, i) => ({ label: bucket.label, count: counts[i] }));
 }
