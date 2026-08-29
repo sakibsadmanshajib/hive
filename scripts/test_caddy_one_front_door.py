@@ -39,6 +39,7 @@ Two properties, because the defect needs both to stay fixed:
 No framework, no network, no Docker. Run via `make test-scripts`.
 """
 
+import ast
 import pathlib
 import re
 import sys
@@ -141,6 +142,57 @@ def test_the_chat_listener_proxies_no_second_application() -> None:
     )
 
 
+# The routes the agent proxy is expected to expose, asserted as an exact set.
+#
+# A guard that only walks whatever it happens to find can go quiet without
+# failing: it reports "all routes gated" while silently checking fewer of them.
+# Naming the set makes both directions loud. A route removed fails here, and a
+# route added fails here until someone states, in this list, that they thought
+# about whether the chat session gates it.
+EXPECTED_AGENT_ROUTES = {
+    "list_tasks",
+    "create_task",
+    "get_task",
+    "cancel_task",
+    "list_task_events",
+    "list_task_files",
+}
+
+
+def _router_handlers(tree: ast.Module) -> dict[str, ast.AST]:
+    """Every function decorated with `@router.<verb>(...)`, by name.
+
+    Parsed rather than pattern matched. A regex over the source drops a handler
+    the moment anyone writes it slightly differently, and the two shapes that
+    would drop one here are both ordinary: a return type annotation between the
+    signature and the colon, which this repository's own style encourages, and a
+    signature split across lines. Neither is visible to `ast`, which is the
+    point of using it.
+    """
+    handlers: dict[str, ast.AST] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            call = dec.func if isinstance(dec, ast.Call) else dec
+            if isinstance(call, ast.Attribute) and isinstance(call.value, ast.Name):
+                if call.value.id == "router":
+                    handlers[node.name] = node
+    return handlers
+
+
+def _is_verified_user_dependency(default: ast.AST | None) -> bool:
+    """True for a parameter defaulted to `Depends(get_verified_user)`."""
+    if not isinstance(default, ast.Call):
+        return False
+    if not (isinstance(default.func, ast.Name) and default.func.id == "Depends"):
+        return False
+    return any(
+        isinstance(arg, ast.Name) and arg.id == "get_verified_user"
+        for arg in default.args
+    )
+
+
 def test_every_agent_route_is_gated_on_the_chat_session() -> None:
     """One session in, one session out.
 
@@ -151,23 +203,28 @@ def test_every_agent_route_is_gated_on_the_chat_session() -> None:
     would be reachable by a session Open WebUI has already invalidated.
     """
     source = AGENT_PROXY.read_text()
+    tree = ast.parse(source)
+    handlers = _router_handlers(tree)
 
-    routes = re.findall(
-        r"^@router\.(get|post|put|patch|delete)\((.*?)\)\s*$\n"
-        r"(?:async\s+)?def\s+(\w+)\s*\((.*?)\)\s*:",
-        source,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert routes, (
-        f"found no @router routes in {AGENT_PROXY}. If the router was renamed or "
-        "restructured, update this test deliberately: do not let it pass by "
-        "matching nothing."
+    assert set(handlers) == EXPECTED_AGENT_ROUTES, (
+        "the agent proxy's route set changed. Every route here is reachable with "
+        "nothing but the chat session, so a new one is an authentication decision "
+        "and a removed one may leave a caller stranded. Update "
+        f"EXPECTED_AGENT_ROUTES deliberately. found={sorted(handlers)} "
+        f"expected={sorted(EXPECTED_AGENT_ROUTES)}"
     )
 
-    ungated = [
-        name for _verb, _path, name, params in routes
-        if "Depends(get_verified_user)" not in params
-    ]
+    ungated = sorted(
+        name
+        for name, node in handlers.items()
+        if not any(
+            _is_verified_user_dependency(default)
+            for default in [
+                *node.args.defaults,
+                *node.args.kw_defaults,
+            ]
+        )
+    )
     assert not ungated, (
         "these agent proxy routes do not depend on Open WebUI's get_verified_user, "
         "so they answer a caller the chat session no longer covers and survive a "
@@ -178,6 +235,35 @@ def test_every_agent_route_is_gated_on_the_chat_session() -> None:
         f"{AGENT_PROXY} no longer imports get_verified_user from Open WebUI's own "
         "auth module, so the dependency named on every route may be a local stand "
         "in rather than the chat session gate"
+    )
+
+
+def test_the_agent_proxy_registers_no_route_the_guard_cannot_see() -> None:
+    """The decorator is not the only way to mount a route.
+
+    `router.add_api_route(...)`, `router.api_route(...)` and `router.websocket(...)`
+    all register a handler that `_router_handlers` above would not attribute to a
+    decorated function, so a route mounted that way would be exempt from the
+    dependency check without anything failing. None exist today; this fails if
+    one appears, which is the moment to extend the check rather than the moment
+    to discover it was never covering anything.
+    """
+    tree = ast.parse(AGENT_PROXY.read_text())
+    smuggled = sorted(
+        {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "router"
+            and node.func.attr in {"add_api_route", "add_api_websocket_route", "websocket", "api_route"}
+        }
+    )
+    assert not smuggled, (
+        "the agent proxy mounts routes through "
+        f"{smuggled}, which the get_verified_user check above does not inspect. "
+        "Extend _router_handlers to cover them before this lands (#540)."
     )
 
 

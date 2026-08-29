@@ -193,6 +193,7 @@
   # + unit + build)` is a required check on main, so deleting the app needs a
   # branch-protection change and takes its e2e project and CI wiring with it.
   # Nothing on this origin reaches it any more, which is the half that mattered.
+  # The deletion, and everything wired to it, is issue #1464.
   # Structural guard: scripts/test_caddy_one_front_door.py.
   @removedSurfaces {
     path_regexp removed (?i)^/+(?:agent-workspace|playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
