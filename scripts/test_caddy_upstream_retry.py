@@ -70,14 +70,16 @@ def proxy_blocks(text):
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
-        if stripped.startswith("#") or not stripped.startswith("reverse_proxy"):
+        tokens = stripped.split()
+        if stripped.startswith("#") or not tokens or tokens[0] != "reverse_proxy":
             i += 1
             continue
+        start = i + 1
         if not stripped.endswith("{"):
             # A bare one-line `reverse_proxy host:port` with no options block.
-            # Reported by the caller as a block with an empty body so it fails
-            # the retry assertion rather than being skipped.
-            out.append((i + 1, stripped.split()[-1], []))
+            # Reported as a block with an empty body so it fails the retry
+            # assertion rather than being skipped.
+            out.append((start, tokens[-1], []))
             i += 1
             continue
         # Upstream is the last token before the opening brace. Any leading
@@ -88,11 +90,19 @@ def proxy_blocks(text):
         i += 1
         while i < len(lines) and depth > 0:
             line = lines[i].strip()
+            i += 1
+            # Comment lines are skipped before the depth arithmetic, not after.
+            # An unbalanced brace inside a comment would otherwise close the
+            # block early and hide every directive below it, which is the one
+            # way this parser could silently report a pass it should not.
+            if line.startswith("#"):
+                continue
+            # Placeholders (`{$HIVE_CHAT_EXTERNAL_SCHEME:http}`, `{remote_host}`)
+            # are balanced on their own line, so they cancel out here.
             depth += line.count("{") - line.count("}")
             if depth > 0:
                 body.append(line)
-            i += 1
-        out.append((i, upstream, body))
+        out.append((start, upstream, body))
     return out
 
 
@@ -149,19 +159,34 @@ def check_file(path):
     return failures
 
 
+# Three blocks on purpose. The first carries a nested block and a placeholder,
+# so a parser that lost track of brace depth there would swallow the two below
+# it and report a clean pass. The middle one is the omission this guard exists
+# to catch. The last proves depth came back to zero. The comment inside the
+# middle block carries a deliberately unbalanced brace, which is the other way
+# a naive parser closes a block early and reports a pass.
 SYNTHETIC_UNGUARDED = """\
 :80 {
   reverse_proxy @api edge-api:8080 {
     lb_try_duration 30s
     lb_try_interval 1s
-    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {$SOME_SCHEME:http}
+    transport http {
+      dial_timeout 5s
+    }
   }
 
   reverse_proxy open-webui:8080 {
+    # a comment with an unbalanced { brace
     header_up X-Real-IP {remote_host}
     transport http {
       dial_timeout 5s
     }
+  }
+
+  reverse_proxy web-console-prod:3000 {
+    lb_try_duration 30s
+    lb_try_interval 1s
   }
 }
 """
