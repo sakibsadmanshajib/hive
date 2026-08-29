@@ -137,6 +137,47 @@ RAG_CONFIG_ENV = {
     # INTEGER_KEYS and LIST_KEYS below.
     "rag.file.max_size": "RAG_FILE_MAX_SIZE",
     "rag.file.allowed_extensions": "RAG_ALLOWED_FILE_EXTENSIONS",
+    # The prompts Open WebUI sends to a model on its own account, separately
+    # from anything the user typed: the chat title, the tag list, the
+    # follow-up chips, the retrieval and web-search query it writes for
+    # itself, the autocomplete and voice prompts, the prompt-based
+    # tool-calling preamble, the context-compaction instruction, and the
+    # wrapper placed around retrieved documents on the chat surface.
+    #
+    # The same first-boot-wins trap for the fourth time, and read out of the
+    # demo box's own database on 2026-08-29 rather than assumed: every one of
+    # these ten rows already exists there, `rag.template` holding upstream's
+    # full default text and the nine `*.prompt_template` rows holding "", all
+    # written at that volume's first boot. So compose alone could never have
+    # moved any of them.
+    #
+    # What made this worth reconciling rather than leaving alone is that there
+    # is no other way in at all. Open WebUI's admin panel, which is where
+    # upstream edits these, is deleted from the fork's source and 404'd at the
+    # proxy, and every write verb under /api/v1/configs is denied there too, so
+    # the only remaining path was a hand-written SQLite UPDATE inside the
+    # owui-data volume on a live box.
+    #
+    # The empty string is not "no template": each consumer substitutes its own
+    # DEFAULT_*_PROMPT_TEMPLATE when the persisted value is falsy, so the
+    # shipped prompt text lives in Python and the row is an override slot.
+    # `rag.template` is the exception, its default IS the text.
+    #
+    # Every variable name here is upstream's own (config.py's own os.getenv
+    # calls), so an operator reading Open WebUI's documentation finds the same
+    # name. compose passes all ten through with an empty default on every
+    # profile, so a deployment that sets nothing keeps today's prompts byte
+    # for byte. See TEMPLATE_KEYS below for why these alone are not stripped.
+    "rag.template": "RAG_TEMPLATE",
+    "task.title.prompt_template": "TITLE_GENERATION_PROMPT_TEMPLATE",
+    "task.tags.prompt_template": "TAGS_GENERATION_PROMPT_TEMPLATE",
+    "task.image.prompt_template": "IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE",
+    "task.follow_up.prompt_template": "FOLLOW_UP_GENERATION_PROMPT_TEMPLATE",
+    "task.query.prompt_template": "QUERY_GENERATION_PROMPT_TEMPLATE",
+    "task.autocomplete.prompt_template": "AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE",
+    "task.voice.prompt_template": "VOICE_MODE_PROMPT_TEMPLATE",
+    "task.tools.prompt_template": "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE",
+    "chat.context_compaction.prompt_template": "CONTEXT_COMPACTION_PROMPT_TEMPLATE",
 }
 
 # Same idea, boolean-valued.
@@ -258,6 +299,38 @@ INTEGER_KEYS = frozenset({"rag.file.max_size"})
 # lowercased and stripped the dot from.
 LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 
+# Keys whose value is a prompt, and therefore the only ones here that are
+# persisted exactly as the environment wrote them.
+#
+# Every other key in this module is stripped on the way in, which is right for
+# a model id or a URL and wrong for a prompt: leading indentation and a
+# trailing newline are part of what the model receives, and upstream's own read
+# of these variables is a bare `os.getenv` with no strip at all. Stripping here
+# would persist a value that differs from the one a first boot would have
+# seeded, which is the class of mismatch that made `ui.enable_login_form` wrong
+# before.
+#
+# The strip still decides whether the variable was SET, so an all-whitespace
+# value stays "unset" exactly like every other key here rather than persisting
+# a blank prompt. That distinction is load bearing: a blank row is falsy, and
+# every consumer treats a falsy row as "use my built-in default", so persisting
+# one would silently revert the prompt while leaving the deployment looking
+# configured.
+TEMPLATE_KEYS = frozenset(
+    {
+        "rag.template",
+        "task.title.prompt_template",
+        "task.tags.prompt_template",
+        "task.image.prompt_template",
+        "task.follow_up.prompt_template",
+        "task.query.prompt_template",
+        "task.autocomplete.prompt_template",
+        "task.voice.prompt_template",
+        "task.tools.prompt_template",
+        "chat.context_compaction.prompt_template",
+    }
+)
+
 # Keys whose value must never be logged. The rest are named with their value,
 # because the embedding model Open WebUI will actually send is the one signal
 # this failure mode never produced anywhere: Open WebUI logs only aiohttp's
@@ -307,8 +380,13 @@ def overrides(environ) -> dict:
     """
     applied = {}
     for key, variable in RAG_CONFIG_ENV.items():
-        value = (environ.get(variable) or "").strip()
+        raw = environ.get(variable) or ""
+        value = raw.strip()
         if not value:
+            continue
+        if key in TEMPLATE_KEYS:
+            # Persisted unstripped, deliberately. See TEMPLATE_KEYS.
+            applied[key] = raw
             continue
         if key in BOOLEAN_KEYS:
             applied[key] = value.lower() == "true"

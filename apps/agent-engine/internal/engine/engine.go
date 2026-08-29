@@ -151,6 +151,21 @@ type Config struct {
 	// false, so existing tasks launch unchanged.
 	BrowserTools bool
 
+	// SystemMessageSuffix, when non-empty, is appended to the sandbox
+	// agent's system prompt via agent_context.system_message_suffix on the
+	// inline agent_settings payload
+	// (HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX on the host launcher).
+	//
+	// Before this, Hive set no part of that agent's system prompt at all: the
+	// launch payload had no field for it, so the prompt was whatever the
+	// vendored OpenHands default preset produced, and changing it meant
+	// changing the vendored SDK. Empty is the default and sends no
+	// agent_context key whatsoever, so a launcher that sets nothing produces
+	// the identical agent it produced before. Ignored on the AgentProfileID
+	// path, like BrowserTools above, since a stored profile carries its own
+	// context.
+	SystemMessageSuffix string
+
 	// SessionAPIKey, when set, is both passed to the sandbox
 	// (sandbox.LaunchConfig.SessionAPIKey, actually enforced server-side)
 	// and sent by the control client as controlclient.SessionAPIKeyHeader.
@@ -529,6 +544,15 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 				// meters a buffered one).
 				Stream: true,
 			},
+		}
+		if e.cfg.SystemMessageSuffix != "" {
+			// Only when configured. An explicit empty context would be sent
+			// on every launch and would displace the SDK's own
+			// default_factory=AgentContext, changing the agent on the
+			// strength of a variable nobody set.
+			settings.AgentContext = &controlclient.AgentContext{
+				SystemMessageSuffix: e.cfg.SystemMessageSuffix,
+			}
 		}
 		if e.cfg.BrowserTools {
 			// An explicit Tools list replaces the default set wholesale

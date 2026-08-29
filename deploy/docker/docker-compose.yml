@@ -1310,6 +1310,43 @@ services:
       # unrecognised extension: without one, an executable is "processed" into
       # mojibake, stored, and served back on request.
       RAG_ALLOWED_FILE_EXTENSIONS: ${RAG_ALLOWED_FILE_EXTENSIONS:-bash,bat,c,cmd,conf,cpp,cs,css,csv,dart,db2,doc,dockerfile,docx,env,epub,erl,ex,exs,go,h,hpp,hs,hsc,htm,html,ini,java,js,json,jsx,lhs,log,lua,m,md,mm,msg,nginxconf,odt,pdf,perl,php,pl,plsql,pm,ppt,pptx,ps1,py,r,rb,rs,rst,scala,sh,sql,svelte,swift,toml,ts,tsx,txt,vue,xls,xlsx,xml,yaml,yml}
+      # The prompts Open WebUI sends to a model on its own account: the chat
+      # title, the tag list, the follow-up chips, the retrieval and web-search
+      # query it writes for itself, the autocomplete and voice prompts, the
+      # prompt-based tool-calling preamble, the context-compaction
+      # instruction, and the wrapper it puts around retrieved documents.
+      #
+      # All ten are persistent config, reconciled by
+      # owui-patches/hive_rag_env_config.py for the same first-boot-wins reason
+      # as everything above, and confirmed already seeded on the demo box on
+      # 2026-08-29. They matter more than most, because there is no other way
+      # to reach them at all on this deployment: Open WebUI's admin panel is
+      # deleted from the fork and 404'd at the proxy, and /api/v1/configs
+      # writes are denied there, so before this the only lever was a
+      # hand-written SQLite UPDATE inside the owui-data volume on a live box.
+      #
+      # Every one defaults to EMPTY, here and on every profile, and empty means
+      # "not set" rather than "set to blank", so the reconcile skips it and the
+      # deployment keeps Open WebUI's own prompt text byte for byte. That is
+      # deliberate and this file is the wrong place to change it: a prompt
+      # reaches every user of a surface, this compose file is shared with the
+      # enterprise profile and local dev, and picking Hive's own wording is a
+      # product decision rather than a side effect of shipping the knob. An
+      # operator changes one by setting the variable in the box's own .env, or
+      # in the deploy workflow's env for a versioned change.
+      #
+      # Names are upstream's own, so Open WebUI's documentation for each of
+      # these applies unchanged.
+      RAG_TEMPLATE: ${RAG_TEMPLATE:-}
+      TITLE_GENERATION_PROMPT_TEMPLATE: ${TITLE_GENERATION_PROMPT_TEMPLATE:-}
+      TAGS_GENERATION_PROMPT_TEMPLATE: ${TAGS_GENERATION_PROMPT_TEMPLATE:-}
+      IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE: ${IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE:-}
+      FOLLOW_UP_GENERATION_PROMPT_TEMPLATE: ${FOLLOW_UP_GENERATION_PROMPT_TEMPLATE:-}
+      QUERY_GENERATION_PROMPT_TEMPLATE: ${QUERY_GENERATION_PROMPT_TEMPLATE:-}
+      AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE: ${AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE:-}
+      VOICE_MODE_PROMPT_TEMPLATE: ${VOICE_MODE_PROMPT_TEMPLATE:-}
+      TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: ${TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE:-}
+      CONTEXT_COMPACTION_PROMPT_TEMPLATE: ${CONTEXT_COMPACTION_PROMPT_TEMPLATE:-}
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
       # first-boot-wins reason as the RAG keys above.
