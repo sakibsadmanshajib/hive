@@ -533,9 +533,23 @@ type RailOption struct {
 	MaxCredits int64  `json:"max_credits"`
 }
 
-// RailLabel returns the customer-facing name of a payment rail. It is the name
-// the payer already sees on the rail's own checkout page, not an inference
-// provider identity, so it is not covered by the provider-blindness rule.
+// RailLabel returns the customer-facing name of a payment rail.
+//
+// The provider-blindness rule this repository enforces is about inference
+// providers: the customer must never learn which upstream model host served
+// their request. A payment rail is the opposite situation. The payer is
+// choosing the rail deliberately and is redirected to that rail's own checkout
+// page under its own branding, so a BD customer selecting "bKash" has to see
+// the word bKash or the choice is meaningless. The `rail` field on this same
+// wire object has carried "bkash" and "sslcommerz" since the endpoint existed,
+// so a neutral label would hide nothing anyway.
+//
+// Stripe is labelled "Card" because that is what the customer is actually
+// picking there, not because the name needs hiding.
+//
+// The default never fires for a Rail this package defines, and returns a
+// generic string rather than the raw identifier so that an unrecognised value
+// can never be echoed straight back onto a customer surface.
 func RailLabel(r Rail) string {
 	switch r {
 	case RailStripe:
@@ -545,7 +559,7 @@ func RailLabel(r Rail) string {
 	case RailSSLCommerz:
 		return "SSLCommerz"
 	default:
-		return string(r)
+		return "Payment method"
 	}
 }
 
@@ -564,13 +578,24 @@ func NewRailOption(rail Rail, enabled bool) RailOption {
 }
 
 // MostRestrictiveMaxCredits returns the smallest per-rail purchase ceiling among
-// the given options, which is the only single ceiling that no rail on offer will
-// reject. Returns 0 for an empty set, which is what a country with no rails
-// means and which ValidatePurchaseAmount already refuses.
+// the options the payer can actually select, which is the only single ceiling
+// that no selectable rail will reject.
+//
+// Disabled options are skipped. Including them would let a rail nobody can
+// choose set the bound: on a deployment with bKash registered and Stripe not,
+// the disabled Stripe entry carries the smallest ceiling and would cap the
+// console at 100.00 USD while the only selectable rail accepts 300.00 USD.
+//
+// Returns 0 when nothing is selectable, which is the honest answer for a
+// deployment that has no usable rail, and which ValidatePurchaseAmount refuses
+// anyway since every purchase must be positive.
 func MostRestrictiveMaxCredits(options []RailOption) int64 {
 	var minMax int64
-	for i, opt := range options {
-		if i == 0 || opt.MaxCredits < minMax {
+	for _, opt := range options {
+		if !opt.Enabled {
+			continue
+		}
+		if minMax == 0 || opt.MaxCredits < minMax {
 			minMax = opt.MaxCredits
 		}
 	}

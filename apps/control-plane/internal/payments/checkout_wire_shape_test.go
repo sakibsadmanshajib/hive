@@ -145,3 +145,45 @@ func TestCheckoutOptions_MaxCreditsIsTheMostRestrictiveAvailableRail(t *testing.
 		t.Errorf("expected increment %d, got %d", CreditIncrement, opts.CreditIncrement)
 	}
 }
+
+// A rail nobody can select must not set the bound. On a deployment with bKash
+// registered and Stripe not, counting the disabled Stripe entry would cap the
+// console at Stripe's 100.00 USD ceiling while the only selectable rail accepts
+// 300.00 USD (CodeRabbit, PR #1393).
+func TestCheckoutOptions_MaxCreditsIgnoresUnselectableRails(t *testing.T) {
+	repo := newStubRepository()
+	prof := &stubProfiles{accountProfile: profiles.AccountProfile{CountryCode: "BD"}}
+	fx := &stubFXProvider{snap: FXSnapshot{EffectiveRate: "115.500000"}}
+	svc := buildService(repo, &stubLedger{}, prof, fx, map[Rail]PaymentRail{
+		RailBkash: newStubRail(RailBkash),
+	})
+
+	opts, err := svc.GetCheckoutOptions(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("get checkout options: %v", err)
+	}
+	if opts.MaxCredits != MaxPurchaseCreditsBkash {
+		t.Errorf("expected the only selectable rail's ceiling %d, got %d", MaxPurchaseCreditsBkash, opts.MaxCredits)
+	}
+	for _, rail := range opts.Rails {
+		if rail.Enabled && opts.MaxCredits > rail.MaxCredits {
+			t.Errorf("advertised max %d exceeds the selectable %s ceiling %d", opts.MaxCredits, rail.Rail, rail.MaxCredits)
+		}
+	}
+}
+
+// A deployment with no usable rail advertises no purchasable amount rather than
+// inheriting a ceiling from a rail that cannot run.
+func TestCheckoutOptions_NoSelectableRailAdvertisesNoCeiling(t *testing.T) {
+	repo := newStubRepository()
+	prof := &stubProfiles{accountProfile: profiles.AccountProfile{CountryCode: "US"}}
+	svc := buildService(repo, &stubLedger{}, prof, &stubFXProvider{}, map[Rail]PaymentRail{})
+
+	opts, err := svc.GetCheckoutOptions(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("get checkout options: %v", err)
+	}
+	if opts.MaxCredits != 0 {
+		t.Errorf("expected no advertised ceiling with no selectable rail, got %d", opts.MaxCredits)
+	}
+}
