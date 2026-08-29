@@ -182,3 +182,51 @@ func TestBodyLimit_TrustedBody_SkipsTheCap(t *testing.T) {
 		t.Fatalf("expected 401 (auth layer reached, body read in full), got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// refusingBody fails the test if anything reads it. A declared-oversize
+// request must be refused on the Content-Length alone, before a single byte
+// lands in memory: that is the entire point of the pre-check, and the reason
+// it is worth having at all on a read that happens before the credential is
+// validated (issue #1299).
+type refusingBody struct{ t *testing.T }
+
+func (b *refusingBody) Read([]byte) (int, error) {
+	b.t.Fatal("request body was read despite a declared Content-Length over the limit")
+	return 0, nil
+}
+
+func (b *refusingBody) Close() error { return nil }
+
+// TestDeclaredOversizeBodyRejectedBeforeRead is the stronger form of
+// TestBodyLimit_ChatCompletions_ContentLengthOverLimit_RejectedWithoutReading
+// above: it proves the claim in that test's name (nothing is read) rather
+// than only that the status is 413, and it does so on all four routes that
+// read a body before the credential is validated, not chat/completions
+// alone.
+func TestDeclaredOversizeBodyRejectedBeforeRead(t *testing.T) {
+	for _, path := range []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/responses",
+		"/v1/embeddings",
+	} {
+		t.Run(path, func(t *testing.T) {
+			h := NewHandler(&Orchestrator{})
+			req := httptest.NewRequest(http.MethodPost, path, &refusingBody{t: t})
+			req.ContentLength = apierrors.MaxRequestBodyBytes + 1
+			w := httptest.NewRecorder()
+
+			h.ServeHTTP(w, req)
+
+			requestTooLargeBody(t, w)
+			var resp map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("response is not JSON: %v", err)
+			}
+			errObj, _ := resp["error"].(map[string]any)
+			if got := errObj["code"]; got != "request_too_large" {
+				t.Fatalf("error code = %v, want request_too_large", got)
+			}
+		})
+	}
+}

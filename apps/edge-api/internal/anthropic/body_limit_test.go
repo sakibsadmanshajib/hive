@@ -271,3 +271,55 @@ func TestHandler_TranslatedBodyGrowth_ToolUseArgumentQuoteEscaping_DoesNotTripCa
 		t.Fatalf("status: want 200 (client body never exceeded the limit) got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// refusingBody fails the test if anything reads it.
+type refusingBody struct{ t *testing.T }
+
+func (b *refusingBody) Read([]byte) (int, error) {
+	b.t.Fatal("request body was read despite a declared Content-Length over the limit")
+	return 0, nil
+}
+
+func (b *refusingBody) Close() error { return nil }
+
+// TestMessagesDeclaredOversizeBodyRejectedBeforeRead covers both Anthropic
+// routes, not /v1/messages alone. Per declared byte /v1/messages is the most
+// expensive pre-auth read in edge-api, so a declared-oversize request has to
+// cost approximately nothing: refused on Content-Length, body never read,
+// nothing delegated downstream.
+//
+// Both subtests send an AUTHENTICATED request. An anonymous one to
+// /v1/messages/count_tokens is refused 401 before the read is ever reached,
+// so that subtest would pin nothing about body-size behaviour at all and
+// would stay green with the size check deleted outright (review finding F2
+// on PR #1301).
+func TestMessagesDeclaredOversizeBodyRejectedBeforeRead(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens"} {
+		t.Run(path, func(t *testing.T) {
+			chat := &fakeChat{}
+			h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: chat})
+			req := newAuthedRequest(t, "")
+			req.URL.Path = path
+			req.RequestURI = path
+			req.Body = &refusingBody{t: t}
+			req.ContentLength = apierr.MaxRequestBodyBytes + 1
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+			}
+			if chat.calls != 0 {
+				t.Fatalf("downstream calls = %d, want 0", chat.calls)
+			}
+			var got anthropicErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("response is not JSON: %v body=%s", err, rec.Body.String())
+			}
+			if got.Error.Type != "request_too_large" {
+				t.Errorf("error.type: want request_too_large got %q", got.Error.Type)
+			}
+		})
+	}
+}

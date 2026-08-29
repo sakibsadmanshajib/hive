@@ -2,6 +2,7 @@ package files
 
 import (
 	"errors"
+	"net/http"
 
 	sharedstorage "github.com/sakibsadmanshajib/hive/packages/storage"
 )
@@ -70,3 +71,38 @@ var ValidPurposes = map[string]bool{
 
 // MaxFileSize is the maximum allowed file upload size (512 MB).
 const MaxFileSize = 512 << 20
+
+// multipartMemoryBudget is what an upload may hold in RAM while being parsed.
+// Everything past it spills to a temporary file, which net/http removes when
+// the request ends.
+//
+// This is r.ParseMultipartForm's maxMemory argument, which is a BUFFERING
+// THRESHOLD and not an acceptance limit. Passing MaxFileSize here (as this
+// package used to) did not raise the size of an accepted upload by one byte:
+// the size limit is enforced separately, against the part's own length, and
+// is unchanged. What it did was let a single upload pin 512 MiB of live heap,
+// which no GOMEMLIMIT can reclaim because it is reachable, so two concurrent
+// uploads exceeded edge-api's container memory limit on their own and got the
+// whole service OOM-killed, dropping every in-flight SSE stream with it.
+//
+// 32 MiB matches what the images surface already passes, and is well above
+// any realistic non-file form field.
+//
+// The trade this makes is heap for disk: the spill lands on the container's
+// filesystem, so a burst of concurrent large uploads consumes disk instead of
+// memory. That is the better failure by a wide margin. Disk exhaustion
+// surfaces as a parse error on the one request that hit it, which this
+// handler already answers with a 400, while the same bytes on the heap take
+// the whole container past its memory limit and the kernel kills it, dropping
+// every in-flight SSE stream in the process. These routes also authorize
+// before reading, so the concurrency behind that disk usage is authenticated
+// traffic, not anonymous.
+const multipartMemoryBudget = 32 << 20
+
+// parseUploadForm parses a multipart upload under multipartMemoryBudget.
+// Every upload handler in this package goes through it so the budget cannot
+// drift back to a per-call-site argument, and so the test that pins the
+// budget's meaning exercises the same call the handlers make.
+func parseUploadForm(r *http.Request) error {
+	return r.ParseMultipartForm(multipartMemoryBudget)
+}

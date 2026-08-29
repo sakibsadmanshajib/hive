@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,42 +14,39 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/httpx"
 )
 
 // chatCompletionsPath is the internal endpoint this surface delegates to.
 const chatCompletionsPath = "/v1/chat/completions"
 
-// readMessagesBody reads r.Body up to apierr.MaxRequestBodyBytes via
-// http.MaxBytesReader, which errors instead of silently truncating an
-// oversized body. Before this, io.LimitReader truncated silently; the
+// readMessagesBody reads r.Body up to apierr.MaxRequestBodyBytes through
+// httpx.ReadBody, which caps the read with http.MaxBytesReader (erroring
+// instead of silently truncating an oversized body), refuses a
+// declared-oversize body before reading it at all, and bounds how long the
+// read may take. Before this, io.LimitReader truncated silently; the
 // truncated bytes then failed json.Unmarshal and the caller saw a lying
 // "invalid JSON body" with no mention of size anywhere (issue #1250). A
 // too-large body now gets an honest 413 in Anthropic's own
 // request_too_large error type, naming the limit; any other read failure
-// keeps the prior generic message. errors.As distinguishes the two rather
-// than any truncate-then-fails-to-parse heuristic. Only ever called on the
-// real client-facing read (handleMessages, handleCountTokens), never on the
-// translated sub-request this surface delegates downstream, so it always
-// enforces the cap -- no apierr.IsTrustedBody check needed here.
+// keeps the prior generic message.
+//
+// Only ever called on the real client-facing read (handleMessages,
+// handleCountTokens), never on the translated sub-request this surface
+// delegates downstream, so it always enforces the cap -- no
+// apierr.IsTrustedBody check needed here.
+//
+// handleMessages reads BEFORE the credential is validated for API-key
+// traffic: its guard covers a session principal only, and an API-key
+// principal is authorized later, inside the delegated chat chain. Per
+// declared byte this is the most expensive pre-auth read in edge-api,
+// because the body is read, unmarshalled, translated, re-marshalled, and
+// then read and unmarshalled again downstream. The ordering is the defect
+// and is not fixed here; see issue #1299.
 func readMessagesBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	// Reject a declared oversize body before reading anything, mirroring
-	// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
-	// optimisation, not an error-delivery fix: it bounds the server's peak
-	// buffering for a declared-oversize body instead of reading up to the
-	// cap before erroring, but the client sees the 413 no later (often
-	// earlier), so it does not make an honest error any more reachable, and
-	// ContentLength is -1 when unknown (chunked), which fails this
-	// comparison and falls through to MaxBytesReader below, a no-op for
-	// that transfer encoding.
-	if r.ContentLength > apierr.MaxRequestBodyBytes {
-		writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
-		return nil, false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
-	raw, err := io.ReadAll(r.Body)
+	raw, err := httpx.ReadBody(w, r, apierr.MaxRequestBodyBytes)
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if httpx.TooLarge(err) {
 			writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
 			return nil, false
 		}

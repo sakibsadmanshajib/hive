@@ -78,6 +78,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// GOMEMLIMIT and the container's own memory limit are set in two different
+	// places and nothing keeps them consistent. Say so at boot when they cannot
+	// do their job together (issue #1299).
+	logMemoryLimit(log.Printf)
+
 	// Root context cancels on SIGINT/SIGTERM so background goroutines
 	// rooted here (notably the jwx JWKS auto-refresher) exit cleanly
 	// instead of leaking through process shutdown — passing

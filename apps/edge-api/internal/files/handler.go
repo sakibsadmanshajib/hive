@@ -125,7 +125,7 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(MaxFileSize); err != nil {
+	if err := parseUploadForm(r); err != nil {
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to parse multipart form", nil)
 		return
 	}
@@ -426,7 +426,7 @@ func (h *Handler) handleAddPart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(MaxFileSize); err != nil {
+	if err := parseUploadForm(r); err != nil {
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to parse multipart form", nil)
 		return
 	}

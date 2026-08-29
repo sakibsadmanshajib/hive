@@ -14,7 +14,52 @@ services:
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
+    # Bounded memory (issue #1299). edge-api reads and buffers a request body
+    # before the credential is validated on five routes, with no rate limit,
+    # no concurrency limiter and no proxy in front of it (the tunnel maps
+    # api-hive.scubed.co straight to this port), so an unauthenticated caller
+    # can drive its heap. Uncapped, that is a whole-box outage on the 12 GB
+    # demo machine; capped, it is one container under GC pressure.
+    #
+    # A cap this size is only safe because no single request can claim a large
+    # share of it. The per-request costs it has to cover:
+    #   * ~21 MiB of live heap per concurrent 10 MiB inference request,
+    #     measured, which is the widest body the JSON surfaces accept.
+    #   * 32 MiB per concurrent /v1/files upload (files.multipartMemoryBudget),
+    #     with everything past it spilled to a temporary file. That argument
+    #     used to be files.MaxFileSize, so one upload could hold 512 MiB of
+    #     live heap and two could exceed this limit between them, with no
+    #     GOMEMLIMIT able to reclaim a byte of it because it is all reachable.
+    #     Lowering it did not shrink what an upload may contain by one byte.
+    # 1.5 GiB therefore leaves room for dozens of concurrent requests of any
+    # shape, rather than being sized around a single one.
+    #
+    # The ceiling comes from the box: 1.5 GiB is 12.5% of the 12 GB it shares
+    # with open-webui (2g), self-hosted Postgres, LiteLLM, the monitoring
+    # stack and a 4 GiB-per-sandbox agent ceiling. A saturated edge-api must
+    # not be able to displace any of those.
+    #
+    # GOMEMLIMIT is the same budget expressed to the Go runtime, at ~83% of
+    # the cgroup limit. The remaining ~256 MiB covers what the runtime does
+    # not count against the soft limit (thread stacks, mmapped runtime
+    # metadata, allocator overhead). Without it the runtime has no idea a
+    # ceiling exists and grows the heap until the kernel kills the container,
+    # dropping every in-flight SSE stream. With it, the collector runs harder
+    # as the heap approaches the limit, which buys back only what is garbage:
+    # against genuinely live memory it changes nothing except how much CPU is
+    # spent discovering that, so it is a SOFT limit that cannot by itself
+    # prevent an OOM kill. That is why mem_limit is set too, and why the
+    # per-request costs above are what the safety actually rests on.
+    #
+    # Deliberately a literal and not ${EDGE_API_GOMEMLIMIT}: an override that
+    # can move on its own is an override that can be raised past mem_limit,
+    # which silently removes the only thing GOMEMLIMIT does. Keep the two in
+    # sync if either changes; edge-api also compares them against its own
+    # cgroup limit at boot and logs a WARNING when the pair cannot work
+    # (cmd/server/memlimit.go).
+    mem_limit: 1536m
     environment:
+      GOMEMLIMIT: 1280MiB
       EDGE_CONTROL_PLANE_BASE_URL: ${EDGE_CONTROL_PLANE_BASE_URL:-http://control-plane:8081}
       CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-hive-local-internal-token}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
