@@ -107,4 +107,23 @@ describe('the create route is wired to it', () => {
 	it('no longer toasts the raw error text', () => {
 		expect(createRoute).not.toMatch(/toast\.error\(`\$\{error\}`\)/);
 	});
+
+	/*
+	 * `createNewSkill` does not reject on every failure. Its own catch reads
+	 * `err.detail` and only rethrows when that is truthy
+	 * ($lib/apis/skills/index.ts), so a network failure, a proxy error page, or
+	 * any response whose body is not JSON carrying a `detail` key resolves the
+	 * promise with `null` instead. The route's `.catch` never fires for those,
+	 * and the original `if (res)` had no else arm, so the author clicked Save
+	 * and absolutely nothing happened: no toast, no navigation, no clue.
+	 *
+	 * Upstream's client is shared by every skills caller, so the guard goes in
+	 * the route Hive owns rather than in vendor code this change never
+	 * exercised elsewhere.
+	 */
+	it('still says something when the client resolves null instead of throwing', () => {
+		expect(createRoute).toMatch(/}\s*else\s*if\s*\(\s*!\s*\w+\s*\)\s*{/);
+		// Two toast.error sites: the thrown-error arm and the silent-null arm.
+		expect(createRoute.match(/toast\.error\(/g) ?? []).toHaveLength(2);
+	});
 });
