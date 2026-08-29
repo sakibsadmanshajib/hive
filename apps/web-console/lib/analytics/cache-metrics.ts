@@ -10,9 +10,11 @@
  * covers. A cache hit rate whose sample is unstated is worse than no tile.
  *
  * No I/O in this file, by design: everything here is a pure function of data
- * already fetched by lib/analytics/overview-fetch.ts. Type imports from
- * control-plane/client are fine, and so is the one contract constant this
- * file compares against (a string, no I/O, issue #1347); an actual
+ * already fetched by lib/analytics/overview-fetch.ts. Type-only imports from
+ * control-plane/client are fine (they cost nothing at runtime), and the one
+ * runtime value this file compares against is imported from
+ * control-plane/contract, which is dependency-free precisely so that import
+ * does not drag client.ts server graph in here (issue #1347); an actual
  * fetch call here would not be.
  */
 import type {
@@ -21,7 +23,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
-import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/client";
+import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/contract";
 import {
   ANALYTICS_WINDOW_SPAN_MS,
   EVENT_SAMPLE_WINDOWS,

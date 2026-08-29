@@ -2174,17 +2174,6 @@ export async function getCatalogModels(): Promise<CatalogModel[]> {
   return models;
 }
 
-/**
- * group_key value the control-plane reports for a summary row whose grouping
- * column is NULL, which today means only usage_events.api_key_id: a request
- * served without an API key at all (console and chat traffic), a request that
- * failed before a key was resolved, or a key row deleted after the fact (the
- * FK is ON DELETE SET NULL). Mirrors usage.UnattributedGroupKey in
- * apps/control-plane/internal/usage/repository.go (issue #1347). It cannot
- * collide with a real api key id, which renders as a UUID.
- */
-export const UNATTRIBUTED_GROUP_KEY = "unattributed";
-
 export interface UsageSummaryRow {
   group_key: string;
   total_input_tokens: number;
