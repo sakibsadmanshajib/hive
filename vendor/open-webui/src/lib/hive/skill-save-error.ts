@@ -24,18 +24,28 @@
  * thing that actually collided. The id is what collided, the editor shows it,
  * and pointing at it is true on all four routes.
  *
- * It asserts no scope. "Unique across this whole instance" is true today and
- * becomes false for tenant-grouped accounts the moment PR #1437 lands, which
- * this branch is blocked on; wording that does not claim a scope survives that
- * merge in both directions and needs no follow-up commit. The helper stays
- * useful after #1437 regardless, because most accounts on this deployment have
- * no tenant group and share one namespace whatever the scoping does.
+ * It asserts no scope, which is why it survived PR #1437 landing under it.
+ * "Unique across this whole instance" was true when this was written and false
+ * a few hours later: `apply_skill_tenant_scope_router_patch.py` now prefixes
+ * the id with a scope, and that scope is the caller's tenant group, or their
+ * own user id when they have none, or nothing at all for a platform admin.
+ * Any scope word would therefore have been wrong for some population of
+ * accounts on this deployment, and most accounts here have no tenant group.
  *
- * It says nothing about WHICH skill or WHOSE. A uniqueness check leaks the
- * bare fact that an id is taken and no wording takes that back while the check
- * exists, but naming the holder would turn an unavoidable existence oracle
- * into a real disclosure, on an instance where reads are otherwise denied
- * cross-account by ownership plus access grants.
+ * That same patch is why the sentence hedges on WHOSE skill holds the id
+ * rather than asserting it. After #1437 a collision means a duplicate inside
+ * the caller's own scope, so for the common ungrouped account it is one of
+ * their own skills, sitting in their own list. For a tenant-grouped member it
+ * is a peer's, which ownership plus access grants may well hide from them. For
+ * an admin, on the unscoped namespace, it is anyone's. "One of your own, or
+ * one you do not have access to see" is the only phrasing true in all three.
+ *
+ * It never names WHICH skill or WHOSE. A uniqueness check leaks the bare fact
+ * that an id is taken and no wording takes that back while the check exists,
+ * but naming the holder would turn an unavoidable existence oracle into a real
+ * disclosure, on an instance where reads are otherwise denied cross-account by
+ * ownership plus access grants in application logic, with no row level
+ * security behind them.
  *
  * Every other failure passes through verbatim. A rewrite that catches more
  * than it means to is how a permission failure, a network failure and a
@@ -49,8 +59,8 @@ const ID_TAKEN =
 	/Uh-oh!\s*This id is already registered\.\s*Please choose another id string\./i;
 
 const TAIL =
-	'The skill holding it may belong to an account you cannot see, so it will not ' +
-	'appear in your own list. Edit the id field to something unused.';
+	'It may be one of your own skills, or one you do not have access to see. ' +
+	'Edit the id field to something unused.';
 
 /**
  * The subset of i18next's `t` this module uses. Passing `$i18n.t` keeps these

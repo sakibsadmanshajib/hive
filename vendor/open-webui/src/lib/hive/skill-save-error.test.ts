@@ -57,13 +57,21 @@ describe('skillSaveErrorMessage', () => {
 		expect(message).not.toMatch(/\beverywhere\b/i);
 	});
 
-	it('says the holder may be invisible without identifying it', () => {
+	/*
+	 * After PR #1437 a collision is a duplicate inside the caller's own scope,
+	 * and that scope is their tenant group, or their own user id when they have
+	 * none, or nothing at all for a platform admin. So the holder is their own
+	 * skill for the common ungrouped account, a peer's for a grouped one, and
+	 * anyone's for an admin. The sentence has to cover all three without
+	 * asserting any of them, and without sending an ungrouped author looking
+	 * for a skill that is sitting in their own list.
+	 */
+	it('covers both an own skill and an invisible one, without identifying either', () => {
 		const message = skillSaveErrorMessage(UPSTREAM_ID_TAKEN, 'research');
 
-		// Without this the author hunts through their own library for a skill
-		// that was never theirs to see.
-		expect(message).toMatch(/cannot see/i);
-		// And nothing beyond the bare existence the constraint already leaks.
+		expect(message).toMatch(/your own/i);
+		expect(message).toMatch(/do not have access to see/i);
+		// Nothing beyond the bare existence the constraint already leaks.
 		expect(message).not.toMatch(/@/);
 		expect(message).not.toMatch(/owned by|belongs to|created by/i);
 	});
