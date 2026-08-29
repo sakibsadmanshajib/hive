@@ -142,11 +142,13 @@ export const CREDITS_PER_USD = 1_000_000_000;
 /**
  * Format a credit balance as the US dollars a customer reasons in.
  *
- * Truncated toward zero, never rounded, which is the one behavioural
- * difference from formatUsdFromCredits in model-pricing.ts. A catalog rate is
- * a published price and rounds to the nearest cent; an available balance is
- * spendable money, and rounding 99,996,364,207 credits up to "$100.00" tells
- * a customer they hold more than they can spend.
+ * Rounded down, never up, which is the one behavioural difference from
+ * formatUsdFromCredits in model-pricing.ts. A catalog rate is a published
+ * price and rounds to the nearest cent; an available balance is spendable
+ * money, and rounding 99,996,364,207 credits up to "$100.00" tells a customer
+ * they hold more than they can spend. Down rather than toward zero, so that a
+ * balance driven negative by reservations overstates the hole rather than
+ * flattering it.
  *
  * Precision follows the same rule as the pricing formatter (three significant
  * digits, at least two decimals, at most the nine that one credit occupies),
@@ -171,15 +173,15 @@ export function formatUsdBalanceFromCredits(credits: number): string {
   const usd = credits / CREDITS_PER_USD;
   const magnitude = Math.floor(Math.log10(Math.abs(usd)));
   const digits = Math.min(9, Math.max(2, 2 - magnitude));
-  // Truncate in credits rather than in dollars. The dollar product is a float:
+  // Round in credits rather than in dollars. The dollar product is a float:
   // 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
-  // 828.9999999999999, and truncating that prints $8.28, understating a real
-  // balance by a cent. CREDITS_PER_USD is a power of ten and digits never
+  // 828.9999999999999, and rounding that down prints $8.28, understating a
+  // real balance by a cent. CREDITS_PER_USD is a power of ten and digits never
   // exceeds nine, so creditsPerStep is an exact integer and this is exact for
   // every integer balance.
   const creditsPerStep = CREDITS_PER_USD / 10 ** digits;
   const truncated =
-    (Math.trunc(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
+    (Math.floor(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
