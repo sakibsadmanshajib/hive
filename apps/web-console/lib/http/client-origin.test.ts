@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveClientOrigin } from "./client-origin";
 
@@ -80,5 +80,32 @@ describe("resolveClientOrigin", () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     setPageOrigin("");
     expect(resolveClientOrigin()).toBe("http://localhost:3000");
+  });
+
+  // Every call site today is inside a browser event handler, so there is always
+  // a window. Review asked what happens without one, which is a fair question
+  // about a helper anybody can import: with no page origin to demote to, a
+  // loopback configured value is all there is, and returning it is correct for
+  // the one context that has no window and a loopback config, which is local
+  // development. Pinned here so the answer is a decision rather than an
+  // accident if somebody calls this from a server component.
+  it("returns the configured loopback origin when there is no window to prefer", () => {
+    process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
+    vi.stubGlobal("window", undefined);
+    try {
+      expect(resolveClientOrigin()).toBe("http://localhost:3000");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to the default with neither a window nor a configured origin", () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubGlobal("window", undefined);
+    try {
+      expect(resolveClientOrigin()).toBe("http://localhost:3000");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -14,6 +14,8 @@ import {
   parseDeliveryFlag,
 } from "@/lib/members/invite-outcome";
 import {
+  InvitationOutcomeNotice,
+  InvitePanelProvider,
   InviteTeammateForm,
   ResendInvitationButton,
 } from "@/components/members/invite-panel";
@@ -380,6 +382,12 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
         description="Invite teammates to share API keys, billing visibility, and analytics. Roles control what each member can change."
       />
 
+      {/* The provider holds the invitation outcome, including the one-time
+          link, above the members table. Inside a table row it would be
+          destroyed by the refresh that follows issuing it: DataTable keys rows
+          on their row key, so anything that changes a row's identity remounts
+          it and takes its state along. */}
+      <InvitePanelProvider>
       <div className="flex flex-col gap-6">
         {failureMessage !== null ? (
           <p
@@ -412,7 +420,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
               shown to you here so you can pass it on yourself.
             </CardDescription>
           </CardHeader>
-          <CardContent className="px-5 py-5">
+          <CardContent className="flex flex-col gap-4 px-5 py-5">
             {canInvite ? (
               <InviteTeammateForm />
             ) : (
@@ -431,6 +439,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
                 </p>
               </div>
             )}
+            <InvitationOutcomeNotice />
           </CardContent>
         </Card>
 
@@ -454,6 +463,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
           />
         )}
       </div>
+      </InvitePanelProvider>
     </ConsoleShell>
   );
 }

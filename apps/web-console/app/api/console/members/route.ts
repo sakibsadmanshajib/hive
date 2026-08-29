@@ -99,18 +99,24 @@ export async function POST(request: Request): Promise<Response> {
   return redirectToMembers(request, { invited: created.delivery });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // readFields accepts either a plain HTML form post (the console) or JSON.
+//
+// Narrowed at runtime rather than asserted. This is a trust boundary, so a cast
+// would be asserting a shape about a body the caller chose.
 async function readFields(
   request: Request,
 ): Promise<{ email?: unknown; role?: unknown }> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const body: unknown = await request.json().catch(() => null);
-    if (body === null || typeof body !== "object") return {};
-    const record = body as Record<string, unknown>;
+    if (!isRecord(body)) return {};
     return {
-      email: record.email,
-      role: "role" in record ? record.role : undefined,
+      email: body.email,
+      role: "role" in body ? body.role : undefined,
     };
   }
   const form = await request.formData().catch(() => null);

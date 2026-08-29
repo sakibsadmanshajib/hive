@@ -43,14 +43,22 @@ export async function POST(request: Request): Promise<Response> {
   return redirectToMembers(request, { revoked: "1" });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // readInvitationId accepts a plain HTML form post (the console) or JSON.
+//
+// Narrowed at runtime rather than asserted. A route handler is a trust
+// boundary, so a cast here would be asserting a shape about a body an
+// unauthenticated caller chose.
 async function readInvitationId(request: Request): Promise<string | null> {
   const contentType = request.headers.get("content-type") ?? "";
   let raw: unknown;
   if (contentType.includes("application/json")) {
     const body: unknown = await request.json().catch((): unknown => null);
-    if (body === null || typeof body !== "object") return null;
-    raw = (body as Record<string, unknown>).id;
+    if (!isRecord(body)) return null;
+    raw = body.id;
   } else {
     const form = await request.formData().catch((): FormData | null => null);
     if (!form) return null;

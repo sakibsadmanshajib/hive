@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/mailer"
 )
@@ -85,21 +86,55 @@ func AcceptURL(consoleBaseURL, token string) string {
 }
 
 func invitationSubject(workspace string) string {
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" {
+	bounded := singleLine(workspace, 80)
+	if bounded == "" {
 		return "You have been invited to a Hive workspace"
 	}
-	return fmt.Sprintf("Join %s on Hive", workspace)
+	return fmt.Sprintf("Join %s on Hive", bounded)
+}
+
+// singleLine bounds a caller-controlled string before it reaches an email body.
+//
+// CodeQL's go/email-injection is right to flag this class even though the HTML
+// escaping already closes markup injection: a workspace display name is chosen
+// by a customer, and an unbounded multi-line one can be used to compose what
+// looks like a second message inside ours ("your account is suspended, call
+// this number"). Escaping stops them adding a link. This stops them adding a
+// paragraph.
+//
+// So: every line break, tab and control character becomes a space, runs of
+// whitespace collapse, and the result is capped. What survives is one short
+// phrase in a sentence that already says who it is from and what it is for.
+func singleLine(value string, max int) string {
+	var b strings.Builder
+	space := false
+	for _, r := range value {
+		if r == '\r' || r == '\n' || r == '\t' || unicode.IsControl(r) || r == ' ' {
+			space = true
+			continue
+		}
+		if space && b.Len() > 0 {
+			b.WriteRune(' ')
+		}
+		space = false
+		b.WriteRune(r)
+	}
+	out := []rune(strings.TrimSpace(b.String()))
+	if len(out) > max {
+		return string(out[:max]) + "…"
+	}
+	return string(out)
 }
 
 // workspaceLabel keeps the copy readable when the display name is missing,
 // which is a data problem rather than a reason to mail a sentence with a hole
 // in it.
 func workspaceLabel(workspace string) string {
-	if strings.TrimSpace(workspace) == "" {
+	bounded := singleLine(workspace, 80)
+	if bounded == "" {
 		return "a workspace"
 	}
-	return strings.TrimSpace(workspace)
+	return bounded
 }
 
 func roleLabel(role string) string {
@@ -112,10 +147,11 @@ func roleLabel(role string) string {
 }
 
 func inviterLabel(email string) string {
-	if strings.TrimSpace(email) == "" {
+	bounded := singleLine(email, 120)
+	if bounded == "" {
 		return "Someone"
 	}
-	return strings.TrimSpace(email)
+	return bounded
 }
 
 // renderInvitation returns the plain-text and HTML alternatives.
