@@ -90,6 +90,17 @@ http://{$CONSOLE_DOMAIN:console.localhost} {
   @auth path /auth/v1 /auth/v1/*
   handle @auth {
     reverse_proxy caddy-supabase:8080 {
+      # Bounded dial retry across a container recreate, #1407. This origin
+      # served 3 of the 58 measured 502s, and like the chat origin's 55 they
+      # fell inside deploy-demo-box.yml run windows: the console's own report
+      # was `lookup web-console-prod on 127.0.0.11:53: server misbehaving`,
+      # which is Docker's embedded DNS forwarding a deregistered container
+      # name to the host resolver and relaying its SERVFAIL. Full reasoning,
+      # including why an explicit `resolvers` would not help and what the 30s
+      # bound costs a genuinely broken upstream, is written out once at the
+      # @agentConsole block of Caddyfile.owui.
+      lb_try_duration 30s
+      lb_try_interval 1s
       header_up Host {$SUPABASE_DOMAIN:supabase.localhost}
       header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
       transport http {
@@ -101,6 +112,10 @@ http://{$CONSOLE_DOMAIN:console.localhost} {
 
   handle {
     reverse_proxy web-console-prod:3000 {
+      # Bounded dial retry across a container recreate, #1407. Reasoning at the
+      # auth-origin block above.
+      lb_try_duration 30s
+      lb_try_interval 1s
       header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
       transport http {
         response_header_timeout 30s
