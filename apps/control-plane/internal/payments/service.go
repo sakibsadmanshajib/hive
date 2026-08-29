@@ -22,10 +22,17 @@ type LedgerGranter interface {
 	GrantCredits(ctx context.Context, accountID uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (ledger.LedgerEntry, error)
 }
 
-// ProfileReader reads account and billing profiles.
+// ProfileReader reads the profile facts the payment path needs.
+//
+// Country arrives as a bare code rather than as a whole AccountProfile on
+// purpose. Both callers below want only the country, to choose a rail set, and
+// reading the whole profile for it made a missing `account_profiles` row fatal
+// on the entire checkout surface (issue #1386). Narrowing the port removes the
+// opportunity: there is now no way to ask this question from here that can fail
+// on an absent row. profiles.Service.CountryCode owns that mapping.
 type ProfileReader interface {
 	GetBillingProfile(ctx context.Context, accountID uuid.UUID) (profiles.BillingProfile, error)
-	GetAccountProfile(ctx context.Context, accountID uuid.UUID) (profiles.AccountProfile, error)
+	CountryCode(ctx context.Context, accountID uuid.UUID) (string, error)
 }
 
 // FXProvider creates FX snapshots for BDT transactions.
@@ -90,14 +97,17 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		return nil, err
 	}
 
-	// 2. Verify rail availability for the account's country.
-	accountProfile, err := s.profiles.GetAccountProfile(ctx, accountID)
+	// 2. Verify rail availability for the account's country. An account whose
+	// country cannot be resolved gets AvailableRails(""), the non-BD set, so an
+	// unknown country can only ever keep rail access at the default and never
+	// widen it to a BD rail.
+	countryCode, err := s.profiles.CountryCode(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("payments: get account profile: %w", err)
+		return nil, fmt.Errorf("payments: get account country: %w", err)
 	}
-	available := AvailableRails(accountProfile.CountryCode)
+	available := AvailableRails(countryCode)
 	if !railIn(rail, available) {
-		return nil, fmt.Errorf("payments: rail %s not available for country %s", rail, accountProfile.CountryCode)
+		return nil, fmt.Errorf("payments: rail %s not available for country %s", rail, countryCode)
 	}
 
 	// 3. Require a complete billing profile.
@@ -480,19 +490,91 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 // local-currency minor units via `math/big` against the latest FX
 // snapshot mid-rate (with the standard fee markup) and returns only the
 // resolved scalar.
+// CreditIncrement, MinCredits and MaxCredits repeat the purchase bounds at the
+// top level because that is where the console reads them
+// (`apps/web-console/lib/control-plane/client.ts`). Their absence was not
+// visible: the client silently substituted a fallback ceiling of
+// 1,000,000,000 credits, which is 1.00 USD, against a real Stripe ceiling of
+// 100.00 USD (issue #1386).
+//
+// MaxCredits is the MINIMUM ceiling across the rails on offer, not the maximum.
+// The console carries one bound for a rail the payer has not chosen yet, so the
+// only value that cannot advertise more than a rail will accept is the most
+// restrictive one. ValidatePurchaseAmount remains the authority and still
+// enforces the real per-rail ceiling on initiate, so this wire value can only
+// ever be stricter than enforcement, never looser.
 type CheckoutOptions struct {
 	Rails              []RailOption `json:"rails"`
 	PredefinedTiers    []int64      `json:"predefined_tiers"`
 	PricePerBlockMinor int64        `json:"price_per_block_minor"`
 	CreditBlockSize    int64        `json:"credit_block_size"`
 	Currency           string       `json:"currency"`
+	CreditIncrement    int64        `json:"credit_increment"`
+	MinCredits         int64        `json:"min_credits"`
+	MaxCredits         int64        `json:"max_credits"`
 }
 
 // RailOption describes a single payment rail with its credit limits.
+//
+// Currency, Label and Enabled exist because the console's decoder requires them
+// and drops any rail item that lacks one, which emptied the rail list and left
+// the checkout modal with no payment method to offer (issue #1386).
+//
+// Enabled is whether this deployment can actually execute a checkout on the
+// rail, which is exactly whether the rail was registered at startup from its
+// credentials. A rail that cannot complete a purchase must not present itself
+// as a choice.
 type RailOption struct {
-	Rail       Rail  `json:"rail"`
-	MinCredits int64 `json:"min_credits"`
-	MaxCredits int64 `json:"max_credits"`
+	Rail       Rail   `json:"rail"`
+	Label      string `json:"label"`
+	Currency   string `json:"currency"`
+	Enabled    bool   `json:"enabled"`
+	MinCredits int64  `json:"min_credits"`
+	MaxCredits int64  `json:"max_credits"`
+}
+
+// RailLabel returns the customer-facing name of a payment rail. It is the name
+// the payer already sees on the rail's own checkout page, not an inference
+// provider identity, so it is not covered by the provider-blindness rule.
+func RailLabel(r Rail) string {
+	switch r {
+	case RailStripe:
+		return "Card"
+	case RailBkash:
+		return "bKash"
+	case RailSSLCommerz:
+		return "SSLCommerz"
+	default:
+		return string(r)
+	}
+}
+
+// NewRailOption builds the wire option for one rail. `enabled` says whether the
+// deployment can actually execute a checkout on it. Defined once so the real
+// service and the demo stub cannot drift into two different payload shapes.
+func NewRailOption(rail Rail, enabled bool) RailOption {
+	return RailOption{
+		Rail:       rail,
+		Label:      RailLabel(rail),
+		Currency:   localCurrencyFor(rail),
+		Enabled:    enabled,
+		MinCredits: MinPurchaseCredits,
+		MaxCredits: maxCreditsForRail(rail),
+	}
+}
+
+// MostRestrictiveMaxCredits returns the smallest per-rail purchase ceiling among
+// the given options, which is the only single ceiling that no rail on offer will
+// reject. Returns 0 for an empty set, which is what a country with no rails
+// means and which ValidatePurchaseAmount already refuses.
+func MostRestrictiveMaxCredits(options []RailOption) int64 {
+	var minMax int64
+	for i, opt := range options {
+		if i == 0 || opt.MaxCredits < minMax {
+			minMax = opt.MaxCredits
+		}
+	}
+	return minMax
 }
 
 // GetCheckoutOptions returns available payment rails, predefined tiers, and
@@ -509,23 +591,23 @@ type RailOption struct {
 // FX rate is computed server-side only and never returned. If FX is
 // unavailable for a BD account, the FX provider error surfaces.
 func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (*CheckoutOptions, error) {
-	accountProfile, err := s.profiles.GetAccountProfile(ctx, accountID)
+	countryCode, err := s.profiles.CountryCode(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("payments: get account profile: %w", err)
+		return nil, fmt.Errorf("payments: get account country: %w", err)
 	}
 
-	available := AvailableRails(accountProfile.CountryCode)
+	available := AvailableRails(countryCode)
 	railOptions := make([]RailOption, 0, len(available))
 	for _, rail := range available {
-		maxCredits := maxCreditsForRail(rail)
-		railOptions = append(railOptions, RailOption{
-			Rail:       rail,
-			MinCredits: MinPurchaseCredits,
-			MaxCredits: maxCredits,
-		})
+		// A rail is offered only if this deployment registered it, which it
+		// does from the rail's credentials at startup. Advertising an
+		// unregistered rail would hand the payer a choice that InitiateCheckout
+		// refuses.
+		_, configured := s.rails[rail]
+		railOptions = append(railOptions, NewRailOption(rail, configured))
 	}
 
-	priceMinor, currency, err := s.resolvePricePerUSDBlock(ctx, accountProfile.CountryCode, accountID)
+	priceMinor, currency, err := s.resolvePricePerUSDBlock(ctx, countryCode, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("payments: resolve price per credit: %w", err)
 	}
@@ -536,6 +618,9 @@ func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (
 		PricePerBlockMinor: priceMinor,
 		CreditBlockSize:    CreditsPerUSD,
 		Currency:           currency,
+		CreditIncrement:    CreditIncrement,
+		MinCredits:         MinPurchaseCredits,
+		MaxCredits:         MostRestrictiveMaxCredits(railOptions),
 	}, nil
 }
 

@@ -146,8 +146,8 @@ type capProfiles struct{}
 func (capProfiles) GetBillingProfile(_ context.Context, _ uuid.UUID) (profiles.BillingProfile, error) {
 	return profiles.BillingProfile{BillingContactName: "Jane", CountryCode: "US"}, nil
 }
-func (capProfiles) GetAccountProfile(_ context.Context, _ uuid.UUID) (profiles.AccountProfile, error) {
-	return profiles.AccountProfile{CountryCode: "US"}, nil
+func (capProfiles) CountryCode(_ context.Context, _ uuid.UUID) (string, error) {
+	return "US", nil
 }
 
 type capFX struct{}
