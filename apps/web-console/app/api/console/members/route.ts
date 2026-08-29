@@ -2,11 +2,15 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { ControlPlaneError, createInvitation } from "@/lib/control-plane/client";
+import {
+  ControlPlaneError,
+  createInvitation,
+  type InvitationCreated,
+} from "@/lib/control-plane/client";
 import { parseMemberRole } from "@/lib/members/roles";
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
 
-// Server-side proxy for sending a workspace invite (issue #111).
+// Server-side proxy for issuing a workspace invitation (issues #111, #1440).
 //
 // The invite form used to POST cross-origin straight at the control-plane with
 // `action={process.env.CONTROL_PLANE_BASE_URL}/...`, which (a) leaked the
@@ -14,10 +18,18 @@ import { resolveCanonicalOrigin } from "@/lib/http/origin";
 // from the browser without the user's session bearer. This handler keeps the
 // control-plane address server-only and attaches auth via the client helper.
 //
-// The form is a plain HTML <form method="POST"> (no client JS), so on success
-// we redirect (303) back to the members page; failures redirect back with a
-// generic, customer-safe `error` message. Auth/validation failures
-// short-circuit before any upstream call.
+// Two response shapes, chosen by the Accept header.
+//
+// A plain HTML <form method="POST"> still works with no client JavaScript at
+// all: it gets a 303 back to the members page carrying the delivery outcome as
+// a flag. The invite panel asks for JSON instead, and gets the outcome plus the
+// invitation link, which it renders in place.
+//
+// The link is the reason the JSON shape exists. The acceptance token is
+// bearer-equivalent and must never travel in a redirect URL, so it cannot ride
+// the 303, and the database stores only its hash so it cannot be recovered
+// afterwards. Before this change the route simply dropped it, which destroyed
+// the only copy while the interface reported "Invitation sent" (issue #1440).
 export async function POST(request: Request): Promise<Response> {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
@@ -43,15 +55,48 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "A valid role is required" }, { status: 400 });
   }
 
+  const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
+
+  let created: InvitationCreated;
   try {
-    // The 201 body carries the bearer-equivalent acceptance token; we keep it
-    // server-side only and never place it in the redirect URL.
-    await createInvitation(email, role);
+    created = await createInvitation(email, role);
   } catch (err) {
-    return redirectToMembers(request, { error: inviteErrorMessage(err) });
+    const message = inviteErrorMessage(err);
+    if (wantsJson) {
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+    return redirectToMembers(request, { error: message });
   }
 
-  return redirectToMembers(request, { invited: "1" });
+  if (wantsJson) {
+    // The link is built against the canonical app origin rather than the
+    // request host, so a spoofed X-Forwarded-Host cannot produce an invitation
+    // link pointing somewhere else.
+    const link =
+      created.token === null
+        ? null
+        : `${resolveCanonicalOrigin(request)}/invitations/accept?token=${encodeURIComponent(created.token)}`;
+    return NextResponse.json(
+      {
+        email,
+        role,
+        delivered: created.delivered,
+        delivery: created.delivery,
+        link,
+      },
+      {
+        status: 201,
+        // Belt and braces around a body carrying an acceptance token: no shared
+        // cache, no proxy copy, no back-button replay out of the disk cache.
+        headers: { "Cache-Control": "no-store, private" },
+      },
+    );
+  }
+
+  // No-JS path. The token cannot ride a redirect, so this shape reports the
+  // delivery outcome only, and the members page tells the user plainly when
+  // nothing was mailed rather than claiming a send.
+  return redirectToMembers(request, { invited: created.delivery });
 }
 
 // readFields accepts either a plain HTML form post (the console) or JSON.
@@ -90,7 +135,7 @@ function readEmail(raw: unknown): string | null {
 // URL, history, or logs. Only the HTTP status of a ControlPlaneError informs the
 // wording; every other error collapses to the generic fallback.
 function inviteErrorMessage(err: unknown): string {
-  const generic = "Could not send the invitation. Please try again.";
+  const generic = "Could not create the invitation. Please try again.";
   if (!(err instanceof ControlPlaneError)) {
     return generic;
   }
