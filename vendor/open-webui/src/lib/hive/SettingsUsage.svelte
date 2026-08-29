@@ -5,7 +5,8 @@
 		creditState,
 		formatUsdFromCredits,
 		refreshCreditSnapshot,
-		type CreditBalance
+		type CreditBalance,
+		type CreditSnapshot
 	} from './credits';
 
 	const i18n: any = getContext('i18n');
@@ -53,25 +54,26 @@
 	 */
 
 	/*
-	 * Starting balance. Null in the app: SettingsModal renders this component
-	 * with no balance and the mount fetch below fills it in. Exported so the
-	 * rendered surface can be asserted with a known balance and no network,
-	 * no database and no DOM, which is what makes transposing the two money
-	 * figures a failing test rather than a code review question. See the
-	 * server-side render assertions in settings-usage-tab.test.ts.
+	 * Starting snapshot, or null to fetch one on mount. SettingsModal hands
+	 * over the balance its own availability probe already fetched, with the
+	 * time it arrived, so opening this tab shows that number immediately
+	 * rather than firing a second request for the same figure. Read once, at
+	 * init: later changes to the prop are ignored on purpose, because from
+	 * then on this component owns the value and the Refresh button below is
+	 * what moves it. The tab is destroyed when the user leaves it, so the
+	 * next open reads the prop again.
+	 *
+	 * Exported at all so the rendered surface can be asserted with a known
+	 * balance and no network, no database and no DOM, which is what makes
+	 * transposing the two money figures a failing test rather than a code
+	 * review question. See the server side render assertions in
+	 * settings-usage-tab.test.ts.
 	 */
-	export let balance: CreditBalance | null = null;
+	export let initial: CreditSnapshot | null = null;
 
-	/*
-	 * Whether a first load is still in flight. Exported for the same reason as
-	 * balance: it is initial state, and the no-data branch (enterprise posture
-	 * or a failed first fetch) has to be assertable without waiting on a
-	 * network. It only gates the empty case; once a balance exists the figures
-	 * render regardless.
-	 */
-	export let loading = true;
-
-	let lastUpdated: Date | null = null;
+	let balance: CreditBalance | null = initial === null ? null : initial.balance;
+	let lastUpdated: Date | null = initial === null ? null : initial.lastUpdated;
+	let loading = initial === null;
 
 	$: state = balance === null ? null : creditState(balance.available_credits);
 
@@ -89,7 +91,7 @@
 	}
 
 	onMount(() => {
-		if (balance === null) void load();
+		if (initial === null) void load();
 	});
 </script>
 

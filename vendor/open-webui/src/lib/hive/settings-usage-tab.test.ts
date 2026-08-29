@@ -5,7 +5,7 @@ import { render } from 'svelte/server';
 import { readable } from 'svelte/store';
 
 import SettingsUsage from './SettingsUsage.svelte';
-import { formatUsdFromCredits, type CreditBalance } from './credits';
+import { formatUsdFromCredits, type CreditBalance, type CreditSnapshot } from './credits';
 
 /*
  * Regression guard for the P0.5 settings retitle plus Usage tab wave (parity
@@ -38,11 +38,11 @@ const locale = (code: string) =>
  * jsdom for it. The translator is the identity function, so every assertion
  * below reads the English source string.
  */
-const renderUsage = (balance: CreditBalance | null, loading = true): string => {
+const renderUsage = (initial: CreditSnapshot | null): string => {
 	const t = (key: string): string => key;
 	const context = new Map();
 	context.set('i18n', readable({ t }));
-	return render(SettingsUsage, { props: { balance, loading }, context }).body;
+	return render(SettingsUsage, { props: { initial }, context }).body;
 };
 
 // Two deliberately different magnitudes. Equal figures would render the same
@@ -51,11 +51,18 @@ const renderUsage = (balance: CreditBalance | null, loading = true): string => {
 const AVAILABLE_CREDITS = 12_500_000_000;
 const USAGE_TODAY_CREDITS = 340_000_000;
 
-const balanceFixture = (overrides: Partial<CreditBalance> = {}): CreditBalance => ({
-	available_credits: AVAILABLE_CREDITS,
-	usage_today_credits: USAGE_TODAY_CREDITS,
-	...overrides
+const snapshotFixture = (overrides: Partial<CreditBalance> = {}): CreditSnapshot => ({
+	balance: {
+		available_credits: AVAILABLE_CREDITS,
+		usage_today_credits: USAGE_TODAY_CREDITS,
+		...overrides
+	},
+	lastUpdated: null
 });
+
+// A snapshot whose first load came back with nothing: the enterprise posture
+// and the failed-first-fetch case are the same state here.
+const EMPTY_SNAPSHOT: CreditSnapshot = { balance: null, lastUpdated: null };
 
 /*
  * The text a given slot actually renders. Reading the value out of the span
@@ -88,7 +95,15 @@ describe('General tab no longer reads as stock Open WebUI branding', () => {
 
 	it('carries the retitle into the search keywords, so the old title is not the only way to find the tab', () => {
 		const src = settingsModal();
-		const generalBlock = src.slice(src.indexOf("id: 'general'"), src.indexOf("id: 'account'"));
+		// Both boundaries asserted before slicing. A missing end marker makes
+		// indexOf return -1, and slice(start, -1) would quietly widen this to
+		// most of the file, so the keywords could satisfy it from any other
+		// tab's descriptor.
+		const start = src.indexOf("id: 'general'");
+		const end = src.indexOf("id: 'account'");
+		expect(start).toBeGreaterThan(-1);
+		expect(end).toBeGreaterThan(start);
+		const generalBlock = src.slice(start, end);
 		expect(generalBlock).toContain("'chat preferences'");
 		expect(generalBlock).toContain("'chatpreferences'");
 	});
@@ -196,7 +211,7 @@ describe('Usage tab, rendered', () => {
 		// balance row shows today spend and vice versa. Every source-level
 		// assertion in this file stays green through that swap; this one does
 		// not, because it reads the rendered order.
-		const html = renderUsage(balanceFixture());
+		const html = renderUsage(snapshotFixture());
 		const balanceLabel = html.indexOf('Organization credit balance');
 		const todayLabel = html.indexOf('Organization usage today');
 		expect(balanceLabel).toBeGreaterThan(-1);
@@ -212,7 +227,7 @@ describe('Usage tab, rendered', () => {
 	});
 
 	it('keeps each figure in the slot its own test id names', () => {
-		const html = renderUsage(balanceFixture());
+		const html = renderUsage(snapshotFixture());
 		expect(valueForTestId(html, 'usage-available-credits')).toBe(
 			formatUsdFromCredits(AVAILABLE_CREDITS)
 		);
@@ -222,35 +237,33 @@ describe('Usage tab, rendered', () => {
 	});
 
 	it('never renders a bare credit integer, the defect a customer once read as 9,789,478,244', () => {
-		const html = renderUsage(balanceFixture());
+		const html = renderUsage(snapshotFixture());
 		expect(html).not.toContain(String(AVAILABLE_CREDITS));
 		expect(html).not.toContain(String(USAGE_TODAY_CREDITS));
 	});
 
 	it('flags an empty balance rather than printing a bare zero', () => {
-		const html = renderUsage(balanceFixture({ available_credits: 0 }));
+		const html = renderUsage(snapshotFixture({ available_credits: 0 }));
 		expect(html).toContain('Out of credits');
 		expect(valueForTestId(html, 'usage-available-credits')).toBe('$0');
 	});
 
 	it('flags a low balance below the shared threshold', () => {
-		const html = renderUsage(balanceFixture({ available_credits: 100_000_000 }));
+		const html = renderUsage(snapshotFixture({ available_credits: 100_000_000 }));
 		expect(html).toContain('Low');
 	});
 
 	it('offers the top-up link only where the deployment names one', () => {
-		const without = renderUsage(balanceFixture());
+		const without = renderUsage(snapshotFixture());
 		expect(without).not.toContain('Top up');
 		const url = 'https://example.invalid/billing';
-		const withLink = renderUsage(balanceFixture({ top_up_url: url }));
+		const withLink = renderUsage(snapshotFixture({ top_up_url: url }));
 		expect(withLink).toContain('Top up');
 		expect(withLink).toContain(url);
 	});
 
 	it('says so explicitly when there is no balance to show, rather than rendering blank', () => {
-		// loading false: the first load has come back with nothing, which is
-		// the enterprise posture and the failed-fetch case both.
-		const html = renderUsage(null, false);
+		const html = renderUsage(EMPTY_SNAPSHOT);
 		expect(html).toContain('available on this deployment');
 	});
 
@@ -258,7 +271,7 @@ describe('Usage tab, rendered', () => {
 		// The Claude Desktop reference shows countdowns backed by a
 		// rate-limited plan quota. Hive bills prepaid credits with no such
 		// window, per D-046 and D-031.
-		const html = renderUsage(balanceFixture()).toLowerCase();
+		const html = renderUsage(snapshotFixture()).toLowerCase();
 		expect(html).not.toContain('resets in');
 		expect(html).not.toContain('resets on');
 	});

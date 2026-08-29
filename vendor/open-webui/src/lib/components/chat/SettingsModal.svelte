@@ -4,7 +4,7 @@
 	import { config, models, settings, user } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
 	import { getModels as _getModels } from '$lib/apis';
-	import { fetchCreditBalance } from '$lib/hive/credits';
+	import { refreshCreditSnapshot, type CreditSnapshot } from '$lib/hive/credits';
 
 	import Modal from '../common/Modal.svelte';
 	import Account from './Settings/Account.svelte';
@@ -478,11 +478,34 @@
 	 * silent absence is that posture's documented behavior. A Usage tab that is
 	 * permanently stuck on "Usage isn't available on this deployment." would
 	 * invert it, so the tab is gated on a balance actually answering.
+	 *
+	 * The answer is kept, not thrown away: it is handed to the Usage panel as
+	 * its starting snapshot, so opening the tab shows the number the probe
+	 * already fetched, with the time that fetch happened, instead of firing a
+	 * second request for the same figure and rendering a spinner over data the
+	 * modal is already holding.
+	 *
+	 * One probe at a time. This runs on every open of a modal that stays
+	 * mounted for the whole session, so without the guard two opens in quick
+	 * succession can land out of order and an older answer can overwrite a
+	 * newer one.
 	 */
 	let creditsAvailable = false;
+	let creditsSnapshot: CreditSnapshot = { balance: null, lastUpdated: null };
+	let creditsProbeInFlight = false;
 
 	const probeCredits = async () => {
-		creditsAvailable = (await fetchCreditBalance()) !== null;
+		if (creditsProbeInFlight) return;
+		creditsProbeInFlight = true;
+		try {
+			// refreshCreditSnapshot, not a bare fetch: a failed re-probe keeps
+			// the last known good balance and its original timestamp rather
+			// than blanking a figure the customer has already seen.
+			creditsSnapshot = await refreshCreditSnapshot(creditsSnapshot);
+		} finally {
+			creditsProbeInFlight = false;
+		}
+		creditsAvailable = creditsSnapshot.balance !== null;
 		availableSettings = getAvailableSettings();
 		setFilteredSettings();
 	};
@@ -887,7 +910,7 @@
 						}}
 					/>
 				{:else if selectedTab === 'usage'}
-					<Usage />
+					<Usage initial={creditsSnapshot} />
 				{:else if selectedTab === 'interface'}
 					<Interface
 						{saveSettings}
