@@ -128,13 +128,21 @@ on 2026-08-29, per surface:
     this deployment nobody reaches the unscoped path and every delete resolves
     through `get_chat_by_id_and_user_id`. Turn the flag on and the admin arm is
     cross-account again.
-  * **The delete is scoped; the task cancellation in front of it is not.**
-    `stop_item_tasks(request.app.state.redis, id)` is the first statement in
-    the handler, above the role split and above any ownership resolution, so
-    any verified user holding another user's chat id can cancel that chat's
-    in-flight completion and title generation by issuing a DELETE they are then
-    refused. The 404 is real, but it arrives after that side effect. Filed as
-    issue #1474 rather than fixed here.
+  * **The task cancellation in front of the delete is scoped too, since
+    #1474.** It was not. `stop_item_tasks(request.app.state.redis, id)` was the
+    first statement in the handler, above the role split and above any ownership
+    resolution, so any verified user holding another user's chat id could cancel
+    that chat's in-flight completion and title generation by issuing a DELETE
+    they were then refused. The 404 was real, but it arrived after the side
+    effect, and a 404 that has cancelled the victim's streaming response is not
+    a denial. `owui-patches/apply_chat_delete_task_cancel_1474_patch.py` moves
+    the call into each arm, in both cases immediately after that arm's 404, so a
+    refused caller reaches no cancellation and an owner still cancels their own
+    in-flight tasks ahead of the delete. Both arms are patched even though the
+    admin one is unreachable while `ENABLE_ADMIN_CHAT_ACCESS` is `"false"`.
+    `scripts/test_owui_chat_delete_task_cancel.py` executes the patched handler
+    and counts the cancellations, against the patch chain both with and without
+    that patch, so the pre-fix behaviour stays reproduced rather than described.
 
   Measured live: a second signed-in non-admin identity is refused (401 on the
   read, 404 on the delete) and the owner's row survives.

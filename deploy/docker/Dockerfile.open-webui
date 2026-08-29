@@ -500,7 +500,22 @@ RUN python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_w
 COPY deploy/docker/owui-patches/apply_authz_residuals_1191_patch.py /tmp/apply_authz_residuals_1191_patch.py
 RUN python3 /tmp/apply_authz_residuals_1191_patch.py
 
-# Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191):
+# issue #1474: DELETE /api/v1/chats/{id} cancelled the chat's in-flight tasks as
+# its FIRST statement, above the role split and above every ownership check, so
+# any verified user holding another user's chat id could cancel that user's
+# streaming completion and title generation with a DELETE they were then refused
+# with a 404. The refusal was real and the row survived, but the side effect had
+# already fired. This moves the cancellation into each arm, immediately after
+# that arm's 404, which is the first point at which the caller is established as
+# entitled to delete the chat, and still ahead of the delete itself so an owner's
+# own cancellation is unchanged. Runs after the #1186 family patch, which rewrote
+# this handler's admin-split line; no anchor here overlaps it. Same fail-loud
+# posture as the patches above.
+COPY deploy/docker/owui-patches/apply_chat_delete_task_cancel_1474_patch.py /tmp/apply_chat_delete_task_cancel_1474_patch.py
+RUN python3 /tmp/apply_chat_delete_task_cancel_1474_patch.py
+
+# Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191 +
+# #1474):
 # the exact expected marker count in every patched file so a vendor bump that
 # silently drops any single fix fails the image build instead of reopening a
 # cross-tenant hole (same failure mode class as #1162).
@@ -518,7 +533,9 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1186)' $B/routers/models.py)" -eq 5 \
     && test "$(grep -c '# hive (#1186)' $B/routers/skills.py)" -eq 5 \
     && test "$(grep -c '# hive (#1191)' $B/routers/chats.py)" -eq 1 \
-    && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1
+    && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1 \
+    && test "$(grep -c '# hive (#1474)' $B/routers/chats.py)" -eq 3 \
+    && test "$(grep -c '^    await stop_item_tasks(request.app.state.redis, id)$' $B/routers/chats.py)" -eq 0
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
 # auth credential. The tool servers added there are direct ones, called by the
