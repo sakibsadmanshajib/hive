@@ -93,8 +93,10 @@ def strip_inline_comment(line):
 def proxy_blocks(text):
     """Yield (line_no, upstream, body_lines) for each reverse_proxy with a block.
 
-    Caddyfile nesting is plain braces, so a depth counter is enough here. Only
-    whole-line comments are stripped, which is all these two files use.
+    Caddyfile nesting is plain braces, so a depth counter is enough here.
+    Comments, whole-line and inline alike, are removed before any line is read,
+    so a brace inside one can neither be counted as nesting nor be mistaken for
+    the start of a block.
     """
     lines = text.splitlines()
     out = []
@@ -188,12 +190,20 @@ def check_file(path):
     return failures
 
 
-# Three blocks on purpose. The first carries a nested block and a placeholder,
-# so a parser that lost track of brace depth there would swallow the two below
-# it and report a clean pass. The middle one is the omission this guard exists
-# to catch. The last proves depth came back to zero. The comment inside the
-# middle block carries a deliberately unbalanced brace, which is the other way
-# a naive parser closes a block early and reports a pass.
+# Four blocks, each earning its place.
+#
+#   1. edge-api: a nested block and an environment placeholder. A parser that
+#      lost brace depth here would swallow everything below and report a clean
+#      pass.
+#   2. open-webui: the omission this guard exists to catch, and its body holds
+#      a comment with a deliberately unbalanced brace, the other way a naive
+#      parser closes a block early and reports a pass.
+#   3. web-console-prod: guarded, and its opening line carries an inline
+#      comment. It proves depth came back to zero after block 2 and that a
+#      trailing comment does not turn a block into a bare one-liner.
+#   4. caddy-supabase: a duration with no interval, which is the only case that
+#      reaches the interval branch. Without it that branch is never entered by
+#      any test.
 SYNTHETIC_UNGUARDED = """\
 :80 {
   reverse_proxy @api edge-api:8080 {
