@@ -493,7 +493,15 @@ func TestHandleChat_SuppressedChunkUsageNotAccounted(t *testing.T) {
 		t.Fatalf("expected 200 for streaming, got %d: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if strings.Contains(body, "SPURIOUS-POST-FINISH-MARKER") || strings.Contains(body, "999") {
+	// The usage check names the field, not the bare number. Every frame this
+	// handler emits carries a generated `ragchat-<uuid>` id, and a hex uuid
+	// contains the substring "999" often enough to fail this test at random:
+	// it did on CI run 33238715016, on an id of ragchat-39990550-..., with
+	// nothing wrong in the code under test. A flake in a regression guard is
+	// worse than no guard, because the next red is assumed to be this one.
+	if strings.Contains(body, "SPURIOUS-POST-FINISH-MARKER") ||
+		strings.Contains(body, `"total_tokens":999`) ||
+		strings.Contains(body, `"prompt_tokens":999`) {
 		t.Errorf("suppressed chunk (and its bogus usage) must never reach the client:\n%s", body)
 	}
 
