@@ -693,6 +693,15 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-set-compose-project-name.sh
 
+      # Regression guard for deploy-demo-box.yml's pre-build disk gate
+      # (issue #1098). Also stubs its dependencies on PATH, so no docker
+      # daemon and no real filesystem are involved. Wired here for the same
+      # reason as the two guards above: this job is a required check, so a
+      # workflow-only change cannot quietly invert a comparison in the one
+      # disk guard a job timeout is unable to skip.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-deploy-disk-gate.sh
+
       # Regression guard for the PreToolUse guards in .claude/hooks/. It
       # feeds each guard both harness payload shapes plus Claude Code's
       # MultiEdit shape, which nests its edit array at `tool_input.edits`

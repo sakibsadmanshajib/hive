@@ -682,6 +682,76 @@ jobs:
     # vendored tree alone hit the cache and cost nothing extra.
     timeout-minutes: 30
     steps:
+      - name: Refuse to build without disk headroom
+        # Issue #1098. FIRST step in this job, and that position is the whole
+        # point: it is the only disk guard a job timeout cannot skip.
+        #
+        # The two prune steps at the end of this job (`Prune dangling images`,
+        # `Prune build cache older than 24h`) both carry `if: always()`, which
+        # covers a failed step but does NOT cover the runner being killed. When
+        # this job trips its own `timeout-minutes` mid-build, every remaining
+        # step including both prunes reports no conclusion at all and never
+        # runs. Run 33237021243 on 2026-08-29 did exactly that: it timed out
+        # inside `Rebuild + recreate changed services` with the box at 11 GB
+        # free, so the deploy that filled the disk was also the deploy whose
+        # cleanup never fired. Cleanup that only runs on the happy path is not
+        # a floor; this step is.
+        #
+        # Failing here is deliberately preferable to failing halfway. This box
+        # holds the Postgres data directory, the storage buckets and the chat
+        # data volume, so a filesystem that fills during a recreate does not
+        # merely abort a deploy, it stops the database accepting writes (the
+        # 2026-08-01 shape) with containers already half torn down. A deploy
+        # that never starts leaves the previous stack running and serving.
+        #
+        # Measured envelope for the thresholds, demo box 2026-08-29: the built
+        # images total about 26 GB, of which open-webui alone is 7.4 GB and
+        # web-console-prod 2.4 GB. A base-image bump that invalidates every
+        # Dockerfile rebuilds all of them in one run. 10 GB is below every
+        # free-space figure under which a deploy has been observed to complete,
+        # and above the point where a single large image build can still land,
+        # so it fails only runs that genuinely cannot finish. 20 GB is the warn
+        # line: loud on every deploy long before it is fatal.
+        #
+        # `df` targets /var/lib/docker rather than `/` so this stays correct if
+        # the image store is ever moved to its own filesystem. Today they are
+        # the same volume.
+        run: |
+          set -euo pipefail
+
+          fail_gb=10
+          warn_gb=20
+
+          free_gb=$(df -BG --output=avail /var/lib/docker | tail -1 | tr -dc '0-9')
+          if [ -z "$free_gb" ]; then
+            echo "::error::could not read free space on /var/lib/docker"
+            exit 1
+          fi
+
+          echo "free space on /var/lib/docker: ${free_gb}G (warn <${warn_gb}G, fail <${fail_gb}G)"
+          echo "### Demo box disk: ${free_gb}G free" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$free_gb" -ge "$warn_gb" ]; then
+            exit 0
+          fi
+
+          # Below one of the thresholds: show where the space went, so whoever
+          # reads this does not have to ssh in to find out.
+          echo "::group::docker system df"
+          docker system df || true
+          echo "::endgroup::"
+
+          hint="Reclaim safely by removing tagged images no container references and nothing in this repo names (superseded base images, old third-party versions). Do NOT run 'docker system prune -a' or 'docker image prune -a': both delete the previous stack images that are this box's only rollback path. Do NOT prune volumes: the database, the storage buckets and the chat data all live in them, with no off-box backup (issue #1000)."
+
+          if [ "$free_gb" -lt "$fail_gb" ]; then
+            echo "::error::demo box has ${free_gb}G free on /var/lib/docker, below the ${fail_gb}G floor. Refusing to build. $hint"
+            echo "Refused to build: below the ${fail_gb}G floor. $hint" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "::warning::demo box has ${free_gb}G free on /var/lib/docker, below the ${warn_gb}G warn line. This deploy will proceed. $hint"
+          echo "Below the ${warn_gb}G warn line. $hint" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
         # control-plane's own container cannot exec Apptainer. The launcher
