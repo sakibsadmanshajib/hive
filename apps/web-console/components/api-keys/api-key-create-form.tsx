@@ -87,6 +87,36 @@ interface CreateApiKeyResponse {
   secret?: string;
 }
 
+const CREATE_FAILED = "Failed to create key. Please try again.";
+
+function isExplainedError(value: unknown): value is { error: string; code: string } {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.error === "string" &&
+    candidate.error.trim() !== "" &&
+    typeof candidate.code === "string" &&
+    candidate.code.trim() !== ""
+  );
+}
+
+/**
+ * Show the server's sentence only when the proxy route named a machine code
+ * alongside it. That pairing is the route's signal that the wording is its own
+ * customer-facing copy for a refusal it recognised, such as the workspace with
+ * no billing link that would have produced a key the API refuses (issue #1330).
+ * Printing "please try again" over that sends the customer round a loop that
+ * cannot succeed.
+ *
+ * Without a code the body carries only a status class ("Conflict", "Upstream
+ * service error"), which tells a customer nothing, so those keep the generic
+ * wording this form has always used.
+ */
+async function createKeyErrorMessage(response: Response): Promise<string> {
+  const body: unknown = await response.json().catch(() => null);
+  return isExplainedError(body) ? body.error : CREATE_FAILED;
+}
+
 function isApiKeyResponse(value: unknown): value is CreateApiKeyResponse {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -141,14 +171,14 @@ export function ApiKeyCreateForm() {
       });
 
       if (!response.ok) {
-        setError("Failed to create key. Please try again.");
+        setError(await createKeyErrorMessage(response));
         setLoading(false);
         return;
       }
 
       const data: unknown = await response.json();
       if (!isApiKeyResponse(data)) {
-        setError("Failed to create key. Please try again.");
+        setError(CREATE_FAILED);
         setLoading(false);
         return;
       }

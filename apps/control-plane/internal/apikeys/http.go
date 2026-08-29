@@ -271,6 +271,10 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.CreateKey(r.Context(), vc.CurrentAccount.ID, vc.User.ID, input)
 	if err != nil {
+		if errors.Is(err, ErrAccountNotProvisioned) {
+			handleKeyError(w, err)
+			return
+		}
 		writeInternal(w, r, "request could not be completed", err)
 		return
 	}
@@ -639,6 +643,29 @@ func extractKeyID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
+// accountNotProvisionedMessage is the customer-facing half of the issue #1330
+// fix. The refusal is only an improvement on the old behaviour if it says what
+// is missing and what to do about it, so it names the missing link, echoes the
+// exact code edge-api would have answered with (which is what joins a customer
+// report to the operator log line PR #1240 added), and gives the two remedies
+// that actually exist. It carries no account, tenant or key identifier: this
+// text is rendered in a browser.
+// It deliberately does NOT say "reload and it will sort itself out". The only
+// principal that can reach this refusal is one whose token already carries a
+// tenant claim (a user with no claim at all is redirected into
+// /console/provision before any page renders), and nothing on the console's
+// render path re-attempts the mapping for that user: EnsureViewerContext only
+// provisions when there are zero memberships, and the reconciler sweep only
+// looks at identities holding no tenant membership. Telling them to retry
+// would be a loop that cannot terminate.
+const accountNotProvisionedMessage = "This workspace has no billing account linked, so a key created here would be rejected by the API with account_not_provisioned. Only one workspace per user can carry the billing link: if you have another workspace, create the key there instead. If this is your only workspace, it has to be linked before it can issue keys."
+
+// accountNotProvisionedCode is the stable machine code for the refusal above.
+// It is deliberately the same string edge-api answers with when the key is
+// used, so a customer report, this refusal and the operator log line PR #1240
+// added all name one thing.
+const accountNotProvisionedCode = "account_not_provisioned"
+
 func handleKeyError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -649,6 +676,18 @@ func handleKeyError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is not disabled"})
 	case errors.Is(err, ErrNotActive):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is not active"})
+	case errors.Is(err, ErrAccountNotProvisioned):
+		// The machine code matters as much as the sentence. The console's
+		// proxy route deliberately never forwards upstream error text to the
+		// browser (app/api/v1/accounts/current/[...path]/route.ts), so without
+		// a code the refusal reaches a customer as the word "Conflict"; with
+		// one, the console renders its own wording for this exact refusal, the
+		// way it already does for last_owner_required. The sentence is still
+		// carried for callers hitting this API directly.
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": accountNotProvisionedMessage,
+			"code":  accountNotProvisionedCode,
+		})
 	default:
 		writeOpaque(w, "request could not be completed", err)
 	}

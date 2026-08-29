@@ -126,6 +126,65 @@ describe("ApiKeyCreateForm validation and creation", () => {
     expect(screen.queryByTestId("created-api-key-secret")).toBeNull();
   });
 
+  // Issue #1330. A workspace with no billing link used to receive a key, a
+  // copy-it-now panel, and a 403 from the gateway on first use. It now receives
+  // a refusal, and the whole point of that refusal is the sentence, so the
+  // generic retry text must not overwrite it.
+  it("an unprovisioned workspace sees the reason, not the generic retry text", async () => {
+    const reason =
+      "This workspace is not connected to billing, so a key created here would be rejected by the API.";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: reason, code: "account_not_provisioned" }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "prod" } });
+    fireEvent.click(submitButton());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(reason);
+    expect(screen.queryByTestId("created-api-key-secret")).toBeNull();
+  });
+
+  it("a refusal with no readable body still says something", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 409 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "prod" } });
+    fireEvent.click(submitButton());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Failed to create key");
+  });
+
+  // The proxy route answers an unrecognised refusal with a bare status class.
+  // "Conflict" is developer jargon and is not what a customer should be shown,
+  // so the absence of a machine code is what keeps the generic wording.
+  it("an uncoded 409 keeps the generic wording rather than showing a status word", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "Conflict" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApiKeyCreateForm />);
+    fireEvent.change(nicknameInput(), { target: { value: "prod" } });
+    fireEvent.click(submitButton());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Failed to create key");
+    expect(alert.textContent).not.toContain("Conflict");
+  });
+
   it("copy button writes the one-time secret to the clipboard exactly once per click", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(createdKeyBody()), { status: 201 }),

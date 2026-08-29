@@ -116,9 +116,53 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 	return buildKeyView(key, policy, spend), nil
 }
 
+// requireBillingTenant refuses a mint for an account edge-api is guaranteed to
+// reject (issue #1330).
+//
+// public.tenant_billing_accounts maps an account to the tenant that bills it,
+// and ResolveSnapshot carries that tenant onto the key's AuthSnapshot. When
+// the mapping is absent the snapshot's TenantID is uuid.Nil, and every
+// fail-closed consumer answers 403 account_not_provisioned on the first
+// request (authz.AuthSnapshot.TenantUUID, PR #1240). Until this check existed
+// the console still returned 201, rendered the secret in its copy-it-now
+// panel, and listed the key as active, so the only signal a customer got was
+// an opaque refusal from a different service naming neither cause nor remedy.
+//
+// This is a gate on issuing a credential, not a repair of the mapping. The
+// missing row cannot simply be created here: signup.EnsureTenantBillingAccount
+// deliberately refuses to guess one (both columns are UNIQUE, so a wrong
+// mapping bills one tenant's usage to another account and is unreachable
+// afterwards), and a user holding several workspaces has exactly one that can
+// ever carry the tenant. Refusing at mint time is what turns that permanent
+// state into something the customer can be told about while they still have a
+// choice.
+//
+// The read and the insert that follows it are not one transaction, and
+// deliberately so. Nothing in this repository ever deletes a
+// tenant_billing_accounts row (both writers only INSERT, and the migrations
+// only backfill), so the only state this window could miss is a mapping that
+// appeared, which is the harmless direction. If one ever were deleted mid
+// flight the resulting key would fail closed at the API boundary exactly as it
+// did before this gate existed, so the worst case is the old behaviour, not a
+// usable credential on an unbillable account.
+func (s *Service) requireBillingTenant(ctx context.Context, accountID uuid.UUID) error {
+	tenantID, err := s.repo.GetTenantIDByAccountID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("apikeys: resolve tenant for account: %w", err)
+	}
+	if tenantID == uuid.Nil {
+		return ErrAccountNotProvisioned
+	}
+	return nil
+}
+
 // CreateKey issues a new API key. The raw secret is returned once and
 // must not be logged, persisted, or included in list responses.
 func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
+	if err := s.requireBillingTenant(ctx, accountID); err != nil {
+		return CreateKeyResult{}, err
+	}
+
 	rawSecret, tokenHash, redactedSuffix, err := generateSecret()
 	if err != nil {
 		return CreateKeyResult{}, fmt.Errorf("apikeys: generate secret: %w", err)
@@ -264,6 +308,14 @@ func (s *Service) RevokeKey(ctx context.Context, accountID, actorUserID, keyID u
 // RotateKey creates a brand-new replacement key and immediately revokes
 // only the rotated source key. Sibling keys are unaffected.
 func (s *Service) RotateKey(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, nickname string, expiresAt *time.Time) (RotateKeyResult, error) {
+	// Rotation mints a fresh secret, so it carries the same trap as creation:
+	// a customer whose key is being refused clicks Rotate and walks away with
+	// a second key refused identically. Checked before the source key is
+	// read, so a refused rotation leaves that key exactly as it was.
+	if err := s.requireBillingTenant(ctx, accountID); err != nil {
+		return RotateKeyResult{}, err
+	}
+
 	existing, err := s.repo.GetKey(ctx, accountID, keyID)
 	if err != nil {
 		return RotateKeyResult{}, fmt.Errorf("apikeys: rotate: %w", err)
