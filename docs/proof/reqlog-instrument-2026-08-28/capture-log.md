@@ -67,3 +67,54 @@ provider identity is stored on `usage_events`/`request_attempts` for the
 general gateway path today, and the repo's provider-blind invariant is a
 second, independent reason it would need a product decision before shipping
 even if the data existed).
+
+## Re-capture after the review fixes
+
+Captured again on 2026-08-28 after the review round on this pull request,
+because the review changed what the page renders: the histogram now counts one
+request per `request_attempt_id` instead of one per usage event, it carries a
+caption naming how many requests it covers and that the number is this page
+rather than the account, the first bucket label reads as the closed range the
+inclusive comparison actually implements, and the last remaining column's
+checkbox is disabled rather than silently springing back.
+
+Same method as above: the console built and run standalone from a private image
+tag (`hive-web-console:fix1293-proof`, never the shared `hive-web-console:ci`)
+on host port 3100, with a temporary route (`app/dev-proof-reqlog/page.tsx`,
+deleted before this commit, never part of the diff) rendering the real
+`UsageLogsHistogram` and `UsageLogsTable` against twelve fixture
+`UsageEventRow` objects spread across eight `request_attempt_id` values. Three
+of the twelve events share one attempt at 62ms and two more share another at
+1.5s, which is exactly the shape that used to be triple and double counted.
+One row carries no latency at all. No login, no cookies, no Supabase call.
+
+Captured with Playwright (chromium) against `http://localhost:3100/...`.
+
+### Frames captured
+
+| Frame | What it shows |
+| --- | --- |
+| `01-histogram-and-latency-column.png` | Seven bars of height one across seven buckets from twelve events, so the three events sharing one attempt count once; the caption `7 measured requests on this page only, not the whole account.`; the first bucket labelled `0-100ms`; the Latency column showing `62ms`, `340ms`, `1.5s`, `14.5s` and an em-dash on the one row with no measured latency |
+| `03-column-floor-disabled.png` | Every column but Time hidden through the checklist: the table keeps one header, and the Time checkbox is checked and disabled rather than clickable |
+
+### Console transcript
+
+```
+URL: http://localhost:3100/dev-proof-reqlog (no credential, no query string, no session)
+console.info: %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+console.log: [HMR] connected
+histogram caption: 7 measured requests on this page only, not the whole account.
+table headers: ["Time","Model","Tokens in","Tokens out","Cached in","Cache write","Credits","Latency","Status","API key"]
+latency column cells: ["62ms","62ms","62ms","340ms","340ms","780ms","1.5s","1.5s","3.2s","8.2s","14.5s","—"]
+last remaining column checkbox disabled: true
+header count at the floor: 1
+```
+
+The bucket-label probe in that run returned an empty array because the selector
+did not match how recharts renders its axis text. The labels are legible in the
+screenshot itself, which is what the frame is for, so the probe was left as it
+came out rather than tuned until it agreed.
+
+No URL captured here carries any credential, session token, or query-string
+secret (the route takes no session at all), so there was nothing to redact in
+either the text or the pixels.

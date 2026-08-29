@@ -65,8 +65,12 @@ export function formatLatencyMs(
   if (value === null || !Number.isFinite(value) || value < 0) {
     return "—";
   }
-  if (value < 1000) {
-    return `${Math.round(value)}ms`;
+  // Round before choosing the unit, not after: picking on the raw value
+  // sends 999.7 down the millisecond branch and then rounds it to a
+  // "1000ms" that the second branch would have written as "1.0s".
+  const roundedMs = Math.round(value);
+  if (roundedMs < 1000) {
+    return `${roundedMs}ms`;
   }
   return `${new Intl.NumberFormat(intlTag(locale, "number"), {
     minimumFractionDigits: 1,

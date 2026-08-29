@@ -55,6 +55,13 @@ describe("formatLatencyMs", () => {
     expect(formatLatencyMs(18450)).toBe("18.5s");
   });
 
+  it("never prints a 1000ms that should have been one second", () => {
+    // The unit is chosen from the rounded value, so nothing between
+    // 999.5 and 1000 can slip out of the millisecond branch as "1000ms".
+    expect(formatLatencyMs(999.7)).toBe("1.0s");
+    expect(formatLatencyMs(999.4)).toBe("999ms");
+  });
+
   it("renders an em-dash for a genuinely unknown latency, never a fabricated zero", () => {
     expect(formatLatencyMs(null)).toBe("—");
   });
