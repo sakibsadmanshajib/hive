@@ -390,12 +390,24 @@ async function seedTenantsAndMemberships(admin, ids, users) {
   }
 }
 
-// The credits each fixture tenant is funded with. Session chat takes a flat
-// 10000 credit hold before it dispatches, so an account below that figure is
-// refused on quota and never reaches a provider. This is deliberately several
-// holds' worth: a spec that sends more than one turn must not start failing on
-// the second.
-const FIXTURE_GRANT_CREDITS = 1_000_000;
+// The credits each fixture tenant is funded with, stated in the current
+// credit unit: 1 USD = 1,000,000,000 credits since the 2026-08-23 rescale
+// (D-046, supabase/migrations/20260823_40_credit_unit_rescale_billion.sql).
+// This is 10.00 USD.
+//
+// Session chat takes a flat 100,000,000 credit hold (0.10 USD,
+// inference.DefaultHoldText) before it dispatches, so an account below that
+// figure is refused on quota and never reaches a provider. The hold is flat
+// and is taken before the alias price is consulted, so a cheap alias does not
+// lower it. This grant is deliberately a hundred holds' worth: a spec that
+// sends more than one turn must not start failing on the second.
+//
+// The rescale migration multiplied stored credit columns by 10,000 but could
+// not reach this constant, so it silently became 0.001 USD and every fixture
+// seeded after it was refused at its first turn (issue #1441). Restating it
+// in any future unit is guarded by TestFixtureGrantCoversTheFlatChatHold in
+// apps/control-plane/internal/accounting.
+const FIXTURE_GRANT_CREDITS = 10_000_000_000;
 
 // seedBilling maps each fixture tenant to the account it settles against and
 // funds that account.
