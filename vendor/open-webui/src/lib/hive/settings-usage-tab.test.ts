@@ -69,10 +69,12 @@ const valueForTestId = (html: string, testId: string): string => {
 	if (at === -1) return '';
 	const open = html.indexOf('>', at);
 	const close = html.indexOf('</span>', open);
-	return html
-		.slice(open + 1, close)
-		.replace(/<[^>]*>/g, '')
-		.trim();
+	// Sliced between the span's own boundaries and compared whole, rather
+	// than stripped of markup: the value is a formatted currency string with
+	// no nested elements, so any tag or comment turning up inside it is a
+	// real change in what the slot renders and should fail this comparison
+	// rather than be quietly removed from it.
+	return html.slice(open + 1, close).trim();
 };
 
 describe('General tab no longer reads as stock Open WebUI branding', () => {
