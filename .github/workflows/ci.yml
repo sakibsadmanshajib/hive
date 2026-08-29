@@ -714,6 +714,18 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-remove-stale-compose-containers.sh
 
+      # Regression guard for install-agent-engine-host.sh's restart decision
+      # (issue #921). That script runs on every merge to main, and stopping the
+      # launcher unit kills the apptainer child holding every in-flight Cowork
+      # session, so restarting it when nothing about the launcher changed
+      # terminally failed every running task on an unrelated deploy. The guard
+      # models `stop` as destructive, which is what KillMode=control-group
+      # actually is, so a script that goes back to restarting unconditionally
+      # fails here rather than on the box. Stubs apptainer, docker, systemctl,
+      # systemd-run and curl on PATH, same trick as the guards above.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-agent-engine-restart-gate.sh
+
       # Regression guard for the PreToolUse guards in .claude/hooks/. It
       # feeds each guard both harness payload shapes plus Claude Code's
       # MultiEdit shape, which nests its edit array at `tool_input.edits`

@@ -11,7 +11,12 @@
 # as an ordinary unprivileged user, and control-plane reaches it over a Unix
 # socket bind-mounted into the container. Nothing in this script needs root.
 #
-# Idempotent: safe to run on every deploy. Prints no secret values.
+# Idempotent, and since issue #921 that is load bearing rather than merely
+# tidy: a run whose built binary, rendered env file and entry script all match
+# what the healthy running daemon was started with leaves that process alone
+# instead of restarting it, because a restart kills every in-flight Cowork
+# session. See "Restart only when something changed" below. Prints no secret
+# values.
 #
 # Required environment:
 #   HIVE_AGENT_ENGINE_LLM_MODEL     model alias the sandboxed agent calls
@@ -36,6 +41,14 @@ RUN_ENTRY="$RUNTIME_DIR/bin/run-engine.sh"
 SOCKET_DIR="$RUNTIME_DIR/run"
 SOCKET_PATH="$SOCKET_DIR/engine.sock"
 UNIT_NAME="hive-agent-engine"
+# Everything below is built and rendered to a `.next` staging path first, so the
+# installed artifacts can be compared against what the running daemon was
+# actually started with before deciding whether to restart it at all. See
+# "Restart only when something changed" further down for why that matters.
+STAGE_BIN="$BIN_PATH.next"
+STAGE_ENV="$ENV_FILE.next"
+STAGE_ENTRY="$RUN_ENTRY.next"
+FINGERPRINT_PATH="$RUNTIME_DIR/engine.fingerprint"
 
 for var in HIVE_AGENT_ENGINE_LLM_MODEL HIVE_AGENT_ENGINE_LLM_BASE_URL \
            HIVE_AGENT_ENGINE_LLM_API_KEY CONTROL_PLANE_INTERNAL_TOKEN; do
@@ -89,19 +102,18 @@ docker run --rm \
   -w /workspace \
   -e CGO_ENABLED=0 \
   golang:1.26-alpine \
-  go build -o /out/agent-engine ./apps/agent-engine/cmd/agent-engine
+  go build -o /out/agent-engine.next ./apps/agent-engine/cmd/agent-engine
 # `go build` already emits 0755, so this is belt and braces for an odd umask.
 # It is allowed to fail: under rootful Docker (every GitHub-hosted runner) the
 # build ran as root and the binary is not ours to chmod, which used to abort
 # the install with "Operation not permitted" even though the file was already
 # correct. What has to hold is that it ends up executable, so assert that
 # rather than trusting either the chmod or the builder.
-chmod 0755 "$BIN_PATH" 2>/dev/null || true
-if [ ! -x "$BIN_PATH" ]; then
-  echo "::error::$BIN_PATH is not executable after the build"
+chmod 0755 "$STAGE_BIN" 2>/dev/null || true
+if [ ! -x "$STAGE_BIN" ]; then
+  echo "::error::$STAGE_BIN is not executable after the build"
   exit 1
 fi
-echo "binary: $BIN_PATH"
 
 # ---------------------------------------------------------------------------
 # Configuration. Written 0600 and read only by the unit below, so the API key
@@ -148,8 +160,8 @@ umask 077
   printf '%s=%q\n' HIVE_SANDBOX_MEMORY_LIMIT "${HIVE_SANDBOX_MEMORY_LIMIT:-4G}"
   printf '%s=%q\n' HIVE_SANDBOX_CPU_LIMIT "${HIVE_SANDBOX_CPU_LIMIT:-2}"
   printf '%s=%q\n' HIVE_SANDBOX_PIDS_LIMIT "${HIVE_SANDBOX_PIDS_LIMIT:-512}"
-} > "$ENV_FILE"
-chmod 0600 "$ENV_FILE"
+} > "$STAGE_ENV"
+chmod 0600 "$STAGE_ENV"
 
 # Apptainer enforces this sandbox's --memory/--cpus/--pids-limit through
 # rootless cgroups, which need a systemd user session to delegate them. A
@@ -157,7 +169,7 @@ chmod 0600 "$ENV_FILE"
 # with "cannot use cgroups - DBUS_SESSION_BUS_ADDRESS is not set", measured on
 # this box. Running under the user manager (below) supplies both; they are
 # pinned here as well so a hand-run daemon behaves identically.
-cat > "$RUN_ENTRY" <<EOF
+cat > "$STAGE_ENTRY" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
@@ -167,16 +179,77 @@ set -a
 set +a
 exec "$BIN_PATH" -serve "$SOCKET_PATH"
 EOF
-chmod 0700 "$RUN_ENTRY"
+chmod 0700 "$STAGE_ENTRY"
 umask 022
+
+# ---------------------------------------------------------------------------
+# Restart only when something changed (issue #921).
+#
+# This script runs on EVERY merge to main: deploy-demo-box.yml's paths filter
+# fires on deploy/**, apps/web-console/**, vendor/open-webui/**,
+# supabase/migrations/** and more, none of which can change anything below.
+# Stopping the unit is not free. It is a systemd user service with the default
+# KillMode=control-group and the sandbox is a foreground `apptainer run` child
+# of the launcher process, so the stop kills the running agent, not merely the
+# launcher's in-memory session registry. Control-plane then polls a session the
+# new launcher never heard of, gets the 404 that maps onto
+# agenttask.ErrEngineSessionGone, and since PR #914 that is terminal on first
+# detection: every in-flight Cowork task died within one 15 second poll of any
+# merge. Measured on the box on 2026-08-29: ten stop/start pairs in eight
+# hours, and two independent container builds of this binary produced bytes
+# identical to the copy already installed there, so every one of those ten
+# restarts reinstalled exactly what was already running.
+#
+# So compare first. The fingerprint covers the three things the running daemon
+# actually baked in: the binary, the env file it sources, and the entry script
+# that wires them together. The SIF is deliberately NOT in it. serve.go reads
+# HIVE_AGENT_ENGINE_SIF_PATH once at start-up but only as a path, and
+# sandbox.BuildArgv reads the file itself per launch, so a replaced SIF takes
+# effect on the next task with no restart, and hashing a multi-gigabyte image
+# on every deploy would cost more than the restart it is trying to avoid.
+#
+# A drain was considered and rejected rather than skipped: Cowork tasks run
+# sixteen to twenty-two minutes against this job's 30 minute timeout, so
+# waiting for one would trade a dead task for a failed deploy.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+
+# Content hashes only. The env file holds the model API key and the internal
+# token, so nothing here ever prints or stores the file itself.
+want_fingerprint=$(sha256sum "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY" | awk '{print $1}' | sha256sum | cut -d' ' -f1)
+have_fingerprint=$(cat "$FINGERPRINT_PATH" 2>/dev/null || true)
+
+daemon_healthy() {
+  systemctl --user is-active --quiet "$UNIT_NAME.service" || return 1
+  [ -S "$SOCKET_PATH" ] || return 1
+  curl -sS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health >/dev/null 2>&1
+}
+
+if [ -n "$have_fingerprint" ] && [ "$have_fingerprint" = "$want_fingerprint" ] && daemon_healthy; then
+  rm -f "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY"
+  running_pid=$(systemctl --user show "$UNIT_NAME.service" -p MainPID --value 2>/dev/null || echo "?")
+  echo "binary: $BIN_PATH (unchanged)"
+  echo "agent-engine daemon already runs these exact artifacts; leaving PID $running_pid and its in-flight sessions alone"
+  exit 0
+fi
+
+mv -f "$STAGE_BIN" "$BIN_PATH"
+mv -f "$STAGE_ENV" "$ENV_FILE"
+mv -f "$STAGE_ENTRY" "$RUN_ENTRY"
+chmod 0600 "$ENV_FILE"
+chmod 0700 "$RUN_ENTRY"
+echo "binary: $BIN_PATH"
+
+# Cleared BEFORE the restart, not after: a run that dies between the stop and a
+# healthy start must not leave a fingerprint claiming these artifacts are live,
+# or the next deploy would skip the restart the box actually needs.
+rm -f "$FINGERPRINT_PATH"
 
 # ---------------------------------------------------------------------------
 # The unit. A transient systemd user service, so it keeps running after the
 # CI job that started it exits (the runner reaps its own orphans), restarts on
 # failure, and gets a delegated cgroup for free.
 # ---------------------------------------------------------------------------
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 systemctl --user stop "$UNIT_NAME.service" 2>/dev/null || true
 rm -f "$SOCKET_PATH"
 systemd-run --user --unit="$UNIT_NAME" --collect \
@@ -194,4 +267,8 @@ if ! curl -sS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health;
   exit 1
 fi
 echo
+# Only now, with the new unit answering, is it true that these artifacts are
+# what is running. The next deploy compares against this and skips the restart
+# when nothing changed.
+printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"
