@@ -63,8 +63,24 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 		return "", ErrWorkspaceNotFound
 	}
 
+	// Issue #896: account_memberships' hive_app policy requires
+	// app.current_actor_user_id set LOCAL to the caller's own id (Shape A --
+	// every call site passes the caller's own userID here, never a target
+	// user's). See apps/control-plane/internal/accounts/repository.go's
+	// withActorTx doc comment for why this needs an explicit transaction
+	// rather than a bare set_config + separate query.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("platform: begin membership role tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", userID.String()); err != nil {
+		return "", fmt.Errorf("platform: set actor scope: %w", err)
+	}
+
 	var role string
-	err = s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT role
 		FROM public.account_memberships
 		WHERE account_id = $1 AND user_id = $2 AND status = 'active'
@@ -75,6 +91,9 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 			return "", nil
 		}
 		return "", fmt.Errorf("platform: get membership role: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("platform: commit membership role tx: %w", err)
 	}
 	return MembershipRole(role), nil
 }
@@ -132,8 +151,21 @@ func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.
 // platform-admin account held both from the moment the membership row was
 // written, without ever accepting the invitation.
 func (s *pgxRoleStore) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	// Issue #896: same actor-scope requirement as GetMembershipRole above.
+	// Every call site (WorkspaceAdminGate.Require, accounts.Service twice)
+	// passes viewer.UserID, the caller's own id, never a target user's.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("platform: begin platform admin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", userID.String()); err != nil {
+		return false, fmt.Errorf("platform: set actor scope: %w", err)
+	}
+
 	var isAdmin bool
-	err := s.pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1
 			FROM public.account_memberships m
@@ -143,9 +175,11 @@ func (s *pgxRoleStore) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (b
 			  AND m.status = 'active'
 			  AND a.is_platform_admin = true
 		)
-	`, userID).Scan(&isAdmin)
-	if err != nil {
+	`, userID).Scan(&isAdmin); err != nil {
 		return false, fmt.Errorf("platform: is platform admin: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("platform: commit platform admin tx: %w", err)
 	}
 	return isAdmin, nil
 }
