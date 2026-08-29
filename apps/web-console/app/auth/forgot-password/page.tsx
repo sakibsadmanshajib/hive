@@ -8,6 +8,7 @@ import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
+import { resolveClientOrigin } from "@/lib/http/client-origin";
 
 export default function ForgotPasswordPage() {
   const supabase = createClient();
@@ -21,11 +22,11 @@ export default function ForgotPasswordPage() {
     setError(null);
     setLoading(true);
 
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ??
-      (typeof window !== "undefined"
-        ? window.location.origin
-        : "http://localhost:3000");
+    // Loopback-demoted (issue #487). `.env.example` ships
+    // NEXT_PUBLIC_APP_URL=http://localhost:3000 and the value is baked into
+    // this bundle at build time, so a build that carries the example default
+    // forward would otherwise mail a link to the recipient's own machine.
+    const appUrl = resolveClientOrigin();
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${appUrl}/auth/callback?next=/auth/reset-password`,

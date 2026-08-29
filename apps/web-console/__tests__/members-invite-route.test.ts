@@ -27,6 +27,17 @@ vi.mock("../lib/control-plane/client", () => ({
   },
 }));
 
+function jsonRequest(email: string, role?: string): Request {
+  return new Request("http://localhost:3000/api/console/members", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(role === undefined ? { email } : { email, role }),
+  });
+}
+
 function formRequest(email: string, role?: string): Request {
   const body = new URLSearchParams(
     role === undefined ? { email } : { email, role },
@@ -45,10 +56,17 @@ describe("app/api/console/members/route.ts POST", () => {
       data: { user: { id: "u1", email: "owner@hive.com" } },
       error: null,
     });
-    mockCreateInvitation.mockResolvedValue(undefined);
+    // The default is the state every deployment without a relay is in, and the
+    // state the demo box is in while its relay refuses every message.
+    mockCreateInvitation.mockResolvedValue({
+      id: "inv-1",
+      token: "raw-token-value",
+      delivered: false,
+      delivery: "not_configured",
+    });
   });
 
-  it("proxies the invite server-side and redirects back to members on success", async () => {
+  it("proxies the invite server-side and redirects back with the real delivery outcome", async () => {
     const { POST } = await import("../app/api/console/members/route");
     const res = await POST(formRequest("teammate@example.com"));
 
@@ -59,7 +77,84 @@ describe("app/api/console/members/route.ts POST", () => {
     expect(res.status).toBe(303);
     const location = res.headers.get("location") ?? "";
     expect(location).toContain("/console/members");
-    expect(location).toContain("invited=1");
+    // Not a bare success flag. The flag it replaced was rendered as
+    // "Invitation sent" while nothing in the product could send anything
+    // (issue #1440).
+    expect(location).toContain("invited=not_configured");
+    expect(location).not.toContain("invited=1");
+  });
+
+  // THE GUARD FOR ISSUE #1440, ON THE ROUTE.
+  //
+  // The acceptance token is bearer-equivalent and the database keeps only its
+  // hash, so a token that lands in a redirect URL is both a leak (history,
+  // referrer, server logs) and the only copy in existence. It must never appear
+  // in a Location header under any outcome.
+  it.each(["sent", "not_configured", "failed"] as const)(
+    "never puts the acceptance token in the redirect for outcome %s",
+    async (delivery) => {
+      mockCreateInvitation.mockResolvedValue({
+        id: "inv-1",
+        token: "raw-token-value",
+        delivered: delivery === "sent",
+        delivery,
+      });
+      const { POST } = await import("../app/api/console/members/route");
+      const res = await POST(formRequest("teammate@example.com"));
+
+      const location = res.headers.get("location") ?? "";
+      expect(location).not.toContain("raw-token-value");
+      expect(location).toContain(`invited=${delivery}`);
+    },
+  );
+
+  it("returns the invitation link and the delivery outcome to a JSON caller", async () => {
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(jsonRequest("teammate@example.com"));
+
+    expect(res.status).toBe(201);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    const body = (await res.json()) as {
+      delivered: boolean;
+      delivery: string;
+      link: string;
+    };
+    expect(body.delivered).toBe(false);
+    expect(body.delivery).toBe("not_configured");
+    // The link the inviting user passes on by hand, anchored to the canonical
+    // app origin rather than the request host.
+    expect(body.link).toBe(
+      "http://localhost:3000/invitations/accept?token=raw-token-value",
+    );
+  });
+
+  it("reports a delivered invitation as delivered, and only then", async () => {
+    mockCreateInvitation.mockResolvedValue({
+      id: "inv-1",
+      token: "raw-token-value",
+      delivered: true,
+      delivery: "sent",
+    });
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(jsonRequest("teammate@example.com"));
+
+    const body = (await res.json()) as { delivered: boolean; delivery: string };
+    expect(body.delivered).toBe(true);
+    expect(body.delivery).toBe("sent");
+  });
+
+  it("gives a JSON caller a JSON error rather than a redirect", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockCreateInvitation.mockRejectedValue(
+      new ControlPlaneError(403, "internal: provider acme rejected db row 42"),
+    );
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(jsonRequest("teammate@example.com"));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("permission");
+    expect(body.error).not.toContain("provider");
   });
 
   // Issue #536: the invite form now carries a role selector.

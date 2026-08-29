@@ -206,8 +206,16 @@ func (s *stubRepo) GetAccountByID(_ context.Context, id uuid.UUID) (*accounts.Ac
 	return acct, nil
 }
 
-func (s *stubRepo) CreateInvitation(_ context.Context, invitation accounts.Invitation) error {
+func (s *stubRepo) CreateInvitation(_ context.Context, invitation accounts.Invitation) (uuid.UUID, error) {
 	s.invitations[invitation.TokenHash] = &invitation
+	return invitation.ID, nil
+}
+
+func (s *stubRepo) ListOutstandingInvitations(_ context.Context, _ uuid.UUID) ([]accounts.Invitation, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) DeleteInvitation(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
 

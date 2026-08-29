@@ -180,7 +180,22 @@ services:
       GOTRUE_SMTP_PORT: ${ENTERPRISE_SMTP_PORT:-587}
       GOTRUE_SMTP_USER: ${ENTERPRISE_SMTP_USER:-}
       GOTRUE_SMTP_PASS: ${ENTERPRISE_SMTP_PASS:-}
-      GOTRUE_SMTP_ADMIN_EMAIL: ${ENTERPRISE_SMTP_ADMIN_EMAIL:-admin@example.com}
+      # The address auth mail is sent AS, and it needs its own variable.
+      #
+      # It used to be ENTERPRISE_SMTP_ADMIN_EMAIL, which is simultaneously
+      # Alertmanager's alert RECIPIENT (deploy/docker/docker-compose.yml). One
+      # variable cannot be both a no-reply sender and the mailbox a human reads,
+      # and pointing it at an authenticated sending domain would have silently
+      # redirected every ops alert to an unread no-reply address.
+      #
+      # The default sits on hive.scubed.co because that is the domain the relay
+      # has authenticated: it carries the Brevo DKIM CNAMEs (brevo1/brevo2) and a
+      # DMARC record. scubed.com.bd has neither, and its SPF record ends in -all
+      # while listing only Outlook, so mail sent as an address there through this
+      # relay fails authentication at the receiver with nothing to fall back on.
+      GOTRUE_SMTP_ADMIN_EMAIL: ${HIVE_MAIL_FROM:-no_reply@hive.scubed.co}
+      # Without this the inbox list shows a bare address rather than a name.
+      GOTRUE_SMTP_SENDER_NAME: ${HIVE_MAIL_FROM_NAME:-Hive}
       GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
