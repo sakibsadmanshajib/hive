@@ -288,11 +288,24 @@ func (o *Orchestrator) executeSync(
 
 	// 7b. Zero-content guard (issue #1171). A chat completion whose every
 	// choice finished with finish_reason=length and no visible output is the
-	// reasoning-burn signature: a member spent the whole ceiling on hidden
-	// reasoning. Retry once against the same pool; if the retry is empty too,
-	// or fails, keep the original response and settle fail-closed below.
+	// reasoning-burn signature: the upstream spent the whole ceiling on hidden
+	// reasoning. Retry once; if the retry is empty too, or fails, keep the
+	// original response and settle fail-closed below.
+	//
+	// The gate used to be route.ReasoningReserveTokens > 0, on the reading that
+	// the column marks a pool whose members reason. It does not: it marks the
+	// three free-pool members somebody happened to enumerate in migration
+	// 20260826_01, and deepseek-v4-flash carries the column default of zero
+	// while reasoning heavily. Measured on the demo box on 2026-08-29, second
+	// turn of a tool round trip, ceiling 120: reasoning_tokens came back as
+	// 117 and 124 on two of eight attempts, both with content null and
+	// finish_reason length. Those requests reached the caller as an empty
+	// string with no retry, which is what made the live conformance suite fail
+	// intermittently on the multi-turn tool path. The response shape is the
+	// honest signal and needs no catalogue column to interpret: an empty
+	// length completion is worth one retry whatever route produced it.
 	zeroContentCaptured := false
-	if endpoint == EndpointChatCompletions && route.ReasoningReserveTokens > 0 && isEmptyLengthCompletion(normalized) {
+	if endpoint == EndpointChatCompletions && isEmptyLengthCompletion(normalized) {
 		log.Printf("inference: zero-content length completion on a reserving pool, retrying once request_id=%s alias=%s", requestID, model)
 		retried, rerr := dispatch(ctx, route.LiteLLMModelName, body)
 		if rerr != nil {

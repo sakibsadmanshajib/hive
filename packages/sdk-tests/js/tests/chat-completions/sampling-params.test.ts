@@ -45,10 +45,15 @@ describe("Chat Completions sampling parameters", () => {
   // resolved route reasoning reserve (migration 20260826_01, issue #1171):
   // on a pool with reasoning members, hidden reasoning burns the reserve so
   // the caller budget survives as visible content. So the contract is
-  // max_tokens on a route with no reserve, and max_tokens plus the reserve on
-  // one that has it. Both are asserted, because only the first can catch
-  // max_tokens being dropped outright.
-  const REASONING_RESERVE_TOKENS = 4096;
+  // max_tokens on every route, full stop. An earlier version of this file
+  // asserted a reserve-inflated ceiling on the pooled alias, on the strength
+  // of migration 20260826_01. That inflation is GONE: PR #1225 added it, issue
+  // #1283 removed it, and the current code sends the caller ceiling upstream
+  // untouched, which is also what OpenAI specifies for a reasoning model where
+  // reasoning tokens count against the ceiling. Verified against the live
+  // gateway on 2026-08-29: a ceiling of 120 came back as exactly 120
+  // completion tokens, not 4216. Both aliases are asserted because they
+  // resolve to different routes, not because the contract differs.
 
   // Both ceiling tests need a prompt whose NATURAL answer is far longer than
   // the ceiling, or the assertion cannot fail: ask for one short fact and a
@@ -57,7 +62,7 @@ describe("Chat Completions sampling parameters", () => {
   // answer that only stops early because the ceiling stopped it.
   const LONG_ANSWER_PROMPT = "Count from 1 to 200, one number per line.";
 
-  it("honors max_tokens plus the reasoning reserve on the pooled alias", async () => {
+  it("honors max_tokens on the pooled alias", async () => {
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [{ role: "user", content: LONG_ANSWER_PROMPT }],
@@ -65,16 +70,14 @@ describe("Chat Completions sampling parameters", () => {
     });
 
     expect(response.usage).toBeDefined();
-    expect(response.usage!.completion_tokens).toBeLessThanOrEqual(
-      8 + REASONING_RESERVE_TOKENS,
-    );
+    expect(response.usage!.completion_tokens).toBeLessThanOrEqual(8);
   });
 
-  it("honors max_tokens exactly on a route carrying no reasoning reserve", async () => {
-    // deepseek-v4-flash is not a free pool member, so its
-    // provider_routes.reasoning_reserve_tokens is the column default of zero
-    // and the caller ceiling reaches the provider untouched. This is the
-    // assertion that goes red if max_tokens stops being forwarded at all.
+  it("honors max_tokens on the pinned single-route alias", async () => {
+    // A second route, not a second contract. deepseek-v4-flash reasons
+    // heavily and still respects the ceiling exactly, which is what makes an
+    // empty answer on this alias a reasoning burn rather than a dropped
+    // parameter (issue #1326 and the zero-content guard).
     const response = await client.chat.completions.create({
       model: TOOL_CAPABLE_MODEL,
       messages: [{ role: "user", content: LONG_ANSWER_PROMPT }],

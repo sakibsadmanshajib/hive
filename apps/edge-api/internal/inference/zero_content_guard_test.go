@@ -176,8 +176,20 @@ func TestExecuteSync_ZeroContentLength_Twice_CapturesHold(t *testing.T) {
 
 // TestExecuteSync_NonReservingAlias_NeverRetries pins scope: reserve 0 (every
 // ordinary alias) keeps exactly one dispatch even on an empty-length answer.
-func TestExecuteSync_NonReservingAlias_NeverRetries(t *testing.T) {
-	litellm := newScriptedLiteLLM(t, []string{emptyLengthBody(76)})
+// TestExecuteSync_ZeroContentLength_RetriesOnAZeroReserveRoute is the inverse
+// of what this test used to assert. It required that a route with no reasoning
+// reserve NEVER retried an empty length completion, on the reading that the
+// reserve column marks the pools that reason. It does not: it marks the three
+// free-pool members enumerated in migration 20260826_01, and
+// deepseek-v4-flash carries the column default of zero while reasoning
+// heavily. Measured on the demo box on 2026-08-29, second turn of a tool round
+// trip at ceiling 120: two of eight attempts came back with content null,
+// finish_reason length and reasoning_tokens of 117 and 124. Under the old gate
+// those reached the caller as an empty string with no retry, which is what
+// made the live conformance suite fail intermittently on the multi-turn tool
+// path that Claude Code compatibility rests on.
+func TestExecuteSync_ZeroContentLength_RetriesOnAZeroReserveRoute(t *testing.T) {
+	litellm := newScriptedLiteLLM(t, []string{emptyLengthBody(76), contentBody()})
 	defer litellm.server.Close()
 	routing := newRoutingMock(litellm.server.URL) // reserve 0
 	defer routing.Close()
@@ -193,11 +205,14 @@ func TestExecuteSync_NonReservingAlias_NeverRetries(t *testing.T) {
 	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, body, "gpt-4o",
 		NeedFlags{NeedChatCompletions: true}, DefaultHoldText, orch.litellm.ChatCompletion, normalizeChatCompletion)
 
-	if got := atomic.LoadInt64(&litellm.hits); got != 1 {
-		t.Errorf("provider dispatched %d time(s), want 1: the guard is scoped to reserving pools only", got)
+	if got := atomic.LoadInt64(&litellm.hits); got != 2 {
+		t.Errorf("provider dispatched %d time(s), want 2: an empty length completion is worth one retry whatever route produced it", got)
 	}
 	if hdr := w.Header().Get(emptyContentHeader); hdr != "" {
-		t.Errorf("%s set on a non-reserving alias; must stay absent", emptyContentHeader)
+		t.Errorf("%s set even though the retry produced content; must stay absent", emptyContentHeader)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "hello there") {
+		t.Errorf("caller got the empty first answer rather than the retry: %s", body)
 	}
 }
 
