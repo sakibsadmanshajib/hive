@@ -122,6 +122,14 @@ umask 077
   printf '%s=%q\n' HIVE_AGENT_ENGINE_LLM_BASE_URL "$HIVE_AGENT_ENGINE_LLM_BASE_URL"
   printf '%s=%q\n' HIVE_AGENT_ENGINE_LLM_API_KEY "$HIVE_AGENT_ENGINE_LLM_API_KEY"
   printf '%s=%q\n' HIVE_AGENT_ENGINE_SESSION_API_KEY "${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}"
+  # Appended to the sandboxed agent's system prompt
+  # (agent_context.system_message_suffix on the launch payload). Unset is the
+  # normal state and the pre-existing behaviour: no agent_context is sent at
+  # all and the vendored OpenHands preset produces the prompt unchanged. Set
+  # it to shape how that agent behaves without touching the vendored SDK. The
+  # value is written through printf %q like every other line here, so a
+  # multi-line prompt containing quotes or $(...) is read back as data.
+  printf '%s=%q\n' HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX "${HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX:-}"
   printf '%s=%q\n' CONTROL_PLANE_URL "${CONTROL_PLANE_URL:-http://127.0.0.1:8081}"
   printf '%s=%q\n' CONTROL_PLANE_INTERNAL_TOKEN "$CONTROL_PLANE_INTERNAL_TOKEN"
   # Same reasoning as CONTROL_PLANE_URL above: this daemon runs as a bare

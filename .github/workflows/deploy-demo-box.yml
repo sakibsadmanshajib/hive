@@ -742,6 +742,13 @@ jobs:
           HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
           HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
           HIVE_AGENT_ENGINE_SESSION_API_KEY: ${{ secrets.HIVE_AGENT_ENGINE_SESSION_API_KEY }}
+          # Appended to the sandboxed agent's system prompt. A repository
+          # variable rather than a literal, and empty by default, so the
+          # deployed agent keeps the vendored preset's prompt exactly as it is
+          # today until someone deliberately sets it. Changing what every
+          # Cowork task is told is a product decision, and this line is the
+          # versioned place to record it when one is made.
+          HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX: ${{ vars.HIVE_AGENT_ENGINE_SYSTEM_MESSAGE_SUFFIX }}
         run: |
           set -euo pipefail
           if [ -z "${CONTROL_PLANE_INTERNAL_TOKEN:-}" ]; then

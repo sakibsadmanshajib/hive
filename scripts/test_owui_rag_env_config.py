@@ -980,6 +980,265 @@ def test_env_example_documents_the_upload_limits() -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# Prompt templates: the task family and the chat-surface RAG template.
+#
+# These are the prompts Open WebUI itself sends to a model, separately from
+# whatever the user typed: the chat title, the tag list, the follow-up
+# suggestions, the retrieval and web-search query it writes for itself, the
+# prompt-based tool-calling preamble, and the instruction wrapped around
+# retrieved documents. Every one of them is a persisted-config row with no
+# editor anywhere on this deployment. Open WebUI's admin panel is deleted from
+# the fork's source and 404'd at the proxy, and every write verb under
+# /api/v1/configs is denied there too, so before this the only way to change
+# one was a direct SQLite write inside the box's owui-data volume.
+#
+# The same first-boot-wins trap as #722, confirmed against the demo box's own
+# database on 2026-08-29 rather than assumed: `rag.template` carries the full
+# upstream default text and all nine `*.prompt_template` rows carry "", every
+# one of them written at first boot. So an environment variable alone was a
+# silent no-op there, exactly as RAG_EMBEDDING_MODEL was in #722 and
+# RAG_FILE_MAX_SIZE was in #1405.
+#
+# The empty string is not "no template". Each consumer substitutes its own
+# DEFAULT_*_PROMPT_TEMPLATE when the persisted value is falsy, so the shipped
+# text lives in Python and the row is an override slot. `rag.template` is the
+# exception: its default IS the full text, seeded verbatim.
+
+
+PROMPT_TEMPLATE_KEYS = {
+    "rag.template": "RAG_TEMPLATE",
+    "task.title.prompt_template": "TITLE_GENERATION_PROMPT_TEMPLATE",
+    "task.tags.prompt_template": "TAGS_GENERATION_PROMPT_TEMPLATE",
+    "task.image.prompt_template": "IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE",
+    "task.follow_up.prompt_template": "FOLLOW_UP_GENERATION_PROMPT_TEMPLATE",
+    "task.query.prompt_template": "QUERY_GENERATION_PROMPT_TEMPLATE",
+    "task.autocomplete.prompt_template": "AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE",
+    "task.voice.prompt_template": "VOICE_MODE_PROMPT_TEMPLATE",
+    "task.tools.prompt_template": "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE",
+    "chat.context_compaction.prompt_template": "CONTEXT_COMPACTION_PROMPT_TEMPLATE",
+}
+
+
+def test_every_prompt_template_follows_the_environment() -> None:
+    """The whole family, each through its own variable, over a persisted row
+    that already exists. One assertion per key rather than a spot check,
+    because a map entry with the wrong variable name on either side is exactly
+    the mistake that produces a knob nobody can turn."""
+    stored = {key: "" for key in PROMPT_TEMPLATE_KEYS}
+    config = FakeConfig(stored)
+    environ = {
+        variable: f"### Task:\nHIVEPROOF for {key}\n"
+        for key, variable in PROMPT_TEMPLATE_KEYS.items()
+    }
+    applied = reconcile(config, environ)
+    for key, variable in PROMPT_TEMPLATE_KEYS.items():
+        expected = f"### Task:\nHIVEPROOF for {key}\n"
+        assert applied[key] == expected, f"{variable} did not reach {key}: {applied}"
+        assert config.stored[key] == expected, config.stored[key]
+
+
+def test_the_prompt_template_variable_names_are_upstreams_own() -> None:
+    """Asserted against the vendored config.py, not against this file's own
+    table. An operator reading Open WebUI's documentation looks for the name
+    upstream reads; inventing a Hive-specific spelling would mean the
+    documented variable silently does nothing, which is the failure this whole
+    module exists to end. This also catches an upstream rename on a digest
+    bump."""
+    config_py = (
+        Path(__file__).resolve().parents[1]
+        / "vendor"
+        / "open-webui"
+        / "backend"
+        / "open_webui"
+        / "config.py"
+    ).read_text(encoding="utf-8")
+    for key, variable in PROMPT_TEMPLATE_KEYS.items():
+        assert re.search(
+            rf"^\s*'{re.escape(key)}':", config_py, re.MULTILINE
+        ), f"{key} is no longer a DEFAULT_CONFIG key upstream"
+        assert re.search(
+            rf"os\.getenv\(\s*'{re.escape(variable)}'", config_py
+        ), f"upstream no longer reads {variable}"
+
+
+def test_unset_prompt_template_env_leaves_the_persisted_value_alone() -> None:
+    """A deployment that sets none of them keeps today's behaviour byte for
+    byte. A system prompt reaches every user of a surface, so a default that
+    drifted here would be a product-wide behaviour change nobody asked for."""
+    stored = {key: f"chosen by an administrator: {key}" for key in PROMPT_TEMPLATE_KEYS}
+    config = FakeConfig(dict(stored))
+    applied = reconcile(config, {})
+    for key in PROMPT_TEMPLATE_KEYS:
+        assert key not in applied, applied
+        assert config.stored[key] == stored[key], config.stored[key]
+
+
+def test_a_blank_prompt_template_does_not_erase_the_persisted_one() -> None:
+    """Blank is "I am not setting this", not "set it to empty". Same rule as
+    every other key here, and it matters more for these: an empty
+    `rag.template` row is falsy, so Open WebUI would fall back to its own
+    default and the deployment would look configured while sending upstream's
+    prompt."""
+    config = FakeConfig({"rag.template": "custom grounding text"})
+    reconcile(config, {"RAG_TEMPLATE": "   \n  "})
+    assert config.stored["rag.template"] == "custom grounding text", config.stored
+
+
+def test_prompt_template_whitespace_is_preserved() -> None:
+    """Every other key in this module is stripped on the way in. A prompt is
+    not a model id: its leading indentation and its trailing newline are part
+    of what the model receives, and upstream's own read is a bare os.getenv
+    with no strip at all, so stripping here would persist a value that differs
+    from the one a first boot would have seeded."""
+    applied = hive_rag_env_config.overrides(
+        {"TITLE_GENERATION_PROMPT_TEMPLATE": "  ### Task:\nGo.\n\n"}
+    )
+    assert applied["task.title.prompt_template"] == "  ### Task:\nGo.\n\n", applied
+
+
+def test_prompt_templates_persist_as_strings() -> None:
+    """The type a first boot seeds. Open WebUI reads these rows straight into
+    a template renderer, so a bool or an int coerced in from one of the other
+    frozensets would blow up at request time rather than at boot."""
+    applied = hive_rag_env_config.overrides({"RAG_TEMPLATE": "true"})
+    assert applied["rag.template"] == "true", applied
+    assert isinstance(applied["rag.template"], str), applied
+
+
+def test_compose_passes_prompt_templates_through_without_defining_them() -> None:
+    """The knob ships off, and the shape of "off" is load bearing here.
+
+    Compose's null form (`VAR:` with no value) resolves from the environment
+    and, when the variable is set nowhere, leaves it OUT of the container
+    entirely. The `${VAR:-}` form does not: it always defines the variable,
+    with the empty string. Measured both ways against a running container
+    rather than assumed, and both still resolve a real value from --env-file
+    and from the shell, which are the two paths an operator actually uses.
+
+    That difference is the whole of `test_an_always_present_rag_template_would_
+    break_upstreams_own_default` below. It applies to only one of the ten
+    today, and the null form is used for all ten anyway, because the same
+    upstream default could be added to any of the others on a digest bump and
+    nothing would fail if the difference were left to chance."""
+    compose = _compose_text()
+    for variable in PROMPT_TEMPLATE_KEYS.values():
+        assert re.search(
+            rf"^      {variable}:$", compose, re.MULTILINE
+        ), f"docker-compose.yml must pass {variable} through in compose's null form"
+        assert (
+            f"{variable}: ${{{variable}:-}}" not in compose
+        ), (
+            f"{variable} uses the ${{VAR:-}} form, which defines it as the empty "
+            f"string in the container even when nobody set it"
+        )
+
+
+def test_an_always_present_rag_template_would_break_upstreams_own_default() -> None:
+    """The one key of the ten whose upstream default is not the empty string,
+    and the reason the test above insists on the null form.
+
+    `RAG_TEMPLATE = os.getenv('RAG_TEMPLATE', DEFAULT_RAG_TEMPLATE)`, and
+    os.getenv returns its default only when the key is ABSENT: present and
+    empty yields ''. So defining the variable unconditionally would make
+    DEFAULT_CONFIG['rag.template'] evaluate to '' at import, and a FRESH
+    volume's seed_defaults would persist that blank row instead of upstream's
+    real default text. The reconcile cannot repair it either, because blank
+    means unset there, so it never touches the row.
+
+    Nothing breaks at the model today, because `rag_template()` substitutes
+    DEFAULT_RAG_TEMPLATE for a blank value at request time. That masking is
+    exactly why this needs a test: the defect would be invisible in behaviour
+    while the persisted row silently diverged from what a first boot should
+    have written, and the next reader of that row without the same fallback
+    (a restored admin panel, an export or diff tool, a migration) would be the
+    one to find it.
+
+    Asserted against the vendored source, so a digest bump that gives any of
+    the other nine a non-empty default fails here instead of quietly widening
+    the hazard."""
+    config_py = (
+        Path(__file__).resolve().parents[1]
+        / "vendor"
+        / "open-webui"
+        / "backend"
+        / "open_webui"
+        / "config.py"
+    ).read_text(encoding="utf-8")
+    with_real_defaults = []
+    for variable in PROMPT_TEMPLATE_KEYS.values():
+        match = re.search(
+            rf"^{re.escape(variable)} = os\.getenv\(\s*'{re.escape(variable)}',\s*([^)]+)\)",
+            config_py,
+            re.MULTILINE,
+        )
+        assert match, f"upstream no longer reads {variable} in the expected shape"
+        if match.group(1).strip() not in ("''", '""'):
+            with_real_defaults.append(variable)
+    assert with_real_defaults == ["RAG_TEMPLATE"], (
+        "the set of prompt variables whose upstream default is not the empty "
+        f"string changed to {with_real_defaults}. Every one of them seeds a "
+        "real default that an always-present empty environment variable would "
+        "silently replace with a blank row on a fresh volume."
+    )
+
+
+def test_no_prompt_template_default_is_baked_into_the_repo() -> None:
+    """The inverse of the test above, and the one that fails if someone later
+    helpfully seeds a Hive prompt into compose or into the deploy workflow's
+    env. Changing what every user of a surface is told is a product decision,
+    not a side effect of adding a knob."""
+    compose = _compose_text()
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "deploy-demo-box.yml"
+    ).read_text(encoding="utf-8")
+    for variable in PROMPT_TEMPLATE_KEYS.values():
+        assert not re.search(
+            rf"^\s*{variable}:\s*['\"]", compose, re.MULTILINE
+        ), f"{variable} carries a literal default in docker-compose.yml"
+        assert (
+            variable not in workflow
+        ), f"{variable} is set for the demo box; that is a product decision, not a knob"
+
+
+def test_prompt_templates_are_logged_by_size_not_by_value() -> None:
+    """The startup line names every reconciled key with its value, which is
+    right for a model id and wrong for ten prompt templates: upstream's
+    `rag.template` default alone is about twenty five lines, so logging these
+    verbatim would push kilobytes of prose into the boot log on every single
+    start and bury the one line an operator reads it for. A prompt is also
+    not automatically safe to print, since an operator may put internal policy
+    text in one, and unlike the api keys above nothing here marks it as such.
+
+    Named with a length rather than dropped, so the log still answers the only
+    question it is read for, which is whether the key was reconciled at all."""
+    summary = hive_rag_env_config.log_summary(
+        {
+            "rag.template": "x" * 312,
+            "rag.embedding_model": "hive-embedding-default",
+        }
+    )
+    assert "rag.template=<312 chars>" in summary, summary
+    assert "x" * 20 not in summary, "the template's text was logged verbatim"
+    # The keys that are not prompts must be unaffected: their value IS the
+    # signal, which is the whole reason this module logs values at all.
+    assert "rag.embedding_model=hive-embedding-default" in summary, summary
+
+
+def test_env_example_documents_every_prompt_template() -> None:
+    """An operator changing a prompt has no UI to do it in on this deployment,
+    so .env.example is where they have to find the lever. A knob nobody can
+    find is the same as no knob."""
+    env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(
+        encoding="utf-8"
+    )
+    for variable in PROMPT_TEMPLATE_KEYS.values():
+        assert variable in env_example, f".env.example does not document {variable}"
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

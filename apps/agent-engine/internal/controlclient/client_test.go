@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -264,6 +266,71 @@ func TestAgentSettings_ToolsWireShape(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("tool %d: got %q, want %q (wire: %s)", i, got[i], want[i], raw)
 		}
+	}
+}
+
+// The suffix is only worth anything if it survives the whole client, so this
+// goes through the real StartConversation over a real Unix socket and reads
+// the body the fake agent-server actually received, rather than marshalling
+// the struct and calling that proof. Asserting the field exists on a Go type
+// would say nothing about whether the sandbox is told about it.
+func TestStartConversation_SystemMessageSuffixReachesTheWire(t *testing.T) {
+	const suffix = "Always answer in Bengali."
+	var body []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/conversations", func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":%q}`, uuid.New())
+	})
+	client := controlclient.New(newFakeAgentServer(t, mux), "")
+
+	if _, err := client.StartConversation(context.Background(), controlclient.StartConversationRequest{
+		Workspace: controlclient.LocalWorkspace("/workspace"),
+		AgentSettings: &controlclient.AgentSettings{
+			AgentKind:    "openhands",
+			LLM:          controlclient.LLMSettings{Model: "m"},
+			AgentContext: &controlclient.AgentContext{SystemMessageSuffix: suffix},
+		},
+	}); err != nil {
+		t.Fatalf("StartConversation: %v", err)
+	}
+
+	var payload struct {
+		AgentSettings struct {
+			AgentContext struct {
+				SystemMessageSuffix string `json:"system_message_suffix"`
+			} `json:"agent_context"`
+		} `json:"agent_settings"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal request body: %v (%s)", err, body)
+	}
+	if got := payload.AgentSettings.AgentContext.SystemMessageSuffix; got != suffix {
+		t.Fatalf("agent_settings.agent_context.system_message_suffix: got %q, want %q (wire: %s)", got, suffix, body)
+	}
+}
+
+// The other half, and the one that protects every task launched today. The
+// sandbox's OpenHandsAgentSettings.agent_context has default_factory=AgentContext
+// (vendor/openhands/openhands-sdk/openhands/sdk/settings/model.py), so an
+// omitted key produces exactly the agent Hive launches now. A key present with
+// a null or empty value would not: it would start writing an explicit context
+// object into every launch on the strength of a variable nobody set.
+func TestAgentSettings_NilAgentContextOmittedFromWire(t *testing.T) {
+	raw, err := json.Marshal(controlclient.AgentSettings{
+		AgentKind: "openhands",
+		LLM:       controlclient.LLMSettings{Model: "m"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := payload["agent_context"]; present {
+		t.Fatalf("expected agent_context omitted when unset so the sandbox default applies, got: %s", raw)
 	}
 }
 

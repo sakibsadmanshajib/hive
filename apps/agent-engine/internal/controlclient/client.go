@@ -212,6 +212,36 @@ type AgentSettings struct {
 	// injection does. Existing tasks that leave this field unset are
 	// unaffected either way.
 	Tools []ToolSpec `json:"tools,omitempty"`
+
+	// AgentContext optionally shapes the agent's system prompt. Omitted
+	// (nil), OpenHandsAgentSettings.agent_context falls back to its own
+	// default_factory=AgentContext (openhands/sdk/settings/model.py), which
+	// is byte for byte the agent every Hive launch produced before this
+	// field existed. Nothing else here reaches the system prompt: the pack's
+	// AGENTS.md is a bind mount the agent reads, and the task instructions
+	// are the conversation's first user message.
+	AgentContext *AgentContext `json:"agent_context,omitempty"`
+}
+
+// AgentContext is the subset of
+// vendor/openhands/openhands-sdk/openhands/sdk/context/agent_context.py's
+// AgentContext that Hive populates. Every other field on that model has a
+// default, so a body carrying only the fields below builds the same object
+// the SDK's own default_factory would, plus the suffix.
+//
+// Only the system-prompt suffix is plumbed. AgentContext also carries a
+// `skills` list, and that one is NOT usable from here as things stand: the
+// sandbox launches with --containall, so the SDK's own skill loader reads an
+// empty home directory every session, and a real per-tenant skills story needs
+// either this list populated from a store Hive does not have yet or a second
+// read-only bind mount alongside the pack. Adding the field without that
+// decision would ship a knob that resolves to nothing.
+type AgentContext struct {
+	// SystemMessageSuffix is appended to the agent's rendered system prompt
+	// (AgentContext.get_system_message_suffix, consumed by the agent's
+	// system-prompt assembly). Empty is omitted rather than sent as "", so an
+	// unconfigured deployment produces no such key at all.
+	SystemMessageSuffix string `json:"system_message_suffix,omitempty"`
 }
 
 // ToolSpec is one entry of AgentSettings.Tools: a tool-set name from the
