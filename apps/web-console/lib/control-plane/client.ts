@@ -1833,12 +1833,17 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
     }
   }
 
-  // Fallbacks are one-cent steps at the current credit unit (1 USD = 1e9
-  // credits since the 2026-08-23 rescale); the server normally supplies all
-  // three.
-  const creditIncrement = readNumberField(payload, "credit_increment") ?? 10_000_000;
-  const minCredits = readNumberField(payload, "min_credits") ?? 10_000_000;
-  const maxCredits = readNumberField(payload, "max_credits") ?? 1_000_000_000;
+  // Read the purchase bounds RAW. Defaulting first would fabricate a coherent
+  // range out of an omitted field and let it through the check below, so the
+  // guard would catch a loudly wrong response and miss a silently incomplete
+  // one. That is the same shape as the defect this guard exists for, and it is
+  // how issue #1386 happened: an absent ceiling was silently replaced with
+  // 1,000,000,000 credits (1.00 USD) against a real Stripe ceiling of 100.00
+  // USD, and nothing complained. Judge what the server actually sent, then
+  // default.
+  const rawCreditIncrement = readNumberField(payload, "credit_increment");
+  const rawMinCredits = readNumberField(payload, "min_credits");
+  const rawMaxCredits = readNumberField(payload, "max_credits");
   // FX-17-04 regulatory: pricing primitive must be in minor units of a
   // declared currency, priced per `credit_block_size` credits. Reject
   // payload without these fields rather than defaulting to a USD
@@ -1863,24 +1868,36 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   // A purchase range whose ceiling sits below its floor is not renderable: it
   // reached the live amount input as min="10000000" max="0", an invalid HTML5
   // number range, because the console wrote the server's value straight into
-  // the attribute.
+  // the attribute. An omitted bound is the quiet version of the same fault and
+  // is refused here too, rather than papered over with a fallback.
   //
   // The guard is conditional on a rail the payer can actually select, because
   // `max_credits: 0` alongside no selectable rail is not corruption. The
   // control plane computes that field as the most restrictive ceiling among
   // ENABLED rails (`MostRestrictiveMaxCredits`), and 0 is its documented
   // answer for a deployment that registered no rail credentials. That case is
-  // a real state the modal explains to the user, not a server error to raise.
+  // a real state the modal explains to the user, not a server error to raise,
+  // and nothing there is purchasable so the bounds do not matter.
   const anyRailSelectable = rails.some((rail) => rail.enabled);
-  if (
-    anyRailSelectable &&
-    (!Number.isFinite(minCredits) ||
-      minCredits <= 0 ||
-      !Number.isFinite(maxCredits) ||
-      maxCredits < minCredits)
-  ) {
+  const boundsUsable =
+    rawMinCredits !== null &&
+    Number.isFinite(rawMinCredits) &&
+    rawMinCredits > 0 &&
+    rawMaxCredits !== null &&
+    Number.isFinite(rawMaxCredits) &&
+    rawMaxCredits >= rawMinCredits &&
+    rawCreditIncrement !== null &&
+    Number.isFinite(rawCreditIncrement) &&
+    rawCreditIncrement > 0;
+  if (anyRailSelectable && !boundsUsable) {
     throw new Error("Failed to parse checkout rails response");
   }
+  // Defaults apply only once the response has been judged, and only on the
+  // path where nothing is purchasable, so they can never stand in for a bound
+  // the server failed to send while the payer can still reach a checkout.
+  const creditIncrement = rawCreditIncrement ?? 10_000_000;
+  const minCredits = rawMinCredits ?? 10_000_000;
+  const maxCredits = rawMaxCredits ?? 1_000_000_000;
   return {
     rails,
     credit_increment: creditIncrement,

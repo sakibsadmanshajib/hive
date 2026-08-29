@@ -124,31 +124,55 @@ describe("CheckoutModal behavior", () => {
   });
 
   it("an inverted or zero purchase range never reaches the DOM", async () => {
-    // Both shapes that produced the live defect: nothing selectable with a zero
-    // ceiling, and a selectable rail whose ceiling sits below the floor.
-    const fixtures = [
-      noRailFixture(),
-      optionsFixture({ min_credits: 10_000_000, max_credits: 0 }),
-      optionsFixture({ min_credits: 0, max_credits: 0 }),
+    // The healthy case is in this list on purpose. Without it the attribute
+    // assertion below would only ever iterate an empty NodeList, which is a
+    // green that cannot go red: it would pass just as happily against a modal
+    // that renders no input for any payload at all. With it, the loop runs
+    // against a real node on one case and stays the tripwire for a regression
+    // that starts rendering the field again on the broken ones.
+    const cases = [
+      { name: "nothing selectable, zero ceiling", rails: noRailFixture(), purchasable: false },
+      {
+        name: "selectable rail, ceiling below floor",
+        rails: optionsFixture({ min_credits: 10_000_000, max_credits: 0 }),
+        purchasable: false,
+      },
+      {
+        name: "selectable rail, zero floor and ceiling",
+        rails: optionsFixture({ min_credits: 0, max_credits: 0 }),
+        purchasable: false,
+      },
+      { name: "healthy range", rails: optionsFixture(), purchasable: true },
     ];
 
-    for (const rails of fixtures) {
+    for (const { name, rails, purchasable } of cases) {
       stubFetch({ rails });
       const { unmount } = render(
         <CheckoutModal accountCountryCode="US" onClose={vi.fn()} />,
       );
-      await screen.findByRole("status");
+      if (purchasable) {
+        await screen.findByText("Payment method");
+      } else {
+        await screen.findByRole("status");
+      }
 
-      for (const input of Array.from(
+      const numberInputs = Array.from(
         document.querySelectorAll<HTMLInputElement>("input[type=number]"),
-      )) {
+      );
+      for (const input of numberInputs) {
         const min = Number(input.min);
         const max = Number(input.max);
-        expect(Number.isFinite(min) && Number.isFinite(max) && max >= min && min > 0).toBe(
-          true,
-        );
+        expect(
+          Number.isFinite(min) && Number.isFinite(max) && max >= min && min > 0,
+        ).toBe(true);
       }
-      expect(screen.queryByRole("spinbutton")).toBeNull();
+      // The purchasable case must actually have produced a field, or the
+      // attribute loop above proves nothing about it.
+      expect({ case: name, inputs: numberInputs.length > 0 }).toEqual({
+        case: name,
+        inputs: purchasable,
+      });
+      expect(screen.queryByRole("spinbutton") !== null).toBe(purchasable);
 
       unmount();
       cleanup();

@@ -101,6 +101,31 @@ describe("getCheckoutRails purchase range guard", () => {
     await expect(client.getCheckoutRails()).rejects.toThrow(/checkout rails/i);
   });
 
+  // An omitted bound is the quiet version of the same fault. Defaulting before
+  // the coherence check would fabricate a valid range out of the absence and
+  // wave it through, so the guard would catch the loud failure and miss the
+  // silent one. That is how issue #1386 shipped a 1.00 USD ceiling against a
+  // real 100.00 USD one with nothing complaining.
+  for (const field of ["min_credits", "max_credits", "credit_increment"]) {
+    it(`rejects an omitted ${field} while a rail is selectable`, async () => {
+      const payload: Record<string, unknown> = railsPayload();
+      delete payload[field];
+      respondWith(payload);
+      const client = await import("../lib/control-plane/client");
+
+      await expect(client.getCheckoutRails()).rejects.toThrow(/checkout rails/i);
+    });
+  }
+
+  it("rejects a non-finite bound while a rail is selectable", async () => {
+    // JSON has no NaN literal, so a string reaches readNumberField as a
+    // non-number and comes back null, which is the same absence case.
+    respondWith(railsPayload({ max_credits: "lots" }));
+    const client = await import("../lib/control-plane/client");
+
+    await expect(client.getCheckoutRails()).rejects.toThrow(/checkout rails/i);
+  });
+
   it("keeps the zero ceiling when no rail is selectable, because that is the honest answer", async () => {
     respondWith(
       railsPayload({
@@ -123,5 +148,31 @@ describe("getCheckoutRails purchase range guard", () => {
 
     expect(options.rails.every((rail) => !rail.enabled)).toBe(true);
     expect(options.max_credits).toBe(0);
+  });
+
+  it("tolerates absent bounds only where nothing is purchasable", async () => {
+    const payload: Record<string, unknown> = railsPayload({
+      rails: [
+        {
+          rail: "stripe",
+          label: "Card",
+          currency: "USD",
+          enabled: false,
+          min_credits: 10_000_000,
+          max_credits: 100_000_000_000,
+        },
+      ],
+    });
+    delete payload.min_credits;
+    delete payload.max_credits;
+    delete payload.credit_increment;
+    respondWith(payload);
+    const client = await import("../lib/control-plane/client");
+
+    // Resolves rather than throwing: no rail can complete a purchase, so the
+    // bounds are never rendered and the modal explains the state instead.
+    const options = await client.getCheckoutRails();
+
+    expect(options.rails.every((rail) => !rail.enabled)).toBe(true);
   });
 });

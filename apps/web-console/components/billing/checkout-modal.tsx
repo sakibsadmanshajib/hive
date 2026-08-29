@@ -220,10 +220,13 @@ export function CheckoutModal({
     Number.isFinite(maxCredits) &&
     maxCredits >= minCredits;
   const canPurchase = selectableRails.length > 0 && rangeIsCoherent;
+  // Both messages name the state and then the next move. A dead end that only
+  // says it is a dead end still leaves the user guessing, which is the
+  // complaint this change exists to answer.
   const unavailableReason =
     selectableRails.length === 0
-      ? "No payment method is available for this account yet, so credits cannot be bought here right now. Your balance is unchanged."
-      : "The payment options for this account came back unusable, so credits cannot be bought here right now. Your balance is unchanged.";
+      ? "No payment method is available for this account yet, so credits cannot be bought here. Your balance and your existing API keys are unaffected. Contact support to have a payment method enabled for this account."
+      : "The payment options for this account came back unusable, so credits cannot be bought here right now. Your balance and your existing API keys are unaffected. Refresh in a moment, and contact support if it keeps happening.";
 
   function decrementAmount() {
     setCreditAmount((prev) => Math.max(minCredits, prev - increment));
