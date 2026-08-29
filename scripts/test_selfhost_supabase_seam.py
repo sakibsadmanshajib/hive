@@ -296,15 +296,22 @@ def test_storage_accepts_the_s3_credentials_the_consumers_sign_with() -> None:
     with. A separate pair would let the signing half and the verifying half
     drift with no boot error on either side, and the only symptom is a 403 from
     a service that looks configured."""
+    # A plain substring would also match ${S3_ACCESS_KEY_ID}, a different
+    # variable that would leave the two halves signing with different values,
+    # which is exactly the drift this asserts against. The terminator is what
+    # makes the match the whole name.
+    def references(value: str, variable: str) -> bool:
+        return re.search(r"\$\{" + variable + r"[:}]", value) is not None
+
     storage = ENT_SERVICES["supabase-storage"]
     key_id = env_value(storage, "S3_PROTOCOL_ACCESS_KEY_ID")
     secret = env_value(storage, "S3_PROTOCOL_ACCESS_KEY_SECRET")
-    assert "${S3_ACCESS_KEY" in key_id, key_id
-    assert "${S3_SECRET_KEY" in secret, secret
+    assert references(key_id, "S3_ACCESS_KEY"), key_id
+    assert references(secret, "S3_SECRET_KEY"), secret
     for consumer in ("edge-api", "control-plane"):
         block = BASE_SERVICES[consumer]
-        assert "${S3_ACCESS_KEY" in env_value(block, "S3_ACCESS_KEY"), consumer
-        assert "${S3_SECRET_KEY" in env_value(block, "S3_SECRET_KEY"), consumer
+        assert references(env_value(block, "S3_ACCESS_KEY"), "S3_ACCESS_KEY"), consumer
+        assert references(env_value(block, "S3_SECRET_KEY"), "S3_SECRET_KEY"), consumer
 
 
 def test_the_storage_s3_prefix_matches_the_prefix_the_gateway_strips() -> None:
