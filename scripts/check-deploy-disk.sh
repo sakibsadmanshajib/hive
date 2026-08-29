@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Refuse to start work on the demo box without disk headroom. Issue #1098.
 #
+# It also reclaims unused build cache first, but only when it already finds
+# itself below the warn line, and only in a way that cannot skip or soften the
+# refusal that follows. Issue #1419, and the reasoning is at that step rather
+# than here.
+#
 # Called as the FIRST step of both jobs in deploy-demo-box.yml, and that
 # position is the whole point: it is the only disk guard a job timeout cannot
 # skip. The two prune steps at the end of the deploy job (`Prune dangling
