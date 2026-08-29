@@ -8,5 +8,5 @@ turns the Repo policy lints check RED. It is removed in the next commit on this
 same branch, and neither this file nor this branch is part of the pull request
 that merges.
 
-step 3: navigated to http://web-console:3000/invitations/accept?token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
+step 3: navigated to http://web-console:3000/invitations/accept?token=REDACTED_INVITE_TOKEN
 step 4: invitation accepted, redirected to /dashboard
