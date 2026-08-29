@@ -221,3 +221,42 @@ This is the empty-index case, with the account owning no skills, and it is the
 weakest case rather than the strongest: a populated index adds one row and one
 active switch per skill, which is exactly the account-data variability the
 `dataDriven` classification exists to keep out of a pinned count.
+
+## 8. The collision message, measured on the box rather than quoted
+
+The wording this branch replaces was read out of `constants.py` and argued
+about. It is worth having reached it the way an author does, so the claim that
+it is confusing is a measurement rather than a reading.
+
+Two saves of the same name, as the same ordinary member, through the deployed
+editor:
+
+```
+=== first "Research" ===
+HTTP 200 https://chat-hive.scubed.co/api/v1/skills/create
+landed on https://chat-hive.scubed.co/skills
+=== second "Research", expecting the collision ===
+HTTP 400 https://chat-hive.scubed.co/api/v1/skills/create
+still on https://chat-hive.scubed.co/skills/create
+toast text on screen: Uh-oh! This id is already registered. Please choose another id string.
+=== cleanup ===
+delete research -> HTTP 200
+```
+
+So the path is reachable, the author is left on a filled-in form that did not
+save, and the sentence they get names an "id string" while the field they
+filled in was the name. The id the box assigned was the bare `research`,
+unprefixed, which is the pre-#1437 scoping: `c205afb45` had merged but had not
+yet reached this deployment when this was captured.
+
+The replacement string is not shown here, because the box runs the merged
+image and this branch's frontend is not on it. What exists today is the unit
+cover in `lib/hive/skill-save-error.test.ts` plus the source pin on the create
+route; the deployed capture of the new wording belongs after this merges and
+`deploy-demo-box.yml` runs, which is where the orchestrator contract puts it.
+
+A first attempt at this capture screenshotted six seconds after the click and
+found no toast, because it had already faded, and reported "(none found)".
+Recorded because that reads exactly like a missing error message, which is a
+different defect from the one being measured, and a run that produced it
+without explanation would have been misleading in a new direction.
