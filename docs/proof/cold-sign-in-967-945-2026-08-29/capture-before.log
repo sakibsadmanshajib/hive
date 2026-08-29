@@ -1,0 +1,47 @@
+capture: before
+entry: https://chat-hive.scubed.co/
+
+document responses, offset from navigation start:
+     263ms  200  https://chat-hive.scubed.co/
+    1348ms  302  https://chat-hive.scubed.co/oauth/oidc/login
+    1556ms  302  https://console-hive.scubed.co/auth/v1/oauth/authorize?response_type=code&client_id=REDACTED&redirect_uri=https%3A%2F%2Fchat-hive.scubed.co%2Foauth%2Foidc%2Fcallback&scope=openid+email+profile&state=REDACTED&nonce=REDACTED&code_challenge=REDACTED&code_challenge_method=S256
+    1704ms  200  https://console-hive.scubed.co/oauth/consent?authorization_id=REDACTED
+    2848ms  200  https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3DREDACTED%26retried%3D1
+
+main-frame navigations:
+     275ms  https://chat-hive.scubed.co/
+     838ms  https://chat-hive.scubed.co/
+    1690ms  https://chat-hive.scubed.co/
+    1728ms  https://console-hive.scubed.co/oauth/consent?authorization_id=REDACTED
+    2659ms  https://console-hive.scubed.co/oauth/consent?authorization_id=REDACTED
+    2879ms  https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3DREDACTED%26retried%3D1
+
+sign-in control usable at 3485ms
+final url: https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3DREDACTED%26retried%3D1
+
+browser console during the journey:
+
+screenshot: /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/proof967/signin-before.png
+
+--- how this capture was taken ---
+Fresh Chromium process and a fresh browser context, so nothing was served from
+an HTTP cache, from storage or from a warm service worker. Navigation to
+https://chat-hive.scubed.co/ only; every hop after that is the deployment's own
+OAUTH_AUTO_REDIRECT carrying the browser through OIDC. The run stops when the
+sign-in form's submit control is visible, resolved by accessible role rather
+than by selector. Chromium was launched through the SOCKS proxy at
+127.0.0.1:1080, which this development host needs to reach Cloudflare at all.
+
+--- what this before capture shows ---
+The /oauth/consent hop answers 200 with a rendered document rather than a
+redirect, and the navigation to /auth/sign-in follows roughly two seconds
+later: the consent panel is booting in the browser, reading the session,
+finding none, and navigating to a URL the server could have named without
+painting anything. That gap is the subject of issue #967 and the reason the
+sign-in journey misses the p90 target in issue #945.
+
+--- redaction ---
+authorization_id, code_challenge, client_id, state and nonce are masked in this
+log and in the screenshot's URL banner before upload. The banner is drawn into
+the page by the capture script, so the masked value is what reaches the pixels;
+nothing scans an uploaded image.

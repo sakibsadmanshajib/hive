@@ -704,6 +704,16 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-deploy-disk-gate.sh
 
+      # Regression guard for the profile-eviction step deploy-demo-box.yml runs
+      # against the live box (issue #967). Stubs `docker` on PATH, so no daemon
+      # is involved. Wired here for the same reason as the guards above: this
+      # job is a required check, and the two ways that step can go wrong are
+      # both silent, either leaving a profile-gated `next dev` console serving
+      # an unauthenticated LAN surface, or removing a live service on a box
+      # with no off-box backup.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-remove-stale-compose-containers.sh
+
       # Regression guard for the PreToolUse guards in .claude/hooks/. It
       # feeds each guard both harness payload shapes plus Claude Code's
       # MultiEdit shape, which nests its edit array at `tool_input.edits`

@@ -123,6 +123,11 @@ on:
       # box, which for this one means the box keeps enforcing a threshold the
       # repo no longer states.
       - 'scripts/check-deploy-disk.sh'
+      # Runs in the deploy job and can remove a container from the live box.
+      # Same blind spot: without an entry, a fix to the eviction itself would
+      # merge and never reach the box, so the box would keep running the
+      # version of the selection the repo no longer states.
+      - 'scripts/remove-stale-compose-containers.sh'
   workflow_dispatch:
     inputs:
       disk_floor_gb:
@@ -1002,6 +1007,27 @@ jobs:
             echo "recreate cleared the drift"
           fi
           echo "$checked running services are on the images this deploy built"
+
+      - name: Remove containers for services outside the active profile set
+        # `--remove-orphans` on the step above removes a container whose
+        # service is gone from the compose file. It does not touch a container
+        # whose service still exists but sits in a profile this deploy did not
+        # enable, so moving a service behind a profile stops it being STARTED
+        # and never stops it RUNNING. `hive-web-console-1` proved it: a
+        # `next dev` server publishing 0.0.0.0:3000 survived roughly thirty
+        # deploys after PR #605 gated it behind the `dev` profile (issue #967).
+        #
+        # The selection lives in a script rather than inline here so it can
+        # have a regression guard: `scripts/test-remove-stale-compose-containers.sh`
+        # runs it against stubbed docker output in CI, because the two ways
+        # this can go wrong (evict nothing, or evict a live service) are both
+        # silent until they happen on the box.
+        #
+        # Runs from the compose directory, not the repo root: HIVE_COMPOSE_FLAGS
+        # carries relative `-f docker-compose.yml` and `--env-file ../../.env`
+        # paths, which resolve only from here.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: bash ../../scripts/remove-stale-compose-containers.sh
 
       - name: Apply the bind-mounted Caddy configs
         # Every Caddyfile in this stack is bind-mounted into its container, so
