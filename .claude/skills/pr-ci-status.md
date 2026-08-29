@@ -1,6 +1,6 @@
 ---
 name: PR CI & Merge Status
-description: Use when a GitHub pull request reports mergeStateStatus BLOCKED with no explanation, when you need to wait for CI to finish before merging, or before reaching for `gh pr checks` to read status at all. Covers telling apart the three real causes of BLOCKED (unresolved threads, a required check that never ran, a genuinely failing check) and the polling bugs that make an agent report a stale or wrong result.
+description: Use when a GitHub pull request reports mergeStateStatus BLOCKED or UNKNOWN with no explanation, when a PR page looks green but you are not sure CI ran at all, when you need to wait for CI to finish before merging, or before reaching for `gh pr checks` to read status at all. Covers telling apart the four real causes of a non-mergeable PR (a merge conflict that suppressed every workflow run, unresolved threads, a required check that never ran, a genuinely failing check) and the polling bugs that make an agent report a stale or wrong result.
 ---
 
 # PR CI & Merge Status
@@ -43,11 +43,71 @@ underneath it. Then poll on a bounded loop (or the Monitor tool) until every
 entry's `status` is `COMPLETED`. Do not end the turn on a single snapshot and
 assume a later resume will re-check it.
 
-## Diagnosing BLOCKED: three causes, three different fixes
+An **empty `statusCheckRollup` is ambiguous** between "has not started yet" and
+"cannot start at all", and the two need opposite responses (wait versus rebase).
+Read `mergeable` before concluding anything from an empty rollup. See cause 0
+below.
 
-`mergeable=MERGEABLE, mergeStateStatus=BLOCKED` explains nothing on its own.
-Work through these in order; they are not mutually exclusive but usually only
-one applies.
+## `mergeStateStatus: UNKNOWN` means retry, not fail
+
+`UNKNOWN` is GitHub saying it has not finished computing the merge commit yet.
+It is a transient state, not a verdict. It shows up right after a push, a base
+branch update, or a force-push, and it resolves on its own within seconds once
+the background mergeability job runs.
+
+Poll again after a few seconds. Requesting `mergeable` at all is what asks
+GitHub to compute it, so a second read usually returns the real answer.
+
+Treating `UNKNOWN` as failure produces a false "cannot merge" verdict on a pull
+request that merges fine moments later. That is not theoretical: it has
+produced two false NOT-MERGED reports in a single session, on PRs that had in
+fact already merged.
+
+## Diagnosing a non-mergeable PR: four causes, four different fixes
+
+`mergeStateStatus=BLOCKED` explains nothing on its own, and neither does a
+checks section that looks quiet. Work through these in order; they are not
+mutually exclusive, but cause 0 invalidates the evidence you would use to
+diagnose the other three, so it genuinely has to go first.
+
+### 0. The PR is CONFLICTING, so no CI ran at all
+
+**Read `mergeable` before `mergeStateStatus`, always.**
+
+`mergeable: CONFLICTING` means GitHub cannot build `refs/pull/N/merge`. With no
+merge ref there is no `pull_request` workflow run, so CI does not fail: it is
+never created. The consequences on the page are all quiet ones:
+
+- `statusCheckRollup` comes back empty, or stale from an earlier commit.
+- The checks section shows nothing failing, because nothing ran.
+- The page therefore reads as "no problems found" rather than "not evaluated",
+  which is the opposite of the truth.
+
+Checks that run on events other than `pull_request` still fire and make this
+worse, because their green rows are the only rows visible. Observed on PR #1336
+while it was CONFLICTING: the page showed only CodeQL, GitGuardian and
+CodeRabbit, which scans as green at a glance. The full required suite ran only
+after a rebase.
+
+Check it first, and never infer it from the rendered page:
+
+```bash
+gh pr view <N> --json mergeable,mergeStateStatus,statusCheckRollup \
+  --jq '{mergeable, mergeStateStatus, checks: [.statusCheckRollup[].name]}'
+```
+
+If `mergeable` is `CONFLICTING`: rebase or merge the base branch first, push,
+then re-read the rollup. Any conclusion drawn from the pre-rebase rollup is
+worthless. If `mergeable` is `UNKNOWN`, see the section above and poll again
+rather than concluding anything.
+
+**The recurring cause on this repo is `.wolf/buglog.jsonl`.** `merge=union` in
+`.gitattributes` resolves concurrent appends in local merges and rebases, but
+GitHub's server-side merge ignores the union driver entirely, so any two
+branches that both appended a line are in hard conflict there (issue #873).
+This is why the buglog protocol forbids appending on a feature branch: carry
+the entry in the PR body and append it to `main` in a separate buglog-only PR
+afterwards (`.claude/rules/openwolf.md`).
 
 ### 1. Unresolved review threads
 
@@ -109,9 +169,9 @@ delivered in the first place.
 
 ### 3. A genuinely failing check
 
-Only after ruling out 1 and 2: read the actual failing check's log
+Only after ruling out 0, 1 and 2: read the actual failing check's log
 (`gh run view <run-id> --log-failed`) and fix the real failure. This is the
-only one of the three that is actually about the code in the PR.
+only one of the four that is actually about the code in the PR.
 
 ## Related
 
