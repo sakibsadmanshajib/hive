@@ -107,6 +107,11 @@ card further down the billing page and is unrelated to checkout. The dead
 Continue control is gone, the state is explained, and Keep balance still
 closes the modal. Screenshot: `after-02-modal.png` (posted on the PR).
 
+Re-run after the review follow-ups (the raw-bounds ordering, the next-step copy,
+and the zero or negative `credit_increment` guard) against a rebuild of the
+same image from the final commit: identical output, byte for byte, on the same
+server response. The posted screenshots are of this state.
+
 ## Not proven here
 
 Nothing in this capture exercises a successful purchase, because the
