@@ -25,13 +25,19 @@ describe("Batches", () => {
     }
   });
 
-  // EXPECTED FAILURE, issue #1324: this is an environment defect, not a
-  // gateway one. The CI object storage endpoint still points at the Supabase
-  // Cloud project this repo left in August, which no longer resolves in DNS,
-  // so every upload dies at the socket. Kept as it.fails rather than skipped
-  // so the request still goes out and the assertions still run: correct the
-  // secret and this passes, the suite reports the unexpected pass, and the
-  // marker comes off.
+  // EXPECTED FAILURE, and the marker stays, but NOT for the reason it used to
+  // give. Issue #1324 (missing S3 protocol credentials on supabase-storage)
+  // was fixed by PR #1368, and the sibling test below, which does the same
+  // upload, now passes. This one still fails on the first live run after that
+  // fix, so the remaining blocker is downstream of the upload rather than the
+  // upload itself.
+  //
+  // The likely candidate, stated as a lead and not as a diagnosis, is the
+  // provider capability gap already recorded as Known Issue 4 in CLAUDE.md:
+  // LiteLLM managed file upload with purpose=batch supports openai, azure,
+  // vertex_ai, manus and anthropic, and neither configured provider has a
+  // native batch API. Whoever picks this up should read the actual failure
+  // first, because an it.fails marker swallows it and nobody has seen it yet.
   it.fails("submits a batch, retrieves it, then cancels it", async () => {
     const requestLine = JSON.stringify({
       custom_id: "sdk-conformance-1",
@@ -98,14 +104,12 @@ describe("Batches", () => {
     }
   });
 
-  // EXPECTED FAILURE, issue #1324: this is an environment defect, not a
-  // gateway one. The CI object storage endpoint still points at the Supabase
-  // Cloud project this repo left in August, which no longer resolves in DNS,
-  // so every upload dies at the socket. Kept as it.fails rather than skipped
-  // so the request still goes out and the assertions still run: correct the
-  // secret and this passes, the suite reports the unexpected pass, and the
-  // marker comes off.
-  it.fails("rejects an unsupported batch endpoint value with a structured 4xx error", async () => {
+  // Marker removed for the same reason as the one in files.test.ts: issue
+  // #1324 was the missing S3 protocol credentials on supabase-storage, PR
+  // #1368 supplied them, and this test reported an unexpected pass on the
+  // first live run afterwards. The upload it does first is the part #1324
+  // broke; the refusal it asserts was always the gateway own behaviour.
+  it("rejects an unsupported batch endpoint value with a structured 4xx error", async () => {
     const uploaded = await client.files.create({
       file: await toFile(Buffer.from("{}\n", "utf-8"), "bad-batch-input.jsonl", {
         type: "application/jsonl",
