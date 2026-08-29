@@ -22,6 +22,7 @@ const mockCreateClient = vi.fn(() => ({ auth: { getUser: mockGetUser } }));
 
 const upstream = {
   createInvitation: vi.fn(),
+  revokeInvitation: vi.fn(),
   updateMemberRole: vi.fn(),
   setFeatureGate: vi.fn(),
   createMarketplaceEntry: vi.fn(),
@@ -105,6 +106,16 @@ const handlers: readonly GuardedHandler[] = [
     upstreamCall: upstream.createInvitation,
   },
   {
+    name: "app/api/console/members/invitations/revoke/route.ts POST",
+    invoke: async (origin) => {
+      const { POST } = await import(
+        "../app/api/console/members/invitations/revoke/route"
+      );
+      return POST(formRequest({ id: "inv-1" }, origin));
+    },
+    upstreamCall: upstream.revokeInvitation,
+  },
+  {
     name: "app/api/console/members/role/route.ts POST",
     invoke: async (origin) => {
       const { POST } = await import("../app/api/console/members/role/route");
@@ -181,7 +192,14 @@ describe("console mutating routes refuse a cross-origin request (issue #1457)", 
       data: { user: { id: "u1", email: "owner@hive.com" } },
       error: null,
     });
-    upstream.createInvitation.mockResolvedValue(undefined);
+    // The invite proxy reads `delivery` off what the control-plane returned
+    // (issue #1440), so the mock has to carry it or the accept cases fail for a
+    // reason that has nothing to do with this guard.
+    upstream.createInvitation.mockResolvedValue({
+      delivery: "sent",
+      invitation: { id: "inv-1" },
+    });
+    upstream.revokeInvitation.mockResolvedValue(undefined);
     upstream.updateMemberRole.mockResolvedValue(undefined);
     upstream.setFeatureGate.mockResolvedValue({ key: "chat", enabled: true });
     upstream.createMarketplaceEntry.mockResolvedValue({ id: "m1" });
