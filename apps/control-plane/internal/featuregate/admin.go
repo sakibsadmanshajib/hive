@@ -88,14 +88,23 @@ func (h *AdminHandler) AdminMux() http.Handler {
 }
 
 // adminGate is one row the admin UI renders: the key, its human label and
-// category, whether it is enabled for the current tenant, and whether this
-// caller may change it.
+// category, whether it is enabled for the current tenant, whether this caller
+// may change it, and whether anything reads it at runtime.
+//
+// Enforced is derived from the registry's enforcement_site rather than from a
+// list here, because adding a gate key is a migration-only change by design
+// (see 20260715_04_featuregate_dynamic_keys.sql) and a list in Go or in the
+// console would go stale silently the first time a migration added one. Only
+// three of the twenty five registered keys are enforced anywhere; the console
+// marks the rest as stored but not enforced so an operator is never told a
+// setting takes effect when it does not (issue #762).
 type adminGate struct {
 	Key        string `json:"key"`
 	Label      string `json:"label"`
 	Category   string `json:"category"`
 	Enabled    bool   `json:"enabled"`
 	Manageable bool   `json:"manageable"`
+	Enforced   bool   `json:"enforced"`
 }
 
 type adminGatesResponse struct {
@@ -146,6 +155,10 @@ func (h *AdminHandler) handleCollection(w http.ResponseWriter, r *http.Request) 
 			Category:   g.Category,
 			Enabled:    enabled[g.Key],
 			Manageable: manageableBy(g.Category, isPlatformAdmin),
+			// Whitespace is not an enforcement point. A row someone began
+			// documenting and left blank must read as unenforced rather than
+			// claim a guarantee nothing keeps.
+			Enforced: strings.TrimSpace(g.EnforcementSite) != "",
 		})
 	}
 

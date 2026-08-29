@@ -2,10 +2,12 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,12 +128,32 @@ func (c *Client) LookupUser(ctx context.Context, bearerToken string) (Viewer, er
 		emailVerified = *su.AppMetadata.HiveEmailVerified
 	}
 
-	// selected_tenant_id is user-mutable metadata, not an authorization claim.
-	// Parse it, then confirm the user actually holds a live membership on it
-	// before letting it into the Viewer. Anything unverified collapses to
-	// uuid.Nil, which every consumer treats as "no tenant" and denies on.
-	tenantID := uuid.Nil
-	if su.UserMetadata.SelectedTenantID != "" {
+	// Tenant scope, in order of preference.
+	//
+	// First the tenant_id claim on the bearer. public.custom_access_token_hook
+	// resolves it inside the database from one snapshot of ACTIVE tenant_users
+	// joined to non-archived tenants, honouring selected_tenant_id only when it
+	// appears in that snapshot and otherwise falling back to the first active
+	// membership, and omits the claim entirely for a user with none. It is
+	// therefore already validated at issue time, and the token carrying it is
+	// signed by GoTrue.
+	//
+	// Reading it here is safe specifically because this line sits below the
+	// status check above: Supabase has just accepted this exact token and
+	// resolved su.ID from it, which is the signature check. tenantClaimFromToken
+	// itself verifies nothing, so it must never be lifted above that point or
+	// called on a token from anywhere but the validated Authorization header.
+	// The sub match below binds the claim to the user Supabase returned.
+	//
+	// Then selected_tenant_id, kept because a control-plane may serve a token
+	// issued before the hook existed. That field is user-mutable metadata, not
+	// an authorization claim: it is writable through GoTrue's PUT /auth/v1/user.
+	//
+	// Either way the membership check below decides. Anything unverified
+	// collapses to uuid.Nil, which every consumer treats as "no tenant" and
+	// denies on.
+	tenantID := tenantClaimFromToken(bearerToken, su.ID)
+	if tenantID == uuid.Nil && su.UserMetadata.SelectedTenantID != "" {
 		if parsed, err := uuid.Parse(su.UserMetadata.SelectedTenantID); err == nil {
 			tenantID = parsed
 		}
@@ -165,3 +187,54 @@ func (c *Client) LookupUser(ctx context.Context, bearerToken string) (Viewer, er
 
 // ErrUnauthorized is returned when Supabase rejects the bearer token.
 var ErrUnauthorized = fmt.Errorf("auth: unauthorized")
+
+// tenantClaims is the subset of the access token payload control-plane reads.
+// role, tenants and owui_role are also present and deliberately not read here:
+// authorization decisions belong to the services that own them, and a second
+// reader of role would compete with platform.TenantRoleService.
+type tenantClaims struct {
+	Sub      string `json:"sub"`
+	TenantID string `json:"tenant_id"`
+}
+
+// tenantClaimFromToken returns the tenant_id claim carried by bearerToken when
+// that claim is a uuid and the token's sub is expectedSub. It returns uuid.Nil
+// for every other input, including a bearer that is not a JWT at all.
+//
+// UNVERIFIED READ. This function checks no signature and must never be the
+// thing that decides a token is genuine. Its only caller reads it after
+// Supabase has accepted the same token through GET /auth/v1/user and returned
+// the user id passed as expectedSub, so the authenticity of the token, and the
+// binding of this claim to that user, are both already established. Calling it
+// anywhere else would let a caller mint their own tenant scope.
+func tenantClaimFromToken(bearerToken string, expectedSub string) uuid.UUID {
+	segments := strings.Split(bearerToken, ".")
+	if len(segments) != 3 {
+		return uuid.Nil
+	}
+
+	// GoTrue emits unpadded base64url. StdEncoding and padded variants are
+	// accepted too rather than assumed away: a decode failure here silently
+	// drops the tenant, which reads as a permission bug rather than a parse bug.
+	payload, err := base64.RawURLEncoding.DecodeString(segments[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(segments[1])
+		if err != nil {
+			return uuid.Nil
+		}
+	}
+
+	var claims tenantClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return uuid.Nil
+	}
+	if claims.Sub == "" || claims.Sub != expectedSub {
+		return uuid.Nil
+	}
+
+	tenantID, err := uuid.Parse(claims.TenantID)
+	if err != nil {
+		return uuid.Nil
+	}
+	return tenantID
+}

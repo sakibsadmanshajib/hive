@@ -1,7 +1,10 @@
 import type { ReactElement } from "react";
+import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
+  getAccountProfile,
   getApiKeyLimits,
   getViewer,
   updateApiKeyLimits,
@@ -13,6 +16,8 @@ import {
   type SaveLimitsResult,
 } from "@/lib/api-keys";
 import { RateLimitForm } from "@/components/api-keys/rate-limit-form";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { PageHeader } from "@/components/ui/page-header";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -45,6 +50,13 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
 
   // Owner-gate: members without api_keys.write see read-only.
   const canEdit = can(viewer, "api_keys.write");
+
+  // The shell needs a display name, and a profile fetch failure is not a reason
+  // to fail the page: the viewer already carries everything the rail needs, and
+  // the shell falls back to the email. Same degradation the billing pages use.
+  const profile = await getAccountProfile().catch(
+    (): { owner_name: string } => ({ owner_name: "" }),
+  );
 
   let limits: KeyLimits;
   try {
@@ -86,14 +98,43 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
     }
   }
 
+  // Issue #543: this page rendered a bare <main> with no ConsoleShell, so it
+  // had no navigation, no wordmark, no workspace switcher and no way back to
+  // the key list except the browser's Back button. Combined with having no
+  // inbound link at all, the only way in was to type a URL and the only way out
+  // was to leave. active="/console/api-keys" keeps the rail lit on the section
+  // this page belongs to, matching how the billing sub-pages point at
+  // /console/billing.
   return (
-    <main className="px-6 py-8">
-      <h1 className="text-2xl font-semibold">Rate limits</h1>
-      <p className="text-sm text-[var(--color-ink-2)] mb-4">
-        Configure per-key request and token limits. Tier overrides take
-        precedence over system defaults for the matching tier.
-      </p>
+    <ConsoleShell
+      workspace={{
+        id: viewer.current_account.id,
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      memberships={viewer.memberships}
+      viewer={viewer}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console/api-keys"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">
+          Rate limits
+        </span>
+      }
+    >
+      <Link
+        href="/console/api-keys"
+        className="mb-4 inline-flex items-center gap-1.5 text-xs text-[var(--color-ink-3)] transition-colors hover:text-[var(--color-ink)]"
+      >
+        <ArrowLeft size={12} />
+        All API keys
+      </Link>
+      <PageHeader
+        eyebrow="Authentication"
+        title="Rate limits"
+        description="Per-key request and token limits. Tier overrides take precedence over system defaults for the matching tier."
+      />
       <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
-    </main>
+    </ConsoleShell>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Info } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import type { FeatureGate } from "@/lib/control-plane/client";
@@ -120,6 +120,19 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
                       <span className="mt-0.5 flex items-center gap-1 text-2xs text-[var(--color-danger,#d64545)]">
                         <AlertCircle size={12} />
                         Could not save. Try again.
+                      </span>
+                    ) : null}
+                    {gate.enforced !== true ? (
+                      // Read as "anything but true", not as "=== false", so a
+                      // control-plane that predates the enforced field lands on
+                      // the safe side during a rolling deploy.
+                      <span className="mt-1 flex items-start gap-1 text-2xs text-[var(--color-ink-3)]">
+                        <Info size={12} className="mt-px shrink-0" aria-hidden="true" />
+                        <span>
+                          Not enforced yet. This setting is saved for this
+                          workspace, and no part of the API or apps reads it, so
+                          changing it does not change what the workspace can do.
+                        </span>
                       </span>
                     ) : null}
                   </div>

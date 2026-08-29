@@ -192,6 +192,13 @@ type GateKey struct {
 	Key      Key
 	Label    string
 	Category string
+	// EnforcementSite names where this key is read at runtime, empty when
+	// nothing reads it. Twenty two of the twenty five registered keys are
+	// empty today (issues #755 to #758, tracked as #762): the value persists
+	// to tenant_settings and changes no behaviour. The admin surface reports
+	// the emptiness so an operator is never told a stored setting is enforced
+	// when it is not.
+	EnforcementSite string
 }
 
 // Registry returns every gate key registered in public.feature_gate_keys,
@@ -201,7 +208,7 @@ type GateKey struct {
 // HTTP layer.
 func (r *Resolver) Registry(ctx context.Context) ([]GateKey, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT key, label, category
+		SELECT key, label, category, COALESCE(enforcement_site, '')
 		  FROM public.feature_gate_keys
 		 ORDER BY category, label`)
 	if err != nil {
@@ -212,7 +219,7 @@ func (r *Resolver) Registry(ctx context.Context) ([]GateKey, error) {
 	var out []GateKey
 	for rows.Next() {
 		var g GateKey
-		if err := rows.Scan(&g.Key, &g.Label, &g.Category); err != nil {
+		if err := rows.Scan(&g.Key, &g.Label, &g.Category, &g.EnforcementSite); err != nil {
 			return nil, fmt.Errorf("settings: scan feature gate registry: %w", err)
 		}
 		out = append(out, g)

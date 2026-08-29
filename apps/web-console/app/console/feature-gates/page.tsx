@@ -68,10 +68,19 @@ export default async function FeatureGatesPage() {
         </span>
       }
     >
+      {/*
+        The old description promised that every change "takes effect across the
+        API and apps within about a minute". That is true of three of the
+        twenty five registered gates and false of the rest, which persist
+        correctly and are read by nothing (issue #762). A page cannot state a
+        guarantee the system does not keep, so the promise moved onto the rows
+        that earn it: each unenforced row says so itself, and this description
+        says only what is true of all of them.
+      */}
       <PageHeader
         eyebrow="Admin"
         title="Feature gates"
-        description="Turn capabilities on or off for this workspace. Changes take effect across the API and apps within about a minute."
+        description="Capability settings for this workspace. Each row says whether it is enforced at runtime today; an enforced change reaches the API and apps within about a minute."
       />
 
       {notPermitted ? (
