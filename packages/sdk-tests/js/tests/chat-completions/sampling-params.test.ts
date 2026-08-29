@@ -118,12 +118,15 @@ describe("Chat Completions sampling parameters", () => {
     expect(response.object).toBe("chat.completion");
   });
 
-  // EXPECTED FAILURE, issue #1316: the gateway answers 200 with a single
-  // choice, which is neither honouring n nor rejecting it. it.fails keeps the
-  // call live and the assertion real: the day the gateway starts returning
-  // two choices or a clean 4xx, this test passes and vitest turns the suite
-  // red for an unexpected pass, which is the signal to delete this marker.
-  it.fails("n>1 either returns n choices or is cleanly rejected", async () => {
+  // Issue #1316 lives here, and the marker that used to sit on this test does
+  // not, because the behaviour is not stable enough for one. Run 33220907602
+  // answered 200 with a single choice, which is the defect: neither honouring
+  // n nor rejecting it. Run 33225363432 took the other branch and the
+  // expected-failure marker itself went red for an unexpected pass. A plain
+  // assertion is the honest shape for something that alternates: it goes red
+  // exactly on the runs where the defect actually happens, and says nothing
+  // on the runs where it does not.
+  it("n>1 either returns n choices or is cleanly rejected", async () => {
     const result = await acceptedOrCleanlyRejected(() =>
       client.chat.completions.create({
         model: TOOL_CAPABLE_MODEL,
