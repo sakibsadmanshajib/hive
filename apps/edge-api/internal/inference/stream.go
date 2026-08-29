@@ -789,29 +789,31 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	}
 
 	// Fail-closed money capture (#1215): actuals were unavailable on a stream
-	// that delivered output, so the charge is the full reservation hold -- the
-	// same rule UpstreamActualSettlement has always applied to variable-price
-	// aliases, extended here to every catalog-priced stream. Control-plane
-	// clamps at the hold and files a reconciliation job; TerminalUsageConfirmed
-	// stays false so nothing records an estimate as measured truth. The alarm
-	// below is the only standing signal that a provider stopped honouring
-	// stream_options.include_usage or shipped unparseable usage frames.
+	// that delivered output, so the charge is a capture rather than a
+	// measurement -- the same rule UpstreamActualSettlement has always applied
+	// to variable-price aliases, extended here to every catalog-priced stream.
+	// Control-plane clamps at the hold and files a reconciliation job;
+	// TerminalUsageConfirmed stays false so nothing records an estimate as
+	// measured truth. The alarm below is the only standing signal that a
+	// provider stopped honouring stream_options.include_usage or shipped
+	// unparseable usage frames.
 	if !confirmed {
 		if reservation.ID != "" {
-			// Bounded by the caller's own completion ceiling (#1283), for the
-			// same reason the sync path's zero-content capture is: the hold is
-			// a flat authorization floor, so capturing it whole against a
-			// request capped at a handful of completion tokens breaches the
-			// never-bill-past-the-ceiling invariant far harder than the
-			// undercharge this capture exists to prevent. It only ever lowers
-			// the figure, and never to zero, so the fail-closed property is
-			// untouched.
+			// Priced from the tokens this request actually involved, not from
+			// the flat hold (#1283, #1198). The hold is an authorization floor
+			// picked before the request ran; capturing it whole charged short
+			// turns thousands of times the alias price, which is a wider breach
+			// of the same invariant than the undercharge this capture exists to
+			// prevent. It only ever lowers the figure, and never below one
+			// credit, so the fail-closed property is untouched.
 			credits = capCaptureAtCeiling(route, ceiling,
-				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, endpoint, []byte(promptBody)),
-				acc.CachedTokens, acc.CacheWriteTokens, reservation.Held())
+				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, endpoint, []byte(promptBody)),
+				acc.CachedTokens, acc.CacheWriteTokens,
+				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, content),
+				reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
-		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_reservation_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the reservation hold per D-034 (#1215)",
+		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the priced capture per D-034 (#1215, #1198)",
 			requestID, reservation.ID, endpoint, model, credits, len(content))
 	}
 

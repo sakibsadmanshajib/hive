@@ -17,6 +17,16 @@ import (
 // from a content estimate or settling at zero, raises a loud alarm, and never
 // misfiles a content-delivered stream as upstream_error.
 
+// routeMockPricing mirrors the catalog row newRoutingMock answers with, so a
+// test can price a settlement the way production does instead of hardcoding
+// the arithmetic.
+var routeMockPricing = SelectRouteResult{
+	AliasID:   "gpt-4o",
+	Provider:  "openrouter",
+	Pricing:   catalogHiveFast,
+	PriceUnit: PriceUnitTokens,
+}
+
 // contentOnlySSEServer streams an ordinary completion minus the terminal
 // usage chunk: content, finish_reason stop, [DONE], no usage object anywhere.
 // The shape of a provider that stopped honouring stream_options.include_usage,
@@ -72,12 +82,20 @@ func toolCallOnlySSEServer() *httptest.Server {
 	}))
 }
 
-// TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtReservationHold is the
+// TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtPricedCapture is the
 // primary red test for #1215 family 1 (deepseek-v4-flash undercharge): content
-// delivered, usage block absent. Settlement must capture the reservation hold
-// in full, stay unconfirmed so control-plane reconciliation sees it, keep
-// status completed, and raise the alarm.
-func TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtReservationHold(t *testing.T) {
+// delivered, usage block absent. Settlement must charge, stay unconfirmed so
+// control-plane reconciliation sees it, keep status completed, and raise the
+// alarm.
+//
+// The figure it charges changed with #1198. This test used to require the
+// reservation hold in full, and that requirement was itself the defect: the
+// hold is a flat authorization floor, so on the live box it charged 100,000,000
+// credits for turns whose median confirmed price on the same alias was 281.
+// What #1215 actually needs is that a delivered stream is never undercharged to
+// nothing, and the catalog price of the tokens involved satisfies that while
+// the flat hold overshoots it by five orders of magnitude.
+func TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtPricedCapture(t *testing.T) {
 	rec := &accountingRecorder{}
 	acctSrv := newAccountingMock(rec) // reservation EstimatedCredits 10000
 	defer acctSrv.Close()
@@ -90,9 +108,10 @@ func TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtReservationHold(t *tes
 
 	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
 
+	reqBody := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Write me a full answer about the sea, at length."}],"stream":true}`)
 	var logs string
 	logs = captureLogs(t, func() {
-		done, _ := runExecuteStreaming(orch, context.Background())
+		done, _ := runExecuteStreamingWithBody(orch, context.Background(), reqBody)
 		waitDone(t, done)
 	})
 
@@ -100,9 +119,19 @@ func TestExecuteStreaming_ContentButNoUsageBlock_SettlesAtReservationHold(t *tes
 	if !ok {
 		t.Fatalf("content was delivered; expected FinalizeReservation, got calls: %+v", rec.calls)
 	}
-	actual, _ := body["actual_credits"].(float64)
-	if int64(actual) != 10000 {
-		t.Errorf("actual_credits = %v, want 10000: with actuals unavailable the reservation estimate must be captured in full, never an undercharge (#1215)", body["actual_credits"])
+	actual := finalizeInt64(t, body, "actual_credits")
+	// The whole content the mock streams, which is what the capture prices its
+	// completion half from.
+	const delivered = "a full answer the customer received " +
+		"in full, with no usage chunk behind it"
+	want := CreditsForTokens(routeMockPricing,
+		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0,
+		estimateCompletionTokens(delivered))
+	if actual > want {
+		t.Errorf("actual_credits = %d, more than the %d this turn costs at catalog price: the hold is an authorization floor, never a measurement (#1198)", actual, want)
+	}
+	if actual < 1 {
+		t.Errorf("actual_credits = %d: a delivered stream is never free (#1215, D-034)", actual)
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: no real usage arrived, the charge routes to reconciliation")
@@ -140,9 +169,10 @@ func TestExecuteStreaming_UnparseableFramesDelivered_CompletesNotUpstreamError(t
 
 	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
 
+	reqBody := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Tell me about the sea in several long paragraphs."}],"stream":true}`)
 	var logs string
 	logs = captureLogs(t, func() {
-		done, _ := runExecuteStreaming(orch, context.Background())
+		done, _ := runExecuteStreamingWithBody(orch, context.Background(), reqBody)
 		waitDone(t, done)
 	})
 
@@ -150,9 +180,20 @@ func TestExecuteStreaming_UnparseableFramesDelivered_CompletesNotUpstreamError(t
 	if !ok {
 		t.Fatalf("the caller received full content; expected FinalizeReservation, got calls: %+v", rec.calls)
 	}
-	actual, _ := body["actual_credits"].(float64)
-	if int64(actual) != 10000 {
-		t.Errorf("actual_credits = %v, want 10000: frames were forwarded but nothing accumulated, so the hold is the already-authorized bound (#1215)", body["actual_credits"])
+	// Nothing accumulated, so there is no completion quantity to price and the
+	// prompt carries the charge alone. It is an undercharge on the output half
+	// and it is a deliberate one: the alternative this replaces was the flat
+	// hold, which on the live box was 355,872x the alias price (#1198). Pricing
+	// the forwarded bytes needs the relay to count them, which is tracked
+	// separately rather than smuggled into a money fix.
+	actual := finalizeInt64(t, body, "actual_credits")
+	promptOnly := CreditsForTokens(routeMockPricing,
+		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0, 0)
+	if actual != promptOnly {
+		t.Errorf("actual_credits = %d, want %d: the prompt is the only quantity anything can price here (#1198)", actual, promptOnly)
+	}
+	if actual < 1 {
+		t.Errorf("actual_credits = %d: a delivered stream is never free (#1215, D-034)", actual)
 	}
 	event, ok := rec.find("/internal/usage/events")
 	if !ok || event["event_type"] != "completed" {
@@ -163,11 +204,11 @@ func TestExecuteStreaming_UnparseableFramesDelivered_CompletesNotUpstreamError(t
 	}
 }
 
-// TestExecuteStreaming_ToolCallOnlyTurn_BilledAtHold_NotUpstreamError covers
+// TestExecuteStreaming_ToolCallOnlyTurn_Billed_NotUpstreamError covers
 // the third family: a parseable stream whose deltas are all tool calls. No
 // visible content accumulates, so the old code released the hold and filed
 // upstream_error over a turn that ran real billable work.
-func TestExecuteStreaming_ToolCallOnlyTurn_BilledAtHold_NotUpstreamError(t *testing.T) {
+func TestExecuteStreaming_ToolCallOnlyTurn_Billed_NotUpstreamError(t *testing.T) {
 	rec := &accountingRecorder{}
 	acctSrv := newAccountingMock(rec)
 	defer acctSrv.Close()
@@ -180,9 +221,10 @@ func TestExecuteStreaming_ToolCallOnlyTurn_BilledAtHold_NotUpstreamError(t *test
 
 	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
 
+	reqBody := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"What is the weather in Dhaka right now?"}],"stream":true}`)
 	var logs string
 	logs = captureLogs(t, func() {
-		done, _ := runExecuteStreaming(orch, context.Background())
+		done, _ := runExecuteStreamingWithBody(orch, context.Background(), reqBody)
 		waitDone(t, done)
 	})
 
@@ -190,9 +232,17 @@ func TestExecuteStreaming_ToolCallOnlyTurn_BilledAtHold_NotUpstreamError(t *test
 	if !ok {
 		t.Fatalf("a served tool-calling turn is billable work; expected FinalizeReservation, got calls: %+v", rec.calls)
 	}
-	actual, _ := body["actual_credits"].(float64)
-	if int64(actual) != 10000 {
-		t.Errorf("actual_credits = %v, want 10000", body["actual_credits"])
+	// Same deliberate undercharge as the unparseable-frame case above:
+	// AccumulateContent ignores tool-call deltas, so the prompt is the only
+	// quantity available to price, and it is charged rather than the flat hold.
+	actual := finalizeInt64(t, body, "actual_credits")
+	promptOnly := CreditsForTokens(routeMockPricing,
+		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0, 0)
+	if actual != promptOnly {
+		t.Errorf("actual_credits = %d, want %d: a served tool-calling turn bills the prompt it consumed, never the flat hold (#1198)", actual, promptOnly)
+	}
+	if actual < 1 {
+		t.Errorf("actual_credits = %d: a served tool-calling turn is never free (#1215, D-034)", actual)
 	}
 	event, ok := rec.find("/internal/usage/events")
 	if !ok || event["event_type"] != "completed" {

@@ -419,16 +419,38 @@ func (o *Orchestrator) executeSync(
 		// captures rather than releases; what it may never do is bill the
 		// alias's service price for content that does not exist.
 		//
-		// The capture is bounded by the caller's own ceiling (#1283). The hold
-		// is a flat authorization floor, so capturing it whole against a
-		// request capped at a handful of completion tokens breaches the same
-		// invariant by a far wider margin than the overrun that reported it.
-		// capCaptureAtCeiling only ever lowers the figure and never to zero, so
-		// the fail-closed property this branch exists for is untouched.
-		if zeroContentCaptured {
+		// The capture is bounded by the catalog price of the tokens the request
+		// actually involved (#1283, #1198). The hold is a flat authorization
+		// floor, so capturing it whole against a short turn overcharges by
+		// thousands of times the alias price; capCaptureAtCeiling only ever
+		// lowers the figure and never below one credit, so the fail-closed
+		// property this branch exists for is untouched.
+		//
+		// The completion count is the provider's own where it reported one,
+		// which on this branch is the reasoning burn: hidden reasoning is real
+		// inference we paid for, and it is already inside completion_tokens, so
+		// pricing it is what charges for it. Where the provider reported
+		// nothing at all there is no output to price and the prompt carries the
+		// charge on its own.
+		//
+		// A variable-price alias is excluded outright, and the exclusion is
+		// written here rather than left to capCaptureAtCeiling's own early
+		// return. That early return hands back its credits argument untouched,
+		// and the argument this call site passes is reservation.Held(), so
+		// routing an upstream-actual route through it REPLACED the cost the
+		// upstream reported with the whole authorization hold: measured in
+		// test, a reported 560,000 credits became 100,000,000, a 178x
+		// overcharge on the one alias family that has no catalog price to fall
+		// back on. UpstreamActualSettlement above is already fail-closed for
+		// this route (a cost it cannot read settles at the hold, and a
+		// generation that delivered nothing releases), so there is nothing left
+		// for this branch to add.
+		if zeroContentCaptured && !route.Pricing.IsUpstreamActual() {
 			actualCredits = capCaptureAtCeiling(route, ceiling,
-				captureInputTokens(hasUsage, cache.FreshInputTokens, endpoint, body),
-				cache.CacheReadTokens, cache.CacheWriteTokens, reservation.Held())
+				captureInputTokens(hasUsage, cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, endpoint, body),
+				cache.CacheReadTokens, cache.CacheWriteTokens,
+				captureCompletionTokens(hasUsage, outputTokens, responseText(endpoint, normalized)),
+				reservation.Held())
 			confirmed = false
 			billable = true
 		}
