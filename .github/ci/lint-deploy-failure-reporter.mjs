@@ -21,7 +21,8 @@
 // allowed to drift out of step with the file path. It is a shape check, not a
 // behaviour test: nothing here can execute a github-script block. The two
 // things it can prove are the two things that actually broke, absence and
-// asymmetry.
+// asymmetry. It also holds the three safeguards added in review of that PR in
+// place: attribution, ordering, and the job's own failure alarm.
 //
 // Run: node .github/ci/lint-deploy-failure-reporter.mjs
 
@@ -126,6 +127,56 @@ if (failureJob && recoveryJob) {
   }
   if (!/issues\.create\b/.test(scriptText(failureJob))) {
     fail(`${FAILURE_JOB}'s script no longer calls issues.create, so an outage files no tracking issue.`);
+  }
+
+  // The three safeguards added in review of the PR for #1416. Each is one
+  // careless edit from being deleted, and each failure is silent: the job
+  // still runs, still reports green, and does the wrong thing quietly.
+
+  // Attribution. Closing is destructive where commenting is not, and the label
+  // is not evidence of who filed anything: GitHub creates a label on first use
+  // and then offers it to every contributor, so a hand-labelled issue carries
+  // the same string a filed one does. Only this workflow's own issues close.
+  if (!/const filedBy = '[^']+'/.test(recoveryScript) || !/issue\.user/.test(recoveryScript)) {
+    fail(
+      `${RECOVERY_JOB} no longer checks who filed the issue it is about to close: its script has no ` +
+        `\`const filedBy = '...'\` compared against \`issue.user\`. Without it, an issue a human ` +
+        `opened or hand-labelled with the same string is closed automatically with no review.`,
+    );
+  }
+
+  // Ordering. An issue opened while this deploy was in flight describes a
+  // failure this run never disproved. The comparison needs the run's own start
+  // time, which the API only hands over with `actions: read`, so the missing
+  // permission and the missing comparison are the same defect.
+  const recoveryPermissions = recoveryJob.permissions ?? {};
+  if (
+    !/run_started_at/.test(recoveryScript) ||
+    !/issue\.created_at/.test(recoveryScript) ||
+    recoveryPermissions.actions !== 'read'
+  ) {
+    fail(
+      `${RECOVERY_JOB} no longer refuses to close issues opened after this run started: its script ` +
+        `must compare \`issue.created_at\` against the run's \`run_started_at\`, and the job needs ` +
+        `\`actions: read\` to be allowed to read that timestamp at all.`,
+    );
+  }
+
+  // Loudness. `continue-on-error` keeps a broken closer from turning a green
+  // deploy red, and also suppresses GitHub's own failure notification, so
+  // without an annotation and a summary line a closer that breaks leaves the
+  // tracking issue open forever with nobody told. That is #1416 with the alarm
+  // removed, which is the trade this repository refuses everywhere else.
+  if (
+    !/catch\s*\(/.test(recoveryScript) ||
+    !/core\.error\(/.test(recoveryScript) ||
+    !/core\.summary/.test(recoveryScript)
+  ) {
+    fail(
+      `${RECOVERY_JOB} no longer reports its own failure: its script must catch, then emit both a ` +
+        `core.error annotation and a core.summary line. It runs under continue-on-error, so a ` +
+        `failure here is invisible unless the script says so itself.`,
+    );
   }
 }
 
