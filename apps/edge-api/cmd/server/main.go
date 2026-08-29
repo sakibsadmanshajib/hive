@@ -1038,6 +1038,21 @@ func parseRAGMaxUploadBytes(raw string) (int64, error) {
 	if raw == "" {
 		return edgerag.DefaultMaxUploadBytes, nil
 	}
+	// ASCII digits only, checked before ParseInt rather than relying on it.
+	// ParseInt accepts a leading sign, so "+26214400" would parse here and be
+	// refused by the Python half's isdigit() check, leaving the two consumers
+	// of one variable disagreeing about what malformed means, which is the
+	// exact class of divergence this change exists to remove.
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf(
+				"RAG_MAX_UPLOAD_BYTES=%q must be ASCII digits only, with no sign, "+
+					"separator or unit suffix; refusing to start rather than "+
+					"accepting a value deploy/docker/owui-patches/hive_rag_env_config.py "+
+					"would refuse, which would put the chat cap and the ingest "+
+					"ceiling back out of step (26214400 is 25MB)", raw)
+		}
+	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf(

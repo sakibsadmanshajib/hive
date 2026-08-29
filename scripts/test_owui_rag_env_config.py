@@ -817,6 +817,40 @@ def _compose_text() -> str:
     ).read_text(encoding="utf-8")
 
 
+def _compose_service_block(compose: str, service: str) -> str:
+    """The text of one compose service, from its own key to the next one.
+
+    Service keys sit at exactly two spaces of indentation under `services:`,
+    and nothing else in this file does, so that is the boundary. Returning the
+    slice rather than searching the whole document is what lets a caller assert
+    something about one service instead of about the file, which is the
+    difference between a guard and a word count.
+    """
+    match = re.search(
+        rf"^  {re.escape(service)}:$(.*?)(?=^  [a-z0-9][a-z0-9._-]*:$|\Z)",
+        compose,
+        re.S | re.M,
+    )
+    assert match, f"docker-compose.yml has no service named {service!r}"
+    return match.group(1)
+
+
+def test_compose_service_block_isolates_one_service() -> None:
+    """The slicing helper above is load bearing for the guard below it, so it
+    gets its own check. Without this, a regex that silently matched the whole
+    document would make that guard pass over anything at all."""
+    compose = _compose_text()
+    edge = _compose_service_block(compose, "edge-api")
+    markitdown = _compose_service_block(compose, "markitdown")
+    assert "MARKITDOWN_URL" in edge, "edge-api's own block was not returned"
+    assert "MARKITDOWN_URL" not in markitdown, (
+        "the slice for markitdown leaked into another service's block, so every "
+        "per-service assertion built on it is meaningless"
+    )
+    assert "hive-markitdown:ci" in markitdown, "markitdown's own block was not returned"
+    assert "hive-markitdown:ci" not in edge, "the slice for edge-api leaked"
+
+
 def _compose_allowed_extensions() -> list:
     """The allowlist docker-compose.yml actually hands the container."""
     match = re.search(
@@ -853,17 +887,27 @@ def test_one_expression_sets_every_upload_ceiling() -> None:
             "chat upload cap is what issue #1428 is. The chat cap is derived from "
             "RAG_MAX_UPLOAD_BYTES by deploy/docker/owui-patches/hive_rag_env_config.py"
         )
+    # Checked per service rather than by counting occurrences across the whole
+    # file. A bare count of three is blind to a swap: drop the expression from
+    # open-webui and duplicate it inside edge-api and the count still reads
+    # three while the property this test claims to hold is false.
+    #
     # Matched without pinning the value, so raising the product's document
     # ceiling stays a one-line edit in three places rather than four. What must
     # not change is that the three agree: a test that pinned 26214400 would
     # fail on a deliberate raise, which trains the next person to edit the test
     # until it passes, and that is how a guard stops guarding.
-    defaults = re.findall(r"\$\{RAG_MAX_UPLOAD_BYTES:-([^}]*)\}", compose)
-    assert len(defaults) == 3, (
-        f"expected the one ceiling expression on exactly three services "
-        f"(edge-api, the markitdown sidecar, open-webui), found {len(defaults)}"
-    )
-    assert len(set(defaults)) == 1, (
+    defaults = {}
+    for service in ("edge-api", "markitdown", "open-webui"):
+        block = _compose_service_block(compose, service)
+        found = re.findall(r"\$\{RAG_MAX_UPLOAD_BYTES:-([^}]*)\}", block)
+        assert len(found) == 1, (
+            f"the {service} service must interpolate the one upload ceiling "
+            f"exactly once, found {len(found)}: {found}"
+        )
+        defaults[service] = found[0]
+
+    assert len(set(defaults.values())) == 1, (
         f"the three services disagree about the default upload ceiling: "
         f"{defaults}. They must interpolate one identical expression, or a "
         f"deployment that sets nothing gets a different limit in chat than on "

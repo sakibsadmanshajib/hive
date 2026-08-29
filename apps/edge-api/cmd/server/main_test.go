@@ -1413,7 +1413,13 @@ func TestParseRAGMaxUploadBytes(t *testing.T) {
 		}
 	})
 
-	for _, raw := range []string{"25MB", "26214400 bytes", "0", "-1", "1.5", "twenty"} {
+	// "+26214400" is the one that matters most here. strconv.ParseInt accepts a
+	// leading sign and the Python half's isdigit() check does not, so accepting
+	// it would boot edge-api at a ceiling the open-webui container refuses to
+	// start on, which is one variable with two parse rules again.
+	for _, raw := range []string{
+		"25MB", "26214400 bytes", "0", "-1", "1.5", "twenty", "+26214400", " +1 ", "26_214_400",
+	} {
 		t.Run("refuses "+raw, func(t *testing.T) {
 			got, err := parseRAGMaxUploadBytes(raw)
 			if err == nil {
