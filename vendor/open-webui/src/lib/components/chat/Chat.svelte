@@ -32,6 +32,7 @@
 		showControls,
 		showCallOverlay,
 		composerMode,
+		composerPack,
 		currentChatPage,
 		temporaryChatEnabled,
 		mobile,
@@ -118,7 +119,6 @@
 	import {
 		foldRunSteps,
 		latestStepSeq,
-		packForMode,
 		renderRun,
 		runTurnIsDone,
 		selectPendingCoworkTurns,
@@ -2413,7 +2413,10 @@
 
 		let task;
 		try {
-			task = await createTask(localStorage.token, packForMode('cowork'), userPrompt);
+			// The pack the composer's own control is showing (#1500). Read at
+			// submit rather than captured earlier, so the row and the wire cannot
+			// disagree about which pack this run is.
+			task = await createTask(localStorage.token, $composerPack, userPrompt);
 		} catch (error) {
 			const refusal = describeRefusal(error);
 			await applyCoworkRun(_chatId, runMessageId, {

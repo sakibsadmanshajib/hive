@@ -89,6 +89,22 @@ export const TTSWorker = writable(null);
  */
 export const composerMode: Writable<'chat' | 'cowork'> = writable('chat');
 
+/*
+ * Which agent pack a Cowork submission runs as (#1500).
+ *
+ * Spelled out rather than imported as TaskPack, for the same reason
+ * composerMode above is spelled out rather than imported as ComposerMode: this
+ * module is reached by everything and importing lib/hive from it would invert
+ * the dependency the other way round.
+ *
+ * Session scoped like the mode, and for a weaker version of the same reason: a
+ * persisted pack would quietly apply a choice made days ago to a task the
+ * person has not thought about since. The default matches what the composer
+ * sent before this control existed, so ignoring it changes nothing.
+ */
+export const composerPack: Writable<'knowledge-work-pack' | 'coding-pack'> =
+	writable('knowledge-work-pack');
+
 export const chatId = writable('');
 export const chatTitle = writable('');
 

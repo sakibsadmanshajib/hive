@@ -6,19 +6,21 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	COMPOSER_MODES,
+	COMPOSER_PACKS,
+	DEFAULT_COMPOSER_PACK,
 	describeEvent,
 	foldRunSteps,
 	isComposerMode,
 	latestStepSeq,
 	nextMode,
-	packForMode,
+	nextPack,
 	renderRun,
 	runTurnIsDone,
 	selectPendingCoworkTurns,
 	settleRunSteps,
 	type RunStep
 } from './coworkMode';
-import type { TaskEvent } from './agentTasks';
+import { isTaskPack, type TaskEvent } from './agentTasks';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const readComponent = (relative: string): string =>
@@ -36,9 +38,61 @@ describe('composer mode', () => {
 		expect(isComposerMode(undefined)).toBe(false);
 	});
 
-	it('derives the pack instead of asking, so no control can pick the wrong one', () => {
-		expect(packForMode('cowork')).toBe('knowledge-work-pack');
-		expect(packForMode('chat')).toBe('knowledge-work-pack');
+});
+
+/*
+ * #1500. The pack used to be derived rather than chosen, and the assertion that
+ * replaced this one said so approvingly. That was the defect: `coding-pack` was
+ * unreachable from the chat surface entirely, and the only route that could
+ * reach it was the `/agents` destination D-045 retires. The pack is now offered.
+ */
+describe('the pack the composer will send', () => {
+	it('offers both packs the wire accepts, knowledge work first', () => {
+		expect(COMPOSER_PACKS.map((option) => option.value)).toEqual([
+			'knowledge-work-pack',
+			'coding-pack'
+		]);
+	});
+
+	it('offers only values the API and the database CHECK constraint accept', () => {
+		for (const option of COMPOSER_PACKS) {
+			expect(isTaskPack(option.value)).toBe(true);
+		}
+	});
+
+	it('labels the segments in words rather than in wire identifiers', () => {
+		// A customer never reads `knowledge-work-pack`. These are the same two
+		// words the /agents route already used, so retiring that route in #1501
+		// changes no vocabulary anyone has learned.
+		expect(COMPOSER_PACKS.map((option) => option.label)).toEqual(['Knowledge work', 'Coding']);
+		for (const option of COMPOSER_PACKS) {
+			expect(option.label).not.toContain('-pack');
+		}
+	});
+
+	it('defaults to what the composer already sent, so ignoring the control changes nothing', () => {
+		expect(DEFAULT_COMPOSER_PACK).toBe('knowledge-work-pack');
+		expect(COMPOSER_PACKS[0].value).toBe(DEFAULT_COMPOSER_PACK);
+	});
+});
+
+describe('nextPack', () => {
+	it('moves forward and back with the arrow keys a radiogroup answers to', () => {
+		expect(nextPack('knowledge-work-pack', 'ArrowRight')).toBe('coding-pack');
+		expect(nextPack('knowledge-work-pack', 'ArrowDown')).toBe('coding-pack');
+		expect(nextPack('coding-pack', 'ArrowLeft')).toBe('knowledge-work-pack');
+		expect(nextPack('coding-pack', 'ArrowUp')).toBe('knowledge-work-pack');
+	});
+
+	it('wraps at both ends, as a native radio group does', () => {
+		expect(nextPack('coding-pack', 'ArrowRight')).toBe('knowledge-work-pack');
+		expect(nextPack('knowledge-work-pack', 'ArrowLeft')).toBe('coding-pack');
+	});
+
+	it('ignores every other key, so typing near the control cannot switch packs', () => {
+		for (const key of ['Enter', 'a', 'Tab', 'Escape', ' ']) {
+			expect(nextPack('coding-pack', key)).toBeNull();
+		}
 	});
 });
 
@@ -187,8 +241,46 @@ describe('the composer actually carries the mode', () => {
 	});
 });
 
+/*
+ * #1500. The row used to render the pack as a `<span>`, so a Playwright query
+ * for clickable elements matching "Knowledge work" returned 0 against the live
+ * box and every composer submission ran as knowledge-work-pack. These pins are
+ * the source-level half of that; the count-greater-than-zero half is the
+ * screenshot on the pull request.
+ */
+describe('the cowork row offers the pack rather than stating it', () => {
+	const row = readComponent('./ComposerCoworkRow.svelte');
+
+	it('is a radiogroup with a radio per pack, the same contract the mode toggle has', () => {
+		expect(row).toContain('role="radiogroup"');
+		expect(row).toContain('role="radio"');
+		expect(row).toContain('data-hive-pack={option.value}');
+		expect(row).toContain('aria-checked={$composerPack === option.value}');
+	});
+
+	it('writes the store the submit path reads, so the choice reaches the wire', () => {
+		expect(row).toContain("import { composerPack } from '$lib/stores'");
+		expect(row).toContain('composerPack.set(');
+	});
+
+	it('reuses the mode toggle segment classes rather than inventing a control idiom', () => {
+		expect(row).toContain('hv-mode-segment');
+	});
+
+	it('keeps no static pack label that could disagree with the selection', () => {
+		// The briefcase glyph named one pack and was wrong the moment the other
+		// was chosen, and the bare `<span>` is the defect itself.
+		expect(row).not.toContain('hv-cowork-scope');
+	});
+});
+
 describe('sending in cowork mode starts a run instead of a completion', () => {
 	const chat = readComponent('../components/chat/Chat.svelte');
+
+	it('sends the pack the person chose, not a derived constant (#1500)', () => {
+		expect(chat).toContain('createTask(localStorage.token, $composerPack, userPrompt)');
+		expect(chat).not.toContain('packForMode');
+	});
 
 	it('branches on the mode inside the one submit handler both composers call', () => {
 		expect(chat).toContain("if ($composerMode === 'cowork')");
