@@ -20,9 +20,6 @@ func TestConfiguredAuditSinksDefaultOff(t *testing.T) {
 	t.Setenv("AUDIT_SINK_SPLUNK_HEC_URL", "http://splunk.example.com")
 	t.Setenv("AUDIT_SINK_SPLUNK_HEC_TOKEN", "splunk-token")
 	t.Setenv("SENTRY_DSN", "https://key@sentry.example.com/1")
-	t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
-	t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
-	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
 
 	// All ENABLE_* flags absent — expect zero sinks regardless of credentials.
 	sinks := configuredAuditSinks()
@@ -64,11 +61,6 @@ func TestConfiguredAuditSinksEachFlagGates(t *testing.T) {
 			credKey: "SENTRY_DSN", credVal: "https://key@sentry.example.com/1",
 			sinkName: "sentry",
 		},
-		{
-			name: "langfuse", envKey: "ENABLE_AUDIT_SINK_LANGFUSE",
-			credKey: "LANGFUSE_HOST", credVal: "http://langfuse.example.com",
-			sinkName: "langfuse",
-		},
 	}
 
 	for _, tc := range cases {
@@ -80,12 +72,6 @@ func TestConfiguredAuditSinksEachFlagGates(t *testing.T) {
 			if tc.name == "splunk" {
 				t.Setenv("AUDIT_SINK_SPLUNK_HEC_TOKEN", "tok")
 			}
-			// Langfuse requires host + both keys; supply the extras here.
-			if tc.name == "langfuse" {
-				t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
-				t.Setenv("LANGFUSE_SECRET_KEY", "sec")
-			}
-
 			result := configuredAuditSinks()
 			require.Len(t, result, 1, "exactly one sink must be registered when only %s=true", tc.envKey)
 			assert.Equal(t, tc.sinkName, result[0].Name())
@@ -121,21 +107,69 @@ func TestConfiguredAuditSinksPartialCredsSkipped(t *testing.T) {
 		result := configuredAuditSinks()
 		assert.Empty(t, result, "splunk must be skipped when HEC url is absent")
 	})
-	t.Run("langfuse_host_only", func(t *testing.T) {
-		t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
-		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
-		// public and secret keys intentionally absent
-		result := configuredAuditSinks()
-		assert.Empty(t, result, "langfuse must be skipped when keys are absent")
-	})
-	t.Run("langfuse_missing_secret", func(t *testing.T) {
-		t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
-		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
-		t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
-		// secret key intentionally absent
-		result := configuredAuditSinks()
-		assert.Empty(t, result, "langfuse must be skipped when secret key is absent")
-	})
+}
+
+// TestConfiguredAuditSinksHasNoLangfuseSink is a deletion guard. The Langfuse
+// audit sink was removed in favour of internal/genexport, which reads the
+// accounting tables directly. Two Langfuse writers is worse than either, so if
+// somebody reintroduces the sink this test says why not to.
+func TestConfiguredAuditSinksHasNoLangfuseSink(t *testing.T) {
+	t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
+	t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
+	t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
+	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
+
+	result := configuredAuditSinks()
+	assert.Empty(t, result,
+		"the langfuse audit sink is deleted; generation telemetry goes through internal/genexport")
+}
+
+// TestGenerationExporterDefaultOff is the ships-dark guarantee at the wiring
+// level: credentials alone must never start an exporter.
+func TestGenerationExporterDefaultOff(t *testing.T) {
+	t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
+	t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
+	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
+	// ENABLE_GENERATION_EXPORT deliberately absent.
+
+	assert.Nil(t, buildGenerationExporter(nil),
+		"the exporter must not start on credential presence alone")
+}
+
+// TestGenerationExporterSkippedWhenIncomplete verifies that an enabled flag
+// with any credential missing yields no exporter rather than a half-configured
+// one. The boot WARNING that names the missing variable is emitted alongside.
+func TestGenerationExporterSkippedWhenIncomplete(t *testing.T) {
+	cases := map[string]map[string]string{
+		"no host":        {"LANGFUSE_PUBLIC_KEY": "pub", "LANGFUSE_SECRET_KEY": "sec"},
+		"no public key":  {"LANGFUSE_HOST": "http://langfuse.example.com", "LANGFUSE_SECRET_KEY": "sec"},
+		"no secret key":  {"LANGFUSE_HOST": "http://langfuse.example.com", "LANGFUSE_PUBLIC_KEY": "pub"},
+		"nothing at all": {},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ENABLE_GENERATION_EXPORT", "true")
+			t.Setenv("LANGFUSE_HOST", "")
+			t.Setenv("LANGFUSE_PUBLIC_KEY", "")
+			t.Setenv("LANGFUSE_SECRET_KEY", "")
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+			assert.Nil(t, buildGenerationExporter(nil))
+		})
+	}
+}
+
+// TestGenerationExporterNeedsAPool: fully credentialed but with no database
+// pool there is nothing to read, so the exporter is skipped with a named
+// reason rather than started and left failing every tick.
+func TestGenerationExporterNeedsAPool(t *testing.T) {
+	t.Setenv("ENABLE_GENERATION_EXPORT", "true")
+	t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
+	t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
+	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
+
+	assert.Nil(t, buildGenerationExporter(nil))
 }
 
 // TestAuditSinkEnabled verifies the helper's case-insensitive true detection.

@@ -40,6 +40,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/genexport"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
@@ -825,6 +826,12 @@ func main() {
 			worker := auditworker.New(auditworker.Config{Pool: pool, Sinks: configuredSinks})
 			go worker.Run(runCtx)
 			log.Printf("phase-19 audit sink worker started (sinks=%d)", len(configuredSinks))
+		}
+
+		if exporter := buildGenerationExporter(pool); exporter != nil && exporter.Enabled() {
+			go exporter.Run(runCtx)
+			log.Printf("generation exporter started (settled usage events, batch=%d, poll=%s)",
+				exporter.BatchSize(), exporter.PollInterval())
 		}
 
 		if auditWAL != nil {
@@ -1703,21 +1710,58 @@ func configuredAuditSinks() []auditworker.Sink {
 			log.Println("WARNING: ENABLE_AUDIT_SINK_SENTRY=true but SENTRY_DSN is unset — sink skipped")
 		}
 	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_LANGFUSE") {
-		host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST"))
-		pub := strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY"))
-		sec := strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY"))
-		if host != "" && pub != "" && sec != "" {
-			configured = append(configured, sinks.NewLangfuse(sinks.LangfuseConfig{
-				Host:      host,
-				PublicKey: pub,
-				SecretKey: sec,
-			}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_LANGFUSE=true but LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, or LANGFUSE_SECRET_KEY is unset — sink skipped")
-		}
-	}
+	// There is deliberately no langfuse audit sink here any more. Generation
+	// telemetry now goes through internal/genexport, which reads the
+	// accounting tables directly; see buildGenerationExporter below.
 	return configured
+}
+
+// buildGenerationExporter returns the settled-generation exporter, or nil when
+// it is not configured. It follows the same posture as configuredAuditSinks:
+// an explicit enable flag AND credentials, both required, so a sovereign-edge
+// deployment egresses nothing until an operator consciously turns it on.
+//
+// Unlike the audit sinks this does not ride the audit outbox. That path writes
+// each event inside a SERIALIZABLE transaction holding a per-month advisory
+// lock, which is right for a tamper-evident compliance ledger and wrong as a
+// transport for per-generation telemetry. The exporter is a poller over
+// already-committed rows instead, so it cannot slow or fail a request.
+func buildGenerationExporter(pool *pgxpool.Pool) *genexport.Exporter {
+	if !auditSinkEnabled("ENABLE_GENERATION_EXPORT") {
+		return nil
+	}
+
+	host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST"))
+	pub := strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY"))
+	sec := strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY"))
+
+	// Name exactly what is missing. A generic "not configured" line sends the
+	// next operator reading three variables to find the one that is blank.
+	missing := make([]string, 0, 4)
+	if host == "" {
+		missing = append(missing, "LANGFUSE_HOST")
+	}
+	if pub == "" {
+		missing = append(missing, "LANGFUSE_PUBLIC_KEY")
+	}
+	if sec == "" {
+		missing = append(missing, "LANGFUSE_SECRET_KEY")
+	}
+	if pool == nil {
+		missing = append(missing, "a database pool")
+	}
+	if len(missing) > 0 {
+		log.Printf("WARNING: ENABLE_GENERATION_EXPORT=true but %s is unset — generation export skipped",
+			strings.Join(missing, ", "))
+		return nil
+	}
+
+	return genexport.New(genexport.Config{
+		Pool:      pool,
+		Host:      host,
+		PublicKey: pub,
+		SecretKey: sec,
+	})
 }
 
 func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
