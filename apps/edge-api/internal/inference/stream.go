@@ -403,8 +403,11 @@ func (o *Orchestrator) executeStreaming(
 				// Read before the finishSeen update below, so a frame that
 				// carries finish_reason AND usage together (the shape a direct
 				// OpenRouter stream sends) is not mistaken for one arriving
-				// after the finish.
-				postFinishUsageFrame := finishSeen && chunk.Usage != nil
+				// after the finish. A frame that carries a finish_reason of
+				// its own is excluded outright: emptying its choices would
+				// strip that finish_reason on the way out, and a terminal
+				// usage frame never carries one.
+				postFinishUsageFrame := finishSeen && chunk.Usage != nil && !ChunkFinished(chunk)
 				if ChunkFinished(chunk) {
 					finishSeen = true
 				}

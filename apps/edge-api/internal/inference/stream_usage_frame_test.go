@@ -148,10 +148,11 @@ func TestStreamRelay_ForwardsLiteLLMTerminalUsageFrame(t *testing.T) {
 	if usage.chunk.Usage.CompletionTokens != 20 {
 		t.Errorf("completion_tokens on the wire = %d, want 20", usage.chunk.Usage.CompletionTokens)
 	}
-	for _, choice := range usage.chunk.Choices {
-		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
-			t.Errorf("terminal usage frame must carry no content delta, got %q", *choice.Delta.Content)
-		}
+	// Asserted as emptiness, not as a loop over the choices: a loop over an
+	// empty slice runs zero times and passes whatever the relay did, which is
+	// the shape of assertion that cannot fail.
+	if len(usage.chunk.Choices) != 0 {
+		t.Errorf("terminal usage frame must be relayed in the canonical usage-only shape (choices []), got %d choice(s); wire was:\n%s", len(usage.chunk.Choices), wire)
 	}
 }
 
