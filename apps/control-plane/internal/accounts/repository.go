@@ -60,6 +60,80 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 	return &pgxRepository{pool: pool}
 }
 
+// withActorTx runs fn inside an explicit transaction with the RLS session
+// variable app.current_actor_user_id set LOCAL to actorUserID (issue #896).
+// hive_app is NOT BYPASSRLS, and public.account_memberships' hive_app policy
+// (20260829_04_account_memberships_hive_app_scope.sql) is keyed on this
+// setting for every "my own memberships" access shape: ListMembershipsByUserID,
+// CreateMembership, ActivateMembership, and the account_memberships reads and
+// writes inside ProvisionDefaultWorkspace.
+//
+// Posture caveat (issue #1444), the canonical statement of it for this
+// package: that policy does not bind on the system as currently deployed, and
+// this scoping does not make it bind. hive_app is NOLOGIN with zero role
+// members, no production code path anywhere in this repository issues
+// SET ROLE hive_app, and control-plane connects as postgres, which is
+// BYPASSRLS and skips policy evaluation entirely. So the Go predicates in the
+// callers below remain the only tenancy enforcement today, exactly as before.
+// What the session scoping buys is that the policy is correct and exercised
+// by tests ahead of the connection-posture change that makes it load bearing;
+// issue #1444 owns that change and is the blocker. Full evidence in the header
+// of supabase/migrations/20260829_04_account_memberships_hive_app_scope.sql.
+// Read every "hive_app is NOT BYPASSRLS" remark in this package as a statement
+// about the role's attributes, never as evidence that hive_app connects.
+//
+// LOCAL scope inside an explicit transaction is required, not incidental --
+// see egress/repository.go's withTenantTx comment for the two ways this was
+// gotten wrong before: a bare Exec followed by a separate Query loses the
+// LOCAL setting the instant the Exec's own implicit transaction ends, and
+// session scope (is_local=false) survives pool.Release and leaks the actor
+// onto whichever request borrows that physical connection next.
+func (r *pgxRepository) withActorTx(ctx context.Context, actorUserID uuid.UUID, fn func(tx pgx.Tx) error) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("accounts: begin actor-scoped tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", actorUserID.String()); err != nil {
+		return fmt.Errorf("accounts: set actor scope: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("accounts: commit actor-scoped tx: %w", err)
+	}
+	return nil
+}
+
+// withAccountTx is withActorTx's counterpart for the "members of one account
+// I already administer" access shape (issue #896): app.current_account_id,
+// read by the same migration's second hive_app policy, and subject to the same
+// issue #1444 posture caveat spelled out on withActorTx above. Used by
+// ListMembersByAccountID (the member-list page, which by design reads every
+// member's row, not just the caller's own) and UpdateMembershipRole
+// (including its embedded last-owner-count subquery, which reads every owner
+// row of the account, and its post-failure diagnostic read).
+func (r *pgxRepository) withAccountTx(ctx context.Context, accountID uuid.UUID, fn func(tx pgx.Tx) error) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("accounts: begin account-scoped tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID.String()); err != nil {
+		return fmt.Errorf("accounts: set account scope: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("accounts: commit account-scoped tx: %w", err)
+	}
+	return nil
+}
+
 // ListMembershipsByUserID returns userID's memberships, active and invited
 // alike, ordered by created_at then id.
 //
@@ -80,26 +154,32 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 // created_at (a single bulk upsert statement stamps every row it inserts
 // with the same transaction timestamp).
 func (r *pgxRepository) ListMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, account_id, user_id, role, status, created_at
-		FROM public.account_memberships
-		WHERE user_id = $1
-		ORDER BY created_at ASC, id ASC
-	`, userID)
+	var memberships []Membership
+	err := r.withActorTx(ctx, userID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, account_id, user_id, role, status, created_at
+			FROM public.account_memberships
+			WHERE user_id = $1
+			ORDER BY created_at ASC, id ASC
+		`, userID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var m Membership
+			if err := rows.Scan(&m.ID, &m.AccountID, &m.UserID, &m.Role, &m.Status, &m.CreatedAt); err != nil {
+				return err
+			}
+			memberships = append(memberships, m)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var memberships []Membership
-	for rows.Next() {
-		var m Membership
-		if err := rows.Scan(&m.ID, &m.AccountID, &m.UserID, &m.Role, &m.Status, &m.CreatedAt); err != nil {
-			return nil, err
-		}
-		memberships = append(memberships, m)
-	}
-	return memberships, rows.Err()
+	return memberships, nil
 }
 
 // ActiveTenantID reports the tenant userID holds an ACTIVE tenant_users row
@@ -168,10 +248,13 @@ func (r *pgxRepository) CreateAccount(ctx context.Context, acct Account) error {
 // as of that instant, so the unique violation is translated into ErrAlreadyMember
 // rather than escaping as raw pgx text and being answered as an opaque 500.
 func (r *pgxRepository) CreateMembership(ctx context.Context, m Membership) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO public.account_memberships (id, account_id, user_id, role, status)
-		VALUES ($1, $2, $3, $4, $5)
-	`, m.ID, m.AccountID, m.UserID, m.Role, m.Status)
+	err := r.withActorTx(ctx, m.UserID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.account_memberships (id, account_id, user_id, role, status)
+			VALUES ($1, $2, $3, $4, $5)
+		`, m.ID, m.AccountID, m.UserID, m.Role, m.Status)
+		return err
+	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 		return ErrAlreadyMember
@@ -205,6 +288,16 @@ func (r *pgxRepository) ProvisionDefaultWorkspace(ctx context.Context, acct Acco
 		return uuid.Nil, false, fmt.Errorf("accounts: begin provisioning tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Issue #896: every account_memberships statement below runs as the
+	// caller's own actor scope (Shape A -- see withActorTx's doc comment).
+	// hive_app is NOT BYPASSRLS, and the account_memberships hive_app policy
+	// (20260829_04_account_memberships_hive_app_scope.sql) requires this
+	// setting for both the pre-check read and the owner-membership insert.
+	// Dormant today for the reason withActorTx documents (issue #1444).
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_actor_user_id', $1, true)", membership.UserID.String()); err != nil {
+		return uuid.Nil, false, fmt.Errorf("accounts: set actor scope: %w", err)
+	}
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::int8)`, membership.UserID.String()); err != nil {
 		return uuid.Nil, false, fmt.Errorf("accounts: acquire provisioning lock: %w", err)
@@ -421,18 +514,26 @@ func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.
 // soft-removal status now falls through as ErrNotFound instead of being
 // silently reinstated by an accepted invitation.
 func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE public.account_memberships
-		SET role = CASE WHEN status = 'invited' THEN $3 ELSE role END,
-		    status = 'active'
-		WHERE account_id = $1
-		  AND user_id = $2
-		  AND status IN ('active', 'invited')
-	`, accountID, userID, role)
+	var rowsAffected int64
+	err := r.withActorTx(ctx, userID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE public.account_memberships
+			SET role = CASE WHEN status = 'invited' THEN $3 ELSE role END,
+			    status = 'active'
+			WHERE account_id = $1
+			  AND user_id = $2
+			  AND status IN ('active', 'invited')
+		`, accountID, userID, role)
+		if err != nil {
+			return err
+		}
+		rowsAffected = tag.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("accounts: activate membership: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	if rowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -443,27 +544,33 @@ func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userI
 // a bare UUID. The join is a LEFT JOIN and email is coalesced: a membership
 // whose auth row has no email still lists.
 func (r *pgxRepository) ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT m.user_id, coalesce(u.email, ''), m.role, m.status
-		FROM public.account_memberships m
-		LEFT JOIN auth.users u ON u.id = m.user_id
-		WHERE m.account_id = $1
-		ORDER BY m.created_at
-	`, accountID)
+	var members []Member
+	err := r.withAccountTx(ctx, accountID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT m.user_id, coalesce(u.email, ''), m.role, m.status
+			FROM public.account_memberships m
+			LEFT JOIN auth.users u ON u.id = m.user_id
+			WHERE m.account_id = $1
+			ORDER BY m.created_at
+		`, accountID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var m Member
+			if err := rows.Scan(&m.UserID, &m.Email, &m.Role, &m.Status); err != nil {
+				return err
+			}
+			members = append(members, m)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var members []Member
-	for rows.Next() {
-		var m Member
-		if err := rows.Scan(&m.UserID, &m.Email, &m.Role, &m.Status); err != nil {
-			return nil, err
-		}
-		members = append(members, m)
-	}
-	return members, rows.Err()
+	return members, nil
 }
 
 // UpdateMembershipRole writes a new role onto an active membership.
@@ -476,29 +583,36 @@ func (r *pgxRepository) ListMembersByAccountID(ctx context.Context, accountID uu
 // means "not an active member, or this write would have removed the last
 // owner", and surfaces as ErrNotFound / ErrLastOwner respectively.
 func (r *pgxRepository) UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE public.account_memberships AS m
-		SET role = $3
-		WHERE m.account_id = $1
-		  AND m.user_id = $2
-		  AND m.status = 'active'
-		  AND (
-		    $3 = 'owner'
-		    OR m.role <> 'owner'
-		    OR (
-		      SELECT count(*) FROM public.account_memberships o
-		      WHERE o.account_id = $1 AND o.role = 'owner' AND o.status = 'active'
-		    ) > 1
-		  )
-	`, accountID, userID, role)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
+	// Shape B (issue #896): the target row's user_id is the member being
+	// changed, not necessarily the caller, and the embedded last-owner-count
+	// subquery reads every owner row of the account, not just one user's. Both
+	// are scoped by account, not by actor.
+	return r.withAccountTx(ctx, accountID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE public.account_memberships AS m
+			SET role = $3
+			WHERE m.account_id = $1
+			  AND m.user_id = $2
+			  AND m.status = 'active'
+			  AND (
+			    $3 = 'owner'
+			    OR m.role <> 'owner'
+			    OR (
+			      SELECT count(*) FROM public.account_memberships o
+			      WHERE o.account_id = $1 AND o.role = 'owner' AND o.status = 'active'
+			    ) > 1
+			  )
+		`, accountID, userID, role)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			return nil
+		}
 		// Distinguish the two zero-row causes so the HTTP layer stays truthful.
 		var currentRole string
 		var activeOwners int
-		if scanErr := r.pool.QueryRow(ctx, `
+		if scanErr := tx.QueryRow(ctx, `
 			SELECT m.role,
 			       (SELECT count(*) FROM public.account_memberships o
 			        WHERE o.account_id = $1 AND o.role = 'owner' AND o.status = 'active')
@@ -511,6 +625,5 @@ func (r *pgxRepository) UpdateMembershipRole(ctx context.Context, accountID, use
 			return ErrLastOwner
 		}
 		return ErrNotFound
-	}
-	return nil
+	})
 }
