@@ -90,7 +90,14 @@ if [ -f "$STAMP_PATH" ]; then
   case "$last" in
     ''|*[!0-9]*) last=0 ;;
   esac
-  age=$(( now - last ))
+  # 10# forces base ten. Bash arithmetic reads a leading zero as octal, so a
+  # truncated or half-written stamp beginning with 0 either evaluates to the
+  # wrong number or, on a digit of 8 or 9, is a fatal arithmetic error that
+  # would abort this script under `set -e` before it checked the launcher at
+  # all. Taking the whole watchdog offline is the one outcome this file exists
+  # to prevent, and the digit filter above cannot catch it because "08" is all
+  # digits.
+  age=$(( now - 10#$last ))
   if [ "$age" -gt "$STALE_AFTER" ]; then
     post_alert "HiveAgentEngineProbeStale" \
       "The agent-engine launcher health probe on the demo box last succeeded ${age}s ago, over the ${STALE_AFTER}s threshold. A scheduled probe run did not happen, so treat the launcher as unverified rather than healthy. Check: systemctl --user list-timers hive-agent-engine-health.timer"

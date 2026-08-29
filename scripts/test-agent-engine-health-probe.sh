@@ -206,12 +206,20 @@ alerted HiveAgentEngineProbeStale && fail "[F] a fresh stamp reported itself sta
 # `$(( now - garbage ))` is a fatal arithmetic error under `set -e`, which would
 # abort the probe before it ever checked the launcher: a truncated or
 # half-written stamp would take the whole watchdog offline silently.
+#
+# Two shapes, because the obvious guard only catches the first. A stamp of
+# non-digits is caught by a digit filter; a stamp with a leading zero is all
+# digits and passes that filter, and bash then reads it as octal, so "08"
+# is the same fatal arithmetic error arriving through the guard rather than
+# around it.
 before_g=$failures
-printf 'not-a-number\n' > "$stamp"
-run_probe
-alerted HiveAgentEngineProbeStale || fail "[G] a corrupt stamp did not read as stale" "$out"
-[ "$status" = 0 ] || fail "[G] a corrupt stamp aborted the probe instead of reading as stale" "$out"
-[ $failures -eq "$before_g" ] && echo "ok   [G] a corrupt stamp reads as stale rather than aborting the probe"
+for corrupt in 'not-a-number' '08'; do
+  printf '%s\n' "$corrupt" > "$stamp"
+  run_probe
+  alerted HiveAgentEngineProbeStale || fail "[G] a corrupt stamp ($corrupt) did not read as stale" "$out"
+  [ "$status" = 0 ] || fail "[G] a corrupt stamp ($corrupt) aborted the probe instead of reading as stale" "$out"
+done
+[ $failures -eq "$before_g" ] && echo "ok   [G] a corrupt stamp, non-numeric or octal-looking, reads as stale rather than aborting the probe"
 
 # --- case H: a dead Alertmanager must not hide the underlying failure -------
 before_h=$failures
