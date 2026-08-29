@@ -5,9 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Issue #1457. Every mutating route under app/api/console accepts a plain
 // <form method="POST"> and carries no CSRF token; nothing in this repository
-// asserted that a forged cross-site post is refused. These tests are that
-// assertion. If lib/http/same-origin.ts stops refusing, every case in the
-// "refuses a cross-origin request" table goes red.
+// asserted that a forged post is refused. These tests are that assertion for
+// the routes the issue named, at the handler itself. If lib/http/same-origin.ts
+// stops refusing, every case in the "refuses a cross-origin request" table goes
+// red.
+//
+// The app-wide guarantee lives in the middleware and is covered by
+// middleware-origin-guard.test.ts. This file covers the second, explicit layer
+// on the console handlers, which is what keeps them refusing even if the
+// middleware matcher is ever narrowed.
 
 const CANONICAL = "https://console.example.test";
 
@@ -267,25 +273,42 @@ describe("every mutating console route is guarded", () => {
     expect(files.length).toBeGreaterThanOrEqual(8);
   });
 
-  it("finds every mutating handler and sees the guard in each file", () => {
-    const mutating = /export\s+(?:async\s+)?function\s+(POST|PUT|PATCH|DELETE)\b/g;
+  it("finds every mutating handler and sees the guard inside each one", () => {
+    // Both declaration forms. `export const POST = ...` is ordinary App Router
+    // style, and a regex that only knew `export function` would skip such a
+    // file entirely, leaving an unguarded route invisible rather than red.
+    const mutating =
+      /export\s+(?:async\s+)?(?:function|const|let|var)\s+(POST|PUT|PATCH|DELETE)\b/g;
     let handlerCount = 0;
     const unguarded: string[] = [];
 
     for (const file of files) {
       const source = readFileSync(file, "utf8");
-      const matches = source.match(mutating);
-      if (!matches) continue;
-      handlerCount += matches.length;
-      if (
-        !source.includes("refuseCrossOrigin(request)") ||
-        !source.includes("@/lib/http/same-origin")
-      ) {
-        unguarded.push(file);
+      const starts = [...source.matchAll(mutating)].map((match) => match.index ?? 0);
+      handlerCount += starts.length;
+      if (starts.length === 0) continue;
+
+      // Per handler, not per file. A second mutating handler added to a file
+      // that already has one would otherwise be satisfied by its neighbour's
+      // call, which is exactly the case a single-handler mutation test cannot
+      // reveal.
+      starts.forEach((start, index) => {
+        const body = source.slice(start, starts[index + 1] ?? source.length);
+        if (!body.includes("refuseCrossOrigin(request)")) {
+          unguarded.push(`${file} (handler ${index + 1})`);
+        }
+      });
+
+      if (!source.includes("@/lib/http/same-origin")) {
+        unguarded.push(`${file} (missing import)`);
       }
     }
 
     expect(unguarded).toEqual([]);
-    expect(handlerCount).toBeGreaterThanOrEqual(handlers.length);
+    // Exact, not at-least: a mutating handler added later must also gain a row
+    // in the `handlers` table above, so it gets a behavioural test and not only
+    // a source-text check. A greater-or-equal assertion would let a new route
+    // satisfy this file by importing the helper and nothing more.
+    expect(handlerCount).toBe(handlers.length);
   });
 });
