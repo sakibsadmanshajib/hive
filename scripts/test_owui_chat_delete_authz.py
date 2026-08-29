@@ -102,22 +102,6 @@ PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 CADDYFILE = REPO_ROOT / "deploy/docker/Caddyfile.owui"
 COMPOSE = REPO_ROOT / "deploy/docker/docker-compose.yml"
 
-# apply_router_authz_family_patch.py rewrites every file in this set and fails
-# if one is missing, so the whole family is copied even though only chats.py is
-# read afterwards. Mirrors EXPECTED_MARKERS in that script.
-FAMILY_ROUTERS = (
-    "knowledge.py",
-    "files.py",
-    "evaluations.py",
-    "folders.py",
-    "calendar.py",
-    "chats.py",
-    "prompts.py",
-    "notes.py",
-    "tools.py",
-    "models.py",
-)
-
 SCOPED_LOOKUP = "get_chat_by_id_and_user_id"
 SCOPED_DELETE = "delete_chat_by_id_and_user_id"
 UNSCOPED_LOOKUP = "get_chat_by_id"
@@ -155,8 +139,14 @@ def patched_chats_router() -> str:
     the pre-patch check it replaced.
     """
     tmp = Path(tempfile.mkdtemp(prefix="owui-chat-authz-"))
-    for name in FAMILY_ROUTERS:
-        shutil.copy(VENDORED_ROUTERS / name, tmp / name)
+    # Every router, not the subset the family patch happens to rewrite today.
+    # An earlier version of this listed that subset by hand and went red the
+    # moment main added skills.py to the family (PR #1388): the patch reads
+    # every file in its own EXPECTED_MARKERS and raises FileNotFoundError on a
+    # missing one. Copying the directory means this file has no second copy of
+    # that list to keep in step.
+    for source in sorted(VENDORED_ROUTERS.glob("*.py")):
+        shutil.copy(source, tmp / source.name)
     env = dict(os.environ)
     env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
     for patch in (
