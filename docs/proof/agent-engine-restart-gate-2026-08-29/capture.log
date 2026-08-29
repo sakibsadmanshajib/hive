@@ -1,0 +1,158 @@
+Issue #921 live verification on the demo box, 2026-08-29
+========================================================
+
+What was exercised: scripts/install-agent-engine-host.sh from branch
+fix/921-launcher-restart-kills-tasks, invoked the same way
+.github/workflows/deploy-demo-box.yml invokes it, with the launcher's own
+already-installed environment fed back in so the render is identical to the
+deploy's. Nothing was merged to main to trigger any of this, and no service on
+the box was reconfigured. No credential appears in this log; the installer
+prints none, and the env file was sourced, never displayed.
+
+Host: hive-demo. Unit: hive-agent-engine.service (systemd --user, transient,
+KillMode=control-group). Runtime dir: /home/sakib/agent-runtime.
+
+
+RUN 1 - no fingerprint yet, so a restart is the correct answer
+--------------------------------------------------------------
+=== run1-no-fingerprint: before ===
+now: 2026-08-29T18:33:15Z
+launcher MainPID: 640231
+launcher started: Sat 2026-08-29 18:23:08 UTC
+binary sha256:    bc2f84a183d39551d1075002a40a9f75eb2b376104ea57f58992936fe74512bc
+fingerprint file: (absent)
+=== run1-no-fingerprint: installer output ===
+SIF: /home/sakib/agent-runtime/agent-engine.sif (1096302592 bytes)
+binary: /home/sakib/agent-runtime/bin/agent-engine
+Running as unit: hive-agent-engine.service; invocation ID: 0bc98358500d4f3684f7ac64f31063e3
+{"status":"ok"}
+
+agent-engine daemon healthy on /home/sakib/agent-runtime/run/engine.sock
+installer exit: 0
+=== run1-no-fingerprint: after ===
+now: 2026-08-29T18:33:34Z
+launcher MainPID: 679861
+launcher started: Sat 2026-08-29 18:33:33 UTC
+binary sha256:    bc2f84a183d39551d1075002a40a9f75eb2b376104ea57f58992936fe74512bc
+fingerprint file: 59ea6a518ad4a0970536540c9877f243a9b84f2f005a6f82ad59b0ff49353b11
+staging left:
+=== journal ===
+2026-08-29T18:33:33+00:00 systemd: Stopping hive-agent-engine.service ...
+2026-08-29T18:33:33+00:00 systemd: Started hive-agent-engine.service.
+2026-08-29T18:33:33+00:00 run-engine.sh[679861]: agent-engine: serving on /home/sakib/agent-runtime/run/engine.sock
+
+Note the binary hash is identical before and after: the rebuild produced the
+same bytes that were already installed, which is the whole premise of the fix.
+This run was deliberately done with zero tasks active
+(select count(*) from agent_tasks where status in ('queued','running') = 0).
+
+
+RUN 2 - fingerprint matches, daemon healthy, no task in flight
+---------------------------------------------------------------
+=== run2-unchanged-no-task: before ===
+now: 2026-08-29T18:33:41Z
+launcher MainPID: 679861
+fingerprint file: 59ea6a518ad4a0970536540c9877f243a9b84f2f005a6f82ad59b0ff49353b11
+=== run2-unchanged-no-task: installer output ===
+SIF: /home/sakib/agent-runtime/agent-engine.sif (1096302592 bytes)
+binary: /home/sakib/agent-runtime/bin/agent-engine (unchanged)
+agent-engine daemon already runs these exact artifacts; leaving PID 679861 and its in-flight sessions alone
+installer exit: 0
+=== run2-unchanged-no-task: after ===
+now: 2026-08-29T18:34:00Z
+launcher MainPID: 679861
+launcher started: Sat 2026-08-29 18:33:33 UTC
+staging left:
+=== journal: no new lifecycle line, newest is still 18:33:33 ===
+
+
+A REAL COWORK TASK, IN FLIGHT
+------------------------------
+Created through control-plane's own internal endpoint, the same one edge-api's
+/v1/agent/tasks handler calls (POST /internal/agent-tasks/{tenant}/{user}).
+Same agent_tasks row, same launcher, same poller.
+
+{"id":"53d3b30e-ea05-4679-ba8b-549bdfa6e9a6","pack":"coding-pack","status":"queued",
+ "created_at":"2026-08-29T18:34:30.620892Z"}
+
+now: 2026-08-29T18:35:11Z
+ status  |          engine_session_ref          | err |          started_at
+---------+--------------------------------------+-----+-------------------------------
+ running | 79ba0099-a931-446e-a308-c9d96aa0558e |     | 2026-08-29 18:34:49.567002+00
+
+
+RUN 3 - THE ONE THAT MATTERS: unchanged artifacts, task in flight
+------------------------------------------------------------------
+=== run3-unchanged-WITH-live-task: before ===
+now: 2026-08-29T18:35:25Z
+launcher MainPID: 679861
+fingerprint file: 59ea6a518ad4a0970536540c9877f243a9b84f2f005a6f82ad59b0ff49353b11
+=== run3-unchanged-WITH-live-task: installer output ===
+SIF: /home/sakib/agent-runtime/agent-engine.sif (1096302592 bytes)
+binary: /home/sakib/agent-runtime/bin/agent-engine (unchanged)
+agent-engine daemon already runs these exact artifacts; leaving PID 679861 and its in-flight sessions alone
+installer exit: 0
+=== run3-unchanged-WITH-live-task: after ===
+now: 2026-08-29T18:35:46Z
+launcher MainPID: 679861
+launcher started: Sat 2026-08-29 18:33:33 UTC
+staging left:
+=== journal: still no new lifecycle line since 18:33:33 ===
+
+Task immediately afterwards, still alive, same session:
+now: 2026-08-29T18:35:53Z
+ status  |          engine_session_ref          | err |          started_at
+---------+--------------------------------------+-----+-------------------------------
+ running | 79ba0099-a931-446e-a308-c9d96aa0558e |     | 2026-08-29 18:34:49.567002+00
+
+
+THE COUNTERFACTUAL, EXECUTED BY A REAL DEPLOY RATHER THAN BY ME
+----------------------------------------------------------------
+A `deploy-demo-box` run (created 18:34:34Z, for "fix: bring skills.py into the
+#1186 tenant-scoping ...") reached its launcher-install step at 18:36:24Z and
+ran main's installer against the same box while task 53d3b30e was still in
+flight. Journal:
+
+2026-08-29T18:36:24+00:00 systemd: Stopping hive-agent-engine.service ...
+2026-08-29T18:37:55+00:00 systemd: Started hive-agent-engine.service.
+
+The poller then recorded, 104 seconds later:
+
+now: 2026-08-29T18:38:11Z
+ status |          engine_session_ref          |                               err                                | finished_at
+--------+--------------------------------------+------------------------------------------------------------------+-----------------------------
+ failed | 79ba0099-a931-446e-a308-c9d96aa0558e | this task's outcome could not be recovered: its session was lost | 2026-08-29 18:38:08.66907+00
+
+So the same task, on the same box, within seventy seconds:
+  18:35:46Z  fix-branch installer ran   -> task untouched, still running
+  18:36:24Z  main's installer ran (real deploy) -> task dead at 18:38:08Z
+
+I had queued my own counterfactual invocation of main's installer for this, but
+the real deploy got there first: my script found MainPID 0 at 18:36:27Z because
+the unit was already stopping, and its own `systemd-run` then failed with "Unit
+hive-agent-engine.service was already loaded" because the deploy's had claimed
+the unit. The kill above is the deploy's, not mine. That collision is itself
+worth recording: two concurrent installer invocations do not compose.
+
+
+STATE THE BOX WAS LEFT IN
+--------------------------
+{"status":"ok"} from /health, unit active, MainPID 704088 (started by the
+deploy at 18:37:55Z), no *.next staging files anywhere, binary still
+bc2f84a183d39551d1075002a40a9f75eb2b376104ea57f58992936fe74512bc.
+
+/home/sakib/agent-runtime/engine.fingerprint was left in place holding
+59ea6a51...; recomputed against the live artifacts afterwards it still matches
+exactly, so it is accurate rather than stale. It is a new file this branch
+introduces and nothing on main reads it.
+
+Things I touched on the box and nothing else: two installer invocations of the
+fix-branch script (one restart, at a moment with zero active tasks), one
+Cowork task I created myself (53d3b30e), one partial invocation of main's
+installer that failed to start a unit, and four scripts under /tmp. No
+password was set or reset, no container was restarted or recreated, no prune
+was run, no configuration was changed.
+
+Note for anyone later mining agent_tasks for incidents: the row 53d3b30e
+"this task's outcome could not be recovered: its session was lost" dated
+2026-08-29 18:38:08Z is this experiment, not a customer incident.

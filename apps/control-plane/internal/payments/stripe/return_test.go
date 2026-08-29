@@ -16,7 +16,6 @@ import (
 	"github.com/stripe/stripe-go/v84/webhook"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
-	stripeRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stripe"
 )
 
 // stripeAPIStub stands in for the Stripe REST API so Initiate can be exercised
@@ -75,7 +74,7 @@ func stripeInput() payments.InitiateInput {
 // a route that exists in no service, so a paying customer landed on a 404.
 func TestStripeInitiate_BrowserReturnsGoToTheConsole(t *testing.T) {
 	stub := newStripeAPIStub(t)
-	rail := stripeRail.NewRail("sk_test_key", "whsec_test")
+	rail := mustStripeRail(t, "sk_test_key", "whsec_test")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -135,7 +134,7 @@ func TestStripeInitiate_BrowserReturnsGoToTheConsole(t *testing.T) {
 
 func TestStripeInitiate_RequiresAReturnOrigin(t *testing.T) {
 	stub := newStripeAPIStub(t)
-	rail := stripeRail.NewRail("sk_test_key", "whsec_test")
+	rail := mustStripeRail(t, "sk_test_key", "whsec_test")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -205,7 +204,7 @@ func TestStripeProcessEvent_CheckoutSessionEvents(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rail := stripeRail.NewRail("sk_test_key", secret)
+			rail := mustStripeRail(t, "sk_test_key", secret)
 			rawBody, sig := signedSessionEvent(t, tc.eventType, sessionID, tc.paymentStatus, secret)
 
 			event, err := rail.ProcessEvent(context.Background(), rawBody, map[string]string{
@@ -231,7 +230,7 @@ func TestStripeProcessEvent_CheckoutSessionEvents(t *testing.T) {
 }
 
 func TestStripeProcessEvent_RejectsBadSignature(t *testing.T) {
-	rail := stripeRail.NewRail("sk_test_key", "whsec_testvalidwebhooksecret12345")
+	rail := mustStripeRail(t, "sk_test_key", "whsec_testvalidwebhooksecret12345")
 	rawBody, _ := signedSessionEvent(t, "checkout.session.completed", "cs_test_1", "paid", "whsec_someothersecret000000")
 
 	if _, err := rail.ProcessEvent(context.Background(), rawBody, map[string]string{

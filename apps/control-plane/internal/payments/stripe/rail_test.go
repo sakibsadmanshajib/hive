@@ -57,8 +57,48 @@ func buildSignedPayload(t *testing.T, eventType string, piID string, webhookSecr
 	return rawEvent, signed.Header
 }
 
+// mustStripeRail builds a rail and fails the test if the constructor refuses.
+// NewRail now rejects an empty secret key or webhook secret outright, so the
+// error is a real outcome rather than boilerplate (issue #1449).
+func mustStripeRail(t *testing.T, secretKey, webhookSecret string) *stripeRail.Rail {
+	t.Helper()
+	rail, err := stripeRail.NewRail(secretKey, webhookSecret)
+	if err != nil {
+		t.Fatalf("NewRail: %v", err)
+	}
+	return rail
+}
+
+// TestStripeNewRail_RefusesAnIncompleteCredentialSet is the defence in depth the
+// registration gate should never be the only copy of. An empty webhook secret is
+// not merely unable to settle: ProcessEvent would HMAC with a key an attacker can
+// also compute, so a forged payment.succeeded delivery would grant credits for a
+// payment that never happened.
+func TestStripeNewRail_RefusesAnIncompleteCredentialSet(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		secretKey     string
+		webhookSecret string
+	}{
+		{"no webhook secret", "sk_test_placeholder", ""},
+		{"blank webhook secret", "sk_test_placeholder", "   "},
+		{"no secret key", "", "whsec_placeholder"},
+		{"neither", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rail, err := stripeRail.NewRail(tc.secretKey, tc.webhookSecret)
+			if err == nil {
+				t.Fatalf("expected a refusal, got a usable rail %v", rail)
+			}
+			if rail != nil {
+				t.Errorf("a refused rail must be nil, got %v", rail)
+			}
+		})
+	}
+}
+
 func TestStripeRailName(t *testing.T) {
-	rail := stripeRail.NewRail("sk_test_key", "whsec_test")
+	rail := mustStripeRail(t, "sk_test_key", "whsec_test")
 	if rail.RailName() != payments.RailStripe {
 		t.Errorf("expected %q got %q", payments.RailStripe, rail.RailName())
 	}
@@ -88,7 +128,7 @@ func TestStripeProcessEvent_PaymentIntentEventsAreNotASettlementPath(t *testing.
 		"payment_intent.canceled",
 	} {
 		t.Run(eventType, func(t *testing.T) {
-			rail := stripeRail.NewRail("sk_test_key", webhookSecret)
+			rail := mustStripeRail(t, "sk_test_key", webhookSecret)
 			rawBody, sig := buildSignedPayload(t, eventType, "pi_test_1234", webhookSecret)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -115,7 +155,7 @@ func TestStripeProcessEvent_PaymentIntentEventsAreNotASettlementPath(t *testing.
 func TestStripeProcessEvent_InvalidSignature_ReturnsError(t *testing.T) {
 	const webhookSecret = "whsec_testvalidwebhooksecret12345"
 
-	rail := stripeRail.NewRail("sk_test_key", webhookSecret)
+	rail := mustStripeRail(t, "sk_test_key", webhookSecret)
 	rawBody, _ := buildSignedPayload(t, "payment_intent.succeeded", "pi_test_1234", webhookSecret)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -133,7 +173,7 @@ func TestStripeProcessEvent_InvalidSignature_ReturnsError(t *testing.T) {
 func TestStripeProcessEvent_UnsupportedEventType_ReturnsError(t *testing.T) {
 	const webhookSecret = "whsec_testvalidwebhooksecret12345"
 
-	rail := stripeRail.NewRail("sk_test_key", webhookSecret)
+	rail := mustStripeRail(t, "sk_test_key", webhookSecret)
 	rawBody, sig := buildSignedPayload(t, "charge.succeeded", "ch_test_1234", webhookSecret)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

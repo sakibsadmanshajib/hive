@@ -26,10 +26,10 @@ type sslServer struct {
 	validateQueries  []url.Values
 
 	// configurable responses
-	initiateStatus      string
-	initiateSessionkey  string
-	initiateGatewayURL  string
-	validateStatus      string
+	initiateStatus     string
+	initiateSessionkey string
+	initiateGatewayURL string
+	validateStatus     string
 }
 
 func newSSLServer(t *testing.T) *sslServer {
@@ -71,12 +71,37 @@ func newSSLServer(t *testing.T) *sslServer {
 }
 
 func (ss *sslServer) newRail() *sslRail.Rail {
-	return sslRail.NewRail(
+	rail, err := sslRail.NewRail(
 		ss.server.Client(),
 		ss.server.URL,
 		"test_store_id",
 		"test_store_passwd",
 	)
+	if err != nil {
+		panic("sslcommerz test rail: " + err.Error())
+	}
+	return rail
+}
+
+// TestSSLCommerzNewRail_RefusesAnIncompleteCredentialSet: the store password
+// signs the IPN verification hash, so an empty one leaves ProcessEvent verifying
+// against md5 of the empty string, which any caller can compute (issue #1449).
+func TestSSLCommerzNewRail_RefusesAnIncompleteCredentialSet(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		storeID, passwd string
+	}{
+		{"no store password", "store", ""},
+		{"no store id", "", "passwd"},
+		{"blank store password", "store", "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rail, err := sslRail.NewRail(nil, "https://example.invalid", tc.storeID, tc.passwd)
+			if err == nil || rail != nil {
+				t.Fatalf("expected a refusal, got rail=%v err=%v", rail, err)
+			}
+		})
+	}
 }
 
 func defaultSSLInput() payments.InitiateInput {

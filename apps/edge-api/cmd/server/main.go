@@ -428,25 +428,30 @@ func main() {
 		// event in chat_handler.go), matching what internal/chat/dispatch.go
 		// already does (an llm_traces row) for the equivalent JWT-session
 		// /v1/chat/completions path.
-		ragSelectRoute := func(ctx context.Context, aliasID string) (string, error) {
+		ragSelectRoute := func(ctx context.Context, aliasID string) (inference.SelectRouteResult, error) {
 			route, err := routingClient.SelectRoute(ctx, inference.SelectRouteInput{
 				AliasID:             aliasID,
 				NeedChatCompletions: true,
 			})
 			if err != nil {
 				if errors.Is(err, inference.ErrRouteNotFound) {
-					return "", edgerag.ErrRouteNotFound
+					return inference.SelectRouteResult{}, edgerag.ErrRouteNotFound
 				}
 				if errors.Is(err, inference.ErrModelNotEntitled) {
-					return "", edgerag.ErrModelNotEntitled
+					return inference.SelectRouteResult{}, edgerag.ErrModelNotEntitled
 				}
-				return "", err
+				return inference.SelectRouteResult{}, err
 			}
-			return route.LiteLLMModelName, nil
+			return route, nil
 		}
 
 		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
 			WithChat(ragSelectRoute, litellmClient.ChatCompletion).
+			// Money path (#669). Grounded chat used to take no hold and issue
+			// no charge, so a tenant at zero credits was served anyway. These
+			// are the same two dependencies session chat settles through, so
+			// both JWT surfaces charge through one lifecycle.
+			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool}).
 			// Binary document ingest: convert PDF/DOCX/etc to markdown via the
 			// pinned markitdown sidecar before chunk + embed. MARKITDOWN_URL
 			// defaults to the compose service DNS name; without the sidecar
@@ -474,7 +479,13 @@ func main() {
 	// the RAG block above.
 	{
 		agentTaskClient := edgeagenttask.NewClient(resolveControlPlaneBaseURL())
-		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient)
+		// Money path (#669). A sandbox launch used to ask nothing about the
+		// submitting tenant's balance, so a tenant at zero credits could
+		// submit tasks indefinitely. Same two dependencies RAG chat and
+		// session chat settle through, so all three JWT surfaces ask the same
+		// question of the same account.
+		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient).
+			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool})
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
 		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)
@@ -487,7 +498,13 @@ func main() {
 	// boundary, registered behind FeatureCowork like /v1/agent/tasks.
 	{
 		agentSchedClient := edgeagentsched.NewClient(resolveControlPlaneBaseURL())
-		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient)
+		// Money path (#669). Creating a routine is submitting a task on a
+		// timer, so it asks the same solvency question POST /v1/agent/tasks
+		// asks. Each firing of an existing routine is created by
+		// control-plane's scheduler directly and does not pass through here,
+		// which is a stated gap rather than a covered case.
+		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient).
+			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool})
 		agentSchedMux := http.NewServeMux()
 		agentSchedHandler.Register(agentSchedMux)
 		registerAgentScheduleRoutes(mux, featureGate, agentSchedMux)

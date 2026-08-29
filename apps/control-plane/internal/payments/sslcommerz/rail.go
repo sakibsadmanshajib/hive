@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // SSLCommerz IPN verification requires MD5 per spec
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,13 +26,21 @@ type Rail struct {
 }
 
 // NewRail constructs an SSLCommerz Rail with the given HTTP client and credentials.
-func NewRail(httpClient *http.Client, baseURL, storeID, storePasswd string) *Rail {
+//
+// Both credentials are required. The store password is what signs the IPN
+// verification hash, so an empty one leaves ProcessEvent verifying against
+// md5(""), a value any caller can compute, which is the same forged-settlement
+// shape as an empty Stripe webhook secret (issue #1449).
+func NewRail(httpClient *http.Client, baseURL, storeID, storePasswd string) (*Rail, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(storePasswd) == "" {
+		return nil, errors.New("sslcommerz: refusing to build a rail without both a store id and a store password")
+	}
 	return &Rail{
 		httpClient:  httpClient,
 		baseURL:     baseURL,
 		storeID:     storeID,
 		storePasswd: storePasswd,
-	}
+	}, nil
 }
 
 // RailName returns the rail identifier for SSLCommerz.

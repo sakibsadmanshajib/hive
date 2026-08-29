@@ -17,7 +17,7 @@ OpenAI-compatible API gateway. v1.0 shipped as a full **Go rewrite** of a prior 
 
 One product, two modes: **Hive** (hosted SaaS, Bangladesh market first, prepaid credit billing on BDT payment rails via Stripe, bKash, and SSLCommerz) and **Hive Enterprise** (customer-hosted, data-sovereign posture for regulated buyers in finance, legal, healthcare, and government). Single org equals single tenant; departments via RBAC. Provider-agnostic routing to OpenRouter, Groq, and future providers, plus self-hosted inference for the Enterprise posture.
 
-Surfaces: chat (Open WebUI), coding and browsing agents (agent-console sidecar plus agent-engine sandbox), RAG (`/v1/rag/chat`), voice (Groq STT/TTS), artifacts hosting, desktop app (Tauri, Windows/Linux), and the developer console for key and billing management.
+Surfaces: chat (Open WebUI), coding and browsing agents (agent-console sidecar plus agent-engine sandbox), RAG (`/v1/rag/chat`), voice (TTS through Groq; STT dispatches to self-hosted Parakeet and faster-whisper sidecars when `PARAKEET_BASE_URL` or `FASTER_WHISPER_BASE_URL` is set, and falls back to ordinary route selection otherwise), artifacts hosting, desktop app (Tauri, Windows/Linux), and the developer console for key and billing management.
 
 ## Getting Started
 
@@ -51,27 +51,42 @@ never changes that project name.
 ```bash
 cd deploy/docker
 
-# Local dev: core stack with in-stack Redis.
+# The four core services (edge-api, control-plane, litellm, markitdown) carry
+# no `profiles:` key, so they start under every command below regardless of
+# which profile is named. A profile only ever adds services on top of those.
+
+# Local dev: core + in-stack Redis + Open WebUI + its Caddy fronts
+# (open-webui, caddy-owui, caddy-artifacts are all in the `local` profile).
 docker compose --env-file ../../.env --profile local up --build
 
-# Full demo surface (agent subsystem): core + agent-console sidecar (chat) +
-# agent-engine (agent) + in-stack Redis (local), in ONE command. RAG query
-# embeddings run serverless via LiteLLM (EMBEDDING_BASE_URL default). Live
-# agent-task sandbox launch additionally needs the host launcher running and
+# Full demo surface (agent subsystem), in ONE command. `chat` adds
+# agent-console, web-console-prod and caddy-console on top of what `local`
+# already started; `agent` adds the agent-engine build container; `local`
+# supplies in-stack Redis. RAG query embeddings run serverless via LiteLLM
+# (EMBEDDING_BASE_URL defaults to http://litellm:4000). Live agent-task sandbox
+# launch additionally needs the host launcher running and
 # HIVE_AGENT_ENGINE_SOCKET set (see section 4); the `agent` profile's
 # agent-engine service is a build and smoke-test container only.
 docker compose --env-file ../../.env --profile local --profile chat --profile agent up --build
 
-# Hive Cloud (hosted SaaS): core services expecting managed Upstash Redis.
-# Set REDIS_URL=rediss://... in .env before running.
+# Hive Cloud (hosted SaaS): the four core services, expecting managed Upstash
+# Redis. Set REDIS_URL=rediss://... in .env before running. No service declares
+# a `cloud` profile, so the flag selects nothing by itself; it is a label for
+# "core only, no in-stack Redis" and the command behaves identically without it.
 docker compose --env-file ../../.env --profile cloud up --build
 
-# Hive Cloud with chat front-end (Open WebUI + Caddy on top of cloud):
+# Hive Cloud with chat front-end (Open WebUI, agent-console, web-console-prod
+# and the Caddy fronts) on top of core, still with no in-stack Redis:
 docker compose --env-file ../../.env --profile cloud --profile chat up --build
 
-# Hive Enterprise (self-hosted single box): core + in-stack Redis + OWUI + Caddy.
-# Optional Ollama: set OLLAMA_BASE_URL=http://ollama:11434 in .env and
-# uncomment the ollama model entries in deploy/litellm/config.yaml.
+# Hive Enterprise (self-hosted single box): core + in-stack Redis + OWUI +
+# agent-console + web-console-prod + the Caddy fronts + Ollama, plus the
+# self-hosted Supabase data plane from the overlay file. The ollama service is
+# in the `enterprise` profile, so it starts here unconditionally; wiring it into
+# inference is the optional part. Set OLLAMA_BASE_URL=http://ollama:11434 in
+# .env and append ollama entries to model_list in deploy/litellm/config.yaml
+# (there is nothing to uncomment: the entries are deliberately absent, and
+# `scripts/install.sh --with-ollama` appends them for you).
 docker compose \
   -f docker-compose.yml \
   -f docker-compose.enterprise.yml \
@@ -84,9 +99,29 @@ docker compose --env-file ../../.env --profile local --profile monitoring up --b
 ### 3. Migrations
 
 ```bash
-supabase db push                    # If Supabase CLI is linked
-# Or apply supabase/migrations/ files in order via SQL editor
+scripts/apply-migrations.sh --dry-run   # list what would be applied, touch nothing
+scripts/apply-migrations.sh             # apply pending migrations
+scripts/apply-migrations.sh --check     # validate the baseline file only, no database
 ```
+
+`scripts/apply-migrations.sh` is the migration path. It applies pending
+`supabase/migrations/*.sql` in order and records each one in
+`public.hive_schema_migrations` so the next run skips it. Both the deploy
+workflow (`.github/workflows/deploy-demo-box.yml`, `--check` at preflight and a
+real run before the stack restarts) and CI's throwaway Postgres
+(`scripts/ci-throwaway-db.sh`) go through it, so it is the only route that has
+been exercised.
+
+Connection settings come from libpq environment variables (`PGHOST`, `PGPORT`,
+`PGUSER`, `PGDATABASE`, `PGPASSWORD`) that the caller exports; the script never
+takes a DSN. Against the self-hosted data plane, which publishes no host port,
+set `PSQL_BIN=scripts/stack-psql.sh` so the client runs inside the stack's
+network. Full detail in the script's own header comment.
+
+Do not apply migration files by hand through a SQL editor. Hand application is
+exactly the drift this script exists to end: two correct migrations merged and
+never ran, which answered HTTP 403 to every API-key call on the demo box and
+silently discarded every `interrupted` usage event.
 
 ### 4. Agent-engine runtime (Apptainer sandbox)
 
@@ -122,7 +157,9 @@ immediately, and a boot WARN names what was missing
 (`docker compose logs control-plane | grep "agent engine not configured"`).
 Under docker compose this arm cannot succeed regardless of the variables.
 
-Optional, all defaulted: `HIVE_AGENT_ENGINE_SESSION_API_KEY`,
+Optional, all defaulted. The first six are read by `buildAgentEngine` on the
+in-process arm and by the host launcher; the last two only by the host launcher
+(`serve.go`). `HIVE_AGENT_ENGINE_SESSION_API_KEY`,
 `HIVE_QUOTA_TENANT_CONCURRENCY` (4), `HIVE_QUOTA_USER_CONCURRENCY` (2),
 `HIVE_SANDBOX_MEMORY_LIMIT` (4G), `HIVE_SANDBOX_CPU_LIMIT` (2),
 `HIVE_SANDBOX_PIDS_LIMIT` (512), `HIVE_AGENT_ENGINE_BROWSER_TOOLS` (off), and
@@ -213,24 +250,23 @@ None currently. The prior rule here (never show FX rates, currency-exchange lang
 
 ## Known Issues
 
-Full runtime UAT results, phase closure notes, and v1.1 deferred scope live in the project vault (Obsidian), not in-repo. Resolved items stay listed for their regression guards; open items are deferred to v1.1 because the core developer API path is unaffected in practice.
+Full runtime UAT results and phase closure notes live in the project vault (Obsidian), not in-repo. Resolved items stay listed for their regression guards. This list is not the open-issue tracker: open work lives in GitHub issues, and an item here is either a resolved entry kept for its guard or one carrying a pointer to the issue that owns it.
 
 1. **`ensureCapabilityColumns` targets wrong table** — Resolved by Phase 16 (2026-04-25). Function removed from `apps/control-plane/internal/routing/repository.go`; schema lives in `supabase/migrations/20260414_01_provider_capabilities_media_columns.sql` (correctly targets `public.provider_capabilities`); regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence. Evidence recorded in the project vault.
-2. **File storage wiring under final verification** — Phase 10 now wires file + media endpoints to Supabase Storage. Final live smoke verification tracked in Phase 10 Plan 10-08.
+2. **File storage wiring** — Resolved. File and media endpoints are wired to Supabase Storage, `edge-api` and `control-plane` both refuse to boot without the S3 variables (`requireStorageEnv` in `apps/edge-api/cmd/server/main.go`), and the demo box holds live rows in both `storage.objects` and `public.files`. The former pointer to "Phase 10 Plan 10-08" named a tracking device that no longer exists.
 3. **`amount_usd` exposed in BD checkout** — No longer tracked as an issue. Phase 17 (PR #137, 2026-05-09) stripped FX/USD from customer-bound surfaces under what was believed to be a regulatory constraint; that constraint was revoked by owner decision on 2026-08-08 (see Regulatory Rules above, `.wolf/decisions.md` D-035). The stripping code itself is unchanged; the USD-absence test assertions that treated it as a hard requirement were removed.
-4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). Phase 15 shipped a local batch executor in control-plane. Full write-up in the project vault.
+4. **Batch settlement ignores the alias pricing mode** — open, tracked in issue #1473. The batch success path is **not** blocked: Phase 15's local executor bypasses LiteLLM's `/v1/files` and `/v1/batches` entirely and runs each line through `/v1/chat/completions`, `Submitter.shouldUseLocalExecutor` routes any non-OpenAI, non-Anthropic provider (so, `openrouter`) to it, `BATCH_EXECUTOR_KIND` defaults to `auto`, and the demo box logs `batch local executor ready (concurrency=8 kind=auto)` at boot today. Do not cite the old LiteLLM `purpose=batch` provider list as a reason the path cannot run. What is actually wrong: `DefaultCreditPolicy.Credits` (`apps/control-plane/internal/batchstore/executor/dispatcher.go`) charges one credit per token and never reads the alias's pricing mode or price columns, and `hive-auto`, the only batch-capable alias in the live catalog, is `upstream_actual`. Nothing has been mispriced yet only because no batch has completed. Treat this as an armed defect, not a latent one.
 5. **Capability-based tool routing** — Resolved by Phase 20 wave 3 (PR #206, 2026-06-11). Custom providers are DB-managed (PR #199); `tools`/`tool_choice`/`response_format` route per-route on `tools_supported` in `provider_capabilities`. Tenant model visibility (PR #205) is enforced at catalog/model-listing level, not inside `SelectRoute` dispatch, which filters on `AllowedAliases`/`AllowedProviders`.
 
 ## Project State
 
 - **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete.
 - **v1.1 — closed out late July 2026**; the phase-numbering frame (phases 12-20) is retired as a tracking device. Work now tracks through GitHub issues and pull requests.
-- **Milestones**: `v1.2 agentic surface` (in progress), `v1.3 device era` (early), `Hive Enterprise edge-first v1` (15 closed, 7 open). Roadmap board: https://github.com/users/sakibsadmanshajib/projects/3
+- **Milestones**: four are open — `v1.2 agentic surface`, `v1.2.1 demo readiness hotfixes`, `Hive Enterprise edge-first v1`, `v1.3 device era`. Three older ones are closed. Issue counts are deliberately not written here because they rot within days; read them live with `gh api "repos/sakibsadmanshajib/hive/milestones?state=all"`. Roadmap board (private, so it 404s unauthenticated): https://github.com/users/sakibsadmanshajib/projects/3
 - **Recent major work** (detail in `.wolf/decisions.md` D-031 to D-044 and the vault timeline):
   - Money path: credit unit per million tokens (D-031), one alias one price on `model_aliases` (D-032), fail-closed money path verified live (D-034); billing repaired 2026-08-03.
   - Chat front end: the Open WebUI fork IS the product shell; D-040 retires the LibreChat migration (D-028) permanently; frontend built from forked source with one Hive navigation (PR #938); OWUI reduced to a view over control-plane-owned state (D-044).
   - Data plane: self-hosted Supabase cutover on the demo box (PRs #982-#993, Aug 2026); CI decoupled from the live database with throwaway Postgres (PR #983).
-  - Agent surface: sandbox token streaming (PR #920), Anthropic Messages compatibility fixes (PRs #954, #964), native agent surface inside the fork in flight (issue #944).
-- **Open operational risks at last review (2026-08-22)**: deploy-demo-box migration failure (#1002); no off-box backup of any production data store since the Supabase cutover (#1000); shared-chat-instance admin exposure family (#947, #948, #949).
+  - Agent surface: sandbox token streaming (PR #920), Anthropic Messages compatibility fixes (PRs #954, #964), the agent surface moved into the composer as a mode rather than a separate destination (issue #944, closed).
 
 Planning ground truth (milestone state, roadmap, requirements traceability, UAT results, deferred scope) lives in the project vault (Obsidian), not in-repo.

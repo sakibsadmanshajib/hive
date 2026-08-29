@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling"
 )
 
 // ScheduleClient is the minimal interface the handler needs from Client.
@@ -27,11 +29,38 @@ type ScheduleClient interface {
 // featuregate.Require(FeatureCowork) before mounting, mirroring
 // apps/edge-api/internal/agenttask's gating contract.
 type Handler struct {
-	client ScheduleClient
+	client     ScheduleClient
+	accounting *inference.AccountingClient
+	billing    sessionbilling.Resolver
 }
 
 func NewHandler(client ScheduleClient) *Handler {
 	return &Handler{client: client}
+}
+
+// scheduleLaunchFloor is the credit balance a tenant must be able to cover
+// before a routine is created: the same launch floor a direct submission
+// holds, because a routine is a submission on a timer.
+const scheduleLaunchFloor = inference.DefaultHoldText
+
+// scheduleLabel is what the probe records where an inference request records
+// its model alias. Operator-facing, never customer-visible.
+const scheduleLabel = "agent-schedule"
+
+// WithBilling wires the solvency gate onto an existing Handler and returns it
+// for chaining, the same shape agenttask.Handler.WithBilling uses. Without it,
+// creating a routine is refused.
+//
+// KNOWN GAP, stated rather than implied. This gates the CREATION of a routine
+// only. Each firing of an existing routine is turned into a task by
+// control-plane's own scheduler, which calls its task store directly and never
+// passes through this process, so a routine created while solvent goes on
+// firing after the balance runs out. Closing that needs the same probe inside
+// control-plane's scheduler, which is not this package and not this PR.
+func (h *Handler) WithBilling(accounting *inference.AccountingClient, billing sessionbilling.Resolver) *Handler {
+	h.accounting = accounting
+	h.billing = billing
+	return h
 }
 
 // Register mounts all /v1/agent/schedules* routes on mux.
@@ -90,6 +119,25 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid request body")
 		return
 	}
+	// Solvency gate (#669). A routine is a task submission on a timer, so the
+	// same question is asked here as at POST /v1/agent/tasks: creating one
+	// while insolvent would otherwise be the way around that gate. The hold is
+	// taken and handed straight back; see WithBilling for what this does and
+	// does not cover.
+	if refusal := sessionbilling.Probe(r.Context(), sessionbilling.ProbeInput{
+		Accounting:  h.accounting,
+		Billing:     h.billing,
+		TenantID:    user.TenantID,
+		Endpoint:    inference.EndpointAgentTasks,
+		Label:       scheduleLabel,
+		RequestID:   uuid.New(),
+		HoldCredits: scheduleLaunchFloor,
+		Surface:     "agent schedule",
+	}); refusal != nil {
+		refusal.Write(w)
+		return
+	}
+
 	schedule, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Name, req.Instructions, req.Schedule)
 	if err != nil {
 		writeScheduleError(w, err)

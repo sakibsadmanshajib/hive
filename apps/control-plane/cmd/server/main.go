@@ -246,18 +246,23 @@ func main() {
 	}
 
 	// Payment provider credentials (all optional — missing vars skip that rail).
-	stripeSecretKey := os.Getenv("STRIPE_SECRET_KEY")
-	stripeWebhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
-	bkashAppKey := os.Getenv("BKASH_APP_KEY")
-	bkashAppSecret := os.Getenv("BKASH_APP_SECRET")
-	bkashUsername := os.Getenv("BKASH_USERNAME")
-	bkashPassword := os.Getenv("BKASH_PASSWORD")
-	bkashBaseURL := os.Getenv("BKASH_BASE_URL")
-	sslcommerzStoreID := os.Getenv("SSLCOMMERZ_STORE_ID")
-	sslcommerzStorePasswd := os.Getenv("SSLCOMMERZ_STORE_PASSWD")
-	sslcommerzBaseURL := os.Getenv("SSLCOMMERZ_BASE_URL")
-	xeAccountID := os.Getenv("XE_ACCOUNT_ID")
-	xeAPIKey := os.Getenv("XE_API_KEY")
+	// Trimmed at the read site so the value that is checked against a rail's
+	// credential set is the value the rail is built from. A `.env` line with a
+	// trailing space is preserved by docker compose, and an untrimmed copy would
+	// pass the gate and then authenticate against the provider with the space
+	// attached (issue #1449).
+	stripeSecretKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	stripeWebhookSecret := strings.TrimSpace(os.Getenv("STRIPE_WEBHOOK_SECRET"))
+	bkashAppKey := strings.TrimSpace(os.Getenv("BKASH_APP_KEY"))
+	bkashAppSecret := strings.TrimSpace(os.Getenv("BKASH_APP_SECRET"))
+	bkashUsername := strings.TrimSpace(os.Getenv("BKASH_USERNAME"))
+	bkashPassword := strings.TrimSpace(os.Getenv("BKASH_PASSWORD"))
+	bkashBaseURL := strings.TrimSpace(os.Getenv("BKASH_BASE_URL"))
+	sslcommerzStoreID := strings.TrimSpace(os.Getenv("SSLCOMMERZ_STORE_ID"))
+	sslcommerzStorePasswd := strings.TrimSpace(os.Getenv("SSLCOMMERZ_STORE_PASSWD"))
+	sslcommerzBaseURL := strings.TrimSpace(os.Getenv("SSLCOMMERZ_BASE_URL"))
+	xeAccountID := strings.TrimSpace(os.Getenv("XE_ACCOUNT_ID"))
+	xeAPIKey := strings.TrimSpace(os.Getenv("XE_API_KEY"))
 
 	// Apply default sandbox base URLs when not explicitly configured.
 	if bkashBaseURL == "" {
@@ -941,16 +946,33 @@ func main() {
 		// FX service — wraps XE API with Redis cache.
 		fxSvc := payments.NewFXService(paymentHTTPClient, xeAccountID, xeAPIKey, redisClient)
 
-		// Rails — conditionally registered based on env var presence.
-		rails := make(map[payments.Rail]payments.PaymentRail)
-		if stripeSecretKey != "" {
-			rails[payments.RailStripe] = stripeRail.NewRail(stripeSecretKey, stripeWebhookSecret)
-		}
-		if bkashAppKey != "" {
-			rails[payments.RailBkash] = bkashRail.NewRail(paymentHTTPClient, bkashBaseURL, bkashAppKey, bkashAppSecret, bkashUsername, bkashPassword)
-		}
-		if sslcommerzStoreID != "" {
-			rails[payments.RailSSLCommerz] = sslcommerzRail.NewRail(paymentHTTPClient, sslcommerzBaseURL, sslcommerzStoreID, sslcommerzStorePasswd)
+		// Rails are registered only when the rail's whole credential set is
+		// present (payments.RailCredentialEnvs). A rail built from half a set
+		// can still redirect a payer and take their money while being unable to
+		// settle it, so an incomplete rail is left unregistered and named in a
+		// warning an operator can act on (issue #1449).
+		// The registration decision itself lives in payments.RegisterRails so a
+		// test can observe it. Inline here it was unobservable, and reverting the
+		// gate to a single-variable presence check left every test green.
+		rails, refusals := payments.RegisterRails(os.Getenv, []payments.RailBuilder{
+			{Rail: payments.RailStripe, Build: func() (payments.PaymentRail, error) {
+				return stripeRail.NewRail(stripeSecretKey, stripeWebhookSecret)
+			}},
+			{Rail: payments.RailBkash, Build: func() (payments.PaymentRail, error) {
+				return bkashRail.NewRail(paymentHTTPClient, bkashBaseURL, bkashAppKey, bkashAppSecret, bkashUsername, bkashPassword)
+			}},
+			{Rail: payments.RailSSLCommerz, Build: func() (payments.PaymentRail, error) {
+				return sslcommerzRail.NewRail(paymentHTTPClient, sslcommerzBaseURL, sslcommerzStoreID, sslcommerzStorePasswd)
+			}},
+		})
+		for _, refusal := range refusals {
+			if refusal.Err != nil {
+				log.Printf("WARNING: payments: %s rail not registered, buying credits on it will be refused: %v",
+					refusal.Rail, refusal.Err)
+				continue
+			}
+			log.Printf("WARNING: payments: %s rail not registered, buying credits on it will be refused. Unset credential(s): %s",
+				refusal.Rail, strings.Join(refusal.Missing, ", "))
 		}
 
 		log.Printf("payments: %d rail(s) active: %v", len(rails), func() []string {

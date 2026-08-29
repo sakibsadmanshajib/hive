@@ -231,7 +231,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	releaseReason := "interrupted"
 	defer func() {
 		if settle != nil && !settled {
-			settle.release(releaseReason)
+			settle.Release(releaseReason)
 		}
 	}()
 	// Rewrite only the two fields this path owns (the resolved route name, and
@@ -437,7 +437,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Open WebUI uses, so it is where a silent free-serve would do the most
 		// damage.
 		settled := inference.UpstreamActualSettlement(
-			rawUsagePayload, settle.held(), hasUsage,
+			rawUsagePayload, settle.Held(), hasUsage,
 			inTokens, outTokens, completion.String())
 		costCredits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
 		if delivered {
@@ -447,7 +447,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Info("session chat: variable-price settlement",
 				"request_id", requestID, "alias", clientModel, "reason", settled.Reason,
 				"credits", settled.Credits, "confirmed", settled.Confirmed,
-				"generation_id", settled.GenerationID, "held_credits", settle.held())
+				"generation_id", settled.GenerationID, "held_credits", settle.Held())
 		}
 	} else {
 		costCredits, confirmed, delivered = inference.ChatSettlementCredits(
@@ -482,7 +482,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			releaseReason = "client_disconnect"
 		}
 		costCredits = 0
-	case settle.finalize(costCredits, confirmed, inTokens, outTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens):
+	case settle.Finalize(costCredits, confirmed, inTokens, outTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens):
 		settled = true
 	default:
 		// The charge did not land. Leaving settled false hands the reservation

@@ -29,6 +29,8 @@ test-scripts:
 	python3 scripts/test_owui_display_name.py
 	python3 scripts/test_owui_tenant_role.py
 	python3 scripts/test_owui_knowledge_authz.py
+	python3 scripts/test_owui_chat_delete_authz.py
+	python3 scripts/test_shared_demo_account.py
 	python3 scripts/test_owui_skill_group_grants.py
 	python3 scripts/test_owui_skill_tenant_scope.py
 	python3 scripts/owui-promote-instance-admin.py --self-check
