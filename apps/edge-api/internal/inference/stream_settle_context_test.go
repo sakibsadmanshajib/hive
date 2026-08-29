@@ -75,7 +75,7 @@ func TestSettleStream_ReleaseGetsFreshDeadlineAfterSlowFinalize(t *testing.T) {
 			AttemptResult{ID: "attempt-test-1"},
 			ReservationResult{ID: "res-test-1"},
 			hiveFastRoute,
-			"req-test-1", EndpointChatCompletions, "gpt-4o", acc, `{}`, "hello",
+			"req-test-1", EndpointChatCompletions, "gpt-4o", 0, acc, `{}`, "hello",
 		)
 	})
 
@@ -126,7 +126,7 @@ func TestSettleStream_SlowButSuccessfulFinalize_NeverReleases(t *testing.T) {
 		AttemptResult{ID: "attempt-test-1"},
 		ReservationResult{ID: "res-test-1"},
 		hiveFastRoute,
-		"req-test-1", EndpointChatCompletions, "gpt-4o", acc, `{}`, "hello",
+		"req-test-1", EndpointChatCompletions, "gpt-4o", 0, acc, `{}`, "hello",
 	)
 
 	if !settled {

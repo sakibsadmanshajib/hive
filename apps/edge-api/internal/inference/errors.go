@@ -82,6 +82,67 @@ func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error", msg, &code, param)
 }
 
+// writeUnsupportedChoiceCountError refuses a request asking for a number of
+// choices this gateway cannot serve (issue #1283).
+//
+// n was declared on the request structs and read by nothing: it was forwarded
+// upstream, ignored, and one choice came back with HTTP 200 and no indication
+// the parameter had been dropped. Accept-and-silently-truncate is the one
+// outcome the OpenAI contract does not allow, because a caller has no way to
+// tell a parameter that was honoured from one that vanished.
+//
+// Rejecting rather than honouring, because no route in this catalog can serve
+// n > 1: the free pool's Groq members accept only n=1 on their
+// OpenAI-compatible surface, and OpenRouter does not implement the parameter
+// across the pool either. Honouring it would also multiply generated tokens
+// against a single per-request max_tokens ceiling, which is the settlement
+// invariant in completion_ceiling.go.
+//
+// Provider-blind by construction: the message names the parameter and nothing
+// about who serves the request.
+//
+// ponytail: a flat refusal, not a capability lookup. Give it a
+// provider_capabilities column the day a route can actually serve n > 1.
+func writeUnsupportedChoiceCountError(w http.ResponseWriter) {
+	code := "unsupported_parameter"
+	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+		"This endpoint generates exactly one choice per request. Omit 'n' or set it to 1, and send multiple requests if you need multiple completions.",
+		&code, "n")
+}
+
+// writeUnsupportedBestOfError refuses a legacy-completions request that asks
+// the provider to generate several candidates server-side and hand back only
+// the best one (issue #1283, review finding 5).
+//
+// Identical defect to n above, and the same remedy. Nothing in this package
+// read best_of: the outbound body is re-marshalled from a map, so every field
+// the caller sent survives byte for byte and best_of reached the provider
+// intact, while the generated OpenAPI contract advertised it as supported.
+//
+// It costs money in both directions. Upstream it multiplies generated tokens
+// against a single per-request completion ceiling, which is the settlement
+// invariant completion_ceiling.go exists to hold. Downstream, a provider that
+// honours it bills the caller for candidates they never receive, and one that
+// drops it answers 200 with a single candidate and no indication the parameter
+// vanished, which is the accept-and-silently-truncate outcome the OpenAI
+// contract does not allow.
+//
+// ponytail: a flat refusal, not a capability lookup, exactly like the n guard
+// above. Give it a provider_capabilities column the day a route can serve it.
+func writeUnsupportedBestOfError(w http.ResponseWriter) {
+	code := "unsupported_parameter"
+	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+		"This endpoint generates exactly one completion per request. Omit 'best_of' or set it to 1.",
+		&code, "best_of")
+}
+
+// unsupportedChoiceCount reports whether the caller asked for a choice count
+// this gateway cannot serve. Absent and 1 are servable; everything else,
+// including the 0 and the negatives OpenAI itself rejects, is not.
+func unsupportedChoiceCount(n *int) bool {
+	return n != nil && *n != 1
+}
+
 func writeModelNotFoundError(w http.ResponseWriter, model string) {
 	code := "model_not_found"
 	log.Printf("inference: model_not_found via routing layer model=%q", model)

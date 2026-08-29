@@ -102,7 +102,17 @@ func (o *Orchestrator) executeResponsesStreaming(
 		return
 	}
 
-	// 3c. Bound the request for a variable-price alias, before dispatch. Its
+	// 3c. Read the caller's own max_output_tokens BEFORE any outbound rewrite,
+	// same contract as the sync path's step 2c (issue #1283).
+	ceiling := requestedCompletionCeiling(EndpointResponses, body)
+
+	// Pin the outbound body to it, same contract as the sync path. A no-op
+	// here today, since this endpoint speaks exactly one ceiling field, but it
+	// is the same call the other two paths make so a second field added to
+	// completionLimitFields cannot quietly reopen the bypass on this one.
+	body = pinCompletionCeiling(body, EndpointResponses, ceiling)
+
+	// 3d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
 	// every fixed-price alias.
@@ -111,15 +121,6 @@ func (o *Orchestrator) executeResponsesStreaming(
 		return
 	}
 	body = boundedBody
-
-	// Reasoning headroom, same contract as the sync path's step 2d (issue
-	// #1171): inflate the ceiling fields present by the pool reserve so
-	// hidden reasoning spends the reserve. Applied before the reservation and
-	// before any byte reaches the client. Headroom only here; the sync-path
-	// zero-content guard does not apply mid-stream.
-	if headroomBody, inflated := applyReasoningHeadroom(body, EndpointResponses, route.ReasoningReserveTokens); inflated {
-		body = headroomBody
-	}
 
 	// 4. Start attempt
 	requestID := uuid.New().String()
@@ -167,7 +168,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, EndpointResponses, model, acc, string(body), translator.currentContent.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, EndpointResponses, model, ceiling, acc, string(body), translator.currentContent.String())
 	}()
 
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with
@@ -260,6 +261,11 @@ func (o *Orchestrator) executeResponsesStreaming(
 		// translator.currentContent already holds the full response body.
 		if chunk.Usage != nil {
 			clampZeroCompletionUsage(chunk.Usage, []string{translator.currentContent.String()}, chunk.ID, model, EndpointResponses)
+			// Cap the metered completion count at the caller's own
+			// max_output_tokens (#1283), before acc.Accumulate copies it and
+			// before emitCompleted translates it into the response.completed
+			// event's usage block.
+			clampUsageToCeiling(chunk.Usage, route, ceiling, EndpointResponses, model)
 			// Same capture as executeStreaming. Without it this path can only
 			// ever fail closed for a variable-price alias, because settleStream
 			// reads these bytes and ChatCompletionChunk has already discarded

@@ -26,6 +26,18 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 		writeMissingFieldError(w, "prompt")
 		return
 	}
+	// Same refusal as the chat surface (issue #1283): one choice per request,
+	// declared rather than silently delivered.
+	if unsupportedChoiceCount(req.N) {
+		writeUnsupportedChoiceCountError(w)
+		return
+	}
+	// best_of is the same defect and takes the same refusal, reusing the same
+	// predicate: absent and 1 are servable, everything else is not.
+	if unsupportedChoiceCount(req.BestOf) {
+		writeUnsupportedBestOfError(w)
+		return
+	}
 
 	// LiteLLM routes legacy completions through chat/completions-capable routes.
 	needFlags := NeedFlags{

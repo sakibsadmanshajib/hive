@@ -105,7 +105,7 @@
       "path": "/v1/chat/completions",
       "status": "supported_now",
       "phase": 6,
-      "notes": "Chat completion inference. tools, tool_choice, response_format, parallel_tool_calls, functions, function_call are conditionally supported (Phase 20): passed through when the alias has at least one route with provider_capabilities.tools_supported=true; returns 400 unsupported_parameter (with param field) when no capable route exists for the alias."
+      "notes": "Chat completion inference. tools, tool_choice, response_format, parallel_tool_calls, functions, function_call are conditionally supported (Phase 20): passed through when the alias has at least one route with provider_capabilities.tools_supported=true; returns 400 unsupported_parameter (with param field) when no capable route exists for the alias. n is refused: any value other than 1 returns 400 unsupported_parameter with param n, because no route in the catalog can generate more than one choice per request (issue #1283). max_tokens and max_completion_tokens reach the provider unchanged, except that a request carrying both is dispatched with the smaller of the two written over both, and they additionally bound settlement: on a fixed-price alias a request specifying a ceiling of N is never billed for more than N completion tokens. On a variable-price alias, whose charge is the cost the upstream reported for the generation rather than a token count times a catalog rate, the ceiling bounds what may be generated at the request boundary instead, and the usage block reports what the upstream actually reported."
     },
     {
       "method": "GET",
@@ -140,7 +140,7 @@
       "path": "/v1/completions",
       "status": "supported_now",
       "phase": 6,
-      "notes": "Legacy completion inference"
+      "notes": "Legacy completion inference. n is refused: any value other than 1 returns 400 unsupported_parameter with param n (issue #1283). best_of is refused on the same terms as n and for the same reason. max_tokens reaches the provider unchanged and additionally bounds settlement: on a fixed-price alias a request specifying a ceiling of N is never billed for more than N completion tokens. On a variable-price alias, whose charge is the cost the upstream reported for the generation rather than a token count times a catalog rate, the ceiling bounds what may be generated at the request boundary instead."
     },
     {
       "method": "POST",
