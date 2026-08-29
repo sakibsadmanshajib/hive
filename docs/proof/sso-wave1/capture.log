@@ -1,0 +1,152 @@
+SSO wave 1 live capture: silent server-completed consent landing
+================================================================
+
+Capture 2 of 2, taken 2026-08-29 after the branch was rebased onto main at
+5e08d641. Capture 1 (2026-08-23, pre-rebase) is preserved at the bottom of
+this file so the two substrates can be compared.
+
+Substrate (2026-08-29)
+----------------------
+Throwaway local stack, built for this capture and thrown away after it:
+
+  * self-hosted GoTrue v2.189.0, the digest this repository pins in
+    deploy/docker/docker-compose.enterprise.yml, with the OAuth 2.1
+    authorization server enabled and GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH
+    pointing at /oauth/consent, on its own throwaway Postgres
+  * web-console built from THIS BRANCH with Dockerfile.web-console.prod
+    (a real `next build` plus `next start`, not the dev server), fronted by
+    the same one-origin arrangement Caddyfile.console uses in production:
+    /auth/v1/* proxied to GoTrue, everything else to the console
+  * Open WebUI (the Hive fork image) as the relying party, registered on
+    GoTrue through the same admin OAuth client registration
+    scripts/register-owui-oauth-client.py performs, with PKCE S256
+
+Real OAuth 2.1 authorization-code round trips only; no session injected,
+nothing stubbed. Sessions minted through the audited one-time-token flow
+(tests/e2e/support/live-auth.mjs, driven by
+tests/e2e/support/sso-wave1-fixture.mjs). No password was set, read, reset
+or rotated for any account, and no shared or deployed environment was
+touched: every user, client and key in this capture was created inside the
+throwaway stack.
+
+Every URL below has its query string AND fragment stripped before commit;
+the same redaction is burned into the screenshot banners. This flow carries
+authorization codes and one-time tokens in the query.
+
+BEFORE (tracer baseline, team-lead 2026-08-23)
+----------------------------------------------
+Repeat sign-in cost 3 HTML loads plus 3 redirects, and the /oauth/consent
+stop painted "Checking your authorization request..." plus the Approve/Deny
+panel even when an auth.oauth_consents row already existed.
+
+AFTER, PASS 1: first ever consent for a fresh user
+--------------------------------------------------
+  200 http://localhost:3010/
+  302 http://localhost:3010/oauth/oidc/login
+  302 http://console.hive.test:8899/auth/v1/oauth/authorize?<redacted>
+  200 http://console.hive.test:8899/oauth/consent?<redacted>
+  approve buttons: 1
+  deny buttons: 1
+  password inputs: 0
+  after Approve: http://localhost:3010/
+
+The interactive panel still paints exactly once for a genuine first consent,
+and Approve completes the round trip into chat. Wave 1 did not break the
+approve/deny case. Frame: 01-first-consent-panel.png.
+
+AFTER, PASS 2: repeat entry, only the console ssr session on the device
+-----------------------------------------------------------------------
+  200 http://localhost:3010/
+  302 http://localhost:3010/oauth/oidc/login
+  302 http://console.hive.test:8899/auth/v1/oauth/authorize?<redacted>
+  307 http://console.hive.test:8899/oauth/consent?<redacted>
+  307 http://localhost:3010/oauth/oidc/callback?<redacted>
+  200 http://localhost:3010/
+  painted consent documents (2xx on /oauth/consent): 0
+  approve buttons: 0
+  deny buttons: 0
+  password inputs: 0
+  redirects through the consent landing: 1
+  final: http://localhost:3010/
+
+The consent landing answered 307. Zero painted consent documents, zero
+Approve or Deny buttons ever rendered, zero password inputs, and exactly one
+redirect beyond the authorize round trip: the landing's own hand-off to the
+registered callback. Frame: 04-repeat-entry-chat-home.png, taken with an
+activated chat account so the destination is the chat home itself.
+
+Note on the destination: DEFAULT_USER_ROLE is "pending" on the deployment as
+well as here, so a brand new chat account lands on Open WebUI's activation
+notice rather than the chat home until an admin activates it. That is
+existing product behaviour and is unrelated to this change; the frame above
+uses an activated account so the end state is the one a returning user sees.
+
+Re-run after the adversarial review fixes
+-----------------------------------------
+The review found a real gap in the redirect guard (a target spelled
+`//oauth/consent` or `/oauth//consent` passed the guard and then 308ed back
+to the landing) plus a hop bound, a 403 handling and an observability fix.
+Both journeys and the committed e2e were then run again against a console
+image rebuilt from the fixed source. The chains above are unchanged, and the
+two frames come out byte identical to the pre-fix run:
+
+  01-first-consent-panel.png       md5 7b3e1d73fa0ba2011304bb4a223cf4c6
+  04-repeat-entry-chat-home.png    md5 20c588349d0734b188438f029e08b89b
+
+which is the expected result: the fixes harden refusal paths that neither
+journey walks, and change nothing a user sees on the paths they do.
+
+E2E
+---
+apps/web-console/tests/e2e/sso-silent-consent.spec.ts, the committed opt-in
+journey, run against this same stack:
+
+  npx playwright test tests/e2e/sso-silent-consent.spec.ts --project=chromium
+  1 passed (9.6s)   before the review fixes
+  1 passed (11.2s)  after the review fixes, console image rebuilt
+
+Unit, type and build checks on the rebased branch, all in the repository's
+Docker toolchain: lib/auth/silent-consent.test.ts 21 passed,
+components/oauth/consent-panel.test.tsx 13 passed, tsc --noEmit clean,
+next build clean, and the Playwright spec-collection guard green with the
+new spec declared (42 files across 3 configs).
+
+
+Capture 1 (2026-08-23, pre-rebase), preserved verbatim
+======================================================
+
+Substrate: full local stack on the dev box (self-hosted GoTrue v2.189.0,
+PostgREST, storage behind caddy-supabase; control-plane, edge-api,
+web-console-prod built FROM THIS BRANCH behind caddy-console; Open WebUI
+behind caddy-owui). Real OAuth 2.1 authorization-code round trips only;
+no session injected, nothing stubbed. Sessions minted through the audited
+one-time-token flow (tests/e2e/support/live-auth.mjs); no password was
+set, read, reset or rotated for any account.
+
+Every URL in this log has query strings AND fragments stripped before
+commit; the same redaction is burned into the screenshot banners.
+
+1. BEFORE (tracer baseline, team-lead 2026-08-23): repeat sign-in cost
+   3 HTML loads plus 3 redirects, and the /oauth/consent stop painted
+   "Checking your authorization request..." plus the Approve/Deny panel
+   even when an auth.oauth_consents row already existed.
+
+2. AFTER: repeat second-surface entry with ONLY the console ssr session
+   (chat cookies and localStorage wiped first). Main-frame chain:
+
+     200 http://localhost:3003/
+     302 http://localhost:3003/oauth/oidc/login
+     302 http://console.hive.test/auth/v1/oauth/authorize
+     307 http://console.hive.test/oauth/consent        <- zero paint
+     307 http://localhost:3003/oauth/oidc/callback
+     200 http://localhost:3003/auth                    <- pass-through
+     200 http://localhost:3003/
+     FINAL http://localhost:3003/ (signed in)
+
+   Consent landing answered 307: zero painted documents, zero Approve or
+   Deny buttons ever rendered, zero password inputs. One redirect beyond
+   the authorize round trip (the landing's own hand-off to the registered
+   callback).
+
+3. First-ever consent for a fresh user still paints the interactive panel
+   exactly once; Approve completes into chat.

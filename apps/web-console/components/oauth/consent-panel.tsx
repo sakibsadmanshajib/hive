@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/browser";
 import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
+// The sign-in round-trip URL builder lives beside the allow-list that
+// validates its output, so the server-completed landing page (SSO wave 1) and
+// this panel share one format, and importing it here pulls no server-side
+// lookup code into the browser bundle.
+import { buildSignInRedirect } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
@@ -18,16 +23,6 @@ interface ConsentDetails {
 }
 
 type ConsentStatus = "loading" | "ready" | "error";
-
-/**
- * Builds the /auth/sign-in?next=... URL that round-trips an unauthenticated
- * visitor back to this exact consent request once they've logged in.
- * Exported for direct unit testing without rendering the component.
- */
-export function buildSignInRedirect(authorizationId: string): string {
-  const returnPath = `/oauth/consent?authorization_id=${encodeURIComponent(authorizationId)}`;
-  return `/auth/sign-in?next=${encodeURIComponent(returnPath)}`;
-}
 
 export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
   const [status, setStatus] = useState<ConsentStatus>("loading");

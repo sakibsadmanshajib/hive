@@ -43,7 +43,8 @@ vi.mock("@/lib/navigate", () => ({
   navigate: vi.fn(),
 }));
 
-import { ConsentPanel, buildSignInRedirect } from "./consent-panel";
+import { ConsentPanel } from "./consent-panel";
+import { buildSignInRedirect } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
 
 const mockNavigate = vi.mocked(navigate);
@@ -79,16 +80,9 @@ const CONSENT_NEEDED_DETAILS = {
   error: null,
 };
 
-describe("buildSignInRedirect", () => {
-  it("preserves authorization_id through the sign-in round-trip", () => {
-    const url = buildSignInRedirect(AUTH_ID);
-    expect(url).toBe(
-      `/auth/sign-in?next=${encodeURIComponent(
-        `/oauth/consent?authorization_id=${AUTH_ID}`,
-      )}`,
-    );
-  });
-});
+// buildSignInRedirect's own format is asserted where it lives, in
+// lib/auth/next-target.test.ts, beside the allow-list that validates it. What
+// this file still asserts is that the panel navigates to exactly that value.
 
 describe("ConsentPanel", () => {
   beforeEach(() => {

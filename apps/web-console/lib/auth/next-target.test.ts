@@ -1,5 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { appendNextParam, resolveNextTarget } from "./next-target";
+import {
+  CONSENT_RETRIED_PARAM,
+  appendNextParam,
+  buildSignInRedirect,
+  resolveNextTarget,
+} from "./next-target";
+
+const AUTH_ID = "auth-req-abc123";
+
+describe("buildSignInRedirect", () => {
+  it("preserves authorization_id through the sign-in round-trip", () => {
+    expect(buildSignInRedirect(AUTH_ID)).toBe(
+      `/auth/sign-in?next=${encodeURIComponent(
+        `/oauth/consent?authorization_id=${AUTH_ID}&${CONSENT_RETRIED_PARAM}=1`,
+      )}`,
+    );
+  });
+
+  it("appends the reason marker when one is given", () => {
+    expect(buildSignInRedirect(AUTH_ID, "stale")).toBe(
+      `/auth/sign-in?next=${encodeURIComponent(
+        `/oauth/consent?authorization_id=${AUTH_ID}&${CONSENT_RETRIED_PARAM}=1`,
+      )}&reason=stale`,
+    );
+  });
+
+  it("produces a next value the allow-list actually accepts", () => {
+    // The builder and the validator live in one file precisely so this cannot
+    // drift. A next target the allow-list rejects would silently dump the user
+    // on /console instead of back at their consent request.
+    const url = new URL(buildSignInRedirect(AUTH_ID), "https://console.example");
+    const next = url.searchParams.get("next");
+    expect(resolveNextTarget(next)).toBe(next);
+  });
+});
 
 describe("resolveNextTarget", () => {
   it("defaults to /console when next is null", () => {
