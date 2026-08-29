@@ -69,7 +69,12 @@ fi
 # back empty, the script would report "removed: 0" and exit green, and the
 # stale container this exists to evict would go on running behind a passing
 # step. A silent no-op is the one outcome worse than a loud failure here.
-first_container=$(docker compose $HIVE_COMPOSE_FLAGS ps --quiet | head -1)
+# Sliced rather than piped through `head -1`, for the same reason the
+# membership test below is a herestring: under `pipefail` a reader that exits
+# early can leave the writer killed by SIGPIPE and fail the whole pipeline.
+# shellcheck disable=SC2086 # HIVE_COMPOSE_FLAGS is a flag string and must split
+project_containers=$(docker compose $HIVE_COMPOSE_FLAGS ps --quiet)
+first_container=${project_containers%%$'\n'*}
 if [ -z "$first_container" ]; then
   echo "::error::this compose project has no running containers, so the project name cannot be resolved; refusing to remove anything" >&2
   exit 1
