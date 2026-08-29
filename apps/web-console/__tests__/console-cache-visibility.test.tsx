@@ -338,8 +338,16 @@ describe("request log cache token columns", () => {
       />,
     );
 
-    expect(screen.getByText("Cached in")).toBeDefined();
-    expect(screen.getByText("Cache write")).toBeDefined();
+    // Scoped to the columnheader role: the table's column-controls checklist
+    // also carries "Cached in"/"Cache write" as checkbox labels (same text
+    // shown twice by design, once as the header and once as the toggle), so
+    // a plain getByText is ambiguous once that checklist exists.
+    expect(
+      screen.getByRole("columnheader", { name: "Cached in" })
+    ).toBeDefined();
+    expect(
+      screen.getByRole("columnheader", { name: "Cache write" })
+    ).toBeDefined();
     expect(screen.getByText("12,345")).toBeDefined();
     expect(screen.getByText("678")).toBeDefined();
   });
@@ -403,6 +411,7 @@ describe("usage CSV export", () => {
       "cache_read_tokens",
       "cache_write_tokens",
       "hive_credit_delta",
+      "latency_ms",
       "error_code",
       "api_key",
     ]);
@@ -415,5 +424,20 @@ describe("usage CSV export", () => {
     const cells = row.split(",");
     expect(cells[6]).toBe("900");
     expect(cells[7]).toBe("");
+  });
+
+  it("exports latency as raw milliseconds, and an absent one as an empty cell", async () => {
+    // The CSV is the artefact someone attaches to an incident review, so
+    // the number the latency column was added for has to survive the
+    // export. Absent stays empty for the same reason the table renders an
+    // em-dash: an unmeasured request is not a 0ms one.
+    const csv = await exportedCsv([
+      event({ latency_ms: 1800 }),
+      event({ id: "e2" }),
+    ]);
+
+    const [, measured, unmeasured] = csv.split("\n");
+    expect(measured.split(",")[9]).toBe("1800");
+    expect(unmeasured.split(",")[9]).toBe("");
   });
 });

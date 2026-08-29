@@ -7,7 +7,7 @@ import { parseLedgerEntriesText } from "@/lib/control-plane/ledger-decode";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { cn } from "@/lib/cn";
-import { formatCredits, formatTokens } from "@/lib/format/credits";
+import { formatCredits, formatLatencyMs, formatTokens } from "@/lib/format/credits";
 import { formatDateTime } from "@/lib/format/datetime";
 
 interface UsageLogsTableProps {
@@ -58,10 +58,19 @@ interface LifecycleState {
 
 const LIFECYCLE_EMPTY: LifecycleState = { loading: false, entries: null };
 
+// No column starts hidden: every column this table has ever shown
+// (including the two cache columns console-cache-visibility.test.tsx pins as
+// always-visible) stays visible until the viewer opts out through the
+// column-controls checklist.
+const DEFAULT_HIDDEN_COLUMNS: ReadonlySet<string> = new Set();
+
 export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
   const [expandedKey, setExpandedKey] = React.useState<string | null>(null);
   const [lifecycle, setLifecycle] =
     React.useState<Record<string, LifecycleState>>({});
+  const [hiddenColumns, setHiddenColumns] = React.useState<ReadonlySet<string>>(
+    DEFAULT_HIDDEN_COLUMNS,
+  );
 
   const handleToggle = React.useCallback((key: string) => {
     setExpandedKey((current) => (current === key ? null : key));
@@ -113,9 +122,13 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
       });
   }, [expandedRow, lifecycle]);
 
-  const columns: ReadonlyArray<Column<UsageEventRow>> = [
+  // Every candidate column, in display order. label is the plain-text name
+  // shown in the column-controls checklist (header can be JSX; label always
+  // a string, so the checklist never has to unwrap it).
+  const allColumns: ReadonlyArray<Column<UsageEventRow> & { label: string }> = [
     {
       key: "time",
+      label: "Time",
       header: "Time",
       cell: (row) => (
         <span className="text-xs text-[var(--color-ink-2)]">
@@ -125,6 +138,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "model",
+      label: "Model",
       header: "Model",
       cell: (row) => (
         <span className="font-medium text-[var(--color-ink)]">
@@ -134,6 +148,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "tokens_in",
+      label: "Tokens in",
       header: "Tokens in",
       numeric: true,
       align: "right",
@@ -141,6 +156,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "tokens_out",
+      label: "Tokens out",
       header: "Tokens out",
       numeric: true,
       align: "right",
@@ -148,6 +164,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "cache_read",
+      label: "Cached in",
       header: "Cached in",
       numeric: true,
       align: "right",
@@ -155,6 +172,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "cache_write",
+      label: "Cache write",
       header: "Cache write",
       numeric: true,
       align: "right",
@@ -162,6 +180,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "credits",
+      label: "Credits",
       header: "Credits",
       numeric: true,
       align: "right",
@@ -178,7 +197,16 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
       ),
     },
     {
+      key: "latency",
+      label: "Latency",
+      header: "Latency",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatLatencyMs(row.latency_ms ?? null),
+    },
+    {
       key: "status",
+      label: "Status",
       header: "Status",
       cell: (row) => (
         <Badge tone={row.status === "completed" ? "success" : "neutral"}>
@@ -188,6 +216,7 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
     {
       key: "key",
+      label: "API key",
       header: "API key",
       cell: (row) => {
         if (!row.api_key_id) {
@@ -202,21 +231,82 @@ export function UsageLogsTable({ rows, keyNames }: UsageLogsTableProps) {
     },
   ];
 
+  const columns = allColumns.filter((col) => !hiddenColumns.has(col.key));
+
+  // The last visible column cannot be hidden. Disabling its checkbox is
+  // what says so, rather than leaving the click a silent no-op that
+  // springs the box back with no reason given; toggleColumn below still
+  // carries the guard, because a disabled input is only unclickable in a
+  // real browser and the handler is what actually holds the invariant.
+  const atColumnFloor = columns.length <= 1;
+
+  function toggleColumn(key: string) {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        // Never let the toggle empty the table entirely: a header row with
+        // zero columns is a broken layout, not a valid preference. The
+        // disabled checkbox above is the explanation a viewer sees; this
+        // is the enforcement behind it, and it is reachable, so it is
+        // covered rather than decorative.
+        if (allColumns.length - next.size <= 1) return prev;
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
   return (
-    <DataTable<UsageEventRow>
-      rows={rows}
-      columns={columns}
-      rowKey={(row) => row.id}
-      expandedKey={expandedKey}
-      onRowToggle={handleToggle}
-      renderDetail={(row) => (
-        <UsageLogDetail
-          row={row}
-          state={lifecycle[row.request_id] ?? LIFECYCLE_EMPTY}
-        />
-      )}
-      empty="No requests match these filters."
-    />
+    <div className="flex flex-col gap-3">
+      <div className="flex justify-end">
+        <details className="relative">
+          <summary
+            className={cn(
+              "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-[var(--color-border)]",
+              "px-2.5 py-1.5 text-xs text-[var(--color-ink-2)] hover:bg-[var(--color-surface-inset)]",
+            )}
+            aria-label="Choose columns"
+          >
+            Columns
+          </summary>
+          <div
+            className="absolute right-0 z-10 mt-1 w-48 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-md"
+            data-testid="column-controls"
+          >
+            {allColumns.map((col) => (
+              <label
+                key={col.key}
+                className="flex items-center gap-2 rounded px-1.5 py-1 text-xs text-[var(--color-ink-2)] hover:bg-[var(--color-surface-inset)]"
+              >
+                <input
+                  type="checkbox"
+                  checked={!hiddenColumns.has(col.key)}
+                  disabled={atColumnFloor && !hiddenColumns.has(col.key)}
+                  onChange={() => toggleColumn(col.key)}
+                />
+                {col.label}
+              </label>
+            ))}
+          </div>
+        </details>
+      </div>
+      <DataTable<UsageEventRow>
+        rows={rows}
+        columns={columns}
+        rowKey={(row) => row.id}
+        expandedKey={expandedKey}
+        onRowToggle={handleToggle}
+        renderDetail={(row) => (
+          <UsageLogDetail
+            row={row}
+            state={lifecycle[row.request_id] ?? LIFECYCLE_EMPTY}
+          />
+        )}
+        empty="No requests match these filters."
+      />
+    </div>
   );
 }
 
@@ -247,6 +337,11 @@ function UsageLogDetail({ row, state }: UsageLogDetailProps) {
 
         <dt className="text-[var(--color-ink-3)]">Event</dt>
         <dd className="text-[var(--color-ink)]">{row.event_type}</dd>
+
+        <dt className="text-[var(--color-ink-3)]">Latency</dt>
+        <dd className="text-[var(--color-ink)]">
+          {formatLatencyMs(row.latency_ms ?? null)}
+        </dd>
 
         <dt className="text-[var(--color-ink-3)]">Error</dt>
         <dd className="text-[var(--color-ink)]">

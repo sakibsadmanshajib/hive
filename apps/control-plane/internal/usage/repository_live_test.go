@@ -177,6 +177,97 @@ func TestRecordEventAndListEvents_ZeroCacheTokensStayZero(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// ListEvents: latency_ms is derived from request_attempts.started_at /
+// completed_at, not stored on usage_events itself. Console's request log
+// depends on this being present once an attempt terminates and absent
+// (nil, never a fabricated zero) while it has not.
+// -----------------------------------------------------------------------------
+
+func TestListEvents_LatencyMsPresentAfterAttemptCompletes(t *testing.T) {
+	pool := newUsageTestPool(t)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+	accountID := seedUsageAccount(t, pool)
+	attemptID := seedUsageAttempt(t, ctx, repo, accountID)
+
+	// UpdateAttemptStatus is what accounting.FinalizeReservation calls on
+	// every terminal outcome (service.go:392), so this mirrors production
+	// rather than reaching into the schema directly.
+	completedAt := time.Now().UTC().Add(750 * time.Millisecond)
+	if err := repo.UpdateAttemptStatus(ctx, attemptID, "completed", &completedAt); err != nil {
+		t.Fatalf("UpdateAttemptStatus: %v", err)
+	}
+
+	requestID := "req-" + uuid.NewString()
+	if _, err := repo.RecordEvent(ctx, RecordEventInput{
+		AccountID:        accountID,
+		RequestAttemptID: attemptID,
+		RequestID:        requestID,
+		EventType:        UsageEventCompleted,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "gpt-test",
+		Status:           "completed",
+		HiveCreditDelta:  -1,
+		InternalMetadata: map[string]any{},
+		CustomerTags:     map[string]any{},
+	}); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	events, err := repo.ListEvents(ctx, ListEventsFilter{AccountID: accountID, RequestID: requestID, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 event, got %d", len(events))
+	}
+	if events[0].LatencyMs == nil {
+		t.Fatal("expected latency_ms to be populated once the attempt has completed_at, got nil")
+	}
+	if *events[0].LatencyMs < 500 || *events[0].LatencyMs > 5000 {
+		t.Fatalf("expected latency_ms close to the seeded ~750ms gap, got %d", *events[0].LatencyMs)
+	}
+}
+
+func TestListEvents_LatencyMsNilWhileAttemptInFlight(t *testing.T) {
+	// The inverse: an attempt that never got a completed_at (still
+	// dispatching/streaming) must read back latency as nil, never as a
+	// fabricated zero that would misreport a genuinely unknown duration as
+	// an instant response.
+	pool := newUsageTestPool(t)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+	accountID := seedUsageAccount(t, pool)
+	attemptID := seedUsageAttempt(t, ctx, repo, accountID)
+
+	requestID := "req-" + uuid.NewString()
+	if _, err := repo.RecordEvent(ctx, RecordEventInput{
+		AccountID:        accountID,
+		RequestAttemptID: attemptID,
+		RequestID:        requestID,
+		EventType:        UsageEventStreamUpdate,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "gpt-test",
+		Status:           "streaming",
+		InternalMetadata: map[string]any{},
+		CustomerTags:     map[string]any{},
+	}); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	events, err := repo.ListEvents(ctx, ListEventsFilter{AccountID: accountID, RequestID: requestID, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 event, got %d", len(events))
+	}
+	if events[0].LatencyMs != nil {
+		t.Fatalf("expected latency_ms nil for an in-flight attempt, got %d", *events[0].LatencyMs)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // GetUsageSummary: current rollup contract. Sums input/output tokens and
 // credits correctly. Documents, with a real query, that cache tokens do NOT
 // appear on UsageSummaryRow today (issue #1174) — this must go red the

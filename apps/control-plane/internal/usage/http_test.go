@@ -340,6 +340,88 @@ func TestListEventsIncludesAPIKeyIDWhenPresent(t *testing.T) {
 	}
 }
 
+// The console reads latency_ms off this response body and renders it as its
+// own column, so the JSON key is a wire contract rather than an incidental
+// field. Assert both arms here: emitted when the attempt carried a measured
+// latency, and absent (not a fabricated zero) when it did not, because the
+// column prints an em-dash for absence and would print a misleading "0ms" for
+// a zero.
+func TestListEventsLatencyCrossesTheWire(t *testing.T) {
+	repo := newStubRepo()
+	viewer, accountID := seedUsageHTTPAccount(repo)
+	latency := int64(1800)
+	repo.events[accountID] = []UsageEvent{
+		{
+			ID:               uuid.New(),
+			AccountID:        accountID,
+			RequestAttemptID: uuid.New(),
+			RequestID:        "req_measured",
+			EventType:        UsageEventCompleted,
+			Endpoint:         "/v1/responses",
+			ModelAlias:       "hive-fast",
+			Status:           "completed",
+			HiveCreditDelta:  -3,
+			LatencyMs:        &latency,
+			CreatedAt:        time.Now().UTC(),
+		},
+		{
+			ID:               uuid.New(),
+			AccountID:        accountID,
+			RequestAttemptID: uuid.New(),
+			RequestID:        "req_unmeasured",
+			EventType:        UsageEventCompleted,
+			Endpoint:         "/v1/responses",
+			ModelAlias:       "hive-fast",
+			Status:           "completed",
+			HiveCreditDelta:  -3,
+			CreatedAt:        time.Now().UTC(),
+		},
+	}
+
+	handler := newHTTPHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid response JSON: %v", err)
+	}
+	if len(response.Events) != 2 {
+		t.Fatalf("expected 2 usage events, got %d", len(response.Events))
+	}
+
+	byRequest := map[string]map[string]any{}
+	for _, event := range response.Events {
+		requestID, _ := event["request_id"].(string)
+		byRequest[requestID] = event
+	}
+
+	measured, ok := byRequest["req_measured"]
+	if !ok {
+		t.Fatal("expected the measured event in the response")
+	}
+	if got := measured["latency_ms"]; got != float64(1800) {
+		t.Fatalf("expected latency_ms 1800 on the wire, got %#v", got)
+	}
+
+	unmeasured, ok := byRequest["req_unmeasured"]
+	if !ok {
+		t.Fatal("expected the unmeasured event in the response")
+	}
+	if _, present := unmeasured["latency_ms"]; present {
+		t.Fatalf("expected latency_ms to be omitted when unmeasured, got %#v", unmeasured["latency_ms"])
+	}
+}
+
 func seedUsageHTTPAccount(repo *stubRepo) (auth.Viewer, uuid.UUID) {
 	userID := uuid.New()
 	accountID := uuid.New()

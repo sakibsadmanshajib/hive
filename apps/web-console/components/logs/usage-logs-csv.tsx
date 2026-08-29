@@ -18,9 +18,17 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
     // omits both fields when they are zero, so the console cannot tell a
     // measured zero from an unmeasured one, and a spreadsheet full of zeroes
     // is exactly the shape a customer would reconcile a bill against.
+    //
+    // latency_ms follows the same rule for the same reason: it is absent
+    // until the attempt has both a started_at and a completed_at, and a
+    // negative value is clock skew rather than a fast request, so both
+    // export as an empty cell rather than a fabricated 0. Raw
+    // milliseconds, not the table's "1.8s", because the export exists to
+    // be sorted and charted.
     const header =
       "created_at,request_id,model_alias,status,input_tokens,output_tokens," +
-      "cache_read_tokens,cache_write_tokens,hive_credit_delta,error_code,api_key\n";
+      "cache_read_tokens,cache_write_tokens,hive_credit_delta,latency_ms," +
+      "error_code,api_key\n";
     const lines = rows.map((row) => {
       const key = row.api_key_id
         ? (keyNames[row.api_key_id] ?? `…${row.api_key_id.slice(-6)}`)
@@ -40,6 +48,9 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
           ? ""
           : String(row.cache_write_tokens),
         String(row.hive_credit_delta),
+        row.latency_ms === undefined || row.latency_ms < 0
+          ? ""
+          : String(row.latency_ms),
         row.error_code ?? "",
         key,
       ]
