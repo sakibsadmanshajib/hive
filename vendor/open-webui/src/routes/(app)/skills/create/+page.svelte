@@ -8,6 +8,7 @@
 
 	import { createNewSkill, getSkills } from '$lib/apis/skills';
 	import SkillEditor from '$lib/components/workspace/Skills/SkillEditor.svelte';
+	import { skillSaveErrorMessage } from '$lib/hive/skill-save-error';
 
 	let skill: {
 		name: string;
@@ -22,7 +23,12 @@
 
 	const onSubmit = async (_skill) => {
 		const res = await createNewSkill(localStorage.token, _skill).catch((error) => {
-			toast.error(`${error}`);
+			// The id is derived from the name and is unique across the whole
+			// instance, so the commonest failure here is a collision with a
+			// skill this account cannot read. Upstream's wording for that names
+			// a field the author never filled in and sends them looking for a
+			// skill that is not in their library. See lib/hive/skill-save-error.
+			toast.error(skillSaveErrorMessage(error, _skill?.name ?? ''));
 			return null;
 		});
 

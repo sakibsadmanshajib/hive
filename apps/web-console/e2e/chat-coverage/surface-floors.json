@@ -1,9 +1,10 @@
 {
   "$comment": "Minimum control count per surface, the highest count a live run has ever enumerated there. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. A floor key this run never swept fails too, which is what stops a red surface being turned green by deleting the link that reaches it: the four surfaces sitting at 1 (sidebar, chat-item-menu, chat-message-actions, workspace:knowledge) do not sweep today, and their floor of 1 says the surface must exist and render something, so removing its entry point fails the gate instead of silently emptying the denominator. Raising or lowering a floor is a separate, deliberate commit made with scripts/update-chat-coverage-floors.mjs against a recorded ledger, never by the run that checks them.",
   "dataDriven": [
-    "search"
+    "search",
+    "skills"
   ],
-  "$dataDrivenComment": "Surfaces whose control count is account data rather than product surface. They carry a floor of 1, a presence bar: the surface must still exist and render something, so deleting the link that reaches it still fails the gate, but the count itself is not pinned. The chat list renders one row per chat, so it enumerated 50 controls on one run and 106 on the next with no product change between them; pinning that number reds the gate whenever somebody grooms the account, and the fix everyone reaches for is to lower the floor, which is the ratchet this file exists to stop.",
+  "$dataDrivenComment": "Surfaces whose control count is account data rather than product surface. They carry a floor of 1, a presence bar: the surface must still exist and render something, so deleting the link that reaches it still fails the gate, but the count itself is not pinned. The chat list renders one row per chat, so it enumerated 50 controls on one run and 106 on the next with no product change between them; pinning that number reds the gate whenever somebody grooms the account, and the fix everyone reaches for is to lower the floor, which is the ratchet this file exists to stop. `skills` is here for the same reason and not because the surface is unimportant: the /skills index shipped in PR #1388 renders its own chrome plus one row per skill the signed-in account owns, so its count moves whenever a run creates or deletes one. The presence bar is what matters there, because the surface can be emptied three ways that leave no other trace: a frontend regression, a proxy rule that 404s the route, and `user.permissions.workspace.skills` reverting to its upstream default of false.",
   "surfaces": {
     "chat-item-menu": 1,
     "chat-message-actions": 1,
@@ -20,6 +21,7 @@
     "settings:Interface": 56,
     "settings:Personalization": 2,
     "sidebar": 1,
+    "skills": 1,
     "user-menu": 6,
     "workspace": 12,
     "workspace:knowledge": 1,

@@ -26,6 +26,7 @@ import {
   type Control,
   type Result,
 } from "../../e2e/chat-coverage/lib";
+import { STATIC_SURFACES } from "../../e2e/chat-coverage/surfaces";
 
 const COVERAGE_DIR = join(__dirname, "../../e2e/chat-coverage");
 
@@ -346,5 +347,44 @@ describe("the data-file validators", () => {
     for (const entry of parsed) {
       expect(entry.id).not.toBe("");
     }
+  });
+});
+
+// The skills library shipped in PR #1388 as a Hive route at /skills with its
+// own navigation row. Nothing swept it, so it sat outside the denominator
+// entirely: a bundle regression, a new proxy rule, or `workspace.skills`
+// flipping back to false would have emptied the surface with every gate still
+// reporting green. That is the failure shape this repository keeps paying for,
+// a quiet absence where a loud failure belonged, so the surface is swept and
+// floored.
+//
+// A presence bar rather than a pinned count, because the index renders one row
+// per skill the account owns, which is account data in exactly the way the
+// chat list is. A floor of 1 still fails when the surface stops rendering at
+// all, and a floor key a run never sweeps fails too, so deleting the entry
+// point is caught rather than quietly shrinking the denominator.
+describe("the skills surface is inside the denominator", () => {
+  const floorsFile = JSON.parse(
+    readFileSync(join(COVERAGE_DIR, "surface-floors.json"), "utf8"),
+  );
+
+  it("is swept by the live run", () => {
+    const ids = STATIC_SURFACES.map((surface) => surface.id);
+    expect(ids, "the /skills route must be swept or it leaves the denominator").toContain(
+      "skills",
+    );
+  });
+
+  it("carries a presence bar, not a pinned count", () => {
+    expect(parseDataDriven(floorsFile).has("skills")).toBe(true);
+    expect(parseFloors(floorsFile).skills).toBe(1);
+  });
+
+  it("fails the gate when the surface stops rendering", () => {
+    const floors = parseFloors(floorsFile);
+    expect(floorFailures(floors, [], (surface) => surface === "skills")).toHaveLength(1);
+    expect(
+      floorFailures(floors, [{ surface: "skills", enumerated: 3 }], (s) => s === "skills"),
+    ).toEqual([]);
   });
 });

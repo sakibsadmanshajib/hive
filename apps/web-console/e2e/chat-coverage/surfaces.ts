@@ -189,6 +189,19 @@ export const STATIC_SURFACES: Surface[] = [
       await page.waitForTimeout(3000);
     },
   },
+  // The user-created skills library (PR #1388). A Hive route rather than a
+  // Workspace tab, so `discoverWorkspaceTabs` below never finds it: it
+  // enumerates `a[href^="/workspace/"]` and this surface lives at /skills,
+  // which is also why the proxy's `@removedSurfaces` rule still 404s
+  // /workspace/skills without touching it. Listed here so it is inside the
+  // denominator; without an entry it renders nothing and no gate notices.
+  {
+    id: "skills",
+    open: async (page) => {
+      await page.goto("/skills", { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(3000);
+    },
+  },
   {
     id: "chat-item-menu",
     open: async (page) => {
