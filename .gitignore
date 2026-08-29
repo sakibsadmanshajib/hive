@@ -84,9 +84,6 @@ __pycache__/
 # the origin it ran against, so it travels as a CI artifact and a Playwright
 # attachment rather than as a committed file that would go stale silently.
 /apps/web-console/interaction-coverage/
-# Added by code-review-graph
-.code-review-graph/
-
 # Claude Code (user-local)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
