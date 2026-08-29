@@ -203,6 +203,71 @@ func TestCaptureInputTokens_FullyCachedPromptIsNotEstimatedOnTop(t *testing.T) {
 	}
 }
 
+// TestExecuteSync_FullyCachedPrompt_ChargedOnceAtTheCacheRate is the
+// end-to-end half of the same regression, asserted on the CHARGE rather than
+// on the helper's return value, because the charge is what the customer pays
+// and the helper is only where the mistake was made.
+//
+// The upstream answers with a real usage block whose prompt is served entirely
+// from cache: prompt_tokens 4096, cached_tokens 4096, so NormalizeCacheUsage's
+// inclusive shape yields fresh 0 and cacheRead 4096. Before the fix, the zero
+// fresh count was read as "nothing reported", the whole prompt was estimated
+// back from the request body, and CreditsForTokens priced that estimate as
+// fresh input while ALSO pricing the same content's 4096 cache-read tokens.
+//
+// The fixture is deliberately sized so the two answers cannot collide at the
+// one-credit floor, and the test asserts that separation before asserting the
+// charge, so it can never silently become a check that cannot go red.
+func TestExecuteSync_FullyCachedPrompt_ChargedOnceAtTheCacheRate(t *testing.T) {
+	const cachedTokens = 4096
+	// content null and finish_reason length so the zero-content capture is the
+	// branch under test, with a usage block that is real and fully cached.
+	const cachedBody = `{"id":"chatcmpl-cached","object":"chat.completion","created":1,"model":"route",` +
+		`"choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"length"}],` +
+		`"usage":{"prompt_tokens":4096,"completion_tokens":0,"total_tokens":4096,` +
+		`"prompt_tokens_details":{"cached_tokens":4096,"cache_write_tokens":0}}}`
+	litellm := newScriptedLiteLLM(t, []string{cachedBody, cachedBody})
+	defer litellm.server.Close()
+	routing := newRoutingMockFreePool(0)
+	defer routing.Close()
+	rec := &accountingRecorder{}
+	acct := newAccountingMockWithHold(rec, DefaultHoldText)
+	defer acct.Close()
+
+	orch := newAuthorizedOrchestrator(acct.URL, routing.URL, litellm.server.URL)
+	body := []byte(`{"model":"hive-free","messages":[{"role":"user","content":"` +
+		strings.Repeat("a long cached system preamble. ", 400) + `"}]}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, body, "hive-free",
+		NeedFlags{NeedChatCompletions: true}, DefaultHoldText, orch.litellm.ChatCompletion, normalizeChatCompletion)
+
+	// What the customer owes: the cache-read rate on the tokens the provider
+	// actually reported, and nothing in the fresh-input position.
+	want := CreditsForTokens(routeForPricingAssertions, 0, cachedTokens, 0, 0)
+	// What the defect charged: the same content again, estimated from the
+	// request body and priced at the full input rate on top.
+	promptEstimate := estimateCompletionTokens(promptText(EndpointChatCompletions, body))
+	buggy := CreditsForTokens(routeForPricingAssertions, promptEstimate, cachedTokens, 0, 0)
+	if buggy <= want {
+		t.Fatalf("fixture cannot distinguish the defect from the fix (want %d, defect %d): make the prompt longer or the cached count larger", want, buggy)
+	}
+	if want < 1 {
+		t.Fatalf("fixture prices the cached prompt below the one-credit floor (%d), so the floor would mask the defect", want)
+	}
+
+	finalize, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("no finalize call recorded; calls: %v", rec.calls)
+	}
+	credits := finalizeInt64(t, finalize, "actual_credits")
+	if credits != want {
+		t.Errorf("actual_credits = %d, want %d (the defect charges %d): a fully cached prompt is one piece of content and is billed once, at the cache rate, not again at the full input rate from a re-estimate (#1198)",
+			credits, want, buggy)
+	}
+}
+
 // TestExecuteSync_ZeroContentLength_UpstreamActual_KeepsTheReportedCost covers
 // a variable-price alias reaching the zero-content guard.
 //
