@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 type Deps struct {
@@ -312,9 +314,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if isData && !isDone {
 			sanitized, sanOK := inference.SanitizeVariablePriceFrame(payload, clientModel, mintedID)
 			if !sanOK {
-				slog.Warn("session chat: dropping an unparseable upstream frame",
-					"request_id", requestID, "alias", clientModel)
-				continue
+				// An upstream failure delivered inside a body whose 200 was
+				// already committed. The sanitizer refuses such a frame, and
+				// dropping it silently truncates the answer mid-sentence with
+				// nothing to render and nothing to retry on: the customer sees
+				// a half-finished reply and a normal end of stream. Replace it
+				// with a gateway-owned error the client can display instead,
+				// carrying no upstream text at all. Anything else the
+				// sanitizer refused is still unknown content and is still
+				// dropped.
+				replacement, upstream, isErrorFrame := sanitize.ReplaceErrorFrame(
+					payload, apierr.UpstreamUnavailableMessage(clientModel))
+				if !isErrorFrame {
+					slog.Warn("session chat: dropping an unparseable upstream frame",
+						"request_id", requestID, "alias", clientModel)
+					continue
+				}
+				// This log is now the ONLY place the upstream text survives,
+				// so it carries the request id the trace rows are keyed on.
+				// %.512s truncates on a rune boundary, unlike a byte slice,
+				// which mangles the tail of any non-ASCII upstream message.
+				slog.Warn("session chat: replaced an upstream error frame",
+					"request_id", requestID, "alias", clientModel,
+					"upstream_error", fmt.Sprintf("%.512s", upstream))
+				sanitized = replacement
 			}
 			_, _ = w.Write([]byte("data: "))
 			_, _ = w.Write(sanitized)

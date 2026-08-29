@@ -739,3 +739,75 @@ func TestHandleChat_RetrievedContextIsDelimitedAsUntrustedData(t *testing.T) {
 		t.Errorf("expected retrieved chunk content between the BEGIN/END markers, got %q", systemContent)
 	}
 }
+
+// ragErrorFrameSSE is an upstream stream that starts normally, then fails
+// after the 200 was committed. Measured shape: OpenRouter's out-of-credit
+// body, brand and top-up URL included, wrapped in LiteLLM's relay.
+const ragErrorFrameSSE = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer"}}]}
+
+data: {"error":{"code":402,"message":"You exceeded your current quota, please check your plan and billing details. Add more using https://openrouter.ai/settings/credits"}}
+
+data: [DONE]
+
+`
+
+// TestHandleChat_StreamingErrorFrameIsProviderBlind is the live leak PR #1303
+// closes on this surface.
+//
+// This relay hand-sanitized: rewrite model, rewrite id, delete
+// system_fingerprint, forward every other key of a parseable frame. A
+// top-level "error" key is such a key, so the upstream's own sentence, the
+// provider brand and its top-up URL all reached a chat customer on
+// /v1/rag/chat. Unlike the session-chat relay (which dropped the frame via
+// the shared sanitizer), this one genuinely leaked, which is why the fix is
+// to route it through the same shared sanitizer rather than to extend its
+// delete list by one more key.
+func TestHandleChat_StreamingErrorFrameIsProviderBlind(t *testing.T) {
+	store := newFakeStore()
+	docID := uuid.New()
+	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: docID, Content: "relevant content", Score: 0.1}}
+
+	var audits []auditRecord
+	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		fakeDispatch(http.StatusOK, ragErrorFrameSSE, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "what is the answer?"}},
+		Stream:   true,
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for streaming, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	lower := strings.ToLower(body)
+	for _, forbidden := range []string{
+		"exceeded your current quota",
+		"plan and billing",
+		"settings/credits",
+		"https://",
+		"402",
+	} {
+		if strings.Contains(lower, strings.ToLower(forbidden)) {
+			t.Fatalf("upstream error text reached the customer: %q in %s", forbidden, body)
+		}
+	}
+	assertNoLeak(t, body)
+
+	// The customer still gets something to render rather than a truncated
+	// answer, and it is gateway-owned.
+	if !strings.Contains(body, `"code":"upstream_error"`) {
+		t.Fatalf("expected a gateway-owned error frame, got %s", body)
+	}
+	if !strings.Contains(body, "hive-fast is unavailable right now") {
+		t.Fatalf("expected the Hive-owned sentence naming the alias, got %s", body)
+	}
+	// The content that arrived before the failure is not thrown away.
+	if !strings.Contains(body, "The answer") {
+		t.Fatalf("expected the pre-failure content frame to survive, got %s", body)
+	}
+}

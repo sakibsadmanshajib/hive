@@ -566,3 +566,111 @@ func containsCI(haystack, needle string) bool {
 	}
 	return false
 }
+
+// billingSpy records every conversion of usage into credits, so a test can
+// assert not merely that a failed line settled at zero but that the dispatcher
+// never got as far as pricing it.
+type billingSpy struct{ calls atomic.Int32 }
+
+func (b *billingSpy) Credits(usage *Usage) int64 {
+	b.calls.Add(1)
+	return 999_999
+}
+
+// TestDispatcher_ErrorCarryingFrameIsNeverStoredOrBilled is the money-path
+// guard for PR #1303's change to packages/sanitize.
+//
+// That PR gives the SSE relays a way to turn an upstream error frame into a
+// gateway-owned error the customer can render, instead of dropping it. The
+// dangerous way to have built that would have been to change
+// VariablePriceFrame itself to return (replacement, true), because this
+// caller reads ok == false as "do not store this line": a replacement with
+// ok == true would land a synthetic Hive error object in output.jsonl as a
+// completed 2xx result AND charge d.credits.Credits(usage) for it at
+// dispatcher.go's success branch. The replacement is therefore a separate,
+// opt-in call (sanitize.ReplaceErrorFrame) that only the relays make.
+//
+// This test fails if that contract is ever relaxed back. It goes red on all
+// three of: an Output line appearing, a non-zero charge, and the pricing
+// function being called at all.
+func TestDispatcher_ErrorCarryingFrameIsNeverStoredOrBilled(t *testing.T) {
+	for _, body := range []string{
+		// LiteLLM's mid-stream shape, delivered on a 200.
+		`{"error":{"message":"litellm.APIConnectionError: OpenAIException - You exceeded your current quota","code":"500"}}`,
+		// OpenRouter's out-of-credit body, brand and top-up URL included.
+		`{"id":"gen-1","error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402},"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}`,
+	} {
+		t.Run(body[:40], func(t *testing.T) {
+			spy := &billingSpy{}
+			infer := &fakeInference{
+				handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+					return json.RawMessage(body), &Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}, 200, nil
+				},
+			}
+			disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 2, LineTimeout: 5 * time.Second}, infer, spy)
+			if err != nil {
+				t.Fatalf("new dispatcher: %v", err)
+			}
+			res := disp.Dispatch(context.Background(), InputLine{
+				CustomID:     "x",
+				Method:       "POST",
+				URL:          "/v1/chat/completions",
+				Body:         mustBody(t, "customer-alias-1", ""),
+				Alias:        "customer-alias-1",
+				LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+			})
+			if res.Output != nil {
+				t.Fatalf("error-carrying 200 body stored as a completed line: %s", res.Output.Response.Body)
+			}
+			if res.Error == nil {
+				t.Fatalf("expected a failed line, got neither output nor error")
+			}
+			if res.ConsumedCredits != 0 {
+				t.Fatalf("credits=%d want 0: an upstream error line must never be charged", res.ConsumedCredits)
+			}
+			if got := spy.calls.Load(); got != 0 {
+				t.Fatalf("credit policy consulted %d times for a refused line, want 0", got)
+			}
+			// The customer-facing error message carries no upstream text.
+			for _, leak := range []string{"openrouter", "quota", "credits", "litellm"} {
+				if strings.Contains(strings.ToLower(res.Error.Error.Message), leak) {
+					t.Fatalf("upstream text %q reached the batch error line: %q", leak, res.Error.Error.Message)
+				}
+			}
+		})
+	}
+}
+
+// TestDispatcher_DeclaredButEmptyErrorIsStoredNormally is the other side of
+// the same change: relaxing the empty-error cases must actually take effect
+// here, or a provider that declares "error":null on every chunk has every
+// batch line refused and retried to exhaustion for no reason.
+func TestDispatcher_DeclaredButEmptyErrorIsStoredNormally(t *testing.T) {
+	infer := &fakeInference{
+		handler: func(ctx context.Context, _ int, _ string, _ json.RawMessage) (json.RawMessage, *Usage, int, error) {
+			return json.RawMessage(`{"id":"gen-1","error":null,"choices":[{"index":0,"message":{"content":"hi"}}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}`),
+				&Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}, 200, nil
+		},
+	}
+	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 2, LineTimeout: 5 * time.Second}, infer, DefaultCreditPolicy{})
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	res := disp.Dispatch(context.Background(), InputLine{
+		CustomID:     "x",
+		Method:       "POST",
+		URL:          "/v1/chat/completions",
+		Body:         mustBody(t, "customer-alias-1", ""),
+		Alias:        "customer-alias-1",
+		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+	})
+	if res.Error != nil {
+		t.Fatalf("healthy line with a declared-but-null error was refused: %+v", res.Error)
+	}
+	if res.Output == nil {
+		t.Fatalf("expected a stored output line")
+	}
+	if strings.Contains(string(res.Output.Response.Body), `"error"`) {
+		t.Fatalf("the error key must not reach the customer's output.jsonl: %s", res.Output.Response.Body)
+	}
+}

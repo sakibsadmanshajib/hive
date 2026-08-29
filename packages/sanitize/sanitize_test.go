@@ -247,3 +247,103 @@ func TestVariablePriceFrame_KeysetAllowlist_CatchesUnforeseenFields(t *testing.T
 		}
 	}
 }
+
+// TestVariablePriceFrame_DeclaredButEmptyErrorIsNotAnError pins the live
+// defect this file had before PR #1303: the error check keyed on the KEY
+// being present, so a provider that declares "error" on every chunk of a
+// perfectly healthy stream and leaves it empty had every content frame
+// refused. On the SSE relays that meant a silently truncated answer on every
+// turn; here it meant a completed batch line refused and retried three times.
+//
+// Table over all five empty encodings rather than null alone: an upstream
+// that zeroes the field is as likely to write "" or {} as null, and the blast
+// radius is identical.
+func TestVariablePriceFrame_DeclaredButEmptyErrorIsNotAnError(t *testing.T) {
+	for _, empty := range []string{`null`, `""`, `"  "`, `{}`, `[]`, `false`} {
+		t.Run(empty, func(t *testing.T) {
+			raw := `{"id":"gen-1","error":` + empty + `,"choices":[{"delta":{"content":"hi"}}]}`
+			out, ok := VariablePriceFrame([]byte(raw), "hive-auto", "chatcmpl-1")
+			if !ok {
+				t.Fatalf("frame with an empty error value must be usable, got ok=false for %s", empty)
+			}
+			body := string(out)
+			if !strings.Contains(body, `"content":"hi"`) {
+				t.Fatalf("content frame must survive, got %s", body)
+			}
+			// The key itself is off the allowlist, so it never reaches the
+			// customer either way.
+			if strings.Contains(body, `"error"`) {
+				t.Fatalf("error key must be dropped by the allowlist, got %s", body)
+			}
+		})
+	}
+}
+
+// TestVariablePriceFrame_NonEmptyErrorStillRefused is the other half, and the
+// one that matters for money: the batch dispatcher reads ok == false as "do
+// not store this line", so relaxing the empty cases above must not relax a
+// real error into a storable, billable success (issue #1235, PR #1303 review).
+func TestVariablePriceFrame_NonEmptyErrorStillRefused(t *testing.T) {
+	for _, errValue := range []string{
+		`{"message":"You exceeded your current quota","code":402}`,
+		`"boom"`,
+		`["boom"]`,
+		`true`,
+		`{"message":""}`,
+	} {
+		t.Run(errValue, func(t *testing.T) {
+			raw := `{"id":"gen-1","error":` + errValue + `,"choices":[{"delta":{"content":"hi"}}]}`
+			if _, ok := VariablePriceFrame([]byte(raw), "hive-auto", "chatcmpl-1"); ok {
+				t.Fatalf("error-carrying frame must be refused, got ok=true for %s", errValue)
+			}
+		})
+	}
+}
+
+func TestReplaceErrorFrame_ReplacesWholeFrameAndKeepsRawForOperator(t *testing.T) {
+	raw := `{"id":"gen-1","error":{"message":"Insufficient credits. Add more using https://openrouter.ai/settings/credits","code":402},"choices":[{"delta":{"content":"partial"}}]}`
+
+	out, upstream, ok := ReplaceErrorFrame([]byte(raw), "hive-auto is unavailable right now.")
+	if !ok {
+		t.Fatalf("expected an error frame to be recognized")
+	}
+	body := string(out)
+	for _, leak := range []string{
+		"openrouter", "settings/credits", "Insufficient credits", "https://",
+		"gen-1", "partial", "402",
+	} {
+		if strings.Contains(strings.ToLower(body), strings.ToLower(leak)) {
+			t.Fatalf("replacement leaked %q:\n%s", leak, body)
+		}
+	}
+	if !strings.Contains(body, "hive-auto is unavailable right now.") {
+		t.Fatalf("replacement must carry the caller's message, got %s", body)
+	}
+	if !strings.Contains(body, `"code":"upstream_error"`) {
+		t.Fatalf("replacement must carry the gateway-owned code, got %s", body)
+	}
+	// The operator, and only the operator, still gets the upstream text.
+	if !strings.Contains(upstream, "openrouter.ai") {
+		t.Fatalf("raw upstream error must be returned for the log, got %q", upstream)
+	}
+}
+
+func TestReplaceErrorFrame_DeclinesEverythingThatIsNotAnErrorFrame(t *testing.T) {
+	for _, payload := range []string{
+		`{"id":"gen-1","choices":[{"delta":{"content":"hi"}}]}`,
+		`{"error":null,"choices":[]}`,
+		`{"error":"","choices":[]}`,
+		`{"error":{},"choices":[]}`,
+		`{"error":[],"choices":[]}`,
+		`{"error":false,"choices":[]}`,
+		`not json at all`,
+		`null`,
+		`[]`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			if _, _, ok := ReplaceErrorFrame([]byte(payload), "unavailable"); ok {
+				t.Fatalf("must not manufacture an error frame from %s", payload)
+			}
+		})
+	}
+}
