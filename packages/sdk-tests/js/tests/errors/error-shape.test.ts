@@ -35,9 +35,27 @@ describe("Error response shape", () => {
     expect(typeof body.error.code).toBe("string");
   });
 
+  // The Authorization header is load-bearing and was missing, which is why
+  // this asserted 404 and measured 401 on the live run. Everything under
+  // /v1/ passes through the auth selector before the mux sees it, so an
+  // unauthenticated request is answered as unauthenticated no matter which
+  // path it names. That ordering is not a defect and it is what the real
+  // OpenAI API does too; issue #1377 covers the one route where it IS a
+  // defect, /v1/audio/voices, which is deliberately registered without an
+  // authorizer and never reached.
+  //
+  // With a credential present the request reaches the endpoint check and
+  // answers what this test is actually about. Verified against the deployed
+  // gateway: GET /v1/nonexistent with an hk_ bearer returns 404 with
+  // {"code":"unknown_endpoint","type":"invalid_request_error"}. The key does
+  // not need to be valid, because the unsupported-endpoint middleware sits
+  // outside the mux and therefore ahead of any per-route authorizer.
   it("unknown endpoints return invalid_request_error type", async () => {
     const res = await fetch(`${BASE_URL}/nonexistent`, {
       method: "GET",
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+      },
     });
 
     expect(res.status).toBe(404);
