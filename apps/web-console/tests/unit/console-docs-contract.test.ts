@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
-  API_BASE_URL,
+  DEFAULT_API_BASE_URL,
   OPENAPI_SPEC_PATH,
   STATUS_META,
   buildEndpointSections,
@@ -206,8 +206,13 @@ describe("spec against matrix", () => {
 });
 
 describe("quickstart facts", () => {
+  // Asserted against DEFAULT_API_BASE_URL, not the resolved API_BASE_URL. The
+  // resolved value now depends on HIVE_PUBLIC_API_BASE_URL, which a self-hosted
+  // deployment sets to its own hostname, and no hostname of theirs belongs in
+  // our tunnel ingress. The invariant this guard exists for is about the value
+  // we ship as the hosted default, so that is what it reads.
   it("names a host the tunnel actually serves, on the spec's own base path", () => {
-    const base = new URL(API_BASE_URL);
+    const base = new URL(DEFAULT_API_BASE_URL);
     const ingress: { config: { ingress: { hostname?: string }[] } } = JSON.parse(
       readFileSync(resolve(REPO_ROOT, "deploy/cloudflare/tunnel-ingress.json"), "utf8"),
     );

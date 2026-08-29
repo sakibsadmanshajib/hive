@@ -16,6 +16,14 @@ import { MAX_KEY_NICKNAME_LEN } from "@/lib/api-keys";
 
 const CREATE_URL = "/api/v1/accounts/current/api-keys";
 
+// Deliberately not the hosted deployment's own hostname: these assertions must
+// fail if the panel ever reverts to printing a literal instead of the base URL
+// this deployment was configured with (issue #550).
+const formProps = {
+  apiBaseUrl: "https://ai.acme-bank.internal/v1",
+  quickstartModel: "hive-chat-default",
+};
+
 function createdKeyBody(overrides: Record<string, unknown> = {}) {
   return {
     id: "key-1",
@@ -29,7 +37,7 @@ function createdKeyBody(overrides: Record<string, unknown> = {}) {
     expiration_summary: { kind: "never", label: "Never expires" },
     budget_summary: { kind: "unlimited", label: "No budget" },
     allowlist_summary: { mode: "all", group_names: [], label: "All groups" },
-    secret: "sk-hive-once-only-secret",
+    secret: "placeholder-not-a-real-key",
     ...overrides,
   };
 }
@@ -59,7 +67,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     const form = nicknameInput().closest("form");
     if (!form) {
       throw new Error("create form not found");
@@ -75,7 +83,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     // Issue #1400. The browser stops typing past the cap; the two assertions
     // below cover a value that arrives some other way (a paste handler, a
     // programmatic fill, a direct POST).
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     expect(nicknameInput().maxLength).toBe(MAX_KEY_NICKNAME_LEN);
   });
 
@@ -83,7 +91,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), {
       target: { value: "A".repeat(MAX_KEY_NICKNAME_LEN + 1) },
     });
@@ -101,7 +109,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: atCap } });
     fireEvent.click(submitButton());
 
@@ -115,7 +123,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "dead-on-arrival" } });
     const expires = screen.getByLabelText(/expires/i);
     fireEvent.change(expires, { target: { value: "2020-01-01" } });
@@ -132,7 +140,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "  prod-server  " } });
     fireEvent.click(submitButton());
 
@@ -143,7 +151,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ nickname: "prod-server" });
     expect(screen.getByTestId("created-api-key-secret").textContent).toBe(
-      "sk-hive-once-only-secret",
+      "placeholder-not-a-real-key",
     );
     expect(refresh).toHaveBeenCalledTimes(1);
   });
@@ -154,7 +162,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "rotating" } });
     fireEvent.change(screen.getByLabelText(/expires/i), {
       target: { value: "2027-01-15" },
@@ -173,7 +181,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
 
@@ -197,7 +205,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
 
@@ -212,7 +220,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
 
@@ -232,7 +240,7 @@ describe("ApiKeyCreateForm validation and creation", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
 
@@ -253,14 +261,14 @@ describe("ApiKeyCreateForm validation and creation", () => {
       writable: true,
     });
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
     await screen.findByTestId("created-api-key-secret");
 
-    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Copy$/i }));
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith("sk-hive-once-only-secret");
+      expect(writeText).toHaveBeenCalledWith("placeholder-not-a-real-key");
     });
     expect(screen.getByRole("button", { name: /copied/i })).toBeTruthy();
 
@@ -282,12 +290,12 @@ describe("ApiKeyCreateForm validation and creation", () => {
       writable: true,
     });
 
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "prod" } });
     fireEvent.click(submitButton());
     await screen.findByTestId("created-api-key-secret");
 
-    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Copy$/i }));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalled();
     });
@@ -302,12 +310,12 @@ describe("ApiKeyCreateForm limit cadence feedback", () => {
   const cadenceField = () => screen.getByLabelText(/reset limit every/i);
 
   it("is usable before an amount is typed", () => {
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     expect(cadenceField().hasAttribute("disabled")).toBe(false);
   });
 
   it("changing the cadence restates what the amount field means", () => {
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     expect(screen.queryByText(/per calendar month/i)).toBeNull();
     fireEvent.change(cadenceField(), { target: { value: "monthly" } });
     expect(screen.getByText(/per calendar month/i)).toBeTruthy();
@@ -315,7 +323,7 @@ describe("ApiKeyCreateForm limit cadence feedback", () => {
   });
 
   it("states the bound that will be enforced, not the field's name", () => {
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     expect(summary()).toContain("No credit limit");
     fireEvent.change(limitField(), { target: { value: "10" } });
     expect(summary()).toContain("$10.00");
@@ -347,7 +355,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
   it("no limit typed sends the create call and nothing else", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "uncapped" } });
     fireEvent.click(submitButton());
     await screen.findByTestId("created-api-key-secret");
@@ -358,7 +366,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
   it("a lifetime cap reaches the wire as the exact integer the amount means", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "capped" } });
     fireEvent.change(limitField(), { target: { value: "12.34" } });
     fireEvent.click(submitButton());
@@ -378,7 +386,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
   it("the monthly cadence changes the budget kind on the wire", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "monthly-capped" } });
     fireEvent.change(limitField(), { target: { value: "10.00" } });
     fireEvent.change(cadenceField(), { target: { value: "monthly" } });
@@ -395,7 +403,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
   it("an unparseable amount is refused before the key is created", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "bad-limit" } });
     fireEvent.change(limitField(), { target: { value: "-5" } });
     fireEvent.click(submitButton());
@@ -412,7 +420,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
       )
       .mockResolvedValueOnce(new Response("denied", { status: 403 }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "half-applied" } });
     fireEvent.change(limitField(), { target: { value: "5" } });
     fireEvent.click(submitButton());
@@ -429,14 +437,86 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
       )
       .mockRejectedValueOnce(new Error("network down"));
     vi.stubGlobal("fetch", fetchMock);
-    render(<ApiKeyCreateForm />);
+    render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "net-fail" } });
     fireEvent.change(limitField(), { target: { value: "5" } });
     fireEvent.click(submitButton());
     const secret = await screen.findByTestId("created-api-key-secret");
-    expect(secret.textContent).toBe("sk-hive-once-only-secret");
+    expect(secret.textContent).toBe("placeholder-not-a-real-key");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("live and uncapped");
     expect(limitCell()).toBe("Unlimited");
+  });
+});
+
+/**
+ * Issue #550: the panel showed a secret and then stopped. It named no host, no
+ * path and no way to test the key, so "mint a key, make a request" left the
+ * product entirely. These tests pin the three things that fix has to hold: the
+ * base URL is the one this deployment was configured with, the command is
+ * runnable as rendered, and a response with no secret in it produces no command
+ * at all rather than one that only looks runnable.
+ */
+describe("ApiKeyCreateForm quickstart", () => {
+  async function mint(body: Record<string, unknown> = {}) {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify(createdKeyBody(body)), { status: 201 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ApiKeyCreateForm {...formProps} />);
+    fireEvent.change(nicknameInput(), { target: { value: "quickstart" } });
+    fireEvent.click(submitButton());
+    await screen.findByTestId("created-api-key-base-url");
+  }
+
+  it("states the base URL this deployment was configured with", async () => {
+    await mint();
+
+    expect(screen.getByTestId("created-api-key-base-url").textContent).toBe(
+      "https://ai.acme-bank.internal/v1",
+    );
+  });
+
+  it("renders a curl that runs verbatim, with the key just minted in it", async () => {
+    await mint();
+
+    const curl = screen.getByTestId("created-api-key-curl").textContent ?? "";
+    expect(curl).toContain("https://ai.acme-bank.internal/v1/chat/completions");
+    expect(curl).toContain('"model": "hive-chat-default"');
+    expect(curl).toContain("Authorization: Bearer placeholder-not-a-real-key");
+    // A placeholder here would be the whole defect: a command that looks
+    // runnable, is not, and is the developer's first impression of the product.
+    expect(curl).not.toContain("$HIVE_API_KEY");
+  });
+
+  it("copies the whole command, not just the key", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    await mint();
+
+    fireEvent.click(screen.getByRole("button", { name: /copy command/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(String(writeText.mock.calls[0][0])).toContain(
+      "https://ai.acme-bank.internal/v1/chat/completions",
+    );
+  });
+
+  it("renders no command at all when the response carried no secret", async () => {
+    await mint({ secret: undefined });
+
+    expect(screen.queryByTestId("created-api-key-curl")).toBeNull();
+    // The base URL is still worth stating: it is true regardless of whether
+    // this particular response carried a secret.
+    expect(screen.getByTestId("created-api-key-base-url").textContent).toBe(
+      "https://ai.acme-bank.internal/v1",
+    );
+    expect(
+      screen.getByTestId("created-api-key-quickstart-note").textContent,
+    ).toContain("secret was not returned");
   });
 });

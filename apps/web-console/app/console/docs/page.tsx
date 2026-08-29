@@ -7,7 +7,7 @@ import {
   type CatalogModel,
 } from "@/lib/control-plane/client";
 import {
-  API_BASE_URL,
+  apiBaseUrl,
   OPENAPI_ROUTE,
   type EndpointSection,
   buildEndpointSections,
@@ -15,7 +15,7 @@ import {
   loadSpecOperations,
   loadSupportMatrix,
 } from "@/lib/api-contract";
-import { pickQuickstartAlias } from "@/lib/quickstart-model";
+import { buildQuickstartCurl, pickQuickstartAlias } from "@/lib/quickstart-model";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -80,13 +80,11 @@ export default async function DocsPage() {
   const statusMismatch = countKind("status_mismatch");
   const sections = buildEndpointSections(matrix);
 
-  const curl = `curl ${API_BASE_URL}/chat/completions \\
-  -H "Authorization: Bearer $HIVE_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${alias}",
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
-  }'`;
+  // Composed by the shared builder, which the created-key panel on
+  // /console/api-keys also uses. Two hand-written copies of the same example
+  // drift, and a drifted first request is what issue #550 is about.
+  const baseUrl = apiBaseUrl();
+  const curl = buildQuickstartCurl({ baseUrl, model: alias });
 
   const python = `# pip install openai
 import os
@@ -94,7 +92,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="${API_BASE_URL}",
+    base_url="${baseUrl}",
     api_key=os.environ["HIVE_API_KEY"],
 )
 
@@ -144,7 +142,7 @@ print(response.choices[0].message.content)`;
                   Base URL
                 </dt>
                 <dd className="font-mono text-xs text-[var(--color-ink)]">
-                  {API_BASE_URL}
+                  {baseUrl}
                 </dd>
               </div>
               <div className="flex flex-col gap-1">

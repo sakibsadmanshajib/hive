@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Copy, Plus, Check } from "lucide-react";
 
@@ -17,6 +17,7 @@ import { Field, Input } from "@/components/ui/input";
 import { formatShortDate } from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 import { MAX_KEY_NICKNAME_LEN, usdToCreditsInput } from "@/lib/api-keys";
+import { buildQuickstartCurl } from "@/lib/quickstart-model";
 
 // Mirrors UpdateApiKeyBudgetInput["budgetKind"] in lib/control-plane/client.ts.
 // Duplicated as a literal union rather than imported: that type lives in a
@@ -126,7 +127,29 @@ function isApiKeyResponse(value: unknown): value is CreateApiKeyResponse {
   );
 }
 
-export function ApiKeyCreateForm() {
+export interface ApiKeyCreateFormProps {
+  /**
+   * Gateway base URL of THIS deployment, already resolved by
+   * `resolveApiBaseUrl` on the server. Passed down rather than read here: the
+   * value is operator configuration read at request time, and a Client
+   * Component has no access to it (issue #550).
+   */
+  apiBaseUrl: string;
+  /**
+   * Model alias the sample request names, from `pickQuickstartAlias`, so the
+   * command works on a fresh account instead of refusing on a credit hold
+   * (issue #1372).
+   */
+  quickstartModel: string;
+}
+
+/** What the copy buttons most recently put on the clipboard. */
+type CopiedTarget = "secret" | "command";
+
+export function ApiKeyCreateForm({
+  apiBaseUrl,
+  quickstartModel,
+}: ApiKeyCreateFormProps) {
   const [nickname, setNickname] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
@@ -136,7 +159,8 @@ export function ApiKeyCreateForm() {
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
   const [appliedLimitCredits, setAppliedLimitCredits] = useState<number | null>(null);
   const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<CopiedTarget | null>(null);
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -246,20 +270,39 @@ export function ApiKeyCreateForm() {
     }
   }
 
-  async function handleCopy() {
-    if (!createdKey?.secret) {
-      return;
-    }
+  async function handleCopy(target: CopiedTarget, text: string) {
     try {
-      await navigator.clipboard.writeText(createdKey.secret);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopied(target);
+      // One timer, cancelled and restarted per click. Without the cancel, two
+      // copy buttons share one deadline: copying the command a second after
+      // copying the key would show "Copied" for a second rather than two,
+      // because the key's timer is still pending and clears it.
+      if (copyResetTimer.current !== null) {
+        clearTimeout(copyResetTimer.current);
+      }
+      copyResetTimer.current = setTimeout(() => setCopied(null), 2000);
     } catch {
       // Clipboard API unavailable — user must copy manually.
     }
   }
 
   if (createdKey) {
+    // The command is built only while the plaintext secret is in hand. Issue
+    // #550 asked for a runnable example, and the whole value of it is that it
+    // runs as rendered: substituting a placeholder when the secret is missing
+    // would produce a command that looks copy-and-run and is not, which is a
+    // worse first impression than saying plainly that there is nothing to show.
+    // The secret is optional on the wire (`secret?: string`), so this is a real
+    // branch, not a defensive one.
+    const quickstartCurl = createdKey.secret
+      ? buildQuickstartCurl({
+          baseUrl: apiBaseUrl,
+          model: quickstartModel,
+          credential: createdKey.secret,
+        })
+      : null;
+
     return (
       <Card>
         <CardHeader>
@@ -277,22 +320,26 @@ export function ApiKeyCreateForm() {
             >
               {createdKey.secret ?? "—"}
             </code>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => void handleCopy()}
-            >
-              {copied ? (
-                <>
-                  <Check size={14} aria-hidden="true" /> Copied
-                </>
-              ) : (
-                <>
-                  <Copy size={14} aria-hidden="true" /> Copy
-                </>
-              )}
-            </Button>
+            {/* No secret means nothing to copy, and a button that silently
+                does nothing is worse than an absent one. */}
+            {createdKey.secret ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void handleCopy("secret", createdKey.secret ?? "")}
+              >
+                {copied === "secret" ? (
+                  <>
+                    <Check size={14} aria-hidden="true" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy size={14} aria-hidden="true" /> Copy
+                  </>
+                )}
+              </Button>
+            ) : null}
           </div>
           <dl className="grid grid-cols-2 gap-2 text-xs text-[var(--color-ink-3)]">
             <div className="flex flex-col gap-0.5">
@@ -330,6 +377,94 @@ export function ApiKeyCreateForm() {
               {budgetWarning}
             </p>
           ) : null}
+
+          {/*
+            Issue #550. The panel used to end at the secret, so the next step
+            after minting a key was to leave the product and guess a hostname.
+            This is an OpenAI-compatible gateway: the one thing this screen owes
+            a developer is a request that works, at the only moment the key
+            exists in plaintext.
+          */}
+          <section className="flex flex-col gap-3 border-t border-[var(--color-border)] pt-4">
+            <div className="flex flex-col gap-0.5">
+              {/* h4, because CardTitle above renders the card's own h3. */}
+              <h4 className="text-sm font-medium text-[var(--color-ink)]">
+                Send your first request
+              </h4>
+              <p className="text-xs text-[var(--color-ink-3)]">
+                Any OpenAI SDK works against this base URL. Swap the key, keep
+                the code.
+              </p>
+            </div>
+
+            {/* Same dl/dt/dd shape as the key's own facts above, and as the
+                quickstart on /console/docs, so a screen reader reads this as
+                the labelled value it is rather than as loose text. */}
+            <dl className="flex flex-col gap-1">
+              <dt className="text-2xs uppercase tracking-wider text-[var(--color-ink-3)]">
+                Base URL
+              </dt>
+              <dd
+                className="overflow-x-auto whitespace-nowrap font-mono text-xs text-[var(--color-ink)]"
+                data-testid="created-api-key-base-url"
+              >
+                {apiBaseUrl}
+              </dd>
+            </dl>
+
+            {quickstartCurl ? (
+              <div className="flex flex-col gap-2">
+                {/* tabIndex 0 and a group role: the block scrolls sideways, and
+                    a scrollable region that cannot be focused cannot be
+                    scrolled by keyboard at all. */}
+                <pre
+                  tabIndex={0}
+                  role="group"
+                  aria-label="Sample request using this key"
+                  className="overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-3 py-3 text-xs leading-relaxed text-[var(--color-ink-2)]"
+                >
+                  <code
+                    className="font-mono"
+                    data-testid="created-api-key-curl"
+                  >
+                    {quickstartCurl}
+                  </code>
+                </pre>
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void handleCopy("command", quickstartCurl)}
+                  >
+                    {copied === "command" ? (
+                      <>
+                        <Check size={14} aria-hidden="true" /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={14} aria-hidden="true" /> Copy command
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-[var(--color-ink-3)]">
+                    This command carries the key above. Treat it like the key
+                    itself.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p
+                className="text-xs text-[var(--color-ink-3)]"
+                data-testid="created-api-key-quickstart-note"
+              >
+                The secret was not returned with this response, so there is no
+                ready-to-run command to show. Create a replacement key to get
+                one.
+              </p>
+            )}
+          </section>
+
           <Button
             type="button"
             variant="secondary"
@@ -342,6 +477,7 @@ export function ApiKeyCreateForm() {
               setResetCadence("never");
               setAppliedLimitCredits(null);
               setBudgetWarning(null);
+              setCopied(null);
             }}
             className="self-start"
           >

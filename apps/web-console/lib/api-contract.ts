@@ -41,7 +41,7 @@ export const SUPPORT_MATRIX_PATH = path.join(
 );
 
 /**
- * Public base URL of the gateway's OpenAI-compatible API.
+ * Base URL of the gateway's OpenAI-compatible API on the hosted deployment.
  *
  * `api-hive.scubed.co` is edge-api in `deploy/cloudflare/tunnel-ingress.json`,
  * which that file's own header calls the single source of truth for which hive
@@ -49,8 +49,103 @@ export const SUPPORT_MATRIX_PATH = path.join(
  * declares. `tests/unit/console-docs-contract.test.ts` asserts both halves
  * still hold, so a hostname move fails a check instead of leaving a quickstart
  * that quietly points at nothing.
+ *
+ * This is the default, not the answer. See `resolveApiBaseUrl`.
  */
-export const API_BASE_URL = "https://api-hive.scubed.co/v1";
+export const DEFAULT_API_BASE_URL = "https://api-hive.scubed.co/v1";
+
+/**
+ * The gateway base URL this deployment actually serves, printed in the console
+ * and pasted into every snippet a developer copies.
+ *
+ * It has to come from configuration rather than from a literal. Hive ships in
+ * two modes (`.wolf/decisions.md` D-007): the hosted service, whose gateway is
+ * the default above, and Hive Enterprise, which the customer runs on their own
+ * hardware at their own hostname. A literal is correct for exactly one of those
+ * and silently wrong for every install of the other, in the worst possible
+ * shape: a snippet that still looks runnable and points at somebody else's
+ * gateway.
+ *
+ * `HIVE_PUBLIC_API_BASE_URL` is read at request time rather than baked into the
+ * client bundle, so an operator re-points it by editing their `.env` and
+ * restarting, with no image rebuild. That is why it is not a `NEXT_PUBLIC_`
+ * variable: those travel as build args (see `web-console-prod` in
+ * `deploy/docker/docker-compose.yml`) and a self-hosting customer does not build
+ * our images.
+ *
+ * Unset falls back to the default. A value that is SET but unusable throws
+ * instead of falling back, and the difference matters more than it looks. The
+ * fallback is the hosted gateway. An Enterprise deployment whose operator
+ * mistyped this variable would otherwise print the hosted deployment's base URL
+ * under a freshly minted key, and the customer's first action is to copy that
+ * command and send their own key to a gateway that is not theirs. Losing the
+ * page loudly is a far cheaper failure than misdirecting a credential quietly,
+ * and the throw names the variable, so `docker compose logs web-console-prod`
+ * says exactly what is wrong.
+ *
+ * Userinfo is refused for the same reason it is never wanted: `https://u:p@host`
+ * parses, and rendering it would print whatever the operator put in those
+ * fields into the console and into a command a developer copies.
+ */
+export function resolveApiBaseUrl(configured: string | undefined): string {
+  const raw = configured?.trim();
+  // Unset and set-to-empty are the same thing to an operator, and compose
+  // passes `${HIVE_PUBLIC_API_BASE_URL:-}` as an empty string.
+  if (!raw) return DEFAULT_API_BASE_URL;
+
+  const reject = (why: string): never => {
+    throw new Error(
+      `HIVE_PUBLIC_API_BASE_URL is set but unusable (${why}). It must be an absolute http or https URL with no credentials, for example https://ai.example.internal/v1. Leave it unset to use ${DEFAULT_API_BASE_URL}.`,
+    );
+  };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return reject("not a URL");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return reject(`scheme ${parsed.protocol} is not http or https`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    return reject("it carries credentials in the authority");
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return reject("it carries a query string or fragment");
+  }
+
+  // Rebuilt from the PARSED url rather than returned as it arrived, and that
+  // is the load-bearing half of this function. The WHATWG parser strips tab,
+  // carriage return and line feed from anywhere in its input before parsing,
+  // so a value carrying a newline parses clean, passes every check above, and
+  // used to come back with the newline intact. The result is pasted into a
+  // shell block, and a second line in it is a second command. Returning
+  // `origin + pathname` means whatever survives parsing is all that is ever
+  // rendered, and no control character can survive it.
+  //
+  // Trailing slash stripped so `${base}/chat/completions` never doubles it.
+  return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+}
+
+/**
+ * The resolved base URL, read fresh per call.
+ *
+ * Deliberately a function rather than a module-scope const. `resolveApiBaseUrl`
+ * throws on a misconfigured value, and a const would run that throw at module
+ * load, which fails EVERY importer of this module. That includes
+ * `app/api/openapi.yaml/route.ts`, which imports only `OPENAPI_SPEC_PATH`: the
+ * public unauthenticated spec endpoint an integrator points codegen at, a Route
+ * Handler no `error.tsx` covers, whose own careful "500 with a plain message"
+ * path for an unreadable spec would never be reached because the module never
+ * loaded. The fail-closed behaviour is right for the two screens that print the
+ * value; taking the spec endpoint with them is collateral it does not need.
+ *
+ * Server-side only. Client Components receive the result as a prop.
+ */
+export function apiBaseUrl(): string {
+  return resolveApiBaseUrl(process.env.HIVE_PUBLIC_API_BASE_URL);
+}
 
 /** Public, unauthenticated route this app serves the raw spec on. */
 export const OPENAPI_ROUTE = "/api/openapi.yaml";
