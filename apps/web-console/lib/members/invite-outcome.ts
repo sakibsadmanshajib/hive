@@ -19,13 +19,12 @@ export interface InvitationOutcome {
   // because the two surfaces that render this can offer different next steps:
   // the invite panel can show the link, the no-JavaScript redirect cannot.
   action: string | null;
-  // Whether the interface must put the invitation link in front of the inviting
-  // user so they can deliver it themselves. True whenever nothing was mailed,
-  // and true after a successful send as well, because a message that is
-  // delivered to a spam folder is indistinguishable from one that is not
-  // delivered at all.
-  showLink: boolean;
 }
+
+// The link is offered on every outcome, successful send included, because a
+// message sitting in a spam folder is indistinguishable from one that was never
+// delivered. There is deliberately no flag for this: a field that is true in
+// every branch is not a decision, it is a comment pretending to be code.
 
 // Phrases that assert a message reached somebody. A non-"sent" outcome must
 // contain none of them. Exported so the guard test and the copy cannot drift
@@ -54,14 +53,12 @@ export function invitationOutcome(
         tone: "success",
         message: `We emailed an invitation to ${recipient(email)}. They join this workspace once they accept.`,
         action: null,
-        showLink: true,
       };
     case "not_configured":
       return {
         tone: "warning",
         message: `The invitation for ${recipient(email)} is ready, but this deployment has no mail delivery configured, so nothing was emailed.`,
         action: "Pass the link on yourself.",
-        showLink: true,
       };
     case "failed":
     default:
@@ -69,7 +66,6 @@ export function invitationOutcome(
         tone: "warning",
         message: `The invitation for ${recipient(email)} is ready, but the mail relay refused it, so nothing reached them.`,
         action: "Pass the link on yourself.",
-        showLink: true,
       };
   }
 }

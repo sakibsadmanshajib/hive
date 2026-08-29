@@ -314,14 +314,6 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 		return InvitationResult{}, fmt.Errorf("accounts: generate token: %w", err)
 	}
 
-	// Re-inviting an address supersedes whatever was outstanding for it rather
-	// than stacking a second live token beside the first. Re-send is the normal
-	// reason somebody invites the same person twice, and two simultaneously
-	// valid links would make revoking one meaningless.
-	if err := s.repo.DeleteOutstandingInvitationsForEmail(ctx, accountID, email); err != nil {
-		return InvitationResult{}, fmt.Errorf("accounts: supersede invitations: %w", err)
-	}
-
 	expiresAt := time.Now().Add(72 * time.Hour)
 	inv := Invitation{
 		ID:              uuid.New(),
@@ -332,9 +324,19 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 		ExpiresAt:       expiresAt,
 		InvitedByUserID: viewer.UserID,
 	}
-	if err := s.repo.CreateInvitation(ctx, inv); err != nil {
+	// Re-inviting an address supersedes whatever was outstanding for it rather
+	// than stacking a second live token beside the first. Re-send is the normal
+	// reason somebody invites the same person twice, and two simultaneously
+	// valid links would make revoking one meaningless.
+	//
+	// That is the database's job, not this function's: CreateInvitation upserts
+	// onto a partial unique index, so the id that comes back is the row that
+	// ended up live and is not necessarily the one generated above.
+	storedID, err := s.repo.CreateInvitation(ctx, inv)
+	if err != nil {
 		return InvitationResult{}, fmt.Errorf("accounts: store invitation: %w", err)
 	}
+	inv.ID = storedID
 
 	result := InvitationResult{
 		ID:        inv.ID,

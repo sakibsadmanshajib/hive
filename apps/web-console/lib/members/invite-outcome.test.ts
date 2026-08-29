@@ -39,15 +39,10 @@ describe("invitationOutcome", () => {
     (delivery) => {
       const outcome = invitationOutcome(delivery, "invitee@example.test");
       expect(outcome.tone).toBe("warning");
-      expect(outcome.showLink).toBe(true);
       expect(outcome.action).not.toBeNull();
       expect(outcome.message).toMatch(/nothing (?:was emailed|reached them)/i);
     },
   );
-
-  it("offers the link after a successful send too, because a spam folder looks like a failure", () => {
-    expect(invitationOutcome("sent", "invitee@example.test").showLink).toBe(true);
-  });
 
   it("stays readable when the address is missing", () => {
     const outcome = invitationOutcome("not_configured", null);

@@ -268,9 +268,7 @@ function InvitationOutcomeNotice({
         {outcome.message}
         {outcome.action !== null ? ` ${outcome.action}` : null}
       </p>
-      {outcome.showLink && link !== null ? (
-        <InvitationLink link={link} />
-      ) : null}
+      {link !== null ? <InvitationLink link={link} /> : null}
     </div>
   );
 }

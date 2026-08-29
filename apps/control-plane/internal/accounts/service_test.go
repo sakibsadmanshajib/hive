@@ -104,9 +104,24 @@ func (s *stubRepo) GetAccountByID(_ context.Context, id uuid.UUID) (*accounts.Ac
 	return a, nil
 }
 
-func (s *stubRepo) CreateInvitation(_ context.Context, inv accounts.Invitation) error {
+// CreateInvitation mirrors the production upsert: a live invitation for the
+// same account and address (case insensitively, matching the index's
+// lower(email)) is replaced in place and keeps its id.
+func (s *stubRepo) CreateInvitation(_ context.Context, inv accounts.Invitation) (uuid.UUID, error) {
+	for hash, existing := range s.invitations {
+		if existing.AccountID != inv.AccountID || existing.AcceptedAt != nil {
+			continue
+		}
+		if !strings.EqualFold(existing.Email, inv.Email) {
+			continue
+		}
+		delete(s.invitations, hash)
+		inv.ID = existing.ID
+		s.invitations[inv.TokenHash] = &inv
+		return inv.ID, nil
+	}
 	s.invitations[inv.TokenHash] = &inv
-	return nil
+	return inv.ID, nil
 }
 
 // ListOutstandingInvitations mirrors the production statement: unaccepted rows
@@ -136,15 +151,6 @@ func (s *stubRepo) DeleteInvitation(_ context.Context, accountID, invitationID u
 
 // DeleteOutstandingInvitationsForEmail mirrors the production statement's
 // case-insensitive email comparison.
-func (s *stubRepo) DeleteOutstandingInvitationsForEmail(_ context.Context, accountID uuid.UUID, email string) error {
-	for hash, inv := range s.invitations {
-		if inv.AccountID == accountID && inv.AcceptedAt == nil && strings.EqualFold(inv.Email, email) {
-			delete(s.invitations, hash)
-		}
-	}
-	return nil
-}
-
 func (s *stubRepo) FindInvitationByTokenHash(_ context.Context, tokenHash string) (*accounts.Invitation, error) {
 	inv, ok := s.invitations[tokenHash]
 	if !ok {

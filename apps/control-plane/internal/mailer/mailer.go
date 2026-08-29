@@ -12,7 +12,9 @@ package mailer
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"mime"
@@ -134,7 +136,15 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if !s.cfg.Configured() {
 		return ErrNotConfigured
 	}
-	body, err := s.render(msg)
+	// Validate the recipient once, here, and use the validated value for both
+	// the envelope and the header. Validating inside render and then passing
+	// msg.To straight to client.Rcpt would leave two paths for one value, and
+	// only one of them checked. CodeQL flagged exactly that shape.
+	to, err := validRecipient(msg.To)
+	if err != nil {
+		return err
+	}
+	body, err := s.render(msg, to)
 	if err != nil {
 		return err
 	}
@@ -188,7 +198,7 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if err := client.Mail(s.cfg.FromAddress); err != nil {
 		return fmt.Errorf("mailer: sender refused: %w", err)
 	}
-	if err := client.Rcpt(msg.To); err != nil {
+	if err := client.Rcpt(to); err != nil {
 		return fmt.Errorf("mailer: recipient refused: %w", err)
 	}
 	writer, err := client.Data()
@@ -221,16 +231,38 @@ func headerSafe(value string) bool {
 	return !strings.ContainsAny(value, "\r\n")
 }
 
+// validRecipient returns the address to use in both the envelope and the To
+// header, or refuses.
+//
+// A header line ends at a CRLF, so an address carrying one appends headers of
+// its own, including a second Bcc. The same value is also written into the SMTP
+// RCPT command, where a CRLF injects a command. This address originates in user
+// input, so both are live concerns rather than theoretical ones.
+func validRecipient(raw string) (string, error) {
+	to := strings.TrimSpace(raw)
+	if to == "" || !headerSafe(to) {
+		return "", fmt.Errorf("%w: recipient address", ErrInvalidMessage)
+	}
+	parsed, err := mail.ParseAddress(to)
+	if err != nil {
+		return "", fmt.Errorf("%w: recipient address", ErrInvalidMessage)
+	}
+	// The parsed address rather than the raw string, so anything the parser
+	// tolerated but did not keep cannot reach a header or a command.
+	if !headerSafe(parsed.Address) {
+		return "", fmt.Errorf("%w: recipient address", ErrInvalidMessage)
+	}
+	return parsed.Address, nil
+}
+
 // render builds a multipart/alternative message. Plain text first, HTML second:
 // a client picks the last part it can display, so this order gives HTML to
 // clients that render it and text to clients that do not.
-func (s *SMTPSender) render(msg Message) ([]byte, error) {
-	to := strings.TrimSpace(msg.To)
-	if to == "" || !headerSafe(to) || !headerSafe(msg.Subject) {
-		return nil, ErrInvalidMessage
-	}
-	if _, err := mail.ParseAddress(to); err != nil {
-		return nil, fmt.Errorf("%w: recipient address", ErrInvalidMessage)
+//
+// to must already have come through validRecipient.
+func (s *SMTPSender) render(msg Message, to string) ([]byte, error) {
+	if !headerSafe(msg.Subject) {
+		return nil, fmt.Errorf("%w: subject", ErrInvalidMessage)
 	}
 	if strings.TrimSpace(msg.Text) == "" {
 		return nil, fmt.Errorf("%w: a plain-text part is required", ErrInvalidMessage)
@@ -238,10 +270,18 @@ func (s *SMTPSender) render(msg Message) ([]byte, error) {
 
 	from := (&mail.Address{Name: s.cfg.FromName, Address: s.cfg.FromAddress}).String()
 
-	// A fixed boundary would be a bug if a body ever contained it. This one is
-	// derived from the process clock and the recipient, and the bodies here are
-	// rendered by this repository rather than accepted from a user.
-	boundary := fmt.Sprintf("hive-%d-%d", time.Now().UnixNano(), len(to))
+	// A boundary that appears anywhere in a body truncates the message at that
+	// point, and both parts carry user-influenced text (a workspace name, an
+	// inviter address). Random rather than derived from the clock, so it cannot
+	// be predicted and planted, and then checked against what was actually
+	// rendered, so the guarantee is structural rather than probabilistic.
+	boundary, err := randomBoundary()
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(msg.Text, boundary) || strings.Contains(msg.HTML, boundary) {
+		return nil, fmt.Errorf("%w: body collides with the MIME boundary", ErrInvalidMessage)
+	}
 
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
@@ -266,6 +306,15 @@ func (s *SMTPSender) render(msg Message) ([]byte, error) {
 	b.WriteString(normalizeCRLF(msg.HTML))
 	b.WriteString("\r\n--" + boundary + "--\r\n")
 	return []byte(b.String()), nil
+}
+
+// randomBoundary returns a MIME boundary with 128 bits of entropy.
+func randomBoundary() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("mailer: generate boundary: %w", err)
+	}
+	return "hive-" + hex.EncodeToString(raw[:]), nil
 }
 
 // normalizeCRLF converts bare newlines to CRLF. SMTP line endings are CRLF, and

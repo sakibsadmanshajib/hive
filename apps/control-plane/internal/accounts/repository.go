@@ -30,7 +30,11 @@ type Repository interface {
 	// that case nothing is inserted and existingAccountID is the winner's.
 	ProvisionDefaultWorkspace(ctx context.Context, acct Account, membership Membership, profile AccountProfile) (existingAccountID uuid.UUID, wonElsewhere bool, err error)
 	GetAccountByID(ctx context.Context, id uuid.UUID) (*Account, error)
-	CreateInvitation(ctx context.Context, inv Invitation) error
+	// CreateInvitation stores an invitation, superseding any live invitation
+	// for the same address on the same account. It returns the id of the row
+	// that ended up live, which is not necessarily inv.ID: superseding is an
+	// upsert onto a unique index, so it reuses the existing row.
+	CreateInvitation(ctx context.Context, inv Invitation) (uuid.UUID, error)
 	FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
 	AcceptInvitation(ctx context.Context, invitationID uuid.UUID, acceptedAt time.Time) error
 	// ListOutstandingInvitations returns every unaccepted invitation on an
@@ -41,10 +45,6 @@ type Repository interface {
 	// DeleteInvitation removes one invitation. accountID scopes the delete, so a
 	// caller cannot revoke an invitation belonging to another workspace by id.
 	DeleteInvitation(ctx context.Context, accountID, invitationID uuid.UUID) error
-	// DeleteOutstandingInvitationsForEmail clears any unaccepted invitation for
-	// an address so a re-invitation supersedes rather than accumulates. The
-	// superseded token stops working, which is what re-sending has to mean.
-	DeleteOutstandingInvitationsForEmail(ctx context.Context, accountID uuid.UUID, email string) error
 	ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error)
 	UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error
 	ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error
@@ -272,13 +272,42 @@ func (r *pgxRepository) GetAccountByID(ctx context.Context, id uuid.UUID) (*Acco
 	return &a, nil
 }
 
-func (r *pgxRepository) CreateInvitation(ctx context.Context, inv Invitation) error {
-	_, err := r.pool.Exec(ctx, `
+// CreateInvitation stores an invitation, superseding any live invitation for
+// the same address on the same account.
+//
+// One statement, on purpose. Superseding used to be a separate DELETE, and
+// there is no order for that pair which is correct: sweeping before the insert
+// means a failed insert leaves the address with no invitation at all, and
+// sweeping after means two concurrent invitations delete each other's rows.
+// The upsert lands on the partial unique index added in
+// 20260829_03_account_invitations_one_live_per_email.sql, so the invariant is
+// the database's and no interleaving can break it.
+//
+// The conflict target repeats the index predicate because a partial index
+// requires it. accepted_at is deliberately not touched on update: it is NULL on
+// every row this can conflict with, and an accepted invitation is history that
+// a re-invitation must not overwrite.
+func (r *pgxRepository) CreateInvitation(ctx context.Context, inv Invitation) (uuid.UUID, error) {
+	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.account_invitations
 		  (id, account_id, email, role, token_hash, expires_at, invited_by_user_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id, lower(email)) WHERE accepted_at IS NULL
+		DO UPDATE SET
+		  email              = EXCLUDED.email,
+		  role               = EXCLUDED.role,
+		  token_hash         = EXCLUDED.token_hash,
+		  expires_at         = EXCLUDED.expires_at,
+		  invited_by_user_id = EXCLUDED.invited_by_user_id,
+		  created_at         = now()
+		RETURNING id
 	`, inv.ID, inv.AccountID, inv.Email, inv.Role, inv.TokenHash, inv.ExpiresAt, inv.InvitedByUserID)
-	return err
+
+	var id uuid.UUID
+	if err := row.Scan(&id); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
 }
 
 func (r *pgxRepository) FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error) {
@@ -346,23 +375,6 @@ func (r *pgxRepository) DeleteInvitation(ctx context.Context, accountID, invitat
 		return ErrNotFound
 	}
 	return nil
-}
-
-// DeleteOutstandingInvitationsForEmail supersedes any live invitation for an
-// address on this account.
-//
-// The comparison is case insensitive to match AcceptInvitation, which compares
-// the invited address with strings.EqualFold. A case-sensitive sweep here would
-// leave "Sam@example.com" redeemable after "sam@example.com" was re-invited, so
-// two links would work at once and revoking one would not revoke the other.
-func (r *pgxRepository) DeleteOutstandingInvitationsForEmail(ctx context.Context, accountID uuid.UUID, email string) error {
-	_, err := r.pool.Exec(ctx, `
-		DELETE FROM public.account_invitations
-		WHERE account_id = $1
-		  AND lower(email) = lower($2)
-		  AND accepted_at IS NULL
-	`, accountID, email)
-	return err
 }
 
 // AcceptInvitation consumes an invitation exactly once.

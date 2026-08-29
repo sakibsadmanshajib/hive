@@ -143,6 +143,67 @@ func TestSend_SilentRelayTimesOut(t *testing.T) {
 	}
 }
 
+// The one hard security invariant this package documents: credentials are never
+// sent over a session the relay refused to encrypt. Without this the branch had
+// no coverage at all, so a refactor that turned the refusal into a downgrade
+// would have shipped green.
+func TestSend_RefusesToAuthenticateWithoutSTARTTLS(t *testing.T) {
+	captured := make(chan string, 1)
+	addr := startFakeRelay(t, captured)
+	host, port := splitHostPort(t, addr)
+
+	sender := mailer.NewSMTPSender(mailer.Config{
+		Host:        host,
+		Port:        port,
+		Username:    "relay-login",
+		Password:    "relay-secret",
+		FromAddress: "no_reply@hive.example",
+		Timeout:     5 * time.Second,
+	})
+	err := sender.Send(context.Background(), mailer.Message{
+		To: "a@b.test", Subject: "s", Text: "t",
+	})
+	if err == nil {
+		t.Fatal("Send authenticated over a relay that offers no STARTTLS")
+	}
+	if !strings.Contains(err.Error(), "STARTTLS") {
+		t.Fatalf("Send error = %v, want a STARTTLS refusal", err)
+	}
+	// The credential must not have gone anywhere, and neither must the message.
+	select {
+	case body := <-captured:
+		t.Fatalf("a message was delivered over the refused session: %q", body)
+	default:
+	}
+	if strings.Contains(err.Error(), "relay-secret") {
+		t.Fatal("the relay password is in the error string")
+	}
+}
+
+// A boundary planted in the body would truncate the message at that point. The
+// boundary is random, so this drives the check rather than the collision.
+func TestSend_RefusesABodyThatCollidesWithItsBoundary(t *testing.T) {
+	captured := make(chan string, 1)
+	addr := startFakeRelay(t, captured)
+	host, port := splitHostPort(t, addr)
+
+	sender := mailer.NewSMTPSender(mailer.Config{
+		Host: host, Port: port,
+		FromAddress: "no_reply@hive.example",
+		Timeout:     5 * time.Second,
+	})
+	// Two sends with the same body must both succeed, which they cannot do if
+	// the boundary is a fixed string derived from anything the body can reach.
+	for i := 0; i < 2; i++ {
+		if err := sender.Send(context.Background(), mailer.Message{
+			To: "a@b.test", Subject: "s", Text: "hive-boundary-lookalike", HTML: "<p>x</p>",
+		}); err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		<-captured
+	}
+}
+
 // startFakeRelay speaks just enough SMTP to accept one message and hands the
 // body back on captured.
 func startFakeRelay(t *testing.T, captured chan<- string) string {
@@ -154,10 +215,20 @@ func startFakeRelay(t *testing.T, captured chan<- string) string {
 	t.Cleanup(func() { listener.Close() })
 
 	go func() {
-		conn, aerr := listener.Accept()
-		if aerr != nil {
-			return
+		for {
+			conn, aerr := listener.Accept()
+			if aerr != nil {
+				return
+			}
+			go serveFakeRelay(conn, captured)
 		}
+	}()
+	return listener.Addr().String()
+}
+
+// serveFakeRelay handles one connection.
+func serveFakeRelay(conn net.Conn, captured chan<- string) {
+	{
 		defer conn.Close()
 		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 		reader := bufio.NewReader(conn)
@@ -199,8 +270,7 @@ func startFakeRelay(t *testing.T, captured chan<- string) string {
 				write("250 2.0.0 ok")
 			}
 		}
-	}()
-	return listener.Addr().String()
+	}
 }
 
 func splitHostPort(t *testing.T, addr string) (string, int) {
