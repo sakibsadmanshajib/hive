@@ -33,19 +33,40 @@ is literally `hive` (the demo box, CI, or a plain single-checkout dev setup),
 it writes nothing and the stack keeps the `hive` project name it has always
 had.
 
-Re-run it with `--check` after you create or copy the repo-root `.env`, not just
-once at worktree creation: `scripts/set-compose-project-name.sh:103-107` writes
-`deploy/docker/.env` unconditionally but touches `<repo-root>/.env` **only if
-that file already exists**, so a worktree namespaced before its `.env` was
-copied in ends up with the namespace on one file and the default `hive` project
-name on the other, and the `--env-file ../../.env` command shapes then recreate
-another checkout's containers exactly as if the script had never run.
+**Run it again, with no flag, every time you create or copy the repo-root
+`.env`.** Once at worktree creation is not enough.
+`scripts/set-compose-project-name.sh:103-107` writes `deploy/docker/.env`
+unconditionally but touches `<repo-root>/.env` **only if that file already
+exists**:
 
-Verify there's no live collision before trusting a run, without writing
-anything:
+```bash
+upsert_line "$compose_dir/.env"
+
+if [[ -f "$repo_root/.env" ]]; then
+  upsert_line "$repo_root/.env"
+fi
+```
+
+A worktree namespaced before its `.env` was copied in therefore ends up with
+the namespace on `deploy/docker/.env` and the default `hive` project name on
+the repo-root `.env`, and every `--env-file ../../.env` command shape then
+recreates another checkout's containers exactly as if the script had never run.
+That is a live container collision produced by a script you did run.
+
+Then verify there's no live collision before trusting a run:
 
 ```bash
 scripts/set-compose-project-name.sh --check
+```
+
+Note what `--check` does and does not cover: it inspects `docker ps -a` for
+containers labelled with this worktree's derived project name whose working
+directory is some other checkout, and exits 1 naming that directory. It does
+**not** read either `.env`, so it cannot tell you the repo-root one is missing
+the variable. Confirm that yourself:
+
+```bash
+grep -H COMPOSE_PROJECT_NAME .env deploy/docker/.env
 ```
 
 ## The full local stack currently cannot start on this machine
