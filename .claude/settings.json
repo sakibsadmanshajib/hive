@@ -58,6 +58,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/secrets-scanner.js\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/decision-citation-check.js\"",
+            "timeout": 5
           }
         ]
       },

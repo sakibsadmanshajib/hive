@@ -1,20 +1,25 @@
 ---
-name: Memory Layers (Six-Layer Model)
-description: Map a memory question to the right layer/store, retrieve in the right order, verify staleness before trusting a hit, and consolidate (promote/retire) between layers. Companion to memory-tools.md, which only covers tool detection.
+name: Memory Layers (Four-Layer Model)
+description: Map a memory question to the right layer/store, retrieve in the right order, verify a citation and check staleness before trusting a hit, and consolidate (promote/retire) between layers. Companion to memory-tools.md, which only covers tool detection.
 ---
 
 ## Memory Layers
 
-Six layers, built on CoALA's four layers (Sumers et al. 2024, arXiv:2309.02427):
-working, episodic, semantic, procedural, plus two practitioner extensions
-this project specifically needs: entity/profile memory and
-reflection/consolidation (grounded in Park et al. 2023, arXiv:2304.03442).
-"Six" is not an established standard; no primary source states it. Full
-sourcing, the one source that does use the word "six" and why it is not
-treated as authoritative, and the gap analysis: vault
-`hive/architecture-2026-08-28-six-layer-agent-memory.md`.
+**Four layers, from CoALA** (Sumers et al. 2024, [arXiv:2309.02427](https://arxiv.org/abs/2309.02427)):
+working, episodic, semantic, procedural. That is the frame, and it is the only
+one with a primary source behind it.
 
-### The six layers
+Two further rows below are **Hive extensions, not CoALA and not a standard**:
+entity/profile memory and reflection/consolidation. They are kept because this
+project needs both jobs done and nothing else does them, not because any paper
+says a memory model has six layers. No primary source states a six-layer model;
+a doc or brief that presents one as established is wrong. Full sourcing, the
+secondary sources that use the words five and six, why they are not treated as
+authoritative, and the gap analysis: vault
+`hive/architecture-2026-08-28-six-layer-agent-memory.md` (filename kept for its
+inbound links; read its research section, not its title, for the frame).
+
+### The four layers
 
 | # | Layer | Store/source | Location | Lifespan |
 |---|-------|---------------|----------|----------|
@@ -22,8 +27,13 @@ treated as authoritative, and the gap analysis: vault
 | 2 | Episodic | `.wolf/buglog.jsonl`; claude-mem sqlite | repo (tracked, append-only); external (`~/.claude-mem/`, read-only) | permanent |
 | 3 | Semantic | `.wolf/decisions.md` (authoritative), MEMORY.md `project_*`/`reference_*`, vault specs | repo; native (`~/.claude/projects/.../memory/`); external (Obsidian vault) | permanent, edit in place |
 | 4 | Procedural | `.wolf/cerebrum.md` Do-Not-Repeat, MEMORY.md `feedback_*`, `.claude/skills/*` | repo; native; repo | permanent, edit in place |
-| 5 | Entity/Profile | MEMORY.md `user_*.md` | native | permanent, edit in place |
-| 6 | Reflection/Consolidation | no store (this skill) | n/a | promotion + retirement process |
+
+### Two Hive extensions (not CoALA, not a standard)
+
+| # | Layer | Store/source | Location | Lifespan |
+|---|-------|---------------|----------|----------|
+| E1 | Entity/Profile | MEMORY.md `user_*.md` | native | permanent, edit in place |
+| E2 | Reflection/Consolidation | no store (this skill) | n/a | promotion + retirement process |
 
 `project_*.md` lives under Semantic (row 3), not Entity/Profile: in this
 repo's actual MEMORY.md convention every `project_*.md` file is a durable
@@ -34,7 +44,7 @@ instance, `user_sakib.md`; the layer stays because the category is real
 (a future second tenant/customer/named sub-project would land here), not
 because this repo currently has many of them.
 
-Why layers 5 and 6 exist beyond CoALA's four: **entity/profile** is needed
+Why the two extensions exist beyond CoALA's four: **entity/profile** is needed
 because a fact about one specific named person (preferences, role) is a
 different shape than a general project fact, and folding it into semantic
 memory loses the "whose fact is this" anchor the moment there is more than
@@ -64,6 +74,79 @@ that check runs.
 5. Entity: MEMORY.md `user_*.md`. Anything specific to this person?
 6. Vault: only when a terse layer points at a doc and full detail is needed.
 
+### Citation check (enforced by a hook, not by good intentions)
+
+Semantic memory is only worth having if a citation to it is true. On
+2026-07-30 an agent killed at its session limit left two retention migrations
+behind whose 14 day window was justified by citing a `.wolf/decisions.md`
+D-030 that did not exist then; a person grepping for it is what caught it
+(native memory: `feedback_killed_agent_work_verification`). That id has since
+been minted for an unrelated decision, which is exactly why a fabricated
+citation is so hard to catch after the fact: grep the same string today and it
+resolves. Writing "verify your citations" here again would have changed
+nothing, so the rule is mechanical instead:
+
+`.claude/hooks/decision-citation-check.js` runs as a PreToolUse hook on every
+Write, Edit and MultiEdit. It **blocks** the write when the content cites a
+`D-NNN` with no entry in `.wolf/decisions.md`, and names the highest id it can
+see so the fabrication is obvious. It **warns**, without blocking, when the
+cited entry opens REVOKED / SUPERSEDED / AMENDED / RETIRED / MOOT (citing one
+as history is legitimate; citing one as a current rule is not) and when an
+"owner ruling `<date>`" names a date that appears nowhere in the ledger. That
+second one stays a warning deliberately: the ruling may be real and merely
+unrecorded, which is a reason to record it, not to refuse a write.
+
+What it does **not** cover, so nobody reads more into it than is there: a
+dispatch brief that misstates the ledger (claiming it tops out ten entries
+below where it does, say). A brief is an Agent prompt, not a file write, so no
+PreToolUse hook on Write, Edit or MultiEdit ever sees one. That class is still
+entirely on you.
+
+It skips `.wolf/decisions.md` itself, where new ids are minted, and
+`.claude/hooks/`, whose fixtures carry deliberate fake ids. Both the hook and
+the CLI below apply the same skip list.
+
+Writing **about** an id that does not exist is mandatory work here (the buglog
+entry after every fixed bug, and the post-mortem or review analysing one), so
+there is a deliberate, greppable bypass: put the literal
+`citation-check: allow-unknown-ids` in the content and the audit is skipped.
+It also covers a real entry that landed on main after this worktree was cut
+and cannot be refreshed in place. It is not for getting past a block you have
+not read. Every use is announced on stdout, so a bypass is visible in the
+transcript rather than looking like a guard that never ran.
+
+Know the reach of the marker before using it. On an Edit or MultiEdit only the
+new strings are audited, so the marker exempts that change alone. A Write
+carries the whole file, so a marker anywhere in it exempts the entire write,
+and a file that keeps the marker stays exempt on every later full-file write.
+This section is itself an example: it contains the literal, so writes to this
+file are exempt. That is the price of a greppable marker rather than a bug,
+and the per-write announcement is what keeps it visible.
+
+Stale worktree ledgers are handled before it comes to that. Every builder
+works in its own worktree carrying whatever `.wolf/decisions.md` its branch
+point had, so the guard merges every ledger from the edited file up to the
+filesystem root: a worktree under `<repo>/.claude/worktrees/` sees the
+canonical checkout's fresher copy, and a correct citation of a recently minted
+id is not read as a fabrication. When a block does land, refresh
+`.wolf/decisions.md` from main and re-read the entry. Never substitute a lower
+id that happens to exist: that turns a stale ledger into a real fabrication,
+which is the failure this whole check exists to stop.
+
+For text a Write never passes through, a PR body or an existing file, run the
+same parser directly:
+
+```
+node .claude/hooks/decision-citation-check.js --check FILE...
+gh pr view <n> --json body -q .body | node .claude/hooks/decision-citation-check.js --check
+```
+
+Self-check for the guard itself: `node .claude/hooks/hooks.selfcheck.js`.
+
+What the hook cannot check, and stays your job: whether the entry you cited
+says what you claimed it says. An id existing is not agreement. Read the
+line before you lean on it.
+
 ### Staleness check (mandatory before trusting any hit above working)
 
 - Grep the hit's own text for `REVOKED`, `SUPERSEDED`, or `STALE` first.
@@ -90,13 +173,13 @@ that type.
 
 ### Retirement: a memory turns out wrong
 
-Applies to the mutable layers (semantic, procedural, entity/profile: layers
-3, 4, 5). Never delete. Edit in place:
+Applies to the mutable layers: semantic and procedural (layers 3 and 4) plus
+the entity/profile extension (E1). Never delete. Edit in place:
 
 1. Prefix `REVOKED` or `SUPERSEDED <date>` on both the frontmatter/index line and the opening sentence of the body.
 2. Point at what supersedes it (decision id, PR, or new fact).
 3. Leave the original wrong text below so a future grep for the old term finds the correction, not silence.
-4. `.wolf/decisions.md` specifically is append-only within this pattern: add a new `D-0xx` row rather than editing the old one; the old row gets the `REVOKED` prefix pointing at the new row's id (pattern: D-013, D-029, D-035, D-036).
+4. `.wolf/decisions.md` specifically is append-only within this pattern: add a new `D-0xx` row rather than editing the old one; the old row gets a dead-status prefix pointing at the new row's id. `REVOKED` is the usual word (pattern: D-013, D-035, D-036), and the ledger also uses `RETIRED` (D-028) and `MOOT` (D-029) where those read truer. The citation hook treats all five words as dead, so any of them earns the warning.
 
 Episodic (layer 2) does not get this treatment at all: `.wolf/buglog.jsonl`
 is append-only history by contract (`.claude/rules/openwolf.md`: "never

@@ -19,6 +19,11 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const HOOKS_DIR = __dirname;
+// decision-citation-check.js resolves .wolf/decisions.md relative to
+// CLAUDE_PROJECT_DIR or the edited file's directory, so the guards are run
+// from the repo root with that variable pinned. Without this the result
+// depends on the directory the self-check happened to be invoked from.
+const REPO_ROOT = path.resolve(HOOKS_DIR, '..', '..');
 
 // Synthetic, never a real credential. Assembled at runtime so the literal
 // never appears in this file, which the secrets scanner reads on write.
@@ -33,10 +38,35 @@ const FAKE_GENERIC_KEY = 'k'.repeat(20);
 // receives stays identical.
 const KEY_IDENT = 'apiKey';
 
+// Real ids pulled from the live ledger: one that exists, and ones whose entry
+// opens with a dead-status marker. Reading them instead of hardcoding them
+// keeps the decision-citation cases correct as the ledger grows. All are null
+// on a checkout with no ledger, and the cases that need them are skipped
+// rather than failing.
+const LEDGER_LINES = (() => {
+  try {
+    return require('fs')
+      .readFileSync(path.join(REPO_ROOT, '.wolf', 'decisions.md'), 'utf8')
+      .split('\n')
+      .map(l => /^-\s*(D-\d{3})\s*\|(.*)$/.exec(l))
+      .filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+})();
+const DEAD_WORDS = /\b(REVOKED|SUPERSEDED|AMENDED|RETIRED|MOOT)\b/;
+const LIVE_DECISION_ID = (LEDGER_LINES.find(m => !DEAD_WORDS.test(m[2].slice(0, 80))) || [])[1] || null;
+const REVOKED_DECISION_ID = (LEDGER_LINES.find(m => /\bREVOKED\b/.test(m[2].slice(0, 80))) || [])[1] || null;
+// This ledger also retires entries with RETIRED (D-028) and MOOT (D-029).
+// Both were invisible to the guard's warn arm until the vocabulary grew.
+const OTHERWISE_DEAD_ID = (LEDGER_LINES.find(m => /\b(RETIRED|MOOT)\b/.test(m[2].slice(0, 80))) || [])[1] || null;
+
 function run(hook, payload) {
   const res = spawnSync(process.execPath, [path.join(HOOKS_DIR, hook)], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
+    cwd: REPO_ROOT,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: REPO_ROOT },
   });
   return { code: res.status, out: (res.stdout || '').trim() };
 }
@@ -113,6 +143,61 @@ for (const shape of ['claude', 'claude-multiedit', 'cursor']) {
   );
 }
 
+// decision-citation-check: a real citation passes, a fabricated one is
+// blocked. The ids the cases use are read out of the ledger at runtime rather
+// than hardcoded, so appending to .wolf/decisions.md can never turn this
+// self-check red on its own. This runs over all three write shapes, including
+// claude-multiedit, because the guard read only the top-level `edits` array
+// and so exited clean on every Claude Code MultiEdit, which is the same
+// defect the secrets scanner had in #1333.
+for (const shape of ['claude', 'claude-multiedit', 'cursor']) {
+  if (LIVE_DECISION_ID) {
+    // Clean first, so a block below can never be a pre-existing failure in
+    // disguise.
+    cases.push({ name: `decision-citation clean (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', `Per ${LIVE_DECISION_ID}, the ledger is authoritative.\n`),
+      code: 0, absent: ['BLOCKED', 'CITATION WARNING'] });
+  }
+  cases.push(
+    { name: `decision-citation block fabricated id (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', 'Per D-999, we already ruled on this.\n'),
+      code: 2, present: ['BLOCKED', 'D-999', 'highest id visible here'] },
+    // Case is normalised before the ledger lookup, so lowercasing an id is
+    // not a way around the block.
+    { name: `decision-citation blocks a lowercase fabricated id (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', 'Per d-999, we already ruled on this.\n'),
+      code: 2, present: ['BLOCKED', 'D-999'] },
+    { name: `decision-citation warn unrecorded owner ruling (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', 'This follows an owner ruling on 1999-01-01.\n'),
+      code: 0, present: ['CITATION WARNING', '1999-01-01'], absent: ['BLOCKED'] },
+    // The ledger is where new ids are minted, so a not-yet-known id in that
+    // file is the normal case, not a fabrication.
+    { name: `decision-citation skips the ledger itself (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, '.wolf/decisions.md', '- D-999 | a brand new decision | owner | 2026-08-28\n'),
+      code: 0, absent: ['BLOCKED'] },
+    // Recording a fabricated id is mandatory work here (the buglog entry after
+    // every fixed bug), so the documented marker has to let that text through.
+    { name: `decision-citation honours the bypass marker (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', 'citation-check: allow-unknown-ids\nThe agent cited D-999, which never existed.\n'),
+      code: 0, present: ['Citation audit skipped'], absent: ['BLOCKED'] },
+    // A hyphen is a word boundary, so a bare \b read the middle of an
+    // identifier as a citation and blocked on it.
+    { name: `decision-citation ignores an id inside an identifier (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', 'The fixture is named part-D-999-abc in the harness.\n'),
+      code: 0, absent: ['BLOCKED'] },
+  );
+  if (REVOKED_DECISION_ID) {
+    cases.push({ name: `decision-citation warn revoked id (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', `Still bound by ${REVOKED_DECISION_ID}.\n`),
+      code: 0, present: ['CITATION WARNING', REVOKED_DECISION_ID], absent: ['BLOCKED'] });
+  }
+  if (OTHERWISE_DEAD_ID) {
+    cases.push({ name: `decision-citation warn retired/moot id (${shape})`, hook: 'decision-citation-check.js',
+      payload: edit(shape, 'docs/note.md', `Still bound by ${OTHERWISE_DEAD_ID}.\n`),
+      code: 0, present: ['CITATION WARNING', OTHERWISE_DEAD_ID], absent: ['BLOCKED'] });
+  }
+}
+
 // Two payload shapes that no harness is documented to send, pinned anyway
 // because this guard fails silently when it fails at all: it exits 0 with no
 // output, which is byte-identical to a clean scan. Both were raised in the
@@ -145,6 +230,49 @@ cases.push(
       },
     },
     code: 2, present: ['BLOCKED', 'AWS access key'] },
+);
+
+// The same three shapes against decision-citation-check, which resolves its
+// content the same way and would fail the same way. The third pins the case
+// the single-edit helper above cannot reach: a fabrication in an edit that is
+// not the first one in the array.
+cases.push(
+  { name: 'decision-citation scans edits even when content is also present', hook: 'decision-citation-check.js',
+    payload: {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: 'docs/note.md',
+        content: 'A line with no citation in it.\n',
+        edits: [{ old_string: 'placeholder', new_string: 'Per D-999, we already ruled on this.\n' }],
+      },
+    },
+    code: 2, present: ['BLOCKED', 'D-999'] },
+
+  { name: 'decision-citation scans a non-string new_string', hook: 'decision-citation-check.js',
+    payload: {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: 'docs/note.md',
+        edits: [{ old_string: 'placeholder', new_string: { note: 'Per D-999, we already ruled on this.' } }],
+      },
+    },
+    code: 2, present: ['BLOCKED', 'D-999'] },
+
+  { name: 'decision-citation scans every edit, not just the first', hook: 'decision-citation-check.js',
+    payload: {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: 'docs/note.md',
+        edits: [
+          { old_string: 'a', new_string: 'An edit with no citation in it.\n' },
+          { old_string: 'b', new_string: 'Per D-999, we already ruled on this.\n' },
+        ],
+      },
+    },
+    code: 2, present: ['BLOCKED', 'D-999'] },
 );
 
 let failed = 0;
