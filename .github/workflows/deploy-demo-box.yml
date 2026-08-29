@@ -123,6 +123,11 @@ on:
       # box, which for this one means the box keeps enforcing a threshold the
       # repo no longer states.
       - 'scripts/check-deploy-disk.sh'
+      # Runs in the deploy job and can remove a container from the live box.
+      # Same blind spot: without an entry, a fix to the eviction itself would
+      # merge and never reach the box, so the box would keep running the
+      # version of the selection the repo no longer states.
+      - 'scripts/remove-stale-compose-containers.sh'
   workflow_dispatch:
     inputs:
       disk_floor_gb:
@@ -1010,8 +1015,12 @@ jobs:
         # runs it against stubbed docker output in CI, because the two ways
         # this can go wrong (evict nothing, or evict a live service) are both
         # silent until they happen on the box.
-        working-directory: /home/sakib/hive
-        run: bash scripts/remove-stale-compose-containers.sh
+        #
+        # Runs from the compose directory, not the repo root: HIVE_COMPOSE_FLAGS
+        # carries relative `-f docker-compose.yml` and `--env-file ../../.env`
+        # paths, which resolve only from here.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: bash ../../scripts/remove-stale-compose-containers.sh
 
       - name: Apply the bind-mounted Caddy configs
         # Every Caddyfile in this stack is bind-mounted into its container, so

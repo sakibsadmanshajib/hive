@@ -235,8 +235,35 @@ set -e
 
 # 13. The deploy workflow actually calls this script. A guard that tests a
 #     script nothing runs is coverage on paper only.
-grep -q "scripts/remove-stale-compose-containers.sh" \
-  "$repo_root/.github/workflows/deploy-demo-box.yml" \
+workflow="$repo_root/.github/workflows/deploy-demo-box.yml"
+grep -q "scripts/remove-stale-compose-containers.sh" "$workflow" \
   || fail "deploy-demo-box.yml does not call remove-stale-compose-containers.sh"
 
-echo "PASS: remove-stale-compose-containers.sh selection guard, 13 cases"
+# 14. It is invoked from the compose directory. HIVE_COMPOSE_FLAGS carries
+#     relative `-f docker-compose.yml` and `--env-file ../../.env` paths, so
+#     running this from the repo root makes every compose call in it resolve
+#     against the wrong directory. Nothing in the stubbed cases above can see
+#     that, because a stub does not care where it was called from, and the
+#     first draft of this step got it wrong exactly that way.
+python3 - "$workflow" <<'PY' || exit 1
+import sys, yaml
+steps = yaml.safe_load(open(sys.argv[1]))["jobs"]["deploy"]["steps"]
+step = next(
+    s for s in steps
+    if isinstance(s, dict) and "remove-stale-compose-containers.sh" in str(s.get("run", ""))
+)
+wd = step.get("working-directory", "")
+if not wd.endswith("deploy/docker"):
+    sys.exit(
+        "FAIL: the eviction step runs from %r; HIVE_COMPOSE_FLAGS only resolves "
+        "from the compose directory" % wd
+    )
+PY
+
+# 15. The script is on the deploy workflow's path filter. Without an entry a
+#     fix to the selection would merge and never reach the box, which is this
+#     repository's documented merged-is-not-deployed trap.
+grep -q "'scripts/remove-stale-compose-containers.sh'" "$workflow" \
+  || fail "remove-stale-compose-containers.sh is not on deploy-demo-box.yml's path filter"
+
+echo "PASS: remove-stale-compose-containers.sh selection guard, 15 cases"
