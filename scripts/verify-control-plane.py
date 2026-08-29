@@ -52,6 +52,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from shared_demo_account import assert_not_shared_demo_account
+
 CP = os.environ.get("HIVE_CONTROL_PLANE_URL", "http://localhost:8081").rstrip("/")
 EDGE = os.environ.get("HIVE_EDGE_API_URL", "http://localhost:8080").rstrip("/")
 EMAIL = os.environ.get("HIVE_VERIFY_EMAIL", "").strip()
@@ -103,6 +105,13 @@ def main() -> None:
             "sends a real chat completion through it (issue #848); it must never default "
             "to the shared demo account. Point it at a dedicated verification identity."
         )
+    # The paragraph in this module's docstring has said "must never be
+    # demo@hive-demo.invalid" since it was written, and nothing checked it.
+    assert_not_shared_demo_account(
+        EMAIL,
+        variable="HIVE_VERIFY_EMAIL",
+        doing="mints a real API key and sends a real chat completion through it",
+    )
 
     print(f"control-plane {CP} | edge-api {EDGE} | caller {EMAIL}")
 

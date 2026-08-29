@@ -59,11 +59,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from shared_demo_account import assert_not_shared_demo_account
+
 TENANT_SLUG = "rag-verify-e2e"
 TENANT_NAME = "RAG Verify E2E"
 TENANT_DEPLOYMENT = "ENTERPRISE_EDGE"
 # .invalid is IANA-reserved for exactly this (RFC 2606).
 USER_EMAIL = "rag-verify-e2e@hive-e2e.invalid"
+# A literal, so this was already safe. Checked anyway, because "safe by accident
+# of the literal somebody happened to type" is not a property an edit preserves.
+assert_not_shared_demo_account(
+    USER_EMAIL,
+    variable="USER_EMAIL",
+    doing="creates a tenant, uploads a document and sends a real RAG query",
+)
 MEMBER_ROLE = "MEMBER"
 MEMBER_STATUS = "ACTIVE"
 RAG_GATE = "ENABLE_RAG"

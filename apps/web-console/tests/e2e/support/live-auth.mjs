@@ -60,8 +60,14 @@
 // Standalone, from a shell:
 //
 //   node tests/e2e/support/live-auth.mjs \
-//     demo@hive-demo.invalid https://chat-hive.scubed.co/agent-workspace \
+//     "e2e-verified+$E2E_RUN_KEY@hive-e2e.invalid" \
+//     https://chat-hive.scubed.co/agent-workspace \
 //     tests/e2e/.auth/agent-workspace.json
+//
+// The address above is run scoped on purpose, and this example used to name
+// the shared demo account. Minting for that account is now refused unless the
+// run declares itself read only (assertNotSharedDemoAccount below, or
+// --read-only on this CLI).
 //
 // Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY.
 // Nothing this module prints contains a token, a password or a key: every
@@ -113,10 +119,67 @@ async function postJson(url, headers, body) {
   return { ok: response.ok, status: response.status, body: parsed, text };
 }
 
+// The shared account the owner demonstrates to prospects. An address, not a
+// credential, so it may live in a tracked file (docs/live-test-auth.md).
+export const SHARED_DEMO_ACCOUNT = "demo@hive-demo.invalid";
+
+/**
+ * Refuses a session for the shared demo account unless the caller has declared
+ * the run read only.
+ *
+ * docs/live-test-auth.md has said since it was written that a write-capable
+ * suite must never authenticate as this account, because every chat it sends
+ * and every task it submits lands permanently in the sidebar the owner is
+ * about to show someone. Nothing enforced that. The account accumulated 24
+ * conversations of automation text, five of them on the day this guard was
+ * written, and the reason nobody cleaned up is that the same document also
+ * claimed the rows were undeletable (issues #848, #916).
+ *
+ * This is the one door every live session already passes through, so the rule
+ * is checked once here rather than in each suite that could forget it.
+ *
+ * ponytail: a declaration gate, not a write blocker. It cannot stop a run that
+ * declares itself read only from then writing; what it removes is the silent
+ * default, so pointing a suite at this account becomes a deliberate, greppable
+ * act instead of an accident. A real write blocker would need a per-request
+ * proxy, which is a great deal of machinery for a rule one line can state.
+ *
+ * The declaration is per call, and deliberately not an environment variable.
+ * An env var belongs to whatever set it, so one line in a workflow's `env:`
+ * block would switch this off for every step in the job, invisibly and for
+ * reasons unrelated to the suite that inherits it. A `readOnly` argument, or
+ * the CLI's `--read-only` flag, sits at the call site where a reviewer reads
+ * it.
+ *
+ * Accepts a missing address rather than throwing on one: mintSession rejects an
+ * empty email itself, with a message about the missing argument, and this guard
+ * has no business pre-empting that with an unrelated one. Hence the union type,
+ * which is what the body already handles.
+ *
+ * @param {string | undefined | null} email
+ * @param {{ readOnly?: boolean }} [options]
+ */
+export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
+  if (String(email ?? "").trim().toLowerCase() !== SHARED_DEMO_ACCOUNT) {
+    return;
+  }
+  if (readOnly) {
+    return;
+  }
+  throw new Error(
+    `live-auth: refusing to mint a session for ${SHARED_DEMO_ACCOUNT}. This is ` +
+      "the shared account the owner demos to prospects, and anything a run " +
+      "creates on it (a chat, an agent task, an API key) is visible on that " +
+      "surface. Run as a dedicated E2E_RUN_KEY-scoped identity instead. If " +
+      "this run only reads, say so at the call site with readOnly: true, or " +
+      "--read-only on this module's CLI. See docs/live-test-auth.md."
+  );
+}
+
 /**
  * Mints a live session for an existing account. Changes no credential.
  *
- * @param {{ email: string, supabaseUrl?: string, serviceRoleKey?: string, anonKey?: string }} options
+ * @param {{ email: string, supabaseUrl?: string, serviceRoleKey?: string, anonKey?: string, readOnly?: boolean }} options
  * @returns {Promise<{ access_token: string, refresh_token: string, expires_at: number, userId: string }>}
  */
 export async function mintSession({
@@ -124,10 +187,12 @@ export async function mintSession({
   supabaseUrl = requiredEnv("SUPABASE_URL"),
   serviceRoleKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
   anonKey = requiredEnv("SUPABASE_ANON_KEY"),
+  readOnly = false,
 } = {}) {
   if (!email) {
     throw new Error("live-auth: mintSession needs an email for an existing account");
   }
+  assertNotSharedDemoAccount(email, { readOnly });
   const base = supabaseUrl.replace(/\/+$/, "");
 
   // GoTrue keeps ONE outstanding one-time token per user, so two mints for the
@@ -325,15 +390,20 @@ export async function withLiveSession(context, options, action) {
 // anywhere in this file makes every spec that imports it fail to load with
 // "require() cannot be used on an ESM graph with top-level await".
 async function main() {
-  const [, , email, targetUrl, statePath] = process.argv;
+  const argv = process.argv.slice(2);
+  // Order-independent so the flag can sit anywhere after the command.
+  const readOnly = argv.includes("--read-only");
+  const [email, targetUrl, statePath] = argv.filter((a) => a !== "--read-only");
   if (!email || !targetUrl) {
     console.error(
-      "usage: node tests/e2e/support/live-auth.mjs <email> <targetUrl> [statePath]"
+      "usage: node tests/e2e/support/live-auth.mjs [--read-only] <email> <targetUrl> [statePath]\n" +
+        "  --read-only  assert this run only reads, which is the sole way to " +
+        "mint for the shared demo account"
     );
     process.exit(2);
   }
   if (statePath) {
-    const result = await writeStorageState({ email, targetUrl, statePath });
+    const result = await writeStorageState({ email, targetUrl, statePath, readOnly });
     // No token material: an id, a path and an expiry are the whole output.
     console.log(
       redactSecrets(
@@ -342,7 +412,7 @@ async function main() {
     );
     return;
   }
-  const session = await mintSession({ email });
+  const session = await mintSession({ email, readOnly });
   console.log(
     redactSecrets(
       `live-auth: minted a session for ${email} (user ${session.userId}); expires_at=${session.expires_at}`

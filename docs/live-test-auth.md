@@ -87,12 +87,123 @@ separate agents were blocked on credentials across that day and the one after.
 
 The password is not the only shared state on `demo@hive-demo.invalid`. It is
 also the account the owner demos to prospects, and every chat this account
-sends, every agent task it submits, and every API key it mints is real,
-visible in that account's own sidebar, task list and keys page, and today
-undeletable: there is no chat-delete, task-delete or account-delete route
-wired up yet (issues #828, #848). A suite that authenticates as this account
-and drives a real composer, a real task submit, or a real key mint leaves a
-permanent mark on the surface the owner is about to show someone.
+sends, every agent task it submits, and every API key it mints is real and
+visible in that account's own sidebar, task list and keys page. A suite that
+authenticates as this account and drives a real composer, a real task submit,
+or a real key mint leaves a mark on the surface the owner is about to show
+someone.
+
+**This paragraph used to say all three were undeletable, and that was wrong
+about chats.** The claim went uncorrected long enough to become received
+wisdom, and it is a large part of why nobody ever cleaned up: an agent reading
+it concluded there was nothing to be done. Measured against the running stack
+on 2026-08-29, per surface:
+
+* **Chats: deletable, and always were, subject to one permission.**
+  `DELETE /api/v1/chats/{id}` is live and is reachable from the sidebar row
+  menu behind a confirm dialog. It is a hard delete: the chat row and its
+  `chat_message` rows are removed, not flagged, and archiving is a separate
+  action and the soft path. That is measured with a control: a deleted
+  conversation reads 0 chat rows and 0 `chat_message` rows, while a kept one
+  created the same way reads 1 and 2
+  (`docs/proof/chat-delete-authz-2026-08-29/capture.md` section 4a). The first
+  attempt at that measurement had no control and proved nothing about the
+  messages, which is the same defect as the sentence this bullet replaces.
+
+  Three conditions belong in the same breath as "deletable", for the same
+  reason: the old sentence was believed for months on the strength of being
+  nearly right.
+
+  * **An ordinary user needs the `chat.delete` permission.** The non-admin arm
+    checks `has_permission(user.id, 'chat.delete', ...)` and answers 401 when
+    it is off, so deletion for ordinary users is configuration dependent. An
+    admin toggle returns the product to the state the old sentence described.
+  * **Ownership scoping holds for every caller on this deployment, including
+    admins, but only because of a flag.** Upstream splits the handler on
+    `user.role == 'admin'` and gives that arm the unscoped lookup and delete,
+    which would matter here because every tenant OWNER holds an administrator
+    session (#748, #948). `owui-patches/apply_router_authz_family_patch.py`
+    narrows that arm to `user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS`
+    (#1186), and `docker-compose.yml` sets that variable to `"false"`, so on
+    this deployment nobody reaches the unscoped path and every delete resolves
+    through `get_chat_by_id_and_user_id`. Turn the flag on and the admin arm is
+    cross-account again.
+  * **The delete is scoped; the task cancellation in front of it is not.**
+    `stop_item_tasks(request.app.state.redis, id)` is the first statement in
+    the handler, above the role split and above any ownership resolution, so
+    any verified user holding another user's chat id can cancel that chat's
+    in-flight completion and title generation by issuing a DELETE they are then
+    refused. The 404 is real, but it arrives after that side effect. Filed as
+    issue #1474 rather than fixed here.
+
+  Measured live: a second signed-in non-admin identity is refused (401 on the
+  read, 404 on the delete) and the owner's row survives.
+  `scripts/test_owui_chat_delete_authz.py` pins all of the above against the
+  **patched** source the image actually runs, not the pre-patch vendored copy,
+  so neither an upstream bump nor an `owui-patches` rewrite can quietly widen
+  it.
+* **Agent tasks: no delete route.** `/internal/agent-tasks/...` offers create,
+  list, get, cancel, events and files, and nothing else. A submitted task is
+  permanent. Cancel stops it; it does not remove the row.
+* **Accounts: no product route, but the fixture sweep can remove one.** There
+  is no user-facing account deletion anywhere. What exists is
+  `sweepStaleFixtureRuns` in `e2e-fixture-seed.mjs`, which deletes a stale
+  fixture account with the service role after explicitly unmapping its
+  `tenant_billing_accounts` row. That unmapping step is required and is the
+  fix for issue #828: `tenant_billing_accounts.account_id` references
+  `accounts(id)` `ON DELETE RESTRICT` on purpose, so an account that still
+  funds a live tenant cannot be dropped by accident. Deleting a real
+  customer's account is a separate, unbuilt question.
+
+So a chat left on that account can be removed by whoever owns it, which is a
+reason to clean up rather than a reason to relax: a task or a key left there
+still cannot be.
+
+### This rule is now enforced, not merely written down
+
+`mintSession` in `tests/e2e/support/live-auth.mjs` is the single door every
+JavaScript live session passes through, and it refuses `demo@hive-demo.invalid`
+outright. A run that genuinely only reads must say so at the call site, with
+`readOnly: true`, or `--read-only` on that module's CLI.
+
+That module is not the single door for the repository, and saying so would be
+the same kind of nearly-true sentence this document exists to correct. Three
+Python scripts reach a deployed environment without importing it, and each now
+carries the same refusal through one shared implementation,
+`scripts/shared_demo_account.py`:
+
+| Script | What a run would land on that account |
+| --- | --- |
+| `verify-control-plane.py` | Mints a real API key and sends a real completion. Its docstring has said "must never be `demo@hive-demo.invalid`" since it was written, and nothing checked it. |
+| `post-deploy-verify.py` | Same, on its `signin` and `ledger` checks. It did guard, with an exact, case-sensitive `==`: `Demo@hive-demo.invalid` or a trailing space walked past. |
+| `verify-rag-roundtrip.py` | Creates a tenant, uploads a document, sends a real RAG query. Safe already, by accident of a hardcoded literal rather than by a check. |
+
+One normalisation, trimmed and lowercased, matching the JavaScript guard, so
+the two halves of one rule cannot drift apart again.
+`scripts/test_shared_demo_account.py` asserts both the normalisation and that
+each of those three scripts actually calls the guard rather than describing it
+in a docstring, and it runs in `make test-scripts`, a required check.
+
+What this is still not is an allowlist. Requiring every address to carry
+`E2E_RUN_KEY` would also cover `qa-tester@hive.test` and the other shared
+identities that collect the same litter, and that is the right end state, but
+two scheduled workflows authenticate as persistent identities with no run key
+today (`demo-chat-settings-check.yml`, and `owui-nightly.yml`, which sets
+`OWUI_E2E_RUN_KEY` rather than `E2E_RUN_KEY`). Those need run-key-scoped
+identities provisioned first; tracked as issue #1476 rather than turned red
+here.
+
+The declaration is deliberately not an environment variable. An env var belongs
+to whoever set it, so one line in a workflow's `env:` block would switch the
+guard off for every step in that job, invisibly, and for reasons unrelated to
+the suite that inherits it. An argument sits where a reviewer reads it.
+
+Be clear about what that buys: it is a declaration gate, not a write blocker.
+It cannot stop a run that has declared itself read only from then sending a
+message. What it removes is the silent default, so aiming a suite at this
+account becomes a deliberate act that shows up in a diff, which is exactly
+what was missing while the account collected 24 conversations of automation
+text, five of them on the day the guard was written.
 
 This happened. `docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json`
 records `"demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"`,
@@ -237,11 +348,20 @@ Standalone, from a shell:
 
 ```bash
 cd apps/web-console
-node tests/e2e/support/live-auth.mjs demo@hive-demo.invalid \
+node tests/e2e/support/live-auth.mjs "e2e-verified+$E2E_RUN_KEY@hive-e2e.invalid" \
   https://chat-hive.scubed.co/agent-workspace tests/e2e/.auth/agent-workspace.json
 ```
 
 Requires `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`.
+
+This example named `demo@hive-demo.invalid` until the guard above landed, which
+is a fair illustration of how the account became the path of least resistance.
+A read-only pass at that account is still possible and must say so:
+
+```bash
+node tests/e2e/support/live-auth.mjs --read-only demo@hive-demo.invalid \
+  https://chat-hive.scubed.co/ tests/e2e/.auth/demo-readonly.json
+```
 
 ### Sessions that die mid-run
 
