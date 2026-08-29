@@ -1,0 +1,23 @@
+[1] GET http://127.0.0.1:3012/console/analytics
+  [console:info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+  landed: http://127.0.0.1:3012/console/analytics
+  Observability sections found: 1
+  links inside Observability: 1
+    link[0] text="Request logs Per-request usage browser with filters and CSV export." href=/console/logs
+  section text: "OBSERVABILITY Request logs Per-request usage browser with filters and CSV export."
+  contains 'Not available on this deployment.': false
+  contains a /d/hive- grafana path: false
+  screenshot -> /tmp/proof-1434/after-01-observability-section.png
+  screenshot -> /tmp/proof-1434/after-02-analytics-page.png
+[2] GET http://127.0.0.1:3012/console/api-keys
+  [console:info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+  landed: http://127.0.0.1:3012/console/api-keys
+  rate-limit links on the key list: 1
+    limits link[0] text="Limits" aria-label="Rate limits for proof-1434-key" href=/console/api-keys/d1a83f6d-48a3-4302-a807-5b172b5c08ba/limits
+  screenshot -> /tmp/proof-1434/after-03-api-keys-list-with-limits-link.png
+[3] clicking the rate-limit link
+  landed: http://127.0.0.1:3012/console/api-keys/d1a83f6d-48a3-4302-a807-5b172b5c08ba/limits
+  h1: "Rate limits"
+  nav elements present (console shell): 1
+  back link present: true
+  screenshot -> /tmp/proof-1434/after-04-rate-limit-editor.png
