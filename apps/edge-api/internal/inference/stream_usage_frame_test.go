@@ -52,17 +52,38 @@ func sseServerWithFrames(frames ...string) *httptest.Server {
 	}))
 }
 
+// sseServerWithoutDone streams the given raw SSE data payloads and then closes
+// cleanly, sending no [DONE] sentinel at all: an upstream that ends the body
+// rather than announcing the end.
+func sseServerWithoutDone(frames ...string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		for _, frame := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", frame)
+			flusher.Flush()
+		}
+	}))
+}
+
 // relayWire runs one streaming request end to end through the real
 // executeStreaming and returns the bytes the caller received.
 func relayWire(t *testing.T, includeUsage bool, frames ...string) string {
+	t.Helper()
+	litellmSrv := sseServerWithFrames(frames...)
+	defer litellmSrv.Close()
+	return relayWireAgainst(t, litellmSrv, includeUsage)
+}
+
+// relayWireAgainst is relayWire against an upstream the caller built, for a
+// test that needs a stream shape sseServerWithFrames does not produce.
+func relayWireAgainst(t *testing.T, litellmSrv *httptest.Server, includeUsage bool) string {
 	t.Helper()
 
 	rec := &accountingRecorder{}
 	acctSrv := newAccountingMock(rec)
 	defer acctSrv.Close()
-
-	litellmSrv := sseServerWithFrames(frames...)
-	defer litellmSrv.Close()
 
 	routingSrv := newRoutingMock(litellmSrv.URL)
 	defer routingSrv.Close()
@@ -189,5 +210,54 @@ func TestStreamRelay_CallerWithoutIncludeUsage_SeesNoUsageFrame(t *testing.T) {
 	}
 	if !strings.Contains(wire, "[DONE]") {
 		t.Errorf("stream must still terminate with [DONE]; wire was:\n%s", wire)
+	}
+}
+
+// TestStreamRelay_UpstreamWithoutSentinel_SynthesizesUsageThenOneDone pins what
+// the relay does when an upstream ends its body cleanly, with no usage frame
+// and no [DONE] of its own, and the caller asked for usage.
+//
+// The behaviour is unchanged by this branch: the code this replaces emitted the
+// same synthesized frame and the same sentinel on the same condition, only in
+// the opposite order and with a second sentinel behind it. It is pinned here
+// rather than left implicit because moving the sentinel out of the relay loop
+// made the choice explicit for the first time (CodeRabbit, PR #1334): a client
+// reads the sentinel as a complete response, and whether a truncated relay
+// should say that is a question worth failing a test over if anyone changes it,
+// in either direction.
+func TestStreamRelay_UpstreamWithoutSentinel_SynthesizesUsageThenOneDone(t *testing.T) {
+	upstream := sseServerWithoutDone(litellmContentFrame, litellmFinishFrame)
+	defer upstream.Close()
+
+	wire := relayWireAgainst(t, upstream, true)
+
+	frames, doneIndex, doneCount := relayedUsage(t, wire)
+	if len(frames) != 1 {
+		t.Fatalf("expected exactly one synthesized usage frame, got %d; wire was:\n%s", len(frames), wire)
+	}
+	if doneCount != 1 {
+		t.Errorf("expected exactly one [DONE] sentinel, got %d; wire was:\n%s", doneCount, wire)
+	}
+	if frames[0].position > doneIndex {
+		t.Errorf("synthesized usage frame landed after [DONE] (position %d vs %d)", frames[0].position, doneIndex)
+	}
+	if len(frames[0].chunk.Choices) != 0 {
+		t.Errorf("synthesized frame must carry no choices, got %d", len(frames[0].chunk.Choices))
+	}
+}
+
+// TestStreamRelay_UpstreamWithoutSentinel_NoUsageAsked_EmitsNoSentinel is the
+// other half of the same behaviour, and the reason the sentinel is not emitted
+// unconditionally: with nothing to synthesize there is nothing to close, and
+// the relay stays silent rather than announcing a completion the upstream never
+// announced.
+func TestStreamRelay_UpstreamWithoutSentinel_NoUsageAsked_EmitsNoSentinel(t *testing.T) {
+	upstream := sseServerWithoutDone(litellmContentFrame, litellmFinishFrame)
+	defer upstream.Close()
+
+	wire := relayWireAgainst(t, upstream, false)
+
+	if strings.Contains(wire, "[DONE]") {
+		t.Errorf("no sentinel must be emitted for an upstream that sent none; wire was:\n%s", wire)
 	}
 }
