@@ -142,6 +142,23 @@ describe("CheckoutModal behavior", () => {
         rails: optionsFixture({ min_credits: 0, max_credits: 0 }),
         purchasable: false,
       },
+      {
+        // step="0" freezes both stepper buttons on an amount the payer cannot
+        // change, which is the same dead control in a different disguise.
+        name: "selectable rail, zero increment",
+        rails: optionsFixture({ credit_increment: 0 }),
+        purchasable: false,
+      },
+      {
+        // A NEGATIVE step is the same fault with a sign: the decrement button
+        // would raise the amount. An ABSENT one is deliberately not here,
+        // because the `??` fallback substitutes a real one-cent step and the
+        // decoder already refuses an absent increment upstream whenever a rail
+        // is selectable, so the modal never sees that case from the real path.
+        name: "selectable rail, negative increment",
+        rails: optionsFixture({ credit_increment: -500 }),
+        purchasable: false,
+      },
       { name: "healthy range", rails: optionsFixture(), purchasable: true },
     ];
 

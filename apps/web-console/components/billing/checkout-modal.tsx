@@ -213,13 +213,20 @@ export function CheckoutModal({
   // incoherent range whenever a rail is selectable, so this branch is what
   // keeps an invalid range out of the DOM if the modal is ever fed one
   // directly.
+  // The step is part of the same predicate, not a separate concern: a zero or
+  // absent `credit_increment` survives the `??` above as a literal 0, renders
+  // as step="0", and freezes both stepper buttons on an amount the payer
+  // cannot change. A field nobody can move is the same dead control this
+  // change exists to remove.
   const selectableRails = options?.rails.filter((rail) => rail.enabled) ?? [];
-  const rangeIsCoherent =
+  const boundsAreCoherent =
     Number.isFinite(minCredits) &&
     minCredits > 0 &&
     Number.isFinite(maxCredits) &&
-    maxCredits >= minCredits;
-  const canPurchase = selectableRails.length > 0 && rangeIsCoherent;
+    maxCredits >= minCredits &&
+    Number.isFinite(increment) &&
+    increment > 0;
+  const canPurchase = selectableRails.length > 0 && boundsAreCoherent;
   // Both messages name the state and then the next move. A dead end that only
   // says it is a dead end still leaves the user guessing, which is the
   // complaint this change exists to answer.
