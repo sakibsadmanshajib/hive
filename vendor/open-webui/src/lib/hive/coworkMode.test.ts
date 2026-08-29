@@ -74,6 +74,25 @@ describe('the pack the composer will send', () => {
 		expect(DEFAULT_COMPOSER_PACK).toBe('knowledge-work-pack');
 		expect(COMPOSER_PACKS[0].value).toBe(DEFAULT_COMPOSER_PACK);
 	});
+
+	it('the store the composer actually reads carries that same default', () => {
+		// Review finding on #1518: the store lives in $lib/stores rather than
+		// here, because that module is reached by everything and importing
+		// lib/hive from it would invert the dependency. The default was
+		// therefore hand-duplicated, and the assertion above only checked the
+		// constant against itself. This pins the copy against the original, so
+		// changing one without the other goes red.
+		const stores = readComponent('../stores/index.ts');
+		const declaration = stores.slice(stores.indexOf('export const composerPack'));
+		expect(declaration).toContain(`writable('${DEFAULT_COMPOSER_PACK}')`);
+		// And that the store offers exactly the packs the control offers, so a
+		// third pack cannot reach the wire without appearing in the row.
+		for (const option of COMPOSER_PACKS) {
+			expect(declaration.slice(0, declaration.indexOf('writable('))).toContain(
+				`'${option.value}'`
+			);
+		}
+	});
 });
 
 describe('nextPack', () => {
@@ -261,6 +280,14 @@ describe('the cowork row offers the pack rather than stating it', () => {
 	it('writes the store the submit path reads, so the choice reaches the wire', () => {
 		expect(row).toContain("import { composerPack } from '$lib/stores'");
 		expect(row).toContain('composerPack.set(');
+	});
+
+	it('binds the click path, not only the keyboard one', () => {
+		// Review finding on #1518: asserting `composerPack.set(` alone would
+		// stay green with the click handler detached, because the keyboard
+		// handler calls the same function. The mouse is the primary way anyone
+		// picks a pack, so its binding is pinned on its own.
+		expect(row).toContain('on:click={() => select(option.value)}');
 	});
 
 	it('reuses the mode toggle segment classes rather than inventing a control idiom', () => {
