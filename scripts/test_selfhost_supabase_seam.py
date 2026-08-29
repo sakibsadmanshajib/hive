@@ -330,6 +330,47 @@ def test_the_storage_s3_prefix_matches_the_prefix_the_gateway_strips() -> None:
     assert f"S3_ENDPOINT=http://caddy-supabase{prefix}/s3" in example
 
 
+def test_ci_tests_the_same_storage_version_the_box_runs() -> None:
+    """CI stands up its own throwaway Storage API (scripts/ci-object-store.sh,
+    issue #1324), because the box's Storage is on an in-network listener that a
+    hosted runner cannot reach and that must not be exposed. The whole value of
+    running the real image rather than a generic S3 double is that a Storage
+    server defect fails CI before it reaches the box, and that value is gone
+    the moment the two pin different versions.
+
+    Bumping one and not the other is silent in both directions: CI keeps
+    passing against the old server, and the box gets a version nothing tested.
+    So the pins are asserted equal here rather than kept in step by memory."""
+    compose_image = ""
+    for line in ENT_SERVICES["supabase-storage"].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("image:"):
+            compose_image = stripped.split(":", 1)[1].strip()
+            break
+    assert compose_image, (
+        "docker-compose.enterprise.yml's supabase-storage names no image; if "
+        "the service was restructured, restate this assertion against the new "
+        "shape rather than deleting it"
+    )
+
+    fixture = (ROOT / "scripts" / "ci-object-store.sh").read_text()
+    match = re.search(r'^storage_image="([^"]+)"', fixture, re.MULTILINE)
+    assert match, (
+        "scripts/ci-object-store.sh no longer assigns storage_image. That "
+        "script is what gives CI an object store at all; if it was renamed or "
+        "restructured, point this assertion at the new shape."
+    )
+    fixture_image = match.group(1)
+
+    assert fixture_image == compose_image, (
+        "the CI object-store fixture and the deployed stack pin different "
+        f"Storage images.\n  compose: {compose_image}\n  fixture: "
+        f"{fixture_image}\nCI would then be testing a version the box does "
+        "not run, or the box would be running a version nothing tested. "
+        "Bump both together."
+    )
+
+
 def test_no_hosted_supabase_host_is_hardcoded_in_the_data_plane() -> None:
     """The data plane IS the replacement for the hosted project. A hosted
     hostname appearing here is either a stale copy-paste or a repointing that

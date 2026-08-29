@@ -1218,13 +1218,29 @@ jobs:
       GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
       GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
       NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
-      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
-      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
-      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-      S3_REGION: ${{ secrets.S3_REGION }}
-      S3_USE_SSL: 'true'
-      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
-      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      # The seven S3_* values are deliberately NOT job-level entries any more,
+      # for the same reason and with the same trap as the SUPABASE_* block
+      # above: the "Start a throwaway object store" step below writes all of
+      # them to $GITHUB_ENV, and a job-level entry takes precedence over what a
+      # step writes there, so naming one here would silently point the two Go
+      # services back at whatever the repository secret holds.
+      #
+      # What the secret holds is a deleted project. `S3_ENDPOINT` was last
+      # written on 2026-04-21, four months before the self-hosted cutover, and
+      # still names the Supabase Cloud project this repository left, which no
+      # longer resolves in DNS. So every POST /v1/files in this job died at the
+      # socket, the Files and Batches conformance assertions were carried as
+      # expected failures rather than as coverage, and the same blind 500 then
+      # reached production uncaught (issues #1324 and #1282).
+      #
+      # There is no correct value to rotate that secret to, which is why this
+      # is a fixture and not a new secret. deploy/docker/Caddyfile.supabase
+      # serves /storage/v1 on the in-network listener only and says that ports
+      # 80 and 443 must never be exposed; the public listener carries /auth/v1
+      # and nothing else. The box's Storage is therefore unreachable from a
+      # GitHub-hosted runner by design, and pointing CI at it would also mean
+      # CI writing into the live demo box's buckets, which is the arrangement
+      # the web-e2e job below already records as a defect that was fixed.
       # Same placeholders, same reason as the SUPABASE_* block above. No
       # console container runs under the `local` profile this job activates;
       # these exist only so compose has something to interpolate.
@@ -1335,6 +1351,57 @@ jobs:
           # longer touches that project at all.
           echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
 
+      # Issues #1324 and #1380. The SDK conformance suites cover POST /v1/files
+      # and the whole /v1/batches surface, which uploads its input file first,
+      # so both write an object and both need a real S3 endpoint. This job used
+      # to take that endpoint from a repository secret naming a project that has
+      # not existed since August, so those suites could not pass and could not
+      # fail for any reason to do with the gateway. It now stands up its own
+      # object store, the same way it already stands up its own database.
+      #
+      # The real supabase/storage-api at the digest the box runs, not MinIO:
+      # the defect that took production down (#1282) was a Storage server-side
+      # credential defect that MinIO has no equivalent of and so could not
+      # catch. The script's own reasoning block carries the full argument.
+      #
+      # After the database step because Storage migrates into a `storage`
+      # schema that scripts/ci-throwaway-db.sh creates, and before the stack
+      # starts because edge-api and control-plane read S3_ENDPOINT at boot and
+      # refuse to start without it.
+      #
+      # The script proves a signed PUT and GET before printing anything, so a
+      # fixture that boots and cannot store fails here by name rather than
+      # fifteen minutes later inside a suite reporting an HTTP 500.
+      - name: Start a throwaway object store
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: hive_ci
+        run: |
+          set -euo pipefail
+          scripts/ci-object-store.sh > /tmp/object-store-env
+          # Same shape the web-e2e job uses for its own throwaway stack: assert
+          # every expected line is present before consuming any of them, so a
+          # script that half succeeded fails here rather than at whichever
+          # service boots first without the value it needed.
+          for v in S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_REGION \
+                   S3_USE_SSL S3_BUCKET_FILES S3_BUCKET_IMAGES; do
+            if ! grep -q "^${v}=" /tmp/object-store-env; then
+              echo "::error::the throwaway object store printed no $v line"
+              exit 1
+            fi
+          done
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in
+              *_KEY=*) echo "::add-mask::${line#*=}" ;;
+            esac
+            echo "$line" >> "$GITHUB_ENV"
+          done < /tmp/object-store-env
+
       - name: Seed this run's API key on the throwaway database
         shell: bash
         env:
@@ -1369,6 +1436,10 @@ jobs:
           # that cannot go red is worse than no check: it reads as coverage.
           # SUPABASE_DB_URL stays, because the throwaway-database step writes it
           # to $GITHUB_ENV and a silent failure there is exactly this step's job.
+          # The three S3_* names stay for that same reason and NOT because they
+          # are still secrets: they are not, since #1324. The throwaway
+          # object-store step writes them, so an empty one here means that step
+          # wrote nothing, which is precisely the silent absence this catches.
           for v in SUPABASE_DB_URL \
                    OPENROUTER_API_KEY GROQ_API_KEY_2 GEMINI_API_KEY HIVE_API_KEY \
                    S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY; do
@@ -1835,6 +1906,10 @@ jobs:
         if: always()
         run: docker rm -f hive-ci-db || true
 
+      - name: Tear down the throwaway object store
+        if: always()
+        run: docker rm -f hive-ci-storage || true
+
       - name: File or update tracking issue on failure
         # Only for main-branch-relevant triggers (post-merge push, daily
         # cron): a labeled PR run failing is already visible to its author
@@ -1997,7 +2072,16 @@ jobs:
       NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
       # The object store is stubbed here, not supplied, for the same reason
       # the provider keys above are: no spec in the chromium project uploads
-      # or downloads an object. control-plane and edge-api only require these
+      # or downloads an object.
+      #
+      # Issue #1380 read this block as the reason `sdk-tests-js` cannot fail on
+      # a file upload. It is not: no SDK suite runs in this job, they all run
+      # in `live-integration`, which now stands up a real throwaway object
+      # store and exercises the upload for real. The stub stays here because
+      # all three of its reasons still hold, and this paragraph exists so the
+      # next reader does not have to re-derive that.
+      #
+      # control-plane and edge-api only require these
       # names to be non-empty at boot (loadStorageConfigFromEnv in
       # apps/control-plane/cmd/server/main.go, NewS3Client in
       # packages/storage/s3.go), and neither dials anything at startup, so a
@@ -2558,7 +2642,9 @@ jobs:
       # run receives no Actions secret, so as secrets these resolved empty and
       # control-plane exited at boot with `storage unavailable`. Port 9 is
       # discard, so a spec that starts touching storage fails loudly rather
-      # than reaching the live bucket.
+      # than reaching the live bucket. The job that DOES exercise storage is
+      # `live-integration`, which stands up its own object store; issue #1380
+      # mistook this block for that coverage.
       S3_ENDPOINT: 'http://127.0.0.1:9'
       S3_ACCESS_KEY: 'ci-stub-not-used'
       S3_SECRET_KEY: 'ci-stub-not-used'
