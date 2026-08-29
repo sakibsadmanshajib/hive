@@ -155,6 +155,13 @@ describe("formatUsdBalanceFromCredits", () => {
     expect(formatUsdBalanceFromCredits(1)).toBe("$0.000000001");
   });
 
+  it("rounds a negative balance down, so an overdrawn account is not flattered", () => {
+    // available_credits is posted minus reserved, so a workspace whose holds
+    // exceed its posted credits reads negative. Rounding toward zero would
+    // show less of the hole than is there.
+    expect(formatUsdBalanceFromCredits(-8_295_000_000)).toBe("-$8.30");
+  });
+
   it("renders an empty balance as zero dollars, not as an absence", () => {
     expect(formatUsdBalanceFromCredits(0)).toBe("$0.00");
   });
