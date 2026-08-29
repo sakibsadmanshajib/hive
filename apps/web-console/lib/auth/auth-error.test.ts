@@ -221,9 +221,20 @@ describe("toUserFacingSignUpMessage", () => {
       ).toBe(GENERIC);
     });
 
-    it("withholds a 500 rather than calling an outage a policy", () => {
+    it("withholds an outage rather than calling it a policy", () => {
+      // The shape auth-js produces for 500, 502, 503, 504 and for a dead
+      // transport, measured on 2026-08-29 (see the comment on isSignUpRefusal).
       expect(
-        toUserFacingSignUpMessage({ message: "internal error", status: 500 }, AT),
+        toUserFacingSignUpMessage(
+          { name: "AuthRetryableFetchError", message: "HTTP 502", status: 502 },
+          AT,
+        ),
+      ).toBe(GENERIC);
+      expect(
+        toUserFacingSignUpMessage(
+          { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 },
+          AT,
+        ),
       ).toBe(GENERIC);
     });
 

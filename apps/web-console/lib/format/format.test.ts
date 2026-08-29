@@ -159,7 +159,8 @@ describe("formatUsdBalanceFromCredits", () => {
     expect(formatUsdBalanceFromCredits(0)).toBe("$0.00");
   });
 
-  it("does not fall over on a non-finite value", () => {
-    expect(formatUsdBalanceFromCredits(Number.NaN)).toBe("$0.00");
+  it("renders a non-finite value as an absence, never as an empty wallet", () => {
+    expect(formatUsdBalanceFromCredits(Number.NaN)).toBe("—");
+    expect(formatUsdBalanceFromCredits(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });

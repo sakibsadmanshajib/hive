@@ -153,6 +153,21 @@ interface AuthErrorLike {
  *     throws and the error arrives carrying no status to branch on. This is
  *     the exact shape reported live in issue #1328, and it is why a status
  *     check alone is not enough.
+ *
+ * The third rule does not swallow an outage, which is the obvious worry.
+ * Measured against @supabase/auth-js 2.x, driving supabase.auth.signUp with a
+ * stubbed fetch, on 2026-08-29:
+ *
+ *   500, 502, 503, 504 with an HTML body -> AuthRetryableFetchError, status
+ *     preserved. A dead transport (DNS failure, offline) -> the same class,
+ *     status 0.
+ *   404 or 403 with an empty or non-JSON body -> AuthUnknownError, no status.
+ *
+ * Every shape auth-js recognises as an outage therefore lands in a different
+ * class than the one below, and reaches the generic branch with its support
+ * reference. AuthUnknownError means the auth origin answered a non-5xx status
+ * with something that is not an API response at all, which on this stack is a
+ * gateway refusal.
  */
 function isSignUpRefusal(error: AuthErrorLike): boolean {
   if (error.status === 404 || error.status === 403) {

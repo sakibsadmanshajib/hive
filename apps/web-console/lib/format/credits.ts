@@ -158,7 +158,14 @@ export const CREDITS_PER_USD = 1_000_000_000;
  * "US$0.20", which reads as a second currency.
  */
 export function formatUsdBalanceFromCredits(credits: number): string {
-  if (!Number.isFinite(credits) || credits === 0) {
+  // Zero is a real, readable balance. A non-finite value is not: it can only
+  // come from a decode that failed, and rendering that as "$0.00" would assert
+  // an empty wallet where nothing was read at all. Same policy, and the same
+  // em dash, as formatPercent above.
+  if (!Number.isFinite(credits)) {
+    return "—";
+  }
+  if (credits === 0) {
     return "$0.00";
   }
   const usd = credits / CREDITS_PER_USD;
