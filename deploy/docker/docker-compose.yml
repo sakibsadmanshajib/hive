@@ -1275,26 +1275,30 @@ services:
       # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
       # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
-      # Chat upload limits (#1405). Both are persistent config, so both are
-      # reconciled by owui-patches/hive_rag_env_config.py for the same
-      # first-boot-wins reason as every key around them. This line existed from
-      # the #1108 follow-up with an EMPTY default and a comment claiming it
-      # served the client-side guard; it did not, because the key was missing
-      # from that reconcile map, so no value set here could reach a box that had
-      # already booted. Measured live 2026-08-29: a 28.6 MB attachment produced
-      # a composer chip and a POST that had still not returned after 105
-      # seconds, with no progress, no timeout and no error, and evil.exe
-      # uploaded and was processed with a 200.
+      # Chat upload limits (#1405, #1428). Both are persistent config, so both
+      # are reconciled by owui-patches/hive_rag_env_config.py for the same
+      # first-boot-wins reason as every key around them.
       #
-      # 25 is not a preference. RAG_MAX_UPLOAD_BYTES above is 26214400 on
-      # edge-api and on the markitdown sidecar, and Open WebUI multiplies its
-      # megabyte value by 1024 * 1024, so this is byte for byte the ceiling
-      # Hive already enforces on its own document ingest path. Accepting more
-      # in chat than the product accepts elsewhere would give two different
-      # answers to "how large a document can Hive read". Raise it in .env if a
-      # real document is refused; the refusal is immediate and names the limit,
-      # so it is visible rather than a stall.
-      RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-25}
+      # This is the SAME expression edge-api and the markitdown sidecar take,
+      # verbatim, and that sameness is the fix. Until #1428 the chat surface
+      # took its own variable, RAG_FILE_MAX_SIZE, in whole megabytes rather than
+      # bytes, settable independently of the ceiling the ingest path enforces.
+      # PR #1426 set that variable's compose default to 25, byte for byte the
+      # ingest ceiling, and was defeated anyway: the demo box's .env carried
+      # RAG_FILE_MAX_SIZE=100, an explicit value beats a compose fallback, and
+      # the chat surface went on publishing a 100 MB cap to every browser.
+      # Measured live 2026-08-29 with that value in place: a 30 MB attachment
+      # produced a composer chip and a POST with no response at all after 44
+      # seconds, no progress, no timeout, no error, while the same file sent
+      # straight at the container's API was accepted and stored with a 200.
+      #
+      # Open WebUI wants whole megabytes and this is bytes, which is the only
+      # reason the conversion needs code: hive_rag_env_config.derived_upload_cap
+      # floors it into rag.file.max_size. Do not re-add a second variable to
+      # avoid that division. scripts/test_owui_rag_env_config.py fails if this
+      # file ever names RAG_FILE_MAX_SIZE again, or if these three services stop
+      # sharing one expression.
+      RAG_MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-26214400}
       # The allowlist is derived by a rule rather than by taste: everything this
       # deployment can turn into text, which is Open WebUI's own
       # `known_source_ext` plus the extensions `Loader._get_loader` names in its

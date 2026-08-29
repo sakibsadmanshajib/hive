@@ -111,31 +111,16 @@ RAG_CONFIG_ENV = {
     # off) yields no entry and never clobbers a persisted engine, while the
     # demo's workflow env supplies "duckduckgo".
     "web.search.engine": "WEB_SEARCH_ENGINE",
-    # Chat upload limits (#1405), and the same first-boot trap for the third
-    # time, with the compose half already written. `RAG_FILE_MAX_SIZE` has been
-    # on the open-webui service since the #1108 follow-up, carrying a comment
-    # saying it serves `rag.file.max_size` to clients so the composer's size
-    # guard fires client-side. It never reached anything: the key was not in
-    # this map, so nothing reconciled it, and the row a first boot seeded from
-    # `DEFAULT_CONFIG` (None, meaning no limit) has outranked the variable ever
-    # since. Measured live on the deployed chat 2026-08-29: a 28.6 MB
-    # attachment produced a composer chip and a POST that had still not
-    # returned after 105 seconds, with no progress, no timeout and no error,
-    # and a Windows executable uploaded and was processed with a 200.
-    #
-    # Neither value is enforced here. Both are enforced by the pinned image's
-    # own `routers/files.py.upload_file_handler`, read out of the running
-    # container rather than assumed: an extension outside
+    # Chat upload type allowlist (#1405). Not enforced here: enforcement is in
+    # the pinned image's own `routers/files.py.upload_file_handler`, read out
+    # of the running container rather than assumed, where an extension outside
     # `rag.file.allowed_extensions` is refused with 400 before the bytes reach
-    # storage, and a file over `rag.file.max_size` megabytes is refused with
-    # 413 and the stored object deleted. Open WebUI also publishes the size cap
-    # through `/api/config` as `file.max_size`, which is what lets
-    # MessageInput.svelte refuse an oversized file before the request is made.
-    # Client-side is the fast, legible refusal; the server is the enforcement.
+    # storage.
     #
-    # These two are types, not strings, and both coercions matter. See
-    # INTEGER_KEYS and LIST_KEYS below.
-    "rag.file.max_size": "RAG_FILE_MAX_SIZE",
+    # This is a type, not a string, and the coercion matters. See LIST_KEYS.
+    #
+    # The size cap is deliberately NOT here. It is derived from
+    # RAG_MAX_UPLOAD_BYTES instead: see derived_upload_cap below.
     "rag.file.allowed_extensions": "RAG_ALLOWED_FILE_EXTENSIONS",
 }
 
@@ -235,15 +220,6 @@ PERMISSIONS_KEY = "user.permissions"
 # the one a first boot would have seeded.
 BOOLEAN_KEYS = frozenset({"ui.enable_login_form"})
 
-# Keys Open WebUI stores as a JSON number. `rag.file.max_size` is published raw
-# to the browser as `file.max_size`, where MessageInput.svelte computes
-# `max_size * 1024 * 1024`, and is read back server-side as
-# `int(max_size) * 1024 * 1024`. A string survives both by coincidence, and is
-# still wrong: upstream parses the variable with `int()`, so a first boot seeds
-# a number, and a reconciled value whose type differs from the seeded one is
-# how `ui.enable_login_form` went wrong before.
-INTEGER_KEYS = frozenset({"rag.file.max_size"})
-
 # Keys Open WebUI stores as a JSON list of strings, split on commas exactly as
 # upstream's own parse does
 # (`[ext.strip() for ext in os.getenv(...).split(',') if ext.strip()]`).
@@ -288,6 +264,100 @@ PAIRED_DESTINATIONS = (
 )
 
 
+# The one settable upload ceiling in the whole stack, in bytes (issue #1428).
+# docker-compose.yml interpolates the identical `${RAG_MAX_UPLOAD_BYTES:-...}`
+# expression into edge-api, into the markitdown sidecar as MAX_UPLOAD_BYTES,
+# and into this container.
+UPLOAD_CEILING_ENV = "RAG_MAX_UPLOAD_BYTES"
+
+# The knob this replaces, kept named so its return can be refused rather than
+# silently obeyed.
+SUPERSEDED_UPLOAD_CAP_ENV = "RAG_FILE_MAX_SIZE"
+
+BYTES_PER_MEGABYTE = 1024 * 1024
+
+
+def derived_upload_cap(environ) -> dict:
+    """Derive `rag.file.max_size` from the one settable upload ceiling.
+
+    Open WebUI wants whole megabytes; edge-api and the markitdown sidecar want
+    bytes. That unit mismatch is the entire reason this is code rather than a
+    plain compose interpolation like the other two, and it used to be an excuse
+    for a second variable: `RAG_FILE_MAX_SIZE` on the chat surface, set
+    independently of `RAG_MAX_UPLOAD_BYTES` on the ingest path, in different
+    units, with nothing making them agree.
+
+    That produced issue #1428. PR #1426 set the compose default to 25 to match
+    the ingest ceiling byte for byte, correctly, and the deployment defeated it:
+    `/home/sakib/hive/.env` on the box carried `RAG_FILE_MAX_SIZE=100`, an
+    explicit value beats a compose fallback, and the chat surface went on
+    publishing a 100 MB cap to every browser while edge-api and the sidecar
+    refused anything over 25 MB. Measured on the deployed chat 2026-08-29, with
+    the derived cap absent: a 30 MB attachment produced a chip, a POST, and no
+    response at all in 44 seconds of watching, while the same file sent
+    straight at the container's API was accepted and stored with a 200.
+
+    A check that compared the two would have reported the disagreement and left
+    both knobs in place. Deriving one from the other means the disagreement
+    cannot be written down.
+
+    Rounds DOWN. The chat surface must never accept a file the ingest path
+    would refuse, so a byte value that is not a whole number of megabytes
+    yields the smaller cap, not the larger.
+
+    Raises RuntimeError rather than falling back, in three cases: the
+    superseded variable is present at all, the ceiling cannot be parsed, or it
+    floors to less than one megabyte. Sub-megabyte is refused for a sharper
+    reason than "not a useful cap": the two consumers read 0 oppositely. Open
+    WebUI's server-side check is `if max_size and len(contents) > ...`, where 0
+    is falsy and enforces nothing, while the browser's is
+    `file.size > max_size * 1024 * 1024`, where 0 rejects every file of
+    non-zero length. A deployment there would refuse every upload in the
+    composer while leaving the API accepting files of unlimited size, and would
+    read as a working cap.
+    """
+    superseded = (environ.get(SUPERSEDED_UPLOAD_CAP_ENV) or "").strip()
+    if superseded:
+        raise RuntimeError(
+            f"{SUPERSEDED_UPLOAD_CAP_ENV} is set to {superseded!r}, and it is no "
+            f"longer read. The chat attachment cap is derived from "
+            f"{UPLOAD_CEILING_ENV}, the same ceiling edge-api and the markitdown "
+            f"sidecar enforce, so that one deployment cannot accept in chat what "
+            f"it refuses everywhere else (issue #1428). Remove "
+            f"{SUPERSEDED_UPLOAD_CAP_ENV} and set {UPLOAD_CEILING_ENV} in bytes "
+            f"instead. Refusing to start rather than quietly ignoring it, "
+            f"because being quietly ignored is exactly what this variable did "
+            f"for the three deploys before this one."
+        )
+
+    raw = (environ.get(UPLOAD_CEILING_ENV) or "").strip()
+    if not raw:
+        # Same contract as every other key here: an unset variable writes
+        # nothing, so an administrator's own choice survives and a deployment
+        # that never sets it is not silently capped. Compose always supplies a
+        # value, so this is the enterprise/self-host path, not the demo one.
+        return {}
+
+    if not raw.isdigit():
+        raise RuntimeError(
+            f"{UPLOAD_CEILING_ENV} must be a whole number of BYTES, got "
+            f"{raw!r}. A value that cannot be parsed would leave the deployment "
+            f"looking capped while enforcing nothing, which is the silent no-op "
+            f"this module exists to end. 26214400 is 25 MB."
+        )
+
+    megabytes = int(raw) // BYTES_PER_MEGABYTE
+    if megabytes < 1:
+        raise RuntimeError(
+            f"{UPLOAD_CEILING_ENV}={raw!r} is less than one megabyte, which "
+            f"floors to a chat cap of 0. Open WebUI reads 0 as no server-side "
+            f"cap at all while the browser reads it as refusing every file of "
+            f"non-zero length, so the composer would reject everything while "
+            f"the API accepted anything. Set at least {BYTES_PER_MEGABYTE}."
+        )
+    return {"rag.file.max_size": megabytes}
+
+
 def overrides(environ) -> dict:
     """Return the persisted-config overrides the environment explicitly sets.
 
@@ -305,38 +375,15 @@ def overrides(environ) -> dict:
     The reverse pairing is fine and is how a rotated shim key reaches Open
     WebUI: a new credential for the destination already persisted.
     """
-    applied = {}
+    # First, so a superseded or malformed ceiling fails the boot before
+    # anything else is reconciled.
+    applied = derived_upload_cap(environ)
     for key, variable in RAG_CONFIG_ENV.items():
         value = (environ.get(variable) or "").strip()
         if not value:
             continue
         if key in BOOLEAN_KEYS:
             applied[key] = value.lower() == "true"
-        elif key in INTEGER_KEYS:
-            # Refused rather than dropped. A cap that cannot be parsed and is
-            # quietly ignored leaves the deployment looking configured while it
-            # goes on accepting a 30 MB upload, which is the silent-no-op
-            # failure this whole module exists to end. Failing here surfaces as
-            # a startup failure naming the variable.
-            #
-            # Zero is refused for a sharper reason than "it is not a useful
-            # cap". The two consumers disagree about what it means. Open
-            # WebUI's server-side check is `if max_size and len(contents) >
-            # ...`, where 0 is falsy, so the backend enforces nothing at all.
-            # The browser's is `file.size > max_size * 1024 * 1024`, where 0
-            # rejects every file of non-zero length. A deployment set to 0 would
-            # therefore refuse every upload in the composer while leaving the
-            # API accepting files of unlimited size, which is worse than either
-            # end of the range and would read as "the cap works".
-            if not value.isdigit() or int(value) == 0:
-                raise RuntimeError(
-                    f"{variable} must be a whole number of megabytes greater "
-                    f"than zero, got {value!r}. Zero disables the server-side "
-                    f"cap while making the composer refuse every file, and a "
-                    f"value that cannot be parsed would leave the deployment "
-                    f"looking capped while enforcing nothing."
-                )
-            applied[key] = int(value)
         elif key in LIST_KEYS:
             # The leading dot is stripped because an operator writing
             # ".pdf,.txt" is writing the obvious thing, and upstream compares
