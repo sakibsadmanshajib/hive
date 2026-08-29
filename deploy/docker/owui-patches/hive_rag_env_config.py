@@ -111,6 +111,32 @@ RAG_CONFIG_ENV = {
     # off) yields no entry and never clobbers a persisted engine, while the
     # demo's workflow env supplies "duckduckgo".
     "web.search.engine": "WEB_SEARCH_ENGINE",
+    # Chat upload limits (#1405), and the same first-boot trap for the third
+    # time, with the compose half already written. `RAG_FILE_MAX_SIZE` has been
+    # on the open-webui service since the #1108 follow-up, carrying a comment
+    # saying it serves `rag.file.max_size` to clients so the composer's size
+    # guard fires client-side. It never reached anything: the key was not in
+    # this map, so nothing reconciled it, and the row a first boot seeded from
+    # `DEFAULT_CONFIG` (None, meaning no limit) has outranked the variable ever
+    # since. Measured live on the deployed chat 2026-08-29: a 28.6 MB
+    # attachment produced a composer chip and a POST that had still not
+    # returned after 105 seconds, with no progress, no timeout and no error,
+    # and a Windows executable uploaded and was processed with a 200.
+    #
+    # Neither value is enforced here. Both are enforced by the pinned image's
+    # own `routers/files.py.upload_file_handler`, read out of the running
+    # container rather than assumed: an extension outside
+    # `rag.file.allowed_extensions` is refused with 400 before the bytes reach
+    # storage, and a file over `rag.file.max_size` megabytes is refused with
+    # 413 and the stored object deleted. Open WebUI also publishes the size cap
+    # through `/api/config` as `file.max_size`, which is what lets
+    # MessageInput.svelte refuse an oversized file before the request is made.
+    # Client-side is the fast, legible refusal; the server is the enforcement.
+    #
+    # These two are types, not strings, and both coercions matter. See
+    # INTEGER_KEYS and LIST_KEYS below.
+    "rag.file.max_size": "RAG_FILE_MAX_SIZE",
+    "rag.file.allowed_extensions": "RAG_ALLOWED_FILE_EXTENSIONS",
 }
 
 # Same idea, boolean-valued.
@@ -209,6 +235,29 @@ PERMISSIONS_KEY = "user.permissions"
 # the one a first boot would have seeded.
 BOOLEAN_KEYS = frozenset({"ui.enable_login_form"})
 
+# Keys Open WebUI stores as a JSON number. `rag.file.max_size` is published raw
+# to the browser as `file.max_size`, where MessageInput.svelte computes
+# `max_size * 1024 * 1024`, and is read back server-side as
+# `int(max_size) * 1024 * 1024`. A string survives both by coincidence, and is
+# still wrong: upstream parses the variable with `int()`, so a first boot seeds
+# a number, and a reconciled value whose type differs from the seeded one is
+# how `ui.enable_login_form` went wrong before.
+INTEGER_KEYS = frozenset({"rag.file.max_size"})
+
+# Keys Open WebUI stores as a JSON list of strings, split on commas exactly as
+# upstream's own parse does
+# (`[ext.strip() for ext in os.getenv(...).split(',') if ext.strip()]`).
+#
+# This coercion is load bearing rather than cosmetic. `upload_file_handler`
+# evaluates `file_extension not in allowed_file_extensions`, so persisting the
+# raw comma string would silently turn a membership test into a SUBSTRING test:
+# an upload with extension `df` would be admitted because the string "pdf"
+# contains it, and so would every other extension that happens to be a
+# substring of an allowed one. Lowercased and stripped of any leading dot on
+# the way in, because the handler compares against an extension it has already
+# lowercased and stripped the dot from.
+LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
+
 # Keys whose value must never be logged. The rest are named with their value,
 # because the embedding model Open WebUI will actually send is the one signal
 # this failure mode never produced anywhere: Open WebUI logs only aiohttp's
@@ -259,8 +308,62 @@ def overrides(environ) -> dict:
     applied = {}
     for key, variable in RAG_CONFIG_ENV.items():
         value = (environ.get(variable) or "").strip()
-        if value:
-            applied[key] = value.lower() == "true" if key in BOOLEAN_KEYS else value
+        if not value:
+            continue
+        if key in BOOLEAN_KEYS:
+            applied[key] = value.lower() == "true"
+        elif key in INTEGER_KEYS:
+            # Refused rather than dropped. A cap that cannot be parsed and is
+            # quietly ignored leaves the deployment looking configured while it
+            # goes on accepting a 30 MB upload, which is the silent-no-op
+            # failure this whole module exists to end. Failing here surfaces as
+            # a startup failure naming the variable.
+            #
+            # Zero is refused for a sharper reason than "it is not a useful
+            # cap". The two consumers disagree about what it means. Open
+            # WebUI's server-side check is `if max_size and len(contents) >
+            # ...`, where 0 is falsy, so the backend enforces nothing at all.
+            # The browser's is `file.size > max_size * 1024 * 1024`, where 0
+            # rejects every file of non-zero length. A deployment set to 0 would
+            # therefore refuse every upload in the composer while leaving the
+            # API accepting files of unlimited size, which is worse than either
+            # end of the range and would read as "the cap works".
+            if not value.isdigit() or int(value) == 0:
+                raise RuntimeError(
+                    f"{variable} must be a whole number of megabytes greater "
+                    f"than zero, got {value!r}. Zero disables the server-side "
+                    f"cap while making the composer refuse every file, and a "
+                    f"value that cannot be parsed would leave the deployment "
+                    f"looking capped while enforcing nothing."
+                )
+            applied[key] = int(value)
+        elif key in LIST_KEYS:
+            # The leading dot is stripped because an operator writing
+            # ".pdf,.txt" is writing the obvious thing, and upstream compares
+            # against an extension it has already stripped the dot from, so
+            # keeping the dot would persist a list that matches nothing and
+            # refuse every upload while looking correctly configured.
+            items = [
+                item.strip().lstrip(".").lower()
+                for item in value.split(",")
+                if item.strip().strip(".")
+            ]
+            # A value that is all separators (",", " . , ") parses to an empty
+            # list, and an empty list is falsy in `if process and
+            # allowed_file_extensions`, so persisting it would turn the check
+            # off while the deployment's own configuration says it is on.
+            if not items:
+                raise RuntimeError(
+                    f"{variable} is set to {value!r}, which parses to no "
+                    f"extensions at all. An empty allowlist turns the type "
+                    f"check off entirely while the deployment still looks "
+                    f"configured. Name the extensions to allow. Removing the "
+                    f"allowlist altogether is a change to the compose default, "
+                    f"made deliberately, not something an empty value does."
+                )
+            applied[key] = items
+        else:
+            applied[key] = value
 
     for key, variable in FEATURE_CONFIG_ENV.items():
         value = (environ.get(variable) or "").strip()
