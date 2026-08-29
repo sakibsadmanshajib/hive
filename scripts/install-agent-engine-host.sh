@@ -301,10 +301,15 @@ echo
 # Only now, with the new unit answering, is it true that these artifacts are
 # what is running. The next deploy compares against this and skips the restart
 # when nothing changed.
-printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH"
 # 0600 like $ENV_FILE and 0700 like $RUN_ENTRY and $SOCKET_DIR: this is the
 # only file the script leaves in $RUNTIME_DIR that the surrounding umask 022
 # would otherwise make world readable, and nothing outside this script and the
-# unit it starts has any business reading it.
+# unit it starts has any business reading it. The umask is what stops the file
+# being created 0644 and narrowed a moment later, the way $STAGE_ENV and
+# $STAGE_ENTRY are already created under `umask 077` rather than fixed up
+# afterwards. The chmod stays for the run that finds the file already there
+# from an older version of this script, since `>` truncates without touching
+# the mode.
+(umask 077; printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH")
 chmod 0600 "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"

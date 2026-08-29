@@ -87,13 +87,25 @@ for arg in "$@"; do
   [ -z "$verb" ] && verb="$arg"
 done
 case "$verb" in
-  stop)
+  # `restart` is destructive here too, and modelling only its teardown half is
+  # deliberate. The installer issues `stop` today, but rewriting that line as
+  # `systemctl --user restart` is the obvious simplification and is exactly the
+  # regression this file exists to catch. With no `restart` arm the stub used to
+  # fall through to `exit 0` having changed nothing: the session marker
+  # survived, `is-active` still reported active, every assertion passed green,
+  # and the real unit had just killed every in-flight sandbox. A stub that also
+  # re-created `active` would mask the kill again, so it does not.
+  stop|restart)
     rm -f "$STATE/active" "$STATE/session" "$STATE/socket_path_marker"
     [ -n "${SOCKET_UNDER_TEST:-}" ] && rm -f "$SOCKET_UNDER_TEST"
     ;;
   is-active) [ -f "$STATE/active" ] || exit 3 ;;
   show) [ -f "$STATE/active" ] && cat "$STATE/active" || echo 0 ;;
   status) [ -f "$STATE/active" ] || exit 3 ;;
+  # The general form of the same bug: any verb this stub has not been taught is
+  # a loud failure rather than a silent success, so the next one to be added to
+  # the installer cannot quietly pass through unmodelled.
+  *) echo "stub systemctl: unhandled verb '$verb' in: $*" >&2; exit 64 ;;
 esac
 exit 0
 SH
@@ -176,7 +188,7 @@ run_installer() {
 # The stubs log full argv, so match the real shapes: `systemctl --user stop …`
 # and `systemd-run --user --unit=… …`. Matching "systemctl stop" would never
 # fire and every stop assertion below would pass vacuously.
-stopped() { grep -q '^systemctl .* stop ' "$STATE/calls"; }
+stopped() { grep -qE '^systemctl .* (stop|restart) ' "$STATE/calls"; }
 started() { grep -q '^systemd-run ' "$STATE/calls"; }
 incarnation(){ cat "$STATE/active" 2>/dev/null || echo none; }
 
@@ -209,6 +221,27 @@ if ! grep -q -- '-buildvcs=false' "$STATE/calls"; then
   fail "[A2] the installer's go build does not pass -buildvcs=false" "$(grep '^docker ' "$STATE/calls" || true)"
 fi
 [ $failures -eq "$before_a2" ] && echo "ok   [A2] the build is pinned to the sources with -buildvcs=false"
+
+# --- case A3: the artifacts this script leaves behind must stay narrow -------
+#
+# The suite asserted no file mode at all before this case existed, so dropping
+# either `umask 077` block or any of the four explicit chmods would have gone
+# green while leaving the model API key and the internal service token in a
+# world readable engine.env on the box. The fingerprint file is here for the
+# same reason: it was shipped 0644 while every sibling artifact in the same
+# directory was 0600 or 0700.
+before_a3=$failures
+mode_of() { stat -c%a "$1" 2>/dev/null || echo missing; }
+for spec in "$runtime/engine.env:600" "$runtime/bin/run-engine.sh:700" \
+            "$runtime/engine.fingerprint:600" "$runtime/run:700"; do
+  path="${spec%:*}"
+  want="${spec##*:}"
+  got=$(mode_of "$path")
+  if [ "$got" != "$want" ]; then
+    fail "[A3] $path is mode $got, expected $want"
+  fi
+done
+[ $failures -eq "$before_a3" ] && echo "ok   [A3] the installed artifacts are not world readable"
 
 # --- case B: THE GUARD. Unchanged artifacts must not kill an in-flight task ---
 
