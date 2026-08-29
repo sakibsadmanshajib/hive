@@ -360,9 +360,18 @@ type StreamDelta struct {
 // StreamUsage carries token counts in streaming events. Same exclusive shape
 // as ResponseUsage (see its doc comment): InputTokens excludes both cache
 // fields below, it is never the raw upstream prompt_tokens total.
+//
+// input_tokens and output_tokens carry NO omitempty, and that is load bearing:
+// the Anthropic Usage model declares both as required, so a zero count has to
+// serialize as an explicit 0 rather than vanish. With omitempty on both, a
+// message_start emitted before any usage-bearing upstream frame (which is
+// every message_start this gateway relays) went out as "usage":{}, an object
+// with no required member at all, and a typed client validating that model
+// gets a parse failure rather than a zero (issue #1329). The cache fields keep
+// omitempty: the real API reports them only when a cache was involved.
 type StreamUsage struct {
-	InputTokens              int `json:"input_tokens,omitempty"`
-	OutputTokens             int `json:"output_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }

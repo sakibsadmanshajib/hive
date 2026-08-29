@@ -375,7 +375,21 @@ func (t *SSETranslator) emitMessageDelta() {
 		},
 		// Cumulative final totals -- see the overwrite-never-accumulate note
 		// in FeedLine's usage capture above.
+		//
+		// input_tokens is reported HERE, not only in message_start, and that is
+		// the whole of what a relayed stream can honestly promise: this gateway
+		// learns the input count from a terminal upstream usage frame that
+		// arrives long after message_start has been flushed (see
+		// emitMessageStart). Carrying it on message_delta is not an invention
+		// for that limitation, it is what the live protocol does: the streaming
+		// specification documents a message_delta usage object carrying
+		// input_tokens, cache_creation_input_tokens, cache_read_input_tokens
+		// and output_tokens together (verified against the published example on
+		// 2026-08-28). Without it the only input count on the wire is the zero
+		// message_start went out with, which is what made every /v1/messages
+		// stream look free and context-less to Claude Code (issue #1329).
 		Usage: &StreamUsage{
+			InputTokens:              t.inputTokens,
 			OutputTokens:             t.outputTokens,
 			CacheCreationInputTokens: t.cacheCreationTokens,
 			CacheReadInputTokens:     t.cacheReadTokens,

@@ -357,13 +357,19 @@ func (o *Orchestrator) executeStreaming(
 	mintedID := mintCompletionID(idPrefixForEndpoint(endpoint))
 	// finishSeen gates the DeepSeek-family post-finish chunk fix below.
 	finishSeen := false
+	// sawDone records that the upstream sent its [DONE] sentinel. The sentinel
+	// is written to the caller after this loop, never inside it, so a
+	// synthesized terminal usage frame cannot land behind it: every SSE client
+	// stops reading at [DONE], so a usage frame written after it is a frame
+	// nobody receives, and the previous code wrote a second [DONE] behind that
+	// one as well (issue #1329).
+	sawDone := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		if line == "data: [DONE]" {
-			fmt.Fprint(w, "data: [DONE]\n\n")
-			flusher.Flush()
+			sawDone = true
 			break
 		}
 
@@ -394,6 +400,14 @@ func (o *Orchestrator) executeStreaming(
 				// billing never silently drops content -- only the write to
 				// the client is skipped.
 				suppressPostFinish := ShouldSuppressPostFinishChunk(finishSeen, chunk)
+				// Read before the finishSeen update below, so a frame that
+				// carries finish_reason AND usage together (the shape a direct
+				// OpenRouter stream sends) is not mistaken for one arriving
+				// after the finish. A frame that carries a finish_reason of
+				// its own is excluded outright: emptying its choices would
+				// strip that finish_reason on the way out, and a terminal
+				// usage frame never carries one.
+				postFinishUsageFrame := finishSeen && chunk.Usage != nil && !ChunkFinished(chunk)
 				if ChunkFinished(chunk) {
 					finishSeen = true
 				}
@@ -420,6 +434,22 @@ func (o *Orchestrator) executeStreaming(
 				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk, aliasID)
+
+				// LiteLLM delivers its terminal usage frame with one
+				// empty-delta choice rather than the empty choices array
+				// OpenAI itself uses (measured on the pinned v1.98.0 image,
+				// 2026-08-28). Now that such a frame is forwarded rather than
+				// dropped, emit it in the canonical usage-only shape: the
+				// 2026-08-26 parity fix exists because a strict SSE client
+				// chokes on any post-finish choice, and an empty choices array
+				// is what every OpenAI-compatible client already expects on a
+				// terminal usage frame. Nothing is lost by it -- content and
+				// finish_reason both arrived on their own earlier frames, and
+				// the accumulator has already read this one in full for
+				// settlement.
+				if postFinishUsageFrame {
+					chunk.Choices = []ChunkChoice{}
+				}
 
 				// The caller's OWN request decides whether a usage-bearing
 				// frame is contract-visible (#1226), never the include_usage
@@ -528,7 +558,12 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
-	// 10. Synthesize terminal usage chunk if requested but upstream didn't send one
+	// 10. Synthesize a terminal usage chunk when the caller asked for one and
+	// the upstream sent none, then close the stream. Both writes happen here,
+	// in this order, so the sentinel is always last and always singular:
+	// [DONE] used to be written inside the relay loop, which put this
+	// synthesized frame behind the sentinel and a second sentinel behind that
+	// (issue #1329).
 	if includeUsage && !accumulator.HasUsage {
 		synth := ChatCompletionChunk{
 			// Same mintedID as every other chunk of this stream -- a
@@ -542,11 +577,15 @@ func (o *Orchestrator) executeStreaming(
 			Choices: []ChunkChoice{},
 			Usage:   accumulator.ToUsageResponse(),
 		}
-		synthJSON, err := json.Marshal(synth)
-		if err == nil {
+		synthJSON, marshalErr := json.Marshal(synth)
+		if marshalErr == nil {
 			fmt.Fprintf(w, "data: %s\n\n", synthJSON)
 			flusher.Flush()
 		}
+		sawDone = true
+	}
+
+	if sawDone {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
