@@ -1,0 +1,2022 @@
+### https://console-hive.scubed.co/console
+HTTP 200 | final=https://console-hive.scubed.co/console
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console.png
+ERRORS(0): 
+FAILED(1): GET https://console-hive.scubed.co/console/marketplace?_rsc=p62TaBKAA6wdbfO9 :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Overview
+Documentation
+EN
+বাংলা
+WORKSPACE:
+Hive Demo
+
+Track credits, recent usage, and the health of your workspace at a glance.
+
+Available credits
+
+Updated continuously across all running requests.
+
+$99.99
+
+Posted $99.99 · Reserved $0.00
+
+99,996,364,207 credits, at 1,000,000,000 credits per $1.00
+
+Today’s activity
+
+Snapshot of requests served and tokens processed.
+
+8
+
+405 tokens in the last 24h · Analytics
+
+Recent errors
+
+Failures across keys in the last 24 hours.
+
+No errors recorded.
+
+Request outcomes visible in the request log.
+
+NEXT STEPS
+Create an API key
+Mint a scoped key and start sending requests.
+Top up credits
+Add prepaid credits so requests keep clearing.
+Browse the model catalog
+See which models and aliases this workspace can route to.
+Open analytics
+Break usage down by key, model, and day.
+Need the API reference? Read the docs
+
+---
+### https://console-hive.scubed.co/console/api-keys
+HTTP 200 | final=https://console-hive.scubed.co/console/api-keys
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-api-keys.png
+ERRORS(0): 
+FAILED(2): GET https://console-hive.scubed.co/console/catalog?_rsc=yVpGkCpe4w_N83Su :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=pS51PTDMfNVp2Ggj :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+API keys
+Documentation
+EN
+বাংলা
+AUTHENTICATION
+API keys
+
+Issue and revoke programmatic credentials. To rotate a key, create a replacement and revoke the old one. Keys are shown in full only at creation, so store them in a secret manager.
+
+Create API key
+
+Each key is scoped to this workspace. Set an expiry to enforce rotation cadence.
+
+Nickname*
+Expires
+
+Optional
+
+Credit limit (USD)
+
+Total for the key's lifetime; blank for unlimited
+
+Reset limit every…
+Never (lifetime cap)
+Every month
+
+Only applies when a credit limit is set
+
+No credit limit: this key can spend the account balance.
+
+Create key
+NAME	KEY	STATUS	SPEND (LIFETIME)	CREDIT LIMIT	EXPIRES	LAST USED	
+ACTIONS
+
+quietwalk-quietwalk-1787966902	hk_xxxx•••4yFrhI	Active	$0.000000858	Unlimited	—	29 Aug 2026	
+Revoke
+
+lc2	hk_xxxx•••d9f834	Revoked	$0.000662	Unlimited	—	24 Aug 2026	—
+orchestrator-livecheck	hk_xxxx•••0fae3a	Revoked	$0.00000278	Unlimited	—	24 Aug 2026	—
+issue-616 post-deploy check 2026-08-16T17:06:30.701Z	hk_xxxx•••OdSynA	Revoked	$0.00001	Unlimited	—	16 Aug 2026	—
+issue-616 post-deploy check 2026-08-16T16:59:27.406Z	hk_xxxx•••lmvqwM	Revoked	$0.00001	Unlimited	—	16 Aug 2026	—
+demo walk extras 2026-08-16	hk_xxxx•••39aOx8	Revoked	$0	Unlimited	—	—	—
+demo walk reliability 2026-08-16	hk_xxxx•••iOWL1s	Revoked	$0.00005	Unlimited	—	16 Aug 2026	—
+demo walk 2026-08-16	hk_xxxx•••5pMa5s	Revoked	$0.00002	Unlimited	—	16 Aug 2026	—
+demo-walk-831590	hk_xxxx•••vCP_uA	Revoked	$0.00001	Unlimited	—	11 Aug 2026	—
+interaction gate probe	hk_xxxx•••gn9OoY	Revoked	$0	Unlimited	1 Jan 2026	—	—
+interaction gate probe	hk_xxxx•••LP3Tr8	Revoked	$0	Unlimited	1 Jan 2026	—	—
+interaction gate probe	hk_xxxx•••bTRf8Q	Revoked	$0	Unlimited	1 Jan 2026	—	—
+interaction gate probe	hk_xxxx•••E9Hans	Revoked	$0	Unlimited	1 Jan 2026	—	—
+interaction gate probe	hk_xxxx•••BrExLM	Revoked	$0	Unlimited	1 Jan 2026	—	—
+interaction gate probe	hk_xxxx•••e9J0BM	Revoked	$0	Unlimited	1 Jan 2026	—	—
+deploy-verify-2026-08-08	hk_xxxx•••DR8oTg	Revoked	$0	Unlimited	—	—	—
+platform-admin-revocation-proof	hk_xxxx•••AWgZUI	Revoked	$0	Unlimited	—	—	—
+diag620-mapped-probe	hk_xxxx•••xxmhAQ	Revoked	$0	Unlimited	—	—	—
+verify-control-plane	hk_xxxx•••tFkiK8	Revoked	$0	Unlimited	—	—	—
+verify-control-plane	hk_xxxx•••dnb1Uo	Revoked	$0	Unlimited	—	—	—
+cp-verify-probe	hk_xxxx•••F0Bvec	Revoked	$0	Unlimited	—	—	—
+
+---
+### https://console-hive.scubed.co/console/catalog
+HTTP 200 | final=https://console-hive.scubed.co/console/catalog
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-catalog.png
+ERRORS(0): 
+FAILED(3): GET https://console-hive.scubed.co/console/marketplace?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-embedding-default?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-fast?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Model catalog
+Documentation
+EN
+বাংলা
+BUILD
+Model catalog
+
+Available models with per-million-token input, output and prompt-cache pricing. Search, filter by capability, or sort by price.
+
+Search models
+Capability
+All capabilities
+chat
+embeddings
+fast
+reasoning
+responses
+stable
+stt
+task-aware
+tools
+tts
+voice
+Sort
+Name (A to Z)
+Input price, low to high
+Input price, high to low
+Output price, low to high
+Output price, high to low
+Cache read price, low to high
+
+11 models
+
+MODEL	CAPABILITIES	INPUT / 1M	OUTPUT / 1M	CACHE READ / 1M	CACHE WRITE / 1M	STATUS	
+TRY IN CHAT
+
+Deepseek V4 Flash
+deepseek-v4-flash
+Very low-cost long-context chat with tool use and reasoning. Largest context window in the catalog.
+	
+stable
+chat
+responses
+tools
+reasoning
+	$0.0895	$0.179	$0.00298	$0.0895	Available	Try in chat
+
+Deepseek V4 Pro
+deepseek-v4-pro
+Highest-capability long-context chat with tool use and reasoning, for harder work.
+	
+stable
+chat
+responses
+tools
+reasoning
+	$1.57	$4.71	$0.0524	$1.57	Available	Try in chat
+
+Hive Auto
+hive-auto
+Automatic routing: each request gets a per-request model choice and is billed at actual usage.
+	
+stable
+chat
+responses
+task-aware
+	Variable	Variable	Variable	Variable	Preview	Try in chat
+
+Hive Default
+hive-default
+Default alias for requests that name no model. Full tool-calling parity on the paid quality tier.
+	
+stable
+chat
+responses
+	$0.0895	$0.179	$0.00298	$0	Available	Try in chat
+
+Hive Embedding Default
+hive-embedding-default
+Default multimodal embedding alias; backed by a free upstream tier.
+	
+stable
+embeddings
+	$0.00001	$0	—	—	Available	Try in chat
+
+Hive Fast
+hive-fast
+Low-latency alias for chat and responses requests that prioritize speed.
+	
+fast
+chat
+responses
+	$0.105	$0.42	$0.00001	$0.00004	Hidden	Try in chat
+
+Hive Free
+hive-free
+Free-tier alias served from a load-balanced pool of our free provider keys; requests fail over automatically when one key is exhausted. Tool calling and structured output are not offered on this alias.
+	
+stable
+chat
+responses
+	$0.001	$0.004	$0	$0	Available	Try in chat
+
+Hive Medium
+hive-medium
+Larger general-purpose chat model. Same family as Hive Small, more capacity per request.
+	
+stable
+chat
+responses
+	$0.21	$0.84	$0	$0	Available	Try in chat
+
+Hive Small
+hive-small
+Fast, low-cost chat for everyday prompts. Replaces hive-fast, which is deprecated and now resolves to the same model at the same price.
+	
+stable
+chat
+responses
+	$0.105	$
+
+---
+### https://console-hive.scubed.co/console/billing
+HTTP 200 | final=https://console-hive.scubed.co/console/billing
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-billing.png
+ERRORS(0): 
+FAILED(9): GET https://console-hive.scubed.co/console/api-keys?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/api-keys?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Billing
+Documentation
+EN
+বাংলা
+WORKSPACE
+Billing
+
+Top up credits, browse the ledger, and download invoices for past purchases.
+
+Overview
+Ledger
+Invoices
+Available balance
+
+Top up to keep production traffic flowing without interruption.
+
+$99.99
+
+Posted $99.99 · Reserved $0.00
+
+99,996,364,207 credits, at 1,000,000,000 credits per $1.00
+
+Buy credits
+Tax profile
+Recent transactions
+
+The last five ledger events.
+
+View ledger
+TYPE	CREDITS	DATE
+Released	+100,000,000	29 Aug 2026
+Usage charge	-194	29 Aug 2026
+Reserved	-100,000,000	29 Aug 2026
+Released	+100,000,000	29 Aug 2026
+Usage charge	-374	29 Aug 2026
+Spend alerts
+
+Get notified when your balance drops below a threshold. Requests keep flowing — alerts are advisory only.
+
+Alert threshold
+
+In Hive credits
+
+Save alert
+
+---
+### https://console-hive.scubed.co/console/members
+HTTP 502 | final=https://console-hive.scubed.co/console/members
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-members.png
+ERRORS(1): Failed to load resource: the server responded with a status of 502 ()
+FAILED(1): HTTP 502 GET https://console-hive.scubed.co/console/members
+TEXT:
+Bad gateway Error code 502
+Visit cloudflare.com for more information.
+2026-08-29 08:18:28 UTC
+You
+Browser
+Working
+Dhaka
+Cloudflare
+Working
+console-hive.scubed.co
+Host
+Error
+What happened?
+
+The web server reported a bad gateway error.
+
+What can I do?
+
+Please try again in a few minutes.
+
+Cloudflare Ray ID: a32a1fce9caa7c42 • Your IP: Click to reveal • Performance & security by Cloudflare
+
+---
+### https://console-hive.scubed.co/console/privacy
+HTTP 200 | final=https://console-hive.scubed.co/console/privacy
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-privacy.png
+ERRORS(0): 
+FAILED(9): GET https://console-hive.scubed.co/console/catalog?_rsc=ejHwjv05GRhorG5v :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=ejHwjv05GRhorG5v :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=ejHwjv05GRhorG5v :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=ejHwjv05GRhorG5v :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=XhO3o-bvBYq2y2xx :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=ejHwjv05GRhorG5v :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=XhO3o-bvBYq2y2xx :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=XhO3o-bvBYq2y2xx :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Privacy
+Documentation
+EN
+বাংলা
+WORKSPACE
+Privacy and data policy
+
+What Hive's API gateway stores, where a request goes once it leaves the gateway, and what is not yet a real control. Every statement below is backed by something verified in code, not a policy promise layered on top.
+
+Request and response content
+
+Scoped to requests made with your API keys through Hive's gateway. This page does not describe Hive Chat's own conversation storage, which is a separate system.
+
+The metering record Hive keeps per request carries token counts, cost, status, model alias, endpoint, error codes and operational metadata. Message content is stripped from that metadata before the record is written, so your prompts and completions are not part of it.
+
+No synchronous request through this gateway has its request or response body stored: chat completion, completion, embedding and audio requests are relayed and not retained. One exception, named because it is a real one: when an upstream provider fails a request, the error text it returned is written to this deployment's server logs for diagnosis, and a provider that echoes part of a request in its error text would have that fragment logged with it.
+
+Three endpoints on this same gateway do store content, because storing it is what they are for. If you use them, the content below is held on your account until you delete it:
+
+Batch jobs. The input file you upload holds your request bodies verbatim, and the job writes an output file holding the upstream responses verbatim. Both are stored as files on your account.
+File uploads. Anything uploaded through the files API is stored until you delete it through that same API.
+RAG documents. Indexed documents are stored in full, both as the original upload and as the text chunks the retrieval index searches. Deleting a document deletes its chunks with it.
+
+There is no automatic deletion schedule for any of this. The per-request metering record is retained indefinitely for billing and audit unless an operator removes it at the database level, and stored content stays until you delete it.
+
+Error messages returned by the API are sanitized before they reach you: which upstream provider served or failed a request is never named in an error response, by design and enforced in tests.
+
+View your usage log
+Where a request goes
+
+This deployment's current model catalog, and whether a request stays inside this d
+
+---
+### https://console-hive.scubed.co/console/settings/profile
+HTTP 200 | final=https://console-hive.scubed.co/console/settings/profile
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-settings-profile.png
+ERRORS(0): 
+FAILED(2): GET https://console-hive.scubed.co/console/privacy?_rsc=5fB8W-1q-oB1Xtro :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=itizRuSOVehmVDOk :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Profile settings
+Documentation
+EN
+বাংলা
+SETTINGS
+Profile settings
+
+Maintain the minimal account profile here. This page stays available even when your email is not yet verified — resend verification or change the login email below.
+
+Email settings
+
+Login email is demo@hive-demo.invalid. Your login email is verified.
+
+Change email
+Change email
+Owner
+
+The person responsible for this workspace. We use these details on invoices, account verification and admin notifications.
+
+Owner name*
+
+Login email: demo@hive-demo.invalid
+
+Account
+
+Whether you’re billing as an individual or a company. You can switch later if your structure changes.
+
+Account name*
+Account type*
+Personal
+Business
+Location
+
+Used for tax treatment and regulatory pricing. Stored in ISO 3166 country codes — e.g. US, BD.
+
+Country*
+State / Province*
+Save profile
+
+---
+### https://console-hive.scubed.co/console/feature-gates
+HTTP 200 | final=https://console-hive.scubed.co/console/feature-gates
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-feature-gates.png
+ERRORS(0): 
+FAILED(8): GET https://console-hive.scubed.co/console/api-keys?_rsc=luAb-Km02qgN3U82 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=luAb-Km02qgN3U82 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=luAb-Km02qgN3U82 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=5luX2ee2C1aqiDbS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=5luX2ee2C1aqiDbS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=5luX2ee2C1aqiDbS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=5luX2ee2C1aqiDbS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=5luX2ee2C1aqiDbS :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Feature gates
+Documentation
+EN
+বাংলা
+ADMIN
+Feature gates
+
+Turn capabilities on or off for this workspace. Changes take effect across the API and apps within about a minute.
+
+ADMIN
+Admin console access
+ENABLE_ADMIN_CONSOLE
+Saving…
+Managed by your administrator
+Custom provider endpoints
+ENABLE_PROVIDER_CUSTOM
+Saving…
+Managed by your administrator
+Multi-tenant mode
+ENABLE_MULTI_TENANT
+Saving…
+Managed by your administrator
+SOVEREIGN WORKSPACE
+Agent cowork capability
+ENABLE_COWORK
+Saving…
+Agent RAG capability
+ENABLE_RAG
+Saving…
+Agent relay capability
+ENABLE_RELAY
+Saving…
+Agent voice capability
+ENABLE_VOICE
+Saving…
+AUDIT SINK
+Audit sink: Datadog
+ENABLE_AUDIT_SINK_DATADOG
+Saving…
+Audit sink: ELK
+ENABLE_AUDIT_SINK_ELK
+Saving…
+Audit sink: Langfuse
+ENABLE_AUDIT_SINK_LANGFUSE
+Saving…
+Audit sink: Loki
+ENABLE_AUDIT_SINK_LOKI
+Saving…
+Audit sink: Sentry
+ENABLE_AUDIT_SINK_SENTRY
+Saving…
+Audit sink: Splunk
+ENABLE_AUDIT_SINK_SPLUNK
+Saving…
+BILLING & PAYMENTS
+bKash payment rail
+ENABLE_BKASH
+Saving…
+Managed by your administrator
+Extra usage beyond plan
+ENABLE_EXTRA_USAGE
+Saving…
+Managed by your administrator
+Per-user spend cap
+ENABLE_PER_USER_CAP
+Saving…
+Managed by your administrator
+Public billing
+ENABLE_PUBLIC_BILLING
+Saving…
+Managed by your administrator
+Shared credit pool
+ENABLE_CREDIT_POOL
+Saving…
+Managed by your administrator
+SSLCommerz payment rail
+ENABLE_SSLCOMMERZ
+Saving…
+Managed by your administrator
+Stripe payment rail
+ENABLE_STRIPE
+Saving…
+Managed by your administrator
+RAG
+Personal RAG workspace
+ENABLE_RAG_PERSONAL
+Saving…
+Shared knowledge base RAG
+ENABLE_RAG_SHARED_KB
+Saving…
+SINGLE SIGN-ON
+Google OIDC SSO
+ENABLE_SSO_GOOGLE
+Saving…
+Microsoft OIDC SSO
+ENABLE_SSO_MICROSOFT
+Saving…
+SAML 2.0 SSO
+ENABLE_SSO_SAML
+Saving…
+
+---
+### https://console-hive.scubed.co/console/marketplace
+HTTP 200 | final=https://console-hive.scubed.co/console/marketplace
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-marketplace.png
+ERRORS(0): 
+FAILED(3): GET https://console-hive.scubed.co/console/docs?_rsc=L0PBgz4UXd8Va3vW :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=NUHzJKZepooPx1pW :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=NUHzJKZepooPx1pW :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Marketplace
+Documentation
+EN
+বাংলা
+ADMIN
+MCP and skills marketplace
+
+Choose which MCP servers, rules, skills, and prompt templates this workspace agents can use.
+
+No connectors have been published for this workspace yet. Ask your administrator if you need one added.
+
+---
+### https://console-hive.scubed.co/console/docs
+HTTP 200 | final=https://console-hive.scubed.co/console/docs
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-docs.png
+ERRORS(0): 
+FAILED(8): GET https://console-hive.scubed.co/console?_rsc=NvcBIryasOxa3tyS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=NvcBIryasOxa3tyS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/billing?_rsc=NvcBIryasOxa3tyS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=NvcBIryasOxa3tyS :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=dzEr27Dg9f_Ypszt :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=dzEr27Dg9f_Ypszt :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=dzEr27Dg9f_Ypszt :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=dzEr27Dg9f_Ypszt :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+API documentation
+Documentation
+EN
+বাংলা
+BUILD
+API reference
+
+An OpenAI-compatible gateway. Point any OpenAI SDK at the base URL below and swap the key. Every endpoint on this page, supported or not, is read from the generated contract in this repository.
+
+Quickstart
+
+Create a key under API keys, export it as HIVE_API_KEY, then call the gateway exactly as you would call OpenAI.
+
+BASE URL
+https://api-hive.scubed.co/v1
+AUTHENTICATION
+Authorization: Bearer <your key>
+curl
+curl https://api-hive.scubed.co/v1/chat/completions \
+  -H "Authorization: Bearer $HIVE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "hive-default",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
+  }'
+Python, official OpenAI SDK
+# pip install openai
+import os
+
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api-hive.scubed.co/v1",
+    api_key=os.environ["HIVE_API_KEY"],
+)
+
+response = client.chat.completions.create(
+    model="hive-default",
+    messages=[{"role": "user", "content": "Say hello in one sentence."}],
+)
+print(response.choices[0].message.content)
+
+hive-default is a routing alias, not a single upstream model. See the model catalog for what each alias resolves to and what it costs.
+
+Machine-readable spec
+
+The OpenAPI document this page is generated from. Point your own tooling at it rather than reading this page.
+
+Served unauthenticated at /api/openapi.yaml on this console's own origin · 97 operations described · support matrix version 0.1.0, generated 2026-03-28
+
+The generation date is printed because it is the honest measure of how current this page is. Nothing here is hand maintained, so if that date is old, the classifications below are that old too.
+
+Where the spec and the support matrix disagree
+
+75 operations are described differently by the two generated files: 75 the matrix classifies but the spec never describes, 0 the two give different support statuses, 0 the spec declares but the matrix never classified. All of them are listed rather than one file being silently preferred, because either side can be the stale one.
+
+Show all 75
+Supported now
+47
+
+Implemented and served by the gateway today.
+
+AGENT
+Method	Path	Notes
+GET	/v1/agent/schedules	Hive proprietary (issue #1081): list scheduled agent tasks.
+POST	/v1/agent/schedules	Hive proprietary (issue #1081): create a scheduled agent task ("routine").
+DELETE	/v1/agent/
+
+---
+### https://console-hive.scubed.co/console/providers
+HTTP 404 | final=https://console-hive.scubed.co/console/providers
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/c1440b-console-hive-scubed-co-console-providers.png
+ERRORS(1): Failed to load resource: the server responded with a status of 404 ()
+FAILED(1): HTTP 404 GET https://console-hive.scubed.co/console/providers
+TEXT:
+Hive
+404
+Page not found
+
+This page does not exist, or it is not available on this account.
+
+Back to the console
+© 2026 Hive
+api.hive · v1
+### https://chat-hive.scubed.co/projects
+HTTP 200 | final=https://chat-hive.scubed.co/projects
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-projects.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+Projects
+New project
+Demo Walk 2026-08-23
+Fixture for the 2026-08-23 demo walk
+5d ago
+readiness probe kb
+probe
+18d ago
+
+---
+### https://chat-hive.scubed.co/artifacts
+HTTP 200 | final=https://chat-hive.scubed.co/artifacts
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-artifacts.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+Artifacts
+
+Pages, charts and snippets the model built for you.
+
+No artifacts yet.
+Ask the model for a web page, a chart or an interactive snippet, and it will show up here.
+
+---
+### https://chat-hive.scubed.co/knowledge
+HTTP 200 | final=https://chat-hive.scubed.co/knowledge
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-knowledge.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+Knowledge
+
+The documents your chats can search.
+
+Demo Walk 2026-08-23
+
+ 
+
+Fixture for the 2026-08-23 demo walk
+
+6 days ago
+
+readiness probe kb
+
+ 
+
+probe
+
+18 days ago
+
+---
+### https://chat-hive.scubed.co/schedules
+HTTP 200 | final=https://chat-hive.scubed.co/schedules
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-schedules.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+Scheduled
+New
+Scheduled
+
+Templated runs kicked off on schedule.
+
+New
+
+Not available yet: scheduling runs server side, and lights up here once its routes are bridged into this deployment.
+
+---
+### https://chat-hive.scubed.co/agents
+HTTP 200 | final=https://chat-hive.scubed.co/agents
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-agents.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+
+Describe the task
+Kind of task
+Knowledge work
+Coding
+
+Reads and edits a codebase, runs commands, and reports what changed.
+
+Your tasks
+
+Make a three slide deck introducing Hive Enterprise. End with the word DECKDONE.
+
+Failed
+
+agent task failed
+
+Knowledge work · 5d
+
+Write a Python function that returns the 10th Fibonacci number, run it, and report the number it printed.
+
+Done
+
+Finished. The result reference is below.
+
+Result: The script executed successfully and calculated the 10th Fibonacci number, which is **55**. If you need any further assistance or modifications, feel free to ask!
+
+Coding · 12d
+
+In two sentences, explain what a data sovereign AI gateway is and why a regulated buyer would want one. End with the single word DEMOKNOWLEDGE.
+
+Done
+
+Finished. The result reference is below.
+
+Result: A data sovereign AI gateway is a system that allows organizations to control and manage their data in compliance with local regulations, ensuring that sensitive information remains protected and utilized effectively. A regulated buyer would want one to mitigate legal risks and enhance trust by maintaining data privacy and sovereignty in their AI applications. DEMOKNOWLEDGE.
+
+Knowledge work · 12d
+
+interaction-coverage proof 1786728010033 0d991ff6-c646-4ae9-b2c2-fb24426e2c38
+
+Blocked
+
+The agent runtime refused to start this task, so nothing ran. Trying again may work; if it keeps happening it is a deployment problem, not your task.
+
+Coding · 14d
+
+interaction-coverage proof 1786726785021
+
+Cancelled
+
+You stopped this task before it finished.
+
+Coding · 14d
+
+interaction-covera
+
+---
+### https://chat-hive.scubed.co/does-not-exist-qa-2026
+HTTP 200 | final=https://chat-hive.scubed.co/does-not-exist-qa-2026
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/k1440-chat-hive-scubed-co-does-not-exist-qa-2026.png
+ERRORS(0): 
+FAILED(0): 
+TEXT:
+Hive
+New Chat
+Search
+Projects
+Artifacts
+Knowledge
+Scheduled
+Folders
+Chats and tasks
+Reply with exactly the word COWORKPROOF and nothing else.
+3d
+New Chat
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b
+3d
+hello
+3d
+hello
+3d
+hello
+3d
+From the attached knowledge collection, state the inventory code for this demo walk.
+5d
+Using only the attached file, state the inventory code for this demo walk.
+5d
+Using only the attached document, state the inventory code for this demo walk.
+5d
+Reply with exactly: FRONTIER OK
+5d
+Reply with exactly: OK
+5d
+Demo
+
+404
+
+This page does not exist
+
+Nothing is served at /does-not-exist-qa-2026.
+
+Back to chat
+### https://console-hive.scubed.co/console/analytics?tab=errors&group_by=model&window=7d
+HTTP 200 | final=https://console-hive.scubed.co/console/analytics?tab=errors&group_by=model&window=7d
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/canal-console-hive-scubed-co-console-analytics-tab-errors-group-by.png
+ERRORS(0): 
+FAILED(11): GET https://console-hive.scubed.co/console/members?_rsc=C4unBP8hzLn8GVXR :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/billing?_rsc=C4unBP8hzLn8GVXR :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=C4unBP8hzLn8GVXR :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/api-keys?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Analytics
+Documentation
+EN
+বাংলা
+WORKSPACE
+Usage and analytics
+
+Inspect requests, tokens, spend and errors broken down by model, key or endpoint.
+
+Overview
+Usage
+Spend
+Errors
+Group by
+Model
+API key
+Endpoint
+Time window
+24h
+7d
+30d
+90d
+OBSERVABILITY
+Request logs
+Per-request usage browser with filters and CSV export.
+Platform overview
+Not available on this deployment.
+Rate limits
+Not available on this deployment.
+Errors
+
+Error count and rate by group.
+
+ErrorsTotal requests
+hive-default
+hive-auto
+hive-free
+deepseek-v4-pro
+0
+6
+12
+18
+24
+GROUP	ERRORS	REQUESTS	ERROR RATE
+hive-default	1	9	11.1%
+hive-auto	0	22	0.0%
+hive-free	0	8	0.0%
+deepseek-v4-pro	0	2	0.0%
+0
+
+---
+### https://console-hive.scubed.co/console/analytics?tab=spend&group_by=api_key&window=30d
+HTTP 200 | final=https://console-hive.scubed.co/console/analytics?tab=spend&group_by=api_key&window=30d
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/canal-console-hive-scubed-co-console-analytics-tab-spend-group-by-.png
+ERRORS(0): 
+FAILED(4): GET https://console-hive.scubed.co/console/catalog?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/billing?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Analytics
+Documentation
+EN
+বাংলা
+WORKSPACE
+Usage and analytics
+
+Inspect requests, tokens, spend and errors broken down by model, key or endpoint.
+
+Overview
+Usage
+Spend
+Errors
+Group by
+Model
+API key
+Endpoint
+Time window
+24h
+7d
+30d
+90d
+OBSERVABILITY
+Request logs
+Per-request usage browser with filters and CSV export.
+Platform overview
+Not available on this deployment.
+Rate limits
+Not available on this deployment.
+Spend
+
+Credits charged and ledger entries.
+
+Credits spent
+890883f4-8da5-474f-8f33-e803f2153c8a
+5408b8bd-3750-4448-a244-3d8f0a82e4c7
+3cb3c893-24ec-44cb-9df5-39ee9d0d8388
+0
+500000
+1000000
+1500000
+2000000
+GROUP	CREDITS	TRANSACTIONS
+unattributed	1,890,750	29
+890883f4-8da5-474f-8f33-e803f2153c8a	661,500	1
+8cc6fc4a-84a2-45d4-9c72-0c2c8e4fab06	2,783	1
+948a1110-a918-4e68-bbb3-dac67dafa56e	858	4
+5408b8bd-3750-4448-a244-3d8f0a82e4c7	5	5
+67ce2f75-fd04-4dac-aeb6-dac5f764004f	2	2
+68bc6267-7136-4525-bfe8-ccc4ccaa5d78	1	1
+3cf2439a-0ef5-4585-ba58-c01424fb3465	1	1
+3cb3c893-24ec-44cb-9df5-39ee9d0d8388	1	1
+0
+
+---
+### https://console-hive.scubed.co/console/analytics?tab=usage&group_by=endpoint&window=90d
+HTTP 200 | final=https://console-hive.scubed.co/console/analytics?tab=usage&group_by=endpoint&window=90d
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/canal-console-hive-scubed-co-console-analytics-tab-usage-group-by-.png
+ERRORS(0): 
+FAILED(6): GET https://console-hive.scubed.co/console?_rsc=C4unBP8hzLn8GVXR :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=C4unBP8hzLn8GVXR :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=cbVOyab5mSAG4I7G :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Analytics
+Documentation
+EN
+বাংলা
+WORKSPACE
+Usage and analytics
+
+Inspect requests, tokens, spend and errors broken down by model, key or endpoint.
+
+Overview
+Usage
+Spend
+Errors
+Group by
+Model
+API key
+Endpoint
+Time window
+24h
+7d
+30d
+90d
+OBSERVABILITY
+Request logs
+Per-request usage browser with filters and CSV export.
+Platform overview
+Not available on this deployment.
+Rate limits
+Not available on this deployment.
+Usage
+
+Requests and tokens.
+
+Input tokensOutput tokens
+chat_completions
+embeddings
+/v1/audio/speech
+0
+4000
+8000
+12000
+16000
+GROUP	INPUT TOKENS	OUTPUT TOKENS	CREDITS	REQUESTS
+chat_completions	15,918	2,007	2,555,899	89
+embeddings	16	0	2	7
+/v1/audio/speech	0	0	0	2
+0
+### https://console-hive.scubed.co/console/billing?action=buy
+HTTP 200 | final=https://console-hive.scubed.co/console/billing?action=buy
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/cbill-console-hive-scubed-co-console-billing-action-buy.png
+ERRORS(0): 
+FAILED(11): GET https://console-hive.scubed.co/console/catalog?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/api-keys?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Billing
+Documentation
+EN
+বাংলা
+WORKSPACE
+Billing
+
+Top up credits, browse the ledger, and download invoices for past purchases.
+
+Overview
+Ledger
+Invoices
+Available balance
+
+Top up to keep production traffic flowing without interruption.
+
+$99.99
+
+Posted $99.99 · Reserved $0.00
+
+99,996,364,207 credits, at 1,000,000,000 credits per $1.00
+
+Buy credits
+Tax profile
+Recent transactions
+
+The last five ledger events.
+
+View ledger
+TYPE	CREDITS	DATE
+Released	+100,000,000	29 Aug 2026
+Usage charge	-194	29 Aug 2026
+Reserved	-100,000,000	29 Aug 2026
+Released	+100,000,000	29 Aug 2026
+Usage charge	-374	29 Aug 2026
+Spend alerts
+
+Get notified when your balance drops below a threshold. Requests keep flowing — alerts are advisory only.
+
+Alert threshold
+
+In Hive credits
+
+Save alert
+
+---
+### https://console-hive.scubed.co/console/billing?tab=ledger
+HTTP 200 | final=https://console-hive.scubed.co/console/billing?tab=ledger
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/cbill-console-hive-scubed-co-console-billing-tab-ledger.png
+ERRORS(0): 
+FAILED(11): GET https://console-hive.scubed.co/console/api-keys?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/api-keys?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/logs?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Billing
+Documentation
+EN
+বাংলা
+WORKSPACE
+Billing
+
+Top up credits, browse the ledger, and download invoices for past purchases.
+
+Overview
+Ledger
+Invoices
+All
+Purchases
+Charges
+Refunds
+Adjustments
+Export CSV
+TYPE	CREDITS	DESCRIPTION	DATE
+Released	+100,000,000		29 Aug 2026, 07:29
+Usage charge	-194		29 Aug 2026, 07:29
+Reserved	-100,000,000		29 Aug 2026, 07:29
+Released	+100,000,000		29 Aug 2026, 07:29
+Usage charge	-374		29 Aug 2026, 07:29
+Reserved	-100,000,000		29 Aug 2026, 07:29
+Released	+100,000,000		29 Aug 2026, 07:28
+Usage charge	-174		29 Aug 2026, 07:28
+Reserved	-100,000,000		29 Aug 2026, 07:28
+Released	+100,000,000		29 Aug 2026, 07:28
+Usage charge	-116		29 Aug 2026, 07:28
+Reserved	-100,000,000		29 Aug 2026, 07:28
+Released	+2,000,000,000		26 Aug 2026, 04:11
+Usage charge	-491,176		26 Aug 2026, 04:11
+Reserved	-2,000,000,000		26 Aug 2026, 04:11
+Released	+2,000,000,000		26 Aug 2026, 04:03
+Usage charge	-368,676		26 Aug 2026, 04:03
+Reserved	-2,000,000,000		26 Aug 2026, 04:03
+Released	+2,000,000,000		26 Aug 2026, 03:57
+Usage charge	-44,352		26 Aug 2026, 03:57
+Reserved	-2,000,000,000		26 Aug 2026, 03:57
+Released	+2,000,000,000		26 Aug 2026, 03:35
+Usage charge	-31,752		26 Aug 2026, 03:35
+Reserved	-2,000,000,000		26 Aug 2026, 03:35
+Released	+2,000,000,000		26 Aug 2026, 00:53
+Next
+
+---
+### https://console-hive.scubed.co/console/billing?tab=invoices
+HTTP 200 | final=https://console-hive.scubed.co/console/billing?tab=invoices
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/cbill-console-hive-scubed-co-console-billing-tab-invoices.png
+ERRORS(0): 
+FAILED(8): GET https://console-hive.scubed.co/console/analytics?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=-tGXKuh5JeTNo6jd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=6Zme4qraQqaV1QTA :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Billing
+Documentation
+EN
+বাংলা
+WORKSPACE
+Billing
+
+Top up credits, browse the ledger, and download invoices for past purchases.
+
+Overview
+Ledger
+Invoices
+
+No invoices yet
+
+Invoices appear here once a checkout settles. Successful purchases produce a downloadable PDF.
+
+---
+### https://console-hive.scubed.co/console/settings/billing
+HTTP 200 | final=https://console-hive.scubed.co/console/settings/billing
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/cbill-console-hive-scubed-co-console-settings-billing.png
+ERRORS(0): 
+FAILED(17): GET https://console-hive.scubed.co/console/catalog?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/analytics?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/feature-gates?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/docs?_rsc=gP3FlqlOYl9sZ-_U :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=d3AN2WOhLolIJNms :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Billing settings
+Documentation
+EN
+বাংলা
+SETTINGS
+Billing settings
+
+Optional until checkout or invoicing. Save whatever billing, legal-entity, and tax context you already know — come back later when a payment or invoice flow needs the rest.
+
+Billing contact
+
+Use these fields for later invoicing or checkout notices without turning them into a setup gate today.
+
+Billing contact name
+Billing contact email
+Country
+State / Province
+Legal entity and tax
+
+You can save partial business identity details now and complete the rest only when checkout or invoicing needs them.
+
+Legal entity name
+Legal entity type
+Private company
+Public company
+Sole proprietor
+Non-profit
+Individual
+Business registration number
+VAT number
+Tax ID type
+VAT / Tax ID
+Save billing details
+### https://console-hive.scubed.co/console/catalog
+HTTP 200 | final=https://console-hive.scubed.co/console/catalog
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccat-console-hive-scubed-co-console-catalog.png
+ERRORS(0): 
+FAILED(15): GET https://console-hive.scubed.co/console/billing?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/feature-gates?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/marketplace?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/deepseek-v4-flash?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-auto?_rsc=L9deZKp0sEDTL1Zc :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Model catalog
+Documentation
+EN
+বাংলা
+BUILD
+Model catalog
+
+Available models with per-million-token input, output and prompt-cache pricing. Search, filter by capability, or sort by price.
+
+Search models
+Capability
+All capabilities
+chat
+embeddings
+fast
+reasoning
+responses
+stable
+stt
+task-aware
+tools
+tts
+voice
+Sort
+Name (A to Z)
+Input price, low to high
+Input price, high to low
+Output price, low to high
+Output price, high to low
+Cache read price, low to high
+
+11 models
+
+MODEL	CAPABILITIES	INPUT / 1M	OUTPUT / 1M	CACHE READ / 1M	CACHE WRITE / 1M	STATUS	
+TRY IN CHAT
+
+Deepseek V4 Flash
+deepseek-v4-flash
+Very low-cost long-context chat with tool use and reasoning. Largest context window in the catalog.
+	
+stable
+chat
+responses
+tools
+reasoning
+	$0.0895	$0.179	$0.00298	$0.0895	Available	Try in chat
+
+Deepseek V4 Pro
+deepseek-v4-pro
+Highest-capability long-context chat with tool use and reasoning, for harder work.
+	
+stable
+chat
+responses
+tools
+reasoning
+	$1.57	$4.71	$0.0524	$1.57	Available	Try in chat
+
+Hive Auto
+hive-auto
+Automatic routing: each request gets a per-request model choice and is billed at actual usage.
+	
+stable
+chat
+responses
+task-aware
+	Variable	Variable	Variable	Variable	Preview	Try in chat
+
+Hive Default
+hive-default
+Default alias for requests that name no model. Full tool-calling parity on the paid quality tier.
+	
+stable
+chat
+responses
+	$0.0895	$0.179	$0.00298	$0	Available	Try in chat
+
+Hive Embedding Default
+hive-embedding-default
+Default multimodal embedding alias; backed by a free upstream tier.
+	
+stable
+embeddings
+	$0.00001	$0	—	—	Available	Try in chat
+
+Hive Fast
+hive-fast
+Low-latency alias for chat and responses requests that prioritize speed.
+	
+fast
+chat
+responses
+	$0.105	$0.42	$0.00001	$0.00004	Hidden	Try in chat
+
+Hive Free
+hive-free
+Free-tier alias served from a load-balanced pool of our free provider keys; requests fail over automatically when one key is exhausted. Tool calling and structured output are not offered on this alias.
+	
+stable
+chat
+responses
+	$0.001	$0.004	$0	$0	Available	Try in chat
+
+Hive Medium
+hive-medium
+Larger general-purpose chat model. Same family as Hive Small, more capacity per request.
+	
+stable
+chat
+responses
+	$0.21	$0.84	$0	$0	Available	Try in chat
+
+Hive Small
+hive-small
+Fast, low-cost chat for everyday prompts. Replaces hive-fast, which is deprecated and now resolves to the same model at the same price.
+	
+stable
+chat
+responses
+	$0.105	$
+
+---
+### https://console-hive.scubed.co/console/catalog/hive-auto
+HTTP 200 | final=https://console-hive.scubed.co/console/catalog/hive-auto
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccat-console-hive-scubed-co-console-catalog-hive-auto.png
+ERRORS(0): 
+FAILED(22): GET https://console-hive.scubed.co/console/catalog/hive-auto?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-default?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-embedding-default?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/catalog/hive-fast?_rsc=LQf-0zZWED3F2B37 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=fWsIw2O8rEIxGxBa :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/billing?_rsc=fWsIw2O8rEIxGxBa :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=fWsIw2O8rEIxGxBa :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=fWsIw2O8rEIxGxBa :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Model catalog
+Documentation
+EN
+বাংলা
+BUILD
+Hive Auto
+
+Automatic routing: each request gets a per-request model choice and is billed at actual usage.
+
+Try in chat
+Back to catalog
+hive-auto
+Preview
+stable
+chat
+responses
+task-aware
+IN / OUT PRICE
+Variable / Variable
+Variable / Variable credits, per 1m tokens
+CACHE READ / WRITE
+Variable / Variable
+Variable / Variable credits, per 1m tokens
+CONTEXT
+Not published
+The catalog carries no context window for this alias.
+PRICING MODE
+Variable
+Charged from the cost the upstream reports per request.
+Pricing
+
+This alias is priced from the actual cost of each generation, so it publishes no per-million rate. The charge is derived per request, not from a table.
+
+DIMENSION	PRICE / 1M	CREDITS / 1M	WHAT IT COVERS
+Input	Variable	Variable	Prompt tokens sent to the model.
+Output	Variable	Variable	Tokens the model generates.
+Cache read	Variable	Variable	Prompt tokens served from an upstream prompt cache.
+Cache write	Variable	Variable	Prompt tokens written into an upstream prompt cache.
+Providers and uptime
+
+Hive routes each request across the providers configured for this alias. Per-provider figures are held in the control plane but are not served to the console today, so they are shown as absent rather than guessed.
+
+Per-provider pricing
+Route-level prices exist in the routing snapshot, which no customer-facing endpoint returns.
+Latency and throughput
+Per-request timings are recorded, but no per-provider percentile is computed or served.
+Uptime
+Route health is tracked for failover decisions only and is not exposed as an availability figure.
+Benchmarks
+Hive publishes no independent benchmark scores for catalog models.
+Your usage
+
+This workspace’s own requests to hive-auto over the last 30 days. Platform-wide usage of a model is not published.
+
+REQUESTS
+62
+INPUT TOKENS
+3,074
+OUTPUT TOKENS
+2,027
+CREDITS SPENT
+2,106,488
+View requests in the log
+
+---
+### https://console-hive.scubed.co/console/catalog/nope-qa
+HTTP 404 | final=https://console-hive.scubed.co/console/catalog/nope-qa
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccat-console-hive-scubed-co-console-catalog-nope-qa.png
+ERRORS(1): Failed to load resource: the server responded with a status of 404 ()
+FAILED(3): HTTP 404 GET https://console-hive.scubed.co/console/catalog/nope-qa || GET https://console-hive.scubed.co/console?_rsc=zZdpfjWOdpyxLqZ6 :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console?_rsc=wlzQ4GR3hWg35YR5 :: net::ERR_ABORTED
+TEXT:
+Hive
+404
+Page not found
+
+This page does not exist, or it is not available on this account.
+
+Back to the console
+© 2026 Hive
+api.hive · v1
+### https://console-hive.scubed.co/console/billing/checkout
+HTTP 404 | final=https://console-hive.scubed.co/console/billing/checkout
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccheck-console-hive-scubed-co-console-billing-checkout.png
+ERRORS(1): Failed to load resource: the server responded with a status of 404 ()
+FAILED(1): HTTP 404 GET https://console-hive.scubed.co/console/billing/checkout
+TEXT:
+Hive
+404
+Page not found
+
+This page does not exist, or it is not available on this account.
+
+Back to the console
+© 2026 Hive
+api.hive · v1
+
+---
+### https://console-hive.scubed.co/console/billing/budget
+HTTP 200 | final=https://console-hive.scubed.co/console/billing/budget
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccheck-console-hive-scubed-co-console-billing-budget.png
+ERRORS(0): 
+FAILED(3): GET https://console-hive.scubed.co/console/members?_rsc=pLR1lJdfs1Na1Nm- :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=bvPTeEPb42iQcDHC :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=bvPTeEPb42iQcDHC :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Budget
+Documentation
+EN
+বাংলা
+WORKSPACE
+Budget settings
+
+Set soft and hard caps for monthly spend in Bangladeshi taka.
+
+Workspace budget
+
+Set a soft cap (advisory alerts) and a hard cap (requests blocked beyond this amount). Amounts are in Bangladeshi taka.
+
+Soft cap (BDT)
+
+Advisory threshold
+
+Hard cap (BDT)
+
+Requests blocked beyond this
+
+Save budget
+
+---
+### https://console-hive.scubed.co/console/billing/alerts
+HTTP 200 | final=https://console-hive.scubed.co/console/billing/alerts
+SHOT /tmp/claude-1001/-home-sakib-hive/ee163698-f9fe-4d9a-8fda-4bc3b84e922c/scratchpad/qa-2026-08-29/shots/ccheck-console-hive-scubed-co-console-billing-alerts.png
+ERRORS(0): 
+FAILED(6): GET https://console-hive.scubed.co/console/billing?_rsc=khiCx87gGWJ1xjAz :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/members?_rsc=khiCx87gGWJ1xjAz :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/privacy?_rsc=khiCx87gGWJ1xjAz :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/api-keys?_rsc=cGrtwQlL002CVeNd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/billing?_rsc=cGrtwQlL002CVeNd :: net::ERR_ABORTED || GET https://console-hive.scubed.co/console/settings/profile?_rsc=cGrtwQlL002CVeNd :: net::ERR_ABORTED
+TEXT:
+Hive
+WORKSPACE
+Hive Demo
+BUILD
+Overview
+API keys
+Model catalog
+Logs
+Analytics
+WORKSPACE
+Billing
+Members
+Privacy
+Settings
+ADMIN
+Feature gates
+Marketplace
+H
+Hive Demo
+demo@hive-demo.invalid
+Spend alerts
+Documentation
+EN
+বাংলা
+WORKSPACE
+Spend alerts
+
+Configure email and webhook notifications when month-to-date spend reaches a percentage of your soft cap.
+
+Active alerts
+
+No spend alerts configured yet.
+
+Create spend alert
+
+Send notifications when month-to-date spend reaches a percentage of your soft cap. Alerts are advisory; the hard cap controls blocking.
+
+Threshold
+50% of soft cap
+80% of soft cap
+100% of soft cap
+
+When to fire
+
+Notify email
+
+Optional
+
+Webhook URL
+
+Optional — POST notification
+
+Create alert

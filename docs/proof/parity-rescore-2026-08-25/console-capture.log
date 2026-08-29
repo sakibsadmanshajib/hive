@@ -1,0 +1,11 @@
+c01-overview /console HTTP 200 url=https://console-hive.scubed.co/console title="Hive Console" firstHeading="Hive Demo"
+c02-logs /console/logs HTTP 200 url=https://console-hive.scubed.co/console/logs title="Hive Console" firstHeading="Request logs"
+c03-analytics /console/analytics HTTP 200 url=https://console-hive.scubed.co/console/analytics title="Hive Console" firstHeading="Usage and analytics"
+c04-api-keys /console/api-keys HTTP 200 url=https://console-hive.scubed.co/console/api-keys title="Hive Console" firstHeading="API keys"
+c05-catalog /console/catalog HTTP 200 url=https://console-hive.scubed.co/console/catalog title="Hive Console" firstHeading="Model catalog"
+c07-billing /console/billing HTTP 200 url=https://console-hive.scubed.co/console/billing title="Hive Console" firstHeading="Billing"
+c08-docs /console/docs HTTP 200 url=https://console-hive.scubed.co/console/docs title="Hive Console" firstHeading="API reference"
+c09-billing-alerts /console/billing/alerts HTTP 200 url=https://console-hive.scubed.co/console/billing/alerts title="Hive Console" firstHeading="Spend alerts"
+c10-settings-profile /console/settings/profile HTTP 200 url=https://console-hive.scubed.co/console/settings/profile title="Hive Console" firstHeading="Profile settings"
+c11-providers /console/providers HTTP 200 url=https://console-hive.scubed.co/console/providers title="Hive Console" firstHeading="Provider endpoints"
+c06-model-detail /console/catalog/deepseek-v4-flash HTTP 200 url=https://console-hive.scubed.co/console/catalog/deepseek-v4-flash
