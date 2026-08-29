@@ -21,7 +21,14 @@ describe("Chat Completions response_format: json_schema", () => {
           content: "Extract: the city is Dhaka and the population is 22 million.",
         },
       ],
-      max_tokens: 256,
+      // 512, not 256. This alias reasons, and reasoning tokens count against
+      // the ceiling: measured live on 2026-08-29, a second-turn answer on this
+      // route spent 22 to 182 tokens thinking before writing anything. At 256
+      // a structured-output task occasionally spends the whole ceiling on
+      // reasoning and returns nothing, which is a defect in what the ceiling
+      // is set to here, not in the schema handling this test exists to check.
+      // The gateway-side half of that story is the zero-content retry guard.
+      max_tokens: 512,
       response_format: {
         type: "json_schema",
         json_schema: {
@@ -43,6 +50,11 @@ describe("Chat Completions response_format: json_schema", () => {
     expect(response.object).toBe("chat.completion");
     const content = response.choices[0].message.content;
     expect(typeof content).toBe("string");
+    // Named explicitly, because JSON.parse on an empty string throws
+    // "Unexpected end of JSON input", which says nothing about what went
+    // wrong. An empty answer here is the reasoning-burn shape (issue #1326),
+    // not a schema violation, and the two deserve different diagnoses.
+    expect(content!.length).toBeGreaterThan(0);
 
     const parsed = JSON.parse(content!) as Record<string, unknown>;
     // The schema sets additionalProperties: false, so the object must be

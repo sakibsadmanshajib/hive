@@ -131,11 +131,21 @@ describe("Chat Completions tool_choice variants", () => {
     const second = await client.chat.completions.create({
       model: TOOL_CAPABLE_MODEL,
       messages,
-      max_tokens: 256,
+      // 512, not 256. The second turn is where this alias does its thinking:
+      // measured live on 2026-08-29 over 30 attempts at 256, reasoning tokens
+      // ran 22 to 182 out of 49 to 231 total, so the visible answer survives
+      // on a margin that occasionally is not there. That tail is what made
+      // this test fail intermittently in CI. The gateway now retries an empty
+      // length completion whatever route produced it, and this ceiling stops
+      // the suite from provoking the case on nearly every run.
+      max_tokens: 512,
     });
 
     expect(second.object).toBe("chat.completion");
     expect(typeof second.choices[0].message.content).toBe("string");
+    // Unchanged and deliberately strict. The final turn of a tool round trip
+    // is what an agent framework reads back to the user, and an empty string
+    // there is a failure however it was produced.
     expect(second.choices[0].message.content).toBeTruthy();
   });
 });
