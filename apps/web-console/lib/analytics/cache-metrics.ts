@@ -11,7 +11,10 @@
  *
  * No I/O in this file, by design: everything here is a pure function of data
  * already fetched by lib/analytics/overview-fetch.ts. Type-only imports from
- * control-plane/client are fine (they cost nothing at runtime); an actual
+ * control-plane/client are fine (they cost nothing at runtime), and the one
+ * runtime value this file compares against is imported from
+ * control-plane/contract, which is dependency-free precisely so that import
+ * does not drag the server graph of client.ts in here (issue #1347); an actual
  * fetch call here would not be.
  */
 import type {
@@ -20,6 +23,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/contract";
 import {
   ANALYTICS_WINDOW_SPAN_MS,
   EVENT_SAMPLE_WINDOWS,
@@ -557,11 +561,19 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
     .sort((a, b) => b.total_credits - a.total_credits)
     .slice(0, TOP_KEYS_LIMIT)
     .map((row) => {
-      const key = apiKeyById.get(row.group_key);
+      // A NULL api_key_id groups here. The bucket mixes causes that the row
+      // itself cannot tell apart (traffic that carried no key, an error
+      // before a key was resolved, a key deleted under ON DELETE SET NULL),
+      // so both the label and the suffix have to be true of all three. What
+      // is certainly false for the first two is "Deleted key", which is how
+      // the bucket rendered on the qa-tester workspace before this fix, whose
+      // spend in that bucket was chat traffic that never carried a key.
+      const unattributed = row.group_key === UNATTRIBUTED_GROUP_KEY;
+      const key = unattributed ? undefined : apiKeyById.get(row.group_key);
       return {
         id: row.group_key,
-        label: key ? key.nickname : "Deleted key",
-        suffix: key?.redacted_suffix ?? row.group_key.slice(0, 8),
+        label: unattributed ? "Unattributed" : key ? key.nickname : "Deleted key",
+        suffix: unattributed ? "no key on record" : (key?.redacted_suffix ?? row.group_key.slice(0, 8)),
         credits: row.total_credits,
       };
     });

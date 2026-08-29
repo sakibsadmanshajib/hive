@@ -18,6 +18,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/contract";
 import {
   bucketByTime,
   deriveBlendedCreditsPerMillion,
@@ -498,6 +499,30 @@ describe("deriveOverviewTiles", () => {
       },
     });
     expect(result.topKeys.map((k) => k.label)).toEqual(["Staging", "Production"]);
+  });
+
+  it("labels the unattributed bucket as Unattributed, never as a deleted key (issue #1347)", () => {
+    const result = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: {
+        // The literal, not the constant: a fixture keyed by the same constant
+        // the code compares against would pass even if the constant drifted
+        // away from what the control-plane actually sends.
+        spend: [spendRow({ group_key: "unattributed", total_credits: 10 })],
+        keys: [apiKey({ id: "key-1", nickname: "Production" })],
+      },
+    });
+    // The bucket mixes traffic that never carried a key with keys deleted
+    // after the fact, so the label and the suffix both have to hold for
+    // either. "Deleted key" does not.
+    expect(UNATTRIBUTED_GROUP_KEY).toBe("unattributed");
+    expect(result.topKeys[0].label).toBe("Unattributed");
+    expect(result.topKeys[0].suffix).toBe("no key on record");
   });
 
   it("labels a spend row 'Deleted key' only when the account's own key list genuinely has no match", () => {

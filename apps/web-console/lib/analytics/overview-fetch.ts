@@ -191,8 +191,12 @@ async function fetchPreviousCacheSample(
  * stale or partial key list, which is what would be needed to mislabel a
  * live key "Deleted key" -- ListKeys never filters by status or paginates
  * (apps/control-plane/internal/apikeys/repository.go), so the only way a
- * spend row's key id has no match is a genuinely gone key or a failed
- * fetch, and this function already tells those apart via null.
+ * spend row key id has no match is the unattributed bucket (issue #1347,
+ * matched on UNATTRIBUTED_GROUP_KEY before the key lookup and labelled
+ * separately), a genuinely gone key, or a failed fetch. Only the last of
+ * those is what a null return means: a failed fetch reads as null and a
+ * successful one reads as rows. The bucket is told apart from a gone key by
+ * its group key, not by this return value.
  */
 async function fetchTopKeys(
   input: OverviewFetchInput,

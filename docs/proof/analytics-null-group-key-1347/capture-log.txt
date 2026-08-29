@@ -1,0 +1,105 @@
+Visual proof capture: issue #1347, PR #1351
+Captured 2026-08-29 against the demo box, on real demo data.
+
+WHAT WAS RUN
+------------
+Two control-planes, against two copies of the same data, so the only variable
+is the fix:
+
+  live control-plane  = the deployed binary at commit 2bad54d37, unfixed,
+                        reading the live database.
+  cp1347              = this branch, built on the box, reading a pg_dump
+                        restore of that same live database taken minutes
+                        earlier. Its Redis and its database are its own, and
+                        its payment and FX credentials were stripped from its
+                        environment, so no background worker of it can touch
+                        live state.
+
+Two console containers, identical except for which control-plane they call:
+
+  console1347b -> live control-plane (the before capture)
+  console1347  -> cp1347 (the after capture)
+
+Signed in as qa-tester@hive.test, the owner of the workspace whose overview
+card was returning the 500. The session was minted through the admin
+one-time-token flow in apps/web-console/tests/e2e/support/live-auth.mjs. No
+password was set, reset or rotated, and nothing was written to the live
+database by this capture.
+
+API LAYER, BEFORE AND AFTER
+---------------------------
+Same account, same bearer, same request, both control-planes:
+
+  GET /api/v1/accounts/current/analytics/errors?group_by=api_key&window=24h
+
+  live control-plane (unfixed) -> 500
+      {"error":"request could not be completed"}
+
+  cp1347 (fixed) -> 200
+      {"errors":[
+        {"group_key":"8571b7db...","error_count":5,"total_requests":20,"error_rate":0.25},
+        {"group_key":"61567500...","error_count":2,"total_requests":33,"error_rate":0.0606},
+        {"group_key":"a30b5251...","error_count":2,"total_requests":8,"error_rate":0.25},
+        {"group_key":"c2323ed1...","error_count":2,"total_requests":42,"error_rate":0.0476},
+        {"group_key":"unattributed","error_count":0,"total_requests":14,"error_rate":0}
+      ]}
+
+API key ids are truncated to eight characters here. They are row identifiers
+rather than credentials, but there is no reason to print more of them than
+the point requires.
+
+The unattributed bucket is 14 requests with zero errors. Those are the rows
+that took the whole summary down: ordinary chat completions served to this
+workspace through a signed-in session, which carry no API key at all.
+
+CONSOLE OVERVIEW CARD
+---------------------
+Recent errors card, before (screenshot before.png):
+
+  Recent errors
+  Failures across keys in the last 24 hours.
+  Couldn not load error data.
+  Try the request log directly, or reload this page.
+
+Recent errors card, after (screenshot after.png):
+
+  Recent errors
+  Failures across keys in the last 24 hours.
+  11
+  View in the request log
+
+The 11 is real: four attributed key buckets carrying 5, 2, 2 and 2 errors.
+
+ANALYTICS PAGE, GROUPED BY API KEY
+----------------------------------
+Screenshot analytics.png, captured after the console change on this branch.
+
+The usage chart carries a bucket labelled unattributed alongside the API key
+UUIDs, which is the explicit bucket this fix introduces.
+
+Top API keys by spend, row 3, reads:
+
+  3  Unattributed                          no key on record    $0.000481
+
+Before the console change in the second commit on this branch, that same row
+read "Deleted key" with the suffix "unattrib", because the widget labels any
+group key missing from the account key list as a deleted key. No key was
+deleted here. That spend is console and chat traffic that never carried a key,
+so the old label asserted something untrue about the account. The suffix says
+"no key on record" rather than "no key" because the same bucket also collects
+rows whose key was genuinely deleted afterwards, and nothing in the row says
+which case it is.
+
+PAGE URLS
+---------
+No credential appears in any URL below, and none was redacted out of them.
+
+  http://console1347b:3000/console                     (status 200)
+  http://console1347:3000/console                      (status 200)
+  http://console1347:3000/console/analytics?group_by=api_key&window=24h  (status 200)
+
+CLEANUP
+-------
+Every container, image and database copy created for this capture is
+throwaway and was removed after it. Nothing on the live stack was restarted,
+reconfigured or written to.
