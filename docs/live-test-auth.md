@@ -110,10 +110,15 @@ on 2026-08-29, per surface:
 * **Agent tasks: no delete route.** `/internal/agent-tasks/...` offers create,
   list, get, cancel, events and files, and nothing else. A submitted task is
   permanent. Cancel stops it; it does not remove the row.
-* **Accounts: no delete route, deliberately.**
-  `tenant_billing_accounts.account_id` references `accounts(id)` `ON DELETE
-  RESTRICT`, so deleting an account that still funds a live tenant fails loudly
-  by design (issue #828).
+* **Accounts: no product route, but the fixture sweep can remove one.** There
+  is no user-facing account deletion anywhere. What exists is
+  `sweepStaleFixtureRuns` in `e2e-fixture-seed.mjs`, which deletes a stale
+  fixture account with the service role after explicitly unmapping its
+  `tenant_billing_accounts` row. That unmapping step is required and is the
+  fix for issue #828: `tenant_billing_accounts.account_id` references
+  `accounts(id)` `ON DELETE RESTRICT` on purpose, so an account that still
+  funds a live tenant cannot be dropped by accident. Deleting a real
+  customer's account is a separate, unbuilt question.
 
 So a chat left on that account can be removed by whoever owns it, which is a
 reason to clean up rather than a reason to relax: a task or a key left there
@@ -123,8 +128,13 @@ still cannot be.
 
 `mintSession` in `tests/e2e/support/live-auth.mjs` is the single door every
 live session passes through, and it refuses `demo@hive-demo.invalid` outright.
-A run that genuinely only reads must say so, either with `readOnly: true` or
-`HIVE_LIVE_AUTH_READ_ONLY=1`.
+A run that genuinely only reads must say so at the call site, with
+`readOnly: true`, or `--read-only` on that module's CLI.
+
+The declaration is deliberately not an environment variable. An env var belongs
+to whoever set it, so one line in a workflow's `env:` block would switch the
+guard off for every step in that job, invisibly, and for reasons unrelated to
+the suite that inherits it. An argument sits where a reviewer reads it.
 
 Be clear about what that buys: it is a declaration gate, not a write blocker.
 It cannot stop a run that has declared itself read only from then sending a
@@ -276,11 +286,20 @@ Standalone, from a shell:
 
 ```bash
 cd apps/web-console
-node tests/e2e/support/live-auth.mjs demo@hive-demo.invalid \
+node tests/e2e/support/live-auth.mjs "e2e-verified+$E2E_RUN_KEY@hive-e2e.invalid" \
   https://chat-hive.scubed.co/agent-workspace tests/e2e/.auth/agent-workspace.json
 ```
 
 Requires `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`.
+
+This example named `demo@hive-demo.invalid` until the guard above landed, which
+is a fair illustration of how the account became the path of least resistance.
+A read-only pass at that account is still possible and must say so:
+
+```bash
+node tests/e2e/support/live-auth.mjs --read-only demo@hive-demo.invalid \
+  https://chat-hive.scubed.co/ tests/e2e/.auth/demo-readonly.json
+```
 
 ### Sessions that die mid-run
 

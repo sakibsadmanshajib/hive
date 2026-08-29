@@ -78,12 +78,39 @@ def find_function(tree: ast.AST, name: str) -> ast.AST | None:
 
 
 def admin_branch(func: ast.AST) -> ast.If | None:
-    """The `if user.role == 'admin':` split inside the delete handler."""
+    """The `if user.role == 'admin':` split inside the delete handler.
+
+    Matched on the exact AST shape rather than on the string 'admin' appearing
+    somewhere in the test. A substring match would happily accept
+    `if user.role != 'admin':`, whose body is then the NON-admin path, and this
+    module would go on to check the scoped calls against the wrong branch and
+    pass while the boundary was inverted. It would also match an unrelated
+    conditional that merely mentions the word.
+
+    Requires, exactly: `user.role` on the left, a single `==`, and the constant
+    'admin' on the right. Anything else is reported as unrecognised rather than
+    guessed at, because a guess here is a false green on an authorisation
+    check.
+    """
     for node in ast.walk(func):
-        if isinstance(node, ast.If):
-            source = ast.dump(node.test)
-            if "'admin'" in source or '"admin"' in source:
-                return node
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
+            continue
+        if len(test.comparators) != 1:
+            continue
+        right = test.comparators[0]
+        if not isinstance(right, ast.Constant) or right.value != "admin":
+            continue
+        left = test.left
+        if not isinstance(left, ast.Attribute) or left.attr != "role":
+            continue
+        if not isinstance(left.value, ast.Name) or left.value.id != "user":
+            continue
+        return node
     return None
 
 
@@ -105,8 +132,35 @@ def route_handler(tree: ast.AST) -> ast.AST | None:
     return None
 
 
+def selfcheck() -> None:
+    """The branch matcher must not accept a shape that inverts the meaning.
+
+    Without this, the hardening in admin_branch is itself untested, and the
+    substring match it replaced would pass every check in this file while the
+    authorisation boundary read backwards.
+    """
+    correct = "async def f(user):\n    if user.role == 'admin':\n        a()\n    else:\n        b()\n"
+    inverted = "async def f(user):\n    if user.role != 'admin':\n        a()\n    else:\n        b()\n"
+    reversed_operands = "async def f(user):\n    if 'admin' == user.role:\n        a()\n    else:\n        b()\n"
+    unrelated = "async def f(user):\n    if user.name == 'admin':\n        a()\n    else:\n        b()\n"
+    mentions_only = "async def f(user):\n    if is_admin(user):\n        a()\n    else:\n        b()\n"
+
+    cases = [
+        ("the exact == shape is matched", correct, True),
+        ("an inverted != test is refused", inverted, False),
+        ("reversed operands are refused", reversed_operands, False),
+        ("a different attribute is refused", unrelated, False),
+        ("a call that merely mentions admin is refused", mentions_only, False),
+    ]
+    print("\nbranch matcher self-check")
+    for label, source, expected in cases:
+        func = ast.parse(source).body[0]
+        check((admin_branch(func) is not None) == expected, label)
+
+
 def main() -> int:
     print("chat delete authorisation (issues #848, #916)")
+    selfcheck()
 
     for path in (ROUTER, MODEL, CADDYFILE):
         if not path.exists():

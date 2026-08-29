@@ -58,4 +58,24 @@ describe("assertNotSharedDemoAccount", () => {
   it("does not throw on a missing address, which mintSession reports itself", () => {
     expect(() => assertNotSharedDemoAccount(undefined)).not.toThrow();
   });
+
+  it("cannot be switched off by an environment variable", () => {
+    // The read-only declaration is per call on purpose. An env var belongs to
+    // whoever set it, so one line in a workflow's env: block would disable the
+    // guard for every step in that job. If someone reintroduces an env-var
+    // escape hatch, this goes red.
+    const previous = process.env.HIVE_LIVE_AUTH_READ_ONLY;
+    process.env.HIVE_LIVE_AUTH_READ_ONLY = "1";
+    try {
+      expect(() => assertNotSharedDemoAccount(SHARED_DEMO_ACCOUNT)).toThrow(
+        /refusing to mint a session/i
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HIVE_LIVE_AUTH_READ_ONLY;
+      } else {
+        process.env.HIVE_LIVE_AUTH_READ_ONLY = previous;
+      }
+    }
+  });
 });

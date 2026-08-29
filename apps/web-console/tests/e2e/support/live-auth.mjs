@@ -66,8 +66,8 @@
 //
 // The address above is run scoped on purpose, and this example used to name
 // the shared demo account. Minting for that account is now refused unless the
-// run declares itself read only (assertNotSharedDemoAccount below, and
-// HIVE_LIVE_AUTH_READ_ONLY=1 for this CLI).
+// run declares itself read only (assertNotSharedDemoAccount below, or
+// --read-only on this CLI).
 //
 // Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY.
 // Nothing this module prints contains a token, a password or a key: every
@@ -144,6 +144,13 @@ export const SHARED_DEMO_ACCOUNT = "demo@hive-demo.invalid";
  * act instead of an accident. A real write blocker would need a per-request
  * proxy, which is a great deal of machinery for a rule one line can state.
  *
+ * The declaration is per call, and deliberately not an environment variable.
+ * An env var belongs to whatever set it, so one line in a workflow's `env:`
+ * block would switch this off for every step in the job, invisibly and for
+ * reasons unrelated to the suite that inherits it. A `readOnly` argument, or
+ * the CLI's `--read-only` flag, sits at the call site where a reviewer reads
+ * it.
+ *
  * @param {string} email
  * @param {{ readOnly?: boolean }} [options]
  */
@@ -159,8 +166,8 @@ export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
       "the shared account the owner demos to prospects, and anything a run " +
       "creates on it (a chat, an agent task, an API key) is visible on that " +
       "surface. Run as a dedicated E2E_RUN_KEY-scoped identity instead. If " +
-      "this run only reads, say so explicitly with readOnly: true or " +
-      "HIVE_LIVE_AUTH_READ_ONLY=1. See docs/live-test-auth.md."
+      "this run only reads, say so at the call site with readOnly: true, or " +
+      "--read-only on this module's CLI. See docs/live-test-auth.md."
   );
 }
 
@@ -175,7 +182,7 @@ export async function mintSession({
   supabaseUrl = requiredEnv("SUPABASE_URL"),
   serviceRoleKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
   anonKey = requiredEnv("SUPABASE_ANON_KEY"),
-  readOnly = process.env.HIVE_LIVE_AUTH_READ_ONLY === "1",
+  readOnly = false,
 } = {}) {
   if (!email) {
     throw new Error("live-auth: mintSession needs an email for an existing account");
@@ -378,15 +385,20 @@ export async function withLiveSession(context, options, action) {
 // anywhere in this file makes every spec that imports it fail to load with
 // "require() cannot be used on an ESM graph with top-level await".
 async function main() {
-  const [, , email, targetUrl, statePath] = process.argv;
+  const argv = process.argv.slice(2);
+  // Order-independent so the flag can sit anywhere after the command.
+  const readOnly = argv.includes("--read-only");
+  const [email, targetUrl, statePath] = argv.filter((a) => a !== "--read-only");
   if (!email || !targetUrl) {
     console.error(
-      "usage: node tests/e2e/support/live-auth.mjs <email> <targetUrl> [statePath]"
+      "usage: node tests/e2e/support/live-auth.mjs [--read-only] <email> <targetUrl> [statePath]\n" +
+        "  --read-only  assert this run only reads, which is the sole way to " +
+        "mint for the shared demo account"
     );
     process.exit(2);
   }
   if (statePath) {
-    const result = await writeStorageState({ email, targetUrl, statePath });
+    const result = await writeStorageState({ email, targetUrl, statePath, readOnly });
     // No token material: an id, a path and an expiry are the whole output.
     console.log(
       redactSecrets(
@@ -395,7 +407,7 @@ async function main() {
     );
     return;
   }
-  const session = await mintSession({ email });
+  const session = await mintSession({ email, readOnly });
   console.log(
     redactSecrets(
       `live-auth: minted a session for ${email} (user ${session.userId}); expires_at=${session.expires_at}`

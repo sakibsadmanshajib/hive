@@ -100,8 +100,12 @@ and nothing else.
 
     agent tasks   create, list, get, cancel, events, files. No DELETE.
                   apps/control-plane/internal/agenttask/http.go:51-111
-    accounts      no route; tenant_billing_accounts.account_id references
-                  accounts(id) ON DELETE RESTRICT, deliberately (#828)
+    accounts      no product route. sweepStaleFixtureRuns in
+                  e2e-fixture-seed.mjs does delete a stale fixture account
+                  with the service role, after explicitly unmapping its
+                  tenant_billing_accounts row; that unmapping is the fix for
+                  #828 (closed), since the account_id foreign key is
+                  ON DELETE RESTRICT on purpose.
 
 ## 7. Demo-account inventory, read only
 
