@@ -73,7 +73,8 @@ func NewService(repo Repository, ledgerSvc LedgerGranter, profilesSvc ProfileRea
 //
 // Flow:
 //  1. Validate credits amount
-//  2. Verify rail is available for the account's country
+//  2. Verify rail is available for the account's country, then that this
+//     deployment holds its credentials
 //  3. Load and validate billing profile (gate)
 //  4. Calculate tax treatment
 //  5. Compute amounts (USD cents, local paisa for BD)
@@ -90,18 +91,6 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	// 1. Validate credits.
 	if err := ValidatePurchaseAmount(credits, rail); err != nil {
 		return nil, err
-	}
-
-	// The rail has to exist on this deployment before anything else happens.
-	// It is registered from its credentials at startup, so an absent one means
-	// this box can neither take the payment nor settle it. Asking last, which is
-	// what this used to do, meant a country lookup, a billing profile read, an
-	// FX snapshot and an inserted payment intent all happened first, leaving a
-	// stranded `created` intent behind on every attempt (issue #1449).
-	railImpl, ok := s.rails[rail]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s (set %s)", ErrRailNotConfigured, rail,
-			strings.Join(RailCredentialEnvs[rail], ", "))
 	}
 
 	// A checkout with no usable browser return origin would strand the payer
@@ -121,6 +110,24 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	available := AvailableRails(countryCode)
 	if !railIn(rail, available) {
 		return nil, fmt.Errorf("payments: rail %s not available for country %s", rail, countryCode)
+	}
+
+	// Only now, once the caller is entitled to this rail at all, ask whether the
+	// deployment holds credentials for it. A rail is registered from its whole
+	// credential set at startup, so an absent one means this box can neither take
+	// the payment nor settle it. Asking last, which is what this used to do,
+	// meant a billing profile read, an FX snapshot and an inserted payment intent
+	// all happened first, leaving a stranded `created` intent behind on every
+	// attempt (issue #1449). Asking first, which the first cut of that fix did,
+	// answered a rail the caller was never entitled to select with a 503 rather
+	// than a 400, blaming the deployment for customer input and telling an
+	// authenticated caller which rails the box holds credentials for outside its
+	// own country set. Both refusals still land before the FX snapshot and the
+	// insert, which is the property this ordering has to keep.
+	railImpl, ok := s.rails[rail]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s (set %s)", ErrRailNotConfigured, rail,
+			strings.Join(RailCredentialEnvs[rail], ", "))
 	}
 
 	// 3. Require a complete billing profile.
@@ -193,6 +200,22 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		return nil, fmt.Errorf("payments: insert intent: %w", err)
 	}
 
+	// The insert stays ahead of the provider call deliberately: it is the durable
+	// record that any provider-side session this request opens is attributable to
+	// an account, and the unique index on (account_id, idempotency_key) is the
+	// only thing stopping a double submit from opening two of them. What was
+	// missing is the other half, a terminal state for the attempts that fail
+	// after it. Every error path below drives the intent to `failed` rather than
+	// abandoning it in `created`, so the class of stranded rows this reviewer
+	// found has no source instead of needing a reaper to clean up after it (the
+	// same shape as the stranded reservation holds of issue #600).
+	markFailed := func(cause error) error {
+		if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, IntentStatusCreated, IntentStatusFailed); err != nil {
+			return errors.Join(cause, fmt.Errorf("payments: mark intent failed: %w", err))
+		}
+		return cause
+	}
+
 	// 8. Call the rail to initiate the provider-side payment.
 	initiateInput := InitiateInput{
 		PaymentIntentID: intent.ID,
@@ -209,13 +232,13 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 
 	initiateResult, err := railImpl.Initiate(ctx, initiateInput)
 	if err != nil {
-		return nil, fmt.Errorf("payments: rail initiate: %w", err)
+		return nil, markFailed(fmt.Errorf("payments: rail initiate: %w", err))
 	}
 
 	// 9. Persist provider details.
 	expiresAt := initiateResult.ExpiresAt
 	if err := s.repo.UpdateProviderDetails(ctx, intent.ID, initiateResult.ProviderIntentID, initiateResult.RedirectURL, &expiresAt); err != nil {
-		return nil, fmt.Errorf("payments: update provider details: %w", err)
+		return nil, markFailed(fmt.Errorf("payments: update provider details: %w", err))
 	}
 
 	// 10. Transition created -> pending_redirect.

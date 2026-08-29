@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
@@ -23,7 +25,18 @@ type Rail struct {
 }
 
 // NewRail constructs a bKash Rail with the given HTTP client and credentials.
-func NewRail(httpClient *http.Client, baseURL, appKey, appSecret, username, password string) *Rail {
+//
+// All four credentials are required. bKash mints the grant token that every
+// call depends on from the whole set, so a partial rail can advertise itself,
+// redirect a payer, and then fail on the settlement round trip. Same argument
+// as the Stripe constructor, weaker consequence: the settlement path here is a
+// live provider call rather than a local signature check, so it fails closed
+// instead of accepting a forgery (issue #1449).
+func NewRail(httpClient *http.Client, baseURL, appKey, appSecret, username, password string) (*Rail, error) {
+	if strings.TrimSpace(appKey) == "" || strings.TrimSpace(appSecret) == "" ||
+		strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
+		return nil, errors.New("bkash: refusing to build a rail without a complete credential set")
+	}
 	return &Rail{
 		httpClient: httpClient,
 		baseURL:    baseURL,
@@ -31,7 +44,7 @@ func NewRail(httpClient *http.Client, baseURL, appKey, appSecret, username, pass
 		appSecret:  appSecret,
 		username:   username,
 		password:   password,
-	}
+	}, nil
 }
 
 // RailName returns the rail identifier for bKash.
