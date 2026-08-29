@@ -8,21 +8,32 @@ use tauri::Manager;
 use url::Url;
 
 const SETTINGS_FILE: &str = "settings.json";
-const CONSOLE_BASE_PATH: &str = "/agent-workspace";
+
+/// The path this module used to append. `apps/agent-console` was a second
+/// whole application with a Supabase sign in of its own, served at
+/// `/agent-workspace` on the deployment's chat origin; issue #540 and D-045
+/// retired it, and that path is now answered 404 there. Kept only so a
+/// settings file written by an older build still resolves to something that
+/// loads: see `origin` below, which strips it, and `resolved_target_url`,
+/// which reads through it.
+const LEGACY_CONSOLE_BASE_PATH: &str = "/agent-workspace";
 
 #[derive(Serialize, Deserialize)]
 struct StoredSettings {
-    /// Full URL to the deployment's agent-console, already normalized
-    /// (scheme + host + optional port + the fixed console base path).
+    /// The deployment origin, already normalized (scheme + host + optional
+    /// port). Files written before issue #540 also carry
+    /// `LEGACY_CONSOLE_BASE_PATH` on the end.
     console_url: String,
 }
 
-/// Validates a user-entered server address and returns the full,
-/// normalized agent-console URL to load in the webview.
+/// Validates a user-entered server address and returns the normalized
+/// deployment origin to load in the webview.
 ///
-/// Only http/https with a host are accepted; any path, query, or fragment
-/// the user typed is discarded in favour of the console's fixed base path
-/// (`apps/agent-console`'s `next.config.ts` bakes in `/agent-workspace`).
+/// Only http/https with a host are accepted; any path, query, or fragment the
+/// user typed is discarded. The deployment serves one shell at its origin
+/// root, with one sign in, so there is no base path to append: appending
+/// `/agent-workspace` is what used to land the desktop on a second,
+/// independent login (issue #540).
 pub fn validate_and_normalize(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -50,7 +61,6 @@ pub fn validate_and_normalize(input: &str) -> Result<String, String> {
     if let Some(port) = parsed.port() {
         normalized.push_str(&format!(":{port}"));
     }
-    normalized.push_str(CONSOLE_BASE_PATH);
 
     Ok(normalized)
 }
@@ -72,18 +82,23 @@ pub fn load(data_dir: &Path) -> Option<String> {
 /// `main.rs` to open, falling back to "unconfigured" (`None`) if the
 /// string itself doesn't parse (e.g. valid JSON but a hand-edited or
 /// otherwise corrupt URL value) rather than propagating a startup error.
+///
+/// Read through `origin`, so an installation configured before issue #540
+/// opens the shell rather than the deployment's 404 for a path that is no
+/// longer served. Migrating on read costs one call and asks the user to
+/// retype nothing.
 pub fn resolved_target_url(saved: Option<String>) -> Option<Url> {
-    saved.and_then(|s| Url::parse(&s).ok())
+    saved.and_then(|s| Url::parse(origin(&s)).ok())
 }
 
-/// Returns the deployment origin (scheme + host + optional port) the stored
-/// console URL was built from, by stripping the fixed console base path this
-/// module always appends. Used by `entitlements.rs` to target edge-api's
-/// `/v1/featuregate` on the same origin as the console, without re-parsing
-/// or re-deriving the URL a second way.
+/// Returns the deployment origin (scheme + host + optional port) for a stored
+/// console URL, stripping the base path older builds appended. Used by
+/// `entitlements.rs` to target edge-api's `/v1/featuregate` on the same origin
+/// as the shell, without re-parsing or re-deriving the URL a second way, and
+/// by `resolved_target_url` above to migrate a pre-#540 settings file.
 pub fn origin(console_url: &str) -> &str {
     console_url
-        .strip_suffix(CONSOLE_BASE_PATH)
+        .strip_suffix(LEGACY_CONSOLE_BASE_PATH)
         .unwrap_or(console_url)
 }
 
@@ -173,33 +188,33 @@ mod tests {
     }
 
     #[test]
-    fn accepts_https_and_appends_base_path() {
+    fn accepts_https_and_keeps_the_deployment_origin() {
         let out = validate_and_normalize("https://hive.example.com").unwrap();
-        assert_eq!(out, "https://hive.example.com/agent-workspace");
+        assert_eq!(out, "https://hive.example.com");
     }
 
     #[test]
     fn accepts_http_for_local_dev() {
         let out = validate_and_normalize("http://localhost:8090").unwrap();
-        assert_eq!(out, "http://localhost:8090/agent-workspace");
+        assert_eq!(out, "http://localhost:8090");
     }
 
     #[test]
     fn strips_user_provided_path_query_and_fragment() {
         let out = validate_and_normalize("https://hive.example.com/some/path?x=1#frag").unwrap();
-        assert_eq!(out, "https://hive.example.com/agent-workspace");
+        assert_eq!(out, "https://hive.example.com");
     }
 
     #[test]
     fn trims_surrounding_whitespace() {
         let out = validate_and_normalize("  https://hive.example.com  ").unwrap();
-        assert_eq!(out, "https://hive.example.com/agent-workspace");
+        assert_eq!(out, "https://hive.example.com");
     }
 
     #[test]
     fn preserves_explicit_port() {
         let out = validate_and_normalize("https://hive.example.com:8443/").unwrap();
-        assert_eq!(out, "https://hive.example.com:8443/agent-workspace");
+        assert_eq!(out, "https://hive.example.com:8443");
     }
 
     // -- load / save / remove ----------------------------------------------
@@ -229,9 +244,19 @@ mod tests {
 
     #[test]
     fn resolved_target_url_parses_valid_saved_string() {
+        let url = resolved_target_url(Some("https://hive.example.com".to_string())).unwrap();
+        assert_eq!(url.as_str(), "https://hive.example.com/");
+    }
+
+    #[test]
+    fn resolved_target_url_migrates_a_stored_agent_workspace_url() {
+        // An installation configured before issue #540 holds the old console
+        // URL on disk. That path is no longer served, so opening it would show
+        // the deployment's 404 rather than the shell. Migrate on read instead
+        // of asking the user to retype an address they already gave us.
         let url = resolved_target_url(Some("https://hive.example.com/agent-workspace".to_string()))
             .unwrap();
-        assert_eq!(url.as_str(), "https://hive.example.com/agent-workspace");
+        assert_eq!(url.as_str(), "https://hive.example.com/");
     }
 
     #[test]

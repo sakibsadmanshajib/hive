@@ -3,9 +3,11 @@
 //! ## Auth timing decision
 //!
 //! `main.rs`'s `setup()` runs before the window exists, so there is no
-//! webview and no session: the agent-console page (which holds the real
-//! Supabase session, per `settings.rs`'s doc comment on `CONSOLE_BASE_PATH`)
-//! has not loaded yet. The main window's Tauri capability
+//! webview and no session: the shell page (which holds the real session, per
+//! `settings.rs`'s doc comment on `LEGACY_CONSOLE_BASE_PATH`, and which since
+//! issue #540 is the deployment's one chat shell rather than a separate agent
+//! console with a login of its own) has not loaded yet. The main window's
+//! Tauri capability
 //! (`src-tauri/capabilities/default.json`) also grants no IPC to remote
 //! content by design, so there is no channel for that page to hand its
 //! session back to Rust even after it loads.
@@ -14,9 +16,12 @@
 //! (`apps/edge-api/internal/featuregate/handler.go` `NewStateHandler`)
 //! unauthenticated at startup. That call always comes back 401/403 today
 //! (`AwaitingSession`) -- expected, not a failure. The real, authenticated
-//! gate check already happens on every load of the agent-console page
-//! itself, which calls the same endpoint with its own session and hides or
-//! shows Cowork accordingly; nothing here needs to duplicate that. What this
+//! gate check already happens on every load of the shell page itself, which
+//! calls the same endpoint with its own session and hides or shows Cowork
+//! accordingly; nothing here needs to duplicate that. Issue #540 moved which
+//! page that is, from the standalone agent console to the deployment's one
+//! shell, and changed nothing about the arrangement: the check is still made
+//! by the page, with the page's own session. What this
 //! startup fetch DOES add: telling a genuinely unreachable server (network
 //! error, timeout, unexpected status) apart from a merely unauthenticated
 //! one, so `main.rs` can fail safe and legible instead of silently opening a

@@ -29,17 +29,17 @@ describe("validateServerUrl", () => {
     expect(validateServerUrl("https://").ok).toBe(false);
   });
 
-  it("accepts https and appends the console base path", () => {
+  it("accepts https and keeps the deployment origin", () => {
     expect(validateServerUrl("https://hive.example.com")).toEqual({
       ok: true,
-      previewUrl: "https://hive.example.com/agent-workspace",
+      previewUrl: "https://hive.example.com",
     });
   });
 
   it("accepts http for local dev servers", () => {
     expect(validateServerUrl("http://localhost:8090")).toEqual({
       ok: true,
-      previewUrl: "http://localhost:8090/agent-workspace",
+      previewUrl: "http://localhost:8090",
     });
   });
 
@@ -48,21 +48,21 @@ describe("validateServerUrl", () => {
       validateServerUrl("https://hive.example.com/some/path?x=1#frag")
     ).toEqual({
       ok: true,
-      previewUrl: "https://hive.example.com/agent-workspace",
+      previewUrl: "https://hive.example.com",
     });
   });
 
   it("trims surrounding whitespace", () => {
     expect(validateServerUrl("  https://hive.example.com  ")).toEqual({
       ok: true,
-      previewUrl: "https://hive.example.com/agent-workspace",
+      previewUrl: "https://hive.example.com",
     });
   });
 
   it("preserves an explicit port", () => {
     expect(validateServerUrl("https://hive.example.com:8443/")).toEqual({
       ok: true,
-      previewUrl: "https://hive.example.com:8443/agent-workspace",
+      previewUrl: "https://hive.example.com:8443",
     });
   });
 });
