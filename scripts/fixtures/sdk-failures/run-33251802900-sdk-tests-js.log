@@ -1,0 +1,88 @@
+
+ RUN  v3.2.7 /tests
+
+ ✓ tests/chat-completions/chat-completions.test.ts (5 tests) 4729ms
+   ✓ Chat Completions > returns a valid chat completion via SDK  1142ms
+   ✓ Chat Completions > model field shows Hive alias not provider handle  1748ms
+   ✓ Chat Completions > passes tools through and returns a tool_calls completion  664ms
+   ✓ Chat Completions > passes response_format through and returns valid JSON  1150ms
+ ✓ tests/batches/batches.test.ts (2 tests) 2167ms
+   ✓ Batches > submits a batch, retrieves it, then cancels it  693ms
+ ✓ tests/chat-completions/tool-choice.test.ts (5 tests) 8220ms
+   ✓ Chat Completions tool_choice variants > tool_choice: "none" never invokes a tool even when tools are offered  2576ms
+   ✓ Chat Completions tool_choice variants > tool_choice: "auto" lets the model decide  653ms
+   ✓ Chat Completions tool_choice variants > tool_choice: "required" forces a tool call  1322ms
+   ✓ Chat Completions tool_choice variants > parallel_tool_calls: true can return more than one tool call  984ms
+   ✓ Chat Completions tool_choice variants > completes a full multi-turn tool call and tool result round trip  2679ms
+ ✓ tests/errors/typed-exceptions.test.ts (6 tests) 1181ms
+   ✓ SDK typed exception classes > a large request body either succeeds (bounded output cost) or is cleanly rejected, never hangs or 5xxs  1005ms
+ ✓ tests/chat-completions/sampling-params.test.ts (7 tests) 9807ms
+   ✓ Chat Completions sampling parameters > honors max_tokens on the pooled alias  2028ms
+   ✓ Chat Completions sampling parameters > honors max_tokens on the pinned single-route alias  1510ms
+   ✓ Chat Completions sampling parameters > honors stop sequences  1940ms
+   ✓ Chat Completions sampling parameters > honors temperature and top_p without erroring  1455ms
+   ✓ Chat Completions sampling parameters > seed either narrows sampling or is cleanly rejected, and never leaks a provider fingerprint  1201ms
+   ✓ Chat Completions sampling parameters > logprobs either returns a valid logprobs shape or is cleanly rejected  1656ms
+ ✓ tests/responses/responses.test.ts (3 tests) 1096ms
+   ✓ Responses API > returns a valid response via SDK  440ms
+   ✓ Responses API > model field shows Hive alias not provider handle  651ms
+ ✓ tests/audio/audio.test.ts (3 tests) 4135ms
+   ✓ Audio > audio.speech.create returns non-empty binary audio  2057ms
+   ✓ Audio > audio.transcriptions.create accepts audio and answers in the OpenAI shape  353ms
+   ✓ Audio > audio.transcriptions.create round-trips speech back to text  1720ms
+ ✓ tests/chat-completions/response-format-json-schema.test.ts (1 test) 1290ms
+   ✓ Chat Completions response_format: json_schema > returns content conforming to the supplied JSON schema  1281ms
+ ✓ tests/images/images.test.ts (1 test) 4113ms
+   ✓ Images > images.generate either returns a real image or fails with a structured, provider-blind error (never an empty success)  4109ms
+ ✓ tests/files/files.test.ts (2 tests) 301ms
+ ✓ tests/errors/error-shape.test.ts (2 tests) 103ms
+ ✓ tests/errors/unsupported-endpoint.test.ts (2 tests) 91ms
+ ✓ tests/streaming/streaming-chat.test.ts (2 tests | 1 skipped) 323ms
+   ✓ Streaming Chat Completions > streams chat completion chunks via SDK  320ms
+ ✓ tests/models/list-models.test.ts (3 tests) 127ms
+ ✓ tests/headers/compat-headers.test.ts (3 tests) 116ms
+ ✓ tests/moderations/moderations.test.ts (1 test) 122ms
+ ✓ tests/embeddings/embeddings.test.ts (3 tests) 1664ms
+   ✓ Embeddings > returns valid embeddings via SDK  524ms
+   ✓ Embeddings > supports batch input  1125ms
+ ✓ tests/completions/completions.test.ts (2 tests) 2071ms
+   ✓ Completions (legacy) > returns a valid text completion via SDK  1558ms
+   ✓ Completions (legacy) > model field shows Hive alias not provider handle  510ms
+ ✓ tests/streaming/streaming-error.test.ts (1 test) 48ms
+ ✓ tests/health/health.test.ts (1 test) 47ms
+ ✓ tests/chat-completions/vision.test.ts (1 test) 11641ms
+   ✓ Chat Completions vision (image_url input) > accepts image_url content and either answers or is cleanly rejected  11627ms
+ ❯ tests/usage/usage-accounting.test.ts (3 tests | 1 failed) 33617ms
+   × Usage accounting > prompt_tokens_details.cached_tokens is present with a numeric value 30314ms
+     → expected 31 to be 5 // Object.is equality
+   ✓ Usage accounting > a second identical request either reuses cache (cached_tokens > 0) or reports a clean zero, never a negative or missing value  2069ms
+   ✓ Usage accounting > stream_options.include_usage emits a terminal usage chunk with prompt_tokens_details  1221ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/usage/usage-accounting.test.ts > Usage accounting > prompt_tokens_details.cached_tokens is present with a numeric value
+AssertionError: expected 31 to be 5 // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 5[39m
+[31m+ 31[39m
+
+ ❯ tests/usage/usage-accounting.test.ts:28:42
+     26|     expect(response.usage!.prompt_tokens).toBeGreaterThan(0);
+     27|     expect(response.usage!.completion_tokens).toBeGreaterThan(0);
+     28|     expect(response.usage!.total_tokens).toBe(
+       |                                          ^
+     29|       response.usage!.prompt_tokens + response.usage!.completion_token…
+     30|     );
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 21 passed (22)
+      Tests  1 failed | 57 passed | 1 skipped (59)
+   Start at  12:18:12
+   Duration  43.66s (transform 357ms, setup 0ms, collect 3.85s, tests 87.01s, environment 11ms, prepare 3.09s)
+
+
