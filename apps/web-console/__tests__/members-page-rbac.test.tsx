@@ -19,7 +19,14 @@ const mockGetViewer = vi.fn();
 const mockGetMembers = vi.fn();
 const mockGetAccountProfile = vi.fn();
 
-vi.mock("next/navigation", () => ({ redirect: mockRedirect }));
+// useRouter is here for the invite panel, which is a client component and calls
+// router.refresh() after issuing an invitation. Mocking the module rather than
+// the panel keeps the real form in the tree, so the role-selector assertions
+// below still test the thing they name.
+vi.mock("next/navigation", () => ({
+  redirect: mockRedirect,
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({
@@ -44,14 +51,6 @@ vi.mock("../lib/control-plane/client", () => ({
       this.code = code;
     }
   },
-}));
-
-// The invite panel is a client component that calls useRouter, which needs an
-// app-router context this test has no reason to stand up. Its own behaviour is
-// covered by lib/members/invite-outcome.test.ts and the route test.
-vi.mock("@/components/members/invite-panel", () => ({
-  InviteTeammateForm: () => <div data-testid="invite-form" />,
-  ResendInvitationButton: () => <button type="button">New link</button>,
 }));
 
 // The shell pulls in next-intl's useTranslations, which needs a provider this
@@ -230,20 +229,23 @@ describe("app/console/members/page.tsx", () => {
   });
 
   it("states the last-owner rule instead of offering to demote a sole owner", async () => {
-    mockGetMembers.mockResolvedValue([
-      {
-        user_id: OWNER_ID,
-        email: "owner@example.test",
-        role: "owner",
-        status: "active",
-      },
-      {
-        user_id: MEMBER_ID,
-        email: "teammate@example.test",
-        role: "member",
-        status: "active",
-      },
-    ]);
+    mockGetMembers.mockResolvedValue({
+      invitations: [],
+      members: [
+        {
+          user_id: OWNER_ID,
+          email: "owner@example.test",
+          role: "owner",
+          status: "active",
+        },
+        {
+          user_id: MEMBER_ID,
+          email: "teammate@example.test",
+          role: "member",
+          status: "active",
+        },
+      ],
+    });
     await renderMembersPage({});
     expect(screen.queryByLabelText(/role for owner@example.test/i)).toBeNull();
     expect(
@@ -253,7 +255,7 @@ describe("app/console/members/page.tsx", () => {
 
   it("states the permission gate, not email verification, on a disabled invite control", async () => {
     await renderMembersPage({}, ["analytics.view"]);
-    const button = screen.getByRole("button", { name: /send invite/i });
+    const button = screen.getByRole("button", { name: /create invitation/i });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText(/only workspace owners can invite teammates/i),

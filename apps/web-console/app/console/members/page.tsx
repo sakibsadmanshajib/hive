@@ -341,13 +341,9 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
         // Members are managed through the Role column. Only an outstanding
         // invitation has anything to act on here.
         if (row.kind === "member") return null;
-        if (!canInvite) {
-          return (
-            <span className="text-2xs text-[var(--color-ink-3)]">
-              {inviteBlockedReason}
-            </span>
-          );
-        }
+        // The card above already explains why the controls are unavailable.
+        // Repeating it on every row would say the same sentence four times.
+        if (!canInvite) return null;
         return (
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
             <ResendInvitationButton email={row.email} role={row.role} />
