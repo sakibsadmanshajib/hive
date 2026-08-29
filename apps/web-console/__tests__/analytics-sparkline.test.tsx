@@ -4,7 +4,7 @@
  * with no prompt tokens behind it, and drawing those at 0% asserts a cache
  * hit rate over a slice of time the bounded sample never covered.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 
 interface ChartProps {
@@ -35,6 +35,13 @@ vi.mock("recharts", () => {
 import { Sparkline } from "@/components/analytics/sparkline";
 
 describe("Sparkline", () => {
+  // The capture arrays are module scoped, so a test asserting on index 0
+  // would otherwise read whichever test ran first once a third is added.
+  beforeEach(() => {
+    chartData.length = 0;
+    areaProps.length = 0;
+  });
+
   it("keeps an unsampled bucket null instead of drawing it as a measured zero", () => {
     render(
       <Sparkline values={[null, 0.5, null]} label="Trend across all 3 requests" />,

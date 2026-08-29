@@ -8,6 +8,10 @@ import {
   type TabName,
 } from "@/lib/analytics/overview-fetch";
 import { deriveOverviewTiles } from "@/lib/analytics/cache-metrics";
+import {
+  ANALYTICS_WINDOW_SPAN_MS,
+  hasWindowSpan,
+} from "@/lib/analytics/windows";
 import { AnalyticsControls } from "@/components/analytics/analytics-controls";
 import { AnalyticsOverviewSection } from "@/components/analytics/analytics-overview-section";
 import { ObservabilityTiles } from "@/components/analytics/observability-tiles";
@@ -41,6 +45,22 @@ function isValidGroupBy(value: string | undefined): value is GroupBy {
   return value === "model" || value === "api_key" || value === "endpoint";
 }
 
+// `window` is user controlled and reaches two backends that quietly serve
+// their own 7d default for anything they do not recognize
+// (parseAnalyticsFilter, apps/control-plane/internal/usage/http.go). An
+// unrecognized value therefore rendered 7d rows under a heading naming a
+// different window, on every panel at once, including the top keys panel,
+// which carries no window note of its own. That is reachable from the real
+// "Custom" control in TimeWindowPicker, not just a crafted query string.
+// Resolve the value once, here, and hand the resolved window to the fetches,
+// the tab links and the picker alike, so what the page says and what it
+// fetched are the same window.
+function resolveWindow(requested: string | undefined): string {
+  return requested && hasWindowSpan(ANALYTICS_WINDOW_SPAN_MS, requested)
+    ? requested
+    : "7d";
+}
+
 const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "usage", label: "Usage" },
@@ -61,18 +81,19 @@ export default async function AnalyticsPage({
   const groupBy: GroupBy = isValidGroupBy(params.group_by)
     ? params.group_by
     : "model";
-  const timeWindow = params.window ?? "7d";
+  const timeWindow = resolveWindow(params.window);
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
-
-  const bundle = await fetchOverviewData({
-    activeTab,
-    groupBy,
-    timeWindow,
-    now: new Date(),
-  });
+  // Independent round trips, so they run together: the profile only feeds
+  // the shell's user menu and nothing in the tab body reads it.
+  const [profile, bundle] = await Promise.all([
+    getAccountProfile().catch((): { owner_name: string } => ({ owner_name: "" })),
+    fetchOverviewData({
+      activeTab,
+      groupBy,
+      timeWindow,
+      now: new Date(),
+    }),
+  ]);
 
   const fetchError = bundle.main === null;
   const usageData = bundle.main?.usage ?? [];

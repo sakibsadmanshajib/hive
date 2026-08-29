@@ -378,10 +378,12 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     expect(screen.queryByText("Unavailable")).toBeNull();
   });
 
-  it("serves a prototype-colliding window value as an ordinary unsupported window, not a 500", async () => {
+  it("resolves a prototype-colliding window value to the 7d default instead of 500ing or labelling 7d rows as that window", async () => {
+    const urls: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        urls.push(url);
         if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
         if (url.endsWith("/api/v1/accounts/current/profile")) {
           return jsonResponse(200, PROFILE_PAYLOAD);
@@ -425,18 +427,18 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     });
     render(page);
 
-    // Live-captured before the fix: this exact query string returned HTTP 500
-    // and the console rendered its generic crash page, because both the span
-    // lookup and the membership check walked the prototype chain and resolved
-    // "toString" to an inherited, always-truthy function.
+    // Live-captured before the fix: this exact query string returned HTTP 500,
+    // because both the span lookup and the membership check walked the
+    // prototype chain and resolved "toString" to an inherited, always-truthy
+    // function.
     expect(screen.queryByText(/Unable to load analytics/)).toBeNull();
     screen.getByText("7");
-    // It degrades to the same visible note any other unrecognized window
-    // gets, rather than silently dropping the delta and trend rows.
-    const notes = screen.getAllByText(
-      "No comparison or trend for this window. Pick 24h, 7d or 30d.",
-    );
-    expect(notes.length).toBeGreaterThanOrEqual(4);
+
+    // And the crafted value never reaches the backend, which would have
+    // answered it with its own 7d rows while every panel here kept saying
+    // this window. The page resolves the window first and asks for 7d.
+    expect(urls.some((u) => u.includes("window=toString"))).toBe(false);
+    expect(urls.some((u) => u.includes("window=7d"))).toBe(true);
   });
 });
 
