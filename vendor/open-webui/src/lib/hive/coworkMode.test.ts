@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	COMPOSER_MODES,
 	describeEvent,
+	dropSummaryEcho,
 	foldRunSteps,
 	isComposerMode,
 	latestStepSeq,
@@ -396,12 +397,90 @@ describe('settleRunSteps', () => {
 	});
 });
 
+describe('dropSummaryEcho', () => {
+	const step = (description: string, seq: number): RunStep => ({
+		action: 'hive_agent_step',
+		description,
+		done: true,
+		seq
+	});
+
+	// The sentence issue #1509 saw twice. The event feed's copy has the message's
+	// content blocks joined with a single space (controlclient/events.go), the
+	// turn's copy keeps the message's own line breaks, and they are the same
+	// words, which is the whole defect.
+	const summary = 'Created `sixcap.txt` with the text `HIVE-COWORK-OK` and displayed its contents:\n\n```\nHIVE-COWORK-OK\n```';
+	const echo = summary.split(/\s+/).join(' ');
+
+	it('drops the closing step that only repeats the turn content (#1509)', () => {
+		const kept = dropSummaryEcho([step('Using bash', 1), step(echo, 2)], summary);
+		expect(kept.map((s) => s.description)).toEqual(['Using bash']);
+	});
+
+	it('matches across the line breaks the two routes disagree about', () => {
+		// Exact string equality would fail here and the duplicate would survive:
+		// one route joined the content blocks with a space, the other did not.
+		expect(echo).not.toBe(summary);
+		expect(dropSummaryEcho([step(echo, 1)], summary)).toEqual([]);
+	});
+
+	it('drops a shortened preview that is a marked prefix of the summary', () => {
+		const long = `${'x'.repeat(40)} tail that the wire cut off`;
+		const kept = dropSummaryEcho([step(`(shortened) ${'x'.repeat(40)}`, 1)], long);
+		expect(kept).toEqual([]);
+	});
+
+	it('keeps a short step that merely begins the summary but is not marked', () => {
+		// Without the marker there is no evidence the wire cut anything, so a
+		// prefix is just a different, shorter thing the agent said.
+		const kept = dropSummaryEcho([step('Created', 1)], 'Created the file and read it back');
+		expect(kept.map((s) => s.description)).toEqual(['Created']);
+	});
+
+	it('keeps every step when the summary is an artifact URL rather than prose', () => {
+		// publishDeckArtifact replaces the agent's text summary with the deck's
+		// URL, so the closing message is NOT the turn content and is the only
+		// place that text appears. Dropping it there would delete real content.
+		const kept = dropSummaryEcho(
+			[step('Using bash', 1), step(echo, 2)],
+			'https://artifacts.example.invalid/d/abc123'
+		);
+		expect(kept.map((s) => s.description)).toEqual(['Using bash', echo]);
+	});
+
+	it('drops only the last echo, so a sentence the agent really did repeat stays visible', () => {
+		const kept = dropSummaryEcho([step(echo, 1), step('Using bash', 2), step(echo, 3)], summary);
+		expect(kept.map((s) => s.description)).toEqual([echo, 'Using bash']);
+	});
+
+	it('drops nothing when the turn has no content to echo', () => {
+		const steps = [step('Using bash', 1)];
+		expect(dropSummaryEcho(steps, '')).toEqual(steps);
+		expect(dropSummaryEcho(steps, '   ')).toEqual(steps);
+	});
+
+	it('returns a new array rather than editing the one the turn already holds', () => {
+		const steps = [step('Using bash', 1), step(echo, 2)];
+		const kept = dropSummaryEcho(steps, summary);
+		expect(kept).not.toBe(steps);
+		expect(steps).toHaveLength(2);
+	});
+});
+
 describe('the run turn follows the detail endpoint, not the task list', () => {
 	const chat = readComponent('../components/chat/Chat.svelte');
 
 	it('reads one task by id rather than filtering every task the user owns', () => {
 		expect(chat).toContain('getTask(localStorage.token, taskId)');
 		expect(chat).not.toContain('listTasks');
+	});
+
+	it('drops the summary echo only once the run has settled (#1509)', () => {
+		// The duplicate exists only after the turn's content becomes the run's
+		// summary; while it is still going the content is a status line and
+		// there is nothing to match, so the drop rides the settled branch.
+		expect(chat).toContain('settleRunSteps(dropSummaryEcho(steps, turn.content))');
+		expect(chat).toContain('dropSummaryEcho(turn.statusHistory as RunStep[], turn.content)');
 	});
 
 	it('uses the events cursor, so a poll asks only for what it has not seen', () => {

@@ -402,6 +402,81 @@ export const latestStepSeq = (steps: readonly RunStep[] | null | undefined): num
 };
 
 /**
+ * Drops the step that is only an echo of the turn's own content (#1509).
+ *
+ * A finished run used to say the same sentence twice, and the duplication was
+ * not one payload appended twice: it was one payload arriving by two routes and
+ * rendered by two components. The sandbox's closing assistant message reaches
+ * this turn as a `message` event, which describeEvent turns into a step line,
+ * AND as the task's `result_summary_ref`, which agent-engine fills from
+ * FinalResponse and renderRun puts in the turn's content. Neither route is
+ * wrong on its own: the event feed is the progress record and the final
+ * response is the result. Rendering both is what is wrong, so the echo is
+ * dropped here rather than either emission being suppressed upstream.
+ *
+ * Applied only once the run has settled, which is the only moment the duplicate
+ * exists: while it is still going the turn's content is a status line, not the
+ * summary, and nothing matches.
+ *
+ * Only the LAST match goes. An intermediate message that happened to repeat the
+ * closing sentence is still a thing the agent said twice, and the step list is
+ * where that is visible.
+ *
+ * The comparison is on the text because the wire carries nothing else to join
+ * on: the event and the final response come from two different endpoints and
+ * share no identifier. It is whitespace-insensitive, because the two routes
+ * assemble the same message differently: normalizeEvent (agent-engine's
+ * controlclient/events.go) joins an llm_message's content blocks with a single
+ * space, while the final response keeps the message's own line breaks. Nothing
+ * else is relaxed, so the rule's failure mode is that it does nothing and the
+ * duplicate stays visible, never that it removes a line whose text is not
+ * already on screen directly underneath it.
+ *
+ * One narrow prefix case on top of equality: a preview is cut at
+ * maxPreviewRunes on the way out (events.go) and describeEvent marks such a
+ * line, so a long closing message arrives here as a marked prefix of the
+ * summary. The prefix comparison is applied ONLY to a line carrying that
+ * marker, so an ordinary short step can never be dropped for accidentally
+ * being the beginning of the summary.
+ *
+ * One accepted side effect: latestStepSeq reads the lines the turn still holds,
+ * so the dropped event sits above the stored cursor and a conversation reopened
+ * later re-reads that one event, folds the echo back in, and drops it again in
+ * the same pass. The persisted result is identical; the cost is one small
+ * request per reopen, which is cheaper than carrying a second cursor field on
+ * every turn to remember a line nobody should see.
+ */
+const flatten = (value: string): string => (value ?? '').replace(/\s+/g, ' ').trim();
+
+const echoesSummary = (description: string, summary: string): boolean => {
+	const text = flatten(description);
+	if (text === '') {
+		return false;
+	}
+	if (text === summary) {
+		return true;
+	}
+	if (text.startsWith(`${SHORTENED} `)) {
+		const head = text.slice(SHORTENED.length + 1).trim();
+		return head !== '' && summary.startsWith(head);
+	}
+	return false;
+};
+
+export const dropSummaryEcho = (steps: readonly RunStep[], content: string): RunStep[] => {
+	const summary = flatten(content);
+	if (summary === '') {
+		return [...steps];
+	}
+	for (let index = steps.length - 1; index >= 0; index--) {
+		if (echoesSummary(steps[index].description, summary)) {
+			return [...steps.slice(0, index), ...steps.slice(index + 1)];
+		}
+	}
+	return [...steps];
+};
+
+/**
  * Closes any step still shimmering once the run itself has settled.
  *
  * A tool call whose result never arrived (a cancelled run, a sandbox that
