@@ -138,16 +138,8 @@ func TestConfiguredAuditSinksPartialCredsSkipped(t *testing.T) {
 	})
 }
 
-// TestAuditSinkEnabled verifies the helper's case-insensitive true detection.
-func TestAuditSinkEnabled(t *testing.T) {
-	t.Setenv("ENABLE_AUDIT_SINK_ELK", "true")
-	assert.True(t, auditSinkEnabled("ENABLE_AUDIT_SINK_ELK"))
-
-	t.Setenv("ENABLE_AUDIT_SINK_LOKI", "TRUE")
-	assert.True(t, auditSinkEnabled("ENABLE_AUDIT_SINK_LOKI"))
-
-	t.Setenv("ENABLE_AUDIT_SINK_DATADOG", "1")
-	assert.False(t, auditSinkEnabled("ENABLE_AUDIT_SINK_DATADOG"), "only 'true' (case-insensitive) must enable")
-
-	assert.False(t, auditSinkEnabled("ENABLE_AUDIT_SINK_SPLUNK"), "absent var must return false")
-}
+// The case-insensitive flag parsing this file used to test directly moved to
+// internal/auditworker/sinkconfig along with the helper itself (issue #755),
+// and its test moved with it, to that package's sinkconfig_test.go. The tests
+// above stay here because configuredAuditSinks is what main wires into the
+// worker, and that wiring is the thing that must not regress.

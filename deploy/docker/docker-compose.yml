@@ -547,6 +547,37 @@ services:
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}
       AUDIT_WAL_DIR: ${AUDIT_WAL_DIR:-/var/lib/hive/audit-wal}
+      # Audit fan-out sinks (issue #755). These are the only surface that
+      # enables one: there is no console control and no per-workspace setting,
+      # because a tenant-scoped switch over the operator's own audit export
+      # would let a workspace suppress its own audit trail. Read by
+      # apps/control-plane/internal/auditworker/sinkconfig at process start.
+      #
+      # A sink needs BOTH its ENABLE_ flag set to the literal string true AND
+      # its credentials; either half alone registers nothing, and every flag
+      # defaults to absent, which is off. That default is the zero-egress
+      # posture, so these lines forward the operator's choice and never make
+      # one. Given to control-plane only, which is the process that runs the
+      # fan-out worker; edge-api has no sink of its own to configure. The
+      # enterprise override adds no environment block for control-plane, so
+      # local, cloud and enterprise all inherit these here.
+      ENABLE_AUDIT_SINK_ELK: ${ENABLE_AUDIT_SINK_ELK:-}
+      AUDIT_SINK_ELK_URL: ${AUDIT_SINK_ELK_URL:-}
+      AUDIT_SINK_ELK_API_KEY: ${AUDIT_SINK_ELK_API_KEY:-}
+      ENABLE_AUDIT_SINK_LOKI: ${ENABLE_AUDIT_SINK_LOKI:-}
+      AUDIT_SINK_LOKI_URL: ${AUDIT_SINK_LOKI_URL:-}
+      ENABLE_AUDIT_SINK_DATADOG: ${ENABLE_AUDIT_SINK_DATADOG:-}
+      AUDIT_SINK_DATADOG_API_KEY: ${AUDIT_SINK_DATADOG_API_KEY:-}
+      AUDIT_SINK_DATADOG_SITE: ${AUDIT_SINK_DATADOG_SITE:-}
+      ENABLE_AUDIT_SINK_SPLUNK: ${ENABLE_AUDIT_SINK_SPLUNK:-}
+      AUDIT_SINK_SPLUNK_HEC_URL: ${AUDIT_SINK_SPLUNK_HEC_URL:-}
+      AUDIT_SINK_SPLUNK_HEC_TOKEN: ${AUDIT_SINK_SPLUNK_HEC_TOKEN:-}
+      ENABLE_AUDIT_SINK_SENTRY: ${ENABLE_AUDIT_SINK_SENTRY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENABLE_AUDIT_SINK_LANGFUSE: ${ENABLE_AUDIT_SINK_LANGFUSE:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       # Tenant BYOK credential encryption (AES-256-GCM at rest). Read only by
       # control-plane, which owns every read and write of
       # public.tenant_provider_keys; deliberately NOT given to edge-api, which

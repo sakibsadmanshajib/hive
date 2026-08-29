@@ -15,10 +15,14 @@ type RowStatus = "idle" | "saving" | "error";
 // Nicer section headings for known categories; unknown categories fall back to
 // a title-cased version of the raw category so a new gate group added by a
 // migration still renders sensibly without a code change.
+// There is deliberately no `audit_sink` entry, and the dead `audit` entry that
+// used to sit here (it never matched: the seeded category was `audit_sink`, so
+// the heading fell through to formatCategory anyway) is gone with it. Issue
+// #755 retired those six gates from the registry, so the category no longer
+// reaches this component at all.
 const CATEGORY_LABELS: Record<string, string> = {
   billing: "Billing & payments",
   agents: "Sovereign workspace",
-  audit: "Audit sinks",
   sso: "Single sign-on",
   feature: "Platform features",
 };

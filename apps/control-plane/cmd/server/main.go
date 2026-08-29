@@ -29,7 +29,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditarchive"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditverifier"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinkconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore"
@@ -1642,83 +1642,22 @@ func tenantMembershipCheck(pool *pgxpool.Pool) auth.MembershipCheckFunc {
 	}
 }
 
-// auditSinkEnabled returns true only when the explicit opt-in environment
-// variable for the named sink is set to "true". Credential presence alone is
-// not sufficient: on the sovereign enterprise profile all external egress is
-// off by default and must be consciously enabled. The variable names match
-// the public.tenant_setting_key enum values (ENABLE_AUDIT_SINK_*) so that
-// operators use the same vocabulary whether configuring via env or DB setting.
-func auditSinkEnabled(key string) bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
+// configuredAuditSinks returns the audit fan-out sinks this process should
+// use. The decision lives in internal/auditworker/sinkconfig so that the
+// database-backed proof in tests/compliance can call the same constructor
+// production calls: an egress boundary reachable only from package main
+// cannot be tested by anything that also needs a pool (issue #755).
+//
+// Enablement is DEPLOYMENT configuration and has no database input. The six
+// ENABLE_AUDIT_SINK_* rows that used to render as per-workspace console
+// toggles were retired by
+// supabase/migrations/20260829_03_retire_audit_sink_feature_gates.sql; see
+// the sinkconfig package comment for why a tenant-scoped switch over the
+// operator's own audit export is not a control this product should offer.
+func configuredAuditSinks() []auditworker.Sink {
+	return sinkconfig.FromEnv()
 }
 
-func configuredAuditSinks() []auditworker.Sink {
-	configured := make([]auditworker.Sink, 0, 6)
-	// Each sink requires BOTH an explicit enable flag AND valid credentials.
-	// The enable flags default to absent (off), making every external sink
-	// opt-in. This satisfies the sovereign-edge zero-egress promise.
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_ELK") {
-		if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_ELK_URL")); url != "" {
-			configured = append(configured, sinks.NewELK(sinks.ELKConfig{
-				URL:    url,
-				APIKey: strings.TrimSpace(os.Getenv("AUDIT_SINK_ELK_API_KEY")),
-			}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_ELK=true but AUDIT_SINK_ELK_URL is unset — sink skipped")
-		}
-	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_LOKI") {
-		if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_LOKI_URL")); url != "" {
-			configured = append(configured, sinks.NewLoki(sinks.LokiConfig{URL: url}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_LOKI=true but AUDIT_SINK_LOKI_URL is unset — sink skipped")
-		}
-	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_DATADOG") {
-		if key := strings.TrimSpace(os.Getenv("AUDIT_SINK_DATADOG_API_KEY")); key != "" {
-			configured = append(configured, sinks.NewDatadog(sinks.DatadogConfig{
-				APIKey: key,
-				Site:   strings.TrimSpace(os.Getenv("AUDIT_SINK_DATADOG_SITE")),
-			}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_DATADOG=true but AUDIT_SINK_DATADOG_API_KEY is unset — sink skipped")
-		}
-	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_SPLUNK") {
-		url := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_URL"))
-		token := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_TOKEN"))
-		if url != "" && token != "" {
-			configured = append(configured, sinks.NewSplunk(sinks.SplunkConfig{
-				URL:   url,
-				Token: token,
-			}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_SPLUNK=true but AUDIT_SINK_SPLUNK_HEC_URL or AUDIT_SINK_SPLUNK_HEC_TOKEN is unset — sink skipped")
-		}
-	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_SENTRY") {
-		if dsn := strings.TrimSpace(os.Getenv("SENTRY_DSN")); dsn != "" {
-			configured = append(configured, sinks.NewSentry(sinks.SentryConfig{DSN: dsn}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_SENTRY=true but SENTRY_DSN is unset — sink skipped")
-		}
-	}
-	if auditSinkEnabled("ENABLE_AUDIT_SINK_LANGFUSE") {
-		host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST"))
-		pub := strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY"))
-		sec := strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY"))
-		if host != "" && pub != "" && sec != "" {
-			configured = append(configured, sinks.NewLangfuse(sinks.LangfuseConfig{
-				Host:      host,
-				PublicKey: pub,
-				SecretKey: sec,
-			}))
-		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_LANGFUSE=true but LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, or LANGFUSE_SECRET_KEY is unset — sink skipped")
-		}
-	}
-	return configured
-}
 
 func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
 	cfg := storageRuntimeConfig{

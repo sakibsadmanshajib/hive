@@ -102,9 +102,9 @@ func (r *Resolver) refresh(ctx context.Context, tenantID uuid.UUID, key Key) (en
 // (issue #293 security review). It covers only capability gates a client needs
 // to adapt its own UI: agents (the RAG/voice/relay/cowork feature keys, née
 // "carl" before the product-name retirement) and sso.
-// The admin, billing, and audit_sink categories are deliberately excluded:
-// exposing them would leak the deployment's commercial and operational posture
-// to any authenticated user, the same information-disclosure class the
+// The admin and billing categories are deliberately excluded: exposing them
+// would leak the deployment's commercial and operational posture to any
+// authenticated user, the same information-disclosure class the
 // 20260715_04 migration avoided by not granting feature_gate_keys to the
 // authenticated role. Fail-closed: a newly added category is excluded here
 // until it is explicitly listed, so a new admin/billing key never leaks by
@@ -130,7 +130,7 @@ func (r *Resolver) AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]
 // the subset safe to expose to an authenticated end user or OWUI Function
 // (issue #293 security review). It backs the control-plane featuregate
 // endpoint, which feeds edge-api's Gate/Require and the /v1/featuregate read
-// surface, so admin, billing, and audit_sink gates never leave control-plane.
+// surface, so admin and billing gates never leave control-plane.
 // Fail-closed: a new category is excluded until added to the allowlist, so a
 // new admin/billing key never leaks by default while a new agents/sso key is
 // exposed automatically.
