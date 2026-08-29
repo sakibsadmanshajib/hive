@@ -81,12 +81,33 @@ export function decideConsentLanding(
 ): ConsentLandingDecision {
   const { hasSession, authorizationId, lookup, signInAlreadyAttempted } = input;
 
-  // No session (or no request id): fall through to the existing client panel,
-  // which routes an unauthenticated visitor to sign-in exactly once and shows
-  // its painted error state when the request id is missing. Unchanged from
-  // pre-wave-1 behavior.
-  if (!hasSession || !authorizationId) {
+  // No request id at all: the panel owns that error state and paints it.
+  // Unchanged from pre-wave-1 behavior.
+  if (!authorizationId) {
     return { action: "render-panel" };
+  }
+
+  // No session is the ordinary first-time case, not a failure: it is every
+  // visitor who arrives from the chat front end without having signed in yet.
+  // The client panel used to make that discovery in the browser and then
+  // navigate to the very URL named here, which cost a full render of the
+  // consent panel and its bundle before anything moved. Measured on the demo
+  // box on 2026-08-29, that was 1984 ms of a 5518 ms cold sign-in journey,
+  // the single largest segment in the trace (issues #967 and #945).
+  //
+  // The server may decide this because it cannot be less informed than the
+  // browser: lib/supabase/server.ts and lib/supabase/browser.ts are both
+  // @supabase/ssr clients reading the same session from the same cookies, so
+  // "no session" cannot mean one thing here and another there.
+  //
+  // The retried marker still bounds the hop count. A session-less request
+  // that already spent one sign-in hop falls through to the panel rather than
+  // being sent around again, which is exactly what it did before this change.
+  if (!hasSession) {
+    if (signInAlreadyAttempted) {
+      return { action: "render-panel" };
+    }
+    return { action: "sign-in", url: buildSignInRedirect(authorizationId) };
   }
 
   if (!lookup) {

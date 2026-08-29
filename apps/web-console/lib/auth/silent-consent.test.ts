@@ -45,10 +45,33 @@ describe("decideConsentLanding", () => {
     expect(decision).toEqual({ action: "render-panel" });
   });
 
-  it("falls through to the panel when there is no session", () => {
+  it("redirects to sign-in on the server when there is no session", () => {
     const decision = decideConsentLanding({
       hasSession: false,
       signInAlreadyAttempted: false,
+      authorizationId: AUTH_ID,
+      lookup: null,
+    });
+    expect(decision).toEqual({
+      action: "sign-in",
+      url: buildSignInRedirect(AUTH_ID),
+    });
+  });
+
+  it("falls through to the panel when there is no session and no request id", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      signInAlreadyAttempted: false,
+      authorizationId: null,
+      lookup: null,
+    });
+    expect(decision).toEqual({ action: "render-panel" });
+  });
+
+  it("does not bounce a session-less visitor twice", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      signInAlreadyAttempted: true,
       authorizationId: AUTH_ID,
       lookup: null,
     });
