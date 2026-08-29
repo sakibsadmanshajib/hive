@@ -33,6 +33,7 @@ FAMILY_MARKERS = {
     "notes.py": 6,
     "tools.py": 10,
     "models.py": 5,
+    "skills.py": 5,
 }
 
 
@@ -141,6 +142,7 @@ def check_router_family() -> int:
         "notes.py": "if user.role != 'admin' and (\n        user.id != note.user_id",
         "tools.py": "and user.role != 'admin'\n    ):",
         "models.py": "if not knowledge_items or user.role == 'admin':",
+        "skills.py": "and user.role != 'admin'\n    ):",
     }
     checks = {}
     tmp = Path(tempfile.mkdtemp())
