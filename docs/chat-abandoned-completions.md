@@ -55,17 +55,34 @@ The submit path then iterates that array
 (`Chat.svelte:2598`, `Chat.svelte:2649`), creating one assistant turn and
 issuing one completion per entry. Two identical entries therefore produce two
 assistant placeholders and two dispatches, which is precisely what the 25 rows
-show, and it means two charges rather than one.
+show.
+
+That is where this document stops. An earlier draft added "and it means two
+charges rather than one", which is a money-path claim asserted from reading two
+Svelte call sites. Billing in this product runs through the credit ledger in
+Postgres, and the standing rule for a billing claim is a magnitude comparison
+against that ledger, not a source read. The dispatch fan-out above is measured;
+the charge is not, and a plausible inference about what a user pays does not
+get to travel in a document whose whole argument is that a nearly-true sentence
+is worse than none.
+
+The measurement, and the product question behind it, are worth their own issue
+rather than a line here: if two dispatches do bill twice, an accidental second
+click on "Add Model" doubles what that turn costs with nothing in the interface
+saying so. Filed as issue #1475.
 
 This also explains why exactly those 25 rows kept the title `New Chat`: title
 generation runs off a completed answer, and none of these completed.
 
-Nothing here is a defect to fix. Selecting the same model twice is a deliberate
-comparison a user may want, and there is no sound way to tell that apart from an
-accidental double-click at the picker. What made it look pathological in #916 is
-whose finger was on the button: an interaction-coverage sweep clicks every
-control on the page, including "Add Model", which is how an automated run
-produced 25 duplicate-alias conversations that a human would rarely create.
+The duplicate alias itself is not a defect. Selecting the same model twice is a
+deliberate comparison a user may want, and there is no sound way to tell that
+apart from an accidental double-click at the picker. What made it look
+pathological in #916 is whose finger was on the button: an interaction-coverage
+sweep clicks every control on the page, including "Add Model", which is how an
+automated run produced 25 duplicate-alias conversations that a human would
+rarely create. What the fan-out costs the user is the open question above, and
+it is open because it was not measured, not because it was measured and found
+harmless.
 
 ## Why the rows accumulated on that account in particular
 

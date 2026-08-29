@@ -74,18 +74,63 @@ After a full page reload:
 
 ## 4. The deletion is hard, not a hidden flag
 
-Read straight out of the running container's `/data/webui.db` afterwards:
+The first version of this section proved less than it claimed, and review
+caught it. It read:
 
     deleted chat rows:            0
     kept chat rows:               1
     deleted chat_message rows:    0
-    chat columns: ['id', 'user_id', 'title', 'created_at', 'updated_at',
-                   'share_id', 'archived', 'chat', 'pinned', 'meta',
-                   'folder_id', 'tasks', 'summary', 'last_read_at']
 
-The row and its messages are gone. An `archived` column exists and is
-untouched by this path, so the product does have a soft option and Delete
-deliberately is not it.
+The chat-row line is paired with a control, so it distinguishes a deletion
+from a query against the wrong store. The `chat_message` line was not, and a
+count of 0 is equally consistent with "the rows were deleted" and with "no
+`chat_message` row ever existed for a conversation created this way". Running
+the control settles it against the second reading:
+
+    chat rows 139
+    chat_message rows 304
+    chats WITH message rows 138
+
+    ('63f4ff43-ae8c-4260-9784-c119a0e69233', 0, 'keep-this-conversation-1788027770069')
+    ('b7de847c-2bb0-4dd4-b81c-aba50645a094', 2, 'Reply with exactly the word: FUNDED')
+
+138 of the 139 conversations in that store carry two `chat_message` rows each.
+The one that does not is this capture's own kept control. These conversations
+were created through `POST /api/v1/chats/new` with a synthetic body, which
+writes no `chat_message` row, so the original line was evidence of nothing.
+
+### 4a. Redone, 2026-08-29, with conversations created through the composer
+
+Same deployment, a fresh run-key-scoped fixture identity
+(`e2e-verified+del1462-<run key>@hive-e2e.invalid`), never the demo account.
+Both conversations were created by typing into the composer and pressing
+Enter, which is the path that writes `chat_message` rows, and the answer was
+allowed to land before either was touched.
+
+    [create keep]   title=keep-this-conversation-1788040403347   id=3c663a3e-b342-46ce-8ea2-f7c32fb96545
+    [create doomed] title=delete-this-conversation-1788040403347 id=b7cd9aff-162a-4ca8-b932-f99c16c05cd7
+
+The doomed row's own sidebar menu was opened, Delete clicked, and the confirm
+dialog's Confirm clicked. The request the UI issued, and the sidebar after a
+full reload:
+
+    [request] DELETE /api/v1/chats/b7cd9aff-162a-4ca8-b932-f99c16c05cd7 -> 200
+    [after reload] doomed rows in sidebar=0 keep rows=1
+
+Read straight out of the running container's `/data/webui.db` afterwards, with
+the kept conversation printed alongside as the control this section previously
+lacked:
+
+    deleted  chat rows: 0  chat_message rows: 0  shared_chat rows: 0
+    kept     chat rows: 1  chat_message rows: 2  shared_chat rows: 0
+
+    archived column present: True
+    kept row archived flag: [(0,)]
+
+The deleted conversation's messages are gone and the kept conversation's two
+survive, so the measurement can now distinguish the two readings. An `archived`
+column exists and is untouched by this path, so the product does have a soft
+option and Delete deliberately is not it.
 
 ## 5. What deletion does not remove
 

@@ -100,6 +100,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from shared_demo_account import assert_not_shared_demo_account
+
 CHECKS = ("chat", "signin", "ledger")
 
 # Every request this script sends carries an explicit User-Agent, and that is
@@ -625,12 +627,14 @@ def main() -> int:
     if {"signin", "ledger"} & set(selected):
         email = env("HIVE_VERIFY_EMAIL")
         password = env("HIVE_VERIFY_PASSWORD")
-        if email == "demo@hive-demo.invalid":
-            raise SystemExit(
-                "error: HIVE_VERIFY_EMAIL is the shared demo account. This script mints a key "
-                "and sends a real completion, and issue #848 exists because that traffic ended "
-                "up on the account the owner demos to prospects. Use a dedicated identity."
-            )
+        # Normalised, so a stray capital or a trailing space does not walk past
+        # it; the exact-string comparison this replaced could be, and the JS
+        # guard at the same rule's other door already trims and lowercases.
+        assert_not_shared_demo_account(
+            email,
+            variable="HIVE_VERIFY_EMAIL",
+            doing="mints a key and sends a real completion",
+        )
 
     print(f"chat {CHAT}")
     print(f"control-plane {CP}")

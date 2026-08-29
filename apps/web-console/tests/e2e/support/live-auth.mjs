@@ -151,7 +151,12 @@ export const SHARED_DEMO_ACCOUNT = "demo@hive-demo.invalid";
  * the CLI's `--read-only` flag, sits at the call site where a reviewer reads
  * it.
  *
- * @param {string} email
+ * Accepts a missing address rather than throwing on one: mintSession rejects an
+ * empty email itself, with a message about the missing argument, and this guard
+ * has no business pre-empting that with an unrelated one. Hence the union type,
+ * which is what the body already handles.
+ *
+ * @param {string | undefined | null} email
  * @param {{ readOnly?: boolean }} [options]
  */
 export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
