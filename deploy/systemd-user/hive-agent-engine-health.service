@@ -1,0 +1,29 @@
+[Unit]
+# Health probe for hive-agent-engine.service (issue #1510).
+#
+# Before this existed, the only way to learn the agent-engine launcher was
+# down was to submit a task and watch it fail, which on a demo day is the
+# first time it matters. This is the lane that says so without a person
+# trying.
+#
+# Rendered and installed by scripts/install-agent-engine-host.sh, which
+# substitutes the placeholders below and writes the result to
+# ~/.config/systemd/user/.
+Description=Hive agent-engine launcher health probe
+Documentation=https://github.com/sakibsadmanshajib/hive/issues/1510
+
+[Service]
+Type=oneshot
+ExecStart=@PROBE@
+Environment=RUNTIME_DIR=@RUNTIME_DIR@
+Environment=UNIT_NAME=@UNIT_NAME@
+
+# A probe that hangs must not pile up against the five minute timer. Every
+# network call inside the script is already bounded by its own --max-time, so
+# reaching this is itself evidence of something wrong.
+TimeoutStartSec=60
+
+# The probe reads nothing secret (a Unix socket health endpoint and a
+# timestamp file) and writes only its own stamp, so unlike the launcher it can
+# take the hardening the backup unit takes.
+NoNewPrivileges=true

@@ -77,54 +77,53 @@ SH
 # `stop` is deliberately destructive: it clears the active marker, unlinks the
 # socket, AND deletes the in-flight session, because that is what stopping a
 # KillMode=control-group unit does to the apptainer child holding the session.
+#
+# Since issue #1510 the stub is also TARGET aware. The installer now touches two
+# units: the launcher service and the health timer, and it restarts that timer
+# on every single run by design, because a timer holds no session state. A stub
+# that ignored the target would let those timer restarts satisfy every "did the
+# launcher restart" assertion below, and case B, the whole reason this file
+# exists, would pass on a script that killed the daemon every deploy.
 cat > "$tmp/bin/systemctl" <<'SH'
 #!/bin/sh
 echo "systemctl $*" >> "$STATE/calls"
 verb=""
+target=""
+prop=""
+prev=""
 for arg in "$@"; do
-  case "$arg" in --user|--quiet|--no-pager|--lines=*|*.service) continue ;; esac
-  case "$arg" in -p) continue ;; MainPID|--value) continue ;; esac
+  case "$arg" in
+    --user|--quiet|--no-pager|--value|--lines=*|-p) prev="$arg"; continue ;;
+    *.service|*.timer) target="$arg"; prev="$arg"; continue ;;
+  esac
+  if [ "$prev" = "-p" ]; then prop="$arg"; prev="$arg"; continue; fi
   [ -z "$verb" ] && verb="$arg"
+  prev="$arg"
 done
-case "$verb" in
-  # `restart` is destructive here too, and modelling only its teardown half is
-  # deliberate. The installer issues `stop` today, but rewriting that line as
-  # `systemctl --user restart` is the obvious simplification and is exactly the
-  # regression this file exists to catch. With no `restart` arm the stub used to
-  # fall through to `exit 0` having changed nothing: the session marker
-  # survived, `is-active` still reported active, every assertion passed green,
-  # and the real unit had just killed every in-flight sandbox. A stub that also
-  # re-created `active` would mask the kill again, so it does not.
-  stop|restart)
-    rm -f "$STATE/active" "$STATE/session" "$STATE/socket_path_marker"
-    [ -n "${SOCKET_UNDER_TEST:-}" ] && rm -f "$SOCKET_UNDER_TEST"
-    ;;
-  is-active) [ -f "$STATE/active" ] || exit 3 ;;
-  show) [ -f "$STATE/active" ] && cat "$STATE/active" || echo 0 ;;
-  status) [ -f "$STATE/active" ] || exit 3 ;;
-  # The general form of the same bug: any verb this stub has not been taught is
-  # a loud failure rather than a silent success, so the next one to be added to
-  # the installer cannot quietly pass through unmodelled.
-  *) echo "stub systemctl: unhandled verb '$verb' in: $*" >&2; exit 64 ;;
-esac
-exit 0
-SH
+
+teardown() {
+  rm -f "$STATE/active" "$STATE/session" "$STATE/socket_path_marker"
+  # Stopping a transient unit also collects it (CollectMode=inactive-or-failed),
+  # which is precisely what unshadows the on-disk unit file and lets the
+  # installer's `enable` succeed on the line after. Modelling that here is what
+  # makes case L below able to fail.
+  rm -f "$STATE/transient"
+  [ -n "${SOCKET_UNDER_TEST:-}" ] && rm -f "$SOCKET_UNDER_TEST"
+}
 
 # Starts the fake daemon: a new incarnation id (so the test can prove the
 # process was NOT replaced) plus a real AF_UNIX inode, since the installer waits
 # on `[ -S "$SOCKET_PATH" ]`.
-cat > "$tmp/bin/systemd-run" <<'SH'
-#!/bin/sh
-echo "systemd-run $*" >> "$STATE/calls"
-rm -f "$STATE/wedged"
-# A monotonic counter, not a random or time-derived value: two restarts inside
-# the same second would collide and the "was the process replaced" assertions
-# below would silently pass on a daemon that had in fact been killed.
-n=$(cat "$STATE/incarnations" 2>/dev/null || echo 0)
-n=$((n + 1))
-echo "$n" > "$STATE/incarnations"
-echo "$n" > "$STATE/active"
-python3 - "$SOCKET_UNDER_TEST" <<'PY'
+startup() {
+  rm -f "$STATE/wedged"
+  # A monotonic counter, not a random or time-derived value: two restarts inside
+  # the same second would collide and the "was the process replaced" assertions
+  # below would silently pass on a daemon that had in fact been killed.
+  n=$(cat "$STATE/incarnations" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" > "$STATE/incarnations"
+  echo "$n" > "$STATE/active"
+  python3 - "$SOCKET_UNDER_TEST" <<'PY'
 import socket, sys, os
 path = sys.argv[1]
 try:
@@ -134,7 +133,74 @@ except FileNotFoundError:
 s = socket.socket(socket.AF_UNIX)
 s.bind(path)
 PY
+}
+
+case "$verb" in
+  # Neither reloading the manager nor enabling a unit touches a running
+  # process, which is exactly why the installer is allowed to do both on the
+  # skip path. Modelled as no-ops that mutate no daemon state, so a script that
+  # smuggled a restart in behind one of them would still fail case B.
+  daemon-reload) : ;;
+  enable)
+    # `enable` on a name a transient unit still holds is what systemd refuses,
+    # so refuse it here too rather than let the installer's guard go untested.
+    if [ -f "$STATE/transient" ] && [ "${target%.timer}" = "$target" ]; then
+      echo "stub systemctl: unit $target is transient or generated" >&2
+      exit 1
+    fi
+    echo enabled > "$STATE/enabled"
+    ;;
+  is-enabled)
+    if [ -f "$STATE/transient" ]; then echo transient; exit 0; fi
+    if [ -f "$STATE/enabled" ]; then echo enabled; exit 0; fi
+    echo disabled; exit 1
+    ;;
+  # `restart` is destructive here too, and modelling only its teardown half is
+  # deliberate. With no `restart` arm the stub used to fall through to `exit 0`
+  # having changed nothing: the session marker survived, `is-active` still
+  # reported active, every assertion passed green, and the real unit had just
+  # killed every in-flight sandbox. A stub that also re-created `active` would
+  # mask the kill again, so `stop` does not.
+  stop|restart|start)
+    case "$target" in
+      # The health timer is stateless from the daemon's point of view.
+      *.timer) : ;;
+      *)
+        case "$verb" in
+          stop) teardown ;;
+          start) startup ;;
+          restart) teardown; startup ;;
+        esac
+        ;;
+    esac
+    ;;
+  is-active) [ -f "$STATE/active" ] || exit 3 ;;
+  show)
+    case "$prop" in
+      MainPID) [ -f "$STATE/active" ] && cat "$STATE/active" || echo 0 ;;
+      Transient) [ -f "$STATE/transient" ] && echo yes || echo no ;;
+      *) echo "stub systemctl: unhandled show property '$prop' in: $*" >&2; exit 64 ;;
+    esac
+    ;;
+  status) [ -f "$STATE/active" ] || exit 3 ;;
+  # The general form of the same bug: any verb this stub has not been taught is
+  # a loud failure rather than a silent success, so the next one to be added to
+  # the installer cannot quietly pass through unmodelled.
+  *) echo "stub systemctl: unhandled verb '$verb' in: $*" >&2; exit 64 ;;
+esac
 exit 0
+SH
+
+# The launcher must NOT go back to a transient `systemd-run` unit (issue
+# #1510): transient units live in tmpfs, so a reboot erases the definition and
+# nothing starts the launcher again, and CollectMode=inactive-or-failed deletes
+# the unit rather than leaving a failed one behind to notice. A stub that
+# quietly worked would let that regression land, so this one refuses.
+cat > "$tmp/bin/systemd-run" <<'SH'
+#!/bin/sh
+echo "systemd-run $*" >> "$STATE/calls"
+echo "stub systemd-run: the launcher must run under an enabled unit file, not a transient systemd-run unit (issue #1510)" >&2
+exit 64
 SH
 
 # The only curl the installer makes once a SIF exists is the /health probe. A
@@ -173,6 +239,7 @@ run_installer() {
     FAKE_BINARY="$binary" \
     REPO_DIR="$repo_root" \
     RUNTIME_DIR="$runtime" \
+    XDG_CONFIG_HOME="$tmp/config" \
     HIVE_AGENT_ENGINE_LLM_MODEL="$model" \
     HIVE_AGENT_ENGINE_LLM_BASE_URL="https://api-hive.example/v1" \
     HIVE_AGENT_ENGINE_LLM_API_KEY="test-key" \
@@ -185,12 +252,22 @@ run_installer() {
   fi
 }
 
-# The stubs log full argv, so match the real shapes: `systemctl --user stop …`
-# and `systemd-run --user --unit=… …`. Matching "systemctl stop" would never
-# fire and every stop assertion below would pass vacuously.
-stopped() { grep -qE '^systemctl .* (stop|restart) ' "$STATE/calls"; }
-started() { grep -q '^systemd-run ' "$STATE/calls"; }
+# The stubs log full argv, so match the real shapes: `systemctl --user stop
+# hive-agent-engine.service`. Matching "systemctl stop" would never fire and
+# every stop assertion below would pass vacuously.
+#
+# Both are pinned to the LAUNCHER service specifically. The installer restarts
+# hive-agent-engine-health.timer on every run by design, so an unanchored match
+# would report "started" on a run that only touched the watchdog, and case B
+# would go green on a script that killed the daemon every deploy.
+launcher_unit='hive-agent-engine\.service'
+stopped() { grep -qE "^systemctl .* (stop|restart) $launcher_unit" "$STATE/calls"; }
+started() { grep -qE "^systemctl .* (start|restart) $launcher_unit" "$STATE/calls"; }
+enabled() { grep -qE "^systemctl .* enable $launcher_unit" "$STATE/calls"; }
 incarnation(){ cat "$STATE/active" 2>/dev/null || echo none; }
+unit_file="$tmp/config/systemd/user/hive-agent-engine.service"
+health_service="$tmp/config/systemd/user/hive-agent-engine-health.service"
+health_timer="$tmp/config/systemd/user/hive-agent-engine-health.timer"
 
 # --- case A: a first install starts the daemon -------------------------------
 
@@ -397,6 +474,126 @@ else
   fi
   [ $failures -eq "$before_i" ] && echo "ok   [I] an unreadable installed artifact restarts instead of aborting"
 fi
+
+# --- case J: the launcher must be supervised, not transient (issue #1510) ----
+#
+# The launcher used to be started by `systemd-run --user --collect
+# --property=Restart=on-failure`, which is four holes at once: the unit lives
+# in tmpfs so a reboot erases it and nothing starts the launcher again,
+# CollectMode deletes the unit instead of leaving a failed one to notice,
+# on-failure does not cover a clean exit or SIGTERM, and the default start
+# limit gives up after five attempts in ten seconds. `systemd-run` is stubbed
+# to fail outright, so a regression to it aborts the installer; these
+# assertions cover the properties that a merely-present unit file would not.
+before_j=$failures
+if [ ! -f "$unit_file" ]; then
+  fail "[J] no launcher unit file was installed at $unit_file"
+else
+  grep -q '^Restart=always$'             "$unit_file" || fail "[J] the unit does not set Restart=always"
+  grep -q '^StartLimitIntervalSec=0$'    "$unit_file" || fail "[J] the unit does not disable the start limit"
+  grep -q '^WantedBy=default.target$'    "$unit_file" || fail "[J] the unit is not wanted by default.target, so it will not start at boot"
+  grep -q "^ExecStart=$runtime/bin/run-engine.sh$" "$unit_file" \
+    || fail "[J] the unit's ExecStart was not rendered to the installed entry script" "$(grep '^ExecStart=' "$unit_file" || true)"
+  grep -q '@' "$unit_file" && fail "[J] an unsubstituted placeholder survived into the installed unit" "$(grep '@' "$unit_file")"
+  # Apptainer's rootless launch goes through a setuid helper, so this line
+  # being copied across from hive-box-backup.service would break every agent
+  # task while leaving the unit itself perfectly healthy.
+  grep -q '^NoNewPrivileges=' "$unit_file" \
+    && fail "[J] the launcher unit sets NoNewPrivileges, which breaks apptainer's setuid starter"
+fi
+if ! enabled; then
+  fail "[J] the launcher unit was never enabled, so it will not come back after a reboot" "$(cat "$STATE/calls")"
+fi
+[ $failures -eq "$before_j" ] && echo "ok   [J] the launcher runs under an enabled, always-restarting unit file"
+
+# --- case K: the launcher being down must be loud without a person ----------
+#
+# Before this, the only way to learn the launcher was gone was to submit a task
+# and watch it fail. The probe and its timer are installed unconditionally, and
+# deliberately outside the fingerprint, so changing the watchdog never restarts
+# the thing it watches.
+before_k=$failures
+[ -x "$runtime/bin/agent-engine-health-probe.sh" ] \
+  || fail "[K] the health probe was not installed executable at $runtime/bin/agent-engine-health-probe.sh"
+[ -f "$health_service" ] || fail "[K] no health probe service was installed at $health_service"
+[ -f "$health_timer" ]   || fail "[K] no health probe timer was installed at $health_timer"
+grep -q "^ExecStart=$runtime/bin/agent-engine-health-probe.sh$" "$health_service" 2>/dev/null \
+  || fail "[K] the health service does not run the installed probe copy" "$(grep '^ExecStart=' "$health_service" 2>/dev/null || true)"
+grep -qE '^systemctl .* enable hive-agent-engine-health\.timer' "$STATE/calls" \
+  || fail "[K] the health timer was never enabled" "$(cat "$STATE/calls")"
+grep -qE '^systemctl .* restart hive-agent-engine-health\.timer' "$STATE/calls" \
+  || fail "[K] the health timer was never started" "$(cat "$STATE/calls")"
+[ $failures -eq "$before_k" ] && echo "ok   [K] the health probe, its service and its timer are installed and enabled"
+
+# --- case L: a changed unit definition must restart --------------------------
+#
+# The other direction of case B. A restart policy that is edited but never
+# applied is worse than none, because the repository then states a guarantee
+# the box does not provide. Only the fingerprint covering the unit file makes
+# this fire.
+before_l=$failures
+pid_before=$(incarnation)
+printf 'Restart=no\n' >> "$unit_file"
+run_installer "L unit-drift" rebuilt-different-bytes openai/some-other-alias
+if ! stopped; then
+  fail "[L] a drifted unit file was reported unchanged and skipped" "$(cat "$STATE/calls")"
+fi
+if [ "$(incarnation)" = "$pid_before" ]; then
+  fail "[L] the daemon was not replaced despite a drifted unit file"
+fi
+if grep -q '^Restart=no$' "$unit_file"; then
+  fail "[L] the drifted unit file was not re-rendered"
+fi
+[ $failures -eq "$before_l" ] && echo "ok   [L] a changed unit definition restarts and is re-rendered"
+
+# --- case M: the one-time migration off the old transient unit --------------
+#
+# What every existing box looks like on the first deploy after this lands: a
+# transient unit from `systemd-run` still holds the name, and no unit file has
+# ever been installed. systemd refuses `enable` while a transient unit shadows
+# the on-disk file, so an installer that called it unguarded would abort the
+# deploy on precisely the run that was supposed to fix the box. It has to skip
+# the enable, stop the transient unit, and only then enable and start the real
+# one.
+before_m=$failures
+pid_before=$(incarnation)
+rm -f "$unit_file"
+rm -f "$STATE/enabled"
+touch "$STATE/transient"
+run_installer "M transient-migration" rebuilt-different-bytes openai/some-other-alias
+if ! stopped; then
+  fail "[M] the transient unit was left in place" "$(cat "$STATE/calls")"
+fi
+if [ "$(incarnation)" = "$pid_before" ]; then
+  fail "[M] the daemon was not replaced despite having no installed unit file"
+fi
+if ! enabled; then
+  fail "[M] the launcher was never enabled after the transient unit was replaced" "$(cat "$STATE/calls")"
+fi
+if [ ! -f "$STATE/enabled" ]; then
+  fail "[M] the enable call did not take effect"
+fi
+[ $failures -eq "$before_m" ] && echo "ok   [M] a box still on the transient unit migrates without aborting"
+
+# --- case N: and the skip still holds once supervised ------------------------
+#
+# Cases J to M all left the daemon restarted. The property case B guards has to
+# survive every one of those additions, so re-assert it as the last word rather
+# than trusting that B still covers a script three features larger.
+before_n=$failures
+pid_before=$(incarnation)
+printf 'task-in-flight' > "$STATE/session"
+run_installer "N unchanged-after-supervision" rebuilt-different-bytes openai/some-other-alias
+if [ ! -f "$STATE/session" ]; then
+  fail "[N] the in-flight session was killed by an install that changed nothing" "$(cat "$STATE/calls")"
+fi
+if stopped || started; then
+  fail "[N] a supervised daemon running identical artifacts was still restarted" "$(cat "$STATE/calls")"
+fi
+if [ "$(incarnation)" != "$pid_before" ]; then
+  fail "[N] the daemon process was replaced on an unchanged install"
+fi
+[ $failures -eq "$before_n" ] && echo "ok   [N] the skip survives the supervision changes"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"

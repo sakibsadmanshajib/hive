@@ -91,6 +91,52 @@ Host requirements, all verified on the demo box on 2026-08-11:
 The full variable set each side reads is in `.env.example`. Only the socket
 variable matters to `control-plane`; everything else is read by the launcher.
 
+## Supervision and the health signal (issue #1510)
+
+The launcher is the only arm that runs a real task on any deployment this repo
+ships, so it is supervised rather than left as a bare process. The installer
+above renders both halves out of `deploy/systemd-user/` and installs them into
+`~/.config/systemd/user/`.
+
+* `hive-agent-engine.service` runs the launcher with `Restart=always` and
+  `StartLimitIntervalSec=0`, enabled into `default.target`. It used to be a
+  transient unit created by `systemd-run --user --collect`, which meant a
+  reboot erased the definition (transient units live in tmpfs), a stop
+  garbage-collected the unit rather than leaving a failed one to notice, a
+  clean exit or a `SIGTERM` was never restarted at all, and five crashes in ten
+  seconds exhausted the default start limit for good. Lingering is required and
+  already on for this user (`loginctl show-user <user> -p Linger`); without it
+  no user unit starts at boot.
+* `hive-agent-engine-health.timer` runs `agent-engine-health-probe.sh` every
+  five minutes from an installed copy under the runtime directory, never from
+  the repo checkout. It posts `HiveAgentEngineDown` to Alertmanager on
+  `localhost:9093` when the unit is not active, the socket is missing, or
+  `/health` does not answer, and `HiveAgentEngineProbeStale` when its own last
+  success is older than fifteen minutes, so a probe run that did not happen
+  reads as down rather than as silence. Both route through the existing tree to
+  the hive-ops email receiver, the same channel `scripts/backup-box.sh` uses.
+
+Restarting the launcher kills the `apptainer` child holding every in-flight
+Cowork session, so the installer restarts it only when the built binary, the
+rendered env file, the entry script or the unit file actually changed. Writing
+the unit, reloading the manager and enabling it happen on every run, because
+none of those three touch a running process.
+
+At-a-glance checks on the box:
+
+```bash
+systemctl --user status hive-agent-engine.service
+systemctl --user is-enabled hive-agent-engine.service     # expect: enabled
+systemctl --user list-timers hive-agent-engine-health.timer
+journalctl --user -u hive-agent-engine -n 100
+journalctl --user -u hive-agent-engine-health -n 50
+```
+
+If the unit fails to start during a deploy, the installer's own `/health` gate
+fails that step and the deploy run goes red. If it dies later, systemd brings
+it back within five seconds. If it cannot be brought back, it restart-loops,
+the socket never answers, and the probe mails within five minutes.
+
 ## The standalone smoke-test container
 
 `HIVE_AGENT_SIF_PATH` (note: a different variable from

@@ -12,11 +12,23 @@
 # socket bind-mounted into the container. Nothing in this script needs root.
 #
 # Idempotent, and since issue #921 that is load bearing rather than merely
-# tidy: a run whose built binary, rendered env file and entry script all match
-# what the healthy running daemon was started with leaves that process alone
-# instead of restarting it, because a restart kills every in-flight Cowork
-# session. See "Restart only when something changed" below. Prints no secret
-# values.
+# tidy: a run whose built binary, rendered env file, entry script and unit
+# file all match what the healthy running daemon was started with leaves that
+# process alone instead of restarting it, because a restart kills every
+# in-flight Cowork session. See "Restart only when something changed" below.
+# Prints no secret values.
+#
+# Since issue #1510 this also installs the supervision the launcher used to
+# lack. It was started by `systemd-run --user --collect`, which produces a
+# TRANSIENT unit under /run/user/<uid>/systemd/transient. That tree is tmpfs,
+# so a reboot erased the unit definition outright and nothing started the
+# launcher again; CollectMode=inactive-or-failed then garbage-collected the
+# unit whenever it stopped, so a dead launcher did not even leave a failed
+# unit behind to notice. Now the unit is a real enabled user unit file
+# rendered from deploy/systemd-user/hive-agent-engine.service, and a five
+# minute health timer posts to Alertmanager when the launcher stops serving,
+# so its absence is loud instead of surfacing the first time someone runs a
+# task.
 #
 # Required environment:
 #   HIVE_AGENT_ENGINE_LLM_MODEL     model alias the sandboxed agent calls
@@ -41,6 +53,21 @@ RUN_ENTRY="$RUNTIME_DIR/bin/run-engine.sh"
 SOCKET_DIR="$RUNTIME_DIR/run"
 SOCKET_PATH="$SOCKET_DIR/engine.sock"
 UNIT_NAME="hive-agent-engine"
+HEALTH_NAME="hive-agent-engine-health"
+# Systemd USER units, not system ones: nothing here needs root, and the whole
+# reason the launcher exists as a separate process is that it runs
+# unprivileged. Linger is already enabled for this user on the demo box, which
+# is what makes an enabled user unit start at boot with no interactive login.
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT_PATH="$UNIT_DIR/$UNIT_NAME.service"
+HEALTH_SERVICE_PATH="$UNIT_DIR/$HEALTH_NAME.service"
+HEALTH_TIMER_PATH="$UNIT_DIR/$HEALTH_NAME.timer"
+# The probe runs from an installed copy under $RUNTIME_DIR, never from the repo
+# checkout, for the same reason hive-box-backup.service runs an installed copy:
+# a deploy that resets /home/sakib/hive must not be able to take the watchdog
+# down with it.
+PROBE_PATH="$RUNTIME_DIR/bin/agent-engine-health-probe.sh"
+TEMPLATE_DIR="$REPO_DIR/deploy/systemd-user"
 # Everything below is built and rendered to a `.next` staging path first, so the
 # installed artifacts can be compared against what the running daemon was
 # actually started with before deciding whether to restart it at all. See
@@ -48,6 +75,7 @@ UNIT_NAME="hive-agent-engine"
 STAGE_BIN="$BIN_PATH.next"
 STAGE_ENV="$ENV_FILE.next"
 STAGE_ENTRY="$RUN_ENTRY.next"
+STAGE_UNIT="$UNIT_PATH.next"
 FINGERPRINT_PATH="$RUNTIME_DIR/engine.fingerprint"
 
 for var in HIVE_AGENT_ENGINE_LLM_MODEL HIVE_AGENT_ENGINE_LLM_BASE_URL \
@@ -60,7 +88,7 @@ done
 
 command -v apptainer >/dev/null || { echo "::error::apptainer is not installed on this host"; exit 1; }
 
-mkdir -p "$RUNTIME_DIR/bin" "$SOCKET_DIR" "$RUNTIME_DIR/workspaces" "$RUNTIME_DIR/sessions"
+mkdir -p "$RUNTIME_DIR/bin" "$SOCKET_DIR" "$RUNTIME_DIR/workspaces" "$RUNTIME_DIR/sessions" "$UNIT_DIR"
 # The socket directory is bind-mounted into control-plane, so keep it as
 # narrow as the socket itself.
 chmod 0700 "$SOCKET_DIR"
@@ -183,6 +211,40 @@ chmod 0700 "$STAGE_ENTRY"
 umask 022
 
 # ---------------------------------------------------------------------------
+# The unit files (issue #1510), rendered from deploy/systemd-user/.
+#
+# They live in the repository rather than in a heredoc here so the supervision
+# policy is reviewable in a diff next to hive-box-backup.service, which is the
+# working user unit this box already runs. Only paths are substituted, because
+# only paths vary with RUNTIME_DIR; no unit carries a secret, and the launcher
+# reads its credentials by sourcing $ENV_FILE from inside $RUN_ENTRY, so no key
+# ever reaches a unit property where `systemctl show` would print it.
+#
+# Substitution is bash parameter replacement, not sed: every value being
+# substituted is an absolute path, and sed would need its delimiter escaped
+# around every one of them.
+# ---------------------------------------------------------------------------
+render_unit() {
+  local template="$1" dest="$2" content
+  [ -f "$template" ] || { echo "::error::missing unit template $template"; exit 1; }
+  content=$(cat "$template")
+  content=${content//@RUN_ENTRY@/$RUN_ENTRY}
+  content=${content//@PROBE@/$PROBE_PATH}
+  content=${content//@RUNTIME_DIR@/$RUNTIME_DIR}
+  content=${content//@UNIT_NAME@/$UNIT_NAME}
+  # A placeholder that survived rendering would install a unit whose ExecStart
+  # is the literal string "@RUN_ENTRY@", which systemd accepts at write time
+  # and fails only at start. Catch it here instead.
+  case "$content" in
+    *@RUN_ENTRY@*|*@PROBE@*|*@RUNTIME_DIR@*|*@UNIT_NAME@*)
+      echo "::error::unsubstituted placeholder left in $dest"; exit 1 ;;
+  esac
+  printf '%s\n' "$content" > "$dest"
+}
+
+render_unit "$TEMPLATE_DIR/$UNIT_NAME.service" "$STAGE_UNIT"
+
+# ---------------------------------------------------------------------------
 # Restart only when something changed (issue #921).
 #
 # This script runs on EVERY merge to main: deploy-demo-box.yml's paths filter
@@ -200,9 +262,15 @@ umask 022
 # identical to the copy already installed there, so every one of those ten
 # restarts reinstalled exactly what was already running.
 #
-# So compare first. The fingerprint covers the three things the running daemon
-# actually baked in: the binary, the env file it sources, and the entry script
-# that wires them together. The SIF is deliberately NOT in it. serve.go reads
+# So compare first. The fingerprint covers the four things the running daemon
+# actually baked in: the binary, the env file it sources, the entry script that
+# wires them together, and since issue #1510 the unit file that defines how it
+# is supervised. The unit belongs in the set for both directions: a changed
+# restart policy has to actually take effect, and an unchanged one must not buy
+# a restart. It is also what makes the one-time migration off the old transient
+# unit happen through this same gate rather than through a special case, since
+# a box with no unit file installed fingerprints as empty and therefore
+# restarts. The SIF is deliberately NOT in it. serve.go reads
 # HIVE_AGENT_ENGINE_SIF_PATH once at start-up but only as a path, and
 # sandbox.BuildArgv reads the file itself per launch, so a replaced SIF takes
 # effect on the next task with no restart, and hashing a multi-gigabyte image
@@ -237,7 +305,7 @@ fingerprint_of() {
   sha256sum "$@" | awk '{print $1}' | sha256sum | cut -d' ' -f1
 }
 
-want_fingerprint=$(fingerprint_of "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY")
+want_fingerprint=$(fingerprint_of "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY" "$STAGE_UNIT")
 # Hash what is actually INSTALLED, not just the note the last run left behind.
 # The question that has to be answered here is "does what the daemon is running
 # match what I am about to install", and only the installed files can answer
@@ -247,7 +315,7 @@ want_fingerprint=$(fingerprint_of "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY")
 # half-written by an earlier run that failed between two of the three `mv`s.
 # Skipping on that is exactly the false confidence this change exists to
 # remove, so the installed bytes are re-read on every run.
-installed_fingerprint=$(fingerprint_of "$BIN_PATH" "$ENV_FILE" "$RUN_ENTRY")
+installed_fingerprint=$(fingerprint_of "$BIN_PATH" "$ENV_FILE" "$RUN_ENTRY" "$UNIT_PATH")
 # Still consulted, for the one thing the installed files cannot tell us on
 # their own: this is written only after a freshly started unit answered
 # /health, so it is the evidence that the running process was started FROM
@@ -255,6 +323,47 @@ installed_fingerprint=$(fingerprint_of "$BIN_PATH" "$ENV_FILE" "$RUN_ENTRY")
 # installed new artifacts and then died before restarting would look identical
 # to a healthy box.
 recorded_fingerprint=$(cat "$FINGERPRINT_PATH" 2>/dev/null || true)
+
+# ---------------------------------------------------------------------------
+# Supervision, installed on EVERY run including the skip path below (issue
+# #1510).
+#
+# This is deliberately not inside the restart branch. Writing a unit file,
+# reloading the user manager and enabling a unit do not touch a running
+# process: only start, stop and restart do. So a box whose unit was never
+# enabled, or whose health timer was removed, is repaired on the next deploy
+# without paying the restart that would kill every in-flight Cowork session.
+#
+# It runs AFTER the fingerprints above are computed, because installing the
+# launcher unit before reading the installed one would make that comparison
+# answer "does my staging area match my staging area" and the restart would
+# never fire. The health probe and its two units are outside the fingerprint
+# on purpose in the other direction: changing the watchdog must never restart
+# the thing it watches.
+# ---------------------------------------------------------------------------
+install -m 0755 "$REPO_DIR/scripts/agent-engine-health-probe.sh" "$PROBE_PATH"
+render_unit "$TEMPLATE_DIR/$HEALTH_NAME.service" "$HEALTH_SERVICE_PATH"
+render_unit "$TEMPLATE_DIR/$HEALTH_NAME.timer" "$HEALTH_TIMER_PATH"
+mv -f "$STAGE_UNIT" "$UNIT_PATH"
+chmod 0644 "$UNIT_PATH"
+systemctl --user daemon-reload
+
+# `enable` refuses a name currently held by a transient unit, which is exactly
+# the state a box carries until the restart below replaces the old
+# `systemd-run` unit. That is not a failure: the restart path re-runs enable
+# once the transient unit is gone, and a box already on a real unit file takes
+# this branch normally.
+if [ "$(systemctl --user show "$UNIT_NAME.service" -p Transient --value 2>/dev/null || true)" = "yes" ]; then
+  echo "$UNIT_NAME.service is still the pre-#1510 transient unit; the restart below replaces it"
+else
+  systemctl --user enable "$UNIT_NAME.service" >/dev/null
+fi
+
+# Restarting a timer costs nothing and holds no session state, so unlike the
+# launcher it is simply re-applied every run. Without it a changed cadence
+# would sit on disk unread until the next reboot.
+systemctl --user enable "$HEALTH_NAME.timer" >/dev/null
+systemctl --user restart "$HEALTH_NAME.timer"
 
 daemon_healthy() {
   systemctl --user is-active --quiet "$UNIT_NAME.service" || return 1
@@ -268,6 +377,7 @@ if [ -n "$installed_fingerprint" ] \
   && daemon_healthy; then
   rm -f "$STAGE_BIN" "$STAGE_ENV" "$STAGE_ENTRY"
   running_pid=$(systemctl --user show "$UNIT_NAME.service" -p MainPID --value 2>/dev/null || echo "?")
+  echo "supervision: $UNIT_PATH enabled, $HEALTH_NAME.timer running"
   echo "binary: $BIN_PATH (unchanged)"
   echo "agent-engine daemon already runs these exact artifacts; leaving PID $running_pid and its in-flight sessions alone"
   exit 0
@@ -286,15 +396,29 @@ echo "binary: $BIN_PATH"
 rm -f "$FINGERPRINT_PATH"
 
 # ---------------------------------------------------------------------------
-# The unit. A transient systemd user service, so it keeps running after the
-# CI job that started it exits (the runner reaps its own orphans), restarts on
-# failure, and gets a delegated cgroup for free.
+# Start the launcher (issue #1510).
+#
+# The `stop` is what frees the name if the box is still carrying the old
+# transient unit: transient units live in /run/user/<uid>/systemd/transient,
+# which takes precedence over ~/.config/systemd/user, so the file installed
+# above stays shadowed until the transient one is gone. Stopping it also
+# collects it, since it was created with CollectMode=inactive-or-failed.
+#
+# The daemon-reload afterwards is what makes the manager pick up the on-disk
+# unit in that same run rather than a deploy later, and the enable is repeated
+# here because the unconditional block above deliberately skips it while a
+# transient unit still holds the name.
+#
+# It keeps running after the CI job that started it exits (the user manager
+# owns it, not the runner), it now restarts on ANY exit rather than only on
+# failure, it survives a reboot because it is enabled and this user has
+# lingering on, and it still gets a delegated cgroup for free.
 # ---------------------------------------------------------------------------
 systemctl --user stop "$UNIT_NAME.service" 2>/dev/null || true
 rm -f "$SOCKET_PATH"
-systemd-run --user --unit="$UNIT_NAME" --collect \
-  --property=Restart=on-failure --property=RestartSec=5 \
-  "$RUN_ENTRY"
+systemctl --user daemon-reload
+systemctl --user enable "$UNIT_NAME.service" >/dev/null
+systemctl --user start "$UNIT_NAME.service"
 
 for _ in $(seq 1 30); do
   [ -S "$SOCKET_PATH" ] && break
@@ -322,3 +446,4 @@ echo
 (umask 077; printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH")
 chmod 0600 "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"
+echo "supervision: $UNIT_PATH ($(systemctl --user is-enabled "$UNIT_NAME.service")), $HEALTH_NAME.timer running"

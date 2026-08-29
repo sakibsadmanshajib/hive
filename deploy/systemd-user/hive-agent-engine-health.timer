@@ -1,0 +1,29 @@
+[Unit]
+# Cadence for the agent-engine launcher health probe (issue #1510).
+#
+# Five minutes bounds how long a launcher that cannot be restarted back to
+# health can sit unnoticed. It is deliberately much tighter than
+# hive-box-backup.timer's twice-daily schedule, because a dead backup costs a
+# day of recovery point and a dead launcher costs every agent task on the box
+# starting immediately.
+#
+# The probe is a socket call and a timestamp comparison, so running it 288
+# times a day costs nothing measurable.
+Description=Hive agent-engine launcher health probe schedule (every five minutes)
+
+[Timer]
+# Monotonic rather than OnCalendar, and so deliberately without
+# Persistent=true, which systemd honours only for calendar timers and would
+# be a decorative no-op here. OnBootSec does the job Persistent= would have
+# been reached for: after a boot the first probe runs a minute in, once,
+# giving the launcher time to come up so a reboot does not post a spurious
+# down alert. OnUnitActiveSec then paces every later run from the end of the
+# previous one rather than from a wall clock, so a slow run cannot stack
+# against its own next slot.
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+Unit=hive-agent-engine-health.service
+
+[Install]
+WantedBy=timers.target
