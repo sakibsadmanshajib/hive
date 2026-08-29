@@ -40,6 +40,38 @@ export function resolveNextTarget(next: string | null): string {
 }
 
 /**
+ * Marks a consent landing URL as having already cost the user one sign-in.
+ * The consent landing bounces a rejected bearer to /auth/sign-in exactly once;
+ * this marker rides back in the `next` target so the landing can tell a first
+ * rejection from a second one and paint an error instead of bouncing again.
+ * Nothing authenticates on it: it only bounds the hop count.
+ */
+export const CONSENT_RETRIED_PARAM = "retried";
+
+/**
+ * Builds the /auth/sign-in?next=... URL that returns a visitor to one exact
+ * consent request after a single credential entry. Lives here, next to the
+ * allow-list that validates the value it produces, so the builder and the
+ * validator cannot drift apart, and so the client consent panel can import it
+ * without pulling the server-side lookup helpers into the browser bundle.
+ * The optional reason is appended for network-trace observability only;
+ * nothing reads it back.
+ */
+export function buildSignInRedirect(
+  authorizationId: string,
+  reason?: string,
+): string {
+  const returnPath =
+    `/oauth/consent?authorization_id=${encodeURIComponent(authorizationId)}` +
+    `&${CONSENT_RETRIED_PARAM}=1`;
+  const next = encodeURIComponent(returnPath);
+  if (reason === undefined) {
+    return `/auth/sign-in?next=${next}`;
+  }
+  return `/auth/sign-in?next=${next}&reason=${encodeURIComponent(reason)}`;
+}
+
+/**
  * Appends `next` as a query param onto `path`, URI-encoded. Used to carry
  * the current `?next=` value across the sign-in <-> sign-up cross-links so
  * a user bounced in from an OAuth consent request (or any other allow-listed

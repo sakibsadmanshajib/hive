@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/browser";
 import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
-// The sign-in round-trip URL builder moved to lib so the server-completed
-// landing page (SSO wave 1) and this panel share one format.
-import { buildSignInRedirect } from "@/lib/auth/silent-consent";
+// The sign-in round-trip URL builder lives beside the allow-list that
+// validates its output, so the server-completed landing page (SSO wave 1) and
+// this panel share one format, and importing it here pulls no server-side
+// lookup code into the browser bundle.
+import { buildSignInRedirect } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";

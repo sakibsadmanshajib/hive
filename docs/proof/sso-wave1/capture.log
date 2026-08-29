@@ -81,13 +81,29 @@ notice rather than the chat home until an admin activates it. That is
 existing product behaviour and is unrelated to this change; the frame above
 uses an activated account so the end state is the one a returning user sees.
 
+Re-run after the adversarial review fixes
+-----------------------------------------
+The review found a real gap in the redirect guard (a target spelled
+`//oauth/consent` or `/oauth//consent` passed the guard and then 308ed back
+to the landing) plus a hop bound, a 403 handling and an observability fix.
+Both journeys and the committed e2e were then run again against a console
+image rebuilt from the fixed source. The chains above are unchanged, and the
+two frames come out byte identical to the pre-fix run:
+
+  01-first-consent-panel.png       md5 7b3e1d73fa0ba2011304bb4a223cf4c6
+  04-repeat-entry-chat-home.png    md5 20c588349d0734b188438f029e08b89b
+
+which is the expected result: the fixes harden refusal paths that neither
+journey walks, and change nothing a user sees on the paths they do.
+
 E2E
 ---
 apps/web-console/tests/e2e/sso-silent-consent.spec.ts, the committed opt-in
 journey, run against this same stack:
 
   npx playwright test tests/e2e/sso-silent-consent.spec.ts --project=chromium
-  1 passed (9.6s)
+  1 passed (9.6s)   before the review fixes
+  1 passed (11.2s)  after the review fixes, console image rebuilt
 
 Unit, type and build checks on the rebased branch, all in the repository's
 Docker toolchain: lib/auth/silent-consent.test.ts 21 passed,

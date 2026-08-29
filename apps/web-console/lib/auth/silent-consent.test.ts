@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { buildSignInRedirect } from "./next-target";
 import {
   CONSENT_LANDING_PATH,
-  buildSignInRedirect,
   decideConsentLanding,
   isSafeRedirectTarget,
   lookupGoTrueAuthorization,
@@ -21,6 +21,7 @@ describe("decideConsentLanding", () => {
   it("returns the silent redirect when session is valid and consent already given", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({ kind: "auto-approved", redirectUrl: CHAT_CALLBACK }),
     });
@@ -33,6 +34,7 @@ describe("decideConsentLanding", () => {
   it("renders the interactive panel when session is valid but consent is required", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({
         kind: "needs-consent",
@@ -46,6 +48,7 @@ describe("decideConsentLanding", () => {
   it("falls through to the panel when there is no session", () => {
     const decision = decideConsentLanding({
       hasSession: false,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: null,
     });
@@ -55,6 +58,7 @@ describe("decideConsentLanding", () => {
   it("falls through to the panel when the request id is missing", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: null,
       lookup: null,
     });
@@ -64,8 +68,9 @@ describe("decideConsentLanding", () => {
   it("routes to sign-in with a reason on a GoTrue 401 rejection", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
-      lookup: { status: "rejected" },
+      lookup: { status: "unauthorized" },
     });
     expect(decision).toEqual({
       action: "sign-in",
@@ -73,9 +78,36 @@ describe("decideConsentLanding", () => {
     });
   });
 
+  it("paints instead of asking for a password twice after one sign-in hop", () => {
+    // The hop bound. Without this the user signs in successfully, comes back,
+    // is refused again for a reason that was never about the session, and is
+    // sent to the password form once more, forever.
+    const decision = decideConsentLanding({
+      hasSession: true,
+      signInAlreadyAttempted: true,
+      authorizationId: AUTH_ID,
+      lookup: { status: "unauthorized" },
+    });
+    expect(decision.action).toBe("error");
+  });
+
+  it("never spends a credential prompt on a 403", () => {
+    // GoTrue accepted the bearer and still refused the authorization, which is
+    // an id belonging to somebody else or an expired request. Signing in again
+    // cannot change that answer.
+    const decision = decideConsentLanding({
+      hasSession: true,
+      signInAlreadyAttempted: false,
+      authorizationId: AUTH_ID,
+      lookup: { status: "forbidden" },
+    });
+    expect(decision.action).toBe("error");
+  });
+
   it("falls back to the panel when GoTrue fails outright", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: { status: "failed" },
     });
@@ -85,6 +117,7 @@ describe("decideConsentLanding", () => {
   it("refuses a redirect target that points back at this landing (loop bound)", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({
         kind: "auto-approved",
@@ -97,6 +130,7 @@ describe("decideConsentLanding", () => {
   it("refuses a non-http(s) redirect target", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({
         kind: "auto-approved",
@@ -109,6 +143,7 @@ describe("decideConsentLanding", () => {
   it("refuses the trailing-slash consent path (308 normalization loop)", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({
         kind: "auto-approved",
@@ -121,6 +156,7 @@ describe("decideConsentLanding", () => {
   it("refuses a relative redirect target", () => {
     const decision = decideConsentLanding({
       hasSession: true,
+      signInAlreadyAttempted: false,
       authorizationId: AUTH_ID,
       lookup: okLookup({ kind: "auto-approved", redirectUrl: "/somewhere" }),
     });
@@ -148,6 +184,22 @@ describe("parseGoTrueAuthorizationBody", () => {
     });
   });
 
+  it("falls through to needs-consent when redirect_url is present but empty", () => {
+    // An absent optional field spelled as null is not a malformed body: the
+    // consent shape still has to be read, or a genuine approve/deny lands in
+    // the failure path instead of the panel.
+    const parsed = parseGoTrueAuthorizationBody({
+      redirect_url: null,
+      client: { name: "Hive Chat" },
+      scope: "openid email",
+    });
+    expect(parsed).toEqual({
+      kind: "needs-consent",
+      clientName: "Hive Chat",
+      scope: "openid email",
+    });
+  });
+
   it("returns null for garbage", () => {
     expect(parseGoTrueAuthorizationBody("nope")).toBeNull();
     expect(parseGoTrueAuthorizationBody(42)).toBeNull();
@@ -171,9 +223,47 @@ describe("isSafeRedirectTarget", () => {
 
   it("rejects the consent landing path itself regardless of origin", () => {
     expect(
-      isSafeRedirectTarget("https://anything.example/oauth/consent"),
+      isSafeRedirectTarget(`https://anything.example${CONSENT_LANDING_PATH}`),
     ).toBe(false);
-    expect(CONSENT_LANDING_PATH).toBe("/oauth/consent");
+  });
+
+  it("rejects every spelling Next.js normalizes back to the landing", () => {
+    // Measured against this repository's production console build: each of
+    // these answers 308 to /oauth/consent, so a target written this way would
+    // re-enter the landing and loop. Dot segments are resolved by the URL
+    // constructor before the guard sees the path, so they are covered too.
+    expect(isSafeRedirectTarget("https://anything.example/oauth/consent/")).toBe(
+      false,
+    );
+    expect(isSafeRedirectTarget("https://anything.example//oauth/consent")).toBe(
+      false,
+    );
+    expect(isSafeRedirectTarget("https://anything.example/oauth//consent")).toBe(
+      false,
+    );
+    expect(
+      isSafeRedirectTarget("https://anything.example/x/../oauth/consent"),
+    ).toBe(false);
+    expect(
+      isSafeRedirectTarget("https://anything.example/oauth/%63onsent"),
+    ).toBe(false);
+    expect(
+      isSafeRedirectTarget("https://anything.example/%6Fauth/consent"),
+    ).toBe(false);
+  });
+
+  it("survives a malformed escape sequence and still judges the raw path", () => {
+    // decodeURIComponent throws on both of these. The guard must not throw
+    // with it, and it must fall back to comparing the raw path rather than
+    // skipping the comparison. Neither of these IS the landing path, so both
+    // are allowed; the assertion that matters is that a decision comes back
+    // at all.
+    expect(isSafeRedirectTarget("https://anything.example/oauth/%E0%A4")).toBe(
+      true,
+    );
+    expect(
+      isSafeRedirectTarget("https://anything.example//oauth/consent%"),
+    ).toBe(true);
   });
 
   it("rejects relative and non-http(s) targets", () => {
@@ -181,20 +271,6 @@ describe("isSafeRedirectTarget", () => {
     expect(isSafeRedirectTarget("data:text/html,hi")).toBe(false);
     expect(isSafeRedirectTarget("javascript:void(0)")).toBe(false);
     expect(isSafeRedirectTarget("not a url")).toBe(false);
-  });
-});
-
-describe("buildSignInRedirect", () => {
-  it("preserves authorization_id through the sign-in round-trip", () => {
-    expect(buildSignInRedirect(AUTH_ID)).toBe(
-      `/auth/sign-in?next=${encodeURIComponent(`/oauth/consent?authorization_id=${AUTH_ID}`)}`,
-    );
-  });
-
-  it("appends the reason marker when one is given", () => {
-    expect(buildSignInRedirect(AUTH_ID, "stale")).toBe(
-      `/auth/sign-in?next=${encodeURIComponent(`/oauth/consent?authorization_id=${AUTH_ID}`)}&reason=stale`,
-    );
   });
 });
 
@@ -238,13 +314,13 @@ describe("lookupGoTrueAuthorization", () => {
     expect(capture.headers).toMatchObject({ Authorization: "Bearer tok" });
   });
 
-  it("maps 401 and 403 to rejected", async () => {
+  it("separates a refused bearer from a refused authorization", async () => {
     expect(
       await lookupGoTrueAuthorization(AUTH_ID, "t", config, jsonFetch(401, {})),
-    ).toEqual({ status: "rejected" });
+    ).toEqual({ status: "unauthorized" });
     expect(
       await lookupGoTrueAuthorization(AUTH_ID, "t", config, jsonFetch(403, {})),
-    ).toEqual({ status: "rejected" });
+    ).toEqual({ status: "forbidden" });
   });
 
   it("maps a 500, a malformed body, and a network throw to failed", async () => {

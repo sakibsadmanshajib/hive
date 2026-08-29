@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { ConsentPanel } from "@/components/oauth/consent-panel";
+import { CONSENT_RETRIED_PARAM } from "@/lib/auth/next-target";
 import {
   decideConsentLanding,
   lookupGoTrueAuthorization,
@@ -10,7 +11,15 @@ import {
 import { createClient } from "@/lib/supabase/server";
 
 interface ConsentPageProps {
-  searchParams: Promise<{ authorization_id?: string }>;
+  // Next hands a repeated query param through as an array, so the honest type
+  // is the union. `?authorization_id=a&authorization_id=b` must not be quietly
+  // collapsed into a fabricated single id: readSingle refuses the array and
+  // the request falls to the panel, which paints its missing-id error.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+function readSingle(value: string | string[] | undefined): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /**
@@ -25,15 +34,20 @@ interface ConsentPageProps {
  * does the interactive Approve/Deny panel render exactly as before wave 1.
  */
 export default async function ConsentPage({ searchParams }: ConsentPageProps) {
-  const { authorization_id: authorizationId } = await searchParams;
+  const params = await searchParams;
+  const authorizationId = readSingle(params.authorization_id);
+  const signInAlreadyAttempted =
+    readSingle(params[CONSENT_RETRIED_PARAM]) !== null;
 
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const { data } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token ?? null;
 
-  // A config gap (either var unset) is not an auth failure: skip the lookup
-  // and let the panel handle the request, exactly as before this change.
+  // A config gap (either Supabase var unset) is not an auth failure: skip the
+  // LOOKUP only and let the panel handle the request, exactly as before this
+  // change. The session read above is unconditional, as it is on every other
+  // console page.
   const lookup =
     accessToken &&
     authorizationId &&
@@ -47,10 +61,15 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
 
   const decision = decideConsentLanding({
     hasSession: Boolean(accessToken),
-    authorizationId: authorizationId ?? null,
+    authorizationId,
     lookup,
+    signInAlreadyAttempted,
   });
 
+  // Both redirect() calls are terminal: next/navigation throws to unwind, so
+  // neither may sit inside a try block and the branches below are unreachable
+  // once one fires. They stay separate ifs rather than else-ifs because the
+  // union is exhaustive and each branch names its own reason.
   if (decision.action === "silent-redirect") {
     // The one permitted hop out of this page: GoTrue's own auto-approve
     // redirect_url, already guarded against pointing back at this landing.
@@ -70,5 +89,5 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     );
   }
 
-  return <ConsentPanel authorizationId={authorizationId ?? null} />;
+  return <ConsentPanel authorizationId={authorizationId} />;
 }
