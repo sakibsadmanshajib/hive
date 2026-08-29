@@ -45,6 +45,25 @@ fail_gb="${HIVE_DEPLOY_DISK_FLOOR_GB:-15}"
 warn_gb="${HIVE_DEPLOY_DISK_WARN_GB:-25}"
 target="${HIVE_DEPLOY_DISK_TARGET:-/var/lib/docker}"
 
+# Both thresholds are reachable from a human-typed workflow_dispatch input, and
+# a bad value here does not fail, it silently stops gating. `[ 22 -lt bad ]`
+# exits 2, which an `if` treats as false, so the floor check is skipped and the
+# deploy proceeds with a stderr line nobody reads. A warn line below the floor
+# is the same hole by a different route: the `>= warn` early exit fires first
+# and returns 0 before the floor is ever compared. Refuse both, loudly.
+for pair in "HIVE_DEPLOY_DISK_FLOOR_GB=$fail_gb" "HIVE_DEPLOY_DISK_WARN_GB=$warn_gb"; do
+  case "${pair#*=}" in
+    "" | *[!0-9]*)
+      echo "::error::${pair%%=*} must be a non-negative whole number of GB, got '${pair#*=}'"
+      exit 1
+      ;;
+  esac
+done
+if [ "$warn_gb" -lt "$fail_gb" ]; then
+  echo "::error::HIVE_DEPLOY_DISK_WARN_GB ($warn_gb) is below HIVE_DEPLOY_DISK_FLOOR_GB ($fail_gb), which would skip the floor check entirely"
+  exit 1
+fi
+
 # `target` is the docker image store rather than `/` so this stays correct if
 # the store is ever moved to its own filesystem. Today they are one volume.
 #
@@ -78,6 +97,15 @@ echo "::endgroup::"
 # Named explicitly because a full disk failure is exactly when someone reaches
 # for the biggest hammer available, and two of the obvious hammers are how this
 # box loses its rollback path or its only copy of the data.
+#
+# The `docker rmi` advice is not a style preference. A rebuild that moves a tag
+# leaves the previous image pinned only by the running container's snapshot,
+# and such an image does not appear in `docker images` at all. On 2026-08-29
+# four of them were live on this box (markitdown, agent-console, supabase-db,
+# proof-db). They are invisible to any inventory a human takes before pruning,
+# so the only thing that reliably protects them is `docker rmi` WITHOUT
+# --force, which refuses an image any container references. A prune, or an rmi
+# with --force, has no such backstop.
 hint="Reclaim safely by removing tagged images no container references and nothing in this repo names (superseded base images, old third-party versions); 'docker rmi' without --force refuses anything a container still holds. Do NOT run 'docker system prune -a' or 'docker image prune -a': both delete the previous stack images that are this box's only rollback path. Do NOT prune volumes: the database, the storage buckets and the chat data all live in them, with no off-box backup (issue #1000)."
 
 if [ "$free_gb" -lt "$fail_gb" ]; then

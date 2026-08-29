@@ -124,6 +124,36 @@ empty_override_status=$?
 set -e
 check "empty-override-uses-default" [ "$empty_override_status" = "1" ]
 
+# Both thresholds come from a human-typed workflow_dispatch input, and a bad
+# value does not fail, it silently stops gating: `[ 22 -lt bad ]` exits 2,
+# which `if` reads as false, so the floor check is skipped. A warn line below
+# the floor is the same hole by another route, since the `>= warn` early exit
+# returns 0 before the floor is compared. Both must be refused, and refused
+# with an annotation rather than a bare non-zero exit.
+bad_case() {
+  local label="$1" free="$2"; shift 2
+  local out status
+  set +e
+  out=$(env "$@" FAKE_FREE_GB="$free" GITHUB_STEP_SUMMARY="$tmp/summary.$label" bash "$gate" 2>&1)
+  status=$?
+  set -e
+  if [ "$status" != "1" ]; then
+    fail "[$label] exit $status, wanted 1" "$out"; return
+  fi
+  if ! printf '%s' "$out" | grep -qF -- "::error::"; then
+    fail "[$label] rejected without an ::error:: annotation" "$out"; return
+  fi
+  echo "ok   [$label]"
+}
+
+bad_case floor-nonnumeric      22G HIVE_DEPLOY_DISK_FLOOR_GB=bad
+bad_case warn-nonnumeric       22G HIVE_DEPLOY_DISK_WARN_GB=bad
+bad_case floor-negative        22G HIVE_DEPLOY_DISK_FLOOR_GB=-5
+bad_case floor-decimal         22G HIVE_DEPLOY_DISK_FLOOR_GB=7.5
+# warn under floor: 10 is >= warn 0, so without the inversion check the script
+# would exit 0 here and never compare against the 15 GB floor.
+bad_case warn-below-floor      10G HIVE_DEPLOY_DISK_WARN_GB=0
+
 # The failure message has to name the things that must NOT be run to reclaim,
 # because a full-disk failure is exactly when someone reaches for the biggest
 # hammer available.
@@ -140,10 +170,17 @@ done
 # silently: deleting a call site is a one-line diff that nothing else notices,
 # and the migrate job is the one where running out of disk is worst (Postgres
 # panics and shuts down on ENOSPC, taking out the stack that is serving).
-calls=$(grep -c 'scripts/check-deploy-disk\.sh' "$workflow" || true)
-# Two `run:` call sites plus the push.paths entry that keeps a fix to the
-# guard itself from merging without ever reaching the box.
-check "wired-into-both-jobs" [ "$calls" -ge 3 ]
+# Count EXECUTABLE call sites, not text matches. The first version of this
+# counted every mention of the path and asserted three or more, which the
+# comments and the push.paths entry satisfy on their own: deleting both `run:`
+# lines still left four matches, so the assertion passed with zero jobs
+# protected. Exactly two `run:` lines, and separately exactly one push.paths
+# entry, which is what keeps a fix to the guard from merging without ever
+# reaching the box.
+calls=$(grep -cE '^[[:space:]]*run: scripts/check-deploy-disk\.sh[[:space:]]*$' "$workflow" || true)
+paths=$(grep -cE "^[[:space:]]*- 'scripts/check-deploy-disk\.sh'[[:space:]]*$" "$workflow" || true)
+check "wired-into-both-jobs" [ "$calls" = "2" ]
+check "guard-change-triggers-deploy" [ "$paths" = "1" ]
 
 if [ "$failures" != "0" ]; then
   echo "$failures check(s) failed"
