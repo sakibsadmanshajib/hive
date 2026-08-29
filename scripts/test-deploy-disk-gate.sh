@@ -22,11 +22,28 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
 
+# The docker stub records every invocation, because two of the guarantees below
+# are about calls that must or must not happen: the reclaim must not run on a
+# healthy box, and it must run before the thresholds are compared. $FAKE_DOCKER_FAIL
+# makes `builder prune` fail the way a real one can (daemon busy, context
+# cancelled, the reclaim outliving its timeout) while leaving the rest of docker
+# working, which is the case that must not be allowed to skip the check.
 cat > "$tmp/bin/docker" <<'SH'
 #!/bin/sh
+echo "$*" >> "$DOCKER_LOG"
+case "$1 $2" in
+  "builder prune")
+    if [ -n "${FAKE_DOCKER_FAIL:-}" ]; then
+      echo "stub docker: builder prune failed" >&2
+      exit 1
+    fi
+    ;;
+esac
 echo "stub docker $*"
 SH
 chmod +x "$tmp/bin/docker"
+export DOCKER_LOG="$tmp/docker.log"
+: > "$DOCKER_LOG"
 
 # $FAKE_FREE_GB is what the stubbed df reports, in the two-line shape
 # `df -BG --output=avail` produces. Two special values: an empty string models
@@ -34,14 +51,26 @@ chmod +x "$tmp/bin/docker"
 # outright (no such mount, permission denied, a df build without --output).
 # The second is the one worth guarding: under `set -euo pipefail` a df inside
 # the pipeline would abort the script with no annotation at all.
+#
+# $FAKE_FREE_SEQ_FILE is how a reclaim is modelled: the guard reads free space,
+# reclaims, then reads again, so the two reads have to be able to differ. Each
+# call consumes one line. A fixed $FAKE_FREE_GB cannot express "the prune freed
+# nothing" and "the prune freed 12 GB" as different runs, and a test that cannot
+# tell those apart cannot fail when the second read is dropped.
 cat > "$tmp/bin/df" <<'SH'
 #!/bin/sh
-if [ "${FAKE_FREE_GB}" = "EXPLODE" ]; then
+if [ -n "${FAKE_FREE_SEQ_FILE:-}" ] && [ -s "${FAKE_FREE_SEQ_FILE}" ]; then
+  value=$(head -1 "${FAKE_FREE_SEQ_FILE}")
+  sed -i '1d' "${FAKE_FREE_SEQ_FILE}"
+else
+  value="${FAKE_FREE_GB:-}"
+fi
+if [ "$value" = "EXPLODE" ]; then
   echo "df: unrecognized option '--output=avail'" >&2
   exit 1
 fi
 echo "Avail"
-echo "${FAKE_FREE_GB}"
+echo "$value"
 SH
 chmod +x "$tmp/bin/df"
 
@@ -60,6 +89,7 @@ run_case() {
   local out status summary
   summary="$tmp/summary.$label"
   : > "$summary"
+  : > "$DOCKER_LOG"
 
   set +e
   out=$(FAKE_FREE_GB="$free" GITHUB_STEP_SUMMARY="$summary" bash "$gate" 2>&1)
@@ -91,6 +121,85 @@ run_case just-below-floor 14G   1       "::error::"     ""
 run_case near-empty       1G    1       "::error::"     ""
 run_case unparseable      ""    1       "::error::"     ""
 run_case df-fails    EXPLODE    1       "::error::"     ""
+
+# ------------------------------------------------------------------
+# Build cache reclaim (issue #1419).
+#
+# The guard reclaims unused build cache when it finds itself below the warn
+# line, then re-reads free space and applies the thresholds to the result. Four
+# properties have to hold, and each of these cases fails if one is dropped.
+# ------------------------------------------------------------------
+
+# A healthy box is never pruned. Without this the guard would throw away the
+# layer cache of a box that had no problem, which costs every subsequent build
+# and launders the trend the warn line exists to show.
+: > "$DOCKER_LOG"
+FAKE_FREE_GB=40G GITHUB_STEP_SUMMARY=/dev/null bash "$gate" >/dev/null 2>&1 || true
+if grep -q 'builder prune' "$DOCKER_LOG"; then
+  fail "[healthy-box-is-not-pruned] a box above the warn line was pruned anyway" "$(cat "$DOCKER_LOG")"
+else
+  echo "ok   [healthy-box-is-not-pruned]"
+fi
+
+# $2 is a space-separated sequence of what successive df calls report: the
+# first is the pre-reclaim reading, the second the post-reclaim one.
+run_seq() {
+  local label="$1" sequence="$2" want_status="$3" want_match="$4" reject_match="$5"
+  shift 5
+  local out status summary seq_file
+  summary="$tmp/summary.$label"
+  seq_file="$tmp/seq.$label"
+  : > "$summary"
+  : > "$DOCKER_LOG"
+  printf '%s\n' $sequence > "$seq_file"
+
+  set +e
+  out=$(env "$@" FAKE_FREE_SEQ_FILE="$seq_file" GITHUB_STEP_SUMMARY="$summary" bash "$gate" 2>&1)
+  status=$?
+  set -e
+
+  if [ "$status" != "$want_status" ]; then
+    fail "[$label] exit $status, wanted $want_status" "$out"; return
+  fi
+  if [ -n "$want_match" ] && ! printf '%s' "$out" | grep -qF -- "$want_match"; then
+    fail "[$label] output missing '$want_match'" "$out"; return
+  fi
+  if [ -n "$reject_match" ] && printf '%s' "$out" | grep -qF -- "$reject_match"; then
+    fail "[$label] output should not contain '$reject_match'" "$out"; return
+  fi
+  if ! grep -q 'builder prune' "$DOCKER_LOG"; then
+    fail "[$label] the guard never reclaimed build cache" "$(cat "$DOCKER_LOG")"; return
+  fi
+  echo "ok   [$label]"
+}
+
+# The motivating case: 14G free is below the 15G floor and is exactly where the
+# box sat when it refused three consecutive deploys, and `docker builder prune
+# -f` took it to 23G on the day. It must proceed, and it must say out loud that
+# it only proceeded because of a reclaim.
+run_seq prune-rescues     "14G 23G" 0 "reclaimed build cache" "::error::"
+# Between the floor and the warn line after the reclaim: proceed, still warn.
+run_seq prune-partial     "14G 20G" 0 "::warning::"           "::error::"
+# A box whose problem is not build cache: the reclaim frees nothing, the pre
+# and post numbers are the same, and the floor still refuses. This is the case
+# that proves pruning before the check cannot mask a real disk problem.
+run_seq prune-not-enough  "14G 14G" 1 "::error::"             ""
+# THE load-bearing case. A failing reclaim must not be able to skip, soften or
+# short-circuit the check that follows it. The guard still refuses.
+run_seq prune-fails       "14G 14G" 1 "::error::"             "" FAKE_DOCKER_FAIL=1
+
+# Both numbers have to reach the log. A reclaim that reported only its result
+# would hide how close the box was, which is the signal an operator needs to
+# tell "build cache accumulated again" from "something else is eating the disk".
+printf '14G\n23G\n' > "$tmp/seq.numbers"
+out=$(FAKE_FREE_SEQ_FILE="$tmp/seq.numbers" GITHUB_STEP_SUMMARY="$tmp/summary.numbers" bash "$gate" 2>&1 || true)
+for wanted in "14G" "23G"; do
+  if printf '%s' "$out" | grep -qF -- "$wanted"; then
+    echo "ok   [reclaim reports $wanted]"
+  else
+    fail "[reclaim-reports-both-numbers] '$wanted' never appears" "$out"
+  fi
+done
 
 check() {
   local label="$1"; shift
