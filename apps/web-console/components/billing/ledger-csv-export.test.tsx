@@ -112,8 +112,29 @@ describe("LedgerCsvExport", () => {
     expect(csv.split("\n")).toEqual([
       "date,type,credits_delta,idempotency_key",
       "2026-08-20T10:00:00Z,usage,-1250,idem-abc-123",
-      "2026-08-21T09:30:00Z,topup,50000000,idemx-with-commas",
+      // A comma is now quoted per RFC 4180 rather than deleted from the
+      // value: the export exists to be reconciled against, so a mangled
+      // idempotency key is worse than a quoted one. The negative delta is
+      // left unprefixed on purpose so the column still sums (issue #1401).
+      '2026-08-21T09:30:00Z,topup,50000000,"idem,x-with-commas"',
     ]);
+  });
+
+  it("neutralises a formula-leading idempotency key so a spreadsheet shows text", async () => {
+    const { blobs } = installDownloadCapture();
+    render(
+      <LedgerCsvExport
+        entries={[
+          entryFixture({ idempotency_key: '=HYPERLINK("http://qa.invalid")' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /export csv/i }));
+
+    const csv = await readBlobText(blobs[0]);
+    const cell = csv.split("\n")[1].split(",").slice(3).join(",");
+    expect(cell.startsWith('"\'=')).toBe(true);
   });
 
   it("revokes the object URL after triggering the click", async () => {

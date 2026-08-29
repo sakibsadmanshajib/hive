@@ -4,6 +4,7 @@ import { Download } from "lucide-react";
 
 import type { UsageEventRow } from "@/lib/control-plane/client";
 import { Button } from "@/components/ui/button";
+import { toCsv } from "@/lib/csv";
 
 interface UsageLogsCsvProps {
   rows: UsageEventRow[];
@@ -25,15 +26,29 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
     // export as an empty cell rather than a fabricated 0. Raw
     // milliseconds, not the table's "1.8s", because the export exists to
     // be sorted and charted.
-    const header =
-      "created_at,request_id,model_alias,status,input_tokens,output_tokens," +
-      "cache_read_tokens,cache_write_tokens,hive_credit_delta,latency_ms," +
-      "error_code,api_key\n";
+    const header = [
+      "created_at",
+      "request_id",
+      "model_alias",
+      "status",
+      "input_tokens",
+      "output_tokens",
+      "cache_read_tokens",
+      "cache_write_tokens",
+      "hive_credit_delta",
+      "latency_ms",
+      "error_code",
+      "api_key",
+    ];
+    // Escaping lives in lib/csv so this export and the billing ledger export
+    // neutralise a formula-leading cell the same way (issue #1401). The
+    // api_key column carries a nickname, which is free text a workspace
+    // member chose, and it used to have its quotes and commas replaced with
+    // spaces while a leading "=" passed straight through.
     const lines = rows.map((row) => {
       const key = row.api_key_id
         ? (keyNames[row.api_key_id] ?? `…${row.api_key_id.slice(-6)}`)
         : "—";
-      const cell = (value: string) => value.replace(/[",\n]/g, " ");
       return [
         row.created_at,
         row.request_id,
@@ -53,12 +68,10 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
           : String(row.latency_ms),
         row.error_code ?? "",
         key,
-      ]
-        .map(cell)
-        .join(",");
+      ];
     });
 
-    const csv = header + lines.join("\n");
+    const csv = toCsv(header, lines);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

@@ -40,8 +40,17 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
     {
       key: "nickname",
       header: "Name",
+      // The nickname is free text a workspace member chose, and a key minted
+      // before the cap landed can still be arbitrarily long. Without a bound
+      // here one such row widened the table to fifty thousand pixels and put
+      // the Revoke control of every key in the workspace out of reach, with
+      // nothing in the product able to shorten the stored value (issue
+      // #1400). The title attribute keeps the full name readable on hover.
       cell: (row) => (
-        <span className="font-medium text-[var(--color-ink)]">
+        <span
+          className="block max-w-[16rem] truncate font-medium text-[var(--color-ink)]"
+          title={row.nickname}
+        >
           {row.nickname}
         </span>
       ),

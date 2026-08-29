@@ -89,3 +89,34 @@ describe("ApiKeyList spend and credit-limit columns", () => {
     expect(screen.getByText("$1.00 total")).toBeTruthy();
   });
 });
+
+describe("ApiKeyList name column", () => {
+  // Issue #1400: a 5000-character nickname made the row 50,000 pixels wide,
+  // pushing every later column, Revoke included, out of reach for every key
+  // in the workspace. A cap on new nicknames does nothing for a row that is
+  // already stored, so the cell has to bound itself. jsdom cannot measure
+  // layout; what is pinned here is that the constraint and the full value
+  // are both present, and the screenshot on the pull request carries the
+  // rendered proof.
+  it("bounds the name cell and keeps the full value reachable", () => {
+    const long = "A".repeat(5000);
+    render(
+      <ApiKeyList keys={[baseKey({ nickname: long })]} canManage={false} />,
+    );
+
+    const cell = screen.getByTitle(long);
+    expect(cell.className).toContain("truncate");
+    expect(cell.className).toMatch(/max-w-/);
+    expect(cell.textContent).toBe(long);
+  });
+
+  it("leaves an ordinary nickname readable", () => {
+    render(
+      <ApiKeyList
+        keys={[baseKey({ nickname: "prod-server" })]}
+        canManage={false}
+      />,
+    );
+    expect(screen.getByTitle("prod-server").textContent).toBe("prod-server");
+  });
+});

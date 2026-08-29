@@ -34,6 +34,14 @@ export interface KeyLimitsInput {
 export const RATE_LIMIT_RPM_MAX = 100000;
 export const RATE_LIMIT_TPM_MAX = 10000000;
 
+/**
+ * Longest API key nickname the control plane will store, in characters.
+ * Mirrors `MaxNicknameLen` in `apps/control-plane/internal/apikeys/types.go`,
+ * which is the enforcement point; this copy exists so the form can refuse a
+ * value before spending a round trip on it (issue #1400).
+ */
+export const MAX_KEY_NICKNAME_LEN = 100;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

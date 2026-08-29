@@ -46,6 +46,16 @@ type KeyEvent struct {
 	CreatedAt   time.Time
 }
 
+// MaxNicknameLen bounds the API key nickname, counted in characters rather
+// than bytes so a Bangla name gets the same allowance as an English one.
+//
+// Issue #1400: the field was unbounded at every layer, and one 5000-character
+// nickname made the console key table 50,000 pixels wide, pushing the Revoke
+// control of every key in the workspace out of reach. Nothing in the product
+// could shorten a stored value afterwards, so repairing it took a direct
+// database write. 100 matches the bound the BYOK label already uses.
+const MaxNicknameLen = 100
+
 // CreateKeyInput is the user-supplied input when creating a new key.
 type CreateKeyInput struct {
 	Nickname  string

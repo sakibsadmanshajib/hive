@@ -9,6 +9,10 @@ import {
 } from "@/lib/analytics/overview-fetch";
 import { deriveOverviewTiles } from "@/lib/analytics/cache-metrics";
 import {
+  apiKeysById,
+  formatApiKeyGroup,
+} from "@/lib/analytics/api-key-labels";
+import {
   ANALYTICS_WINDOW_SPAN_MS,
   hasWindowSpan,
 } from "@/lib/analytics/windows";
@@ -99,9 +103,31 @@ export default async function AnalyticsPage({
   ]);
 
   const fetchError = bundle.main === null;
-  const usageData = bundle.main?.usage ?? [];
-  const spendData = bundle.main?.spend ?? [];
-  const errorData = bundle.main?.errors ?? [];
+
+  // Grouping by api_key is the one dimension whose group key is an opaque id
+  // (endpoint and model_alias are stored as human strings), so it is resolved
+  // to a nickname here, once, for the table and the chart axis alike (issue
+  // #1403). A failed key fetch leaves the ids on screen: an unresolved id is
+  // honest, a row wrongly labelled "Deleted key" is not.
+  // The Overview tab is excluded on purpose: it renders no group table, and
+  // its tiles derive from these same rows, so rewriting group_key there
+  // would relabel the input to a derivation rather than a display.
+  const keyById =
+    activeTab !== "overview" &&
+    groupBy === "api_key" &&
+    bundle.groupKeys !== null
+      ? apiKeysById(bundle.groupKeys)
+      : null;
+  const groupLabel = (groupKey: string): string =>
+    keyById ? formatApiKeyGroup(groupKey, keyById) : groupKey;
+  const relabel = <Row extends { group_key: string }>(rows: Row[]): Row[] =>
+    keyById
+      ? rows.map((row) => ({ ...row, group_key: groupLabel(row.group_key) }))
+      : rows;
+
+  const usageData = relabel(bundle.main?.usage ?? []);
+  const spendData = relabel(bundle.main?.spend ?? []);
+  const errorData = relabel(bundle.main?.errors ?? []);
 
   const tiles = deriveOverviewTiles({
     timeWindow,
