@@ -14,10 +14,24 @@ import (
 
 // TaskCreator is the narrow surface the Scheduler needs from
 // agenttask.Service. The real Service satisfies it directly; tests inject a
-// fake. Going through the SAME service path a manual creation uses is the
-// whole point (brief for this slice): metering, quota and engine gating then
-// apply to scheduled runs identically to manual ones, with no second code
-// path that could drift.
+// fake. Going through the same service path a manual creation uses means the
+// launcher's own engine gating and sandbox quota apply to a scheduled run
+// exactly as they do to a manual one, with no second code path that could
+// drift.
+//
+// It does NOT mean a scheduled run inherits the checks a manual one passes
+// before reaching this seam. This comment used to claim it did, and the claim
+// was false in the direction that mattered: agenttask.Service.CreateTask
+// meters nothing and asks nothing about the tenant's balance.
+//
+// Nor does the manual route carry a solvency check that this path could be
+// said to skip. It has none today either; one is being added a layer above
+// CreateTask, in edge-api's own handler, by the separate change for issue
+// #669, and edge-api is a hop the scheduler never traverses in any case. So
+// when this comment was written neither half existed, and a tenant at zero
+// credits could create a routine and have it launch sandboxes on a cadence
+// forever (issue #1490). What closes that here is the explicit s.solvency
+// check in RunOnce below, not this seam and not anything upstream of it.
 type TaskCreator interface {
 	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions, bearerJWT string) (agenttask.Task, error)
 }
@@ -33,6 +47,13 @@ const scheduledPack = agenttask.PackCoding
 // CreateTask fails. No engine or infra detail reaches a customer-readable
 // column, same posture as agenttask.Service's launch-failure messages.
 const runFailureMessage = "scheduled task could not be created; it will retry on the next cadence"
+
+// insufficientCreditsMessage is the provider-blind text persisted into
+// last_error when the solvency gate refuses a launch (#1490). Kept separate
+// from runFailureMessage because the two are not the same event and the
+// tenant's response to them differs: this one is fixed by topping up, the
+// other one clears on its own.
+const insufficientCreditsMessage = "scheduled task not started: the account does not have enough credits"
 
 // SchedulerConfig controls Scheduler behaviour.
 type SchedulerConfig struct {
@@ -57,6 +78,7 @@ type SchedulerConfig struct {
 type Scheduler struct {
 	repo     Repository
 	tasks    TaskCreator
+	solvency Solvency
 	interval time.Duration
 	batch    int
 	logger   *slog.Logger
@@ -67,13 +89,20 @@ type Scheduler struct {
 	started bool
 }
 
-// NewScheduler builds a Scheduler. repo and tasks must be non-nil.
-func NewScheduler(repo Repository, tasks TaskCreator, cfg SchedulerConfig) *Scheduler {
+// NewScheduler builds a Scheduler. repo, tasks and solvency must be non-nil.
+//
+// solvency is a constructor argument rather than a SchedulerConfig field
+// because a config field left at its zero value defaults silently, and the
+// silent default for a money gate is "admit everyone" (issue #1490).
+func NewScheduler(repo Repository, tasks TaskCreator, solvency Solvency, cfg SchedulerConfig) *Scheduler {
 	if repo == nil {
 		panic("agentsched: nil repository")
 	}
 	if tasks == nil {
 		panic("agentsched: nil task creator")
+	}
+	if solvency == nil {
+		panic("agentsched: nil solvency")
 	}
 	interval := cfg.Interval
 	if interval <= 0 {
@@ -87,7 +116,7 @@ func NewScheduler(repo Repository, tasks TaskCreator, cfg SchedulerConfig) *Sche
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Scheduler{repo: repo, tasks: tasks, interval: interval, batch: batch, logger: logger}
+	return &Scheduler{repo: repo, tasks: tasks, solvency: solvency, interval: interval, batch: batch, logger: logger}
 }
 
 // RunOnce performs exactly one tick at the given clock reading. now is a
@@ -101,15 +130,35 @@ func (s *Scheduler) RunOnce(ctx context.Context, now time.Time) (fired int) {
 		return 0
 	}
 	for _, sched := range due {
+		// Solvency gate (#1490), re-asked at every launch rather than trusted
+		// from creation time: a routine is unbounded in time, so a tenant
+		// solvent when it was created can be at zero by its tenth run, and
+		// nothing between the two moments would notice.
+		//
+		// A lookup failure refuses too. It records the ordinary retry message
+		// rather than the credit one, because the tenant's balance is unknown
+		// and telling them to top up an account that may be fully funded is
+		// worse than saying nothing. Either way the row has already had
+		// next_run_at advanced by ClaimDue, so this backs off a full cadence
+		// instead of hot-looping against a database that is having a bad
+		// minute.
+		if err := s.solvency.Check(ctx, sched.TenantID, launchFloor); err != nil {
+			message := runFailureMessage
+			if errors.Is(err, ErrInsufficientCredits) {
+				message = insufficientCreditsMessage
+			}
+			s.logger.WarnContext(ctx, "agentsched: solvency gate refused a scheduled launch, backing off one cadence",
+				"schedule_id", sched.ID, "tenant_id", sched.TenantID, "error", err)
+			s.recordFailure(ctx, sched, message)
+			continue
+		}
+
 		task, err := s.tasks.CreateTask(ctx, sched.TenantID, sched.UserID, scheduledPack, sched.Instructions, "")
 		if err != nil {
 			// Provider-blind persistence; the real detail stays in the log.
 			s.logger.WarnContext(ctx, "agentsched: scheduled create failed, backing off one cadence",
 				"schedule_id", sched.ID, "tenant_id", sched.TenantID, "error", err)
-			if recErr := s.repo.RecordRunFailure(ctx, sched.TenantID, sched.ID, runFailureMessage); recErr != nil && !errors.Is(recErr, ErrNotFound) {
-				s.logger.WarnContext(ctx, "agentsched: could not record run failure",
-					"schedule_id", sched.ID, "error", recErr)
-			}
+			s.recordFailure(ctx, sched, runFailureMessage)
 			continue
 		}
 		if err := s.repo.RecordRunSuccess(ctx, sched.TenantID, sched.ID, task.ID); err != nil &&
@@ -123,6 +172,16 @@ func (s *Scheduler) RunOnce(ctx context.Context, now time.Time) (fired int) {
 		fired++
 	}
 	return fired
+}
+
+// recordFailure persists a provider-blind message against one claimed row.
+// ErrNotFound is expected and ignored: a schedule deleted between the claim
+// and this write is a normal race, not a failure worth logging.
+func (s *Scheduler) recordFailure(ctx context.Context, sched Schedule, message string) {
+	if err := s.repo.RecordRunFailure(ctx, sched.TenantID, sched.ID, message); err != nil && !errors.Is(err, ErrNotFound) {
+		s.logger.WarnContext(ctx, "agentsched: could not record run failure",
+			"schedule_id", sched.ID, "error", err)
+	}
 }
 
 // Start launches the tick loop on a background goroutine. Subsequent Start

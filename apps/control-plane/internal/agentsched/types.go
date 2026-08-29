@@ -1,9 +1,13 @@
 // Package agentsched owns scheduled agent tasks ("routines"): a user-defined
 // recurring prompt the Scheduler turns into a real agent task on its cadence,
 // through the same Service.CreateTask path a manual creation uses, so a
-// scheduled run is metered, quota-gated and engine-gated exactly like a
-// manual one. First slice carries fixed cadences only (daily, weekly,
-// interval:N hours); no cron-expression UX.
+// scheduled run is engine-gated and sandbox-quota-gated exactly like a manual
+// one. It is NOT metered by that path, and the earlier wording here claiming
+// otherwise was the twin of the false comment on TaskCreator: credits are
+// charged per model turn where those turns are dispatched, and solvency is a
+// check this package makes explicitly, at creation and again at every launch
+// (see Solvency, issue #1490). First slice carries fixed cadences only
+// (daily, weekly, interval:N hours); no cron-expression UX.
 package agentsched
 
 import (

@@ -25,7 +25,7 @@ func ptrTime(t time.Time) *time.Time { return &t }
 
 func TestService_Create_ValidatesAndComputesNextRun(t *testing.T) {
 	now := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
-	svc := NewService(newFakeRepo(), fixedClock(now))
+	svc := NewService(newFakeRepo(), solvent(), fixedClock(now))
 	ctx := context.Background()
 
 	cases := []struct {
@@ -53,7 +53,7 @@ func TestService_Create_ValidatesAndComputesNextRun(t *testing.T) {
 
 func TestService_Create_RejectsInvalidInput(t *testing.T) {
 	now := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
-	svc := NewService(newFakeRepo(), fixedClock(now))
+	svc := NewService(newFakeRepo(), solvent(), fixedClock(now))
 	ctx := context.Background()
 
 	cases := []struct {
@@ -93,7 +93,7 @@ func TestService_Update_RecomputesNextRunOnlyOnCadenceChange(t *testing.T) {
 		Enabled:   true,
 		NextRunAt: ptrTime(now.Add(24 * time.Hour)),
 	})
-	svc := NewService(repo, fixedClock(now))
+	svc := NewService(repo, solvent(), fixedClock(now))
 	ctx := context.Background()
 
 	out, err := svc.Update(ctx, tenantA, userA, idA, UpdateInput{
@@ -133,7 +133,7 @@ func TestService_Update_ReEnableViaPUTResetsStaleNextRun(t *testing.T) {
 		Enabled:   false,
 		NextRunAt: &stale,
 	})
-	svc := NewService(repo, fixedClock(now))
+	svc := NewService(repo, solvent(), fixedClock(now))
 
 	out, err := svc.Update(context.Background(), tenantA, userA, idA, UpdateInput{
 		Name: "n", Instructions: "i", Schedule: "daily", Enabled: true,
@@ -156,7 +156,7 @@ func TestService_SetEnabled_ResetsNextRunWhenEnabling(t *testing.T) {
 		Enabled:   false,
 		NextRunAt: &stale,
 	})
-	svc := NewService(repo, fixedClock(now))
+	svc := NewService(repo, solvent(), fixedClock(now))
 	ctx := context.Background()
 
 	out, err := svc.SetEnabled(ctx, tenantA, userA, idA, true)
