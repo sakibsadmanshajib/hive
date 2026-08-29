@@ -608,7 +608,7 @@ export interface FeatureGate {
   // toggle the API would refuse.
   manageable: boolean;
   // enforced is true only for a gate the registry records a runtime reader
-  // for. Twenty two of the twenty five registered keys have none: the value
+  // for. Sixteen of the nineteen registered keys have none: the value
   // persists to tenant_settings and changes nothing (issue #762). Optional
   // because a control-plane that predates this field omits it, and the render
   // site treats anything but true as unenforced, which is the fail-safe

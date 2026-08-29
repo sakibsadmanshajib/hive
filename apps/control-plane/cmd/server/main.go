@@ -818,7 +818,17 @@ func main() {
 			}
 		}
 
-		configuredSinks := configuredAuditSinks()
+		configuredSinks, skippedSinks := configuredAuditSinks()
+		if len(skippedSinks) > 0 {
+			// An operator asked for these and did not get them, because the
+			// flag is true and the credentials are not there. Said at ERROR
+			// because the consequence is an audit export that does not
+			// happen, and the alternative reading of the line below would be
+			// "no optional sinks configured", which is false and would send
+			// the next reader looking in the wrong place.
+			log.Printf("ERROR: audit sinks enabled but not configured, no records will reach them: %s",
+				strings.Join(skippedSinks, ", "))
+		}
 		if len(configuredSinks) == 0 {
 			log.Println("phase-19 audit sink worker idle (no optional sinks configured)")
 		} else {
@@ -1654,10 +1664,9 @@ func tenantMembershipCheck(pool *pgxpool.Pool) auth.MembershipCheckFunc {
 // supabase/migrations/20260829_03_retire_audit_sink_feature_gates.sql; see
 // the sinkconfig package comment for why a tenant-scoped switch over the
 // operator's own audit export is not a control this product should offer.
-func configuredAuditSinks() []auditworker.Sink {
+func configuredAuditSinks() ([]auditworker.Sink, []string) {
 	return sinkconfig.FromEnv()
 }
-
 
 func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
 	cfg := storageRuntimeConfig{

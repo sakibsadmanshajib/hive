@@ -95,7 +95,7 @@ func (h *AdminHandler) AdminMux() http.Handler {
 // list here, because adding a gate key is a migration-only change by design
 // (see 20260715_04_featuregate_dynamic_keys.sql) and a list in Go or in the
 // console would go stale silently the first time a migration added one. Only
-// three of the twenty five registered keys are enforced anywhere; the console
+// three of the nineteen registered keys are enforced anywhere; the console
 // marks the rest as stored but not enforced so an operator is never told a
 // setting takes effect when it does not (issue #762).
 type adminGate struct {

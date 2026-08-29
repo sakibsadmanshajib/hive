@@ -71,7 +71,7 @@ export default async function FeatureGatesPage() {
       {/*
         The old description promised that every change "takes effect across the
         API and apps within about a minute". That is true of three of the
-        twenty five registered gates and false of the rest, which persist
+        nineteen registered gates and false of the rest, which persist
         correctly and are read by nothing (issue #762). A page cannot state a
         guarantee the system does not keep, so the promise moved onto the rows
         that earn it: each unenforced row says so itself, and this description

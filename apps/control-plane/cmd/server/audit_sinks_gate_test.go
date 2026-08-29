@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinkconfig"
 )
 
 // TestConfiguredAuditSinksDefaultOff verifies that no external sink is
@@ -25,7 +27,7 @@ func TestConfiguredAuditSinksDefaultOff(t *testing.T) {
 	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
 
 	// All ENABLE_* flags absent — expect zero sinks regardless of credentials.
-	sinks := configuredAuditSinks()
+	sinks, _ := configuredAuditSinks()
 	assert.Empty(t, sinks, "no sink must be registered when ENABLE_AUDIT_SINK_* flags are absent")
 }
 
@@ -86,7 +88,7 @@ func TestConfiguredAuditSinksEachFlagGates(t *testing.T) {
 				t.Setenv("LANGFUSE_SECRET_KEY", "sec")
 			}
 
-			result := configuredAuditSinks()
+			result, _ := configuredAuditSinks()
 			require.Len(t, result, 1, "exactly one sink must be registered when only %s=true", tc.envKey)
 			assert.Equal(t, tc.sinkName, result[0].Name())
 		})
@@ -100,7 +102,7 @@ func TestConfiguredAuditSinksMissingCredSkipped(t *testing.T) {
 	t.Setenv("ENABLE_AUDIT_SINK_SENTRY", "true")
 	// SENTRY_DSN intentionally absent.
 
-	sinks := configuredAuditSinks()
+	sinks, _ := configuredAuditSinks()
 	assert.Empty(t, sinks, "sink must be skipped when enable flag is set but credentials are absent")
 }
 
@@ -111,21 +113,21 @@ func TestConfiguredAuditSinksPartialCredsSkipped(t *testing.T) {
 		t.Setenv("ENABLE_AUDIT_SINK_SPLUNK", "true")
 		t.Setenv("AUDIT_SINK_SPLUNK_HEC_URL", "http://splunk.example.com")
 		// token intentionally absent
-		result := configuredAuditSinks()
+		result, _ := configuredAuditSinks()
 		assert.Empty(t, result, "splunk must be skipped when HEC token is absent")
 	})
 	t.Run("splunk_token_only", func(t *testing.T) {
 		t.Setenv("ENABLE_AUDIT_SINK_SPLUNK", "true")
 		t.Setenv("AUDIT_SINK_SPLUNK_HEC_TOKEN", "tok")
 		// url intentionally absent
-		result := configuredAuditSinks()
+		result, _ := configuredAuditSinks()
 		assert.Empty(t, result, "splunk must be skipped when HEC url is absent")
 	})
 	t.Run("langfuse_host_only", func(t *testing.T) {
 		t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
 		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
 		// public and secret keys intentionally absent
-		result := configuredAuditSinks()
+		result, _ := configuredAuditSinks()
 		assert.Empty(t, result, "langfuse must be skipped when keys are absent")
 	})
 	t.Run("langfuse_missing_secret", func(t *testing.T) {
@@ -133,9 +135,35 @@ func TestConfiguredAuditSinksPartialCredsSkipped(t *testing.T) {
 		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
 		t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
 		// secret key intentionally absent
-		result := configuredAuditSinks()
+		result, _ := configuredAuditSinks()
 		assert.Empty(t, result, "langfuse must be skipped when secret key is absent")
 	})
+}
+
+// TestConfiguredAuditSinksDelegatesWithoutAddingInputs pins the delegate to
+// the package that owns the decision. The compliance suite proves, against a
+// real database and a real receiver, that sinkconfig.FromEnv takes no input
+// but the environment; that proof is worth nothing if the wrapper main
+// actually calls can grow a second input of its own. A per-tenant resolver
+// call added here, or a sink appended between here and auditworker.New, would
+// leave the compliance suite green and this assertion red.
+func TestConfiguredAuditSinksDelegatesWithoutAddingInputs(t *testing.T) {
+	t.Setenv("ENABLE_AUDIT_SINK_ELK", "true")
+	t.Setenv("AUDIT_SINK_ELK_URL", "http://elk.example.com")
+	t.Setenv("ENABLE_AUDIT_SINK_SENTRY", "true")
+	// SENTRY_DSN intentionally absent, so one sink registers and one is skipped
+	// and both halves of the return value carry something to compare.
+
+	gotSinks, gotSkipped := configuredAuditSinks()
+	wantSinks, wantSkipped := sinkconfig.FromEnv()
+
+	require.Len(t, gotSinks, len(wantSinks))
+	for i := range gotSinks {
+		assert.Equal(t, wantSinks[i].Name(), gotSinks[i].Name())
+	}
+	assert.Equal(t, wantSkipped, gotSkipped)
+	assert.Equal(t, []string{"sentry"}, gotSkipped,
+		"a sink whose flag is true and whose credentials are missing must be reported, not dropped")
 }
 
 // The case-insensitive flag parsing this file used to test directly moved to

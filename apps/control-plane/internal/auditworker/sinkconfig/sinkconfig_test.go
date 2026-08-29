@@ -47,10 +47,35 @@ func TestFromEnvIgnoresEverythingButTheEnvironment(t *testing.T) {
 	t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
 	t.Setenv("LANGFUSE_SECRET_KEY", "sec")
 
-	assert.Empty(t, FromEnv(), "credentials alone must never start egress")
+	none, skipped := FromEnv()
+	assert.Empty(t, none, "credentials alone must never start egress")
+	assert.Empty(t, skipped, "an absent flag is not a skipped sink, it is a sink nobody asked for")
 
 	t.Setenv("ENABLE_AUDIT_SINK_ELK", "true")
-	got := FromEnv()
+	got, skipped := FromEnv()
 	assert.Len(t, got, 1)
 	assert.Equal(t, "elk", got[0].Name())
+	assert.Empty(t, skipped)
+}
+
+// TestFromEnvReportsRequestedButUnconfigurableSinks is the loud-failure half.
+// A flag set to true with no credentials used to produce one WARNING line and
+// then a summary line reading "no optional sinks configured", which is false
+// and sends the next reader looking in the wrong place. The second return
+// value is what lets the caller say which sink the operator asked for and did
+// not get.
+func TestFromEnvReportsRequestedButUnconfigurableSinks(t *testing.T) {
+	t.Setenv("ENABLE_AUDIT_SINK_SPLUNK", "true")
+	t.Setenv("AUDIT_SINK_SPLUNK_HEC_URL", "http://splunk.example.com")
+	// HEC token intentionally absent: splunk needs both.
+	t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
+	// Every langfuse credential intentionally absent.
+	t.Setenv("ENABLE_AUDIT_SINK_ELK", "true")
+	t.Setenv("AUDIT_SINK_ELK_URL", "http://elk.example.com")
+
+	configured, skipped := FromEnv()
+
+	assert.Len(t, configured, 1, "the one fully configured sink still registers")
+	assert.Equal(t, "elk", configured[0].Name())
+	assert.Equal(t, []string{"splunk", "langfuse"}, skipped)
 }

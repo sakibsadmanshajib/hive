@@ -116,8 +116,8 @@ var clientVisibleGateCategories = []string{"agents", "sso"}
 // tenant_settings row. It is the FULL set across all categories and is for
 // internal/admin callers (e.g. the admin console toggle UI) that must see
 // every gate regardless of category. The client-facing featuregate endpoint
-// uses ClientVisibleEnabled instead, so admin/billing/audit_sink gates never
-// reach an end user; do not swap this method into that path (issue #293).
+// uses ClientVisibleEnabled instead, so admin and billing gates never reach
+// an end user; do not swap this method into that path (issue #293).
 //
 // Unlike IsEnabled, this bypasses the per-key in-memory cache: it always
 // issues one fresh, indexed (tenant_id) query.
@@ -193,9 +193,11 @@ type GateKey struct {
 	Label    string
 	Category string
 	// EnforcementSite names where this key is read at runtime, empty when
-	// nothing reads it. Twenty two of the twenty five registered keys are
-	// empty today (issues #755 to #758, tracked as #762): the value persists
-	// to tenant_settings and changes no behaviour. The admin surface reports
+	// nothing reads it. Sixteen of the nineteen registered keys are empty
+	// today (issues #756 to #758, tracked as #762): the value persists to
+	// tenant_settings and changes no behaviour. It was twenty two of twenty
+	// five until #755 retired the six audit sink keys outright rather than
+	// labelling them. The admin surface reports
 	// the emptiness so an operator is never told a stored setting is enforced
 	// when it is not.
 	EnforcementSite string

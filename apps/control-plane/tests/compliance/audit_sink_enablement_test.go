@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,15 +85,69 @@ func TestAuditSinkGatesAreNotARenderedControl(t *testing.T) {
 		tenantID).Scan(&stored))
 	require.Zero(t, stored, "a refused Set must leave no tenant_settings row behind")
 
-	// 3. Stale state removed, not merely hidden. The migration deletes rows
-	//    that were written before the control was retired, so no workspace
-	//    keeps a stored value that reports a control it does not have.
+	// 3. Stale state removed, not merely hidden. This is the half that needs
+	//    a seeded row to mean anything. A throwaway CI database has never had
+	//    an operator write one of these settings, so asserting "no such row
+	//    exists" against it passes because nothing wrote one, not because the
+	//    migration deleted it. Delete the migration's first statement and
+	//    that assertion would still be green while a real demo box kept six
+	//    rows reporting a control that no longer exists.
+	//
+	//    So: write the row the way a pre-retirement deployment would have,
+	//    then re-apply the migration and assert it is gone. Re-applying is
+	//    safe because the migration is two set-based deletes with no DDL.
+	seedRetiredSetting(t, ctx, pool, tenantID)
+	var seeded int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*)::int FROM public.tenant_settings WHERE tenant_id = $1`,
+		tenantID).Scan(&seeded))
+	require.Equal(t, 1, seeded, "the seed itself must land, or the assertion below proves nothing")
+
+	applyRetirementMigration(t, ctx, pool)
+
 	var lingering int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*)::int
 		   FROM public.tenant_settings
 		  WHERE key::text LIKE 'ENABLE_AUDIT_SINK%'`).Scan(&lingering))
 	require.Zero(t, lingering, "stored audit sink settings must be deleted, not left orphaned")
+}
+
+// seedRetiredSetting writes a tenant_settings row for a retired audit sink key
+// the way a deployment that predates the retirement would carry one. Raw SQL
+// is the only way: settings.Resolver.Set refuses the key, which is half of
+// what this suite asserts.
+func seedRetiredSetting(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenant_settings(tenant_id, key, enabled)
+		 VALUES ($1, 'ENABLE_AUDIT_SINK_ELK'::public.tenant_setting_key, true)
+		 ON CONFLICT (tenant_id, key) DO UPDATE SET enabled = true`,
+		tenantID)
+	require.NoError(t, err)
+}
+
+// applyRetirementMigration executes the retirement migration's own SQL against
+// the test database, so what is under test is the file that ships rather than
+// a copy of its statements pasted into a test that would not notice if the
+// file changed.
+//
+// It goes through PgConn().Exec because the file is a multi-statement script
+// (BEGIN, two DELETEs, COMMIT) and pgx's normal Exec path uses the extended
+// protocol, which refuses more than one command per call.
+func applyRetirementMigration(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "..", "supabase", "migrations",
+		"20260829_03_retire_audit_sink_feature_gates.sql")
+	script, err := os.ReadFile(path)
+	require.NoErrorf(t, err, "the migration under test must be readable at %s", path)
+
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Conn().PgConn().Exec(ctx, string(script)).ReadAll()
+	require.NoError(t, err)
 }
 
 // TestAuditSinkEnablementIsEnvironmentOnly is issue #755 acceptance criterion
@@ -122,12 +178,7 @@ func TestAuditSinkEnablementIsEnvironmentOnly(t *testing.T) {
 		// raw SQL because Set now refuses the key; that is the point. Even a
 		// row that predates the retirement, or one an operator inserts by
 		// hand, must not reach the egress decision.
-		_, err := pool.Exec(ctx,
-			`INSERT INTO public.tenant_settings(tenant_id, key, enabled)
-			 VALUES ($1, 'ENABLE_AUDIT_SINK_ELK'::public.tenant_setting_key, true)
-			 ON CONFLICT (tenant_id, key) DO UPDATE SET enabled = true`,
-			tenantID)
-		require.NoError(t, err)
+		seedRetiredSetting(t, ctx, pool, tenantID)
 		t.Cleanup(func() {
 			_, _ = pool.Exec(context.Background(),
 				`DELETE FROM public.tenant_settings
@@ -136,9 +187,11 @@ func TestAuditSinkEnablementIsEnvironmentOnly(t *testing.T) {
 				tenantID)
 		})
 
-		configured := sinkconfig.FromEnv()
+		configured, skipped := sinkconfig.FromEnv()
 		require.Empty(t, configured,
 			"no sink may be configured while ENABLE_AUDIT_SINK_ELK is unset, whatever tenant_settings says")
+		require.Empty(t, skipped,
+			"an unset flag is not a skipped sink; a tenant_settings row must not make it read as one")
 
 		outboxID := enqueueAuditEvent(t, ctx, pool, tenantID, "elk")
 		runWorker(t, ctx, pool, configured)
@@ -167,9 +220,10 @@ func TestAuditSinkEnablementIsEnvironmentOnly(t *testing.T) {
 			tenantID).Scan(&rows))
 		require.Zero(t, rows)
 
-		configured := sinkconfig.FromEnv()
+		configured, skipped := sinkconfig.FromEnv()
 		require.Len(t, configured, 1)
 		require.Equal(t, "elk", configured[0].Name())
+		require.Empty(t, skipped)
 
 		outboxID := enqueueAuditEvent(t, ctx, pool, tenantID, "elk")
 		runWorker(t, ctx, pool, configured)
@@ -255,10 +309,18 @@ func enqueueAuditEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, te
 // runWorker starts a fan-out worker for the duration of the subtest. The
 // retry budget is generous so a row under test stays in audit_outbox rather
 // than moving to the DLQ mid-assertion.
+//
+// Cleanup waits for the goroutine to exit rather than only cancelling its
+// context. Worker.Run notices cancellation on its next ticker tick, so a
+// cleanup that returns immediately leaves a worker from the previous subtest
+// still claiming rows: drainOnce claims any eligible row on the deployment,
+// not one scoped to a sink or a tenant, so it would compete for the next
+// subtest's freshly enqueued row. Today that resolves itself (the leaked
+// worker holds an empty sink set and its failure path clears the claim), but
+// depending on that is depending on an accident.
 func runWorker(t *testing.T, ctx context.Context, pool *pgxpool.Pool, configured []auditworker.Sink) {
 	t.Helper()
 	runCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
 	worker := auditworker.New(auditworker.Config{
 		Pool:         pool,
 		Sinks:        configured,
@@ -268,7 +330,15 @@ func runWorker(t *testing.T, ctx context.Context, pool *pgxpool.Pool, configured
 		PollInterval: 50 * time.Millisecond,
 		LeaseTTL:     time.Minute,
 	})
-	go worker.Run(runCtx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Run(runCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 }
 
 func delivered(t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID int64) bool {

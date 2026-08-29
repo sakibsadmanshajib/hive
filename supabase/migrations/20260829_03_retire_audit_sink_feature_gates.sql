@@ -29,10 +29,13 @@
 --    tenant) the per-tenant switch is degenerate anyway.
 --
 -- 3. Splitting one control across two stores is the failure mode D-044 was
---    written about. Credentials stay in a reviewed, version-controlled .env;
---    moving the enable half into an unversioned runtime row would reproduce
---    exactly the "unreviewed, unversioned, unreproducible in a fresh
---    environment, silently revertible by a volume reset" shape D-044 names.
+--    written about. Enablement and credentials both live in the deployment
+--    environment: the variable NAMES are version controlled in .env.example
+--    and reviewed, the VALUES are supplied to the process at deploy time and
+--    never committed. Moving the enable half into an unversioned runtime row
+--    would reproduce exactly the "unreviewed, unversioned, unreproducible in
+--    a fresh environment, silently revertible by a volume reset" shape D-044
+--    names.
 --
 -- 4. Nothing enqueues public.audit_outbox in production. Every INSERT in the
 --    repository is in a test, and there is no trigger on audit_log. No sink
@@ -72,6 +75,23 @@
 -- Dropping an enum label is not supported without recreating the type and
 -- rewriting every column that uses it, and the labels are inert once no
 -- registry row and no stored row references them.
+--
+-- Residual, stated rather than left to be discovered. Deleting the registry
+-- row closes the SANCTIONED write path: settings.Resolver.Set checks
+-- feature_gate_keys and the admin route turns its refusal into a 400. It does
+-- not close the RLS-permitted path, because public.tenant_settings grants
+-- INSERT to the authenticated role and tenant_settings_insert_own (added by
+-- 20260518_04) checks only tenant_id and role, never the registry. A tenant
+-- OWNER or ADMIN can therefore still write a row for one of these labels
+-- straight through the REST layer. That row is inert: nothing reads it, and
+-- every registry-driven read (Registry, AllEnabled, ClientVisibleEnabled) is
+-- a join FROM feature_gate_keys, so an unregistered key can never appear on
+-- any surface. It is not fixed here with a foreign key from
+-- tenant_settings.key to feature_gate_keys.key, which would look like the
+-- obvious answer: ENABLE_USAGE_METERING is a deliberately unregistered enum
+-- label that planned metering work intends to store (20260728_02, and
+-- apps/edge-api/internal/metering/precedence.go), so that constraint would
+-- block a feature rather than a defect.
 --
 -- No DOWN migration, matching 20260715_04. Restoring these rows would restore
 -- the defect.
