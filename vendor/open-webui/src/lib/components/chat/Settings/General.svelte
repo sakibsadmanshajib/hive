@@ -225,7 +225,17 @@
 <div class="flex flex-col h-full justify-between text-sm" id="tab-general">
 	<div class="  overflow-y-scroll max-h-[28rem] md:max-h-full">
 		<div class="">
-			<div class=" mb-1 text-sm font-medium">{$i18n.t('WebUI Settings')}</div>
+			<!-- hive: was "WebUI Settings" (parity review finding, this section
+			read as stock Open WebUI branding rather than Hive's own product).
+			The key equals its own English text, the i18next convention this
+			file already relies on, so every locale renders something
+			immediately. That is a fallback, not a translation: the old key was
+			translated in bn-BD and 61 other locales and the rename drops those
+			translations, so the new key is added to en-US and translated in
+			bn-BD (the first market) in this same change. The remaining locales
+			fall back to English until their own translators reach it, which is
+			how every other untranslated key in this fork already behaves. -->
+			<div class=" mb-1 text-sm font-medium">{$i18n.t('Chat Preferences')}</div>
 
 			<div class="flex w-full justify-between">
 				<div class=" self-center text-xs font-medium">{$i18n.t('Theme')}</div>

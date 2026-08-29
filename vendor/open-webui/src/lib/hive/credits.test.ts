@@ -8,6 +8,7 @@ import {
 	dismissCredits,
 	fetchCreditBalance,
 	formatUsdFromCredits,
+	refreshCreditSnapshot,
 	LOW_CREDITS_THRESHOLD
 } from './credits';
 
@@ -135,5 +136,41 @@ describe('fetchCreditBalance', () => {
 		);
 		await expect(fetchCreditBalance('http://x')).resolves.toBeNull();
 		vi.unstubAllGlobals();
+	});
+});
+
+describe('refreshCreditSnapshot', () => {
+	const balance = { available_credits: 12_500_000_000, usage_today_credits: 340_000_000 };
+	const older = new Date('2026-08-28T10:00:00Z');
+	const newer = new Date('2026-08-28T11:00:00Z');
+
+	it('takes the fetched balance and stamps the time it arrived', async () => {
+		const previous = { balance: null, lastUpdated: null };
+		const next = await refreshCreditSnapshot(previous, async () => balance, () => newer);
+		expect(next.balance).toEqual(balance);
+		expect(next.lastUpdated).toBe(newer);
+	});
+
+	it('keeps the last known good balance when a refresh fails', async () => {
+		// The regression: a transient network blip blanking a real number the
+		// customer is reading, which reads as credits having vanished.
+		const previous = { balance, lastUpdated: older };
+		const next = await refreshCreditSnapshot(previous, async () => null, () => newer);
+		expect(next.balance).toEqual(balance);
+	});
+
+	it('never advances the last-updated stamp on a failed refresh', async () => {
+		// A stamp that moves on failure lies about how fresh the number beside
+		// it is, which is worse than a visibly old stamp.
+		const previous = { balance, lastUpdated: older };
+		const next = await refreshCreditSnapshot(previous, async () => null, () => newer);
+		expect(next.lastUpdated).toBe(older);
+	});
+
+	it('stays empty when the very first load fails', async () => {
+		const previous = { balance: null, lastUpdated: null };
+		const next = await refreshCreditSnapshot(previous, async () => null, () => newer);
+		expect(next.balance).toBeNull();
+		expect(next.lastUpdated).toBeNull();
 	});
 });

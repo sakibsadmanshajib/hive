@@ -40,14 +40,15 @@ cp "$ROOT/vendor/open-webui/src/app.html" "$WORK"/app.html
 # flattened, so the mirroring described above still holds.
 cp -R "$SRC"/. "$WORK"/lib/hive/
 
-# The settings declutter guard pins the rendered surface of chat components,
-# plus the layout/page files that also forward directConnections, by reading
-# their sources.
+# The settings declutter guard (plus the settings retitle/Usage-tab guard)
+# pins the rendered surface of chat components, plus the layout/page files
+# that also forward directConnections, by reading their sources.
 COMPONENT_SRC="$ROOT/vendor/open-webui/src/lib/components"
 for rel in \
 	chat/SettingsModal.svelte \
 	chat/ModelSelector/Selector.svelte \
 	chat/Settings/Account.svelte \
+	chat/Settings/General.svelte \
 	chat/Settings/Advanced/AdvancedParams.svelte \
 	chat/MessageInput.svelte \
 	chat/Chat.svelte \
@@ -56,6 +57,19 @@ for rel in \
 do
 	mkdir -p "$WORK/lib/components/${rel%/*}"
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"
+done
+
+# The two locale catalogues the settings guard reads. en-US is the key
+# catalogue every other locale is generated from, and bn-BD is the first
+# market, so a rename that silently drops a translated string fails here
+# rather than in front of a Bangladeshi customer. Only these two travel: the
+# other 61 are never asserted against and copying them would cost seconds per
+# run for nothing.
+I18N_SRC="$ROOT/vendor/open-webui/src/lib/i18n/locales"
+for rel in en-US bn-BD
+do
+	mkdir -p "$WORK/lib/i18n/locales/$rel"
+	cp "$I18N_SRC/$rel/translation.json" "$WORK/lib/i18n/locales/$rel/translation.json"
 done
 
 ROUTES_SRC="$ROOT/vendor/open-webui/src/routes"
@@ -77,6 +91,24 @@ cp "$ROOT/scripts/owui-hive-svelte-compile-check.mjs" "$WORK"/
 # way to get a green check and a red deploy. Read inside the container, so this
 # still needs no host node, per the Docker-only testing contract above.
 cp "$ROOT/vendor/open-webui/package-lock.json" "$WORK"/owui-package-lock.json
+
+# A vitest config for the scratch tree, so a test can IMPORT a Hive component
+# and assert what it renders rather than only reading its source as text. The
+# in-place run (npm run test:frontend, Dockerfile.open-webui) gets the same
+# capability from vite.config.ts's sveltekit() plugin; this is the scratch
+# tree's equivalent, and both compile with the same pinned svelte, so a test
+# that renders behaves identically in both places. Node environment on purpose:
+# the render assertions use svelte/server, which needs no DOM, so nothing here
+# depends on a jsdom the vendored lockfile does not carry.
+cat > "$WORK"/vitest.config.mjs <<'CONFIG'
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+	plugins: [svelte()],
+	test: { environment: 'node' }
+});
+CONFIG
 
 cd "$WORK"
 
@@ -108,24 +140,36 @@ docker run --rm \
     # drift. Both are installed into the scratch tree rather than pulled
     # through npx: vitest resolves @vitest/coverage-v8 relative to the project
     # root it runs from, and packages fetched through separate npx prefixes are
-    # invisible to that lookup. Same pattern as the svelte install below.
+    # invisible to that lookup.
     # The text reporter prints the per-file table plus an All files total line:
     # advisory measurement for this scratch-tree run, no thresholds.
     # Scoped to lib/hive, not all of lib: the upstream components and routes
     # copied in above are text fixtures the declutter guard reads, not code
     # this suite executes, so including them would drag the total down with
     # permanently-zero rows.
-    npm install --no-save --no-audit --no-fund --loglevel=error vitest@2 @vitest/coverage-v8@2
-    npx vitest run --coverage --coverage.include="lib/hive/**" --coverage.reporter=text
-    svelte_version=$(node -e "
+    #
+    # Svelte and its vite plugin are installed BEFORE the test run, not after
+    # it, because the tests now import Hive components and render them; the
+    # compile pass below reuses the same install. Both versions come from the
+    # vendored lockfile so this check runs the EXACT versions the image build
+    # resolves. A major-only pin would let it pass with a different 5.x than
+    # deploy/docker/Dockerfile.open-webui uses, which is a fresh way to get a
+    # green check and a red deploy.
+    pinned=$(node -e "
       const lock = require(\"/work/owui-package-lock.json\");
-      const entry = lock.packages && lock.packages[\"node_modules/svelte\"];
-      if (!entry || !entry.version) {
-        console.error(\"svelte absent from vendor/open-webui/package-lock.json\");
+      const pkgs = lock.packages || {};
+      const svelte = pkgs[\"node_modules/svelte\"];
+      const plugin = pkgs[\"node_modules/@sveltejs/vite-plugin-svelte\"];
+      if (!svelte || !svelte.version || !plugin || !plugin.version) {
+        console.error(\"svelte or its vite plugin absent from vendor/open-webui/package-lock.json\");
         process.exit(1);
       }
-      process.stdout.write(entry.version);
+      process.stdout.write(svelte.version + \" \" + plugin.version);
     ")
-    echo "compiling components with svelte@$svelte_version, the version the image build resolves"
-    npm install --no-save --no-audit --no-fund --loglevel=error "svelte@$svelte_version"
+    svelte_version=${pinned% *}
+    plugin_version=${pinned#* }
+    echo "pinning svelte@$svelte_version and @sveltejs/vite-plugin-svelte@$plugin_version, the versions the image build resolves"
+    npm install --no-save --no-audit --no-fund --loglevel=error \
+      vitest@2 @vitest/coverage-v8@2 "svelte@$svelte_version" "@sveltejs/vite-plugin-svelte@$plugin_version"
+    npx vitest run --coverage --coverage.include="lib/hive/**" --coverage.reporter=text
     node owui-hive-svelte-compile-check.mjs lib/hive'

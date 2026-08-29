@@ -4,11 +4,13 @@
 	import { config, models, settings, user } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
 	import { getModels as _getModels } from '$lib/apis';
+	import { refreshCreditSnapshot, type CreditSnapshot } from '$lib/hive/credits';
 
 	import Modal from '../common/Modal.svelte';
 	import Account from './Settings/Account.svelte';
 	import About from './Settings/About.svelte';
 	import General from './Settings/General.svelte';
+	import Usage from '$lib/hive/SettingsUsage.svelte';
 	import Interface from './Settings/Interface.svelte';
 	import Audio from './Settings/Audio.svelte';
 	import DataControls from './Settings/DataControls.svelte';
@@ -17,6 +19,7 @@
 	import XMark from '../icons/XMark.svelte';
 	import Integrations from './Settings/Integrations.svelte';
 	import DatabaseSettings from '../icons/DatabaseSettings.svelte';
+	import ChartBar from '../icons/ChartBar.svelte';
 	import SettingsAlt from '../icons/SettingsAlt.svelte';
 	import UserCircle from '../icons/UserCircle.svelte';
 	import SoundHigh from '../icons/SoundHigh.svelte';
@@ -34,6 +37,12 @@
 			selectedTab = show;
 			show = true;
 		}
+		// Hive: Usage is a hosted-SaaS surface, so the rail entry only appears
+		// once the credits endpoint actually answers. Probed on open rather
+		// than on mount because this component stays mounted for the whole
+		// session and a user who never opens Settings should not pay for a
+		// request they never see.
+		void probeCredits();
 		addScrollListener();
 	} else {
 		selectedTab = 'general';
@@ -55,6 +64,8 @@
 				'advancedparameters',
 				'advanced params',
 				'advanced parameters',
+				'chat preferences',
+				'chatpreferences',
 				'configuration',
 				'defaultparameters',
 				'default parameters',
@@ -77,6 +88,72 @@
 				'translate',
 				'webuisettings',
 				'webui settings'
+			]
+		},
+		{
+			id: 'account',
+			title: 'Account',
+			keywords: [
+				'account preferences',
+				'account settings',
+				'accountpreferences',
+				'accountsettings',
+				'login',
+				'notification webhook url',
+				'notificationwebhookurl',
+				'personal settings',
+				'personalsettings',
+				'privacy settings',
+				'privacysettings',
+				'profileavatar',
+				'profile avatar',
+				'profile details',
+				'profile image',
+				'profile picture',
+				'profiledetails',
+				'profileimage',
+				'profilepicture',
+				'security settings',
+				'securitysettings',
+				'update account',
+				'updateaccount',
+				'user account',
+				'user data',
+				'user preferences',
+				'user profile',
+				'useraccount',
+				'userdata',
+				'username',
+				'userpreferences',
+				'userprofile',
+				'webhook url',
+				'webhookurl'
+			]
+		},
+		{
+			// Usage (parity re-score finding: no consumption/credit surface
+			// anywhere in Settings). Grouped next to Account, mirroring the reference
+			// Claude Desktop rail (General, Account, Usage clustered together)
+			// named in that finding.
+			id: 'usage',
+			title: 'Usage',
+			keywords: [
+				'balance',
+				'billing',
+				'consumption',
+				'credit balance',
+				'creditbalance',
+				'credits',
+				'remaining balance',
+				'remaining credits',
+				'remainingbalance',
+				'remainingcredits',
+				'spend',
+				'spending',
+				'top up',
+				'top-up',
+				'topup',
+				'usage'
 			]
 		},
 		{
@@ -342,46 +419,6 @@
 			]
 		},
 		{
-			id: 'account',
-			title: 'Account',
-			keywords: [
-				'account preferences',
-				'account settings',
-				'accountpreferences',
-				'accountsettings',
-				'login',
-				'notification webhook url',
-				'notificationwebhookurl',
-				'personal settings',
-				'personalsettings',
-				'privacy settings',
-				'privacysettings',
-				'profileavatar',
-				'profile avatar',
-				'profile details',
-				'profile image',
-				'profile picture',
-				'profiledetails',
-				'profileimage',
-				'profilepicture',
-				'security settings',
-				'securitysettings',
-				'update account',
-				'updateaccount',
-				'user account',
-				'user data',
-				'user preferences',
-				'user profile',
-				'useraccount',
-				'userdata',
-				'username',
-				'userpreferences',
-				'userprofile',
-				'webhook url',
-				'webhookurl'
-			]
-		},
-		{
 			id: 'about',
 			title: 'About',
 			keywords: [
@@ -434,11 +471,54 @@
 	let availableSettings = [];
 	let filteredSettings = [];
 
+	/*
+	 * Hive: whether this deployment has a credits surface at all. Enterprise
+	 * deployments never wire the chat container's credits proxy, which then
+	 * fails closed with a 404 (deploy/docker/owui-patches/hive_credits.py), and
+	 * silent absence is that posture's documented behavior. A Usage tab that is
+	 * permanently stuck on "Usage isn't available on this deployment." would
+	 * invert it, so the tab is gated on a balance actually answering.
+	 *
+	 * The answer is kept, not thrown away: it is handed to the Usage panel as
+	 * its starting snapshot, so opening the tab shows the number the probe
+	 * already fetched, with the time that fetch happened, instead of firing a
+	 * second request for the same figure and rendering a spinner over data the
+	 * modal is already holding.
+	 *
+	 * One probe at a time. This runs on every open of a modal that stays
+	 * mounted for the whole session, so without the guard two opens in quick
+	 * succession can land out of order and an older answer can overwrite a
+	 * newer one.
+	 */
+	let creditsAvailable = false;
+	let creditsSnapshot: CreditSnapshot = { balance: null, lastUpdated: null };
+	let creditsProbeInFlight = false;
+
+	const probeCredits = async () => {
+		if (creditsProbeInFlight) return;
+		creditsProbeInFlight = true;
+		try {
+			// refreshCreditSnapshot, not a bare fetch: a failed re-probe keeps
+			// the last known good balance and its original timestamp rather
+			// than blanking a figure the customer has already seen.
+			creditsSnapshot = await refreshCreditSnapshot(creditsSnapshot);
+		} finally {
+			creditsProbeInFlight = false;
+		}
+		creditsAvailable = creditsSnapshot.balance !== null;
+		availableSettings = getAvailableSettings();
+		setFilteredSettings();
+	};
+
 	let search = '';
 	let searchDebounceTimeout;
 
 	const getAvailableSettings = () => {
 		return allSettings.filter((tab) => {
+			if (tab.id === 'usage') {
+				return creditsAvailable;
+			}
+
 			if (tab.id === 'tools') {
 				return (
 					$user?.role === 'admin' ||
@@ -604,6 +684,30 @@
 									<SettingsAlt strokeWidth="2" />
 								</div>
 								<div class=" self-center">{$i18n.t('General')}</div>
+							</button>
+						{:else if tabId === 'usage'}
+							<button
+								role="tab"
+								aria-controls="tab-usage"
+								aria-selected={selectedTab === 'usage'}
+								class={`px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none flex text-left transition
+								${
+									selectedTab === 'usage'
+										? ($settings?.highContrastMode ?? false)
+											? 'dark:bg-gray-800 bg-gray-200'
+											: ''
+										: ($settings?.highContrastMode ?? false)
+											? 'hover:bg-gray-200 dark:hover:bg-gray-800'
+											: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'
+								}`}
+								on:click={() => {
+									selectedTab = 'usage';
+								}}
+							>
+								<div class=" self-center mr-2">
+									<ChartBar strokeWidth="2" />
+								</div>
+								<div class=" self-center">{$i18n.t('Usage')}</div>
 							</button>
 						{:else if tabId === 'interface'}
 							<button
@@ -805,6 +909,8 @@
 							toast.success($i18n.t('Settings saved successfully!'));
 						}}
 					/>
+				{:else if selectedTab === 'usage'}
+					<Usage initial={creditsSnapshot} />
 				{:else if selectedTab === 'interface'}
 					<Interface
 						{saveSettings}
