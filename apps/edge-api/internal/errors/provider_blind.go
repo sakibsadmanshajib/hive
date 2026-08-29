@@ -48,6 +48,13 @@ func WriteProviderBlindUpstreamError(w http.ResponseWriter, alias string, httpSt
 		code = "upstream_rate_limited"
 	case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		code = "upstream_unavailable"
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		// The upstream refused the CALLER request, so the envelope has to say
+		// that. api_error with upstream_error told an SDK the gateway broke,
+		// and told a human debugging their own payload to go and look at model
+		// status, which is the wrong place entirely (#1348).
+		errType = "invalid_request_error"
+		code = "invalid_request"
 	}
 
 	message := sanitizeProviderBlindMessage(alias, httpStatus, rawMessage)
@@ -88,6 +95,14 @@ func sanitizeProviderBlindMessage(alias string, httpStatus int, raw string) stri
 		// customer-facing error should carry. Collapse the whole message
 		// rather than trying to scrub an open-ended, LiteLLM-versioned
 		// bookkeeping format field by field.
+		if providerBlindRequestShaped(httpStatus) {
+			// Same collapse, different verdict. On a request-shaped status
+			// the bookkeeping exists because every pool member refused the
+			// CALLER request, not because the alias is unavailable, and
+			// saying otherwise sends a customer debugging their own payload
+			// to check model status instead (#1348).
+			return fallbackProviderBlindMessage(resourceLabel, httpStatus)
+		}
 		return fmt.Sprintf("%s is not available.", resourceLabel)
 	}
 	if providerBlindLooksLikeAuthFailure(httpStatus, lowerRaw) || providerBlindLooksLikeAuthFailure(httpStatus, lowerMessage) {
@@ -288,6 +303,14 @@ func fallbackProviderBlindMessage(resourceLabel string, httpStatus int) string {
 		return fmt.Sprintf("%s is temporarily rate limited.", resourceLabel)
 	case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return fmt.Sprintf("%s is temporarily unavailable.", resourceLabel)
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		// Names the request, not the model. The generic "request failed" this
+		// used to return reads as a fault on our side of the call for a status
+		// that means the opposite (#1348). It stays vague about WHICH
+		// parameter, because the upstream sentence that knew was collapsed for
+		// the reasons above, and inventing a field name would be worse than
+		// pointing at the payload.
+		return fmt.Sprintf("Invalid request for %s. Check the request parameters.", resourceLabel)
 	default:
 		return fmt.Sprintf("%s request failed.", resourceLabel)
 	}
@@ -352,4 +375,15 @@ func providerBlindLooksLikeAuthFailure(httpStatus int, message string) bool {
 		}
 	}
 	return false
+}
+
+// providerBlindRequestShaped reports whether an upstream status means the
+// CALLER request was refused rather than the model being unable to serve it.
+//
+// Only the two statuses that can only be about the request itself. A 404 is
+// deliberately not here: an upstream that does not know the model IS an
+// availability answer, and the existing "is not available" sentence is the
+// right one for it. A 429 and every 5xx are not the caller doing at all.
+func providerBlindRequestShaped(httpStatus int) bool {
+	return httpStatus == http.StatusBadRequest || httpStatus == http.StatusUnprocessableEntity
 }

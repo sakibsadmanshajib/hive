@@ -288,6 +288,21 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A 2xx carrying no usable image is a fake success (#1319). Every SDK
+	// reports it to the caller as success, so their code fails somewhere
+	// further away from the cause, and a retry loop built on it can never
+	// recover. Refuse it here, BEFORE settlement, so the flat hold is
+	// released rather than charged for nothing delivered.
+	//
+	// route.AliasID rather than the caller-supplied model string: it is the
+	// catalog canonical alias, so nothing a caller wrote can be reflected
+	// back through the error message.
+	if !hasImagePayload(imageResp.Data) {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		apierrors.WriteProviderBlindUpstreamError(w, route.AliasID, http.StatusBadGateway, upstreamErrorSnippet(respBody))
+		return
+	}
+
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
 	h.settleReservation(ctx, auth.AccountID, reservationID, imageReservationCredits, "/v1/images/generations")
@@ -467,6 +482,14 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same empty-success refusal as the generation path above (#1319): an
+	// edit that returns no image is not an edit.
+	if !hasImagePayload(imageResp.Data) {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		apierrors.WriteProviderBlindUpstreamError(w, route.AliasID, http.StatusBadGateway, upstreamErrorSnippet(respBody))
+		return
+	}
+
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
 	h.settleReservation(ctx, auth.AccountID, reservationID, imageReservationCredits, "/v1/images/edits")
@@ -555,4 +578,36 @@ func (h *Handler) uploadProviderImage(ctx context.Context, providerURL string) (
 	}
 
 	return u, nil
+}
+
+// hasImagePayload reports whether an upstream image response actually carries
+// an image the caller can use.
+//
+// It counts payloads rather than array entries on purpose: `data: []` and
+// `data: [{}]` are the same answer to the caller, and a guard that only
+// checked the length would pass the second one straight through as a success
+// (#1319). revised_prompt alone is metadata about an image, not an image.
+func hasImagePayload(data []ImageData) bool {
+	for _, item := range data {
+		if item.URL != nil && *item.URL != "" {
+			return true
+		}
+		if item.B64JSON != nil && *item.B64JSON != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// upstreamErrorSnippet bounds how much of an upstream body is handed to the
+// provider-blind sanitizer, which also writes it to the operator log. The
+// error paths that read a non-2xx body already cap themselves at this size
+// with io.LimitReader; the empty-image guard reads a 2xx body capped at 10
+// MiB instead, and a multi-megabyte log line helps nobody.
+func upstreamErrorSnippet(body []byte) string {
+	const maxSnippetBytes = 4096
+	if len(body) > maxSnippetBytes {
+		return string(body[:maxSnippetBytes])
+	}
+	return string(body)
 }
