@@ -4,6 +4,7 @@ import { redirect, notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
+  EMPTY_ACCOUNT_PROFILE,
   getAccountProfile,
   getApiKeyLimits,
   getViewer,
@@ -53,10 +54,14 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
 
   // The shell needs a display name, and a profile fetch failure is not a reason
   // to fail the page: the viewer already carries everything the rail needs, and
-  // the shell falls back to the email. Same degradation the billing pages use.
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  // the shell falls back to the email. This follows budget/page.tsx rather than
+  // feature-gates/page.tsx: the canonical EMPTY_ACCOUNT_PROFILE sentinel rather
+  // than an ad hoc object, and a log line, so a real control-plane outage on
+  // this path leaves a trace instead of degrading silently.
+  const profile = await getAccountProfile().catch((error: unknown) => {
+    console.error("ApiKeyLimitsPage: could not load account profile", error);
+    return EMPTY_ACCOUNT_PROFILE;
+  });
 
   let limits: KeyLimits;
   try {

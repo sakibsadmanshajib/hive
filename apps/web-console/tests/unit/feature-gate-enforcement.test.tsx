@@ -87,14 +87,17 @@ describe("FeatureGateManager enforcement honesty", () => {
     expect(screen.getByText(/not enforced yet/i)).toBeTruthy();
   });
 
-  it("gives the notice a text form, not colour alone", () => {
-    // WCAG 1.4.1. A marker that only exists as a muted swatch is invisible to
-    // a screen reader and to anyone who cannot separate the two greys, which
-    // is precisely the audience a compliance-facing page cannot afford to
-    // mislead.
+  it("says what the setting does and does not do, not just that it is unenforced", () => {
+    // WCAG 1.4.1, and the reason #762 exists. A marker that is only a muted
+    // swatch, or only a two-word label, leaves the operator to guess whether
+    // "not enforced" means broken, coming soon, or their own misconfiguration.
+    // Asserting the notice is non-empty would pass against a bare icon, so this
+    // pins the two clauses that carry the meaning: the setting IS saved, and
+    // nothing reads it.
     render(<FeatureGateManager gates={[gate({ enforced: false })]} />);
 
     const notice = screen.getByText(/not enforced yet/i);
-    expect(notice.textContent?.trim().length ?? 0).toBeGreaterThan(0);
+    expect(notice.textContent).toMatch(/saved for this\s+workspace/i);
+    expect(notice.textContent).toMatch(/no part of the API or apps reads it/i);
   });
 });

@@ -127,6 +127,11 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
         row.status === "active" ? (
           <Link
             href={`/console/api-keys/${row.id}/limits`}
+            // Every row's visible text is the same word, so the link is only
+            // disambiguated by its cell in table-navigation mode. A screen
+            // reader's links list is flat, and would otherwise read as
+            // "Limits, Limits, Limits" with no way to tell the keys apart.
+            aria-label={`Rate limits for ${row.nickname}`}
             className="text-xs text-[var(--color-ink-2)] underline underline-offset-2 hover:text-[var(--color-ink)]"
           >
             Limits

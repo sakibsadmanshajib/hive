@@ -152,7 +152,7 @@ func (c *Client) LookupUser(ctx context.Context, bearerToken string) (Viewer, er
 	// Either way the membership check below decides. Anything unverified
 	// collapses to uuid.Nil, which every consumer treats as "no tenant" and
 	// denies on.
-	tenantID := tenantClaimFromToken(bearerToken, su.ID)
+	tenantID := tenantClaimFromToken(bearerToken, userID)
 	if tenantID == uuid.Nil && su.UserMetadata.SelectedTenantID != "" {
 		if parsed, err := uuid.Parse(su.UserMetadata.SelectedTenantID); err == nil {
 			tenantID = parsed
@@ -207,15 +207,18 @@ type tenantClaims struct {
 // the user id passed as expectedSub, so the authenticity of the token, and the
 // binding of this claim to that user, are both already established. Calling it
 // anywhere else would let a caller mint their own tenant scope.
-func tenantClaimFromToken(bearerToken string, expectedSub string) uuid.UUID {
+func tenantClaimFromToken(bearerToken string, expectedSub uuid.UUID) uuid.UUID {
 	segments := strings.Split(bearerToken, ".")
 	if len(segments) != 3 {
 		return uuid.Nil
 	}
 
-	// GoTrue emits unpadded base64url. StdEncoding and padded variants are
-	// accepted too rather than assumed away: a decode failure here silently
-	// drops the tenant, which reads as a permission bug rather than a parse bug.
+	// GoTrue emits unpadded base64url; the padded variant of the same alphabet
+	// is accepted as well rather than assumed away, because a decode failure
+	// here silently drops the tenant and reads as a permission bug rather than
+	// a parse bug. StdEncoding is deliberately not tried: its `+` and `/`
+	// alphabet is not valid in a JWT segment, so accepting it would only widen
+	// what this parses without widening what GoTrue can have issued.
 	payload, err := base64.RawURLEncoding.DecodeString(segments[1])
 	if err != nil {
 		payload, err = base64.URLEncoding.DecodeString(segments[1])
@@ -228,7 +231,15 @@ func tenantClaimFromToken(bearerToken string, expectedSub string) uuid.UUID {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return uuid.Nil
 	}
-	if claims.Sub == "" || claims.Sub != expectedSub {
+
+	// Compare as parsed uuids, not as raw strings. Both sides are authored by
+	// Supabase for any token that reaches this line, so a case or padding
+	// difference between GoTrue's claim rendering and PostgREST's user-id
+	// rendering is not an attack, but it would silently strand a legitimate
+	// tenant. Parsing normalises that away. The failure direction is unchanged
+	// either way: a mismatch denies.
+	sub, err := uuid.Parse(claims.Sub)
+	if err != nil || sub != expectedSub {
 		return uuid.Nil
 	}
 

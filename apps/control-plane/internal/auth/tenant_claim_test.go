@@ -27,13 +27,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
 const (
-	claimUser         = "44444444-4444-4444-8444-444444444444"
+	claimUser         = "4a4b4c4d-4e4f-4a4b-8c4d-4e4f4a4b4c4d"
 	claimTenant       = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	otherUser         = "55555555-5555-4555-8555-555555555555"
 	metadataOnlyState = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -127,6 +128,60 @@ func TestTenantClaimIgnoredWhenSubDoesNotMatch(t *testing.T) {
 
 	if viewer.TenantID != uuid.Nil {
 		t.Fatalf("a claim whose sub names another user must be ignored, got %s", viewer.TenantID)
+	}
+	if called {
+		t.Fatal("membership check must not run for a claim that was not bound to this user")
+	}
+}
+
+// TestTenantClaimSubComparedAsUUIDNotString covers the hardening the security
+// review asked for. Both sides of the comparison are authored by Supabase for
+// any token that reaches this code, so a case difference between GoTrue's claim
+// rendering and PostgREST's user-id rendering is not an attack. It would,
+// however, silently strand a legitimate tenant and read as a permission bug, so
+// the comparison parses both sides instead of matching bytes.
+func TestTenantClaimSubComparedAsUUIDNotString(t *testing.T) {
+	server := userServer(t, claimUser, `{}`)
+	defer server.Close()
+
+	client := NewClient(server.URL, "anon-key").WithMembershipCheck(
+		func(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+			return true, nil
+		})
+
+	token := testToken(t, map[string]any{
+		"sub":       strings.ToUpper(claimUser),
+		"tenant_id": claimTenant,
+	})
+	viewer, err := client.LookupUser(context.Background(), token)
+	if err != nil {
+		t.Fatalf("LookupUser error: %v", err)
+	}
+	if viewer.TenantID.String() != claimTenant {
+		t.Fatalf("an uppercase sub naming the same user must still match, got %s", viewer.TenantID)
+	}
+}
+
+// TestNonUUIDSubIsRejected keeps the parse from turning into an accept. A sub
+// that is not a uuid cannot name the user Supabase resolved, so it denies.
+func TestNonUUIDSubIsRejected(t *testing.T) {
+	server := userServer(t, claimUser, `{}`)
+	defer server.Close()
+
+	called := false
+	client := NewClient(server.URL, "anon-key").WithMembershipCheck(
+		func(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+			called = true
+			return true, nil
+		})
+
+	token := testToken(t, map[string]any{"sub": "not-a-uuid", "tenant_id": claimTenant})
+	viewer, err := client.LookupUser(context.Background(), token)
+	if err != nil {
+		t.Fatalf("LookupUser error: %v", err)
+	}
+	if viewer.TenantID != uuid.Nil {
+		t.Fatalf("a sub that is not a uuid must be ignored, got %s", viewer.TenantID)
 	}
 	if called {
 		t.Fatal("membership check must not run for a claim that was not bound to this user")
