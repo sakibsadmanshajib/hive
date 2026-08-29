@@ -80,10 +80,17 @@ WINDOW_HINT = re.compile(
 )
 
 
+# The error string is provider-controlled text of unbounded length. WINDOW_HINT
+# has no nested quantifier so it cannot backtrack catastrophically, but it is
+# still O(n) per start position, so the input is bounded before scanning rather
+# than trusting a remote service to keep its error messages short.
+WINDOW_SCAN_LIMIT = 8000
+
+
 def _window_hint(error_text: str) -> str:
     """Pull the quota window and retry hint out of the full provider message."""
     found: list[str] = []
-    for match in WINDOW_HINT.finditer(error_text):
+    for match in WINDOW_HINT.finditer(error_text[:WINDOW_SCAN_LIMIT]):
         token = next((g for g in match.groups() if g), None)
         if token and token not in found:
             found.append(token)
@@ -147,11 +154,24 @@ def _render(payload: dict, redact) -> list[str]:
     return lines
 
 
+def _exit_code(payload: dict) -> int:
+    """1 only when every member is down. Unchanged from before the refactor.
+
+    Deliberately computed from the payload rather than by scanning the rendered
+    lines for a `::error::` prefix: an exit code that depends on output
+    formatting breaks the next time somebody rewords a message, and this one
+    decides whether a free-tier outage stops the run.
+    """
+    healthy = payload.get("healthy_count")
+    if not isinstance(healthy, int):
+        healthy = len(payload.get("healthy_endpoints") or [])
+    return 1 if healthy == 0 else 0
+
+
 def report(payload: dict, redact) -> int:
-    lines = _render(payload, redact)
-    for line in lines:
+    for line in _render(payload, redact):
         print(line)
-    return 1 if any(line.startswith("::error::") for line in lines) else 0
+    return _exit_code(payload)
 
 
 def _selfcheck() -> int:

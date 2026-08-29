@@ -50,6 +50,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 
 # Kept verbatim from the bash this replaces, in the same order, because the
 # order encodes a real judgement: the three spend-related refusals are more
@@ -131,24 +132,33 @@ DEAD_CLASS = (
 
 def classify(text: str) -> tuple[str | None, list[str]]:
     """Return (cause sentence or None, the evidence lines that support it)."""
-    # Dropped before any branch reads them, not just before the 429 branch: a
-    # gateway cooldown is never evidence that an upstream refused, whichever
-    # signature it happens to carry.
-    lines = [
-        line
-        for line in text.splitlines()
-        if line.strip() and not GATEWAY_COOLDOWN.search(line)
-    ]
-    evidence = [line for line in lines if EVIDENCE.search(line)]
+    # Cooldown bookkeeping is discounted for the TRANSIENT branch only, not for
+    # every branch. The distinction is whether the quoted condition is still
+    # true when the line is reprinted.
+    #
+    # A 429 inside a cooldown entry is stale by construction: LiteLLM reprints
+    # the table on every dispatch for as long as the entry lives, so one past
+    # rate limit re-reports itself indefinitely. That is the defect being
+    # fixed, and it is why `lines` feeds the 429 branch.
+    #
+    # A daily token budget or a 402 is PERMANENT for the window it names. If
+    # the original refusal has scrolled out of the --tail=2000 window, the
+    # cooldown table is the only surviving evidence of it, and discarding that
+    # would trade the old false positive for a false negative on exactly the
+    # two conditions that no rerun can fix. So the spend branches read
+    # `all_lines`, cooldown entries included.
+    all_lines = [line for line in text.splitlines() if line.strip()]
+    lines = [line for line in all_lines if not GATEWAY_COOLDOWN.search(line)]
+    evidence = [line for line in all_lines if EVIDENCE.search(line)]
 
-    if any(DAILY_BUDGET.search(line) for line in lines):
+    if any(DAILY_BUDGET.search(line) for line in all_lines):
         return DAILY_CLASS, evidence
 
     limited = [line for line in lines if RATE_LIMIT.search(line)]
     if limited:
         return _rate_limit_class(limited), evidence
 
-    if any(OUT_OF_CREDIT.search(line) for line in lines):
+    if any(OUT_OF_CREDIT.search(line) for line in all_lines):
         return CREDIT_CLASS, evidence
 
     if any(DEAD_POOL_MEMBER.search(line) for line in lines):
@@ -167,6 +177,11 @@ def _rate_limit_class(limited: list[str]) -> str:
     )
 
 
+def count_cooldown_lines(text: str) -> int:
+    """How many lines classify() discounted for the transient 429 branch."""
+    return sum(1 for line in text.splitlines() if GATEWAY_COOLDOWN.search(line))
+
+
 def report(text: str) -> int:
     verdict, evidence = classify(text)
     if verdict is None:
@@ -175,6 +190,27 @@ def report(text: str) -> int:
             "this failure is something else. The compose-logs artifact below is "
             "the next place to look."
         )
+        cooldowns = count_cooldown_lines(text)
+        if cooldowns:
+            print(
+                f"({cooldowns} LiteLLM cooldown line(s) were discounted on "
+                "purpose: they are the gateway benching its own deployments, "
+                "and the 429 they quote is reprinted for as long as the entry "
+                "lives. A daily budget or a 402 quoted in the same place WOULD "
+                "still have been reported, since those stay true. If you "
+                "believe an upstream really did refuse, the 'Probe each free "
+                "pool member' step above names any member that is rate "
+                "limited, and the artifact has the raw text.)"
+            )
+        # Even unclassified, hand over what was seen. A reader who gets only
+        # "something else" has to download the artifact to learn anything; a
+        # reader who gets the suspicious lines usually does not. This also
+        # covers the branches that were deliberately narrowed, such as a dead
+        # member in a model group other than the free pool.
+        if evidence:
+            print("closest matching lines (redacted, first 5):")
+            for line in evidence[:5]:
+                print(line)
         return 0
 
     print(f"::error::UPSTREAM REFUSAL, not a performance regression: {verdict}")
@@ -324,6 +360,36 @@ def _selfcheck() -> int:
         "the cooldown line must not contribute its alias to the verdict: " + verdict
     )
 
+    # A PERMANENT refusal quoted inside a cooldown entry must still classify.
+    # Discounting the cooldown table for the transient 429 branch is the fix;
+    # discounting it for the daily-budget and out-of-credit branches would
+    # trade the old false positive for a false negative on the two conditions
+    # no rerun can clear, in the case where the original line has scrolled out
+    # of the --tail=2000 window and the table is the only evidence left.
+    tpd_in_table = (
+        "litellm     | Cooldown Deployments=[('a1b2c3', {'exception_received': "
+        "'litellm.RateLimitError: Rate limit reached on tokens per day (TPD)', "
+        "'status_code': '429', 'cooldown_time': 5})]"
+    )
+    verdict, _ = classify(tpd_in_table)
+    assert verdict == DAILY_CLASS, (
+        "a daily budget quoted in the cooldown table is still true and must "
+        f"classify; got: {verdict}"
+    )
+
+    credit_in_table = (
+        "litellm     | Cooldown Deployments=[('a1b2c3', {'exception_received': "
+        "'402 Payment Required', 'status_code': '402', 'cooldown_time': 5})]"
+    )
+    verdict, _ = classify(credit_in_table)
+    assert verdict == CREDIT_CLASS, (
+        f"a 402 quoted in the cooldown table is still true; got: {verdict}"
+    )
+
+    # But a plain 429 in the table stays discounted, which is the whole fix.
+    verdict, _ = classify(COOLDOWN_TABLE)
+    assert verdict is None, f"a stale 429 in the table must not classify: {verdict}"
+
     # Nothing at all in the logs stays unclassified rather than guessing.
     verdict, _ = classify(STORE_FILE_500)
     assert verdict is None, verdict
@@ -331,6 +397,50 @@ def _selfcheck() -> int:
     # Reporting must never raise on an empty or whitespace-only log.
     assert report("") == 0
     assert report("   \n\n  ") == 0
+
+    # An unclassified log that was full of cooldowns must SAY it dropped them,
+    # rather than going quiet over a log the reader can see is full of 429s.
+    assert count_cooldown_lines("\n".join([COOLDOWN_TABLE, GATEWAY_COOLDOWN_429])) == 2
+    assert count_cooldown_lines(STORE_FILE_500) == 0
+
+    # The cross-step contract: the downstream "File or update tracking issue on
+    # failure" step reads UPSTREAM_FAILURE_CLASS out of $GITHUB_ENV. If this
+    # write breaks, that step silently files an issue with no cause in it,
+    # which is the failure mode issue #1088 opened about.
+    with tempfile.NamedTemporaryFile("w+", delete=False) as handle:
+        env_path = handle.name
+    previous = os.environ.get("GITHUB_ENV")
+    os.environ["GITHUB_ENV"] = env_path
+    try:
+        assert report(REAL_UPSTREAM_429) == 0
+        written = pathlib.Path(env_path).read_text(encoding="utf-8")
+    finally:
+        if previous is None:
+            os.environ.pop("GITHUB_ENV", None)
+        else:
+            os.environ["GITHUB_ENV"] = previous
+        os.unlink(env_path)
+    assert written.startswith("UPSTREAM_FAILURE_CLASS="), written
+    assert written.endswith("\n"), "GITHUB_ENV entries must be newline-terminated"
+    assert "\n" not in written.strip(), (
+        "a multi-line value would corrupt every later GITHUB_ENV entry; the "
+        "class sentence must stay on one line"
+    )
+
+    # Nothing is written when there is no refusal, so a later step cannot read
+    # a stale class from an unrelated run.
+    with tempfile.NamedTemporaryFile("w+", delete=False) as handle:
+        env_path = handle.name
+    os.environ["GITHUB_ENV"] = env_path
+    try:
+        assert report(STORE_FILE_500) == 0
+        assert pathlib.Path(env_path).read_text(encoding="utf-8") == ""
+    finally:
+        if previous is None:
+            os.environ.pop("GITHUB_ENV", None)
+        else:
+            os.environ["GITHUB_ENV"] = previous
+        os.unlink(env_path)
 
     print("ok: classify-upstream-refusal verdicts")
     return 0
