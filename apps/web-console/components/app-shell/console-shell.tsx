@@ -14,6 +14,7 @@ import {
   ToggleRight,
   Store,
   LogOut,
+  Shield,
 } from "lucide-react";
 
 import { useTranslations } from "next-intl";
@@ -61,6 +62,7 @@ const NAV_GROUPS: ReadonlyArray<{
     items: [
       { href: "/console/billing", labelKey: "billing", icon: <Wallet size={14} /> },
       { href: "/console/members", labelKey: "members", icon: <Users size={14} /> },
+      { href: "/console/privacy", labelKey: "privacy", icon: <Shield size={14} /> },
       { href: "/console/settings/profile", labelKey: "settings", icon: <Settings size={14} /> },
     ],
   },

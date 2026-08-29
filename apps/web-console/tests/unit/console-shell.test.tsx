@@ -124,3 +124,16 @@ describe("console sidebar admin section role gating", () => {
     expect(screen.getByRole("link", { name: /marketplace/i })).toBeTruthy();
   });
 });
+
+// Regression guard for the privacy/data-policy page (issue: parity re-score
+// found Hive had no privacy surface at all): the nav is the one place every
+// console page shares, so a link that never got added here is a page nobody
+// can reach.
+describe("console sidebar privacy nav entry", () => {
+  it("links to /console/privacy", () => {
+    renderShell([twoMemberships[0]]);
+
+    const link = screen.getByRole("link", { name: /privacy/i });
+    expect(link.getAttribute("href")).toBe("/console/privacy");
+  });
+});
