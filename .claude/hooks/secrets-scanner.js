@@ -22,10 +22,26 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input);
     const ti = data.tool_input || {};
     const filePath = ti.file_path || data.file_path || '';
-    const editsContent = Array.isArray(data.edits)
-      ? data.edits.map(e => (e || {}).new_string || '').join('\n')
-      : '';
-    const content = ti.content || ti.new_string || editsContent || '';
+    // MultiEdit carries its edits as an array, and the two harnesses put that
+    // array in different places: Claude Code nests it at `tool_input.edits`,
+    // Cursor's file-edit payload puts it at the top level. Consulting only the
+    // top-level shape meant every Claude Code MultiEdit was scanned as an empty
+    // string, so the hook reported clean on a write it had never read (#1333).
+    const editsSource = Array.isArray(ti.edits) ? ti.edits
+      : Array.isArray(data.edits) ? data.edits
+      : [];
+    // Nothing here trusts a payload field to be a string. An unexpected shape
+    // is serialized rather than coerced, because the default coercion of an
+    // object is "[object Object]", which would hide any credential nested
+    // inside it from every pattern below.
+    const asText = v => (typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v));
+    const editsContent = editsSource.map(e => asText((e || {}).new_string)).join('\n');
+    // Every source is scanned, rather than the first truthy one winning. A
+    // fallback chain lets a payload that carries both a content field and an
+    // edits array hide the array behind the field.
+    const content = [asText(ti.content), asText(ti.new_string), editsContent]
+      .filter(Boolean)
+      .join('\n');
 
     if (!content || !filePath) process.exit(0);
 
