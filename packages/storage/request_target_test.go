@@ -136,10 +136,18 @@ func TestOriginFormSurvivesKeysNeedingEscaping(t *testing.T) {
 }
 
 // Guard for the half that must NOT change. presignHTTP relies on Opaque
-// surviving, because url.URL.String renders a bare-path Opaque as
-// `http:/s3/...`; the "//host" form is what makes the presigned URL absolute.
-// A future cleanup that clears Opaque in both places would produce presigned
-// URLs no client can resolve.
+// surviving until the signer has built the URL, because url.URL.String renders
+// a bare-path Opaque as `http:/s3/...`; the "//host" form is what makes the
+// presigned URL absolute.
+//
+// Scope, stated precisely rather than overclaimed, because the first draft of
+// this comment did overclaim and a review caught it. This catches a refactor
+// that clears Opaque BEFORE signer.PresignHTTP, which is the ordering that
+// actually breaks the URL. It cannot catch a clear placed AFTER that call,
+// because the string is already built and the request is discarded, so the
+// field is unobservable from outside the function. That ordering is also
+// harmless, which is why it is left uncovered rather than chased with a
+// whitebox assertion.
 func TestPresignStillProducesAnAbsoluteURL(t *testing.T) {
 	client, err := NewS3Client(Config{
 		Endpoint:  "http://storage.example:5000/s3",

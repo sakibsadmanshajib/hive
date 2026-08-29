@@ -100,6 +100,18 @@ done
 
 log() { echo "$@" >&2; }
 
+# Storage logs every request with its headers, which includes the SigV4
+# Authorization line carrying the access key id in the clear. These dumps land
+# in a public step log, so they go through the same redactor ci.yml pipes the
+# compose logs through rather than straight to stderr. The redactor also
+# catches bare JWTs, which is what covers the anon and service_role keys this
+# container is given if it ever prints its own environment.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+dump_container_logs() {
+  docker logs "$1" 2>&1 | tail -40 \
+    | python3 "$repo_root/scripts/redact-log-credentials.py" >&2 || true
+}
+
 db_name="${PGDATABASE:-hive_ci}"
 db_user="${PGUSER:-postgres}"
 # Unquoted deliberately, matching scripts/ci-supabase-stack.sh: an assignment
@@ -187,7 +199,7 @@ for _ in $(seq 1 60); do
 done
 if [ "$ready" -ne 1 ]; then
   log "::error::the throwaway Storage API never became ready"
-  docker logs "$container" 2>&1 | tail -40 >&2
+  dump_container_logs "$container"
   exit 1
 fi
 
@@ -259,7 +271,7 @@ fi
 if [ "$round_trip_ok" -ne 1 ]; then
   log "::error::the throwaway object store answered its health check but could not complete a signed PUT and GET. That is the shape of issue #1282: Storage reports healthy and refuses every signed request. Its own error and its logs follow."
   cat "$probe_dir/err" >&2 || true
-  docker logs "$container" 2>&1 | tail -40 >&2
+  dump_container_logs "$container"
   exit 1
 fi
 log "round trip OK"
