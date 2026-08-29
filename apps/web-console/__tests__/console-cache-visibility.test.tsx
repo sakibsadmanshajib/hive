@@ -106,6 +106,12 @@ function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     expiration_summary: { kind: "never", label: "Never expires" },
     budget_summary: { kind: "none", label: "No budget" },
     allowlist_summary: { mode: "all", group_names: [], label: "All models" },
+    // Required on ApiKey since the key spend column landed on main. Zero
+    // here is a real measured zero, not an absent figure: these fixtures
+    // exist for the top keys join, which reads credits off the spend rows
+    // rather than off the key.
+    spend_credits: 0,
+    budget_limit_credits: null,
     ...overrides,
   };
 }
