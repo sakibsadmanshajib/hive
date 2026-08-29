@@ -26,7 +26,10 @@ import {
   type Control,
   type Result,
 } from "../../e2e/chat-coverage/lib";
-import { STATIC_SURFACES } from "../../e2e/chat-coverage/surfaces";
+import {
+  assertSkillsSurfaceLanded,
+  STATIC_SURFACES,
+} from "../../e2e/chat-coverage/surfaces";
 
 const COVERAGE_DIR = join(__dirname, "../../e2e/chat-coverage");
 
@@ -375,16 +378,56 @@ describe("the skills surface is inside the denominator", () => {
     );
   });
 
+  // Without this the whole application shell that (app)/+layout.svelte renders
+  // around the index lands in this surface's count, re-counting controls the
+  // sweep already attributes to home and the sidebar. `workspace`, the other
+  // full-page navigation, sits at 12 while a bare enumeration of /skills reads
+  // in the forties, which is the shell showing up in the number.
+  it("counts only what the route adds, not the shell around it", () => {
+    const skills = STATIC_SURFACES.find((surface) => surface.id === "skills");
+    expect(skills?.delta).toBe(true);
+  });
+
   it("carries a presence bar, not a pinned count", () => {
     expect(parseDataDriven(floorsFile).has("skills")).toBe(true);
     expect(parseFloors(floorsFile).skills).toBe(1);
   });
 
-  it("fails the gate when the surface stops rendering", () => {
+  it("fails the gate when the surface enumerates nothing", () => {
     const floors = parseFloors(floorsFile);
     expect(floorFailures(floors, [], (surface) => surface === "skills")).toHaveLength(1);
     expect(
       floorFailures(floors, [{ surface: "skills", enumerated: 3 }], (s) => s === "skills"),
     ).toEqual([]);
+  });
+});
+
+/*
+ * The floor alone does not catch the failure this surface exists to catch.
+ *
+ * `skills/+layout.svelte` calls `goto('/')` when `workspace.skills` is false,
+ * which is exactly the state a persisted config row reverts to when nothing
+ * reconciles it (#722). An opener that only navigates would then land on the
+ * chat home, enumerate it under the id `skills`, clear the floor, and prove a
+ * page full of genuinely working home controls. Green gate, absent surface,
+ * and the miss lands on the one failure mode the surface was added for.
+ *
+ * The assertion is a pure function so this can be proved able to go red
+ * without a browser and without a deployment.
+ */
+describe("the skills surface opener refuses a redirect", () => {
+  it("throws when the permission bounced the page to home", () => {
+    expect(() => assertSkillsSurfaceLanded("/", false)).toThrow(/redirected to \//);
+    // The bounce lands on a page that renders plenty, so a control count can
+    // never distinguish it. Only the pathname can.
+    expect(() => assertSkillsSurfaceLanded("/", true)).toThrow(/workspace\.skills/);
+  });
+
+  it("throws when the route resolves but renders nothing", () => {
+    expect(() => assertSkillsSurfaceLanded("/skills", false)).toThrow(/rendered nothing/);
+  });
+
+  it("passes only when the index is actually on screen", () => {
+    expect(() => assertSkillsSurfaceLanded("/skills", true)).not.toThrow();
   });
 });

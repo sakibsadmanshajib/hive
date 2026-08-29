@@ -154,6 +154,38 @@ export async function relocate(
   return all.find((c) => c.key === key);
 }
 
+/**
+ * Throws unless a `/skills` navigation actually landed on the skills index.
+ *
+ * Pulled out of the surface opener as a pure function so it can be proved able
+ * to fail without a browser. The failure it guards is not hypothetical: with
+ * `workspace.skills` false, `skills/+layout.svelte` redirects to `/`, and a
+ * surface opener that only navigates would then enumerate the chat home under
+ * the id `skills`, satisfy the floor, and prove a page full of working home
+ * controls while the surface it names does not exist.
+ *
+ * Both conditions are checked rather than either alone. The pathname catches
+ * the redirect, and the container catches a route that resolves but renders
+ * nothing, which a pathname check alone would call healthy.
+ *
+ * A throw here is recorded by the spec as `skills: could not open (...)`, which
+ * is a loud failure, and it is what makes the committed floor mean what its
+ * comment says it means.
+ */
+export function assertSkillsSurfaceLanded(pathname: string, containerVisible: boolean): void {
+  if (pathname !== "/skills") {
+    throw new Error(
+      `/skills redirected to ${pathname}; the skills surface is unreachable, which is what ` +
+        "workspace.skills reverting to its upstream default of false looks like",
+    );
+  }
+  if (!containerVisible) {
+    throw new Error(
+      "/skills resolved but #hv-skills-container is not on screen, so the index rendered nothing",
+    );
+  }
+}
+
 /** The surfaces that exist regardless of what the deployment contains. */
 export const STATIC_SURFACES: Surface[] = [
   {
@@ -195,11 +227,34 @@ export const STATIC_SURFACES: Surface[] = [
   // which is also why the proxy's `@removedSurfaces` rule still 404s
   // /workspace/skills without touching it. Listed here so it is inside the
   // denominator; without an entry it renders nothing and no gate notices.
+  //
+  // `delta` because this navigates rather than overlays, so without it the
+  // whole application shell that `(app)/+layout.svelte` renders around the
+  // index lands in this surface's count, double-counting controls the sweep
+  // already attributes to home and the sidebar. Against the home baseline the
+  // count is what /skills actually adds.
+  //
+  // The landing assertion is the load-bearing part. A bare goto is not enough,
+  // because `skills/+layout.svelte` calls `goto('/')` when
+  // `workspace.skills` is false, and that is the single failure this entry
+  // exists to catch: the permission lives in a persisted config row that no
+  // environment variable reaches on a booted deployment (#722). Without the
+  // assertion the sweep would land on the chat home, enumerate it under the id
+  // `skills`, clear the floor and prove every home control, reporting green
+  // over a surface that is entirely gone.
   {
     id: "skills",
+    delta: true,
     open: async (page) => {
       await page.goto("/skills", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(3000);
+      assertSkillsSurfaceLanded(
+        new URL(page.url()).pathname,
+        await page
+          .locator("#hv-skills-container")
+          .isVisible()
+          .catch(() => false),
+      );
     },
   },
   {

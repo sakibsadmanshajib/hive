@@ -25,13 +25,14 @@
 		let reported = false;
 
 		const res = await createNewSkill(localStorage.token, _skill).catch((error) => {
-			// The id is derived from the name and is unique across the whole
-			// instance, so the commonest failure here is a collision with a
-			// skill this account cannot read. Upstream's wording for that names
-			// a field the author never filled in and sends them looking for a
-			// skill that is not in their library. See lib/hive/skill-save-error.
+			// The commonest failure here is an id collision with a skill this
+			// account cannot read. Upstream's wording for that reads as a
+			// schema complaint and sends the author hunting through a library
+			// the offending skill was never in. See lib/hive/skill-save-error,
+			// which also explains why the message names the id and not the
+			// name: a clone, an import and a hand-edited id all decouple them.
 			reported = true;
-			toast.error(skillSaveErrorMessage(error, _skill?.name ?? ''));
+			toast.error(skillSaveErrorMessage(error, _skill?.id ?? '', $i18n.t));
 			return null;
 		});
 
@@ -44,7 +45,7 @@
 			// `detail` string, so a network failure or a non-JSON error page
 			// resolves it with null and the catch above never runs. Without
 			// this arm the author clicks Save and nothing happens at all.
-			toast.error(skillSaveErrorMessage(undefined, _skill?.name ?? ''));
+			toast.error(skillSaveErrorMessage(undefined, _skill?.id ?? '', $i18n.t));
 		}
 	};
 
