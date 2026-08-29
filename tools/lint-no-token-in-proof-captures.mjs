@@ -56,6 +56,15 @@ const PARAM_NAMES = [
 // proof capture can carry is not always shaped like `name=value`.
 const BARE_JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
 
+// A Hive API key, which rides in an Authorization header rather than a query
+// string and so is invisible to PARAM_RE. `generateSecret`
+// (apps/control-plane/internal/apikeys/service.go) emits "hk_" plus 43
+// base64url characters, and a live walkthrough that mints one writes it into
+// the same captured step log everything else lands in. The list view's masked
+// form ("hk_xxxx" plus bullets plus a six character suffix) is far short of
+// the length floor here, so a redacted capture stays quiet.
+const BARE_API_KEY_RE = /\bhk_[A-Za-z0-9_-]{24,}/g;
+
 // An obvious placeholder, not a real value. Matched before the entropy check
 // so a deliberately redacted or documented example never trips the guard.
 const ALLOWED_VALUE = /redact|changeme|example|placeholder|^<.*>$|^\{.*\}$|^\.\.\.+$/i;
@@ -101,6 +110,15 @@ export function findOffenders(text) {
     BARE_JWT_RE.lastIndex = 0;
     if (BARE_JWT_RE.test(line)) {
       offenders.push({ line: i + 1, text: line.trim() });
+      return;
+    }
+    // Through looksLikeToken, not a bare regex test, so a deliberately
+    // redacted capture ("hk_REDACTED_KEY_PLACEHOLDER") is allowed by the same
+    // rule that allows a redacted query parameter.
+    BARE_API_KEY_RE.lastIndex = 0;
+    const apiKey = BARE_API_KEY_RE.exec(line);
+    if (apiKey !== null && looksLikeToken(apiKey[0])) {
+      offenders.push({ line: i + 1, text: line.trim() });
     }
   });
   return offenders;
@@ -132,6 +150,7 @@ const MUST_CATCH = [
   ["access_token= in a URL fragment", `landed on /tasks#access_token=${FAKE_HEX}&token_type=bearer`],
   ["token_hash= one-time credential", `generate_link -> /auth/v1/verify?token_hash=${FAKE_HEX}`],
   ["bare JWT with no parameter name", `stdout: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZW1vIn0.${FAKE_HEX}`],
+  ["bare Hive API key in a step log", `"snippet": "curl -H 'Authorization: Bearer hk_${FAKE_HEX}'"`],
 ];
 
 const MUST_ALLOW = [
@@ -140,6 +159,9 @@ const MUST_ALLOW = [
   ["short id, not a token", "GET /invitations/accept?token=abc123"],
   ["language code", "GET /oauth/callback?code=en"],
   ["documented example value", "?token=example-not-a-real-value-but-twenty-chars"],
+  ["masked API key as the console list renders it", "hk_xxxx•••s2Yn0s  Revoked"],
+  ["redacted API key, as the capture harness masks it", "created key: hk_<redacted by capture harness>"],
+  ["deliberate API key placeholder in documentation", "export HIVE_API_KEY=hk_REDACTED_PLACEHOLDER_VALUE_HERE"],
 ];
 
 function selfTest() {
@@ -178,7 +200,7 @@ function main() {
     }
     for (const o of findOffenders(content)) {
       console.error(
-        `${file.slice(REPO_ROOT.length + 1)}:${o.line}: looks like a real token/code in a query param — ${o.text}`,
+        `${file.slice(REPO_ROOT.length + 1)}:${o.line}: looks like a real credential (query param, JWT, or API key) — ${o.text}`,
       );
       failed = true;
     }
@@ -186,10 +208,10 @@ function main() {
 
   if (failed) {
     console.error(
-      "\nlint-no-token-in-proof-captures: a captured URL under docs/proof/ carries what looks " +
-        "like a real credential (token=, access_token=, refresh_token=, or code=). Redact it " +
-        "before committing, e.g. token=REDACTED_INVITE_TOKEN, and mask the same region in any " +
-        "screenshot that shows the same URL.",
+      "\nlint-no-token-in-proof-captures: a capture under docs/proof/ carries what looks " +
+        "like a real credential (token=, access_token=, refresh_token=, code=, a bare JWT, " +
+        "or an hk_ API key). Redact it before committing, e.g. token=REDACTED_INVITE_TOKEN, " +
+        "and mask the same value in any screenshot that shows it.",
     );
     process.exit(1);
   }
