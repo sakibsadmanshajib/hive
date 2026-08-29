@@ -96,11 +96,99 @@ func sanitizeProviderBlindMessage(alias string, httpStatus int, raw string) stri
 	if httpStatus == http.StatusTooManyRequests || strings.Contains(lowerMessage, "rate limit") || strings.Contains(lowerRaw, "rate limit") {
 		return fmt.Sprintf("%s is temporarily rate limited.", resourceLabel)
 	}
-	if message == "" || lowerMessage == resourceLabel || lowerMessage == "upstream error" || lowerMessage == "upstream provider" {
+	// Default deny. Everything reaching this line is upstream-authored prose
+	// that none of the rules above recognized, and the default for that is
+	// COLLAPSE, not forward.
+	//
+	// This used to be the other way round: forward unless a rule matched.
+	// That is a denylist, exactly as wide as its literals, and it leaked
+	// every shape nobody had enumerated yet. Measured on the previous
+	// revision of this file, all of these reached a customer word for word:
+	// "Insufficient Balance" (DeepSeek's actual 402 body), "You have
+	// exceeded your monthly spend limit", "Your account is past due. Update
+	// your payment information to continue" (the denylist had "payment
+	// method" and not "payment information"), "Free tier limit reached for
+	// this organization" (which tells a customer that OUR account is on a
+	// free tier), and "Your organization has run out of prepaid funds".
+	// Every one of them is an upstream talking about the account WE hold
+	// with it, and the answer to five more of them is not five more
+	// literals (PR #1303 review).
+	//
+	// Same inversion packages/sanitize made for the response-frame path in
+	// #1253, for the same reason: an unrecognized shape must fail to leak
+	// rather than fail to be caught. The cost is a vaguer sentence on
+	// shapes nobody enumerated, and the raw text is in the operator log
+	// either way.
+	if !providerBlindCustomerActionable(httpStatus, lowerMessage) {
 		return fallbackProviderBlindMessage(resourceLabel, httpStatus)
 	}
 
 	return message
+}
+
+// UpstreamUnavailableMessage is the customer-facing sentence for an upstream
+// failure whose own text can never be forwarded and where there is no HTTP
+// status left to classify by at all, which is the case for a mid-stream SSE
+// error frame: the 200 was committed before the failure existed. Exported for
+// the SSE relays (chat dispatch, RAG chat) that build a replacement frame via
+// sanitize.ReplaceErrorFrame.
+//
+// It is Hive-owned, names no provider, blames the customer for nothing, and
+// promises nothing the gateway enforces: it does not say the model will be
+// back, only that it cannot serve now and that another one may.
+func UpstreamUnavailableMessage(alias string) string {
+	return fmt.Sprintf(
+		"%s is unavailable right now. Try another model, or send this message again later.",
+		providerBlindResourceLabel(alias),
+	)
+}
+
+// providerBlindActionableTokens is the allowlist: the vocabulary of an
+// upstream error the CUSTOMER can actually do something about. Forwarding
+// upstream wording has exactly one justification, which is that the customer
+// can act on it; anything else is detail about our side of the relationship
+// and belongs in the log instead.
+//
+// Deliberately narrow, and deliberately free of money, quota, plan, account
+// and organization vocabulary: none of those are ever about the caller's own
+// balance on this gateway. Hive's own credit refusals never pass through this
+// function -- chat.writeInsufficientQuota, inference.refuseOnReservationFailure
+// and authz write theirs directly -- so collapsing that vocabulary here cannot
+// swallow a message about the customer's own balance.
+var providerBlindActionableTokens = []string{
+	// The prompt does not fit the model the customer picked.
+	"context length", "context window", "maximum context", "context_length",
+	"prompt is too long", "reduce the length", "too long",
+	// The request itself is malformed, and the field named is the customer's.
+	"invalid value", "invalid type", "invalid schema", "invalid format",
+	"unsupported parameter", "unsupported value", "unknown parameter",
+	"missing required parameter", "must be one of", "is required",
+	// The upstream refused the CONTENT, which only the customer can change.
+	"content filter", "content_filter", "content policy", "safety", "moderation", "flagged",
+	// Attachment shapes the customer controls.
+	"invalid image", "unsupported image", "image_url", "file type",
+}
+
+// providerBlindCustomerActionable reports whether a sanitized upstream message
+// may be forwarded to the customer verbatim.
+//
+// Gated on status first. A 5xx is never the caller's doing, a 401/403 is our
+// credential rather than theirs, and a 429 is a wait-and-retry verdict the
+// rule above already phrases for us, so only the request-shaped 4xx statuses
+// can carry a message worth forwarding at all.
+func providerBlindCustomerActionable(httpStatus int, message string) bool {
+	switch httpStatus {
+	case http.StatusBadRequest, http.StatusNotFound,
+		http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+	default:
+		return false
+	}
+	for _, token := range providerBlindActionableTokens {
+		if strings.Contains(message, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func providerBlindResourceLabel(alias string) string {
