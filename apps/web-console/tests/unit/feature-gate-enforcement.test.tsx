@@ -1,12 +1,16 @@
 /**
- * Issue #762: twenty two of the twenty five registered feature gates have no
- * runtime reader. The value writes to public.tenant_settings correctly and
- * nothing ever looks at it, so flipping the switch changes nothing at all.
+ * Issue #762: most registered feature gates have no runtime reader. The value
+ * writes to public.tenant_settings correctly and nothing ever looks at it, so
+ * flipping the switch changes nothing at all. Sixteen of the nineteen
+ * registered gates are in that state, down from twenty two of twenty five:
+ * issue #755 retired the six audit sink gates outright rather than labelling
+ * them, because those six were the only inert keys whose enablement would
+ * start outbound egress to a third party.
  *
- * Until the tenant-resolution fix in this same change, the page could not load
- * at all, so nobody was ever misled. Making it load turns a dormant problem
- * into a live one: an operator would be handed twenty two switches and told
- * changes take effect across the API and apps. On a product sold on
+ * Until the tenant-resolution fix that shipped with #762, the page could not
+ * load at all, so nobody was ever misled. Making it load turned a dormant
+ * problem into a live one: an operator would be handed a wall of switches and
+ * told changes take effect across the API and apps. On a product sold on
  * auditability, a control that lies about what it controls is worse than no
  * control, so the row has to say so.
  */
@@ -61,8 +65,8 @@ describe("FeatureGateManager enforcement honesty", () => {
     render(
       <FeatureGateManager
         gates={[
-          gate({ key: "ENABLE_AUDIT_SINK_ELK", label: "Audit sink: ELK", category: "audit_sink", enforced: false }),
-          gate({ key: "ENABLE_AUDIT_SINK_LOKI", label: "Audit sink: Loki", category: "audit_sink", enforced: false }),
+          gate({ key: "ENABLE_SSO_GOOGLE", label: "Google OIDC SSO", category: "sso", enforced: false }),
+          gate({ key: "ENABLE_SSO_MICROSOFT", label: "Microsoft OIDC SSO", category: "sso", enforced: false }),
           gate({ key: "ENABLE_RAG", label: "Agent RAG capability", category: "agents", enforced: true }),
         ]}
       />,

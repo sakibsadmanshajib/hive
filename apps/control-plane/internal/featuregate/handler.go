@@ -8,9 +8,9 @@
 // handler resolves the client-visible gate keys (categories agents and sso)
 // from the tenant_settings table via the shared settings.Resolver in a
 // single call. The response is a flat key->bool map; unknown/unset keys
-// default to false. Admin, billing, and audit_sink gates are deliberately
-// excluded here (issue #293 security review): this endpoint feeds edge-api
-// and, through /v1/featuregate, Open WebUI, so it must never expose them.
+// default to false. Admin and billing gates are deliberately excluded here
+// (issue #293 security review): this endpoint feeds edge-api and, through
+// /v1/featuregate, Open WebUI, so it must never expose them.
 //
 // Data-model rework (issue #293): this used to be a hardcoded five-field
 // FlagsResponse struct, so every new gate cost a change here plus a matching
@@ -44,7 +44,7 @@ type FlagsResponse struct {
 // ClientVisibleEnabled resolves only the client-visible gate keys (agents, sso)
 // for tenantID in one call; see settings.Resolver.ClientVisibleEnabled. The
 // full set (settings.Resolver.AllEnabled) is intentionally not used here so
-// admin/billing/audit_sink gates cannot leak to the client.
+// admin and billing gates cannot leak to the client.
 type Resolver interface {
 	ClientVisibleEnabled(ctx context.Context, tenantID uuid.UUID) (map[settings.Key]bool, error)
 }

@@ -71,6 +71,30 @@ describe("FeatureGateManager", () => {
     });
     expect(rag.getAttribute("aria-checked")).toBe("false");
   });
+  // Issue #755. The route computes a specific message per status and the
+  // component used to throw that body away, so every failure read "Could not
+  // save. Try again." A key the registry no longer carries answers 400
+  // permanently, and telling an operator to retry something that cannot
+  // succeed is the same class of defect as the toggle that lied.
+  it("shows the server's message when the request fails with one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "That feature gate is not recognized." }), {
+        status: 400,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FeatureGateManager gates={GATES} />);
+    const rag = screen.getByRole("switch", { name: /Agent RAG capability/i });
+    fireEvent.click(rag);
+
+    await waitFor(() => {
+      expect(screen.getByText("That feature gate is not recognized.")).toBeTruthy();
+    });
+    expect(screen.queryByText(/Could not save/i)).toBeNull();
+    expect(rag.getAttribute("aria-checked")).toBe("false");
+  });
+
   // Issue #758: a workspace owner reads the platform-managed gates but does not
   // get a control the control-plane would refuse.
   it("renders a platform-managed gate read-only", () => {

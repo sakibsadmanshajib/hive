@@ -47,8 +47,10 @@ func TestResolver_IsEnabled_ReadsValue(t *testing.T) {
 // security-review guard: ClientVisibleEnabled backs the featuregate response
 // that reaches Open WebUI via GET /v1/featuregate, so it must expose only
 // client-visible categories (agents, sso). Enabling one key in each sensitive
-// category proves none of admin, billing, or audit_sink ever appears in the
-// map, closing the information-disclosure blind spot.
+// category proves neither admin nor billing ever appears in the map, closing
+// the information-disclosure blind spot. The audit_sink category used to be
+// the third example here; its keys were retired in issue #755 and its gates
+// no longer exist to enable.
 func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -61,11 +63,10 @@ func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T)
 
 	// Enable one key in each sensitive category plus one client-visible key.
 	for _, k := range []settings.Key{
-		settings.EnableAdminConsole,    // admin
-		settings.EnableStripe,          // billing
-		settings.EnableAuditSinkSentry, // audit_sink
-		settings.EnableRAG,             // agents (client-visible)
-		settings.EnableSSOGoogle,       // sso (client-visible)
+		settings.EnableAdminConsole, // admin
+		settings.EnableStripe,       // billing
+		settings.EnableRAG,          // agents (client-visible)
+		settings.EnableSSOGoogle,    // sso (client-visible)
 	} {
 		_, err := pool.Exec(ctx,
 			`INSERT INTO public.tenant_settings(tenant_id, key, enabled) VALUES ($1, $2::public.tenant_setting_key, true)`,
@@ -89,8 +90,6 @@ func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T)
 		settings.EnableBkash,
 		settings.EnableSSLCommerz,
 		settings.EnableCreditPool,
-		settings.EnableAuditSinkSentry,
-		settings.EnableAuditSinkELK,
 	} {
 		_, present := gates[k]
 		require.Falsef(t, present, "non-client-visible gate %q must not be exposed", k)
@@ -99,7 +98,7 @@ func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T)
 
 // TestResolver_AllEnabled_ReturnsFullSet proves AllEnabled stays unfiltered so
 // internal callers (the #323 admin console toggle UI) see every gate,
-// including admin, billing, and audit_sink, not just the client-visible subset.
+// including admin and billing, not just the client-visible subset.
 func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -111,10 +110,9 @@ func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 	tid := mustTenant(t, ctx, pool, "fg-full-set", "HIVE_CLOUD")
 
 	for _, k := range []settings.Key{
-		settings.EnableAdminConsole,    // admin
-		settings.EnableStripe,          // billing
-		settings.EnableAuditSinkSentry, // audit_sink
-		settings.EnableRAG,             // agents
+		settings.EnableAdminConsole, // admin
+		settings.EnableStripe,       // billing
+		settings.EnableRAG,          // agents
 	} {
 		_, err := pool.Exec(ctx,
 			`INSERT INTO public.tenant_settings(tenant_id, key, enabled) VALUES ($1, $2::public.tenant_setting_key, true)`,
@@ -129,7 +127,6 @@ func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 	for _, k := range []settings.Key{
 		settings.EnableAdminConsole,
 		settings.EnableStripe,
-		settings.EnableAuditSinkSentry,
 		settings.EnableRAG,
 	} {
 		require.Truef(t, gates[k], "AllEnabled must expose %q to internal callers", k)

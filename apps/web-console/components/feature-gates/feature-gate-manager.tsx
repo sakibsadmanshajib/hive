@@ -15,10 +15,14 @@ type RowStatus = "idle" | "saving" | "error";
 // Nicer section headings for known categories; unknown categories fall back to
 // a title-cased version of the raw category so a new gate group added by a
 // migration still renders sensibly without a code change.
+// There is deliberately no `audit_sink` entry, and the dead `audit` entry that
+// used to sit here (it never matched: the seeded category was `audit_sink`, so
+// the heading fell through to formatCategory anyway) is gone with it. Issue
+// #755 retired those six gates from the registry, so the category no longer
+// reaches this component at all.
 const CATEGORY_LABELS: Record<string, string> = {
   billing: "Billing & payments",
   agents: "Sovereign workspace",
-  audit: "Audit sinks",
   sso: "Single sign-on",
   feature: "Platform features",
 };
@@ -55,6 +59,10 @@ function groupByCategory(gates: FeatureGate[]): GateGroup[] {
 export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerProps) {
   const [gates, setGates] = React.useState<FeatureGate[]>(initialGates);
   const [status, setStatus] = React.useState<Record<string, RowStatus>>({});
+  // Per-row failure text from the server, empty when the response carried
+  // none. Kept beside status rather than inside it so the generic fallback
+  // copy still renders when a request fails before any body exists.
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
 
   async function toggle(gate: FeatureGate): Promise<void> {
     const next = !gate.enabled;
@@ -64,6 +72,7 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
       prev.map((g) => (g.key === gate.key ? { ...g, enabled: next } : g)),
     );
     setStatus((prev) => ({ ...prev, [gate.key]: "saving" }));
+    setErrors((prev) => ({ ...prev, [gate.key]: "" }));
 
     try {
       const response = await fetch("/api/console/feature-gates", {
@@ -72,7 +81,15 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
         body: JSON.stringify({ key: gate.key, enabled: next }),
       });
       if (!response.ok) {
-        throw new Error("request failed");
+        // The route already computes a specific, customer-safe message per
+        // status (`gateErrorMessage` in app/api/console/feature-gates/route.ts)
+        // and discarding it left every failure reading "try again", which
+        // invites a retry that cannot succeed. A key the registry no longer
+        // carries answers 400 permanently, which is now a reachable state for
+        // anyone holding a bookmarked or scripted call to one of the six audit
+        // sink keys retired in issue #755.
+        const failure: { error?: string } = await response.json().catch(() => ({}));
+        throw new Error(failure.error ?? "");
       }
       // Reconcile with the state the server actually applied, in case it
       // diverged from the request (e.g. a concurrent admin edit), rather than
@@ -84,11 +101,13 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
         prev.map((g) => (g.key === appliedKey ? { ...g, enabled: applied } : g)),
       );
       setStatus((prev) => ({ ...prev, [gate.key]: "idle" }));
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message.trim() : "";
       setGates((prev) =>
         prev.map((g) => (g.key === gate.key ? { ...g, enabled: gate.enabled } : g)),
       );
       setStatus((prev) => ({ ...prev, [gate.key]: "error" }));
+      setErrors((prev) => ({ ...prev, [gate.key]: message }));
     }
   }
 
@@ -119,7 +138,7 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
                     {rowStatus === "error" ? (
                       <span className="mt-0.5 flex items-center gap-1 text-2xs text-[var(--color-danger,#d64545)]">
                         <AlertCircle size={12} />
-                        Could not save. Try again.
+                        {errors[gate.key] || "Could not save. Try again."}
                       </span>
                     ) : null}
                     {gate.enforced !== true ? (

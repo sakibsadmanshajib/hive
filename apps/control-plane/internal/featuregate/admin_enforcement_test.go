@@ -1,9 +1,11 @@
 package featuregate_test
 
 // A gate the console renders is a promise that flipping it changes something.
-// Twenty two of the twenty five registered keys keep no such promise: they
-// persist to public.tenant_settings and no runtime reader ever looks at them
-// (issues #755, #756, #757, #758, tracked together as #762). Only ENABLE_RAG,
+// Sixteen of the nineteen registered keys keep no such promise: they persist
+// to public.tenant_settings and no runtime reader ever looks at them (issues
+// #756, #757, #758, tracked together as #762). It was twenty two of twenty
+// five until #755 retired the six audit sink keys rather than labelling them.
+// Only ENABLE_RAG,
 // ENABLE_VOICE and ENABLE_COWORK are mounted anywhere, in
 // apps/edge-api/cmd/server/gated_routes.go and main.go.
 //

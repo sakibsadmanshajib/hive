@@ -10,6 +10,16 @@ const ALLOWLIST_DIRS = [
   'apps/control-plane/internal/tenant/settings/',
   'supabase/migrations/',
   'tools/lint-no-direct-tenant-setting.mjs',
+  // One exemption, and it is the inverse of what this lint guards against.
+  // This file (issue #755) proves that a public.tenant_settings row written
+  // for a retired ENABLE_AUDIT_SINK_* key does NOT reach the audit egress
+  // decision. It cannot use the resolver to write that row: the resolver's
+  // Set refuses the key, which is itself half of what the test asserts. So
+  // the raw INSERT here is the hostile input under test, not a code path
+  // taking a shortcut around the resolver. Keep this entry file-scoped; do
+  // not widen it to tests/compliance/, or the next test in that directory
+  // gets to bypass the resolver silently.
+  'apps/control-plane/tests/compliance/audit_sink_enablement_test.go',
 ];
 
 // Narrow to actual SQL access patterns so the lint blocks real direct

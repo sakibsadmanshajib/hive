@@ -102,9 +102,9 @@ func (r *Resolver) refresh(ctx context.Context, tenantID uuid.UUID, key Key) (en
 // (issue #293 security review). It covers only capability gates a client needs
 // to adapt its own UI: agents (the RAG/voice/relay/cowork feature keys, née
 // "carl" before the product-name retirement) and sso.
-// The admin, billing, and audit_sink categories are deliberately excluded:
-// exposing them would leak the deployment's commercial and operational posture
-// to any authenticated user, the same information-disclosure class the
+// The admin and billing categories are deliberately excluded: exposing them
+// would leak the deployment's commercial and operational posture to any
+// authenticated user, the same information-disclosure class the
 // 20260715_04 migration avoided by not granting feature_gate_keys to the
 // authenticated role. Fail-closed: a newly added category is excluded here
 // until it is explicitly listed, so a new admin/billing key never leaks by
@@ -116,8 +116,8 @@ var clientVisibleGateCategories = []string{"agents", "sso"}
 // tenant_settings row. It is the FULL set across all categories and is for
 // internal/admin callers (e.g. the admin console toggle UI) that must see
 // every gate regardless of category. The client-facing featuregate endpoint
-// uses ClientVisibleEnabled instead, so admin/billing/audit_sink gates never
-// reach an end user; do not swap this method into that path (issue #293).
+// uses ClientVisibleEnabled instead, so admin and billing gates never reach
+// an end user; do not swap this method into that path (issue #293).
 //
 // Unlike IsEnabled, this bypasses the per-key in-memory cache: it always
 // issues one fresh, indexed (tenant_id) query.
@@ -130,7 +130,7 @@ func (r *Resolver) AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]
 // the subset safe to expose to an authenticated end user or OWUI Function
 // (issue #293 security review). It backs the control-plane featuregate
 // endpoint, which feeds edge-api's Gate/Require and the /v1/featuregate read
-// surface, so admin, billing, and audit_sink gates never leave control-plane.
+// surface, so admin and billing gates never leave control-plane.
 // Fail-closed: a new category is excluded until added to the allowlist, so a
 // new admin/billing key never leaks by default while a new agents/sso key is
 // exposed automatically.
@@ -193,9 +193,11 @@ type GateKey struct {
 	Label    string
 	Category string
 	// EnforcementSite names where this key is read at runtime, empty when
-	// nothing reads it. Twenty two of the twenty five registered keys are
-	// empty today (issues #755 to #758, tracked as #762): the value persists
-	// to tenant_settings and changes no behaviour. The admin surface reports
+	// nothing reads it. Sixteen of the nineteen registered keys are empty
+	// today (issues #756 to #758, tracked as #762): the value persists to
+	// tenant_settings and changes no behaviour. It was twenty two of twenty
+	// five until #755 retired the six audit sink keys outright rather than
+	// labelling them. The admin surface reports
 	// the emptiness so an operator is never told a stored setting is enforced
 	// when it is not.
 	EnforcementSite string
