@@ -38,9 +38,24 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const interactive = renderDetail !== undefined && onRowToggle !== undefined;
   return (
+    // `relative overflow-x-auto`, and both words are load-bearing.
+    //
+    // overflow-x-auto rather than overflow-hidden: every console table is
+    // wider than a 375px viewport, and hidden clipped the columns past the
+    // fold away with no way to reach them. On a phone the API keys table
+    // simply stopped after Name.
+    //
+    // relative because an over-wide <table> inside a non-positioned
+    // overflow:auto box still propagates its layout overflow to the viewport
+    // in Chromium, so the whole document scrolled sideways even though the
+    // scroller itself was the right width. Measured at 375px on
+    // /console/api-keys: the wrapper was already 343px with scrollWidth 802,
+    // body scrollWidth was 375, and window.scrollX still reached 428.
+    // Making the scroller a containing block takes it to 0 (issue #1367,
+    // second half; /console/catalog was the same defect and the same fix).
     <div
       className={cn(
-        "overflow-hidden rounded-lg border border-[var(--color-border)]",
+        "relative overflow-x-auto rounded-lg border border-[var(--color-border)]",
         "bg-[var(--color-surface)]",
         className,
       )}

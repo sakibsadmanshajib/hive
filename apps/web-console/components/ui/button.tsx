@@ -21,9 +21,13 @@ const buttonVariants = cva(
           "hover:bg-[var(--color-ink-2)]",
           "shadow-[var(--shadow-xs)]",
         ],
+        // Label is --color-canvas, not white: the dark theme's accent is a
+        // light sienna, so white-on-accent measured 2.61:1 there and 4.45:1
+        // in light, both under AA on the console's primary revenue control.
+        // See the --color-accent-solid block in globals.css.
         accent: [
-          "bg-[var(--color-accent)] text-white",
-          "hover:bg-[var(--color-accent-hover)]",
+          "bg-[var(--color-accent-solid)] text-[var(--color-canvas)]",
+          "hover:bg-[var(--color-accent-solid-hover)]",
           "shadow-[var(--shadow-xs)]",
         ],
         secondary: [

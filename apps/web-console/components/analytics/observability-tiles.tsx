@@ -42,7 +42,6 @@ function tiles(): Tile[] {
 
 export function ObservabilityTiles() {
   const items = tiles();
-  const grafanaConfigured = GRAFANA_BASE_URL !== "";
 
   return (
     <section aria-label="Observability" className="flex flex-col gap-3">
@@ -80,8 +79,15 @@ export function ObservabilityTiles() {
                   <span>{tile.icon}</span>
                   {tile.title}
                 </span>
+                {/*
+                  The customer is told the dashboard is off, not how an
+                  operator turns it on: naming the server-side environment
+                  variable in product copy leaks a piece of the deployment's
+                  internals to every account that opens Analytics, and it is
+                  not an instruction anyone reading this page can act on.
+                */}
                 <span className="text-2xs leading-relaxed text-[var(--color-ink-3)]">
-                  Not configured on this deployment (set GRAFANA_BASE_URL).
+                  Not available on this deployment.
                 </span>
               </div>
             </div>

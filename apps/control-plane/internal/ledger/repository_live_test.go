@@ -339,9 +339,20 @@ func TestListEntriesWithCursorFilters_Live(t *testing.T) {
 		if len(entries) != 3 {
 			t.Fatalf("got %d entries, want all 3", len(entries))
 		}
+		// Newest first means newest by created_at. This assertion used to read
+		// descending `id`, which is what the query actually did and is not the
+		// same thing at all: `id` is a v4 UUID, so it encoded the ordering bug
+		// (a customer's money history served shuffled) as the requirement.
+		// Non-increasing rather than strictly decreasing, since two entries can
+		// share a timestamp; the deterministic ordering case lives in
+		// repository_order_live_test.go.
 		for i := 1; i < len(entries); i++ {
-			if string(entries[i-1].ID[:]) <= string(entries[i].ID[:]) {
-				t.Fatalf("entries not ordered newest first by id: %s then %s", entries[i-1].ID, entries[i].ID)
+			if entries[i-1].CreatedAt.Before(entries[i].CreatedAt) {
+				t.Fatalf(
+					"entries not ordered newest first: %s then %s",
+					entries[i-1].CreatedAt.Format(time.RFC3339Nano),
+					entries[i].CreatedAt.Format(time.RFC3339Nano),
+				)
 			}
 		}
 	})

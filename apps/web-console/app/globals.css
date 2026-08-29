@@ -66,6 +66,26 @@
   --color-accent-soft: oklch(0.96 0.025 38);
   --color-accent-ink: oklch(0.32 0.10 38);
 
+  /*
+   * Filled-accent surface (the accent Button variant, so: "Buy credits").
+   * Separate from --color-accent because the two are solving different
+   * problems. --color-accent is a foreground on canvas, tuned to sit against
+   * the page; --color-accent-solid is a background that has to carry legible
+   * label text on top of it in both themes.
+   *
+   * Foreground is --color-canvas in both themes, the same pairing the
+   * `primary` variant already uses, which is what lets one background token
+   * flip direction cleanly: near-white on a dark sienna in light mode,
+   * near-black on a light sienna in dark mode. Measured (WCAG 2.x, sRGB):
+   *   light  rgb(169,69,36)  on canvas  5.62:1   hover  7.29:1
+   *   dark   rgb(238,131,97) on canvas  7.42:1   hover  9.09:1
+   * White on the raw --color-accent, which is what this variant used to be,
+   * measured 4.45:1 light and 2.61:1 dark. The dark figure failed AA outright
+   * on the console's primary revenue control.
+   */
+  --color-accent-solid: oklch(0.52 0.14 38);
+  --color-accent-solid-hover: oklch(0.46 0.14 38);
+
   --color-success: oklch(0.55 0.12 150);
   --color-success-soft: oklch(0.96 0.03 150);
   --color-warning: oklch(0.72 0.13 75);
@@ -131,6 +151,11 @@
     --color-accent-hover: oklch(0.78 0.14 38);
     --color-accent-soft: oklch(0.30 0.05 38);
     --color-accent-ink: oklch(0.86 0.10 38);
+
+    /* Direction flips here: the dark-theme sienna is light, so the label on
+       it is the dark canvas. See the light-theme block for the measurements. */
+    --color-accent-solid: oklch(0.72 0.14 38);
+    --color-accent-solid-hover: oklch(0.78 0.14 38);
 
     --color-success-soft: oklch(0.28 0.05 150);
     --color-warning-soft: oklch(0.30 0.06 75);

@@ -21,7 +21,9 @@
     "workspaceMenu": "Switch workspace",
     "docs": "Documentation",
     "signOut": "Sign out",
-    "primaryNav": "Console sections"
+    "primaryNav": "Console sections",
+    "openNav": "Open navigation",
+    "closeNav": "Close navigation"
   },
   "WorkspaceSwitcher": {
     "label": "Workspace",
