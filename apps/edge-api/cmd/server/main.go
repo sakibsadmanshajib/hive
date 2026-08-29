@@ -479,7 +479,13 @@ func main() {
 	// the RAG block above.
 	{
 		agentTaskClient := edgeagenttask.NewClient(resolveControlPlaneBaseURL())
-		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient)
+		// Money path (#669). A sandbox launch used to ask nothing about the
+		// submitting tenant's balance, so a tenant at zero credits could
+		// submit tasks indefinitely. Same two dependencies RAG chat and
+		// session chat settle through, so all three JWT surfaces ask the same
+		// question of the same account.
+		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient).
+			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool})
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
 		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)

@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling"
 )
 
 // TaskClient is the minimal interface the handler needs from Client.
@@ -29,12 +31,35 @@ type TaskClient interface {
 // featuregate.Require(FeatureCowork) before mounting, mirroring
 // apps/edge-api/internal/rag.Handler's gating contract.
 type Handler struct {
-	client TaskClient
+	client     TaskClient
+	accounting *inference.AccountingClient
+	billing    sessionbilling.Resolver
 }
 
 // NewHandler constructs a Handler.
 func NewHandler(client TaskClient) *Handler {
 	return &Handler{client: client}
+}
+
+// agentTaskLaunchFloor is the credit balance a tenant must be able to cover
+// before a sandbox is launched for it: the same figure one chat turn holds,
+// because a task is at minimum one model turn and in practice many. It is an
+// authorization floor, never a charge, and never an estimate of what the task
+// will go on to spend.
+const agentTaskLaunchFloor = inference.DefaultHoldText
+
+// agentTaskLabel is what the probe records where an inference request records
+// its model alias. Operator-facing, never customer-visible.
+const agentTaskLabel = "agent-task"
+
+// WithBilling wires the solvency gate onto an existing Handler and returns it
+// for chaining, the same shape rag.Handler.WithBilling uses. Without it,
+// submission is refused: a surface that cannot check whether the tenant can
+// pay must not launch a sandbox, which is the #669 failure mode itself.
+func (h *Handler) WithBilling(accounting *inference.AccountingClient, billing sessionbilling.Resolver) *Handler {
+	h.accounting = accounting
+	h.billing = billing
+	return h
 }
 
 // Register mounts all /v1/agent/tasks* routes on mux.
@@ -109,6 +134,31 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Pack) == "" {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "pack required")
+		return
+	}
+
+	// Solvency gate (#669). Submitting a task launches a sandbox that then runs
+	// model turns against this tenant, and until this gate existed the route
+	// asked nothing about the tenant's balance: an account at zero credits
+	// could submit indefinitely, so the insufficient-credit refusal could not
+	// fire on this surface at all.
+	//
+	// The hold is taken and handed straight back inside Probe rather than held
+	// for the task's life, because control-plane owns the task lifecycle and
+	// nothing in this process would ever finalize a hold taken here (#600).
+	// The gate is therefore solvency at submit time, not metering of what the
+	// task goes on to spend, which is billed where it is dispatched.
+	if refusal := sessionbilling.Probe(r.Context(), sessionbilling.ProbeInput{
+		Accounting:  h.accounting,
+		Billing:     h.billing,
+		TenantID:    user.TenantID,
+		Endpoint:    inference.EndpointAgentTasks,
+		Label:       agentTaskLabel,
+		RequestID:   uuid.New(),
+		HoldCredits: agentTaskLaunchFloor,
+		Surface:     "agent task",
+	}); refusal != nil {
+		refusal.Write(w)
 		return
 	}
 

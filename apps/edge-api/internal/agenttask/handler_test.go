@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
 type fakeClient struct {
@@ -78,8 +84,191 @@ func userCtx(tenantID uuid.UUID) context.Context {
 	return auth.WithUser(context.Background(), &auth.User{ID: uuid.New(), TenantID: tenantID})
 }
 
+// fakeAccounting is a control-plane accounting surface that records the
+// solvency probe: the hold taken in front of a launch, and the release that
+// hands it straight back.
+type fakeAccounting struct {
+	mu sync.Mutex
+
+	reservationStatus int // non-zero to refuse the hold with this status
+
+	reservations []inference.CreateReservationInput
+	released     []inference.ReleaseReservationInput
+}
+
+func (f *fakeAccounting) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/usage/attempts", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(inference.AttemptResult{ID: "att_1", Status: "dispatching"})
+	})
+	mux.HandleFunc("/internal/accounting/reservations", func(w http.ResponseWriter, r *http.Request) {
+		var in inference.CreateReservationInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		f.reservations = append(f.reservations, in)
+		status, id := f.reservationStatus, fmt.Sprintf("res_%d", len(f.reservations))
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"error":"reservation exceeds available credits"}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(inference.ReservationResult{
+			ID: id, AccountID: in.AccountID, Status: "active", ReservedCredits: in.EstimatedCredits,
+		})
+	})
+	mux.HandleFunc("/internal/accounting/reservations/release", func(w http.ResponseWriter, r *http.Request) {
+		var in inference.ReleaseReservationInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		f.released = append(f.released, in)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func (f *fakeAccounting) counts() (reservations, released int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.reservations), len(f.released)
+}
+
+// stubBilling is a tenant-to-account map with no database behind it.
+type stubBilling struct {
+	state metering.TenantBillingState
+	err   error
+}
+
+func (s stubBilling) ResolveState(context.Context, uuid.UUID) (metering.TenantBillingState, error) {
+	return s.state, s.err
+}
+
+func billableTenant() stubBilling {
+	return stubBilling{state: metering.TenantBillingState{
+		AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
+	}}
+}
+
+// billedHandler is the handler every test builds: submission is gated on
+// solvency, so a handler without its accounting seam refuses instead of
+// launching.
+func billedHandler(t *testing.T, client TaskClient) *Handler {
+	t.Helper()
+	acct := &fakeAccounting{}
+	return NewHandler(client).
+		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+}
+
+func createReq(t *testing.T, tenantID uuid.UUID) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(createTaskRequest{Pack: "coding-pack"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
+	return req.WithContext(userCtx(tenantID))
+}
+
+// A tenant who cannot pay is refused BEFORE a sandbox is launched. This is the
+// agent-task half of #669: submission asked nothing about the balance, so the
+// refusal could not fire and the task ran.
+func TestHandleCreate_RefusesATenantThatCannotPay(t *testing.T) {
+	acct := &fakeAccounting{reservationStatus: http.StatusConflict}
+	client := newFakeClient()
+	h := NewHandler(client).
+		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+
+	w := httptest.NewRecorder()
+	h.routeTasks(w, createReq(t, uuid.New()))
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body = %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); !strings.Contains(got, "insufficient_quota") {
+		t.Errorf("body = %s, want insufficient_quota", got)
+	}
+	if len(client.tasks) != 0 || client.lastBearerJWT != "" {
+		t.Error("a refused submission reached control-plane anyway, so the sandbox launched unpaid")
+	}
+}
+
+// A handler built without its accounting seam refuses rather than launching a
+// sandbox it cannot check the balance for. Without this, forgetting one wiring
+// line in main.go silently restores the #669 behaviour with no signal.
+func TestHandleCreate_RefusesWhenBillingIsNotWired(t *testing.T) {
+	client := newFakeClient()
+	h := NewHandler(client)
+
+	w := httptest.NewRecorder()
+	h.routeTasks(w, createReq(t, uuid.New()))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+	if len(client.tasks) != 0 {
+		t.Error("an ungated submission launched a sandbox")
+	}
+}
+
+// The launch hold is handed straight back in the same call. Control-plane owns
+// the task lifecycle, so a hold left open here would have nothing to finalize
+// it and would strand permanently (no expires_at, no reaper, #600).
+func TestHandleCreate_SolvencyHoldIsReleasedImmediately(t *testing.T) {
+	acct := &fakeAccounting{}
+	client := newFakeClient()
+	h := NewHandler(client).
+		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+
+	w := httptest.NewRecorder()
+	h.routeTasks(w, createReq(t, uuid.New()))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
+	}
+	reservations, released := acct.counts()
+	if reservations != 1 {
+		t.Fatalf("want exactly one solvency hold, got %d", reservations)
+	}
+	if released != 1 {
+		t.Fatalf("want the hold handed back in the same call, released = %d", released)
+	}
+	acct.mu.Lock()
+	defer acct.mu.Unlock()
+	if got := acct.reservations[0].EstimatedCredits; got != agentTaskLaunchFloor {
+		t.Errorf("held %d credits, want the launch floor %d", got, agentTaskLaunchFloor)
+	}
+	if got := acct.released[0].Reason; got != "solvency_probe" {
+		t.Errorf("release reason = %q, want %q", got, "solvency_probe")
+	}
+}
+
+// An ENTERPRISE_EDGE tenant has no prepaid relationship with Hive (D-027), so
+// it launches with no hold at all rather than being refused for a balance it
+// does not have.
+func TestHandleCreate_EnterpriseTenantTakesNoHold(t *testing.T) {
+	acct := &fakeAccounting{}
+	client := newFakeClient()
+	h := NewHandler(client).WithBilling(
+		inference.NewAccountingClient(acct.server(t).URL),
+		stubBilling{state: metering.TenantBillingState{Deployment: metering.DeploymentEnterpriseEdge}})
+
+	w := httptest.NewRecorder()
+	h.routeTasks(w, createReq(t, uuid.New()))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
+	}
+	if reservations, released := acct.counts(); reservations != 0 || released != 0 {
+		t.Errorf("enterprise tenant must take no hold: reservations=%d released=%d", reservations, released)
+	}
+}
+
 func TestHandleCreate_HappyPath(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	body, _ := json.Marshal(createTaskRequest{Pack: "coding-pack"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	req = req.WithContext(userCtx(uuid.New()))
@@ -93,7 +282,7 @@ func TestHandleCreate_HappyPath(t *testing.T) {
 
 func TestHandleCreate_ForwardsBearerJWT(t *testing.T) {
 	client := newFakeClient()
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	body, _ := json.Marshal(createTaskRequest{Pack: "knowledge-work-pack"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	req = req.WithContext(userCtx(uuid.New()))
@@ -114,7 +303,7 @@ func TestHandleCreate_ForwardsBearerJWT(t *testing.T) {
 // never accept it, so it must never be forwarded as if it were one.
 func TestHandleCreate_DoesNotForwardAPIKeyAsBearerJWT(t *testing.T) {
 	client := newFakeClient()
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	body, _ := json.Marshal(createTaskRequest{Pack: "coding-pack"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	req = req.WithContext(userCtx(uuid.New()))
@@ -131,7 +320,7 @@ func TestHandleCreate_DoesNotForwardAPIKeyAsBearerJWT(t *testing.T) {
 }
 
 func TestHandleCreate_Unauthenticated(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	body, _ := json.Marshal(createTaskRequest{Pack: "coding-pack"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -143,7 +332,7 @@ func TestHandleCreate_Unauthenticated(t *testing.T) {
 }
 
 func TestHandleCreate_MissingPack(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	body, _ := json.Marshal(createTaskRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	req = req.WithContext(userCtx(uuid.New()))
@@ -157,7 +346,7 @@ func TestHandleCreate_MissingPack(t *testing.T) {
 
 func TestHandleList_HappyPath(t *testing.T) {
 	client := newFakeClient()
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	tenantID := uuid.New()
 
 	createReq := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(mustJSON(createTaskRequest{Pack: "coding-pack"})))
@@ -184,7 +373,7 @@ func TestHandleList_HappyPath(t *testing.T) {
 }
 
 func TestHandleGet_NotFound_Returns404(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	taskID := uuid.New()
 	req := httptest.NewRequest(http.MethodGet, "/v1/agent/tasks/"+taskID.String(), nil)
 	req = req.WithContext(userCtx(uuid.New()))
@@ -198,7 +387,7 @@ func TestHandleGet_NotFound_Returns404(t *testing.T) {
 
 func TestHandleCancel_HappyPath(t *testing.T) {
 	client := newFakeClient()
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	tenantID := uuid.New()
 
 	createW := httptest.NewRecorder()
@@ -226,7 +415,7 @@ func TestHandleCancel_HappyPath(t *testing.T) {
 func TestHandleCancel_TerminalStateReturns409(t *testing.T) {
 	client := newFakeClient()
 	client.cancelErr = ErrTerminalState
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks/"+uuid.New().String()+"/cancel", nil)
 	req = req.WithContext(userCtx(uuid.New()))
@@ -310,7 +499,7 @@ func (f *fakeClient) Files(_ context.Context, _, _ uuid.UUID, taskID uuid.UUID) 
 }
 
 func TestHandleEvents_HappyPath(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	fc := h.client.(*fakeClient)
 	fc.tasks[taskID] = Task{ID: taskID.String()}
@@ -336,7 +525,7 @@ func TestHandleEvents_HappyPath(t *testing.T) {
 }
 
 func TestHandleEvents_BadCursorIs400(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	taskID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	h.client.(*fakeClient).tasks[taskID] = Task{ID: taskID.String()}
 	tenant := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -367,14 +556,14 @@ func TestHandleEvents_LimitClampedTo500(t *testing.T) {
 		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events?limit=99999", nil).
 		WithContext(userCtx(tenant))
 	rec := httptest.NewRecorder()
-	NewHandler(fc).routeTaskByID(rec, req)
+	billedHandler(t, fc).routeTaskByID(rec, req)
 	if rec.Code != 200 || gotLimit != 500 {
 		t.Fatalf("status=%d limit=%d, want 200/500", rec.Code, gotLimit)
 	}
 }
 
 func TestHandleEvents_Unauthenticated(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	req := httptest.NewRequest(http.MethodGet,
 		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/events", nil)
 	rec := httptest.NewRecorder()
@@ -393,7 +582,7 @@ func TestHandleFiles_HappyPath(t *testing.T) {
 		"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/files", nil).
 		WithContext(userCtx(tenant))
 	rec := httptest.NewRecorder()
-	NewHandler(fc).routeTaskByID(rec, req)
+	billedHandler(t, fc).routeTaskByID(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
 	}
@@ -406,7 +595,7 @@ func TestHandleFiles_HappyPath(t *testing.T) {
 }
 
 func TestHandleEvents_FilesNotFoundIs404(t *testing.T) {
-	h := NewHandler(newFakeClient())
+	h := billedHandler(t, newFakeClient())
 	for _, suffix := range []string{"events", "files"} {
 		req := httptest.NewRequest(http.MethodGet,
 			"/v1/agent/tasks/11111111-1111-4111-8111-111111111111/"+suffix, nil).

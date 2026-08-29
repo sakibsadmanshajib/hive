@@ -142,8 +142,18 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One identifier for this turn, minted once and used everywhere: the
+	// attempt row, the reservation, both audit events and the completion id
+	// the customer is handed back. An operator investigating a disputed
+	// grounded-chat charge otherwise has nothing joining the charge to the
+	// request that caused it, which is the reconciliation half of #669.
+	// Session chat mints its own the same way (chat/dispatch.go:187): there is
+	// no request id on the context to inherit on either surface.
+	requestID := uuid.New()
+
 	h.audit(r.Context(), "RAG_CHAT_QUERY", "rag_document", user.TenantID.String(), "INFO",
-		user.TenantID, user.ID, r.UserAgent(), map[string]any{"model": req.Model, "top_k": topK})
+		user.TenantID, user.ID, r.UserAgent(), map[string]any{
+			"model": req.Model, "top_k": topK, "request_id": requestID.String()})
 
 	vec, err := h.embed.Embed(r.Context(), query)
 	if err != nil {
@@ -214,6 +224,13 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	// below is sized from THIS body, which is only honest once the body is the
 	// bounded one: a hold sized from an unbounded request is a number with
 	// nothing behind it (issue #1372). A pass-through for a fixed-price alias.
+	//
+	// On this endpoint the bounded body is the customer's messages PLUS the
+	// grounding block, so a large top_k can carry a short question over the
+	// ceiling. That is the intended reading: the provider bills for the whole
+	// dispatched body, so bounding only the customer's half would size the
+	// hold from bytes that are not what gets sent. A refusal before any spend
+	// is the better failure than a hold that cannot cover the request.
 	bounded, withinBounds := inference.EnforceVariablePriceBounds(w, route, inference.EndpointChatCompletions, req.Model, body)
 	if !withinBounds {
 		return
@@ -232,7 +249,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		Route:      route,
 		Alias:      req.Model,
 		Endpoint:   inference.EndpointChatCompletions,
-		RequestID:  uuid.New(),
+		RequestID:  requestID,
 		Body:       body,
 		HoldFloor:  ragHoldCredits,
 		Surface:    "rag chat",
@@ -268,7 +285,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if req.Stream {
 		settled, releaseReason = h.streamGroundedChat(w, r, resp, req.Model, route, body, settle,
-			citations, user.TenantID, user.ID, r.UserAgent())
+			citations, user.TenantID, user.ID, r.UserAgent(), requestID)
 		return
 	}
 
@@ -310,59 +327,77 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		promptTokens, completionTokens, totalTokens = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
 	}
 
-	// Settle the hold taken before dispatch, at the catalog price of the
-	// tokens this generation actually metered.
-	//
-	// This is where the endpoint's accounting used to STOP: it emitted the
-	// audit event below and nothing else, so spend was reconstructable but
-	// never charged and never gated (#669). The audit event stays, because it
-	// is still the retrieval-side record and it fans out to compliance sinks
-	// the ledger does not, but it is no longer the only thing that happens to
-	// the money.
-	env := readUsage(upstreamBody)
-	credits, confirmed, delivered := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body)
-	switch {
-	case settle == nil:
-		// Enterprise posture (D-027): no prepaid relationship, so nothing is
-		// charged and there is no hold to hand back.
-	case !delivered:
-		// Nothing was produced, so there is no quantity to charge and the
-		// deferred release returns the hold in full.
-		releaseReason = "upstream_error"
-	default:
-		inTok, outTok, cacheRead, cacheWrite := env.meteredTokens(req.Model, route.Provider)
-		if settle.Finalize(credits, confirmed, inTok, outTok, cacheRead, cacheWrite) {
-			settled = true
-		} else {
-			// The charge did not land. Leaving settled false hands the
-			// reservation to the deferred release, so it still reaches a
-			// terminal state exactly once rather than stranding the hold
-			// behind a lost charge (#616).
-			releaseReason = "finalize_failed"
-		}
-	}
-
 	// RAG_CHAT_COMPLETED is the retrieval-side usage signal for this endpoint,
-	// carrying the same token counts the settlement above charged for.
+	// carrying the same token counts the settlement below charges for. It fans
+	// out to compliance sinks the ledger does not, which is why it stays; what
+	// changed in #669 is that it is no longer the ONLY thing that happens to
+	// the money.
 	h.audit(r.Context(), "RAG_CHAT_COMPLETED", "rag_document", user.TenantID.String(), "INFO",
 		user.TenantID, user.ID, r.UserAgent(), map[string]any{
 			"model":             req.Model,
 			"prompt_tokens":     promptTokens,
 			"completion_tokens": completionTokens,
 			"total_tokens":      totalTokens,
+			"request_id":        requestID.String(),
 		})
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ChatResponse{
-		// Generated locally rather than passed through from upstream: some
-		// providers embed their own name/prefix in completion ids.
-		ID:        "ragchat-" + uuid.New().String(),
+	if err := json.NewEncoder(w).Encode(ChatResponse{
+		// Derived from this turn's request id rather than passed through from
+		// upstream: some providers embed their own name/prefix in completion
+		// ids, and the customer's handle for a charge should be the same
+		// identifier the ledger row carries.
+		ID:        "ragchat-" + requestID.String(),
 		Object:    "chat.completion",
 		Model:     req.Model,
 		Choices:   choices,
 		Usage:     usage,
 		Citations: citations,
-	})
+	}); err != nil {
+		// Operator signal only. The charge below is deliberately NOT cancelled
+		// by a failed write: the generation was produced and Hive has already
+		// paid the provider for it, so handing the hold back here would be the
+		// same caller-controlled free serve the streaming path closes, reached
+		// by aborting the read instead of the stream (D-055).
+		log.Printf("rag: chat response write failed request_id=%s: %v", requestID, err)
+	}
+
+	// Settle the hold taken before dispatch, at the catalog price of the tokens
+	// this generation actually metered.
+	//
+	// This runs AFTER the response is on the wire. Finalize is a synchronous
+	// control-plane call bounded at the settlement timeout and retried once, so
+	// settling first put up to two of those in front of a customer who had
+	// received nothing, and a server write timeout would then kill the response
+	// after the charge had already landed. Its own doc comment states the
+	// assumption: one accounting call made after the response has been sent.
+	if settle == nil {
+		// Enterprise posture (D-027): no prepaid relationship, so nothing is
+		// charged and there is no hold to hand back.
+		return
+	}
+	env := readUsage(upstreamBody, req.Model, route.Provider)
+	credits, confirmed, delivered := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body)
+	if !delivered {
+		// Nothing was produced, so there is no quantity to charge and the
+		// deferred release returns the hold in full. A client that hung up is
+		// recorded as such rather than against the provider, the same
+		// distinction chat/dispatch.go:479 makes on the identical exit.
+		releaseReason = "upstream_error"
+		if r.Context().Err() != nil {
+			releaseReason = "client_disconnect"
+		}
+		return
+	}
+	inTok, outTok, cacheRead, cacheWrite := env.meteredTokens(req.Model, route.Provider)
+	if settle.Finalize(credits, confirmed, inTok, outTok, cacheRead, cacheWrite) {
+		settled = true
+		return
+	}
+	// The charge did not land. Leaving settled false hands the reservation to
+	// the deferred release, so it still reaches a terminal state exactly once
+	// rather than stranding the hold behind a lost charge (#616).
+	releaseReason = "finalize_failed"
 }
 
 // filterClientSystemMessages drops any client-supplied "system" role
@@ -457,7 +492,7 @@ func streamOptionsFor(stream bool) *streamOptions {
 // happens, never both.
 func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	alias string, route inference.SelectRouteResult, requestBody []byte, settle *sessionbilling.Settlement,
-	citations []ChunkResult, tenantID, actorID uuid.UUID, userAgent string) (settled bool, releaseReason string) {
+	citations []ChunkResult, tenantID, actorID uuid.UUID, userAgent string, requestID uuid.UUID) (settled bool, releaseReason string) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -495,7 +530,7 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 	// this handler's own "provider-blind" design intent already drops
 	// provider/event lines, but the id and system_fingerprint keys survived
 	// inside the generic map because nothing explicitly stripped them.
-	mintedID := "ragchat-" + uuid.New().String()
+	mintedID := "ragchat-" + requestID.String()
 	// finishSeen tracks whether a terminal finish_reason has already been
 	// relayed on an earlier chunk of this stream. DeepSeek-family streams
 	// via OpenRouter emit one extra empty role/content chunk immediately
@@ -574,26 +609,38 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 				log.Printf("rag: replaced an upstream error frame alias=%q upstream_error=%.512s", alias, upstream)
 				sanitized = replacement
 			}
-			// Usage is read back off the sanitized frame rather than the raw
-			// one: VariablePriceFrame keeps usage (minus the upstream cost
-			// fields), so this is the same number, read from the bytes the
+			// TOKEN COUNTS are read back off the sanitized frame rather than
+			// the raw one: VariablePriceFrame keeps usage (minus the upstream
+			// cost fields), so this is the same number, read from the bytes the
 			// customer actually gets. Reading it here, after the suppress
 			// check above has already continued away every chunk that will
 			// not reach the wire, is what stops a suppressed chunk's own
 			// (possibly bogus) usage block from inflating RAG_CHAT_COMPLETED.
 			//
-			// The same decode feeds settlement: the charge is derived from
-			// the usage block the customer was actually shown, and the
-			// assistant text is accumulated because a stream that delivers
-			// content but no usage block still has to settle at something
-			// rather than at nothing (a delivered response is never free).
+			// The COST cannot come from the same bytes. VariablePriceFrame
+			// deletes cost, cost_details and is_byok (packages/sanitize/
+			// sanitize.go:145), correctly, because none of them may reach a
+			// customer, and an upstream_actual alias prices from exactly that
+			// deleted field. Reading settlement off the sanitized frame
+			// therefore charged the flat hold on every streamed hive-auto turn
+			// while the non-streaming half of this same handler priced the
+			// identical request from the real cost. So the raw frame is kept
+			// for the charge, the same capture and the same reason as
+			// apps/edge-api/internal/chat/dispatch.go:395-402. These bytes
+			// never reach the client from here.
+			//
+			// The assistant text is accumulated alongside because a stream that
+			// delivers content but no usage block still has to settle at
+			// something rather than at nothing (a delivered response is never
+			// free).
 			var frame inference.ChatCompletionChunk
 			if err := json.Unmarshal(sanitized, &frame); err == nil {
 				if frame.Usage != nil {
 					promptTokens = frame.Usage.PromptTokens
 					completionTokens = frame.Usage.CompletionTokens
 					totalTokens = frame.Usage.TotalTokens
-					env = readUsage(sanitized)
+					env = readUsage(sanitized, alias, route.Provider)
+					env.rawDocument = append([]byte(nil), payload...)
 				}
 				for _, choice := range frame.Choices {
 					if choice.Delta.Content != nil {
@@ -617,23 +664,31 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		log.Printf("rag: chat stream read error: %v", err)
 	}
 
-	// Emit RAG_CHAT_COMPLETED, and charge, ONLY when the upstream stream
-	// genuinely finished with [DONE]. A client cancellation, scanner error or
-	// truncation must not be billed as a completed stream with partial or zero
-	// usage, so the hold goes back instead.
-	if !completed {
-		if r.Context().Err() != nil {
-			return false, "client_disconnect"
-		}
-		return false, "upstream_error"
+	// RAG_CHAT_COMPLETED is emitted ONLY for a stream that genuinely reached
+	// [DONE]: it is the completion signal, and a truncated stream did not
+	// complete.
+	//
+	// The CHARGE is deliberately not gated on the same flag. A client can read
+	// every content frame and abort before [DONE] arrives, which breaks the
+	// relay loop above with completed still false; a scanner error or an
+	// upstream truncation after the answer was delivered lands the same way.
+	// Handing the hold back on those exits serves a complete generation Hive
+	// has already paid for and bills zero for it, repeatably and on demand,
+	// which is a free-serve hole and contradicts D-055. So the charge gate is
+	// what reached the customer, exactly as
+	// apps/edge-api/internal/chat/dispatch.go settles the same frames for the
+	// same models. An unconfirmed settlement is what tells control-plane the
+	// figure is an estimate to reconcile, which is the right treatment for a
+	// partial answer; a release is not.
+	if completed {
+		h.audit(r.Context(), "RAG_CHAT_COMPLETED", "rag_document", tenantID.String(), "INFO",
+			tenantID, actorID, userAgent, map[string]any{
+				"model":             alias,
+				"prompt_tokens":     promptTokens,
+				"completion_tokens": completionTokens,
+				"total_tokens":      totalTokens,
+			})
 	}
-	h.audit(r.Context(), "RAG_CHAT_COMPLETED", "rag_document", tenantID.String(), "INFO",
-		tenantID, actorID, userAgent, map[string]any{
-			"model":             alias,
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-			"total_tokens":      totalTokens,
-		})
 
 	if settle == nil {
 		// Enterprise posture (D-027): nothing was held, so nothing settles.
@@ -641,8 +696,11 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 	}
 	credits, confirmed, delivered := settleChat(route, settle.Held(), env, alias, completion.String(), requestBody)
 	if !delivered {
-		// The stream finished but produced neither usage nor content, so there
-		// is no quantity to charge.
+		// Neither usage nor content ever reached the customer, so there is no
+		// quantity to charge and the hold goes back in full.
+		if r.Context().Err() != nil {
+			return false, "client_disconnect"
+		}
 		return false, "upstream_error"
 	}
 	inTok, outTok, cacheRead, cacheWrite := env.meteredTokens(alias, route.Provider)

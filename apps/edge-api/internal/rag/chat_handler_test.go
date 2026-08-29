@@ -46,6 +46,22 @@ func pricedSelectRouteErr(model string, inPrice, outPrice int64, err error) Rout
 	}
 }
 
+// upstreamActualSelectRoute resolves any alias to an upstream_actual route
+// (hive-auto's shape, D-059): no catalog token price, so the charge is the
+// cost the upstream reported. Every other stub here is fixed-price, which is
+// what left the whole variable-price branch of settleChat untested.
+func upstreamActualSelectRoute(model string) RouteSelectFunc {
+	return func(_ context.Context, aliasID string) (inference.SelectRouteResult, error) {
+		return inference.SelectRouteResult{
+			AliasID:          aliasID,
+			LiteLLMModelName: model,
+			Provider:         "test-provider",
+			Pricing:          inference.UpstreamActualPricing(inference.DefaultHoldText),
+			PriceUnit:        inference.PriceUnitTokens,
+		}, nil
+	}
+}
+
 // fakeDispatch returns a canned OpenAI-shaped chat completion response.
 func fakeDispatch(statusCode int, respBody string, err error) ChatDispatchFunc {
 	return func(_ context.Context, _ string, _ []byte) (*http.Response, error) {
@@ -87,27 +103,29 @@ type dispatchedRequest struct {
 // serving inference it cannot charge for (#669), so every test that expects a
 // request to be SERVED has to wire it. The tests whose subject IS the money
 // path build their own handler in billing_test.go.
-func newChatTestHandler(store *fakeStore, embed *fakeEmbedder, records *[]auditRecord, route RouteSelectFunc, dispatch ChatDispatchFunc) *Handler {
+func newChatTestHandler(t *testing.T, store *fakeStore, embed *fakeEmbedder, records *[]auditRecord, route RouteSelectFunc, dispatch ChatDispatchFunc) *Handler {
+	t.Helper()
 	h := newTestHandler(store, embed, records)
 	acct := &ragAccounting{}
-	srv := httptest.NewServer(acct.mux())
-	// No t here, so the server is closed by the test binary's exit rather than
-	// by t.Cleanup. These are in-process listeners in a short-lived unit-test
-	// process, which is the same trade the rest of this file makes.
-	_ = srv
 	return h.WithChat(route, dispatch).
-		WithBilling(inference.NewAccountingClient(srv.URL), billableTenant())
+		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
 }
 
 func chatReq(t *testing.T, body ChatRequest, tenantID uuid.UUID) *http.Request {
+	t.Helper()
+	return chatReqCtx(t, body, userCtx(tenantID))
+}
+
+// chatReqCtx is chatReq with a caller-supplied context, for the tests whose
+// subject is what happens when the client goes away mid-request.
+func chatReqCtx(t *testing.T, body ChatRequest, ctx context.Context) *http.Request {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/rag/chat", bytes.NewReader(raw))
-	req = req.WithContext(userCtx(tenantID))
-	return req
+	return req.WithContext(ctx)
 }
 
 // --- tests ---
@@ -119,7 +137,7 @@ func TestHandleChat_HappyPath(t *testing.T) {
 	store.chunks = []ChunkRow{{ID: chunkID, DocumentID: docID, Content: "relevant content", Score: 0.1}}
 
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, canned200Response, nil))
 
@@ -188,7 +206,7 @@ func TestHandleChat_HappyPath(t *testing.T) {
 func TestHandleChat_NoChunksFound_StillAnswers(t *testing.T) {
 	store := newFakeStore() // no chunks
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, canned200Response, nil))
 
@@ -211,7 +229,7 @@ func TestHandleChat_NoChunksFound_StillAnswers(t *testing.T) {
 
 func TestHandleChat_MissingUserMessage(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -228,7 +246,7 @@ func TestHandleChat_MissingUserMessage(t *testing.T) {
 
 func TestHandleChat_MissingModel(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -244,7 +262,7 @@ func TestHandleChat_MissingModel(t *testing.T) {
 
 func TestHandleChat_EmbedFail_ProviderBlind(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{fail: true}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{fail: true}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -305,7 +323,7 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 
 	var audits []auditRecord
 	var captured []byte
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		capturingDispatch(http.StatusOK, cannedSSEResponse, &captured))
 
@@ -432,7 +450,7 @@ func TestHandleChat_StreamingSuppressesPostFinishChunk(t *testing.T) {
 	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: uuid.New(), Content: "ctx", Score: 0.1}}
 
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, spuriousPostFinishSSE, nil))
 
@@ -514,7 +532,7 @@ func TestHandleChat_SuppressedChunkUsageNotAccounted(t *testing.T) {
 	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: uuid.New(), Content: "ctx", Score: 0.1}}
 
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, suppressedChunkCarriesBogusUsageSSE, nil))
 
@@ -561,7 +579,7 @@ func TestHandleChat_SuppressedChunkUsageNotAccounted(t *testing.T) {
 
 func TestHandleChat_StreamingUpstreamNon2xx_StaysProviderBlindNoSSE(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusTooManyRequests, `{"error":{"message":"groq rate limit exceeded, retry after 2.5s"}}`, nil))
 
@@ -596,7 +614,7 @@ func TestHandleChat_StreamingWithoutDoneDoesNotRecordCompleted(t *testing.T) {
 
 `
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, truncated, nil))
 
@@ -619,7 +637,7 @@ func TestHandleChat_StreamingWithoutDoneDoesNotRecordCompleted(t *testing.T) {
 
 func TestHandleChat_RouteNotFound_Returns404(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("", ErrRouteNotFound), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -639,7 +657,7 @@ func TestHandleChat_RouteNotFound_Returns404(t *testing.T) {
 // refusal, not a provider-blind 502.
 func TestHandleChat_ModelNotEntitled_Returns403(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("", ErrModelNotEntitled), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -656,7 +674,7 @@ func TestHandleChat_ModelNotEntitled_Returns403(t *testing.T) {
 
 func TestHandleChat_RouteTransportError_ProviderBlind(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("", errors.New("dial tcp 10.0.0.5:443: connect: connection refused")),
 		fakeDispatch(http.StatusOK, canned200Response, nil))
 
@@ -675,7 +693,7 @@ func TestHandleChat_RouteTransportError_ProviderBlind(t *testing.T) {
 
 func TestHandleChat_DispatchTransportError_ProviderBlind(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(0, "", errors.New("dial tcp: connection refused to openrouter.ai")))
 
@@ -694,7 +712,7 @@ func TestHandleChat_DispatchTransportError_ProviderBlind(t *testing.T) {
 
 func TestHandleChat_UpstreamNon2xx_ProviderBlind(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusTooManyRequests, `{"error":{"message":"groq rate limit exceeded, retry after 2.5s"}}`, nil))
 
@@ -713,7 +731,7 @@ func TestHandleChat_UpstreamNon2xx_ProviderBlind(t *testing.T) {
 
 func TestHandleChat_Unauthenticated(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	body, _ := json.Marshal(ChatRequest{Model: "hive-fast", Messages: []ChatMessage{{Role: "user", Content: "hi"}}})
@@ -728,7 +746,7 @@ func TestHandleChat_Unauthenticated(t *testing.T) {
 
 func TestHandleChat_MethodNotAllowed(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/rag/chat", nil)
@@ -743,7 +761,7 @@ func TestHandleChat_MethodNotAllowed(t *testing.T) {
 
 func TestHandleChat_InvalidBody(t *testing.T) {
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, newFakeStore(), &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/rag/chat", strings.NewReader("{not json"))
@@ -759,7 +777,7 @@ func TestHandleChat_InvalidBody(t *testing.T) {
 func TestHandleChat_TopKDefaultAndCap(t *testing.T) {
 	store := newFakeStore()
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -784,7 +802,7 @@ func TestHandleChat_TopKDefaultAndCap(t *testing.T) {
 func TestHandleChat_TopKDefaultsToFiveAtStoreBoundary(t *testing.T) {
 	store := newFakeStore()
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
 
 	req := chatReq(t, ChatRequest{
@@ -835,7 +853,7 @@ func TestHandleChat_DropsClientSuppliedSystemMessage(t *testing.T) {
 	store := newFakeStore()
 	var audits []auditRecord
 	var captured []byte
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		capturingDispatch(http.StatusOK, canned200Response, &captured))
 
@@ -894,7 +912,7 @@ func TestHandleChat_RetrievedContextIsDelimitedAsUntrustedData(t *testing.T) {
 
 	var audits []auditRecord
 	var captured []byte
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		capturingDispatch(http.StatusOK, canned200Response, &captured))
 
@@ -956,7 +974,7 @@ func TestHandleChat_StreamingErrorFrameIsProviderBlind(t *testing.T) {
 	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: docID, Content: "relevant content", Score: 0.1}}
 
 	var audits []auditRecord
-	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+	h := newChatTestHandler(t, store, &fakeEmbedder{}, &audits,
 		fakeSelectRoute("route-groq-fast", nil),
 		fakeDispatch(http.StatusOK, ragErrorFrameSSE, nil))
 

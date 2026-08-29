@@ -22,6 +22,7 @@ package rag
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
@@ -53,25 +54,49 @@ const ragHoldCredits = inference.DefaultHoldText
 // the cache split, and raw, because an upstream_actual alias prices from the
 // cost fields the upstream reported rather than from tokens.
 type usageEnvelope struct {
-	Usage    *inference.UsageResponse `json:"usage"`
-	rawUsage []byte
+	Usage *inference.UsageResponse `json:"usage"`
+	// rawDocument is the WHOLE upstream document, not the extracted usage
+	// value. inference.ParseUpstreamCost decodes a frame with a top-level
+	// "usage" key, so handing it the inner usage object finds no cost at all
+	// and every upstream_actual request settles at the hold instead of at its
+	// real cost: a sub-cent generation charged against a 0.10 USD floor, which
+	// is the shape of issue #1198. The document also carries the generation id
+	// at its top level, which the inner object loses.
+	rawDocument []byte
 }
 
-// readUsage extracts the usage block from one upstream JSON document. A
-// document with no usage block yields a zero envelope, which settles as
-// unconfirmed rather than as a free request.
-func readUsage(body []byte) usageEnvelope {
+// readUsage extracts the usage block from one upstream JSON document, keeping
+// the document itself for the cost read. A document with no usage block still
+// carries its bytes forward, so a missing usage block settles as unconfirmed
+// rather than as a free request.
+func readUsage(document []byte, alias, provider string) usageEnvelope {
 	var envelope struct {
 		Usage json.RawMessage `json:"usage"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.Usage) == 0 {
+	if err := json.Unmarshal(document, &envelope); err != nil {
+		// A body that does not parse at all is already handled as a normalize
+		// error by the sync caller, and a stream frame only reaches here after
+		// the sanitizer accepted it. Log it anyway: reaching this line means
+		// the charge is about to be derived from nothing, and silence is how a
+		// systematic mispricing goes unnoticed.
+		slog.Warn("rag chat: upstream document did not parse, charge falls back to an estimate",
+			"err", err, "alias", alias, "provider", provider)
 		return usageEnvelope{}
+	}
+	if len(envelope.Usage) == 0 {
+		return usageEnvelope{rawDocument: document}
 	}
 	var decoded inference.UsageResponse
 	if err := json.Unmarshal(envelope.Usage, &decoded); err != nil {
-		return usageEnvelope{rawUsage: envelope.Usage}
+		// A usage block that is present but does not decode drops a fixed-price
+		// charge from real metered tokens to a content-length estimate, for
+		// every request, for as long as the shape is wrong. That is a revenue
+		// drift with no other operator signal.
+		slog.Warn("rag chat: upstream usage block did not decode, charge falls back to an estimate",
+			"err", err, "alias", alias, "provider", provider)
+		return usageEnvelope{rawDocument: document}
 	}
-	return usageEnvelope{Usage: &decoded, rawUsage: envelope.Usage}
+	return usageEnvelope{Usage: &decoded, rawDocument: document}
 }
 
 // settleChat prices one completed grounded chat.
@@ -102,7 +127,7 @@ func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope
 	}
 
 	if route.Pricing.IsUpstreamActual() {
-		settled := inference.UpstreamActualSettlement(env.rawUsage, held, hasUsage, inTokens, outTokens, content)
+		settled := inference.UpstreamActualSettlement(env.rawDocument, held, hasUsage, inTokens, outTokens, content)
 		return settled.Credits, settled.Confirmed, settled.Delivered
 	}
 	return inference.ChatSettlementCredits(route, hasUsage,

@@ -8,6 +8,10 @@ const (
 	EndpointCompletions     = "completions"
 	EndpointResponses       = "responses"
 	EndpointEmbeddings      = "embeddings"
+	// EndpointAgentTasks labels the solvency hold taken in front of an agent
+	// sandbox launch. It is not an inference endpoint: no charge is derived
+	// from it, and the hold it names is released in the same call.
+	EndpointAgentTasks = "agent_tasks"
 )
 
 // NeedFlags describes the capabilities required for route selection.

@@ -42,9 +42,13 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
-// Timeout bounds one control-plane accounting call made after the response has
-// already been streamed. A var so tests can shrink it.
-var Timeout = 30 * time.Second
+// settlementTimeout bounds one control-plane accounting call: the hold taken
+// before dispatch, and the single terminal call made after the response has
+// already been sent. Unexported and constant on purpose. It was briefly an
+// exported var "so tests can shrink it" and no test ever did, which is the
+// weakest available shape: exported mutable package state that any caller can
+// reassign under every other caller.
+const settlementTimeout = 30 * time.Second
 
 // Resolver answers what a session principal's tenant settles against: the
 // billing account, and the deployment posture that decides whether it settles
@@ -106,21 +110,134 @@ type Input struct {
 	Surface string
 }
 
+// Refusal is a money-path verdict that a request must not be served, kept
+// separate from the rendering of it.
+//
+// Start used to write the customer's refusal itself, which hard-bound the
+// reservation lifecycle to an HTTP handler holding a ResponseWriter. That is
+// why the agent-task submit gate could not reuse this lifecycle at all and had
+// to be written separately. The verdict is now a value the caller acts on:
+// an HTTP handler calls Write, anything else reads Reason.
+type Refusal struct {
+	// Reason is an operator-facing token, never customer-visible.
+	Reason string
+	write  func(http.ResponseWriter)
+}
+
+// Write renders the customer-facing refusal. Provider-blind, and it never
+// names a route, an amount or a balance.
+func (r *Refusal) Write(w http.ResponseWriter) {
+	if r == nil || r.write == nil {
+		return
+	}
+	r.write(w)
+}
+
 // Start takes the hold for a session request, or writes the customer's refusal
-// and reports that the request must not be dispatched.
+// and reports that the request must not be dispatched. It is Reserve plus the
+// rendering, for the two HTTP inference handlers.
 //
 // A nil Settlement with refused=false is the Enterprise posture: nothing to
 // charge, so the request proceeds unheld and unbilled by decision rather than
 // by omission.
 func Start(ctx context.Context, w http.ResponseWriter, in Input) (*Settlement, bool) {
+	settle, refusal := Reserve(ctx, in)
+	if refusal != nil {
+		refusal.Write(w)
+		return nil, true
+	}
+	return settle, false
+}
+
+// Reserve is Start's verdict half: it takes the hold, or returns the refusal
+// the caller must render. Every rule it enforces runs before a provider is
+// reached.
+func Reserve(ctx context.Context, in Input) (*Settlement, *Refusal) {
+	return reserve(ctx, in, true)
+}
+
+// ProbeInput is everything Probe needs to answer the solvency question for a
+// unit of work that is not an inference request.
+type ProbeInput struct {
+	Accounting *inference.AccountingClient
+	Billing    Resolver
+	TenantID   uuid.UUID
+	// Endpoint is recorded on the attempt and the reservation, e.g.
+	// inference.EndpointAgentTasks.
+	Endpoint string
+	// Label is what the reservation records where an inference request records
+	// its model alias. Never customer-visible.
+	Label     string
+	RequestID uuid.UUID
+	// HoldCredits is the size of the launch floor this work must be able to
+	// cover. It is an authorization floor, never a charge, and it is handed
+	// straight back.
+	HoldCredits int64
+	Surface     string
+}
+
+// Probe answers one question: can this tenant pay for the unit of work about
+// to be launched? It takes the same hold an inference request would, reads the
+// control-plane's verdict, and hands the hold straight back.
+//
+// It exists because a sandbox launch has no alias, no token count and no
+// settlement point inside edge-api: control-plane owns the task lifecycle, so
+// a hold taken here would have nothing to finalize it and would strand
+// permanently (there is no expires_at and no reaper, #600). A probe that
+// releases in the same call cannot strand, and it still refuses a tenant who
+// cannot pay, which is the gap #669 records on this path.
+//
+// It does NOT meter what the task then spends. The agent's own inference is
+// billed where it is dispatched; this is the solvency gate in front of the
+// launch, and nothing more.
+func Probe(ctx context.Context, in ProbeInput) *Refusal {
+	settle, refusal := reserve(ctx, Input{
+		Accounting: in.Accounting,
+		Billing:    in.Billing,
+		TenantID:   in.TenantID,
+		Endpoint:   in.Endpoint,
+		Alias:      in.Label,
+		RequestID:  in.RequestID,
+		HoldFloor:  in.HoldCredits,
+		Surface:    in.Surface,
+	}, false)
+	if refusal != nil {
+		return refusal
+	}
+	if settle == nil {
+		// Enterprise posture (D-027): no prepaid relationship, so there is
+		// nothing to be solvent against and the launch proceeds.
+		return nil
+	}
+	settle.Release("solvency_probe")
+	return nil
+}
+
+// reserve is the one reservation lifecycle both entry points run.
+//
+// requirePricedRoute is what separates them. An inference request must have a
+// route whose catalog row can price the charge, or it is refused rather than
+// served unpriced (D-034). A solvency probe has no route and no charge to
+// derive, so that check would refuse every caller. The flag is unexported and
+// both exported entry points set it explicitly, so a future caller cannot skip
+// the check by leaving a field at its zero value.
+func reserve(ctx context.Context, in Input, requirePricedRoute bool) (*Settlement, *Refusal) {
+	if in.Endpoint == "" || in.Alias == "" {
+		// Neither is optional: both are recorded on the attempt and the
+		// reservation, and control-plane rejects an empty model_alias outright.
+		// An empty one here is a wiring mistake, and the first place anyone
+		// would otherwise notice is a control-plane row.
+		slog.Error(in.Surface+" money path called without an endpoint or label",
+			"request_id", in.RequestID, "endpoint", in.Endpoint, "alias", in.Alias)
+		return nil, &Refusal{Reason: "not_wired", write: WriteBillingUnavailable}
+	}
 	if in.Accounting == nil || in.Billing == nil {
 		// A gateway that cannot charge must not serve. Reaching here means
 		// this handler was constructed without its accounting seam, which is
 		// the #746 failure mode itself, so it refuses rather than repeat it.
 		slog.Error(in.Surface+" accounting not wired, refusing request",
 			"request_id", in.RequestID, "alias", in.Alias)
-		WriteBillingUnavailable(w)
-		return nil, true
+		return nil, &Refusal{Reason: "not_wired", write: WriteBillingUnavailable}
 	}
 
 	state, err := in.Billing.ResolveState(ctx, in.TenantID)
@@ -128,30 +245,27 @@ func Start(ctx context.Context, w http.ResponseWriter, in Input) (*Settlement, b
 		// The billing position is unknown, not known-absent. Serving anyway is
 		// how free traffic happens, so this refuses and asks for a retry.
 		slog.Error(in.Surface+" billing lookup failed", "err", err, "request_id", in.RequestID)
-		WriteBillingUnavailable(w)
-		return nil, true
+		return nil, &Refusal{Reason: "billing_lookup_failed", write: WriteBillingUnavailable}
 	}
 	// The posture check comes before the pricing check on purpose: a tenant
 	// nobody bills has no charge to fail closed on, so an Enterprise box
 	// running a locally hosted model that carries no catalog price keeps
 	// serving instead of being refused for a price it never needed.
 	if state.Deployment == metering.DeploymentEnterpriseEdge {
-		return nil, false
+		return nil, nil
 	}
 	// An alias that cannot be priced in tokens has no charge this endpoint can
 	// derive. Inventing a rate and serving it free are both worse than
 	// refusing, so this fails closed (D-034).
-	if !inference.CanPriceTokens(in.Route) {
+	if requirePricedRoute && !inference.CanPriceTokens(in.Route) {
 		slog.Warn(in.Surface+" refused, alias not priced in tokens",
 			"request_id", in.RequestID, "alias", in.Alias, "price_unit", in.Route.PriceUnit)
-		WriteUnpriceableModel(w)
-		return nil, true
+		return nil, &Refusal{Reason: "unpriceable_model", write: WriteUnpriceableModel}
 	}
 	if !state.Found {
 		slog.Warn(in.Surface+" refused, tenant has no billing account",
 			"request_id", in.RequestID, "tenant_id", in.TenantID, "alias", in.Alias)
-		WriteBillingNotConfigured(w)
-		return nil, true
+		return nil, &Refusal{Reason: "no_billing_account", write: WriteBillingNotConfigured}
 	}
 
 	accountID := state.AccountID.String()
@@ -175,7 +289,18 @@ func Start(ctx context.Context, w http.ResponseWriter, in Input) (*Settlement, b
 	// bounds allow, which is what made the alias unusable below 2.00 USD of
 	// credit (issue #1372).
 	held := inference.ReservationCredits(in.Route, in.HoldFloor, in.Endpoint, in.Body)
-	reservation, err := in.Accounting.CreateReservation(ctx, inference.CreateReservationInput{
+	// The hold is taken on a context the CLIENT cannot cancel. Cancelling
+	// midway is the one failure this call must not have: control-plane can
+	// commit the reservation row and then lose the answer, which returns an
+	// error here, refuses, and returns before the caller has installed its
+	// deferred release. Nothing else ever releases it (no expires_at, no
+	// reaper, #600), so the customer's credits are locked until someone
+	// intervenes by hand, which is the stranded-hold family behind the 409
+	// cascade in #626. A refusal written to a ResponseWriter nobody is reading
+	// is harmless by comparison. The timeout is what bounds it instead.
+	holdCtx, cancelHold := context.WithTimeout(context.WithoutCancel(ctx), settlementTimeout)
+	defer cancelHold()
+	reservation, err := in.Accounting.CreateReservation(holdCtx, inference.CreateReservationInput{
 		AccountID:        accountID,
 		RequestID:        in.RequestID.String(),
 		AttemptNumber:    1,
@@ -197,19 +322,16 @@ func Start(ctx context.Context, w http.ResponseWriter, in Input) (*Settlement, b
 			// 409 is the control-plane's credit-policy rejection, 429 a rate
 			// limit on the reservation call. Both are quota verdicts.
 			slog.Info(in.Surface+" refused on quota", "request_id", in.RequestID, "alias", in.Alias)
-			WriteInsufficientQuota(w)
-			return nil, true
+			return nil, &Refusal{Reason: "insufficient_quota", write: WriteInsufficientQuota}
 		}
 		slog.Error(in.Surface+" reservation failed", "err", err, "request_id", in.RequestID, "alias", in.Alias)
-		WriteReservationUnavailable(w)
-		return nil, true
+		return nil, &Refusal{Reason: "reservation_failed", write: WriteReservationUnavailable}
 	}
 	if reservation.ID == "" {
 		// A 2xx with no reservation id is a control-plane contract violation.
 		// Nothing could be settled against it, so it fails closed too.
 		slog.Error(in.Surface+" reservation returned no id", "request_id", in.RequestID, "alias", in.Alias)
-		WriteReservationUnavailable(w)
-		return nil, true
+		return nil, &Refusal{Reason: "reservation_without_id", write: WriteReservationUnavailable}
 	}
 
 	return &Settlement{
@@ -219,7 +341,7 @@ func Start(ctx context.Context, w http.ResponseWriter, in Input) (*Settlement, b
 		requestID:     in.RequestID.String(),
 		surface:       in.Surface,
 		heldCredits:   held,
-	}, false
+	}, nil
 }
 
 // Finalize charges the reservation and reports whether the charge actually
@@ -259,7 +381,7 @@ func (s *Settlement) Finalize(credits int64, confirmed bool, inTokens, outTokens
 // handed the timed-out context of the attempt it is retrying. The cache
 // components ride along with the input/output counts they split (#1174).
 func (s *Settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTokens, cacheReadTokens, cacheWriteTokens int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), settlementTimeout)
 	defer cancel()
 	return s.accounting.FinalizeReservation(ctx, inference.FinalizeReservationInput{
 		AccountID:     s.accountID,
@@ -281,7 +403,7 @@ func (s *Settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTo
 // a usage event of its own, so a refused or failed request leaves an explicit
 // zero-charge verdict rather than nothing at all.
 func (s *Settlement) Release(reason string) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), settlementTimeout)
 	defer cancel()
 	if err := s.accounting.ReleaseReservation(ctx, inference.ReleaseReservationInput{
 		AccountID:     s.accountID,
