@@ -5,7 +5,16 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { formatShortDate } from "@/lib/format/credits";
+import { formatUsdFromCredits } from "@/lib/format/model-pricing";
 import { RevokeConfirmPanel } from "./revoke-confirm-panel";
+
+// Reset-cadence suffix for the limit cell, matching the New Key modal's own
+// "Reset limit every..." wording. budget_summary.kind is "none" | "lifetime"
+// | "monthly" (apps/control-plane/internal/apikeys budgetSummary); "none" is
+// handled separately as "Unlimited" before this ever runs.
+function limitSuffix(budgetKind: string): string {
+  return budgetKind === "monthly" ? "/mo" : " total";
+}
 
 interface ApiKeyListProps {
   keys: ApiKey[];
@@ -54,6 +63,35 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
         const { label, tone } = statusTone(row.status);
         return <Badge tone={tone}>{label}</Badge>;
       },
+    },
+    {
+      key: "spend_credits",
+      // "lifetime" is in the header, not implied. spend_credits is the key's
+      // whole-life total (Repository.GetLifetimeSpend), while the cap beside
+      // it can be monthly, and two numbers side by side read as a ratio. A
+      // key at $500 lifetime against a $10/mo cap is not over its cap, and
+      // an unqualified "Spend" column says it is.
+      header: "Spend (lifetime)",
+      numeric: true,
+      align: "right",
+      cell: (row) => (
+        <span className="tabular-nums">{formatUsdFromCredits(row.spend_credits)}</span>
+      ),
+    },
+    {
+      key: "budget_limit_credits",
+      header: "Credit limit",
+      numeric: true,
+      align: "right",
+      cell: (row) =>
+        row.budget_limit_credits === null ? (
+          <span className="text-[var(--color-ink-3)]">Unlimited</span>
+        ) : (
+          <span className="tabular-nums">
+            {formatUsdFromCredits(row.budget_limit_credits)}
+            {limitSuffix(row.budget_summary.kind)}
+          </span>
+        ),
     },
     {
       key: "expires_at",

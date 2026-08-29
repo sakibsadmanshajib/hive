@@ -58,8 +58,14 @@ type RouteInput struct {
 	// RoutingAdapter binds it onto ctx before calling the routing client and
 	// fails closed if it is missing or unparseable (#623).
 	TenantID string
-	NeedTTS  bool
-	NeedSTT  bool
+	// AccountID and APIKeyID are threaded through for exactly one reason:
+	// authz.ParseTenantID logs them when TenantID fails to parse, so an
+	// account_not_provisioned 403 from this endpoint is operator-visible the
+	// same way it is on /v1/models and /v1/chat/completions.
+	AccountID string
+	APIKeyID  string
+	NeedTTS   bool
+	NeedSTT   bool
 }
 
 // RouteResult contains the selected route details.
@@ -264,9 +270,11 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 
 	// Select route based on model alias and TTS capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
-		AliasID:  speechReq.Model,
-		TenantID: auth.TenantID,
-		NeedTTS:  true,
+		AliasID:   speechReq.Model,
+		TenantID:  auth.TenantID,
+		AccountID: auth.AccountID,
+		APIKeyID:  auth.APIKeyID,
+		NeedTTS:   true,
 	})
 	if err != nil {
 		code := "model_not_found"
@@ -449,9 +457,11 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	// endpoint performs (#623).
 	modelAlias := r.FormValue("model")
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
-		AliasID:  modelAlias,
-		TenantID: auth.TenantID,
-		NeedSTT:  true,
+		AliasID:   modelAlias,
+		TenantID:  auth.TenantID,
+		AccountID: auth.AccountID,
+		APIKeyID:  auth.APIKeyID,
+		NeedSTT:   true,
 	})
 	if err != nil {
 		code := "model_not_found"
@@ -586,9 +596,11 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	// Select route based on model alias and STT capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
-		AliasID:  modelAlias,
-		TenantID: auth.TenantID,
-		NeedSTT:  true,
+		AliasID:   modelAlias,
+		TenantID:  auth.TenantID,
+		AccountID: auth.AccountID,
+		APIKeyID:  auth.APIKeyID,
+		NeedSTT:   true,
 	})
 	if err != nil {
 		code := "model_not_found"

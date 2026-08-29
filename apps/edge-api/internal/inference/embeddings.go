@@ -2,16 +2,14 @@ package inference
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 )
 
 // handleEmbeddings handles POST /v1/embeddings.
 func handleEmbeddings(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
-	if err != nil {
-		writeInvalidBodyError(w)
+	body, ok := readLimitedBody(w, r)
+	if !ok {
 		return
 	}
 

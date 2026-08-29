@@ -42,7 +42,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse } from 'yaml';
 
-const WORKFLOW_FILE = '.github/workflows/deploy-demo-box.yml';
+// Exported (not just used below) so check-deploy-drift.mjs can ask this file's
+// exact question -- "does the paths filter cover this file" -- rather than
+// re-deriving its own copy of the glob rules.
+export const WORKFLOW_FILE = '.github/workflows/deploy-demo-box.yml';
 const DOCKER_DIR = 'deploy/docker';
 
 // Same YAML-1.1-boolean-key dodge as lint-workflow-check-names.mjs: `on:`
@@ -51,13 +54,13 @@ function onBlock(workflow) {
   return workflow?.on ?? workflow?.[true] ?? workflow?.True;
 }
 
-function pushPaths(workflow) {
+export function pushPaths(workflow) {
   const on = onBlock(workflow);
   const paths = on?.push?.paths;
   return Array.isArray(paths) ? paths : [];
 }
 
-function isCovered(source, filters) {
+export function isCovered(source, filters) {
   return filters.some((pattern) => {
     if (pattern.endsWith('/**')) {
       const prefix = pattern.slice(0, -3);
@@ -119,41 +122,49 @@ function copySources(text) {
   return sources;
 }
 
-const workflow = parse(readFileSync(WORKFLOW_FILE, 'utf8'));
-const filters = pushPaths(workflow);
+// Gated on direct execution, not just `import`: check-deploy-drift.mjs's
+// sibling script (list-covered-deploy-changes.mjs) imports pushPaths and
+// isCovered from this file to stay in step with it, and an import must not
+// also run the full Dockerfile scan and print its verdict to stdout as a
+// side effect -- that would corrupt the covered-changed-paths list that
+// caller builds from its own stdout.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const workflow = parse(readFileSync(WORKFLOW_FILE, 'utf8'));
+  const filters = pushPaths(workflow);
 
-if (filters.length === 0) {
-  console.error(`${WORKFLOW_FILE}: could not find on.push.paths -- refusing to pass silently.`);
-  process.exit(1);
-}
-
-const dockerfiles = readdirSync(DOCKER_DIR).filter((f) => f.startsWith('Dockerfile.'));
-const uncovered = new Map(); // source -> Set of dockerfiles
-
-for (const file of dockerfiles) {
-  const path = join(DOCKER_DIR, file);
-  const sources = copySources(readFileSync(path, 'utf8'));
-  for (const source of sources) {
-    if (isCovered(source, filters)) continue;
-    if (!uncovered.has(source)) uncovered.set(source, new Set());
-    uncovered.get(source).add(path);
+  if (filters.length === 0) {
+    console.error(`${WORKFLOW_FILE}: could not find on.push.paths -- refusing to pass silently.`);
+    process.exit(1);
   }
-}
 
-if (uncovered.size > 0) {
-  console.error(`${WORKFLOW_FILE} paths filter is missing entries:`);
-  for (const [source, files] of uncovered) {
-    console.error(`  - ${source} (COPYed by ${[...files].join(', ')})`);
+  const dockerfiles = readdirSync(DOCKER_DIR).filter((f) => f.startsWith('Dockerfile.'));
+  const uncovered = new Map(); // source -> Set of dockerfiles
+
+  for (const file of dockerfiles) {
+    const path = join(DOCKER_DIR, file);
+    const sources = copySources(readFileSync(path, 'utf8'));
+    for (const source of sources) {
+      if (isCovered(source, filters)) continue;
+      if (!uncovered.has(source)) uncovered.set(source, new Set());
+      uncovered.get(source).add(path);
+    }
   }
-  console.error(
-    'Add a paths entry for each (a literal for an exact file, or "<dir>/**" for a directory) so a ' +
-      'change here still triggers a demo-box deploy. See this file\'s own header comment for why this ' +
-      'has already happened twice silently.',
+
+  if (uncovered.size > 0) {
+    console.error(`${WORKFLOW_FILE} paths filter is missing entries:`);
+    for (const [source, files] of uncovered) {
+      console.error(`  - ${source} (COPYed by ${[...files].join(', ')})`);
+    }
+    console.error(
+      'Add a paths entry for each (a literal for an exact file, or "<dir>/**" for a directory) so a ' +
+        'change here still triggers a demo-box deploy. See this file\'s own header comment for why this ' +
+        'has already happened twice silently.',
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `Deploy path-filter coverage OK: every COPY/ADD source across ${dockerfiles.length} Dockerfiles ` +
+      `under ${DOCKER_DIR}/ is covered by ${WORKFLOW_FILE}'s push.paths.`,
   );
-  process.exit(1);
 }
-
-console.log(
-  `Deploy path-filter coverage OK: every COPY/ADD source across ${dockerfiles.length} Dockerfiles ` +
-    `under ${DOCKER_DIR}/ is covered by ${WORKFLOW_FILE}'s push.paths.`,
-);

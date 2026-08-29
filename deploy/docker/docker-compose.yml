@@ -352,6 +352,10 @@ services:
       # packages/sdk-tests/python/tests/**.
       HIVE_TEST_MODEL: ${HIVE_TEST_MODEL:-hive-default}
       HIVE_EMBEDDING_MODEL: ${HIVE_EMBEDDING_MODEL:-hive-embedding-default}
+      # test_anthropic_messages.py's tool-use tests need a tools_supported
+      # alias; hive-free/hive-default are not declared tools-capable in the
+      # catalog. Same variable and same cheap default as sdk-tests-js above.
+      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-deepseek-v4-flash}
 
   sdk-tests-java:
     image: hive-sdk-tests-java:ci

@@ -1,18 +1,24 @@
 package authz
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestCheckAccessActiveKey(t *testing.T) {
 	s := AuthSnapshot{
-		KeyID:     "key-1",
-		AccountID: "acc-1",
-		Status:    "active",
+		KeyID:          "key-1",
+		AccountID:      "acc-1",
+		Status:         "active",
 		AllowedAliases: []string{"hive-default", "hive-fast"},
-		BudgetKind: "none",
+		BudgetKind:     "none",
 	}
 
 	r := CheckAccess(s, "hive-default", 0)
@@ -23,8 +29,8 @@ func TestCheckAccessActiveKey(t *testing.T) {
 
 func TestCheckAccessRevokedKey(t *testing.T) {
 	s := AuthSnapshot{
-		KeyID:     "key-1",
-		Status:    "revoked",
+		KeyID:      "key-1",
+		Status:     "revoked",
 		BudgetKind: "none",
 	}
 
@@ -40,9 +46,9 @@ func TestCheckAccessRevokedKey(t *testing.T) {
 func TestCheckAccessExpiredKey(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	s := AuthSnapshot{
-		KeyID:     "key-1",
-		Status:    "active",
-		ExpiresAt: &past,
+		KeyID:      "key-1",
+		Status:     "active",
+		ExpiresAt:  &past,
 		BudgetKind: "none",
 	}
 
@@ -181,11 +187,11 @@ func TestCheckAccessAllModelsWildcard(t *testing.T) {
 func TestCheckAccessRejectsProjectedBudgetOverrun(t *testing.T) {
 	limit := int64(1000)
 	s := AuthSnapshot{
-		KeyID:                "key-1",
-		Status:               "active",
-		AllowAllModels:       true,
-		BudgetKind:           "monthly",
-		BudgetLimitCredits:   &limit,
+		KeyID:                 "key-1",
+		Status:                "active",
+		AllowAllModels:        true,
+		BudgetKind:            "monthly",
+		BudgetLimitCredits:    &limit,
 		BudgetConsumedCredits: 850,
 		BudgetReservedCredits: 100,
 	}
@@ -202,11 +208,11 @@ func TestCheckAccessRejectsProjectedBudgetOverrun(t *testing.T) {
 func TestCheckAccessBudgetWithinLimit(t *testing.T) {
 	limit := int64(1000)
 	s := AuthSnapshot{
-		KeyID:                "key-1",
-		Status:               "active",
-		AllowAllModels:       true,
-		BudgetKind:           "monthly",
-		BudgetLimitCredits:   &limit,
+		KeyID:                 "key-1",
+		Status:                "active",
+		AllowAllModels:        true,
+		BudgetKind:            "monthly",
+		BudgetLimitCredits:    &limit,
 		BudgetConsumedCredits: 400,
 		BudgetReservedCredits: 100,
 	}
@@ -219,8 +225,8 @@ func TestCheckAccessBudgetWithinLimit(t *testing.T) {
 
 func TestCheckAccessDenyReasonFormat(t *testing.T) {
 	s := AuthSnapshot{
-		KeyID:  "key-1",
-		Status: "disabled",
+		KeyID:      "key-1",
+		Status:     "disabled",
 		BudgetKind: "none",
 	}
 
@@ -231,5 +237,58 @@ func TestCheckAccessDenyReasonFormat(t *testing.T) {
 	expected := fmt.Sprintf("API key is %s", "disabled")
 	if r.DenyMsg != expected {
 		t.Fatalf("expected message %q, got %q", expected, r.DenyMsg)
+	}
+}
+
+// TestTenantUUIDLogsOnAccountNotProvisioned is the regression guard for the
+// live incident on 2026-08-28: a security reviewer's freshly minted API key
+// answered 403 account_not_provisioned with nothing anywhere -- not a log
+// line, not a metric -- to tell an operator it happened. TenantUUID is the
+// single choke point every fail-closed caller (handleModels,
+// inference.Orchestrator.selectRoute, checkOWUIShimKey) routes through, so
+// the log line belongs here once, not duplicated at each call site.
+func TestTenantUUIDLogsOnAccountNotProvisioned(t *testing.T) {
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s := AuthSnapshot{KeyID: "key-repro", AccountID: "acct-repro", TenantID: "not-a-uuid-repro"}
+	if _, err := s.TenantUUID(); !errors.Is(err, ErrAccountNotProvisioned) {
+		t.Fatalf("expected ErrAccountNotProvisioned, got %v", err)
+	}
+
+	got := buf.String()
+	for _, want := range []string{"account_not_provisioned", "acct-repro", "not-a-uuid-repro"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected log output to contain %q, got %q", want, got)
+		}
+	}
+	// CodeQL flagged KeyID as clear-text logging of sensitive information on
+	// an earlier commit (alert #31): KeyID is a surrogate api_keys.id UUID,
+	// never the bearer secret, but the field name alone is enough to trip
+	// the scanner, and repeatedly re-litigating a false positive on an auth
+	// path is worse than not logging a field AccountID+TenantID already
+	// make redundant for identifying the account. Guard the removal so it
+	// cannot silently come back.
+	if strings.Contains(got, "key-repro") {
+		t.Fatalf("expected KeyID to no longer appear in the log output, got %q", got)
+	}
+}
+
+// TestTenantUUIDSilentOnSuccess guards the inverse: a resolved tenant must
+// not spam the log on every ordinary request.
+func TestTenantUUIDSilentOnSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s := AuthSnapshot{KeyID: "key-ok", AccountID: "acct-ok", TenantID: uuid.New().String()}
+	if _, err := s.TenantUUID(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output on success, got %q", buf.String())
 	}
 }

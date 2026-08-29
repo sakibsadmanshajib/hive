@@ -1,7 +1,9 @@
 package errors
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 
@@ -18,9 +20,97 @@ const (
 	CodeCrossTenant          Code = "CROSS_TENANT"
 	CodeInvalidTenantSetting Code = "INVALID_TENANT_SETTING"
 	CodeInvalidRequest       Code = "INVALID_REQUEST"
+	CodeRequestTooLarge      Code = "REQUEST_TOO_LARGE"
 	CodeServiceUnavailable   Code = "SERVICE_UNAVAILABLE"
 	CodeInternal             Code = "INTERNAL"
 )
+
+// MaxRequestBodyBytes is the request-body-size cap for the six client-facing
+// JSON endpoints issue #1250 unified: /v1/messages,
+// /v1/messages/count_tokens, /v1/chat/completions, /v1/completions,
+// /v1/embeddings, /v1/responses, and the internal session chat-dispatch
+// path. It is NOT yet the cap for every body-reading endpoint in edge-api:
+// images, audio and the agent-task/agent-schedule handlers still read a
+// client body through their own io.LimitReader, with the same
+// silent-truncation shape this constant's read helpers exist to fix.
+// Bringing those onto this constant (or a deliberately different one) is
+// tracked in issue #1255, not done here -- do not assume this constant is
+// wired in everywhere just because it is named "the" cap.
+//
+// Value: 10 MiB, matching the pre-existing OpenAI-shaped endpoints' limit
+// (the Go-rewrite baseline, #89). /v1/messages and the internal
+// chat-dispatch path previously capped at 4 MiB, introduced independently
+// and later (#168/#243) with no comment or test tying it to the existing
+// convention (issue #1250). Lowering the established 10 MiB endpoints would
+// break any caller already sending a body between 4 and 10 MiB; raising the
+// narrower ones to match is a pure widening and cannot break an existing
+// caller. Note this is still narrower than the real Anthropic API's own 32
+// MB limit, so a client sized to the real API can still be refused here;
+// widening further than 10 MiB is a separate, not-yet-made call.
+const MaxRequestBodyBytes = 10 << 20 // 10 MiB
+
+// This constant-index trick is a compile-time assertion: MaxRequestBodyBytes
+// must stay a whole number of MiB. RequestTooLargeMessage below reports it
+// via integer division, which silently produces a wrong number (10 MiB
+// claimed while a 10.5 MiB body is actually accepted, or "0 MiB" for a value
+// under 1 MiB) if that ever stops holding. Indexing a 1-element array with a
+// non-zero constant is a compile error ("array index out of bounds"), so a
+// non-whole-MiB value fails the build instead of drifting quietly at
+// runtime.
+var _ = [1]struct{}{}[MaxRequestBodyBytes%(1<<20)]
+
+// A note for every call site that wraps r.Body with http.MaxBytesReader
+// against this constant (anthropic, inference, chat): its connection-close
+// signal cannot fire here. MaxBytesReader type-asserts the ResponseWriter it
+// is given against net/http's unexported interface{ requestTooLarge() }, but
+// by the time a request reaches any of those handlers the writer is already
+// wrapped by this codebase's own middleware (embedding http.ResponseWriter
+// as an interface, which promotes only Header/Write/WriteHeader), so the
+// assertion always fails. This is not a bug: net/http falls back to
+// draining up to its own bounded post-handler budget before giving up on
+// keep-alive, which is the same behavior the io.LimitReader this replaced
+// also had. It only means MaxBytesReader is not granting the connection
+// teardown optimisation its use might suggest -- do not later "fix" this by
+// draining the body dry, since that would enable keep-alive reuse with
+// megabytes of a rejected upload still unread on the wire.
+
+// RequestTooLargeMessage is the standard, limit-naming message every
+// body-size refusal uses. The number in the client-facing text cannot drift
+// from MaxRequestBodyBytes given the compile-time guard above keeping the
+// constant a whole number of MiB (the division here is otherwise silently
+// lossy for a non-whole value).
+func RequestTooLargeMessage() string {
+	return fmt.Sprintf("Request body exceeds the maximum allowed size of %d MiB.", MaxRequestBodyBytes/(1<<20))
+}
+
+// trustedBodyKey marks a request context as carrying a body that needs no
+// MaxRequestBodyBytes re-check. It is only ever set below, server-side, on a
+// cloned request built from bytes already in memory -- never derived from
+// any client-supplied header -- so it cannot be spoofed by an inbound
+// request.
+type trustedBodyKey struct{}
+
+// WithTrustedBody marks ctx as carrying a request body that is already fully
+// resident in memory and was already validated against MaxRequestBodyBytes
+// at the original ingress boundary (e.g. the Anthropic Messages surface
+// translating a client request before delegating it, in-process, to the
+// OpenAI chat-completions path). Re-applying the same byte cap to that
+// translated body adds no DoS protection -- the bytes are already fully
+// allocated -- and can only reject a request the translation step grew past
+// the cap the original body already cleared (PR #1273 review finding 2:
+// Stream/StreamOptions alone are unconditionally added to every /v1/messages
+// request, so a client body one byte under the cap becomes, after
+// translation, a translated body over it). IsTrustedBody is the read side.
+func WithTrustedBody(ctx context.Context) context.Context {
+	return context.WithValue(ctx, trustedBodyKey{}, true)
+}
+
+// IsTrustedBody reports whether ctx belongs to a request whose body a
+// capped read helper should skip re-validating. See WithTrustedBody.
+func IsTrustedBody(ctx context.Context) bool {
+	v, _ := ctx.Value(trustedBodyKey{}).(bool)
+	return v
+}
 
 var stableErrorLeakPatterns = []*regexp.Regexp{
 	// Provider names — extended to cover Google/Gemini/Mistral/Cohere/
@@ -52,6 +142,8 @@ func stableType(status int) string {
 		return "FORBIDDEN"
 	case status == http.StatusBadRequest:
 		return "INVALID_REQUEST"
+	case status == http.StatusRequestEntityTooLarge:
+		return "REQUEST_TOO_LARGE"
 	case status == http.StatusServiceUnavailable:
 		return "SERVICE_UNAVAILABLE"
 	case status >= http.StatusInternalServerError:

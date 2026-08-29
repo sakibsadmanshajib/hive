@@ -2,15 +2,13 @@ package inference
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 )
 
 // handleCompletions handles POST /v1/completions.
 func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
-	if err != nil {
-		writeInvalidBodyError(w)
+	body, ok := readLimitedBody(w, r)
+	if !ok {
 		return
 	}
 
@@ -26,6 +24,18 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 	}
 	if len(req.Prompt) == 0 {
 		writeMissingFieldError(w, "prompt")
+		return
+	}
+	// Same refusal as the chat surface (issue #1283): one choice per request,
+	// declared rather than silently delivered.
+	if unsupportedChoiceCount(req.N) {
+		writeUnsupportedChoiceCountError(w)
+		return
+	}
+	// best_of is the same defect and takes the same refusal, reusing the same
+	// predicate: absent and 1 are servable, everything else is not.
+	if unsupportedChoiceCount(req.BestOf) {
+		writeUnsupportedBestOfError(w)
 		return
 	}
 

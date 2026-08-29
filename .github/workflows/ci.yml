@@ -214,10 +214,11 @@ jobs:
           #     boots (deploy/docker/Dockerfile.edge-api,
           #     Dockerfile.control-plane) before Playwright runs.
           #   - packages/storage/*, packages/audit-canonical/*,
-          #     packages/embedmodel/*   go.work members actually imported
-          #     by edge-api and/or control-plane's non-test source
-          #     (confirmed by grep, not assumed), so a change here changes
-          #     the built images even though the path isn't under apps/.
+          #     packages/embedmodel/*, packages/sanitize/*   go.work
+          #     members actually imported by edge-api and/or
+          #     control-plane's non-test source (confirmed by grep, not
+          #     assumed), so a change here changes the built images even
+          #     though the path isn't under apps/.
           #     packages/dbtest is deliberately NOT in this list: it is
           #     imported only from _test.go files, and the Dockerfiles
           #     below build ./cmd/server, which never compiles tests, so a
@@ -259,7 +260,7 @@ jobs:
             case "$f" in
               apps/web-console/* | apps/edge-api/* | apps/control-plane/* \
               | packages/storage/* | packages/audit-canonical/* \
-              | packages/embedmodel/* | deploy/docker/* \
+              | packages/embedmodel/* | packages/sanitize/* | deploy/docker/* \
               | supabase/migrations/* | deploy/supabase/init/* \
               | scripts/ci-throwaway-db.sh | scripts/ci-supabase-stack.sh \
               | scripts/apply-migrations.sh | .github/ci/test-db-bootstrap.sql \
@@ -327,6 +328,8 @@ jobs:
             path: ./apps/control-plane
           - module: storage
             path: ./packages/storage
+          - module: sanitize
+            path: ./packages/sanitize
           - module: agent-engine
             path: ./apps/agent-engine
     steps:
@@ -341,6 +344,7 @@ jobs:
             apps/edge-api/go.sum
             apps/control-plane/go.sum
             packages/storage/go.sum
+            go.work.sum
             apps/agent-engine/go.sum
 
       - name: go vet
@@ -670,6 +674,24 @@ jobs:
       # only touches workflows or Dockerfiles.
       - if: needs.changes.outputs.run != 'false'
         run: node .github/ci/lint-deploy-paths-filter.mjs
+
+      # Regression guard for deploy-drift-watchdog.yml's grace-window
+      # freshness check. Before this test existed, that check read main's
+      # tip commit date instead of the newest covered commit's date, so an
+      # unrelated uncovered commit landing shortly after a genuinely stale
+      # covered commit reset the apparent freshness and masked real drift
+      # (PR #1249 and PR #1246 merging 8 seconds apart is the shape that
+      # exposed it). Wired here, in a required check, for the same reason
+      # lint-deploy-paths-filter.mjs above is: a workflow-only change must
+      # not be able to reintroduce this without CI noticing.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/newest-covered-commit.test.mjs
+
+      # Regression guard for the set-compose-project-name.sh --check
+      # collision detector (issue #1242). No docker daemon needed: it stubs
+      # `docker` on PATH with a fake `ps` line.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-set-compose-project-name.sh
 
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:tenant-setting

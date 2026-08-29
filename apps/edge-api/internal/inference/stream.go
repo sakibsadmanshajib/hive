@@ -15,7 +15,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
+
+// sseScanLineMaxBytes is the maximum single SSE line either relay loop in
+// this package (executeStreaming, executeResponsesStreaming) accepts from
+// upstream before bufio.Scanner reports bufio.ErrTooLong. Both loops pass it
+// as scanner.Buffer's max argument. Named rather than a bare literal so the
+// oversized-line regression tests (stream_scanner_err_test.go,
+// stream_responses_scanner_err_test.go) stay correct if this value ever
+// changes, instead of quietly testing under the real limit.
+const sseScanLineMaxBytes = 512 * 1024
 
 // UsageAccumulator tracks token usage and output text across SSE streaming chunks.
 // Content is recorded so the usage clamp can recompute completion_tokens when
@@ -204,7 +214,17 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
-	// 2c. Bound the request for a variable-price alias, before dispatch. Its
+	// 3c. Read the caller's own completion ceiling BEFORE any outbound rewrite,
+	// same contract as the sync path's step 2c (issue #1283).
+	ceiling := requestedCompletionCeiling(endpoint, body)
+
+	// And pin the outbound body to it, same contract as the sync path: two
+	// contradictory ceilings must not reach the provider as the larger one
+	// while settlement holds the request to the smaller. See
+	// pinCompletionCeiling.
+	body = pinCompletionCeiling(body, endpoint, ceiling)
+
+	// 3d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
 	// every fixed-price alias.
@@ -213,17 +233,6 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 	body = boundedBody
-
-	// Reasoning headroom, same contract as the sync path's step 2d (issue
-	// #1171): inflate the ceiling fields present by the pool reserve so
-	// hidden reasoning spends the reserve. Applied before the reservation is
-	// created and before any byte reaches the client, which keeps the stream
-	// retryable up to this point; a mid-stream empty-content retry is not
-	// possible once chunks have flowed, so the streaming path gets headroom
-	// only. Its settlement side is PR #1220's in-flight territory.
-	if headroomBody, inflated := applyReasoningHeadroom(body, endpoint, route.ReasoningReserveTokens); inflated {
-		body = headroomBody
-	}
 
 	// 4. Start attempt
 	requestID := uuid.New().String()
@@ -270,8 +279,30 @@ func (o *Orchestrator) executeStreaming(
 		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, ceiling, accumulator, string(body), accumulator.Content.String())
 	}()
+
+	// Force upstream usage accounting on a provider verified to honor it
+	// (#1226): without this, a caller that never set stream_options.
+	// include_usage itself gets no terminal usage frame from a provider that
+	// requires the flag, and settlement (#1215) falls back to capturing the
+	// full reservation hold instead of the real charge -- fail-closed and
+	// correct, but a hold is provably wrong far more often than it needs to
+	// be. Reuses the single metering.RewriteBody implementation the
+	// chat-orchestrator path already forces unconditionally
+	// (apps/edge-api/internal/chat/dispatch.go) rather than a second copy;
+	// gated per provider here because, unlike that internal-only surface,
+	// this path can reach an upstream the flag has never been verified
+	// against. This does not change what Hive bills for -- see the
+	// includeUsage-gated strip below, which keeps the flag's effect
+	// internal to settlement for a caller that never asked for it.
+	if metering.SupportsIncludeUsage(route.Provider) {
+		if rewritten, rewriteErr := metering.RewriteBody(body); rewriteErr == nil {
+			body = rewritten
+		} else {
+			log.Printf("inference: include_usage rewrite failed request_id=%s provider=%s: %v", requestID, route.Provider, rewriteErr)
+		}
+	}
 
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
 	// have been written to the client yet at this point).
@@ -317,7 +348,7 @@ func (o *Orchestrator) executeStreaming(
 	// 9. Relay SSE chunks
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer for large chunks
-	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
 	// mintedID is reused for every chunk of this stream: a client-visible id
 	// must be stable within one response, and must match the shape
@@ -374,6 +405,13 @@ func (o *Orchestrator) executeStreaming(
 				// the terminal chunk once all deltas are flushed.
 				if chunk.Usage != nil {
 					accumulator.ClampUsage(chunk.Usage, upstreamChunkID, aliasID, endpoint)
+					// Cap the metered completion count at the caller's own
+					// ceiling (#1283). Applied to the chunk BEFORE Accumulate
+					// copies it and before the frame is re-marshalled, so the
+					// ledger charge and the usage frame the caller receives are
+					// the same number by construction rather than by two
+					// clamps agreeing.
+					clampUsageToCeiling(chunk.Usage, route, ceiling, endpoint, aliasID)
 					// Keep the untyped bytes only for a route that settles
 					// against the upstream's reported cost; see RawUsageChunk.
 					if route.Pricing.IsUpstreamActual() {
@@ -382,6 +420,24 @@ func (o *Orchestrator) executeStreaming(
 				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk, aliasID)
+
+				// The caller's OWN request decides whether a usage-bearing
+				// frame is contract-visible (#1226), never the include_usage
+				// this gateway may have just forced upstream for billing
+				// alone: accumulation above already ran unconditionally, so
+				// billing sees every frame regardless. A caller who never
+				// set stream_options.include_usage itself must see the same
+				// stream shape it always has. A usage-only frame (no delta,
+				// no finish_reason -- the dedicated terminal chunk an
+				// OpenAI-compatible upstream emits for this flag) is dropped
+				// outright rather than forwarded empty; a frame that also
+				// carries real content is forwarded with usage stripped.
+				if !includeUsage {
+					chunk.Usage = nil
+					if len(chunk.Choices) == 0 {
+						continue
+					}
+				}
 
 				if suppressPostFinish {
 					continue
@@ -432,6 +488,44 @@ func (o *Orchestrator) executeStreaming(
 		// Pass through event: lines and other SSE fields
 		fmt.Fprintf(w, "%s\n", line)
 		flusher.Flush()
+	}
+
+	// 9b. A read/token error ended the relay before [DONE] arrived -- most
+	// commonly bufio.ErrTooLong (the 512 KiB scanner.Buffer limit set above),
+	// occasionally a genuine upstream connection drop. Previously this was
+	// never checked at all (issue #1255 HIGH #1): the client just saw the
+	// connection stop, with no error frame, no [DONE], and nothing in the
+	// server log. err.Error() is never put in the client-facing message --
+	// a net/http read error can carry the upstream's own address, exactly
+	// the leak apierrors.WriteProviderBlindUpstreamError exists to prevent
+	// everywhere else -- full detail goes to the operator log only. Settlement
+	// (the deferred settleStream call) is untouched by this branch: it reads
+	// accumulator state that is already final by this point, the same state
+	// it would have read without this check.
+	//
+	// ctx.Err() == nil is required, not optional: r.Context() cancellation
+	// (a client hitting stop, or just navigating away) tears down the
+	// in-flight upstream body read the exact same way a real relay failure
+	// does, so scanner.Err() is context.Canceled on a routine disconnect too.
+	// Without this guard every ordinary cancellation would log "SSE relay
+	// aborted" and write a stream_interrupted frame to an already-dead
+	// socket, burying the ErrTooLong signal this PR exists to surface under
+	// the far more common disconnect case. Same distinction settleStream
+	// already draws via reqCtx.Err() a few dozen lines below (client
+	// disconnect vs. upstream_error) -- settlement still logs and accounts
+	// for a disconnect on its own path regardless of this branch, so nothing
+	// goes unrecorded by skipping it here.
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("inference: chat completions SSE relay aborted request_id=%s alias=%s endpoint=%s err=%v",
+			requestID, aliasID, endpoint, err)
+		streamRelayAborted.WithLabelValues(aliasID, endpoint).Inc()
+		code := "stream_interrupted"
+		if errPayload, marshalErr := json.Marshal(apierrors.NewError("api_error",
+			"The response stream ended unexpectedly.", &code)); marshalErr == nil {
+			fmt.Fprintf(w, "data: %s\n\n", errPayload)
+			flusher.Flush()
+		}
+		return nil
 	}
 
 	// 10. Synthesize terminal usage chunk if requested but upstream didn't send one
@@ -533,13 +627,28 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // reason the figure is defensible. The catalog conversion here does not change
 // that: it only turns the estimated token count into the alias's price, so an
 // under-counted estimate stays under-counted in credits too.
-func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64, prompt, content string) (credits int64, confirmed bool, delivered bool) {
+func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64, prompt, content string, ceiling int64) (credits int64, confirmed bool, delivered bool) {
 	if hasUsage && freshInputTokens+cacheReadTokens+cacheWriteTokens+outputTokens > 0 {
 		return CreditsForTokens(route, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens), true, true
 	}
 	completion := estimateCompletionTokens(content)
 	if completion == 0 {
 		return 0, false, false
+	}
+	// Bound the estimate by the ceiling the caller set (#1283). This branch is
+	// reached exactly when the upstream sent no usable usage block, which is
+	// also exactly when clampUsageToCeiling had no usage object to cap: without
+	// this, the one settlement path that prices from content length was the one
+	// path with no ceiling on it at all, and a 200 carrying content and no
+	// usage block billed 41 times a max_tokens of 8. The streaming caller
+	// survived that only because its unconfirmed branch discards this figure
+	// for a hold capture that is already bounded; the synchronous caller has no
+	// such override. A guess about how many tokens some text came to may not
+	// exceed the number the caller authorized.
+	if ceiling > 0 && completion > ceiling {
+		log.Printf("inference: bounding a content-length completion estimate at the requested ceiling alias=%s estimated_completion_tokens=%d requested_max_tokens=%d",
+			route.AliasID, completion, ceiling)
+		completion = ceiling
 	}
 	// A content-based estimate carries no cache breakdown at all: nothing
 	// downstream of a byte-length guess can tell a cache token apart from a
@@ -571,7 +680,7 @@ func settlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens,
 // route carries the alias's catalog price, which is what the charge is derived
 // from (#688); it is the same route the request was dispatched to, so a charge
 // can never be priced off a different alias than the one that served it.
-func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, route SelectRouteResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
+func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, route SelectRouteResult, requestID, endpoint, model string, ceiling int64, acc *UsageAccumulator, promptBody, content string) bool {
 	// Parse promptBody (the raw request bytes) down to just the message/input
 	// text before estimating -- see promptText in usage_clamp.go for why the
 	// raw bytes themselves must never be counted directly (issue #602).
@@ -595,7 +704,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
-		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content, ceiling)
 	}
 
 	// A frame reached the caller even though nothing accumulated: an
@@ -650,7 +759,17 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// stream_options.include_usage or shipped unparseable usage frames.
 	if !confirmed {
 		if reservation.ID != "" {
-			credits = reservation.Held()
+			// Bounded by the caller's own completion ceiling (#1283), for the
+			// same reason the sync path's zero-content capture is: the hold is
+			// a flat authorization floor, so capturing it whole against a
+			// request capped at a handful of completion tokens breaches the
+			// never-bill-past-the-ceiling invariant far harder than the
+			// undercharge this capture exists to prevent. It only ever lowers
+			// the figure, and never to zero, so the fail-closed property is
+			// untouched.
+			credits = capCaptureAtCeiling(route, ceiling,
+				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, endpoint, []byte(promptBody)),
+				acc.CachedTokens, acc.CacheWriteTokens, reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
 		log.Printf("inference: ERROR stream_usage_block_missing request_id=%s reservation_id=%s endpoint=%s model=%s captured_reservation_credits=%d content_bytes=%d: upstream sent no usable usage block; settled at the reservation hold per D-034 (#1215)",

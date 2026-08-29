@@ -1,12 +1,77 @@
 package inference
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
+
+// readLimitedBody reads r.Body up to apierrors.MaxRequestBodyBytes via
+// http.MaxBytesReader, which errors instead of silently truncating an
+// oversized body. Before this, io.LimitReader truncated silently; the
+// truncated bytes then failed json.Unmarshal and the caller saw a lying
+// "Invalid request body." with no mention of size anywhere (issue #1250).
+// Shared by every inference-package endpoint that decodes a client-supplied
+// JSON body (chat/completions, completions, embeddings, responses), so the
+// cap and its error shape can only diverge by editing this one function.
+//
+// apierrors.IsTrustedBody(r.Context()) skips the cap entirely: the
+// /v1/messages surface delegates here with a translated body that is
+// already fully in memory and was already validated at its own ingress
+// boundary, so re-capping it can only wrongly reject a client body that
+// never exceeded anything (#1273 review finding 2).
+//
+// This read happens before credential validation for an API-key (hk_)
+// caller: the authorizer only runs inside executeSync's own Authorize step,
+// downstream of every call site here. An unauthenticated caller can
+// therefore make this handler buffer up to MaxRequestBodyBytes. audio and
+// images validate before reading for this reason; this package does not,
+// and this PR does not reorder it (a bigger, riskier change than fixing the
+// body-size cap itself). The ContentLength pre-check above mitigates the
+// common case (a declared-oversize body is rejected at ~0 bytes buffered
+// rather than up to the cap), and the outer http.MaxBytesHandler in
+// cmd/server/main.go already allows a much larger pre-auth body on other
+// routes, so this is a real but bounded, pre-existing exposure, not one
+// this PR meaningfully worsens.
+func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if !apierrors.IsTrustedBody(r.Context()) {
+		// Reject a declared oversize body before reading anything, mirroring
+		// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
+		// optimisation, not an error-delivery fix: it bounds the server's
+		// peak buffering for a declared-oversize body instead of reading up
+		// to the cap before erroring, but the client sees the 413 no later
+		// (often earlier), so it does not make an honest error any more
+		// reachable, and ContentLength is -1 when unknown (chunked), which
+		// fails this comparison and falls through to MaxBytesReader below, a
+		// no-op for that transfer encoding.
+		if r.ContentLength > apierrors.MaxRequestBodyBytes {
+			writeRequestTooLargeError(w)
+			return nil, false
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, apierrors.MaxRequestBodyBytes)
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeRequestTooLargeError(w)
+			return nil, false
+		}
+		writeInvalidBodyError(w)
+		return nil, false
+	}
+	return body, true
+}
+
+func writeRequestTooLargeError(w http.ResponseWriter) {
+	code := "request_too_large"
+	apierrors.WriteError(w, http.StatusRequestEntityTooLarge, "invalid_request_error",
+		apierrors.RequestTooLargeMessage(), &code)
+}
 
 func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 	code := "unsupported_parameter"
@@ -15,6 +80,67 @@ func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 		msg = fmt.Sprintf("Model '%s' does not support parameter: %s. Choose an alias with tool-calling capability.", model, param)
 	}
 	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error", msg, &code, param)
+}
+
+// writeUnsupportedChoiceCountError refuses a request asking for a number of
+// choices this gateway cannot serve (issue #1283).
+//
+// n was declared on the request structs and read by nothing: it was forwarded
+// upstream, ignored, and one choice came back with HTTP 200 and no indication
+// the parameter had been dropped. Accept-and-silently-truncate is the one
+// outcome the OpenAI contract does not allow, because a caller has no way to
+// tell a parameter that was honoured from one that vanished.
+//
+// Rejecting rather than honouring, because no route in this catalog can serve
+// n > 1: the free pool's Groq members accept only n=1 on their
+// OpenAI-compatible surface, and OpenRouter does not implement the parameter
+// across the pool either. Honouring it would also multiply generated tokens
+// against a single per-request max_tokens ceiling, which is the settlement
+// invariant in completion_ceiling.go.
+//
+// Provider-blind by construction: the message names the parameter and nothing
+// about who serves the request.
+//
+// ponytail: a flat refusal, not a capability lookup. Give it a
+// provider_capabilities column the day a route can actually serve n > 1.
+func writeUnsupportedChoiceCountError(w http.ResponseWriter) {
+	code := "unsupported_parameter"
+	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+		"This endpoint generates exactly one choice per request. Omit 'n' or set it to 1, and send multiple requests if you need multiple completions.",
+		&code, "n")
+}
+
+// writeUnsupportedBestOfError refuses a legacy-completions request that asks
+// the provider to generate several candidates server-side and hand back only
+// the best one (issue #1283, review finding 5).
+//
+// Identical defect to n above, and the same remedy. Nothing in this package
+// read best_of: the outbound body is re-marshalled from a map, so every field
+// the caller sent survives byte for byte and best_of reached the provider
+// intact, while the generated OpenAPI contract advertised it as supported.
+//
+// It costs money in both directions. Upstream it multiplies generated tokens
+// against a single per-request completion ceiling, which is the settlement
+// invariant completion_ceiling.go exists to hold. Downstream, a provider that
+// honours it bills the caller for candidates they never receive, and one that
+// drops it answers 200 with a single candidate and no indication the parameter
+// vanished, which is the accept-and-silently-truncate outcome the OpenAI
+// contract does not allow.
+//
+// ponytail: a flat refusal, not a capability lookup, exactly like the n guard
+// above. Give it a provider_capabilities column the day a route can serve it.
+func writeUnsupportedBestOfError(w http.ResponseWriter) {
+	code := "unsupported_parameter"
+	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+		"This endpoint generates exactly one completion per request. Omit 'best_of' or set it to 1.",
+		&code, "best_of")
+}
+
+// unsupportedChoiceCount reports whether the caller asked for a choice count
+// this gateway cannot serve. Absent and 1 are servable; everything else,
+// including the 0 and the negatives OpenAI itself rejects, is not.
+func unsupportedChoiceCount(n *int) bool {
+	return n != nil && *n != 1
 }
 
 func writeModelNotFoundError(w http.ResponseWriter, model string) {

@@ -8,7 +8,7 @@ Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md`
 
 The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.
 
-This repo also carries project-level skills under `.claude/skills/` (`memory-tools`, `review-changes`, `refactor-safely`, `debug-issue`, `explore-codebase`), routed only here since the global skill router cannot enumerate every project's local skills. Check that directory for a match before reaching for a global equivalent.
+This repo also carries project-level skills under `.claude/skills/` (`memory-tools`, `review-changes`, `refactor-safely`, `debug-issue`, `explore-codebase`, `vault-search`, `vault-decisions`, `vault-staleness`, `vault-write`), routed only here since the global skill router cannot enumerate every project's local skills. Check that directory for a match before reaching for a global equivalent.
 
 
 # Hive
@@ -35,6 +35,16 @@ cp .env.example .env
 
 See `.env.example` for all vars with inline comments. Payment rail keys (Stripe, bKash, SSLCommerz) optional — services start without them.
 Supabase Storage only object storage backend. Enable S3 protocol in Supabase Storage, pre-create `hive-files` + `hive-images` buckets, provide all S3 vars before start `edge-api` or `control-plane`.
+
+If this checkout is a git worktree (anything under `.claude/worktrees/` or a
+sibling directory, not the canonical `hive` checkout), run
+`scripts/set-compose-project-name.sh` once now, before any `docker compose`
+command below (both the Run and Testing sections use them). Compose keys
+container identity on the project name, which defaults to `hive` for every
+checkout, so the same documented command run from two worktrees can recreate
+or crash each other's containers (issue #1242, PR #1249). The script is a
+no-op on the canonical `hive` checkout (what the demo box and CI use), so it
+never changes that project name.
 
 ### 2. Run
 
@@ -126,6 +136,9 @@ detail: `deploy/apptainer/README.md`.
 ## Commands
 
 ### Testing (always use Docker)
+
+Worktree checkout? See the worktree note under "1. Environment" above before
+running these.
 
 ```bash
 # Go unit tests. The toolchain image is Alpine with ENTRYPOINT ["/bin/sh","-c"],

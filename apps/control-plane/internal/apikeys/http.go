@@ -677,6 +677,13 @@ func keyViewItem(view KeyView) map[string]interface{} {
 			"group_names": view.AllowlistSummary.GroupNames,
 			"label":       view.AllowlistSummary.Label,
 		},
+		// spend_credits and budget_limit_credits are raw integers for the
+		// console to format (lib/format/model-pricing.ts) and, for the limit,
+		// to pre-fill an edit form with. budget_summary.label already carries
+		// a human sentence version of the limit but no machine-readable value
+		// a UI could edit against.
+		"spend_credits":        view.SpendCredits,
+		"budget_limit_credits": view.BudgetLimitCredits,
 	}
 	return item
 }

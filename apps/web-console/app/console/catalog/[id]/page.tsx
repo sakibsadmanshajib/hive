@@ -1,6 +1,9 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 import { notFound, redirect } from "next/navigation";
+
+import { chatModelUrl } from "@/lib/chat-link";
 
 import {
   getAccountProfile,
@@ -74,6 +77,7 @@ export default async function ModelDetailPage(
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console/catalog"
       topbar={
@@ -87,12 +91,27 @@ export default async function ModelDetailPage(
         title={model.display_name || model.id}
         description={model.summary || undefined}
         actions={
-          <Link
-            href="/console/catalog"
-            className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
-          >
-            Back to catalog
-          </Link>
+          <>
+            <a
+              href={chatModelUrl(model.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Opens Hive Chat with this model preselected"
+              className={cn(buttonVariants({ variant: "accent", size: "sm" }))}
+            >
+              Try in chat
+              <ArrowUpRight size={14} aria-hidden="true" />
+            </a>
+            <Link
+              href="/console/catalog"
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "sm" }),
+              )}
+            >
+              Back to catalog
+              <ArrowRight size={14} aria-hidden="true" />
+            </Link>
+          </>
         }
       />
 

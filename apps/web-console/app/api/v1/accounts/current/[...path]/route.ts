@@ -28,6 +28,8 @@ import {
   getLedgerEntries,
   initiateCheckout,
   revokeApiKey,
+  updateApiKeyBudget,
+  type UpdateApiKeyBudgetInput,
 } from "@/lib/control-plane/client";
 
 type Params = { params: Promise<{ path: string[] }> };
@@ -83,6 +85,10 @@ const UUID_RE =
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   const body: unknown = await request.json().catch(() => null);
   return isRecord(body) ? body : {};
+}
+
+function isBudgetKind(value: unknown): value is UpdateApiKeyBudgetInput["budgetKind"] {
+  return value === "none" || value === "lifetime" || value === "monthly";
 }
 
 export async function GET(request: NextRequest, { params }: Params): Promise<Response> {
@@ -154,6 +160,58 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
       return NextResponse.json(await revokeApiKey(path[1]));
     } catch (err) {
       return errorResponse(err, "Failed to revoke API key");
+    }
+  }
+
+  // POST /api/v1/accounts/current/api-keys/{keyId}/policy
+  //
+  // Sets or clears a key's credit cap. This is the browser's only path to the
+  // control-plane's real enforcement mechanism (apps/edge-api authz.CheckAccess
+  // reads budget_kind/budget_limit_credits off the resolved snapshot on every
+  // request) -- there is no separate "display-only" limit anywhere in this
+  // surface, so this route is what makes the New Key modal's credit limit
+  // field actually bind, not just render.
+  if (path.length === 3 && path[0] === "api-keys" && path[2] === "policy") {
+    if (!UUID_RE.test(path[1])) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const body = await readBody(request);
+    const budgetKind = body.budget_kind;
+    if (!isBudgetKind(budgetKind)) {
+      return NextResponse.json(
+        { error: "budget_kind must be none, lifetime, or monthly" },
+        { status: 400 },
+      );
+    }
+    let budgetLimitCredits: number | null = null;
+    if (budgetKind !== "none") {
+      const rawLimit = body.budget_limit_credits;
+      // Same float64-corruption guard as the checkout branch above: a limit
+      // past Number.MAX_SAFE_INTEGER is already rounded by the time it is
+      // parsed, and forwarding it would set an enforcement ceiling the
+      // customer never actually chose.
+      if (
+        typeof rawLimit !== "number" ||
+        !Number.isFinite(rawLimit) ||
+        !Number.isInteger(rawLimit) ||
+        rawLimit <= 0 ||
+        rawLimit > Number.MAX_SAFE_INTEGER
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "budget_limit_credits must be a positive integer within Number.MAX_SAFE_INTEGER when budget_kind is not none",
+          },
+          { status: 400 },
+        );
+      }
+      budgetLimitCredits = rawLimit;
+    }
+    try {
+      await updateApiKeyBudget(path[1], { budgetKind, budgetLimitCredits });
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      return errorResponse(err, "Failed to update the key's credit limit");
     }
   }
 

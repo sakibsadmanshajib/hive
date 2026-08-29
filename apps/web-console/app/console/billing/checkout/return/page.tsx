@@ -53,6 +53,7 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active={BILLING_PATH}
       topbar={<span className="font-medium text-[var(--color-ink-2)]">Billing</span>}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -1290,5 +1291,96 @@ func TestDegradedHealthBodyNamesNoInternalComponent(t *testing.T) {
 		if strings.Contains(body, leak) {
 			t.Fatalf("degraded /health body leaks %q: %s", leak, rec.Body.String())
 		}
+	}
+}
+
+// modelsHandlerTestFixtures builds a catalog client and an authorizer that both
+// accept the one API key these two tests present.
+func modelsHandlerTestFixtures(t *testing.T) (*edgecatalog.Client, *authz.Authorizer) {
+	t.Helper()
+	var sawPath string
+	seeded := `{"models":[{"id":"hive-default","object":"model","created":1716935002,"owned_by":"hive"}],"catalog":[]}`
+	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t, seeded, seeded, &sawPath))
+	authorizer := newTestAuthorizer(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"tenant_id":"`+uuid.New().String()+`",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`)
+	return client, authorizer
+}
+
+// TestModelsHandlerServesAnAnthropicSDKClient is the issue #1259 wiring guard,
+// exercising GET /v1/models exactly as it is registered rather than the inner
+// OpenAI handler alone.
+//
+// A real Anthropic SDK client sends the credential on x-api-key and never on
+// Authorization. Two things then have to happen at this route and neither did:
+// the leaf APIKeyNormalizer has to rewrite the header (authSelectorMiddleware's
+// copy of it only exists when JWT auth is wired, so it cannot be the only one),
+// and the answer has to come back in the Anthropic list shape.
+func TestModelsHandlerServesAnAnthropicSDKClient(t *testing.T) {
+	client, authorizer := modelsHandlerTestFixtures(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("x-api-key", "hk_test")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rr := httptest.NewRecorder()
+
+	modelsHandler(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("x-api-key caller: want 200 got %d: %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Data []struct {
+			Type        string `json:"type"`
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+			CreatedAt   string `json:"created_at"`
+		} `json:"data"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, rr.Body.String())
+	}
+	if len(got.Data) != 1 {
+		t.Fatalf("data: want 1 entry got %d (%s)", len(got.Data), rr.Body.String())
+	}
+	if got.Data[0].Type != "model" || got.Data[0].ID != "hive-default" || got.Data[0].CreatedAt == "" {
+		t.Fatalf("entry is not Anthropic-shaped: %+v", got.Data[0])
+	}
+	if strings.Contains(rr.Body.String(), "owned_by") {
+		t.Errorf("Anthropic list body still carries OpenAI keys: %s", rr.Body.String())
+	}
+}
+
+// TestModelsHandlerKeepsTheOpenAIShapeForOpenAIClients is the non-regression
+// half of the route wiring: Open WebUI's model picker reads this same route
+// with a plain bearer token and must keep getting the OpenAI list.
+func TestModelsHandlerKeepsTheOpenAIShapeForOpenAIClients(t *testing.T) {
+	client, authorizer := modelsHandlerTestFixtures(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_test")
+	rr := httptest.NewRecorder()
+
+	modelsHandler(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bearer caller: want 200 got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"object":"list"`) || !strings.Contains(body, "hive-default") {
+		t.Fatalf("OpenAI-shaped caller must keep the OpenAI list: %s", body)
+	}
+	if strings.Contains(body, "display_name") || strings.Contains(body, "has_more") {
+		t.Fatalf("OpenAI-shaped caller was served the Anthropic shape: %s", body)
 	}
 }

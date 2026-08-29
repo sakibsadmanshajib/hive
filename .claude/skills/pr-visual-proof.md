@@ -39,12 +39,22 @@ the image **pixels** before you call this script. PR #578 leaked four real
 invite tokens this way.
 
 Only the image moves to the release. Commit the capture's text log under
-`docs/proof/<slug>/` in the same PR: `npm run lint:proof-tokens` scans that
-directory and nothing else, so a log left in a scratch dir or a comment is
-unscanned and the check reports green over the old corpus instead of failing.
-Nothing scans the upload itself either. A release asset is blob storage on a
-tag, not a git object, so GitHub secret scanning and GitGuardian never see it.
-A credential in pixels has no automated backstop at all.
+`docs/proof/<slug>/` in the same PR: `npm run lint:proof-tokens`
+(`tools/lint-no-token-in-proof-captures.mjs`) scans that directory and
+nothing else, so a log left in a scratch dir or a comment is unscanned and
+the check reports green over the old corpus instead of failing.
+
+Redact the credential in the text log yourself, but know what the linter
+actually gives you: it is not just a "did you remember" reminder, it
+entropy-scans every text file it finds for known credential param names
+(`token`, `code`, `access_token`, `refresh_token`, `token_hash`,
+`hashed_token`, `email_otp`) plus bare JWTs, and fails the build on a match
+that isn't an obvious placeholder. That is a real automated backstop for the
+text half, the reason PR #578's leak was catchable going forward. Screenshot
+pixels have no equivalent: nothing scans the upload itself either, since a
+release asset is blob storage on a tag, not a git object, so GitHub secret
+scanning and GitGuardian never see it. A credential in pixels has no
+automated backstop at all.
 
 **This repository is public and an upload is permanent.** The script prints
 every file it is about to publish before it uploads. Read that list. A leaked

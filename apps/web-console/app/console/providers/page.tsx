@@ -1,4 +1,6 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+
+import { isPlatformAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
@@ -15,13 +17,20 @@ import { ProvidersManager } from "@/components/providers/providers-manager";
 
 // Providers page: the platform registry of custom provider endpoints
 // (public.custom_providers, PR #199 era). The control-plane gates the list
-// and every mutation on the platform administrator, so a non-admin sees the
-// managed-by-your-administrator state rather than a broken table. Mirrors
-// app/console/marketplace/page.tsx.
+// and every mutation on the platform administrator (RequirePlatformAdmin),
+// so the page itself now refuses to render for anyone else: hidden nav is
+// not access control (#947/#948/#949 family), and a reachable URL returning
+// 200 confirms the surface exists, so a customer gets 404 instead.
+// Mirrors app/console/marketplace/page.tsx.
 export default async function ProvidersPage() {
   const viewer = await getViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
+  }
+
+  // Server-side role gate: refuse the page shell before any data fetch.
+  if (!isPlatformAdminViewer(viewer)) {
+    notFound();
   }
 
   const profile = await getAccountProfile().catch(
@@ -49,6 +58,7 @@ export default async function ProvidersPage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console/providers"
       topbar={
