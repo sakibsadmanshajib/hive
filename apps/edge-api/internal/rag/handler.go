@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 const maxTopK = 100
@@ -72,6 +73,14 @@ type Handler struct {
 	selectRoute RouteSelectFunc  // nil until WithChat is called; POST /v1/rag/chat returns 503
 	dispatch    ChatDispatchFunc // nil until WithChat is called; POST /v1/rag/chat returns 503
 	converter   Converter        // nil until WithConverter is called; binary uploads return 503
+
+	// accounting and billing are the money path for POST /v1/rag/chat, wired
+	// by WithBilling. Unlike the optional dependencies above, these are NOT
+	// optional in effect: a handler without them refuses every grounded chat
+	// request rather than serving inference it cannot charge for, which is the
+	// #669 behaviour and the one thing this must not silently fall back to.
+	accounting *inference.AccountingClient
+	billing    BillingResolver
 
 	// maxUploadBytes caps the binary/base64 upload path; see WithConverter.
 	maxUploadBytes int64

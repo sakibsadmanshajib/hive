@@ -12,13 +12,37 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 // --- fakes ---
 
+// fakeSelectRoute resolves any alias to one priced route. It carries a real
+// token price because the money path refuses an alias it cannot price (D-034),
+// so a zero-priced stub would refuse every request in every test here for a
+// reason none of them is about.
 func fakeSelectRoute(model string, err error) RouteSelectFunc {
-	return func(_ context.Context, _ string) (string, error) {
-		return model, err
+	return pricedSelectRouteErr(model, 300_000, 1_200_000, err)
+}
+
+// pricedSelectRoute resolves any alias to a route at an explicit catalog rate,
+// for the tests whose subject is the size of the charge.
+func pricedSelectRoute(model string, inPrice, outPrice int64) RouteSelectFunc {
+	return pricedSelectRouteErr(model, inPrice, outPrice, nil)
+}
+
+func pricedSelectRouteErr(model string, inPrice, outPrice int64, err error) RouteSelectFunc {
+	return func(_ context.Context, aliasID string) (inference.SelectRouteResult, error) {
+		if err != nil {
+			return inference.SelectRouteResult{}, err
+		}
+		return inference.SelectRouteResult{
+			AliasID:          aliasID,
+			LiteLLMModelName: model,
+			Provider:         "test-provider",
+			Pricing:          inference.FixedPricing(inPrice, outPrice),
+			PriceUnit:        inference.PriceUnitTokens,
+		}, nil
 	}
 }
 
@@ -57,9 +81,22 @@ type dispatchedRequest struct {
 	Messages []ChatMessage `json:"messages"`
 }
 
+// newChatTestHandler builds a chat-capable handler with the money path wired
+// to an accounting stub that always grants the hold. Billing is not optional
+// on this endpoint: an unwired handler refuses every request rather than
+// serving inference it cannot charge for (#669), so every test that expects a
+// request to be SERVED has to wire it. The tests whose subject IS the money
+// path build their own handler in billing_test.go.
 func newChatTestHandler(store *fakeStore, embed *fakeEmbedder, records *[]auditRecord, route RouteSelectFunc, dispatch ChatDispatchFunc) *Handler {
 	h := newTestHandler(store, embed, records)
-	return h.WithChat(route, dispatch)
+	acct := &ragAccounting{}
+	srv := httptest.NewServer(acct.mux())
+	// No t here, so the server is closed by the test binary's exit rather than
+	// by t.Cleanup. These are in-process listeners in a short-lived unit-test
+	// process, which is the same trade the rest of this file makes.
+	_ = srv
+	return h.WithChat(route, dispatch).
+		WithBilling(inference.NewAccountingClient(srv.URL), billableTenant())
 }
 
 func chatReq(t *testing.T, body ChatRequest, tenantID uuid.UUID) *http.Request {
