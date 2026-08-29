@@ -127,7 +127,7 @@ the surface renders 42 controls with no skills owned at all, so a presence bar
 of 1 is far below anything a healthy run sees, and only an emptied surface
 trips it.
 
-## 6. Two findings this capture produced
+## 6. What this capture found, before review added to it
 
 **The surface was outside the coverage denominator.** `surfaces.ts` swept
 `home`, `sidebar`, `model-picker`, the three composer surfaces, `user-menu`,
@@ -145,3 +145,79 @@ library, find nothing, and read it as a broken product. Issue #1397 and PR #1437
 scope uniqueness to the tenant, which is the real fix; this branch fixes the
 sentence, which still has to make sense for the many accounts on this box that
 have no tenant group at all and therefore share one namespace regardless.
+
+## 7. The `surfaces=^skills$` sweep, and the harness defect it found
+
+Review asked for one dispatch of `chat-coverage.yml` with `surfaces=^skills$`,
+on the grounds that adding a surface to the denominator without ever running
+the prove pass over it is an unchecked claim. Correct, and the run answered
+more than the question.
+
+**CI could not run it.** Run `33267620156` failed its own input check before
+Playwright started: `the live sweep needs: HIVE_QA_AGENT_EMAIL
+SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY`. All three are empty in this
+repository's Actions environment. That stream is SKIPPED, not passed, and is
+filed as issue #1459.
+
+**Run directly against the deployed box instead**, driving the real engine
+rather than a description of it: the same `STATIC_SURFACES` entry, the same
+`enumerate` with the same `SELECTOR`, the same delta subtraction, the same
+`isDestructive` and `isStateful` partition, the same `proveByClick` and the
+real `valuePass` from `persistence.ts`.
+
+**It aborted before reaching /skills**, on the home baseline:
+
+```
+baseline NOT pinned: the sidebar is not closed and neither toggle is on
+screen, so this surface cannot be pinned into a known state
+```
+
+Measured rather than guessed. On the deployed shell:
+
+```
+/open sidebar/i  -> count=0 firstVisible=false     (sidebar open)
+/close sidebar/i -> count=1 firstVisible=true
+AFTER COLLAPSE /open sidebar/i  -> count=2
+AFTER COLLAPSE /close sidebar/i -> count=0
+```
+
+Two controls named "Open Sidebar" exist once the sidebar closes. Playwright's
+strict mode makes `isVisible()` on a two-element locator throw, and
+`ensureSidebar`'s `.catch(() => false)` turned that throw into "not visible",
+so the function reported a sidebar it had just successfully collapsed as
+impossible to pin. Every surface that pins the sidebar shut inherited it, which
+is `sidebar` plus every `clickTop` surface, so the live gate could not complete
+against the shipped shell at all. `.first()` on both locators fixes it.
+
+**With that fixed, the sweep:**
+
+```
+baseline sidebar pinned: true
+baseline (home, sidebar collapsed): 27 controls
+/skills enumerated 13 raw, 3 after the delta subtraction
+  New Skill [a] / Search Skills [input] / Select view [button]
+clickable: 2, stateful: 1
+
+{ "skills": { "total": 3, "proven": 3, "deferred": 0, "unproven": [] } }
+
+PROVEN  Search Skills [input]  proof=value     -> hive-coverage-50095
+PROVEN  New Skill [a]          proof=navigate  /skills -> /skills/create
+PROVEN  Select view [button]   proof=dom       what is on screen changed
+
+3 controls, 3 proven, 0 not
+```
+
+The 13-to-3 subtraction is the `delta` correction measured: ten of the thirteen
+were the application shell, now attributed where they belong rather than
+counted twice under this surface.
+
+One correction worth recording, because a wrong red misleads as much as a wrong
+green. An earlier attempt reported `Search Skills` unproven. That was an error
+in the driver, not the surface: it routed a stateful control through
+`proveByClick` when the spec routes it through `valuePass`. The corrected run
+is the one above.
+
+This is the empty-index case, with the account owning no skills, and it is the
+weakest case rather than the strongest: a populated index adds one row and one
+active switch per skill, which is exactly the account-data variability the
+`dataDriven` classification exists to keep out of a pinned count.
