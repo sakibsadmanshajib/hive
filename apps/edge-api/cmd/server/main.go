@@ -1016,18 +1016,60 @@ func resolveMarkitdownURL() string {
 	return "http://markitdown:8700"
 }
 
-// resolveRAGMaxUploadBytes caps the binary/base64 RAG upload path. Must stay
-// in sync with the sidecar's own MAX_UPLOAD_BYTES (compose passes the same
-// value to both). 0 or invalid falls back to the package default (25MB).
-func resolveRAGMaxUploadBytes() int64 {
-	raw := strings.TrimSpace(os.Getenv("RAG_MAX_UPLOAD_BYTES"))
+// parseRAGMaxUploadBytes reads the one upload ceiling this deployment sets.
+//
+// It is not only edge-api's: compose interpolates the same
+// ${RAG_MAX_UPLOAD_BYTES} expression into the markitdown sidecar as
+// MAX_UPLOAD_BYTES and into Open WebUI, where
+// deploy/docker/owui-patches/hive_rag_env_config.py floors it into whole
+// megabytes for the chat composer's cap. One variable, three consumers, so it
+// needs one parse rule and one failure mode (issue #1428).
+//
+// Empty falls back to the package default, which is the documented contract
+// for a deployment that never sets it and is what compose's own default
+// produces anyway. A value that is present but malformed does NOT fall back.
+// It used to warn and carry on, which silently moved the product's document
+// ceiling to 25 MB while the deployment's own configuration said otherwise,
+// and this repository has a long record of warnings nobody reads. The Python
+// half now refuses to start on the same input, so falling back here would
+// leave the two halves of one variable disagreeing about what malformed means.
+func parseRAGMaxUploadBytes(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return edgerag.DefaultMaxUploadBytes
+		return edgerag.DefaultMaxUploadBytes, nil
+	}
+	// ASCII digits only, checked before ParseInt rather than relying on it.
+	// ParseInt accepts a leading sign, so "+26214400" would parse here and be
+	// refused by the Python half's isdigit() check, leaving the two consumers
+	// of one variable disagreeing about what malformed means, which is the
+	// exact class of divergence this change exists to remove.
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf(
+				"RAG_MAX_UPLOAD_BYTES=%q must be ASCII digits only, with no sign, "+
+					"separator or unit suffix; refusing to start rather than "+
+					"accepting a value deploy/docker/owui-patches/hive_rag_env_config.py "+
+					"would refuse, which would put the chat cap and the ingest "+
+					"ceiling back out of step (26214400 is 25MB)", raw)
+		}
 	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n <= 0 {
-		log.Printf("WARNING: RAG_MAX_UPLOAD_BYTES=%q is not a positive integer; using default %d", raw, edgerag.DefaultMaxUploadBytes)
-		return edgerag.DefaultMaxUploadBytes
+		return 0, fmt.Errorf(
+			"RAG_MAX_UPLOAD_BYTES=%q is not a positive whole number of bytes; "+
+				"refusing to start rather than falling back to %d, which would cap "+
+				"uploads at a size this deployment never asked for (26214400 is 25MB)",
+			raw, edgerag.DefaultMaxUploadBytes)
+	}
+	return n, nil
+}
+
+// resolveRAGMaxUploadBytes caps the binary/base64 RAG upload path, and fails
+// the process rather than the request when the ceiling is unreadable.
+func resolveRAGMaxUploadBytes() int64 {
+	n, err := parseRAGMaxUploadBytes(os.Getenv("RAG_MAX_UPLOAD_BYTES"))
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 	return n
 }

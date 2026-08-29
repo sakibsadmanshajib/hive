@@ -669,19 +669,49 @@ def test_compose_grants_the_skills_permission() -> None:
 # variable was never in the reconcile map and so was the #722 silent no-op.
 
 
-def test_upload_size_cap_is_reconciled_as_an_integer() -> None:
-    """The cap must persist as a JSON number, not the string the environment
-    carries. Open WebUI publishes this row straight to the browser as
-    `file.max_size` and `MessageInput.svelte` computes `max_size * 1024 * 1024`
-    from it, so a string happens to work in JavaScript and is still wrong: the
-    row a first boot would have seeded is an int (upstream parses the variable
-    with `int()`), and a type that differs from the seeded one is how the
-    boolean keys above went wrong before."""
+def test_the_chat_cap_is_derived_from_the_ingest_ceiling() -> None:
+    """One settable ceiling for the whole product (issue #1428).
+
+    The cap must persist as a JSON number, not a string. Open WebUI publishes
+    this row straight to the browser as `file.max_size` and
+    `MessageInput.svelte` computes `max_size * 1024 * 1024` from it, so a
+    string happens to work in JavaScript and is still wrong: the row a first
+    boot would have seeded is an int (upstream parses the variable with
+    `int()`), and a type that differs from the seeded one is how the boolean
+    keys above went wrong before."""
     config = FakeConfig({})
-    applied = reconcile(config, {"RAG_FILE_MAX_SIZE": "25"})
+    applied = reconcile(config, {"RAG_MAX_UPLOAD_BYTES": "26214400"})
     assert applied["rag.file.max_size"] == 25, applied
     assert isinstance(applied["rag.file.max_size"], int), applied
     assert config.stored["rag.file.max_size"] == 25, config.stored
+
+
+def test_the_derived_chat_cap_rounds_down() -> None:
+    """The chat surface must never accept what the ingest path refuses, so a
+    byte value that is not a whole number of megabytes rounds toward the
+    smaller cap. Rounding up would reopen the divergence one megabyte at a
+    time, in the direction that hurts: the composer would admit a file
+    `edge-api` and the markitdown sidecar would both reject."""
+    applied = hive_rag_env_config.overrides({"RAG_MAX_UPLOAD_BYTES": "27000000"})
+    assert applied["rag.file.max_size"] == 25, applied
+
+
+def test_a_second_independent_chat_cap_is_refused() -> None:
+    """`RAG_FILE_MAX_SIZE` is what produced issue #1428: it was a second,
+    independently settable ceiling for the same user action, in different
+    units, and the box's `.env` set it to 100 while the ingest path enforced
+    25. Compose no longer passes it, so it should never appear in this
+    container; if it ever does again, it must fail the boot rather than
+    quietly win or quietly lose."""
+    try:
+        hive_rag_env_config.overrides(
+            {"RAG_MAX_UPLOAD_BYTES": "26214400", "RAG_FILE_MAX_SIZE": "100"}
+        )
+    except RuntimeError as error:
+        assert "RAG_FILE_MAX_SIZE" in str(error), error
+        assert "RAG_MAX_UPLOAD_BYTES" in str(error), error
+    else:
+        raise AssertionError("a second, independent chat upload cap was accepted")
 
 
 def test_upload_type_allowlist_is_reconciled_as_a_list() -> None:
@@ -703,27 +733,44 @@ def test_a_malformed_size_cap_is_refused_rather_than_ignored() -> None:
     this module exists to end: the deployment would look configured and would
     accept a 30 MB upload anyway."""
     try:
-        hive_rag_env_config.overrides({"RAG_FILE_MAX_SIZE": "25MB"})
+        hive_rag_env_config.overrides({"RAG_MAX_UPLOAD_BYTES": "25MB"})
     except RuntimeError as error:
-        assert "RAG_FILE_MAX_SIZE" in str(error), error
+        assert "RAG_MAX_UPLOAD_BYTES" in str(error), error
     else:
-        raise AssertionError("a non-numeric RAG_FILE_MAX_SIZE was accepted")
+        raise AssertionError("a non-numeric RAG_MAX_UPLOAD_BYTES was accepted")
 
 
-def test_a_zero_size_cap_is_refused() -> None:
-    """Zero is not merely a useless cap, it is a cap the two consumers read
-    oppositely. Open WebUI's server-side check is `if max_size and len(contents)
-    > ...`, where 0 is falsy and enforces nothing, while the browser's is
-    `file.size > max_size * 1024 * 1024`, where 0 rejects every file of non-zero
-    length. A deployment set to 0 would refuse every upload in the composer
-    while leaving the API accepting files of unlimited size, and would read as
-    a working cap."""
-    try:
-        hive_rag_env_config.overrides({"RAG_FILE_MAX_SIZE": "0"})
-    except RuntimeError as error:
-        assert "RAG_FILE_MAX_SIZE" in str(error), error
-    else:
-        raise AssertionError("a zero RAG_FILE_MAX_SIZE was accepted")
+def test_a_sub_megabyte_ceiling_is_refused() -> None:
+    """Zero, and anything that floors to zero, is not merely a useless cap: it
+    is a cap the two consumers read oppositely. Open WebUI's server-side check
+    is `if max_size and len(contents) > ...`, where 0 is falsy and enforces
+    nothing, while the browser's is `file.size > max_size * 1024 * 1024`, where
+    0 rejects every file of non-zero length. A deployment there would refuse
+    every upload in the composer while leaving the API accepting files of
+    unlimited size, and would read as a working cap."""
+    for value in ("0", "1", "1048575"):
+        try:
+            hive_rag_env_config.overrides({"RAG_MAX_UPLOAD_BYTES": value})
+        except RuntimeError as error:
+            assert "RAG_MAX_UPLOAD_BYTES" in str(error), error
+        else:
+            raise AssertionError(f"RAG_MAX_UPLOAD_BYTES={value} was accepted")
+
+
+def test_a_unicode_digit_ceiling_is_refused_not_crashed_on() -> None:
+    """`str.isdigit()` is true for characters `int()` then refuses, so a
+    ceiling of "²⁵" would leave this module raising ValueError out of a
+    function whose contract is RuntimeError, and the operator would get a
+    traceback naming neither the variable nor what to do. "٣" is the other
+    half: `int()` accepts it, so without an ASCII check it would silently
+    configure a three megabyte ceiling that no grep for a number would find."""
+    for value in ("²⁵", "٣٠"):
+        try:
+            hive_rag_env_config.overrides({"RAG_MAX_UPLOAD_BYTES": value})
+        except RuntimeError as error:
+            assert "RAG_MAX_UPLOAD_BYTES" in str(error), error
+        else:
+            raise AssertionError(f"RAG_MAX_UPLOAD_BYTES={value!r} was accepted")
 
 
 def test_allowlist_entries_written_with_a_leading_dot_still_match() -> None:
@@ -755,7 +802,9 @@ def test_unset_upload_limits_leave_the_persisted_values_alone() -> None:
     nothing, so an administrator's own choice survives, and an enterprise
     deployment that never sets these is not silently capped."""
     config = FakeConfig({"rag.file.max_size": 50, "rag.file.allowed_extensions": ["pdf"]})
-    applied = reconcile(config, {"RAG_FILE_MAX_SIZE": "", "RAG_ALLOWED_FILE_EXTENSIONS": "  "})
+    applied = reconcile(
+        config, {"RAG_MAX_UPLOAD_BYTES": "", "RAG_ALLOWED_FILE_EXTENSIONS": "  "}
+    )
     assert "rag.file.max_size" not in applied, applied
     assert "rag.file.allowed_extensions" not in applied, applied
     assert config.stored["rag.file.max_size"] == 50, config.stored
@@ -768,6 +817,40 @@ def _compose_text() -> str:
     ).read_text(encoding="utf-8")
 
 
+def _compose_service_block(compose: str, service: str) -> str:
+    """The text of one compose service, from its own key to the next one.
+
+    Service keys sit at exactly two spaces of indentation under `services:`,
+    and nothing else in this file does, so that is the boundary. Returning the
+    slice rather than searching the whole document is what lets a caller assert
+    something about one service instead of about the file, which is the
+    difference between a guard and a word count.
+    """
+    match = re.search(
+        rf"^  {re.escape(service)}:$(.*?)(?=^  [a-z0-9][a-z0-9._-]*:$|\Z)",
+        compose,
+        re.S | re.M,
+    )
+    assert match, f"docker-compose.yml has no service named {service!r}"
+    return match.group(1)
+
+
+def test_compose_service_block_isolates_one_service() -> None:
+    """The slicing helper above is load bearing for the guard below it, so it
+    gets its own check. Without this, a regex that silently matched the whole
+    document would make that guard pass over anything at all."""
+    compose = _compose_text()
+    edge = _compose_service_block(compose, "edge-api")
+    markitdown = _compose_service_block(compose, "markitdown")
+    assert "MARKITDOWN_URL" in edge, "edge-api's own block was not returned"
+    assert "MARKITDOWN_URL" not in markitdown, (
+        "the slice for markitdown leaked into another service's block, so every "
+        "per-service assertion built on it is meaningless"
+    )
+    assert "hive-markitdown:ci" in markitdown, "markitdown's own block was not returned"
+    assert "hive-markitdown:ci" not in edge, "the slice for edge-api leaked"
+
+
 def _compose_allowed_extensions() -> list:
     """The allowlist docker-compose.yml actually hands the container."""
     match = re.search(
@@ -778,22 +861,58 @@ def _compose_allowed_extensions() -> list:
     return [ext.strip() for ext in match.group(1).split(",") if ext.strip()]
 
 
-def test_compose_sets_the_upload_size_cap() -> None:
-    """The reconcile only helps if compose names a value, and this variable has
-    been present with an EMPTY default since the #1108 follow-up, carrying a
-    comment that claimed it served the client-side guard. It never did: the key
-    was missing from the reconcile map, so the value could not reach a booted
-    box even when set. 25 is not a guess. `RAG_MAX_UPLOAD_BYTES` is already
-    26214400 on edge-api and on the markitdown sidecar, and Open WebUI
-    multiplies its megabyte value by 1024 * 1024, so 25 is byte for byte the cap
-    Hive already enforces on its own document ingest path."""
+def test_one_expression_sets_every_upload_ceiling() -> None:
+    """The structural half of the fix for issue #1428, and the assertion that
+    has to be able to go red.
+
+    Before this, two services held two independently settable ceilings for one
+    user action, in two different units: `RAG_MAX_UPLOAD_BYTES` in bytes on
+    edge-api and the markitdown sidecar, `RAG_FILE_MAX_SIZE` in whole megabytes
+    on the chat surface. Nothing made them agree, so PR #1426 could set the
+    chat one to 25 in compose and still be defeated by a `RAG_FILE_MAX_SIZE=100`
+    line in the deployment's own `.env`, because an explicit value beats a
+    compose fallback. That is not a number that needed correcting once more; it
+    is a mechanism.
+
+    So: one expression, interpolated identically into all three services, and
+    no second knob anywhere in the file. Re-introducing one fails here."""
     compose = _compose_text()
-    assert (
-        "RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-25}" in compose
-    ), "docker-compose.yml must cap chat uploads at the size the RAG path already enforces"
-    assert (
-        "RAG_MAX_UPLOAD_BYTES:-26214400" in compose
-    ), "the 25 MB chat cap is derived from RAG_MAX_UPLOAD_BYTES; if that moved, move both"
+    # Naming the retired variable in a comment is wanted: it is how the next
+    # reader learns why the division exists. Setting it is what must fail, so
+    # match the two shapes that would, an environment key and an interpolation,
+    # rather than the bare word.
+    for shape in ("RAG_FILE_MAX_SIZE:", "${RAG_FILE_MAX_SIZE"):
+        assert shape not in compose, (
+            f"docker-compose.yml sets {shape!r}: a second, independently settable "
+            "chat upload cap is what issue #1428 is. The chat cap is derived from "
+            "RAG_MAX_UPLOAD_BYTES by deploy/docker/owui-patches/hive_rag_env_config.py"
+        )
+    # Checked per service rather than by counting occurrences across the whole
+    # file. A bare count of three is blind to a swap: drop the expression from
+    # open-webui and duplicate it inside edge-api and the count still reads
+    # three while the property this test claims to hold is false.
+    #
+    # Matched without pinning the value, so raising the product's document
+    # ceiling stays a one-line edit in three places rather than four. What must
+    # not change is that the three agree: a test that pinned 26214400 would
+    # fail on a deliberate raise, which trains the next person to edit the test
+    # until it passes, and that is how a guard stops guarding.
+    defaults = {}
+    for service in ("edge-api", "markitdown", "open-webui"):
+        block = _compose_service_block(compose, service)
+        found = re.findall(r"\$\{RAG_MAX_UPLOAD_BYTES:-([^}]*)\}", block)
+        assert len(found) == 1, (
+            f"the {service} service must interpolate the one upload ceiling "
+            f"exactly once, found {len(found)}: {found}"
+        )
+        defaults[service] = found[0]
+
+    assert len(set(defaults.values())) == 1, (
+        f"the three services disagree about the default upload ceiling: "
+        f"{defaults}. They must interpolate one identical expression, or a "
+        f"deployment that sets nothing gets a different limit in chat than on "
+        f"its own ingest path, which is issue #1428"
+    )
 
 
 def test_compose_allowlist_refuses_executables() -> None:
@@ -853,8 +972,12 @@ def test_env_example_documents_the_upload_limits() -> None:
     env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(
         encoding="utf-8"
     )
-    for variable in ("RAG_FILE_MAX_SIZE", "RAG_ALLOWED_FILE_EXTENSIONS"):
+    for variable in ("RAG_MAX_UPLOAD_BYTES", "RAG_ALLOWED_FILE_EXTENSIONS"):
         assert variable in env_example, f".env.example does not document {variable}"
+    assert "RAG_FILE_MAX_SIZE=" not in env_example, (
+        ".env.example must not offer RAG_FILE_MAX_SIZE as a settable knob: an "
+        "operator who copies it into a real .env re-creates issue #1428"
+    )
 
 
 def main() -> None:

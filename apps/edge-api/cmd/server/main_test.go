@@ -20,6 +20,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	edgecatalog "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
+	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
 
@@ -1382,5 +1383,52 @@ func TestModelsHandlerKeepsTheOpenAIShapeForOpenAIClients(t *testing.T) {
 	}
 	if strings.Contains(body, "display_name") || strings.Contains(body, "has_more") {
 		t.Fatalf("OpenAI-shaped caller was served the Anthropic shape: %s", body)
+	}
+}
+
+// The one upload ceiling this deployment sets is shared by edge-api, the
+// markitdown sidecar and the chat composer's derived cap (issue #1428), so a
+// malformed value must fail the boot here exactly as it does in
+// deploy/docker/owui-patches/hive_rag_env_config.py. It used to warn and carry
+// on with the package default, which silently moved the product's document
+// ceiling while the deployment's own configuration said otherwise.
+func TestParseRAGMaxUploadBytes(t *testing.T) {
+	t.Run("empty falls back to the package default", func(t *testing.T) {
+		got, err := parseRAGMaxUploadBytes("")
+		if err != nil {
+			t.Fatalf("unset RAG_MAX_UPLOAD_BYTES must not be an error, got %v", err)
+		}
+		if got != edgerag.DefaultMaxUploadBytes {
+			t.Fatalf("got %d, want the package default %d", got, edgerag.DefaultMaxUploadBytes)
+		}
+	})
+
+	t.Run("whitespace is trimmed, not treated as malformed", func(t *testing.T) {
+		got, err := parseRAGMaxUploadBytes("  26214400  ")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 26214400 {
+			t.Fatalf("got %d, want 26214400", got)
+		}
+	})
+
+	// "+26214400" is the one that matters most here. strconv.ParseInt accepts a
+	// leading sign and the Python half's isdigit() check does not, so accepting
+	// it would boot edge-api at a ceiling the open-webui container refuses to
+	// start on, which is one variable with two parse rules again.
+	for _, raw := range []string{
+		"25MB", "26214400 bytes", "0", "-1", "1.5", "twenty", "+26214400", " +1 ", "26_214_400",
+	} {
+		t.Run("refuses "+raw, func(t *testing.T) {
+			got, err := parseRAGMaxUploadBytes(raw)
+			if err == nil {
+				t.Fatalf("RAG_MAX_UPLOAD_BYTES=%q was accepted, returning %d; a "+
+					"malformed ceiling must fail the boot, not fall back", raw, got)
+			}
+			if !strings.Contains(err.Error(), "RAG_MAX_UPLOAD_BYTES") {
+				t.Fatalf("error must name the variable an operator has to fix, got %q", err)
+			}
+		})
 	}
 }
