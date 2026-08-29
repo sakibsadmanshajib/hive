@@ -43,6 +43,41 @@ machine, pulled encrypted only (scripts/pull-box-backups.sh). The passphrase
 also exists off-box at /home/sakib/hive-backups/etc/passphrase-hive-demo so a
 dead box does not take its own key down with it.
 
+That pull is manual, and its staleness is now observable (issue #1491). After a
+pull whose checksums verify, and only then, `scripts/pull-box-backups.sh`
+records the repository variable `LAST_OFFBOX_BACKUP_PULL` on
+`sakibsadmanshajib/hive`, holding the pull time and the newest day copied. A
+pull that fails verification leaves the previous value untouched and exits
+non-zero, so the marker never claims a copy that did not happen.
+`deploy-drift-watchdog.yml`'s `offbox-backup-staleness` job reads that variable
+every 30 minutes and fails, opening a tracking issue, once it is older than 72
+hours or missing entirely. Absent is treated as stale, never as unknown.
+
+Why a repository variable rather than a file on the box: nothing that runs on a
+schedule can read a file on the box. Hosted runners have no SSH path to it, and
+the two workflows that do run on its self-hosted runner are triggered by deploys
+and labels rather than by a clock, while a check added to this script would be
+inert until someone hand-copied the new version into
+`/home/sakib/hive-backups/bin`. Only encrypted artifacts still cross the
+network; the marker is a timestamp and a date and involves no credential.
+
+Use a dedicated token for that write, not the ambient `gh auth login`. The dev
+machine holds the only off-box copy of the production database; before the
+marker existed its compromise yielded encrypted backups, and an ambient
+`repo`-scoped login in reach of the same machine turns that into repository
+write as well. Mint a fine-grained PAT scoped to `sakibsadmanshajib/hive` with
+`Variables: read and write` and nothing else, and pass it as `GH_TOKEN` for this
+one script.
+
+The marker is an honesty marker, not proof. Anyone who can write repository
+variables can set it to a recent timestamp with no pull behind it, and the check
+would then report green indefinitely. No `GITHUB_TOKEN` can do that (there is no
+Actions permission scope for variables at all, and no workflow in this
+repository writes one), so the actor would be an insider or whoever compromised
+the dev machine's token, which is the same threat the paragraph above is about.
+Every direction that is not a claim of freshness fails closed: absent, empty,
+unparseable, offset-less, duplicated and future-dated markers are all stale.
+
 ## Schedule, retention, capacity
 
 - systemd USER timer `hive-box-backup.timer`: 03:15 and 15:15 UTC daily,
@@ -69,6 +104,40 @@ The script posts directly to Alertmanager's v2 API on the published host port
   through resolve_timeout once a later run succeeds (success posts nothing).
 - `HiveBoxBackupStale`: posted by any `--check` invocation when the last
   success exceeds 26 hours. Catches missed runs and dead schedulers.
+
+The off-box half has its own, separate signal, because it runs somewhere else
+and had none at all until issue #1491: `deploy-drift-watchdog.yml`'s
+`offbox-backup-staleness` job. It fails and opens a GitHub issue when the last
+verified pull is more than 72 hours old, and the failure text names
+`scripts/pull-box-backups.sh` as the fix.
+
+The 72-hour threshold is deliberately looser than the on-box 26 hours. The
+writing machine is a laptop that is off for stretches, and a Friday-evening to
+Monday-morning gap is about 63 hours, so an ordinary weekend has to stay silent
+or the alarm gets muted and the gap goes unobserved again. It stays well inside
+the box's own 14-day retention, so when it does fire every missing day is still
+recoverable from the box, and it is far tighter than the six days that actually
+elapsed unnoticed on 2026-08-29.
+
+That threshold governs both halves of the marker. `pulled_at` says how recently
+somebody ran the pull; `newest_day` says how recent the data that pull copied
+actually is. They come apart with nobody at fault: a box that stops publishing
+new daily sets leaves every later pull transferring nothing, verifying the days
+already present, and refreshing `pulled_at`, so a check reading only `pulled_at`
+would report green over a copy weeks behind. `newest_day` is aged from the end
+of that UTC day, since the value has date granularity and the box's second daily
+run lands at 15:15 UTC.
+
+Two things a responder should know before chasing the wrong half:
+
+- A stale `newest_day` under a fresh `pulled_at` means the pull is working and
+  the box has published nothing new. Read `~/hive-backups/status/STATUS.txt` and
+  `systemctl --user list-timers hive-box-backup.timer` on the box first.
+- The pull verifies every day it holds, not only the newest, so one corrupted
+  old local day directory (bitrot on a ten-day-old artifact) fails the whole run
+  and leaves the marker unchanged, and the alarm then stays red even though
+  today's pull was perfect. That is deliberate. Delete the bad day directory
+  locally and pull again; the box still holds it.
 
 At-a-glance checks, newest line tells the story:
 
@@ -223,7 +292,14 @@ The backup tar was created as `tar czf - -C / var/lib/storage`, so its entries c
 - True offsite destination: one encrypted copy lives on the dev machine, which
   stops the box-death scenario but not dev-machine-plus-box co-loss. Choosing
   the real offsite/object-store destination is an owner decision, tracked in
-  the follow-up issue filed alongside this change (#1100).
+  #1492. The staleness of whatever copy exists is now visible (#1491), which is
+  a different property: the alarm tells you the copy is behind, it does not
+  make the copy durable.
+- Scheduling the pull itself: deliberately not done. That machine is a laptop
+  and is off for long stretches, so a timer there would recreate an
+  unobservable half with a false sense of coverage, which is the failure this
+  is meant to end rather than repeat. Coverage equals however often someone
+  runs the pull, and the point of the marker is that everyone can see it.
 - Point-in-time recovery: pg_dump gives snapshots at run times, nothing finer.
 - Encryption is aes-256-cbc with a per-file salt and PBKDF2 (600k iterations);
   checksums detect corruption but are not signed, so an attacker who can write
