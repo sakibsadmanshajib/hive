@@ -643,19 +643,21 @@ jobs:
     timeout-minutes: 5
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
     # docs-only decision is applied per step. See the note above `changes`.
+    # One step is deliberately exempt from that decision, `lint:proof-tokens`
+    # below, and the three setup steps it needs are exempt with it.
     needs: changes
     if: always()
     steps:
+      # Ungated, along with setup-node and the install below, so that
+      # `lint:proof-tokens` further down can run on a docs-only pull request.
+      # See the comment on that step for why.
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-node@v7
-        if: needs.changes.outputs.run != 'false'
         with:
           node-version: '24'
 
       - name: Install repo-level dev deps
-        if: needs.changes.outputs.run != 'false'
         run: npm ci --ignore-scripts
 
       # Merge-gate integrity: exactly one job may publish each required
@@ -725,8 +727,31 @@ jobs:
         run: npm run lint:request-url-origin
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:model-visibility
-      - if: needs.changes.outputs.run != 'false'
-        run: npm run lint:proof-tokens
+      # NOT gated on the docs-only decision, and the only step in this job
+      # that is not. Issue #1409.
+      #
+      # tools/lint-no-token-in-proof-captures.mjs scans docs/proof/ and
+      # nothing else, and docs/ is on the inert-path allow-list that sets
+      # `run=false`. So the one guard whose entire purpose is scanning proof
+      # captures disabled itself on the only pull-request shape that adds
+      # them. PR #1398 committed seventy-one captures and this job reported
+      # pass in six seconds, having executed nothing. A gate that switches
+      # off for its own subject matter is worse than no gate, because the
+      # green it publishes is one a reviewer trusts.
+      #
+      # This is the whole of the automated defence for that half of a
+      # capture. GitHub secret scanning, push protection and GitGuardian do
+      # not read a release asset and read no pixels at all, and PR #578
+      # leaked four live invitation tokens through exactly this path.
+      #
+      # Ungating the step rather than carving docs/proof/** out of the
+      # docs-only classification, because the carve-out would run the whole
+      # heavy suite over a pull request of screenshots, and rather than
+      # adding a `changes` output for docs/proof/**, because that copies the
+      # scanner's scope into this file where it can drift. The scanner walks
+      # the committed tree, not the diff, so running it unconditionally also
+      # covers a capture that landed earlier and was never scanned.
+      - run: npm run lint:proof-tokens
       # formatUsdBalanceFromCredits is hand-duplicated across the console and
       # the chat front end, which are separate builds whose test suites cannot
       # see each other's copy. It drifted twice that way (#1344, #1345), each
