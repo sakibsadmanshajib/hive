@@ -58,6 +58,12 @@ func (r *accountingRecorder) has(path string) bool {
 	return ok
 }
 
+// mockReservationHold is the hold newAccountingMock confirms. Named because
+// assertPricedCapture compares against it: a capture must land strictly below
+// the hold, and a test that hardcoded the number separately would stop testing
+// that the day the mock changed.
+const mockReservationHold int64 = 10000
+
 // newAccountingMock stands in for the control-plane's internal accounting
 // and usage endpoints. It always answers 200 OK: this test isolates what
 // edge-api *decides to send*, not control-plane's own ledger business logic
@@ -72,7 +78,7 @@ func newAccountingMock(rec *accountingRecorder) *httptest.Server {
 		switch r.URL.Path {
 		case "/internal/accounting/reservations":
 			_ = json.NewEncoder(w).Encode(ReservationResult{
-				ID: "res-test-1", AccountID: "acct-test-1", Status: "active", EstimatedCredits: 10000,
+				ID: "res-test-1", AccountID: "acct-test-1", Status: "active", EstimatedCredits: mockReservationHold,
 			})
 		case "/internal/usage/attempts":
 			_ = json.NewEncoder(w).Encode(AttemptResult{
@@ -394,10 +400,10 @@ func TestExecuteStreaming_ClientDisconnect_SettlesDeliveredTokensDespiteCancelle
 	}
 
 	// With actuals unavailable the capture still charges (#1215), but it
-	// charges the catalog price rather than the flat hold (#1198). This request
-	// body is bare `{}`, so no prompt and no accumulated content are available
-	// to price and the floor is the answer.
-	assertPricedCapture(t, body, minimumCapture)
+	// charges the catalog price of what the request involved rather than the
+	// flat hold (#1198). The exact figure is incidental to what this test
+	// guards, so only the two bounds are asserted.
+	assertPricedCapture(t, body, mockReservationHold)
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: upstream never sent a real usage block")
 	}

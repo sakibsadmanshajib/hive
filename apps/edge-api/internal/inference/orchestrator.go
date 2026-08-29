@@ -447,7 +447,7 @@ func (o *Orchestrator) executeSync(
 		// for this branch to add.
 		if zeroContentCaptured && !route.Pricing.IsUpstreamActual() {
 			actualCredits = capCaptureAtCeiling(route, ceiling,
-				captureInputTokens(hasUsage, cache.FreshInputTokens, endpoint, body),
+				captureInputTokens(hasUsage, cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, endpoint, body),
 				cache.CacheReadTokens, cache.CacheWriteTokens,
 				captureCompletionTokens(hasUsage, outputTokens, responseText(endpoint, normalized)),
 				reservation.Held())

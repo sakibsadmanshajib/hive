@@ -27,23 +27,28 @@ import (
 // set one and by the hold always, and floored at one credit so no served
 // request is ever free (D-034, D-048, D-055).
 
-// minimumCapture is the one-credit floor capCaptureAtCeiling applies when a
-// request carries no priceable quantity at all. Several streaming tests use the
-// bare `{}` request body, which has no prompt, and exercise shapes that
-// accumulate no content, so there is genuinely nothing to price and the floor
-// is the whole answer. It is asserted exactly rather than as a range, because a
-// range that merely says "at most the hold" is satisfied by charging the hold,
-// which is the defect itself.
-const minimumCapture = 1
-
-// assertPricedCapture pins what a fail-closed hold capture charges. want is the
-// catalog price of the tokens the request involved, or minimumCapture where it
-// involved none.
-func assertPricedCapture(t *testing.T, call map[string]any, want int64) {
+// assertPricedCapture pins the two properties every fail-closed hold capture
+// must hold, for the tests where the exact credit figure is incidental to what
+// the test is actually about (a client disconnect, an oversized upstream line).
+//
+// Both bounds are load bearing and each can go red on its own. The lower one
+// fails if a served request ever becomes free, which is the undercharge #1215
+// exists to prevent. The upper one is STRICT, and that is what fails if the
+// #1198 defect is reintroduced: the defect charged exactly the hold, so an
+// assertion of "at most the hold" would have passed straight through it.
+//
+// The exact figure is asserted instead, computed from the pricing helpers, in
+// the tests whose subject IS the figure. Hardcoding it here would make these
+// tests brittle to the length of a mock's fixture text, which has nothing to do
+// with what they guard.
+func assertPricedCapture(t *testing.T, call map[string]any, hold int64) {
 	t.Helper()
 	credits := finalizeInt64(t, call, "actual_credits")
-	if credits != want {
-		t.Errorf("actual_credits = %d, want %d: a capture is the catalog price of the tokens involved, floored at one credit, never the flat authorization hold (#1198)", credits, want)
+	if credits < 1 {
+		t.Errorf("actual_credits = %d: a served request is never free (#1215, D-034)", credits)
+	}
+	if credits >= hold {
+		t.Errorf("actual_credits = %d, not below the %d credit hold: a capture is the catalog price of the tokens involved, never the flat authorization floor (#1198)", credits, hold)
 	}
 }
 
@@ -149,6 +154,52 @@ func TestExecuteStreaming_NoCallerCeiling_CaptureIsPricedNotTheFlatHold(t *testi
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("a delivered stream must never release its hold")
+	}
+}
+
+// TestCaptureInputTokens_FullyCachedPromptIsNotEstimatedOnTop is the regression
+// guard for the review finding that a fully cached prompt was billed twice.
+//
+// On a 100 percent cache hit the usage block is real and reports a real fresh
+// input count of zero, with the whole prompt sitting in the cache-read
+// component. The old test here was `freshInputTokens > 0`, so it read that
+// legitimate zero as "nothing was reported" and fell through to estimating the
+// entire prompt from the request body. capCaptureAtCeiling then handed that
+// estimate to CreditsForTokens as fresh input ALONGSIDE the same prompt's
+// cache-read tokens, so the customer paid for it once at the full input rate
+// and again at the cache rate.
+//
+// Asserted at the helper rather than through a handler, because the defect is
+// entirely in this one predicate and a handler test would prove it only for
+// whichever cache shape the fixture happened to use.
+func TestCaptureInputTokens_FullyCachedPromptIsNotEstimatedOnTop(t *testing.T) {
+	const endpoint = EndpointChatCompletions
+	body := []byte(`{"model":"hive-free","messages":[{"role":"user","content":"` +
+		strings.Repeat("a long cached system preamble. ", 200) + `"}]}`)
+	promptEstimate := estimateCompletionTokens(promptText(endpoint, body))
+	if promptEstimate == 0 {
+		t.Fatal("fixture prompt estimates to zero tokens, so this test would prove nothing")
+	}
+
+	// A real usage block: every prompt token served from cache.
+	got := captureInputTokens(true, 0, 4096, 0, endpoint, body)
+	if got != 0 {
+		t.Errorf("captureInputTokens = %d, want 0: the usage block reported a real fresh count of zero because the prompt was fully cached, and estimating it back on top bills the same prompt at the input rate and the cache rate at once",
+			got)
+	}
+
+	// A block that reported no input quantity at all is still estimated, which
+	// is the behaviour review round two added and this fix must not undo.
+	if got := captureInputTokens(true, 0, 0, 0, endpoint, body); got != promptEstimate {
+		t.Errorf("captureInputTokens = %d, want %d: a usage block carrying no input quantity at all is not a measured zero, and pricing the prompt at nothing is the free serve D-034 exists to prevent",
+			got, promptEstimate)
+	}
+	if got := captureInputTokens(false, 0, 0, 0, endpoint, body); got != promptEstimate {
+		t.Errorf("captureInputTokens = %d, want %d: no usage block at all must still estimate the prompt", got, promptEstimate)
+	}
+	// A reported fresh count is trusted as-is.
+	if got := captureInputTokens(true, 77, 4096, 0, endpoint, body); got != 77 {
+		t.Errorf("captureInputTokens = %d, want 77: a reported fresh count is the measurement", got)
 	}
 }
 

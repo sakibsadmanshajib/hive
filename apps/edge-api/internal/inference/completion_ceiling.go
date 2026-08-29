@@ -323,8 +323,17 @@ func rewriteNormalizedUsage(normalized []byte, endpoint string, usage *UsageResp
 // The estimate is the same content-length one settlementCredits already uses on
 // the no-usage path, so the two agree on what an absent usage block is worth,
 // and the figure stays flagged unconfirmed either way.
-func captureInputTokens(hasUsage bool, freshInputTokens int64, endpoint string, requestBody []byte) int64 {
-	if hasUsage && freshInputTokens > 0 {
+//
+// The condition is "the block reported SOME input quantity", not "fresh input is
+// above zero". A fully cached prompt is a real usage block reporting a real
+// fresh count of zero, with the whole prompt sitting in cacheReadTokens: the
+// old test fell through to the estimate there, and since capCaptureAtCeiling
+// passes the cache components to CreditsForTokens alongside this return value,
+// the same prompt was then billed twice, once estimated at the full input rate
+// and once at the cache rate. Checking the sum tells "nothing was reported"
+// apart from "zero was reported", which is the distinction that matters.
+func captureInputTokens(hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens int64, endpoint string, requestBody []byte) int64 {
+	if hasUsage && freshInputTokens+cacheReadTokens+cacheWriteTokens > 0 {
 		return freshInputTokens
 	}
 	return estimateCompletionTokens(promptText(endpoint, requestBody))
@@ -335,6 +344,16 @@ func captureInputTokens(hasUsage bool, freshInputTokens int64, endpoint string, 
 // text it actually produced when it did not. Zero is a legitimate answer here,
 // and means exactly what it says: nothing visible came back, so the prompt is
 // the only quantity anything can price.
+//
+// This one keeps the plain "above zero" test, and the asymmetry with
+// captureInputTokens is deliberate rather than an oversight. There is no
+// cache component on the output side for a reported zero to be hiding in, and
+// the only way a usage block reaches either capture branch at all is by failing
+// settlementCredits's confirmed test, which requires every one of its four
+// counts to be zero. So "hasUsage with outputTokens zero" here is never a
+// provider asserting a true zero against real output; it is a block that
+// carried no quantities, and the content estimate is the better answer. Where
+// there is also no content, both forms return zero and the distinction is moot.
 func captureCompletionTokens(hasUsage bool, outputTokens int64, content string) int64 {
 	if hasUsage && outputTokens > 0 {
 		return outputTokens

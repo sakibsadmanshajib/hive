@@ -807,7 +807,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			// prevent. It only ever lowers the figure, and never below one
 			// credit, so the fail-closed property is untouched.
 			credits = capCaptureAtCeiling(route, ceiling,
-				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, endpoint, []byte(promptBody)),
+				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, endpoint, []byte(promptBody)),
 				acc.CachedTokens, acc.CacheWriteTokens,
 				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, content),
 				reservation.Held())

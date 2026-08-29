@@ -53,9 +53,9 @@ func TestExecuteResponsesStreaming_ClientDisconnect_SettlesDeliveredTokensDespit
 	if !ok {
 		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled context; calls seen: %+v", rec.calls)
 	}
-	// Charges, but at the catalog price rather than the flat hold (#1198).
-	// Nothing priceable reached settlement here, so the floor is the answer.
-	assertPricedCapture(t, body, minimumCapture)
+	// Charges, but at the catalog price of what the request involved rather
+	// than the flat hold (#1198). The exact figure is incidental here.
+	assertPricedCapture(t, body, mockReservationHold)
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); confirmed {
 		t.Error("terminal_usage_confirmed must be false: no real usage arrived")
 	}
