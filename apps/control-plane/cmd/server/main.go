@@ -143,12 +143,11 @@ type stubCountryAdapter struct {
 	svc *profiles.Service
 }
 
+// CountryCode delegates rather than reading the profile itself, so the stub
+// shares the production mapping of "no account_profiles row" to "no declared
+// country" instead of failing the demo checkout with a 500 (issue #1386).
 func (a *stubCountryAdapter) CountryCode(ctx context.Context, accountID uuid.UUID) (string, error) {
-	profile, err := a.svc.GetAccountProfile(ctx, accountID)
-	if err != nil {
-		return "", err
-	}
-	return profile.CountryCode, nil
+	return a.svc.CountryCode(ctx, accountID)
 }
 
 // accountsResolverAdapter adapts accounts.Service to the payments.AccountResolver interface.

@@ -280,11 +280,10 @@ func (s *StubService) GetCheckoutOptions(
 	available := payments.AvailableRails(countryCode)
 	railOptions := make([]payments.RailOption, 0, len(available))
 	for _, rail := range available {
-		railOptions = append(railOptions, payments.RailOption{
-			Rail:       rail,
-			MinCredits: payments.MinPurchaseCredits,
-			MaxCredits: maxCreditsForRail(rail),
-		})
+		// Always enabled in stub mode: the stub grants credits through the
+		// ledger without calling any rail, so every rail the country permits is
+		// one it can actually complete.
+		railOptions = append(railOptions, payments.NewRailOption(rail, true))
 	}
 
 	return &payments.CheckoutOptions{
@@ -293,6 +292,9 @@ func (s *StubService) GetCheckoutOptions(
 		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX); the block itself scales with CreditsPerUSD
 		CreditBlockSize:    payments.CreditsPerUSD,
 		Currency:           currencyForCountry(countryCode),
+		CreditIncrement:    payments.CreditIncrement,
+		MinCredits:         payments.MinPurchaseCredits,
+		MaxCredits:         payments.MostRestrictiveMaxCredits(railOptions),
 	}, nil
 }
 
@@ -307,18 +309,9 @@ func railAvailable(rail payments.Rail, countryCode string) bool {
 	return false
 }
 
-// maxCreditsForRail returns the maximum purchasable credits for a rail,
-// mirroring the production per-rail limits.
-func maxCreditsForRail(r payments.Rail) int64 {
-	switch r {
-	case payments.RailBkash:
-		return payments.MaxPurchaseCreditsBkash
-	case payments.RailSSLCommerz:
-		return payments.MaxPurchaseCreditsSSLCommerz
-	default:
-		return payments.MaxPurchaseCreditsStripe
-	}
-}
+// The stub's own copy of the per-rail ceiling table is gone: payments.NewRailOption
+// now builds the whole rail option, ceiling included, so there is one table
+// rather than two that could drift.
 
 // currencyForCountry returns the display currency for the checkout options.
 // BD demo context uses BDT; everything else uses USD.

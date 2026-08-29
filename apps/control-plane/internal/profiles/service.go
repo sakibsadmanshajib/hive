@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/mail"
 	"regexp"
@@ -25,6 +26,38 @@ func NewService(repo Repository) *Service {
 // GetAccountProfile returns the current-account core profile.
 func (s *Service) GetAccountProfile(ctx context.Context, accountID uuid.UUID) (AccountProfile, error) {
 	return s.repo.GetAccountProfile(ctx, accountID)
+}
+
+// CountryCode returns the account's ISO 3166-1 alpha-2 country code, for the
+// callers that need only the country and not the profile itself.
+//
+// An account with no `account_profiles` row resolves to the empty string rather
+// than to an error. The country is already an optional fact: the repository
+// COALESCEs a NULL `country_code` to "", and the consumer of this value
+// (payments.AvailableRails) treats "" as a defined answer, the non-BD default.
+// A missing row says the same thing as a NULL column, so it gets the same
+// answer instead of a 500.
+//
+// This exists because the opposite behaviour took the whole checkout surface
+// down. GetCheckoutOptions and InitiateCheckout, in both the real payment
+// service and the demo stub, read the full profile purely to reach this one
+// field, and each treated ErrNotFound as a server fault. Issue #999 counted 14
+// live accounts with no profile row, and for every one of them "Buy credits"
+// answered 500 (issue #1386). Callers that genuinely need the profile keep
+// using GetAccountProfile and keep getting ErrNotFound, so /profile still
+// answers 404 and the profile-setup gate is unaffected.
+//
+// Any error that is not ErrNotFound still propagates: a database failure must
+// never be read as "no country declared".
+func (s *Service) CountryCode(ctx context.Context, accountID uuid.UUID) (string, error) {
+	profile, err := s.repo.GetAccountProfile(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("profiles: get account country: %w", err)
+	}
+	return profile.CountryCode, nil
 }
 
 // GetBillingProfile returns the current-account billing profile.

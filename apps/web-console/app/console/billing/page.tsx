@@ -11,6 +11,7 @@ import {
   type LedgerPage,
 } from "@/lib/control-plane/client";
 import { BillingOverview } from "@/components/billing/billing-overview";
+import { CheckoutLauncher } from "@/components/billing/checkout-launcher";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
 import { InvoiceList } from "@/components/billing/invoice-list";
 import { LedgerTable } from "@/components/billing/ledger-table";
@@ -19,7 +20,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/cn";
 
 interface BillingPageProps {
-  searchParams: Promise<{ tab?: string; cursor?: string; type?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    cursor?: string;
+    type?: string;
+    action?: string;
+  }>;
 }
 
 type TabName = "overview" | "ledger" | "invoices";
@@ -44,6 +50,11 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const activeTab: TabName = isValidTab(params.tab) ? params.tab : "overview";
   const cursor = params.cursor ?? null;
   const typeFilter = params.type ?? null;
+  // "Buy credits" links to /console/billing?action=buy
+  // (components/billing/billing-overview.tsx). Nothing read the parameter and
+  // CheckoutModal had no import anywhere in the app, so the link navigated back
+  // to this same page and no modal ever appeared. Issue #1386.
+  const showCheckout = params.action === "buy";
 
   const [balance, profile, budgetThreshold, recentLedger] = await Promise.all([
     getBalance(),
@@ -122,6 +133,10 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
       ) : null}
 
       {activeTab === "invoices" ? <InvoicesTab /> : null}
+
+      {showCheckout ? (
+        <CheckoutLauncher accountCountryCode={profile.country_code} />
+      ) : null}
     </ConsoleShell>
   );
 }

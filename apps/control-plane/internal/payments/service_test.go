@@ -250,9 +250,10 @@ func (l *stubLedger) callCount() int {
 
 // stubProfiles implements ProfileReader.
 type stubProfiles struct {
-	accountProfile profiles.AccountProfile
-	billingProfile profiles.BillingProfile
-	billingErr     error
+	accountProfile    profiles.AccountProfile
+	accountProfileErr error
+	billingProfile    profiles.BillingProfile
+	billingErr        error
 }
 
 func (p *stubProfiles) GetBillingProfile(_ context.Context, _ uuid.UUID) (profiles.BillingProfile, error) {
@@ -260,7 +261,24 @@ func (p *stubProfiles) GetBillingProfile(_ context.Context, _ uuid.UUID) (profil
 }
 
 func (p *stubProfiles) GetAccountProfile(_ context.Context, _ uuid.UUID) (profiles.AccountProfile, error) {
+	if p.accountProfileErr != nil {
+		return profiles.AccountProfile{}, p.accountProfileErr
+	}
 	return p.accountProfile, nil
+}
+
+// CountryCode mirrors profiles.Service.CountryCode: an account with no profile
+// row has no declared country, which is the same answer as a row whose
+// country_code is NULL, so it resolves to the empty string rather than to an
+// error. Any other failure still propagates.
+func (p *stubProfiles) CountryCode(_ context.Context, _ uuid.UUID) (string, error) {
+	if p.accountProfileErr != nil {
+		if errors.Is(p.accountProfileErr, profiles.ErrNotFound) {
+			return "", nil
+		}
+		return "", p.accountProfileErr
+	}
+	return p.accountProfile.CountryCode, nil
 }
 
 // stubFXProvider implements FXProvider with a fixed snapshot result.
