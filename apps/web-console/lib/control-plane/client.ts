@@ -607,6 +607,13 @@ export interface FeatureGate {
   // (issue #758). The UI renders those rows read-only rather than offering a
   // toggle the API would refuse.
   manageable: boolean;
+  // enforced is true only for a gate the registry records a runtime reader
+  // for. Twenty two of the twenty five registered keys have none: the value
+  // persists to tenant_settings and changes nothing (issue #762). Optional
+  // because a control-plane that predates this field omits it, and the render
+  // site treats anything but true as unenforced, which is the fail-safe
+  // direction: claiming enforcement that does not exist is the harm.
+  enforced?: boolean;
 }
 
 // FeatureGates is the control-plane response for the admin feature-gate list.
@@ -638,7 +645,14 @@ function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
     // as manageable keeps the pre-#758 behaviour during a rolling deploy: the
     // API is the authority and refuses what it must.
     const manageable = readBooleanField(item, "manageable") ?? true;
-    gates.push({ key, label, category, enabled, manageable });
+    // enforced defaults the other way from manageable, deliberately. For
+    // manageable the API is the authority and refuses what it must, so an
+    // over-permissive default costs a refused request. Nothing refuses an
+    // unenforced gate, so here the default is the entire guarantee: absent
+    // means not enforced. readBooleanField already returns null for a
+    // non-boolean, so a malformed value lands on the same safe side.
+    const enforced = readBooleanField(item, "enforced") ?? false;
+    gates.push({ key, label, category, enabled, manageable, enforced });
   }
 
   return { gates };

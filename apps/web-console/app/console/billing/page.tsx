@@ -13,6 +13,7 @@ import {
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { CheckoutLauncher } from "@/components/billing/checkout-launcher";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
+import { BillingLinks } from "@/components/billing/billing-links";
 import { InvoiceList } from "@/components/billing/invoice-list";
 import { LedgerTable } from "@/components/billing/ledger-table";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
@@ -125,6 +126,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
             accountCountryCode={profile.country_code}
           />
           <BudgetAlertForm currentThreshold={budgetThreshold} />
+          <BillingLinks />
         </div>
       ) : null}
 

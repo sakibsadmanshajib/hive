@@ -1,0 +1,150 @@
+signed in as e2e-verified+<run-key>@scubed.com.bd, landed on http://localhost:3100/console
+created a key through the console form; limits links now: 1
+
+=== /console/feature-gates
+url: http://localhost:3100/console/feature-gates
+nav links: 11 | role=switch: 15 | "not enforced yet" notices: 22 | window.scrollX after scrollTo(9999,0): 0
+ADMIN
+Feature gates
+Capability settings for this workspace. Each row says whether it is enforced at runtime today; an enforced change reaches the API and apps within about a minute.
+ADMIN
+Admin console access
+ENABLE_ADMIN_CONSOLE
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Managed by your administrator
+Custom provider endpoints
+ENABLE_PROVIDER_CUSTOM
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Managed by your administrator
+Multi-tenant mode
+ENABLE_MULTI_TENANT
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Managed by your administrator
+SOVEREIGN WORKSPACE
+Agent cowork capability
+ENABLE_COWORK
+Saving…
+Agent RAG capability
+ENABLE_RAG
+Saving…
+Agent relay capability
+ENABLE_RELAY
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Agent voice capability
+ENABLE_VOICE
+Saving…
+AUDIT SINK
+Audit sink: Datadog
+ENABLE_AUDIT_SINK_DATADOG
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Audit sink: ELK
+ENABLE_AUDIT_SINK_ELK
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Audit sink: Langfuse
+ENABLE_AUDIT_SINK_LANGFUSE
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Audit sink: Loki
+ENABLE_AUDIT_SINK_LOKI
+Not enforced yet. This setting is saved for this workspace, and no part of the API or apps reads it, so changing it does not change what the workspace can do.
+Saving…
+Audit sink: Sentry
+ENABLE_AUDIT_SINK_SENTRY
+Not enforced yet. This setting is saved for 
+
+=== /console/marketplace
+url: http://localhost:3100/console/marketplace
+nav links: 11 | role=switch: 0 | "not enforced yet" notices: 0 | window.scrollX after scrollTo(9999,0): 0
+ADMIN
+MCP and skills marketplace
+Choose which MCP servers, rules, skills, and prompt templates this workspace agents can use.
+No connectors have been published for this workspace yet. Ask your administrator if you need one added.
+
+=== /console/api-keys
+url: http://localhost:3100/console/api-keys
+nav links: 11 | role=switch: 0 | "not enforced yet" notices: 0 | window.scrollX after scrollTo(9999,0): 0
+AUTHENTICATION
+API keys
+Issue and revoke programmatic credentials. To rotate a key, create a replacement and revoke the old one. Keys are shown in full only at creation, so store them in a secret manager.
+Create API key
+Each key is scoped to this workspace. Set an expiry to enforce rotation cadence.
+Nickname*
+Expires
+Optional
+Credit limit (USD)
+Total for the key's lifetime; blank for unlimited
+Reset limit every…
+Never (lifetime cap)
+Every month
+Only applies when a credit limit is set
+No credit limit: this key can spend the account balance.
+Create key
+NAME	KEY	STATUS	SPEND (LIFETIME)	CREDIT LIMIT	EXPIRES	LAST USED
+RATE LIMITS
+ACTIONS
+production	hk_xxxx•••_suhm0	Active	$0	Unlimited	—	—	Limits
+Revoke
+
+=== clicking through from /console/api-keys
+limits links on the key list: 1
+landed on: http://localhost:3100/console/api-keys/1093fb8b-f4ce-406d-847b-5ec33a3ce4b2/limits
+nav links on the limits page: 11 | "All API keys" back link: 1
+All API keys
+AUTHENTICATION
+Rate limits
+
+Per-key request and token limits. Tier overrides take precedence over system defaults for the matching tier.
+
+Per-key limits
+Requests per minute
+Tokens per minute
+Tier overrides
+
+Leave a tier blank to use the system default.
+
+Override guest
+Override unverified
+Override verified
+Override credited
+Save
+
+=== /console/billing
+url: http://localhost:3100/console/billing
+nav links: 14 | role=switch: 0 | "not enforced yet" notices: 0 | window.scrollX after scrollTo(9999,0): 0
+WORKSPACE
+Billing
+Top up credits, browse the ledger, and download invoices for past purchases.
+Overview
+Ledger
+Invoices
+Available balance
+Top up to keep production traffic flowing without interruption.
+< $0.01
+Posted < $0.01 · Reserved $0.00
+1,000,000 credits, at 1,000,000,000 credits per $1.00
+Buy credits
+Tax profile
+Recent transactions
+The last five ledger events.
+View ledger
+TYPE	CREDITS	DATE
+Purchase	+1,000,000	29 Aug 2026
+Spend alerts
+Get notified when your balance drops below a threshold. Requests keep flowing — alerts are advisory only.
+Alert threshold
+In Hive credits
+Save alert
+Spend controls
+Caps, alerts and invoices for this workspace.
+Spend alerts
+Email and webhook notifications when month-to-date spend crosses a percentage of the cap.
+Budget
+Soft and hard caps on monthly workspace spend.
+Workspace invoices
+Monthly invoices for this workspace, with PDF downloads.
