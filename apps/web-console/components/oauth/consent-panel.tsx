@@ -15,6 +15,14 @@ import { Button } from "@/components/ui/button";
 
 interface ConsentPanelProps {
   authorizationId: string | null;
+  /**
+   * True when this render already came back from the one permitted sign-in
+   * hop, read by the server landing from the marker buildSignInRedirect puts
+   * in the return target. Without it this panel bounced to sign-in on every
+   * session-less render, so the marker bounded the server's hop and nothing
+   * at all bounded this one.
+   */
+  signInAlreadyAttempted?: boolean;
 }
 
 interface ConsentDetails {
@@ -24,7 +32,10 @@ interface ConsentDetails {
 
 type ConsentStatus = "loading" | "ready" | "error";
 
-export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
+export function ConsentPanel({
+  authorizationId,
+  signInAlreadyAttempted = false,
+}: ConsentPanelProps) {
   const [status, setStatus] = useState<ConsentStatus>("loading");
   const [details, setDetails] = useState<ConsentDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +67,17 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
       }
 
       if (!sessionResult.data.session) {
+        // One hop, once. A second arrival here with still no session means
+        // signing in did not produce one, and asking for the password again
+        // would just repeat that. Same wording the server landing uses for
+        // its own second rejection.
+        if (signInAlreadyAttempted) {
+          setError(
+            "This sign-in request could not be completed. Start again from the application you were signing in to.",
+          );
+          setStatus("error");
+          return;
+        }
         navigate(buildSignInRedirect(authorizationId));
         return;
       }
@@ -98,7 +120,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [authorizationId]);
+  }, [authorizationId, signInAlreadyAttempted]);
 
   async function handleDecision(action: "approve" | "deny") {
     if (!authorizationId) return;

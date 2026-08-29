@@ -78,6 +78,21 @@ describe("decideConsentLanding", () => {
     expect(decision).toEqual({ action: "render-panel" });
   });
 
+  // A refresh that failed is not the same fact as "this visitor has no
+  // session", and sending the second where the first is true asks a signed-in
+  // user for a password because GoTrue was briefly unreachable. The client
+  // panel has always separated the two; the server decision has to as well.
+  it("never redirects on a failed session read, only on a genuinely absent one", () => {
+    const decision = decideConsentLanding({
+      hasSession: false,
+      sessionReadFailed: true,
+      signInAlreadyAttempted: false,
+      authorizationId: AUTH_ID,
+      lookup: null,
+    });
+    expect(decision).toEqual({ action: "render-panel" });
+  });
+
   it("falls through to the panel when the request id is missing", () => {
     const decision = decideConsentLanding({
       hasSession: true,
