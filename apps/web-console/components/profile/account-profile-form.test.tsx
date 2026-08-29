@@ -103,6 +103,38 @@ describe("AccountProfileForm behavior", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("hides the success confirmation while a new save is pending", async () => {
+    let resolveAction: (state: AccountProfileFormState) => void = () => {};
+    const pending = new Promise<AccountProfileFormState>((resolve) => {
+      resolveAction = resolve;
+    });
+    const action: AccountProfileFormAction = vi.fn().mockReturnValue(pending);
+
+    render(
+      <AccountProfileForm
+        action={action}
+        initialValues={baseValues()}
+        submitLabel="Save profile"
+        justSaved={true}
+      />,
+    );
+
+    // justSaved is already true from a prior save, and the freshly mounted
+    // state has no errors yet -- the stale success banner must not show
+    // once a *new* submission is in flight.
+    fireEvent.click(screen.getByRole("button", { name: /save profile/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /saving/i })).toBeTruthy();
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+
+    resolveAction(cleanState());
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toBeTruthy();
+    });
+  });
+
   it("a validation failure from the server surfaces per-field errors, not a stale success banner", async () => {
     const rejected: AccountProfileFormState = {
       fieldErrors: { countryCode: "Country is required." },

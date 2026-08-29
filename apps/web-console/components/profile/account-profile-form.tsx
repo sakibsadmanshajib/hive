@@ -60,7 +60,7 @@ export function AccountProfileForm({
 
   const values = state.values;
   const hasErrors = state.formError !== null || Object.keys(state.fieldErrors).length > 0;
-  const showSuccess = justSaved && !hasErrors;
+  const showSuccess = justSaved && !isPending && !hasErrors;
 
   return (
     <form action={formAction} noValidate className="grid gap-6">
