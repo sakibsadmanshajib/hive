@@ -27,11 +27,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import {
-  formatCredits,
-  formatNumber,
-  formatTokens,
-} from "@/lib/format/credits";
+import { formatNumber, formatTokens } from "@/lib/format/credits";
+import { CreditBalance } from "@/components/billing/credit-balance";
 
 /*
  * Next steps shown under the metric row. Every entry is a real console route,
@@ -171,24 +168,7 @@ export default async function ConsolePage() {
             </CardHeader>
             <CardContent className="px-5 py-5">
               {balance ? (
-                <div className="flex flex-col gap-1">
-                  <p
-                    className="metric text-3xl text-[var(--color-ink)]"
-                    data-numeric
-                  >
-                    {formatCredits(balance.available_credits)}
-                  </p>
-                  <p className="text-xs text-[var(--color-ink-3)]">
-                    Posted{" "}
-                    <span className="metric text-[var(--color-ink-2)]">
-                      {formatCredits(balance.posted_credits)}
-                    </span>{" "}
-                    · Reserved{" "}
-                    <span className="metric text-[var(--color-ink-2)]">
-                      {formatCredits(balance.reserved_credits)}
-                    </span>
-                  </p>
-                </div>
+                <CreditBalance balance={balance} />
               ) : (
                 <p className="text-sm text-[var(--color-ink-3)]">
                   Verify your email to view balances.

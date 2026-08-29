@@ -114,3 +114,76 @@ export function toUserFacingAuthMessage(
 
   return generic;
 }
+
+/**
+ * Copy for a sign-up that the deployment refuses as policy rather than fails.
+ *
+ * True of both refusal shapes below, and it never blames an outage: a visitor
+ * reading this knows the account exists to be created by someone else, not
+ * that Hive is broken.
+ */
+export const SIGN_UP_UNAVAILABLE_MESSAGE =
+  "Sign-up is not available on this deployment. If you were invited, sign in instead. Otherwise ask a workspace administrator to create your account.";
+
+/**
+ * The subset of an auth-js error this mapper reads. Declared structurally so a
+ * caller can pass an AuthError straight through without a cast, and so a test
+ * can build the shape without constructing an auth-js class.
+ */
+interface AuthErrorLike {
+  message?: string | null;
+  status?: number | null;
+  name?: string | null;
+}
+
+/**
+ * True when the auth origin refused account creation as policy.
+ *
+ * Three shapes, all observed or reachable on this stack:
+ *
+ *   - A 404 or 403 from the auth origin. deploy/docker/Caddyfile.supabase
+ *     answers a bare 404 for /auth/v1/signup on the public listener, and that
+ *     is a stated policy, not a fault.
+ *   - GoTrue's own copy when GOTRUE_DISABLE_SIGNUP is set. That string is
+ *     already allow-listed above and would render verbatim; mapping it here
+ *     instead says the same thing in this console's words, with the next step
+ *     the GoTrue string omits.
+ *   - AuthUnknownError, which auth-js raises when the response body is not
+ *     JSON at all. The Caddy refusal has content-length 0, so the JSON parse
+ *     throws and the error arrives carrying no status to branch on. This is
+ *     the exact shape reported live in issue #1328, and it is why a status
+ *     check alone is not enough.
+ */
+function isSignUpRefusal(error: AuthErrorLike): boolean {
+  if (error.status === 404 || error.status === 403) {
+    return true;
+  }
+  if (error.name === "AuthUnknownError") {
+    return true;
+  }
+  const message = (error.message ?? "").trim();
+  return /^(signups? not allowed|email signups are disabled)/i.test(message);
+}
+
+/**
+ * Same sanitization boundary as toUserFacingAuthMessage, with one extra rule
+ * ahead of it: a deliberate refusal is reported as a refusal.
+ *
+ * Everything the allow-list already handles keeps its existing behaviour, and
+ * an unrecognized message still degrades to the generic copy plus a support
+ * reference. Only the refusal shapes above are pulled out of that default,
+ * because reporting a policy as an outage sends the user to support for
+ * something support cannot change.
+ */
+export function toUserFacingSignUpMessage(
+  error: AuthErrorLike | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!error) {
+    return toUserFacingAuthMessage(null, now);
+  }
+  if (isSignUpRefusal(error)) {
+    return SIGN_UP_UNAVAILABLE_MESSAGE;
+  }
+  return toUserFacingAuthMessage(error.message, now);
+}

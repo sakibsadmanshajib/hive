@@ -1,13 +1,10 @@
-import { formatCredits } from "@/lib/format/credits";
+import { CREDITS_PER_USD, formatCredits } from "@/lib/format/credits";
 
-/**
- * One US dollar is one billion Hive credits (`.wolf/decisions.md` D-046,
- * migration `20260823_40_credit_unit_rescale_billion.sql`). Every catalog
- * price column stores an integer credit rate per one million metered tokens,
- * so dividing by this constant yields the dollars-per-million figure a
- * customer recognises.
- */
-export const CREDITS_PER_USD = 1_000_000_000;
+// Re-exported for the callers that have always imported the credit unit
+// from this module. It now lives in lib/format/credits.ts, next to the
+// balance formatter that needs it too, because importing this module from
+// there would be a cycle.
+export { CREDITS_PER_USD };
 
 /**
  * Which unit a price cell renders in. Both units share one absence policy,

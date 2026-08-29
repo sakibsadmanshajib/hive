@@ -10,7 +10,11 @@
  * allow-list is the safer shape.
  */
 import { describe, expect, it } from "vitest";
-import { toUserFacingAuthMessage } from "./auth-error";
+import {
+  SIGN_UP_UNAVAILABLE_MESSAGE,
+  toUserFacingAuthMessage,
+  toUserFacingSignUpMessage,
+} from "./auth-error";
 
 // Fixed clock so the support reference is deterministic.
 const AT = new Date("2026-07-27T14:03:22.512Z");
@@ -154,6 +158,77 @@ describe("toUserFacingAuthMessage", () => {
       expect(toUserFacingAuthMessage("Email not confirmed", AT)).not.toContain(
         "AUTH-",
       );
+    });
+  });
+});
+
+/**
+ * Guards the sign-up half of the same boundary (issue #1328). The live
+ * failure: a deployment that refuses account creation at the gateway answered
+ * with a bare 404, auth-js surfaced it as an AuthUnknownError carrying a JSON
+ * parse message and no status, and the allow-list correctly withheld it, so a
+ * stated policy reached the visitor as an outage on our end.
+ */
+describe("toUserFacingSignUpMessage", () => {
+  describe("reports a refusal as a refusal", () => {
+    it("maps a bare 404 from the auth origin", () => {
+      expect(
+        toUserFacingSignUpMessage({ message: "Not Found", status: 404 }, AT),
+      ).toBe(SIGN_UP_UNAVAILABLE_MESSAGE);
+    });
+
+    it("maps a 403 from the auth origin", () => {
+      expect(
+        toUserFacingSignUpMessage({ message: "Forbidden", status: 403 }, AT),
+      ).toBe(SIGN_UP_UNAVAILABLE_MESSAGE);
+    });
+
+    it("maps the empty-body 404 shape auth-js reports with no status", () => {
+      expect(
+        toUserFacingSignUpMessage(
+          {
+            name: "AuthUnknownError",
+            message: "Unexpected end of JSON input",
+          },
+          AT,
+        ),
+      ).toBe(SIGN_UP_UNAVAILABLE_MESSAGE);
+    });
+
+    it("maps GoTrue own copy when the signup flag is off", () => {
+      expect(
+        toUserFacingSignUpMessage(
+          { message: "Signups not allowed for this instance", status: 422 },
+          AT,
+        ),
+      ).toBe(SIGN_UP_UNAVAILABLE_MESSAGE);
+    });
+  });
+
+  describe("leaves the rest of the boundary alone", () => {
+    it("still shows an allow-listed message verbatim", () => {
+      expect(
+        toUserFacingSignUpMessage({ message: "User already registered" }, AT),
+      ).toBe("User already registered");
+    });
+
+    it("still withholds an unrecognized message behind the support reference", () => {
+      expect(
+        toUserFacingSignUpMessage(
+          { message: "pg-functions://postgres/public/custom_access_token_hook", status: 500 },
+          AT,
+        ),
+      ).toBe(GENERIC);
+    });
+
+    it("withholds a 500 rather than calling an outage a policy", () => {
+      expect(
+        toUserFacingSignUpMessage({ message: "internal error", status: 500 }, AT),
+      ).toBe(GENERIC);
+    });
+
+    it("falls back to the generic message when there is no error object", () => {
+      expect(toUserFacingSignUpMessage(null, AT)).toBe(GENERIC);
     });
   });
 });

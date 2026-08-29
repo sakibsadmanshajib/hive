@@ -127,3 +127,49 @@ export function formatPercent(
     maximumFractionDigits: 1,
   }).format(value);
 }
+
+/**
+ * One US dollar is one billion Hive credits (.wolf/decisions.md D-046,
+ * migration 20260823_40_credit_unit_rescale_billion.sql).
+ *
+ * Defined here rather than in model-pricing.ts, which is where it used to
+ * live: balances need it too, and model-pricing already imports this module,
+ * so the reverse import would be a cycle. model-pricing re-exports it, so
+ * existing callers are unaffected.
+ */
+export const CREDITS_PER_USD = 1_000_000_000;
+
+/**
+ * Format a credit balance as the US dollars a customer reasons in.
+ *
+ * Truncated toward zero, never rounded, which is the one behavioural
+ * difference from formatUsdFromCredits in model-pricing.ts. A catalog rate is
+ * a published price and rounds to the nearest cent; an available balance is
+ * spendable money, and rounding 99,996,364,207 credits up to "$100.00" tells
+ * a customer they hold more than they can spend.
+ *
+ * Precision follows the same rule as the pricing formatter (three significant
+ * digits, at least two decimals, at most the nine that one credit occupies),
+ * so a small real balance renders as "$0.000662" rather than a "$0.00" that
+ * reads as empty.
+ *
+ * Locale is pinned to en-US for the same reason model-pricing pins it: the
+ * unit is US dollars on every surface, and bn-BD renders the same amount as
+ * "US$0.20", which reads as a second currency.
+ */
+export function formatUsdBalanceFromCredits(credits: number): string {
+  if (!Number.isFinite(credits) || credits === 0) {
+    return "$0.00";
+  }
+  const usd = credits / CREDITS_PER_USD;
+  const magnitude = Math.floor(Math.log10(Math.abs(usd)));
+  const digits = Math.min(9, Math.max(2, 2 - magnitude));
+  const factor = 10 ** digits;
+  const truncated = Math.trunc(usd * factor) / factor;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: digits,
+  }).format(truncated);
+}

@@ -45,7 +45,7 @@ export default async function ApiKeysPage() {
       <PageHeader
         eyebrow="Authentication"
         title="API keys"
-        description="Issue, rotate, and revoke programmatic credentials. Keys are shown in full only at creation — store them in a secret manager."
+        description="Issue and revoke programmatic credentials. To rotate a key, create a replacement and revoke the old one. Keys are shown in full only at creation, so store them in a secret manager."
       />
 
       <div className="flex flex-col gap-6">
