@@ -81,6 +81,60 @@ func TestUploadWritesOriginFormRequestLine(t *testing.T) {
 	}
 }
 
+// The reason Opaque is set at all is to hand the signer a path it will not
+// re-normalize, so the keys that matter are the ones needing escaping. If
+// clearing Opaque after signing changed the bytes on the wire, this is where it
+// would show: the signature covers one string and the server would read
+// another, and the symptom would be SignatureDoesNotMatch on some filenames and
+// not others.
+//
+// Asserted against the escaped path rather than a hardcoded literal so the test
+// states the invariant (wire target equals what was signed) instead of
+// restating Go's escaping rules, which are not what is under test.
+func TestOriginFormSurvivesKeysNeedingEscaping(t *testing.T) {
+	for _, key := range []string{
+		"tenant/a file with spaces.jsonl",
+		"tenant/plus+sign/report.txt",
+		"tenant/percent%20already/report.txt",
+		"tenant/unicode-éè/report.txt",
+		"tenant/trailing/",
+	} {
+		t.Run(key, func(t *testing.T) {
+			var got string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.RequestURI
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			client, err := NewS3Client(Config{
+				Endpoint:  server.URL + "/s3",
+				AccessKey: "access",
+				SecretKey: "secret",
+				Region:    "us-east-1",
+			})
+			if err != nil {
+				t.Fatalf("client: %v", err)
+			}
+			if err := client.Upload(context.Background(), "hive-files", key,
+				strings.NewReader("x"), 1, "application/jsonl"); err != nil {
+				t.Fatalf("upload: %v", err)
+			}
+			if !strings.HasPrefix(got, "/s3/hive-files/") {
+				t.Fatalf("server read %q, want an origin-form target under /s3/hive-files/", got)
+			}
+			// The path the client signed. objectURL escapes per segment, so this
+			// is the string the signer's canonical URI was built from.
+			want := client.objectURL("hive-files", key).EscapedPath()
+			if got != want {
+				t.Fatalf("server read %q but the client signed %q; the wire target and the "+
+					"signed path have diverged, which is SignatureDoesNotMatch on exactly "+
+					"the keys that need escaping", got, want)
+			}
+		})
+	}
+}
+
 // Guard for the half that must NOT change. presignHTTP relies on Opaque
 // surviving, because url.URL.String renders a bare-path Opaque as
 // `http:/s3/...`; the "//host" form is what makes the presigned URL absolute.
