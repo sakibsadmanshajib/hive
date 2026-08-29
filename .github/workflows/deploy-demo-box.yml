@@ -117,7 +117,26 @@ on:
       # to the check itself would merge and never reach the box.
       - 'scripts/check-oauth-scopes.py'
       - '.github/workflows/deploy-demo-box.yml'
+      # Runs as the first step of BOTH jobs below and can refuse to start
+      # either one. Same blind spot as every other script listed here: without
+      # an entry, a fix to the guard itself would merge and never reach the
+      # box, which for this one means the box keeps enforcing a threshold the
+      # repo no longer states.
+      - 'scripts/check-deploy-disk.sh'
   workflow_dispatch:
+    inputs:
+      disk_floor_gb:
+        description: >-
+          Override the free-space floor, in GB, that both jobs refuse to start
+          below. Leave empty for the default in scripts/check-deploy-disk.sh.
+          This is the escape hatch for the one case the floor cannot fix by
+          itself: if the box falls below it, no push can deploy, including a
+          change meant to reduce what the box builds. Lower it only after
+          actually reclaiming space, and prefer reclaiming to lowering. It is
+          deliberately an input rather than anything readable from a commit
+          message, so an ordinary push cannot bypass the floor.
+        required: false
+        type: string
 
 concurrency:
   group: deploy-demo-box
@@ -258,6 +277,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # FIRST thing after the checkout that makes the script available, and
+      # deliberately ahead of every database connection below. Postgres
+      # responds to ENOSPC by panicking and shutting the engine down, so a
+      # migration that runs out of disk mid transaction takes down the stack
+      # that is currently serving. See scripts/check-deploy-disk.sh.
+      - name: Refuse to migrate without disk headroom
+        env:
+          HIVE_DEPLOY_DISK_FLOOR_GB: ${{ inputs.disk_floor_gb }}
+        run: scripts/check-deploy-disk.sh
 
       - name: Pull latest main
         # In migrate, and first, because of the 2026-08-22 deadlock.
@@ -682,6 +711,14 @@ jobs:
     # vendored tree alone hit the cache and cost nothing extra.
     timeout-minutes: 30
     steps:
+      - name: Refuse to build without disk headroom
+        # FIRST step in this job. See scripts/check-deploy-disk.sh for why the
+        # position matters and how the thresholds were measured.
+        working-directory: /home/sakib/hive
+        env:
+          HIVE_DEPLOY_DISK_FLOOR_GB: ${{ inputs.disk_floor_gb }}
+        run: scripts/check-deploy-disk.sh
+
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
         # control-plane's own container cannot exec Apptainer. The launcher
