@@ -578,15 +578,15 @@ services:
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      # The widest content knob in the sink set, and the reason it is listed
-      # here rather than left out: sinks/langfuse.go reads it at send time and,
-      # when true, adds the prompt and the completion to the exported
-      # generation. Documented in .env.example and previously not forwarded,
-      # so an operator who set it got no content and no explanation, which is
-      # the same shape of defect as the toggle this change retired. Default
-      # absent, which is off; turning it on is a decision about user text
-      # leaving the deployment, not a formatting preference.
-      LANGFUSE_INCLUDE_CONTENT: ${LANGFUSE_INCLUDE_CONTENT:-}
+      # LANGFUSE_INCLUDE_CONTENT is deliberately NOT forwarded, and this
+      # comment is here so a later consistency tidy does not "fix" the
+      # omission. sinks/langfuse.go reads it at send time and, when true, adds
+      # the prompt and the completion to the exported generation. It is the
+      # only variable in this block that would put user text on the wire, as
+      # opposed to audit metadata about a change. Leaving it out means turning
+      # content export on takes a reviewed edit to this file rather than a
+      # line in an operator's .env, which is the right bar for that decision.
+      # .env.example says the same thing next to the variable.
       # Tenant BYOK credential encryption (AES-256-GCM at rest). Read only by
       # control-plane, which owns every read and write of
       # public.tenant_provider_keys; deliberately NOT given to edge-api, which
