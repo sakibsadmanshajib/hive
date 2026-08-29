@@ -438,6 +438,82 @@ func TestHandleChat_StreamingSuppressesPostFinishChunk(t *testing.T) {
 	}
 }
 
+// suppressedChunkCarriesBogusUsageSSE puts the real terminal usage-only
+// frame BEFORE the suppressed spurious one, deliberately the opposite of
+// the wire order spuriousPostFinishSSE models. That ordering matters for
+// this fixture specifically: promptTokens/completionTokens/totalTokens are
+// plain function-level vars, overwritten unconditionally by whichever
+// frame's usage is read last, and never reset in between. A suppressed
+// frame that happened to run before the real terminal frame would have its
+// bogus numbers silently overwritten by the real ones a moment later,
+// which would make a test built that way pass whether or not usage is
+// correctly gated on suppression -- exactly the false-negative shape this
+// regression guard exists to avoid. Putting the bogus-usage chunk LAST,
+// after the real terminal frame already recorded 10/5/15, is what forces
+// the assertion below to actually distinguish "usage read after the
+// suppress check" from "usage read before it": only the fixed ordering
+// leaves the audit at 15 once this suppressed last frame is dropped.
+const suppressedChunkCarriesBogusUsageSSE = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer is 42 [1]."},"finish_reason":"stop"}]}
+
+data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"SPURIOUS-POST-FINISH-MARKER"},"finish_reason":null}],"usage":{"prompt_tokens":999,"completion_tokens":999,"total_tokens":999}}
+
+data: [DONE]
+
+`
+
+// TestHandleChat_SuppressedChunkUsageNotAccounted is the regression guard for
+// the CodeRabbit finding on PR #1257: a chunk suppressed by
+// ShouldSuppressPostFinishChunk (non-empty choices, so not the usage-only
+// exception) must never contribute to RAG_CHAT_COMPLETED, even when it
+// happens to carry its own usage block and arrives last on the wire. Only
+// the genuine usage-only terminal frame's numbers may reach the audit
+// event; this fails against the "read usage before the suppress check"
+// ordering and passes against "read it after" (verified by hand against
+// both orderings while writing this test).
+func TestHandleChat_SuppressedChunkUsageNotAccounted(t *testing.T) {
+	store := newFakeStore()
+	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: uuid.New(), Content: "ctx", Score: 0.1}}
+
+	var audits []auditRecord
+	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		fakeDispatch(http.StatusOK, suppressedChunkCarriesBogusUsageSSE, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "what is the answer?"}},
+		Stream:   true,
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for streaming, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "SPURIOUS-POST-FINISH-MARKER") || strings.Contains(body, "999") {
+		t.Errorf("suppressed chunk (and its bogus usage) must never reach the client:\n%s", body)
+	}
+
+	var completed map[string]any
+	for _, a := range audits {
+		if a.Action == "RAG_CHAT_COMPLETED" {
+			completed, _ = a.After.(map[string]any)
+		}
+	}
+	if completed == nil {
+		t.Fatal("RAG_CHAT_COMPLETED audit not emitted for streaming request")
+	}
+	if got := completed["total_tokens"]; got != int64(15) {
+		t.Errorf("expected RAG_CHAT_COMPLETED total_tokens=15 from the genuine terminal frame, got %v (%T) -- a suppressed chunk's usage must not be accounted", got, got)
+	}
+	if got := completed["prompt_tokens"]; got != int64(10) {
+		t.Errorf("expected RAG_CHAT_COMPLETED prompt_tokens=10 from the genuine terminal frame, got %v (%T)", got, got)
+	}
+}
+
 func TestHandleChat_StreamingUpstreamNon2xx_StaysProviderBlindNoSSE(t *testing.T) {
 	var audits []auditRecord
 	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,

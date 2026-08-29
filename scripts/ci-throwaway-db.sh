@@ -146,6 +146,17 @@ authenticated_extra="$(q "SELECT coalesce(string_agg(DISTINCT table_name, ', '),
 if [ -n "$authenticated_extra" ]; then
   fail "authenticated holds public-schema table grants outside the five migration-documented tenant tables: $authenticated_extra"
 fi
+# The two checks above only see grants named to anon or authenticated
+# directly. A GRANT ... TO PUBLIC reaches both roles just as effectively
+# (every role, anon and authenticated included, implicitly carries PUBLIC's
+# privileges) but names neither, so it would leave both checks green while
+# still handing the API roles the exact table access this file exists to
+# catch. information_schema.table_privileges (unlike role_table_grants)
+# reports PUBLIC grants explicitly, which is what this checks.
+public_grants="$(q "SELECT coalesce(string_agg(DISTINCT table_name || ':' || privilege_type, ', '), '') FROM information_schema.table_privileges WHERE table_schema='public' AND grantee='PUBLIC'")"
+if [ -n "$public_grants" ]; then
+  fail "PUBLIC holds public-schema table grant(s), reachable by anon and authenticated through the API roles' implicit PUBLIC membership: $public_grants"
+fi
 if [ "$(q "SELECT has_function_privilege('anon', 'public.agent_tasks_list_active()', 'EXECUTE')")" != "f" ]; then
   fail "anon can EXECUTE the SECURITY DEFINER function public.agent_tasks_list_active(), which 20260823_02_agent_task_schedules.sql revokes precisely because it is a cross-tenant read"
 fi
