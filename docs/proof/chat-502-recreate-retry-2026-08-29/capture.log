@@ -209,3 +209,60 @@ hive-open-webui-1 Up 12 minutes (healthy)
 hive-web-console-prod-1 Up 12 minutes
 hive-caddy-owui-1 Up 3 days
 /dev/mapper/ubuntu--vg-ubuntu--lv   98G   71G   23G  76% /
+
+================================================================================
+8. FOLLOW-UP MEASUREMENTS RAISED IN REVIEW (2026-08-29)
+================================================================================
+
+An adversarial review claimed that enabling lb_try_duration forces Caddy to
+buffer every request body before proxying, which would delay and add I/O to
+every document upload on the chat origin, and that it would let a non-idempotent
+POST be replayed if an upstream crashed mid-request. Both were measured rather
+than argued.
+
+--- Does the directive change body streaming? A/B, not a single reading -------
+Upstream is a Caddy that answers immediately without reading the request body
+and logs when it answers. The client sends a chunked POST whose body pauses for
+six seconds mid-stream. A buffering proxy would not reach the upstream until the
+body completed, so the upstream would log at t>=6s; a streaming one logs at
+about t=0.
+
+  === variant: pre ===
+    client start: 10:40:46.377
+    client done: 5.995642s http=200
+    upstream saw the request at 2026-08-29T10:40:46.057Z
+    upstream request count: 1
+
+  === variant: post ===
+    client start: 10:40:56.571
+    client done: 5.997501s http=200
+    upstream saw the request at 2026-08-29T10:40:56.584Z
+    upstream request count: 1
+
+The upstream saw the request immediately in BOTH variants, six seconds before
+the client finished sending. No buffering, with or without the directive, and
+no measurable difference between them. `request_buffers` is the separate,
+explicit, opt-in directive that would cause buffering, and this change does not
+set it.
+
+`upstream request count: 1` in both is the other half: the request reached the
+upstream exactly once, so nothing was replayed.
+
+--- Can a POST be replayed after the upstream received it? --------------------
+Caddy's documented rule: "If the connection to the upstream failed, a retry is
+always allowed", and after a connection succeeded a retry happens only if the
+request matches `retry_match`, whose default allows GET only. This change does
+not set `retry_match`, so a POST that reaches an upstream and then fails is
+never retried, and a GET has no body to replay. Both classes measured in
+section 1 are pre-connection failures.
+
+--- Connection pile-up blast radius -------------------------------------------
+$ docker exec hive-caddy-owui-1 sh -c 'cat /proc/1/limits | grep -i "open files"'
+Max open files            524287               524288               files
+
+Each public origin is its own Caddy container (hive-caddy-owui-1,
+hive-caddy-console-1, hive-caddy-supabase-1, hive-caddy-artifacts-1), so held
+connections on the chat origin cannot exhaust descriptors for the console,
+Supabase or artifacts origins. The largest burst measured in section 2 was
+eight requests across forty seconds, against a per-container ceiling of 524287
+descriptors.

@@ -47,16 +47,47 @@ GUARDED = ["Caddyfile.owui", "Caddyfile.console"]
 MIN_TRY_DURATION_S = 5
 MAX_TRY_DURATION_S = 60
 
-DURATION = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m)$")
+# Caddy takes Go durations, which compose: `1m30s` is as valid as `90s`, and a
+# guard that rejected the first would fail a legitimate config.
+DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|us|µs|ns|s|m|h)")
+UNIT_SECONDS = {
+    "ns": 1e-9,
+    "us": 1e-6,
+    "µs": 1e-6,
+    "ms": 0.001,
+    "s": 1.0,
+    "m": 60.0,
+    "h": 3600.0,
+}
 
 
 def parse_duration_s(raw):
     """Caddy duration to seconds, or None if it is not one we understand."""
-    m = DURATION.match(raw)
-    if not m:
+    total = 0.0
+    consumed = 0
+    for match in DURATION_PART.finditer(raw):
+        if match.start() != consumed:
+            return None
+        total += float(match.group(1)) * UNIT_SECONDS[match.group(2)]
+        consumed = match.end()
+    if consumed != len(raw) or consumed == 0:
         return None
-    value, unit = float(m.group(1)), m.group(2)
-    return value * {"ms": 0.001, "s": 1.0, "m": 60.0}[unit]
+    return total
+
+
+def strip_inline_comment(line):
+    """Drop a Caddyfile comment from the end of a line.
+
+    Caddy treats `#` as a comment only where it begins a token, so a `#` that
+    is glued to preceding non-space text is data, not a comment. This does not
+    understand quoting, which is fine for the two files it reads: neither has a
+    `#` inside a quoted value, and the only cost of getting it wrong would be
+    an over-eager truncation that makes the guard louder, never quieter.
+    """
+    if line.startswith("#"):
+        return ""
+    cut = re.search(r"\s#", line)
+    return line[: cut.start()].rstrip() if cut else line
 
 
 def proxy_blocks(text):
@@ -69,9 +100,9 @@ def proxy_blocks(text):
     out = []
     i = 0
     while i < len(lines):
-        stripped = lines[i].strip()
+        stripped = strip_inline_comment(lines[i].strip())
         tokens = stripped.split()
-        if stripped.startswith("#") or not tokens or tokens[0] != "reverse_proxy":
+        if not tokens or tokens[0] != "reverse_proxy":
             i += 1
             continue
         start = i + 1
@@ -89,13 +120,13 @@ def proxy_blocks(text):
         body = []
         i += 1
         while i < len(lines) and depth > 0:
-            line = lines[i].strip()
+            line = strip_inline_comment(lines[i].strip())
             i += 1
-            # Comment lines are skipped before the depth arithmetic, not after.
-            # An unbalanced brace inside a comment would otherwise close the
-            # block early and hide every directive below it, which is the one
-            # way this parser could silently report a pass it should not.
-            if line.startswith("#"):
+            # Comments are removed before the depth arithmetic, not after. An
+            # unbalanced brace inside one would otherwise close the block early
+            # and hide every directive below it, which is the one way this
+            # parser could silently report a pass it should not.
+            if not line:
                 continue
             # Placeholders (`{$HIVE_CHAT_EXTERNAL_SCHEME:http}`, `{remote_host}`)
             # are balanced on their own line, so they cancel out here.
@@ -115,8 +146,6 @@ def check_file(path):
     for line_no, upstream, body in blocks:
         directives = {}
         for line in body:
-            if line.startswith("#"):
-                continue
             parts = line.split()
             if len(parts) >= 2 and parts[0] in ("lb_try_duration", "lb_try_interval"):
                 directives[parts[0]] = parts[1]
@@ -184,32 +213,69 @@ SYNTHETIC_UNGUARDED = """\
     }
   }
 
-  reverse_proxy web-console-prod:3000 {
+  reverse_proxy web-console-prod:3000 {  # inline comment on the opening line
     lb_try_duration 30s
     lb_try_interval 1s
   }
+
+  reverse_proxy caddy-supabase:8080 {
+    lb_try_duration 30s
+  }
 }
 """
+
+
+DURATION_CASES = [
+    ("30s", 30.0),
+    ("1m30s", 90.0),  # Go durations compose; rejecting this would be a false red
+    ("250ms", 0.25),
+    ("1m", 60.0),
+    ("banana", None),
+    ("30", None),
+    ("30sx", None),
+    ("", None),
+]
 
 
 def self_check():
     """Prove the checker can go red, not only green, before trusting it."""
     import tempfile
 
+    for raw, expected in DURATION_CASES:
+        got = parse_duration_s(raw)
+        if got != expected:
+            print(
+                f"SELF-CHECK FAILED: parse_duration_s({raw!r}) returned {got!r}, "
+                f"expected {expected!r}",
+                file=sys.stderr,
+            )
+            return False
+
     with tempfile.TemporaryDirectory() as tmp:
         bad = pathlib.Path(tmp) / "Caddyfile.synthetic"
         bad.write_text(SYNTHETIC_UNGUARDED)
         found = check_file(bad)
-    if len(found) != 1 or "no lb_try_duration" not in found[0]:
+
+    # Two failures, from two different blocks and two different causes: the
+    # block with no retry at all, and the block with a duration but no
+    # interval. The second is what proves the interval branch is reachable
+    # rather than dead code that no test ever enters.
+    if len(found) != 2:
         print(
-            "SELF-CHECK FAILED: a Caddyfile with one guarded and one unguarded "
-            f"reverse_proxy should report exactly one failure, got: {found}",
+            "SELF-CHECK FAILED: the synthetic Caddyfile should report exactly "
+            f"two failures, got {len(found)}: {found}",
             file=sys.stderr,
         )
         return False
-    if "open-webui:8080" not in found[0]:
+    if "open-webui:8080" not in found[0] or "no lb_try_duration" not in found[0]:
         print(
-            f"SELF-CHECK FAILED: failure names the wrong upstream: {found[0]}",
+            f"SELF-CHECK FAILED: first failure is not the unguarded block: {found[0]}",
+            file=sys.stderr,
+        )
+        return False
+    if "caddy-supabase:8080" not in found[1] or "without lb_try_interval" not in found[1]:
+        print(
+            f"SELF-CHECK FAILED: second failure is not the missing interval: {found[1]}",
             file=sys.stderr,
         )
         return False
