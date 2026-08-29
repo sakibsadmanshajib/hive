@@ -2517,6 +2517,85 @@ jobs:
                 labels: [label],
                 body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
                   guidance() + '\n\n' +
-                  'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
+                  'Filed automatically, and closed automatically by the report-recovered job below once a run goes green. It will be refiled if it fails again.',
+              });
+            }
+
+  report-recovered:
+    # The other half of report-failure above, and the reason it has to exist is
+    # already written on that job: it dedupes on a single open issue carrying
+    # the label below, so while one is open a genuine new failure is downgraded
+    # to a one-line comment with no guidance and no notification of its own.
+    # agent-workspace-coverage's own comment names that trap by name. It only
+    # stays theoretical if the issue closes when the workflow recovers, and
+    # nothing closed it: the instruction in the filed body, "close it once a
+    # run goes green", was addressed to a human with no reason to be watching,
+    # and no workflow in this repository has ever closed an issue it filed.
+    #
+    # Issue #1416 is the worked example. Filed 10:00 on 2026-08-29 for a disk
+    # floor refusal (run 33246772783, 14G free against the 15G floor), cause
+    # fixed and merged four hours later by PR #1424, then twenty-one
+    # consecutive green runs. The issue stayed open through all of them, still
+    # reading "The MIGRATION failed, so main is running against a stale
+    # schema", and was still being treated that evening as the top blocker on
+    # a demo box that had been deploying every merge all day. A tracker that
+    # cannot say "recovered" is a tracker that stops being read, which is the
+    # same trade refused everywhere else here: never swap a loud signal for a
+    # quiet one, and never leave a red flag flying over a green system.
+    #
+    # `needs` is deliberately identical to report-failure's, and the asymmetry
+    # is what makes it matter: a narrower list here would close an issue that a
+    # job outside the list had just filed, and a wider one would refuse to
+    # close on a job report-failure never tracked.
+    # .github/ci/lint-deploy-failure-reporter.mjs fails the build if the two
+    # lists drift apart or if this job is removed.
+    name: Report recovery
+    needs: [migrate, deploy, sdk-replay]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    # A notifier must never be able to change the verdict, the same rule
+    # post-deploy-verify.yml's reporter carries. A rate-limited or broken close
+    # cannot turn a green deploy red, and its worst case is the issue staying
+    # open, which is exactly today's behaviour.
+    continue-on-error: true
+    steps:
+      - uses: actions/github-script@v9
+        continue-on-error: true
+        with:
+          script: |
+            const label = 'ci-failure:deploy-demo-box';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // The list api rather than the search api, for the same
+            // read-your-writes reason report-failure uses it: search is
+            // eventually consistent and would miss an issue filed minutes ago.
+            // Paginated, and every match is closed rather than only the first,
+            // because report-failure opens at most one but a second filed by
+            // hand under this label would otherwise stay open forever and go
+            // on swallowing real failures as comments.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 100,
+            });
+            for (const issue of open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Recovered: ${runUrl} is green. Migrations applied, the box was `
+                  + `recreated on the new images, and the post-deploy SDK replay passed.\n\n`
+                  + `Closed automatically. It will be refiled the next time this workflow fails.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
               });
             }
