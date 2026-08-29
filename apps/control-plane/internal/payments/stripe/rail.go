@@ -3,6 +3,7 @@ package stripe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,12 +22,23 @@ type Rail struct {
 }
 
 // NewRail constructs a Stripe Rail and sets the global stripe API key.
-func NewRail(secretKey, webhookSecret string) *Rail {
+//
+// Both credentials are required, and the refusal lives here rather than only at
+// the call site because an empty webhook secret is not merely unable to settle:
+// ProcessEvent hands it to webhook.ConstructEventWithOptions, which HMACs with
+// whatever key it is given, and a key an attacker can also compute with turns
+// every forged payment.succeeded delivery into a credit grant for a payment
+// that never happened. Guarding here means no future construction path can
+// reopen that by forgetting the check (issue #1449).
+func NewRail(secretKey, webhookSecret string) (*Rail, error) {
+	if strings.TrimSpace(secretKey) == "" || strings.TrimSpace(webhookSecret) == "" {
+		return nil, errors.New("stripe: refusing to build a rail without both a secret key and a webhook secret")
+	}
 	stripego.Key = secretKey
 	return &Rail{
 		secretKey:     secretKey,
 		webhookSecret: webhookSecret,
-	}
+	}, nil
 }
 
 // RailName returns the rail identifier for Stripe.

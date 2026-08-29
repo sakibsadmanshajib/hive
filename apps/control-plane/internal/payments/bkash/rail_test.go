@@ -19,18 +19,18 @@ import (
 // bkashServer sets up an httptest.Server that handles the three bKash endpoints.
 // It returns the server, and records requests for assertion.
 type bkashServer struct {
-	server            *httptest.Server
-	grantRequests     []*http.Request
-	createRequests    []*http.Request
-	createBodies      []map[string]string
-	executeRequests   []*http.Request
-	executeBodies     []map[string]string
+	server          *httptest.Server
+	grantRequests   []*http.Request
+	createRequests  []*http.Request
+	createBodies    []map[string]string
+	executeRequests []*http.Request
+	executeBodies   []map[string]string
 
 	// configurable responses
-	grantIDToken       string
-	createPaymentID    string
-	createBkashURL     string
-	executeStatus      string
+	grantIDToken    string
+	createPaymentID string
+	createBkashURL  string
+	executeStatus   string
 }
 
 func newBkashServer(t *testing.T) *bkashServer {
@@ -83,7 +83,7 @@ func newBkashServer(t *testing.T) *bkashServer {
 }
 
 func (bs *bkashServer) newRail() *bkashRail.Rail {
-	return bkashRail.NewRail(
+	rail, err := bkashRail.NewRail(
 		bs.server.Client(),
 		bs.server.URL,
 		"test_app_key",
@@ -91,6 +91,32 @@ func (bs *bkashServer) newRail() *bkashRail.Rail {
 		"test_username",
 		"test_password",
 	)
+	if err != nil {
+		panic("bkash test rail: " + err.Error())
+	}
+	return rail
+}
+
+// TestBkashNewRail_RefusesAnIncompleteCredentialSet: bKash mints its grant token
+// from the whole set, so a partial rail can advertise itself and then fail every
+// settlement round trip (issue #1449).
+func TestBkashNewRail_RefusesAnIncompleteCredentialSet(t *testing.T) {
+	for _, tc := range []struct {
+		name                                string
+		appKey, appSecret, username, passwd string
+	}{
+		{"no app secret", "key", "", "user", "pass"},
+		{"no username", "key", "secret", "", "pass"},
+		{"no password", "key", "secret", "user", ""},
+		{"blank app key", "  ", "secret", "user", "pass"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rail, err := bkashRail.NewRail(nil, "https://example.invalid", tc.appKey, tc.appSecret, tc.username, tc.passwd)
+			if err == nil || rail != nil {
+				t.Fatalf("expected a refusal, got rail=%v err=%v", rail, err)
+			}
+		})
+	}
 }
 
 func defaultInput() payments.InitiateInput {

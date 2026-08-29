@@ -183,7 +183,10 @@ func newSignatureFixture(t *testing.T) *signatureFixture {
 		Metadata:         map[string]any{},
 	})
 
-	rail := stripeRail.NewRail("sk_test_key", testWebhookSecret)
+	rail, err := stripeRail.NewRail("sk_test_key", testWebhookSecret)
+	if err != nil {
+		t.Fatalf("NewRail: %v", err)
+	}
 	svc := payments.NewService(repo, capLedger{}, capProfiles{}, capFX{},
 		map[payments.Rail]payments.PaymentRail{payments.RailStripe: rail})
 
