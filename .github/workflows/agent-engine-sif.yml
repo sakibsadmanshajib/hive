@@ -39,12 +39,25 @@ on:
     # more. Monthly is well inside the retention window, so a match always
     # exists, and it revalidates agent-engine.def against upstream base image
     # drift while it is at it.
+    #
+    # One way this can still lapse: GitHub disables a repository's scheduled
+    # workflows after 60 days with no activity, and the artifact then expires
+    # 30 days after that. The proof job's error message names this schedule
+    # for exactly that case, so a reader who hits it knows to check here
+    # before assuming their own ref caused it.
     - cron: '0 4 1 * *'
   workflow_dispatch:
 
 concurrency:
   group: agent-engine-sif-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on a pull request branch only. On main both the
+  # push trigger and the monthly schedule resolve github.ref to
+  # refs/heads/main and so share one group, and cancelling either of those is
+  # a silent absence of the artifact everything downstream correlates
+  # against: agent-visual-proof.yml then hard-errors on a ref that changed
+  # nothing. A merge landing at 04:00 on the first of the month is unlikely
+  # and cheap to let queue, so let it queue.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
