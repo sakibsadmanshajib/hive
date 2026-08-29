@@ -19,7 +19,7 @@ STACK UNDER TEST
                  network as the stack
   web-console    Next.js PRODUCTION build (npm run build && npm run start),
                  http://pr1276-console:3444, built from this PR's head at
-                 c7f4a0b4e
+                 c625b86af
   control-plane  hive-control-plane:ci, http://pr1276-cp:8081, pointed at the
                  throwaway database below
   database       throwaway Postgres, pgvector/pgvector:pg17, container
@@ -150,7 +150,7 @@ URL: /console/analytics?window=toString
 HTTP status: 200
 screenshot: 02-window-prototype-key.png
 
-Window control shows: 24h 7d 30d 90d Custom, with 7d selected.
+Window control shows: 24h 7d 30d 90d, with 7d selected.
 
 The pre-fix build answered this exact URL with HTTP 500 and the console's
 generic crash page (capture-log.txt in this directory, capture 03). It now
@@ -164,6 +164,22 @@ Byte-identical to capture 01, in fact: both screenshots hash to
 the 7d page exactly, pixel for pixel, rather than a crash page or a page
 claiming a window it did not fetch. Only capture 01 is posted to the pull
 request, since the second image carries no additional pixels.
+
+RECAPTURED AFTER THE CUSTOM CONTROL WAS REMOVED
+===============================================
+
+2026-08-29T02:45Z, same stack rebuilt from scratch, same seed script, head
+c625b86af. The Custom control emitted a custom:from:to value no fetch on this
+page understood, so the page served 7d under a heading naming the range; it is
+gone until the range is threaded through for real (issue #1338).
+
+The time window strip now reads 24h 7d 30d 90d, four presets the analytics
+summary endpoint's own enum recognizes, and nothing else.
+
+Every sparkline reading above reproduced exactly on the rebuilt stack, curve
+for curve, which is what a deterministic seed and a fixed bucket count should
+do: 6.88/7.69/8.50, 2.00/3.00/4.00, 5.47/6.33/7.20, 4.34/5.25/6.16, and the
+cache hit rate curve flat at a single value.
 
 TEARDOWN
 ========
