@@ -81,9 +81,9 @@ debugging either.
 `owui-patches/hive_ui_surfaces.py` rewrites verbatim substrings of a compiled
 bundle that only exists inside the image, and PR CI never builds that image
 (`deploy-demo-box.yml` is the only workflow that builds
-`Dockerfile.open-webui`; `ci.yml` runs `make test-scripts` instead). Without a checked-in
-sample of real bundle bytes, a `find` string edited into something that matches
-nothing passes every test in the repo and fails only at deploy.
+`Dockerfile.open-webui`; `ci.yml` runs `make test-scripts` instead). Without a
+checked-in sample of real bundle bytes, a `find` string edited into something
+that matches nothing passes every test in the repo and fails only at deploy.
 
 `owui-patches/dump_bundle_excerpts.py` closes that. It extracts the pinned
 image's `_app/immutable`, writes verbatim excerpts of every rewrite and guard
