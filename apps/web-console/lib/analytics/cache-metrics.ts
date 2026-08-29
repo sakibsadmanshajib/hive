@@ -14,7 +14,7 @@
  * control-plane/client are fine (they cost nothing at runtime), and the one
  * runtime value this file compares against is imported from
  * control-plane/contract, which is dependency-free precisely so that import
- * does not drag client.ts server graph in here (issue #1347); an actual
+ * does not drag the server graph of client.ts in here (issue #1347); an actual
  * fetch call here would not be.
  */
 import type {
@@ -565,9 +565,9 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
       // itself cannot tell apart (traffic that carried no key, an error
       // before a key was resolved, a key deleted under ON DELETE SET NULL),
       // so both the label and the suffix have to be true of all three. What
-      // is certainly false for the first two is "Deleted key", which is what
-      // the bucket rendered as before this fix (issue #1347), on a workspace
-      // whose spend there was chat traffic that never carried a key.
+      // is certainly false for the first two is "Deleted key", which is how
+      // the bucket rendered on the qa-tester workspace before this fix, whose
+      // spend in that bucket was chat traffic that never carried a key.
       const unattributed = row.group_key === UNATTRIBUTED_GROUP_KEY;
       const key = unattributed ? undefined : apiKeyById.get(row.group_key);
       return {

@@ -193,8 +193,8 @@ async function fetchPreviousCacheSample(
  * (apps/control-plane/internal/apikeys/repository.go), so the only way a
  * spend row key id has no match is the unattributed bucket (issue #1347,
  * matched on UNATTRIBUTED_GROUP_KEY before the key lookup and labelled
- * separately), a genuinely gone key, or a failed
- * fetch, and this function already tells those apart via null.
+ * separately), a genuinely gone key, or a failed fetch, and this function
+ * already tells those apart via null.
  */
 async function fetchTopKeys(
   input: OverviewFetchInput,
