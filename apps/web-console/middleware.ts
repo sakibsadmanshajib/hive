@@ -1,7 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
+import { refuseCrossOriginMutation } from "@/lib/http/same-origin";
+
 export async function middleware(request: NextRequest) {
+  // Cross-origin refusal for every state-changing request, before anything else
+  // runs (issue #1457). Here rather than only at each handler because the
+  // matcher below already covers every path, so a route added later is guarded
+  // without anyone remembering, and because refusing here costs a forged
+  // request no GoTrue round trip at all. Safe methods and the SSLCommerz
+  // payment return are skipped inside the helper.
+  const refusal = refuseCrossOriginMutation(request);
+  if (refusal) {
+    // The same anti-framing headers every other response from this middleware
+    // carries, set directly rather than through withSecurityHeaders below,
+    // which is scoped to NextResponse and is not yet in scope here.
+    refusal.headers.set("X-Frame-Options", "DENY");
+    refusal.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    return refusal;
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(

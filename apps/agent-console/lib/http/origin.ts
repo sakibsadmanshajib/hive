@@ -157,3 +157,17 @@ export function resolveCanonicalOrigin(request: { headers: Headers }): string {
 
   return forwardedOrigin(request.headers) ?? configured?.origin ?? FALLBACK_ORIGIN;
 }
+
+// resolveForwardedOrigin exposes the header-derived origin, meaning the origin
+// the request was actually addressed to, for the one caller that has to compare
+// an inbound Origin header against it (lib/http/same-origin.ts).
+//
+// It is NOT a redirect target and must never be used as one. A client chooses
+// this value, which is exactly why resolveCanonicalOrigin outranks it with the
+// operator-configured origin; comparing an attacker-supplied Origin against an
+// attacker-supplied Host is safe (the two must match, and a browser derives Host
+// from the URL that scopes the session cookie), while REDIRECTING to it is the
+// open-redirect this file exists to prevent.
+export function resolveForwardedOrigin(request: { headers: Headers }): string | null {
+  return forwardedOrigin(request.headers);
+}

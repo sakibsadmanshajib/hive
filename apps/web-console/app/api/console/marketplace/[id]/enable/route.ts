@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { ControlPlaneError, setMarketplaceEntryEnabled } from "@/lib/control-plane/client";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 interface PutBody {
   enabled?: boolean;
@@ -17,6 +18,10 @@ interface RouteParams {
 // server-only and attaches the caller's session bearer; the control-plane is
 // the authority on permission (platform-admin) and on entry existence.
 export async function PUT(request: Request, { params }: RouteParams): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

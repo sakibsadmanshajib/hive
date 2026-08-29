@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { ControlPlaneError, updateMemberRole } from "@/lib/control-plane/client";
 import { parseMemberRole } from "@/lib/members/roles";
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 // Server-side proxy for changing a member's workspace role (issue #536).
 //
@@ -18,6 +19,10 @@ import { resolveCanonicalOrigin } from "@/lib/http/origin";
 // only proves the caller has a session, validates the shape of the request, and
 // translates the upstream refusal into copy a customer can act on.
 export async function POST(request: Request): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

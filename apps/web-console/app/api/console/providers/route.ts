@@ -7,6 +7,7 @@ import {
   createProvider,
   type UpsertProviderInput,
 } from "@/lib/control-plane/client";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 // Server-side proxy for registering a custom provider. Keeps
 // CONTROL_PLANE_BASE_URL server-only and attaches the caller's session
@@ -15,6 +16,10 @@ import {
 // only shape-checks and maps the upstream status class to a generic,
 // customer-safe message.
 export async function POST(request: Request): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

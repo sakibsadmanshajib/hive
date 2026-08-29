@@ -9,6 +9,7 @@ import {
 } from "@/lib/control-plane/client";
 import { parseMemberRole } from "@/lib/members/roles";
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 // Server-side proxy for issuing a workspace invitation (issues #111, #1440).
 //
@@ -31,6 +32,10 @@ import { resolveCanonicalOrigin } from "@/lib/http/origin";
 // afterwards. Before this change the route simply dropped it, which destroyed
 // the only copy while the interface reported "Invitation sent" (issue #1440).
 export async function POST(request: Request): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {
