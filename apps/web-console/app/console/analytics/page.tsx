@@ -182,7 +182,11 @@ export default async function AnalyticsPage({
 
           {activeTab === "usage" ? (
             <div className="flex flex-col gap-6">
-              <ChartCard title="Usage" description="Requests and tokens.">
+              <ChartCard
+                title="Usage"
+                description="Requests and tokens."
+                rows={usageData}
+              >
                 <UsageChart data={usageData} />
               </ChartCard>
               <AnalyticsTable
@@ -209,6 +213,7 @@ export default async function AnalyticsPage({
               <ChartCard
                 title="Spend"
                 description="Credits charged and ledger entries."
+                rows={spendData}
               >
                 <SpendChart data={spendData} />
               </ChartCard>
@@ -232,6 +237,7 @@ export default async function AnalyticsPage({
               <ChartCard
                 title="Errors"
                 description="Error count and rate by group."
+                rows={errorData}
               >
                 <ErrorChart data={errorData} />
               </ChartCard>

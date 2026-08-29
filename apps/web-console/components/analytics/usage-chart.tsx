@@ -11,6 +11,15 @@ import {
   Legend,
 } from "recharts";
 import type { UsageSummaryRow } from "@/lib/control-plane/client";
+import {
+  CHART_HEIGHT,
+  CHART_PANEL_CLASS,
+  chartAxis,
+  chartGridStroke,
+  chartLegend,
+  chartSeries,
+  chartTooltip,
+} from "@/components/analytics/chart-theme";
 
 interface UsageChartProps {
   data: UsageSummaryRow[];
@@ -18,32 +27,25 @@ interface UsageChartProps {
 
 export function UsageChart({ data }: UsageChartProps) {
   return (
-    <div
-      style={{
-        backgroundColor: "#f9fafb",
-        borderRadius: "0.75rem",
-        padding: "1rem",
-        marginBottom: "1.5rem",
-      }}
-    >
-      <ResponsiveContainer width="100%" height={300}>
+    <div className={CHART_PANEL_CLASS}>
+      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="group_key" tick={{ fontSize: 12 }} />
-          <YAxis tick={{ fontSize: 12 }} />
-          <Tooltip />
-          <Legend />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+          <XAxis dataKey="group_key" {...chartAxis} />
+          <YAxis {...chartAxis} />
+          <Tooltip {...chartTooltip} />
+          <Legend {...chartLegend} />
           <Line
             type="monotone"
             dataKey="total_input_tokens"
-            stroke="#6366f1"
+            stroke={chartSeries.inputTokens}
             name="Input tokens"
             dot={false}
           />
           <Line
             type="monotone"
             dataKey="total_output_tokens"
-            stroke="#8b5cf6"
+            stroke={chartSeries.outputTokens}
             name="Output tokens"
             dot={false}
           />
