@@ -15,6 +15,7 @@ import {
   loadSpecOperations,
   loadSupportMatrix,
 } from "@/lib/api-contract";
+import { pickQuickstartAlias } from "@/lib/quickstart-model";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -66,13 +67,9 @@ export default async function DocsPage() {
     getCatalogModels().catch((): CatalogModel[] => []),
   ]);
 
-  // Prefer one of Hive's own routing aliases: they are the documented entry
-  // points, and an upstream model id happening to sort first would read as a
-  // recommendation to bypass them.
-  const alias =
-    models.find((model) => model.id.startsWith("hive-"))?.id ??
-    models[0]?.id ??
-    "hive-default";
+  // Name an alias that actually answers on a fresh account. See
+  // pickQuickstartAlias for why "the first hive- id" was not that (issue #1372).
+  const alias = pickQuickstartAlias(models);
   const matrix = loadSupportMatrix();
   const specOperations = loadSpecOperations();
   const disagreements = diffSpecAgainstMatrix(specOperations, matrix);
