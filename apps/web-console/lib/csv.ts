@@ -51,10 +51,18 @@ export function csvRow(cells: readonly CsvValue[]): string {
   return cells.map(csvCell).join(",");
 }
 
-/** Build a whole CSV document from a header row and its data rows. */
+/**
+ * Build a whole CSV document from a header row and its data rows.
+ *
+ * Records are separated by CRLF, which is what RFC 4180 specifies and what
+ * this writer's quoting already claims to follow. A cell's own bytes are left
+ * exactly as they arrived: a line break inside a quoted field is not rewritten
+ * to CRLF, because that would alter the stored value on a round trip, which is
+ * the mutation this writer exists to avoid.
+ */
 export function toCsv(
   header: readonly string[],
   rows: readonly (readonly CsvValue[])[]
 ): string {
-  return [csvRow(header), ...rows.map(csvRow)].join("\n");
+  return [csvRow(header), ...rows.map(csvRow)].join("\r\n");
 }

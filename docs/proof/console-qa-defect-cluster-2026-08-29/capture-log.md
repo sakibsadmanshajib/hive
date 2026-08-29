@@ -57,7 +57,7 @@ two accounts), one ordinary. Viewport 1440.
 
 Before (`shot-api-keys-before.png`):
 
-```
+```text
 table width          45524
 wrapper scrollWidth  45524
 Revoke button left   45579   (44,139 px past the right edge of the viewport)
@@ -65,7 +65,7 @@ Revoke button left   45579   (44,139 px past the right edge of the viewport)
 
 After (`shot-api-keys-after.png`):
 
-```
+```text
 table width          1166
 wrapper scrollWidth  1166
 Revoke button left   1222    visible: true
@@ -91,7 +91,7 @@ Before, the logs export replaced quotes, commas and newlines with spaces and
 passed a leading `=` straight through; the ledger export stripped commas from
 one column and escaped nothing else. Both now go through `lib/csv.ts`.
 
-```
+```text
 before  2026-08-21T09:30:00Z,topup,50000000,idemx-with-commas
 after   2026-08-21T09:30:00Z,topup,50000000,"idem,x-with-commas"
 
@@ -104,7 +104,7 @@ in a spreadsheet. That exemption is carried by the cell's type rather than by
 sniffing the string, because a text column's `-001` is not a number the reader
 wants normalised to `-1` on the next save:
 
-```
+```text
 csvCell(-2000)    "-2000"     a number, from a numeric column
 csvCell("-001")   "'-001"     text, preserved exactly
 csvCell(" =1+1")  "' =1+1"    leading whitespace does not hide the payload
@@ -144,7 +144,7 @@ device width, with the same components and the same measurement.
 
 Before (`shot-analytics-320-before.png`), viewport 320:
 
-```
+```text
 window.scrollX after scrollTo(9999,0)   38
 body.scrollWidth                        343
 card "Cached vs uncached"               327
@@ -154,7 +154,7 @@ the six summary tiles                   273   (correct)
 
 After (`shot-analytics-320-after.png`), viewport 320:
 
-```
+```text
 window.scrollX after scrollTo(9999,0)   0
 body.scrollWidth                        305
 every card                              273
@@ -178,14 +178,14 @@ Viewport 1440, same page as the #1406 capture.
 
 Before (`shot-analytics-overview-1440-before.png`):
 
-```
+```text
 161,794,930,349.395 credits. Credits spent divided by input plus output
 tokens, per million. Effective, so cache reads are already priced in.
 ```
 
 After (`shot-analytics-overview-1440-after.png`):
 
-```
+```text
 161,794,930,349 credits per 1M tokens. Credits spent divided by input plus
 output tokens. Effective, so cache reads are already priced in.
 ```

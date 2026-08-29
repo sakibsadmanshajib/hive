@@ -885,7 +885,7 @@ describe("usage CSV export", () => {
   it("carries both cache token columns in the header", async () => {
     const csv = await exportedCsv([event({ cache_read_tokens: 900 })]);
 
-    const [header] = csv.split("\n");
+    const [header] = csv.split("\r\n");
     expect(header.split(",")).toEqual([
       "created_at",
       "request_id",
@@ -905,7 +905,7 @@ describe("usage CSV export", () => {
   it("exports an absent cache count as an empty cell rather than a zero", async () => {
     const csv = await exportedCsv([event({ cache_read_tokens: 900 })]);
 
-    const [, row] = csv.split("\n");
+    const [, row] = csv.split("\r\n");
     const cells = row.split(",");
     expect(cells[6]).toBe("900");
     expect(cells[7]).toBe("");
@@ -921,7 +921,7 @@ describe("usage CSV export", () => {
       event({ id: "e2" }),
     ]);
 
-    const [, measured, unmeasured] = csv.split("\n");
+    const [, measured, unmeasured] = csv.split("\r\n");
     expect(measured.split(",")[9]).toBe("1800");
     expect(unmeasured.split(",")[9]).toBe("");
   });
@@ -935,7 +935,7 @@ describe("usage CSV export", () => {
       "k-1": '=HYPERLINK("http://qa.invalid")',
     });
 
-    const [, row] = csv.split("\n");
+    const [, row] = csv.split("\r\n");
     expect(row.endsWith('"\'=HYPERLINK(""http://qa.invalid"")"')).toBe(true);
   });
 
@@ -944,7 +944,7 @@ describe("usage CSV export", () => {
       "k-1": "billing, prod",
     });
 
-    const [, row] = csv.split("\n");
+    const [, row] = csv.split("\r\n");
     expect(row.endsWith('"billing, prod"')).toBe(true);
   });
 });

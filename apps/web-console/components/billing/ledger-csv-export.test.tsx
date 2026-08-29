@@ -109,7 +109,7 @@ describe("LedgerCsvExport", () => {
     expect(blobs).toHaveLength(1);
     expect(blobs[0].type).toBe("text/csv");
     const csv = await readBlobText(blobs[0]);
-    expect(csv.split("\n")).toEqual([
+    expect(csv.split("\r\n")).toEqual([
       "date,type,credits_delta,idempotency_key",
       "2026-08-20T10:00:00Z,usage,-1250,idem-abc-123",
       // A comma is now quoted per RFC 4180 rather than deleted from the
@@ -133,7 +133,7 @@ describe("LedgerCsvExport", () => {
     fireEvent.click(screen.getByRole("button", { name: /export csv/i }));
 
     const csv = await readBlobText(blobs[0]);
-    const cell = csv.split("\n")[1].split(",").slice(3).join(",");
+    const cell = csv.split("\r\n")[1].split(",").slice(3).join(",");
     expect(cell.startsWith('"\'=')).toBe(true);
   });
 

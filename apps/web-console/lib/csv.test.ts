@@ -82,6 +82,13 @@ describe("toCsv", () => {
         ["ok", 5],
       ]
     );
-    expect(csv).toBe("name,delta\n'=1+1,-2000\nok,5");
+    // Records separated by CRLF, per RFC 4180.
+    expect(csv).toBe("name,delta\r\n'=1+1,-2000\r\nok,5");
+  });
+
+  it("leaves a line break inside a cell exactly as it arrived", () => {
+    // Rewriting an embedded LF to CRLF would alter the stored value on a
+    // round trip, which is the mutation this writer exists to avoid.
+    expect(toCsv(["note"], [["one\ntwo"]])).toBe('note\r\n"one\ntwo"');
   });
 });
