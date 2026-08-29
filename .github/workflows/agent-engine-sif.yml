@@ -23,6 +23,23 @@ on:
       - 'vendor/openhands/**'
       - 'apps/agent-engine/packs/**'
       - '.github/workflows/agent-engine-sif.yml'
+  schedule:
+    # Keeps an unexpired artifact alive for the current image inputs.
+    #
+    # agent-visual-proof.yml refuses to certify a ref with an image it cannot
+    # tie to that ref: it looks for an unexpired agent-engine-sif artifact
+    # whose run built the same deploy/apptainer, apps/agent-engine/packs and
+    # vendor/openhands trees. Those trees only change occasionally, and the
+    # triggers above only build on a change, while the artifact's 90 day
+    # retention runs regardless. Leave the image inputs alone for a quarter
+    # and the last matching artifact expires, after which every proof run
+    # hard-errors with "no unexpired agent-engine-sif artifact was built from
+    # these image inputs" for reasons no pull request caused. That is
+    # backwards: a stable tree would make the proof job less reliable, not
+    # more. Monthly is well inside the retention window, so a match always
+    # exists, and it revalidates agent-engine.def against upstream base image
+    # drift while it is at it.
+    - cron: '0 4 1 * *'
   workflow_dispatch:
 
 concurrency:

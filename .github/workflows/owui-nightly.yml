@@ -103,7 +103,16 @@ jobs:
           # killed the step at the assignment rather than at the check. The
           # missing-line case is the normal way this seeder now declines to
           # rotate an existing account's password, so it has to say so.
-          if ! out=$(python3 scripts/seed-owui-e2e-user.py); then
+          # --account-slug is spelled out rather than inherited from the
+          # seeder's default. This run revokes every prior key on whatever
+          # account it lands on, so the blast radius of a scheduled job
+          # belongs at the call site where a reader can see it, not in a
+          # constant in another file. The demo box is on its own account
+          # (hive-demo-owui-shim, confirmed 2026-08-29 against the box's live
+          # key: issue #560), and naming the CI account here is what keeps a
+          # later change to that default from silently pointing this nightly
+          # at a long-lived deployment's key.
+          if ! out=$(python3 scripts/seed-owui-e2e-user.py --account-slug owui-e2e-shim); then
             echo "::error::seed-owui-e2e-user.py failed; its stderr is above"
             exit 1
           fi
