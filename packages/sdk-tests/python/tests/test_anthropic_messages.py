@@ -105,12 +105,14 @@ def test_messages_create_basic_non_streaming(client: Anthropic) -> None:
     assert isinstance(msg.usage.output_tokens, int) and msg.usage.output_tokens >= 0
 
 
-@pytest.mark.xfail(
-    reason="issue #1274: content_block_start omits an empty text field "
-    "(json:\"text,omitempty\"), so the SDK's own stream accumulator crashes "
-    "with TypeError on the first content_block_delta of any text response",
-    strict=True,
-)
+# The xfail marker for issue #1274 came off here. That issue was
+# content_block_start omitting an empty `text` field, because
+# `json:"text,omitempty"` drops a Go string's empty value, which made the
+# Anthropic SDK's own accumulator do `None += str` on the first
+# content_block_delta of any text response. PR #1296 (commit 0b4e5ffed) fixed it
+# by making Text a pointer so the required-but-empty value reaches the wire, and
+# the issue is closed. The marker outlived the defect and had been rendering as
+# a red `XPASS(strict)` on every run since.
 def test_streaming_event_sequence_integrity(client: Anthropic) -> None:
     """The SDK's strict streaming parser accepts Hive's Anthropic event sequence.
 
