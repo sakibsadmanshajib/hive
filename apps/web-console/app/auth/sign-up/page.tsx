@@ -13,6 +13,7 @@ import {
 } from "@/lib/auth/auth-error";
 import { appendNextParam } from "@/lib/auth/next-target";
 import { isSelfServeSignupEnabled } from "@/lib/auth/self-serve";
+import { resolveClientOrigin } from "@/lib/http/client-origin";
 
 // Minimal ambient type for the Cloudflare Turnstile widget. The full SDK type
 // is not installed as a dev dependency; we only need the render/remove surface.
@@ -220,11 +221,11 @@ function SignUpForm() {
         return;
       }
 
-      const appUrl =
-        process.env.NEXT_PUBLIC_APP_URL ??
-        (typeof window !== "undefined"
-          ? window.location.origin
-          : "http://localhost:3000");
+      // Loopback-demoted (issue #487). `.env.example` ships
+      // NEXT_PUBLIC_APP_URL=http://localhost:3000 and the value is baked into
+      // this bundle at build time, so a build that carries the example default
+      // forward would otherwise mail a link to the recipient's own machine.
+      const appUrl = resolveClientOrigin();
 
       const { error: signUpError } = await supabase.auth.signUp({
         email,

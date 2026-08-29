@@ -543,6 +543,26 @@ services:
       WEB_CONSOLE_PUBLIC_URL: ${WEB_CONSOLE_PUBLIC_URL:-}
       CONSOLE_APP_URL: ${CONSOLE_APP_URL:-}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      # Outbound mail for workspace invitations (issue #1440). The same relay
+      # GoTrue uses, and deliberately the same sender identity, so auth mail and
+      # product mail arrive from one address on one authenticated domain.
+      #
+      # Unset is a supported state, not a broken one: invitations are still
+      # issued and the console hands the inviting user a copyable link, saying
+      # plainly that nothing was emailed. Control-plane logs which variable is
+      # missing at boot.
+      HIVE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
+      HIVE_SMTP_PORT: ${ENTERPRISE_SMTP_PORT:-587}
+      HIVE_SMTP_USER: ${ENTERPRISE_SMTP_USER:-}
+      HIVE_SMTP_PASS: ${ENTERPRISE_SMTP_PASS:-}
+      # The sender address, which is NOT the SMTP login and NOT
+      # ENTERPRISE_SMTP_ADMIN_EMAIL (that one is the alert recipient). It has to
+      # sit on a domain the relay has authenticated or receivers reject the
+      # message: hive.scubed.co carries the Brevo DKIM CNAMEs and a DMARC
+      # record, scubed.com.bd carries neither and publishes an SPF record that
+      # excludes the relay outright.
+      HIVE_MAIL_FROM: ${HIVE_MAIL_FROM:-no_reply@hive.scubed.co}
+      HIVE_MAIL_FROM_NAME: ${HIVE_MAIL_FROM_NAME:-Hive}
       OWUI_BASE_URL: ${OWUI_BASE_URL:-http://open-webui:8080}
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}

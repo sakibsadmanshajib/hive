@@ -1,6 +1,5 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Mail } from "lucide-react";
 
 import {
   ControlPlaneError,
@@ -8,11 +7,21 @@ import {
   getMembers,
   getViewer,
   type AccountMember,
+  type PendingInvitation,
 } from "@/lib/control-plane/client";
+import {
+  invitationOutcome,
+  parseDeliveryFlag,
+} from "@/lib/members/invite-outcome";
+import {
+  InvitationOutcomeNotice,
+  InvitePanelProvider,
+  InviteTeammateForm,
+  ResendInvitationButton,
+} from "@/components/members/invite-panel";
 import { can } from "@/lib/viewer-gates";
 import {
   MEMBER_ROLES,
-  MEMBER_ROLE_HINTS,
   MEMBER_ROLE_LABELS,
   inviteDisabledReason,
   memberIdentityLabel,
@@ -31,7 +40,7 @@ import {
 } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, Input, Label } from "@/components/ui/input";
+import { Label } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 
 type ToneName = "success" | "warning" | "danger" | "neutral" | "accent";
@@ -42,9 +51,15 @@ type ToneName = "success" | "warning" | "danger" | "neutral" | "accent";
 // (issue #535).
 interface MembersPageProps {
   searchParams: Promise<{
+    // The delivery outcome of an invitation issued through the no-JavaScript
+    // form post: "sent", "not_configured" or "failed". It is never a bare
+    // success flag any more, because the flag it replaced ("1") was rendered as
+    // "Invitation sent" while nothing in the product could send anything
+    // (issue #1440).
     invited?: string;
     joined?: string;
     role_updated?: string;
+    revoked?: string;
     error?: string;
   }>;
 }
@@ -78,23 +93,70 @@ function statusTone(status: string): { label: string; tone: ToneName } {
   }
 }
 
-// successMessage maps the redirect flags onto confirmation copy. Only one banner
+// outcomeBanner maps the redirect flags onto confirmation copy. Only one banner
 // shows at a time, and a failure always wins so a partial success cannot hide it.
-function successMessage(params: {
+//
+// The invitation branch delegates to invitationOutcome, so this page has no
+// wording of its own for a delivery and cannot claim one. It arrives here only
+// on the no-JavaScript path; with JavaScript the invite panel renders the same
+// outcome in place, along with the link.
+function outcomeBanner(params: {
   invited?: string;
   joined?: string;
   role_updated?: string;
-}): string | null {
-  if (params.invited === "1") {
-    return "Invitation sent. They join this workspace once they accept.";
+  revoked?: string;
+}): { tone: "success" | "warning"; message: string } | null {
+  const delivery = parseDeliveryFlag(params.invited);
+  if (delivery !== null) {
+    const outcome = invitationOutcome(delivery, null);
+    return {
+      tone: outcome.tone,
+      // The acceptance token cannot ride a redirect, so this path can only say
+      // where to get a link, not show one.
+      message:
+        outcome.action === null
+          ? outcome.message
+          : `${outcome.message} Use New link on the invitation below to get a link you can pass on.`,
+    };
   }
   if (params.joined === "1") {
-    return "You joined this workspace. Switch to it from the workspace switcher.";
+    return {
+      tone: "success",
+      message:
+        "You joined this workspace. Switch to it from the workspace switcher.",
+    };
   }
   if (params.role_updated === "1") {
-    return "Role updated.";
+    return { tone: "success", message: "Role updated." };
+  }
+  if (params.revoked === "1") {
+    return {
+      tone: "success",
+      message: "Invitation withdrawn. Its link no longer works.",
+    };
   }
   return null;
+}
+
+// A roster row is either somebody who is already in the workspace or somebody
+// who has been invited into it. They share a table because they answer one
+// question, and because an invited address appearing nowhere at all is half of
+// why a broken invitation went unnoticed (issue #1440).
+type RosterRow =
+  | ({ kind: "member" } & AccountMember)
+  | ({ kind: "invitation" } & PendingInvitation);
+
+function invitationStatusTone(status: string): { label: string; tone: ToneName } {
+  return status === "expired"
+    ? { label: "Expired", tone: "danger" }
+    : { label: "Invited", tone: "warning" };
+}
+
+function formatExpiry(raw: string): string | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
 }
 
 export default async function MembersPage({ searchParams }: MembersPageProps) {
@@ -103,7 +165,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
     typeof params.error === "string" && params.error.trim() !== ""
       ? params.error
       : null;
-  const confirmation = failureMessage === null ? successMessage(params) : null;
+  const confirmation = failureMessage === null ? outcomeBanner(params) : null;
 
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
@@ -135,14 +197,16 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
   // refusal still throws, so a real outage stays visible.
   async function loadMembers(): Promise<{
     members: AccountMember[];
+    invitations: PendingInvitation[];
     restricted: boolean;
   }> {
-    if (!session) return { members: [], restricted: false };
+    if (!session) return { members: [], invitations: [], restricted: false };
     try {
-      return { members: await getMembers(session.access_token), restricted: false };
+      const roster = await getMembers(session.access_token);
+      return { ...roster, restricted: false };
     } catch (err: unknown) {
       if (err instanceof ControlPlaneError && err.status === 403) {
-        return { members: [], restricted: true };
+        return { members: [], invitations: [], restricted: true };
       }
       throw err;
     }
@@ -155,6 +219,16 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
     ),
   ]);
   const members = memberList.members;
+  const invitations = memberList.invitations;
+
+  // Invitations first: they are the rows that need an action taken on them.
+  const rosterRows: RosterRow[] = [
+    ...invitations.map((invitation): RosterRow => ({
+      kind: "invitation",
+      ...invitation,
+    })),
+    ...members.map((member): RosterRow => ({ kind: "member", ...member })),
+  ];
 
   const activeOwners = members.filter(
     (member) => member.role === "owner" && member.status === "active",
@@ -212,30 +286,77 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
     );
   }
 
-  const columns: Column<AccountMember>[] = [
+  const columns: Column<RosterRow>[] = [
     {
       key: "user",
       header: "Member",
-      cell: (row) => (
-        <span
-          className="text-[var(--color-ink)]"
-          title={`User ID ${row.user_id}`}
-        >
-          {memberIdentityLabel(row)}
-        </span>
-      ),
+      cell: (row) =>
+        row.kind === "member" ? (
+          <span
+            className="text-[var(--color-ink)]"
+            title={`User ID ${row.user_id}`}
+          >
+            {memberIdentityLabel(row)}
+          </span>
+        ) : (
+          <span className="text-[var(--color-ink)]">{row.email}</span>
+        ),
     },
     {
       key: "role",
       header: "Role",
-      cell: roleCell,
+      cell: (row) =>
+        row.kind === "member" ? (
+          roleCell(row)
+        ) : (
+          <Badge tone={roleTone(row.role)}>{row.role}</Badge>
+        ),
     },
     {
       key: "status",
       header: "Status",
       cell: (row) => {
-        const { label, tone } = statusTone(row.status);
-        return <Badge tone={tone}>{label}</Badge>;
+        if (row.kind === "member") {
+          const { label, tone } = statusTone(row.status);
+          return <Badge tone={tone}>{label}</Badge>;
+        }
+        const { label, tone } = invitationStatusTone(row.status);
+        const expiry = formatExpiry(row.expires_at);
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge tone={tone}>{label}</Badge>
+            {expiry !== null ? (
+              <span className="text-2xs text-[var(--color-ink-3)]">
+                {row.status === "expired"
+                  ? `Expired ${expiry}`
+                  : `Expires ${expiry}`}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      cell: (row) => {
+        // Members are managed through the Role column. Only an outstanding
+        // invitation has anything to act on here.
+        if (row.kind === "member") return null;
+        // The card above already explains why the controls are unavailable.
+        // Repeating it on every row would say the same sentence four times.
+        if (!canInvite) return null;
+        return (
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+            <ResendInvitationButton email={row.email} role={row.role} />
+            <form method="POST" action="/api/console/members/invitations/revoke">
+              <input type="hidden" name="id" value={row.id} />
+              <Button type="submit" variant="secondary" size="sm">
+                Withdraw
+              </Button>
+            </form>
+          </div>
+        );
       },
     },
   ];
@@ -261,6 +382,12 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
         description="Invite teammates to share API keys, billing visibility, and analytics. Roles control what each member can change."
       />
 
+      {/* The provider holds the invitation outcome, including the one-time
+          link, above the members table. Inside a table row it would be
+          destroyed by the refresh that follows issuing it: DataTable keys rows
+          on their row key, so anything that changes a row's identity remounts
+          it and takes its state along. */}
+      <InvitePanelProvider>
       <div className="flex flex-col gap-6">
         {failureMessage !== null ? (
           <p
@@ -273,9 +400,13 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
         {confirmation !== null ? (
           <p
             role="status"
-            className="rounded-lg border border-[var(--color-success)] bg-[var(--color-surface)] px-4 py-3 text-sm text-[var(--color-success)]"
+            className={
+              confirmation.tone === "success"
+                ? "rounded-lg border border-[var(--color-success)] bg-[var(--color-surface)] px-4 py-3 text-sm text-[var(--color-success)]"
+                : "rounded-lg border border-[var(--color-warning)] bg-[var(--color-surface)] px-4 py-3 text-sm text-[var(--color-warning)]"
+            }
           >
-            {confirmation}
+            {confirmation.message}
           </p>
         ) : null}
 
@@ -283,49 +414,15 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
           <CardHeader>
             <CardTitle>Invite a teammate</CardTitle>
             <CardDescription>
-              An email invite is sent with a sign-in link. They&rsquo;ll join
-              this workspace once they accept, with the role you pick here.
+              Creating an invitation produces a private link that joins this
+              workspace with the role you pick. Where mail delivery is
+              configured we email that link as well, and either way the link is
+              shown to you here so you can pass it on yourself.
             </CardDescription>
           </CardHeader>
-          <CardContent className="px-5 py-5">
+          <CardContent className="flex flex-col gap-4 px-5 py-5">
             {canInvite ? (
-              <form
-                method="POST"
-                action="/api/console/members"
-                className="grid gap-3 sm:grid-cols-[1fr_auto_auto] sm:items-end"
-              >
-                <Field label="Email" htmlFor="invite-email" required>
-                  <Input
-                    id="invite-email"
-                    type="email"
-                    name="email"
-                    placeholder="teammate@example.com"
-                    required
-                  />
-                </Field>
-                <Field
-                  label="Role"
-                  htmlFor="invite-role"
-                  hint={MEMBER_ROLE_HINTS.member}
-                >
-                  <select
-                    id="invite-role"
-                    name="role"
-                    defaultValue="member"
-                    className={`${SELECT_CLASSNAME} sm:w-36`}
-                  >
-                    {MEMBER_ROLES.map((role) => (
-                      <option key={role} value={role}>
-                        {MEMBER_ROLE_LABELS[role]}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Button type="submit" variant="primary" size="md">
-                  <Mail size={14} aria-hidden="true" />
-                  Send invite
-                </Button>
-              </form>
+              <InviteTeammateForm />
             ) : (
               <div className="flex flex-col gap-2">
                 <Button
@@ -335,13 +432,14 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
                   disabled
                   className="self-start"
                 >
-                  Send invite
+                  Create invitation
                 </Button>
                 <p className="text-xs text-[var(--color-ink-3)]">
                   {inviteBlockedReason}
                 </p>
               </div>
             )}
+            <InvitationOutcomeNotice />
           </CardContent>
         </Card>
 
@@ -350,19 +448,22 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
             title="Member list is owner-only"
             description="Only workspace owners can see who else belongs to this workspace. Ask an owner if you need the list."
           />
-        ) : members.length === 0 ? (
+        ) : rosterRows.length === 0 ? (
           <EmptyState
             title="No members yet"
-            description="Once teammates accept their invites they&rsquo;ll appear here with their role and status."
+            description="Invitations you create appear here straight away, and become members once they are accepted."
           />
         ) : (
-          <DataTable<AccountMember>
-            rows={members}
+          <DataTable<RosterRow>
+            rows={rosterRows}
             columns={columns}
-            rowKey={(row) => row.user_id}
+            rowKey={(row) =>
+              row.kind === "member" ? `member-${row.user_id}` : `invitation-${row.id}`
+            }
           />
         )}
       </div>
+      </InvitePanelProvider>
     </ConsoleShell>
   );
 }

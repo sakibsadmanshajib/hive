@@ -17,6 +17,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/mailer"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 )
@@ -27,6 +28,7 @@ type Service struct {
 	policy  authz.Policy
 	roleSvc *platform.RoleService // optional — see WithRoleService
 	billing *pgxpool.Pool         // optional — see WithBillingPool
+	mailer  InvitationMailer      // optional — see WithInvitationMailer
 }
 
 // NewService returns a new accounts Service.
@@ -44,6 +46,20 @@ func NewService(repo Repository) *Service {
 func (s *Service) WithRoleService(roleSvc *platform.RoleService) *Service {
 	cloned := *s
 	cloned.roleSvc = roleSvc
+	return &cloned
+}
+
+// WithInvitationMailer returns a copy of the Service that mails an invitation
+// when one is created.
+//
+// Optional on purpose. A deployment with no relay configured still issues
+// invitations, and CreateInvitation reports DeliveryNotConfigured so the caller
+// can hand the link to the inviting user instead of claiming an email went out.
+// That distinction is the whole fix for issue #1440: the interface was reporting
+// a send that no code anywhere was capable of performing.
+func (s *Service) WithInvitationMailer(m InvitationMailer) *Service {
+	cloned := *s
+	cloned.mailer = m
 	return &cloned
 }
 
@@ -308,17 +324,132 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 		ExpiresAt:       expiresAt,
 		InvitedByUserID: viewer.UserID,
 	}
-	if err := s.repo.CreateInvitation(ctx, inv); err != nil {
+	// Re-inviting an address supersedes whatever was outstanding for it rather
+	// than stacking a second live token beside the first. Re-send is the normal
+	// reason somebody invites the same person twice, and two simultaneously
+	// valid links would make revoking one meaningless.
+	//
+	// That is the database's job, not this function's: CreateInvitation upserts
+	// onto a partial unique index, so the id that comes back is the row that
+	// ended up live and is not necessarily the one generated above.
+	storedID, err := s.repo.CreateInvitation(ctx, inv)
+	if err != nil {
 		return InvitationResult{}, fmt.Errorf("accounts: store invitation: %w", err)
 	}
+	inv.ID = storedID
 
-	return InvitationResult{
+	result := InvitationResult{
 		ID:        inv.ID,
 		Email:     email,
 		Role:      invitedRole,
 		Token:     rawToken,
 		ExpiresAt: expiresAt,
-	}, nil
+		Delivery:  DeliveryNotConfigured,
+	}
+
+	// The send is synchronous and its outcome is data. Making it asynchronous
+	// would take back the one thing this change exists to provide: an answer to
+	// "did the invitation actually go anywhere" at the moment the user asks.
+	// A failure here is never fatal to the invitation, which is already stored
+	// and whose link the caller still receives.
+	if s.mailer != nil {
+		workspaceName := ""
+		if acct, aErr := s.repo.GetAccountByID(ctx, accountID); aErr == nil && acct != nil {
+			workspaceName = acct.DisplayName
+		} else if aErr != nil {
+			log.Printf("accounts: workspace lookup for invitation email failed account=%s: %v", accountID, aErr)
+		}
+
+		mailErr := s.mailer.SendInvitation(ctx, InvitationEmail{
+			To:            email,
+			WorkspaceName: workspaceName,
+			InviterEmail:  viewer.Email,
+			Role:          invitedRole,
+			Token:         rawToken,
+			ExpiresAt:     expiresAt,
+		})
+		switch {
+		case mailErr == nil:
+			result.Delivered = true
+			result.Delivery = DeliverySent
+		case errors.Is(mailErr, mailer.ErrNotConfigured):
+			result.Delivery = DeliveryNotConfigured
+		default:
+			result.Delivery = DeliveryFailed
+			// Identified by invitation id, never by token. The token is
+			// bearer equivalent and an error path is exactly where a secret
+			// gets copied into a log by accident.
+			log.Printf("accounts: invitation email delivery failed account=%s invitation=%s: %v",
+				accountID, inv.ID, mailErr)
+		}
+	}
+
+	return result, nil
+}
+
+// ListInvitations returns the outstanding invitations on accountID.
+//
+// Gated on the same permission as issuing one: whoever may invite may see what
+// is outstanding. Without this the console could show an invited address
+// nowhere at all, which is how an undeliverable invitation stayed invisible
+// (issue #1440).
+func (s *Service) ListInvitations(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer) ([]InvitationSummary, error) {
+	actor, err := s.resolveWorkspaceActor(ctx, accountID, viewer)
+	if err != nil {
+		return nil, err
+	}
+	if !s.policy.Can(actor, authz.PermMembersInvite) {
+		return nil, &GateError{
+			Code:    "permission_denied",
+			Message: "members.invite permission required",
+		}
+	}
+
+	invitations, err := s.repo.ListOutstandingInvitations(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: list invitations: %w", err)
+	}
+
+	now := time.Now()
+	summaries := make([]InvitationSummary, 0, len(invitations))
+	for _, inv := range invitations {
+		status := InvitationStatusPending
+		if now.After(inv.ExpiresAt) {
+			status = InvitationStatusExpired
+		}
+		summaries = append(summaries, InvitationSummary{
+			ID:        inv.ID,
+			Email:     inv.Email,
+			Role:      inv.Role,
+			Status:    status,
+			ExpiresAt: inv.ExpiresAt,
+			CreatedAt: inv.CreatedAt,
+		})
+	}
+	return summaries, nil
+}
+
+// RevokeInvitation withdraws an outstanding invitation. The token stops working
+// immediately, because acceptance resolves the token against a stored row and
+// there is no row left to find.
+func (s *Service) RevokeInvitation(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer, invitationID uuid.UUID) error {
+	actor, err := s.resolveWorkspaceActor(ctx, accountID, viewer)
+	if err != nil {
+		return err
+	}
+	if !s.policy.Can(actor, authz.PermMembersInvite) {
+		return &GateError{
+			Code:    "permission_denied",
+			Message: "members.invite permission required",
+		}
+	}
+
+	// Scoped by account in the statement itself, so an invitation on another
+	// workspace is ErrNotFound rather than a successful cross-tenant revoke.
+	if err := s.repo.DeleteInvitation(ctx, accountID, invitationID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // AcceptInvitation accepts a pending invitation for the viewer.

@@ -19,7 +19,14 @@ const mockGetViewer = vi.fn();
 const mockGetMembers = vi.fn();
 const mockGetAccountProfile = vi.fn();
 
-vi.mock("next/navigation", () => ({ redirect: mockRedirect }));
+// useRouter is here for the invite panel, which is a client component and calls
+// router.refresh() after issuing an invitation. Mocking the module rather than
+// the panel keeps the real form in the tree, so the role-selector assertions
+// below still test the thing they name.
+vi.mock("next/navigation", () => ({
+  redirect: mockRedirect,
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({
@@ -94,7 +101,18 @@ describe("app/console/members/page.tsx", () => {
       data: { session: { access_token: "session-token" } },
     });
     mockGetAccountProfile.mockResolvedValue({ owner_name: "Ada Owner" });
-    mockGetMembers.mockResolvedValue([
+    mockGetMembers.mockResolvedValue({
+      invitations: [
+        {
+          id: "inv-1",
+          email: "invitee@example.test",
+          role: "member",
+          status: "pending",
+          expires_at: "2026-09-01T09:30:00Z",
+          created_at: "2026-08-29T09:30:00Z",
+        },
+      ],
+      members: [
       {
         user_id: OWNER_ID,
         email: "owner@example.test",
@@ -113,14 +131,39 @@ describe("app/console/members/page.tsx", () => {
         role: "member",
         status: "active",
       },
-    ]);
+      ],
+    });
   });
 
   // --- #535: invite feedback is rendered ---
 
-  it("renders the invite-sent confirmation", async () => {
+  // Issue #1440. The old assertion here was that `invited=1` renders
+  // "Invitation sent". It passed for months while nothing in the product could
+  // send anything, which is what a test asserting the copy rather than the
+  // outcome buys you.
+  it("reports a real delivery as a delivery", async () => {
+    await renderMembersPage({ invited: "sent" });
+    expect(screen.getByRole("status").textContent).toMatch(/emailed an invitation/i);
+  });
+
+  it("never claims a send when nothing was sent", async () => {
+    await renderMembersPage({ invited: "not_configured" });
+    const banner = screen.getByRole("status").textContent ?? "";
+    expect(banner).toMatch(/nothing was emailed/i);
+    expect(banner).not.toMatch(/invitation sent|we emailed/i);
+    expect(banner).toMatch(/new link/i);
+  });
+
+  it("treats the retired success flag as a failure rather than resurrecting the claim", async () => {
     await renderMembersPage({ invited: "1" });
-    expect(screen.getByRole("status").textContent).toMatch(/invitation sent/i);
+    const banner = screen.getByRole("status").textContent ?? "";
+    expect(banner).not.toMatch(/invitation sent|we emailed/i);
+  });
+
+  it("shows an outstanding invitation in the members table", async () => {
+    await renderMembersPage({});
+    expect(screen.getByText("invitee@example.test")).toBeTruthy();
+    expect(screen.getByText("Invited")).toBeTruthy();
   });
 
   it("renders the joined-workspace confirmation", async () => {
@@ -186,20 +229,23 @@ describe("app/console/members/page.tsx", () => {
   });
 
   it("states the last-owner rule instead of offering to demote a sole owner", async () => {
-    mockGetMembers.mockResolvedValue([
-      {
-        user_id: OWNER_ID,
-        email: "owner@example.test",
-        role: "owner",
-        status: "active",
-      },
-      {
-        user_id: MEMBER_ID,
-        email: "teammate@example.test",
-        role: "member",
-        status: "active",
-      },
-    ]);
+    mockGetMembers.mockResolvedValue({
+      invitations: [],
+      members: [
+        {
+          user_id: OWNER_ID,
+          email: "owner@example.test",
+          role: "owner",
+          status: "active",
+        },
+        {
+          user_id: MEMBER_ID,
+          email: "teammate@example.test",
+          role: "member",
+          status: "active",
+        },
+      ],
+    });
     await renderMembersPage({});
     expect(screen.queryByLabelText(/role for owner@example.test/i)).toBeNull();
     expect(
@@ -209,7 +255,7 @@ describe("app/console/members/page.tsx", () => {
 
   it("states the permission gate, not email verification, on a disabled invite control", async () => {
     await renderMembersPage({}, ["analytics.view"]);
-    const button = screen.getByRole("button", { name: /send invite/i });
+    const button = screen.getByRole("button", { name: /create invitation/i });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText(/only workspace owners can invite teammates/i),

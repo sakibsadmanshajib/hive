@@ -30,9 +30,21 @@ type Repository interface {
 	// that case nothing is inserted and existingAccountID is the winner's.
 	ProvisionDefaultWorkspace(ctx context.Context, acct Account, membership Membership, profile AccountProfile) (existingAccountID uuid.UUID, wonElsewhere bool, err error)
 	GetAccountByID(ctx context.Context, id uuid.UUID) (*Account, error)
-	CreateInvitation(ctx context.Context, inv Invitation) error
+	// CreateInvitation stores an invitation, superseding any live invitation
+	// for the same address on the same account. It returns the id of the row
+	// that ended up live, which is not necessarily inv.ID: superseding is an
+	// upsert onto a unique index, so it reuses the existing row.
+	CreateInvitation(ctx context.Context, inv Invitation) (uuid.UUID, error)
 	FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
 	AcceptInvitation(ctx context.Context, invitationID uuid.UUID, acceptedAt time.Time) error
+	// ListOutstandingInvitations returns every unaccepted invitation on an
+	// account, expired ones included. An expired invitation is still the reason
+	// somebody never joined, so hiding it would leave the workspace owner
+	// looking at an empty list wondering what happened.
+	ListOutstandingInvitations(ctx context.Context, accountID uuid.UUID) ([]Invitation, error)
+	// DeleteInvitation removes one invitation. accountID scopes the delete, so a
+	// caller cannot revoke an invitation belonging to another workspace by id.
+	DeleteInvitation(ctx context.Context, accountID, invitationID uuid.UUID) error
 	ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error)
 	UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error
 	ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error
@@ -260,13 +272,42 @@ func (r *pgxRepository) GetAccountByID(ctx context.Context, id uuid.UUID) (*Acco
 	return &a, nil
 }
 
-func (r *pgxRepository) CreateInvitation(ctx context.Context, inv Invitation) error {
-	_, err := r.pool.Exec(ctx, `
+// CreateInvitation stores an invitation, superseding any live invitation for
+// the same address on the same account.
+//
+// One statement, on purpose. Superseding used to be a separate DELETE, and
+// there is no order for that pair which is correct: sweeping before the insert
+// means a failed insert leaves the address with no invitation at all, and
+// sweeping after means two concurrent invitations delete each other's rows.
+// The upsert lands on the partial unique index added in
+// 20260829_03_account_invitations_one_live_per_email.sql, so the invariant is
+// the database's and no interleaving can break it.
+//
+// The conflict target repeats the index predicate because a partial index
+// requires it. accepted_at is deliberately not touched on update: it is NULL on
+// every row this can conflict with, and an accepted invitation is history that
+// a re-invitation must not overwrite.
+func (r *pgxRepository) CreateInvitation(ctx context.Context, inv Invitation) (uuid.UUID, error) {
+	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.account_invitations
 		  (id, account_id, email, role, token_hash, expires_at, invited_by_user_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id, lower(email)) WHERE accepted_at IS NULL
+		DO UPDATE SET
+		  email              = EXCLUDED.email,
+		  role               = EXCLUDED.role,
+		  token_hash         = EXCLUDED.token_hash,
+		  expires_at         = EXCLUDED.expires_at,
+		  invited_by_user_id = EXCLUDED.invited_by_user_id,
+		  created_at         = now()
+		RETURNING id
 	`, inv.ID, inv.AccountID, inv.Email, inv.Role, inv.TokenHash, inv.ExpiresAt, inv.InvitedByUserID)
-	return err
+
+	var id uuid.UUID
+	if err := row.Scan(&id); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
 }
 
 func (r *pgxRepository) FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error) {
@@ -282,6 +323,58 @@ func (r *pgxRepository) FindInvitationByTokenHash(ctx context.Context, tokenHash
 		return nil, ErrNotFound
 	}
 	return &inv, nil
+}
+
+// ListOutstandingInvitations returns the unaccepted invitations on an account,
+// newest first.
+func (r *pgxRepository) ListOutstandingInvitations(ctx context.Context, accountID uuid.UUID) ([]Invitation, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, account_id, email, role, token_hash, expires_at, accepted_at, invited_by_user_id, created_at
+		FROM public.account_invitations
+		WHERE account_id = $1
+		  AND accepted_at IS NULL
+		ORDER BY created_at DESC, id DESC
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	invitations := make([]Invitation, 0)
+	for rows.Next() {
+		var inv Invitation
+		if err := rows.Scan(&inv.ID, &inv.AccountID, &inv.Email, &inv.Role, &inv.TokenHash,
+			&inv.ExpiresAt, &inv.AcceptedAt, &inv.InvitedByUserID, &inv.CreatedAt); err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, inv)
+	}
+	return invitations, rows.Err()
+}
+
+// DeleteInvitation revokes one invitation.
+//
+// The account_id predicate is authorization, not a filter. Without it the id
+// alone would be enough to revoke another workspace's invitation, and an id is
+// not a secret.
+//
+// The accepted_at IS NULL predicate keeps an accepted invitation on the record:
+// deleting one would erase the audit trail of how a member joined, and would
+// not remove their membership anyway.
+func (r *pgxRepository) DeleteInvitation(ctx context.Context, accountID, invitationID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM public.account_invitations
+		WHERE id = $1
+		  AND account_id = $2
+		  AND accepted_at IS NULL
+	`, invitationID, accountID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // AcceptInvitation consumes an invitation exactly once.

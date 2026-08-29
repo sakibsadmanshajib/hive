@@ -110,6 +110,43 @@ export interface AccountMember {
   status: string;
 }
 
+// PendingInvitation is an invitation that has been issued and not yet accepted.
+//
+// It carries no token. The raw acceptance token exists exactly once, in the
+// create response, and the database keeps only its hash, so a listing has
+// nothing to hand out and must not pretend otherwise.
+export interface PendingInvitation {
+  id: string;
+  email: string;
+  role: string;
+  // "pending" while it can still be accepted, "expired" once it cannot. An
+  // expired invitation is still listed: it is the reason somebody never joined.
+  status: string;
+  expires_at: string;
+  created_at: string;
+}
+
+// MemberRoster is who is in the workspace plus who is on the way in.
+export interface MemberRoster {
+  members: AccountMember[];
+  invitations: PendingInvitation[];
+}
+
+// InvitationDelivery says what actually happened to the invitation message.
+//
+// "sent" only ever comes from a transport that ran and returned success. The
+// console derives every user-visible string from this value, which is what
+// stops it claiming a send that never occurred (issue #1440).
+export type InvitationDelivery = "sent" | "not_configured" | "failed";
+
+export interface InvitationCreated {
+  id: string | null;
+  // The raw acceptance token, returned once and never stored anywhere.
+  token: string | null;
+  delivered: boolean;
+  delivery: InvitationDelivery;
+}
+
 interface ViewerResponse {
   user: ViewerUser;
   current_account: {
@@ -429,6 +466,36 @@ function decodeBillingProfile(payload: JsonObject): BillingProfile | null {
     country_code: countryCode,
     state_region: stateRegion,
   };
+}
+
+function decodeInvitations(payload: JsonObject): PendingInvitation[] {
+  const values = readArrayField(payload, "invitations");
+  if (!values) {
+    return [];
+  }
+
+  const invitations: PendingInvitation[] = [];
+  for (const value of values) {
+    if (!isJsonObject(value)) {
+      continue;
+    }
+    const id = readStringField(value, "id");
+    const email = readStringField(value, "email");
+    const role = readStringField(value, "role");
+    const status = readStringField(value, "status");
+    if (!id || !email || !role || !status) {
+      continue;
+    }
+    invitations.push({
+      id,
+      email,
+      role,
+      status,
+      expires_at: readStringField(value, "expires_at") ?? "",
+      created_at: readStringField(value, "created_at") ?? "",
+    });
+  }
+  return invitations;
 }
 
 function decodeMembers(payload: JsonObject): AccountMember[] {
@@ -1172,20 +1239,25 @@ export async function updateAccountProfile(
   return profile;
 }
 
-// createInvitation sends a workspace invite for the given email. It runs only
-// server-side (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never
-// rendered into client HTML (issue #111). Throws ControlPlaneError so the route
-// can map the upstream status (403 no-permission, 409 already-member, etc.) to a
-// generic, customer-safe message instead of collapsing everything to 500.
+// createInvitation issues a workspace invitation. It runs only server-side
+// (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never rendered into
+// client HTML (issue #111). Throws ControlPlaneError so the route can map the
+// upstream status (403 no-permission, 409 already-member, etc.) to a generic,
+// customer-safe message instead of collapsing everything to 500.
 //
-// The control-plane returns the raw acceptance token in its 201 body. We return
-// it here so a server-side caller (e.g. an invite mailer) can use it, but it is
-// deliberately NOT surfaced in any client-facing redirect/URL — the token is
-// bearer-equivalent and must not leak into browser history or logs.
+// The control-plane returns the raw acceptance token in its 201 body, plus what
+// actually happened to the invitation message. Both matter to the caller: the
+// delivery outcome decides what the interface is allowed to claim, and the token
+// is what lets the inviting user deliver the invitation themselves when nothing
+// was mailed.
+//
+// The token is bearer-equivalent. It may be rendered to the inviting user, who
+// is already authorised to issue it, and it must never travel in a redirect URL,
+// a cookie, a log line, or browser history.
 export async function createInvitation(
   email: string,
   role: string,
-): Promise<{ token: string | null }> {
+): Promise<InvitationCreated> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/invitations`, {
     method: "POST",
@@ -1199,8 +1271,62 @@ export async function createInvitation(
   }
 
   const payload = parseJsonValue(await readResponseText(response));
-  const token = isJsonObject(payload) ? readStringField(payload, "token") : null;
-  return { token };
+  if (!isJsonObject(payload)) {
+    // A response we cannot read is not evidence of a delivery. Treating an
+    // unreadable body as a send is precisely the class of assumption this
+    // change exists to remove.
+    return { id: null, token: null, delivered: false, delivery: "failed" };
+  }
+  const delivered = payload.delivered === true;
+  return {
+    id: readStringField(payload, "id"),
+    token: readStringField(payload, "token"),
+    delivered,
+    delivery: parseInvitationDelivery(readStringField(payload, "delivery"), delivered),
+  };
+}
+
+// parseInvitationDelivery refuses to invent "sent".
+//
+// An unrecognised or absent value falls back to "failed" rather than to the
+// happy path, so a control-plane that stops reporting delivery degrades into
+// telling the user to send the link themselves rather than into claiming an
+// email that nothing sent.
+function parseInvitationDelivery(
+  raw: string | null,
+  delivered: boolean,
+): InvitationDelivery {
+  switch (raw) {
+    case "sent":
+      // Cross-checked against the boolean. The two fields disagreeing means the
+      // response is not trustworthy, and "sent" is the claim that has to earn it.
+      return delivered ? "sent" : "failed";
+    case "not_configured":
+      return "not_configured";
+    case "failed":
+      return "failed";
+    default:
+      return "failed";
+  }
+}
+
+// revokeInvitation withdraws an outstanding invitation. The control-plane scopes
+// the delete by account, so an id belonging to another workspace is a 404 rather
+// than a cross-workspace revoke.
+export async function revokeInvitation(id: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/invitations/revoke`,
+    {
+      method: "POST",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({ id }),
+    },
+  );
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to revoke invitation");
+  }
 }
 
 // updateMemberRole changes an existing member's workspace role. Server-side only
@@ -2669,7 +2795,14 @@ export async function dismissBudgetAlert(): Promise<void> {
   }
 }
 
-export async function getMembers(accessToken: string): Promise<AccountMember[]> {
+// getMembers returns the workspace roster: active and invited members, plus the
+// invitations that have been issued and not yet accepted.
+//
+// Invitations ride on this response rather than on a separate call because they
+// answer the same question behind the same permission, and because an invited
+// address showing up nowhere in the console is half of why a broken invitation
+// went unnoticed (issue #1440).
+export async function getMembers(accessToken: string): Promise<MemberRoster> {
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
   if (!baseUrl) {
     throw new Error("CONTROL_PLANE_BASE_URL is not configured");
@@ -2692,10 +2825,13 @@ export async function getMembers(accessToken: string): Promise<AccountMember[]> 
 
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) {
-    return [];
+    return { members: [], invitations: [] };
   }
 
-  return decodeMembers(payload);
+  return {
+    members: decodeMembers(payload),
+    invitations: decodeInvitations(payload),
+  };
 }
 
 // =============================================================================

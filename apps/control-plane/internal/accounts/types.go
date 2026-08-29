@@ -44,13 +44,42 @@ type Invitation struct {
 
 // InvitationResult is what callers receive when creating an invitation.
 // Token is the plaintext token (returned once, not stored).
+//
+// Delivered and Delivery report what actually happened to the message, and they
+// are the only permitted source for what the interface tells the user. Before
+// this existed the console reported "Invitation sent" on every successful write
+// while no transport existed at all (issue #1440).
 type InvitationResult struct {
 	ID        uuid.UUID
 	Email     string
 	Role      string
 	Token     string
 	ExpiresAt time.Time
+	Delivered bool
+	// Delivery is one of DeliverySent, DeliveryNotConfigured, DeliveryFailed.
+	Delivery string
 }
+
+// InvitationSummary is the customer-safe projection of an outstanding
+// invitation. It deliberately carries no token and no hash: the raw token
+// exists once, in the create response, and the stored hash is not something any
+// listing needs.
+type InvitationSummary struct {
+	ID        uuid.UUID
+	Email     string
+	Role      string
+	// Status is InvitationStatusPending or InvitationStatusExpired.
+	Status    string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+// Statuses an outstanding invitation can be listed under. An accepted
+// invitation is not outstanding and is never listed.
+const (
+	InvitationStatusPending = "pending"
+	InvitationStatusExpired = "expired"
+)
 
 // AccountProfile holds core pre-billing profile data.
 type AccountProfile struct {
