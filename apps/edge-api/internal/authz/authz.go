@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -60,11 +61,51 @@ var ErrAccountNotProvisioned = errors.New(
 // probe that asserts a weaker predicate than the request path is a false green,
 // and the only structural defence is one predicate with one definition.
 func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
-	tenantID, err := uuid.Parse(s.TenantID)
-	if err != nil || tenantID == uuid.Nil {
+	return ParseTenantID(TenantLookup{TenantID: s.TenantID, AccountID: s.AccountID, KeyID: s.KeyID})
+}
+
+// TenantLookup is ParseTenantID's argument: three identifiers, named rather
+// than positional, because three bare strings in a row is a transposition
+// footgun a compiler cannot catch on an auth path -- swap AccountID and
+// KeyID at a call site and it still builds, and now logs (or, if this ever
+// grows a second predicate, checks) the wrong-but-plausible identifier
+// instead. A struct literal forces every call site to name each field, so a
+// transposed pair is a visible diff, not a silent one (review comment,
+// PR #1240).
+type TenantLookup struct {
+	TenantID  string
+	AccountID string
+	KeyID     string
+}
+
+// ParseTenantID is TenantUUID's check, exported so a caller holding only the
+// raw tenant_id string plus the account_id/key_id it came from -- rather than
+// a full AuthSnapshot -- can still route through the one definition instead
+// of re-implementing it. images.RoutingAdapter and audio.RoutingAdapter are
+// exactly that: their RouteInput threads the string form of an
+// already-resolved AuthSnapshot.TenantID across a package boundary and lost
+// the snapshot along the way, which is what let two more account_not_provisioned
+// call sites go silent right alongside the three TenantUUID already covered
+// (found live 2026-08-28, same incident: a security reviewer's freshly
+// minted key 403'd with no operator-visible signal anywhere but the HTTP
+// response itself). Only AccountID and the offending TenantID string are
+// logged, both internal, non-secret identifiers. KeyID is deliberately
+// NOT logged even though it too is a surrogate api_keys.id UUID and not
+// the bearer secret: CodeQL's clear-text-logging check flags any access to
+// a field named *Key* flowing into a log call (alert #31) regardless of
+// what the field actually holds, and AccountID plus the offending
+// TenantID already identify the account well enough to act on -- not
+// worth a permanent scanner alert on an auth path for one narrow
+// increment of diagnostic detail. TenantLookup still carries KeyID (kept
+// for callers that need it for something other than this log line); this
+// function simply never reads it.
+func ParseTenantID(lookup TenantLookup) (uuid.UUID, error) {
+	id, err := uuid.Parse(lookup.TenantID)
+	if err != nil || id == uuid.Nil {
+		log.Printf("authz: account_not_provisioned account_id=%s tenant_id=%q (no public.tenant_billing_accounts row)", lookup.AccountID, lookup.TenantID)
 		return uuid.Nil, ErrAccountNotProvisioned
 	}
-	return tenantID, nil
+	return id, nil
 }
 
 // RatePolicy is the edge-side rate-limit projection for one scope.

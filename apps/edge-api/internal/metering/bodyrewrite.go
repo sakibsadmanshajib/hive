@@ -3,6 +3,7 @@ package metering
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // RewriteBody forces stream_options.include_usage to true on an outbound
@@ -52,4 +53,30 @@ func RewriteBody(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("metering: encode body: %w", err)
 	}
 	return out, nil
+}
+
+// includeUsageSupportedProviders lists the upstream providers verified to
+// accept OpenAI's stream_options.include_usage without the flag breaking the
+// request. Catalogue as of the 2026-08-26 owner ruling on issue #1226: Groq
+// direct, and OpenRouter, which is how every DeepSeek route in this catalog
+// reaches its upstream (provider_routes.provider = 'openrouter' for both
+// deepseek-v4-flash and deepseek-v4-pro -- see
+// supabase/migrations/20260822_02_catalog_alias_restructure.sql). An
+// unlisted provider is left untouched by SupportsIncludeUsage rather than
+// risk an unverified flag breaking dispatch to it.
+var includeUsageSupportedProviders = map[string]bool{
+	"groq":       true,
+	"openrouter": true,
+}
+
+// SupportsIncludeUsage reports whether provider is known to accept
+// stream_options.include_usage on a streaming request without erroring.
+// Normalizes case/whitespace before the lookup: control-plane emits
+// canonical lowercase provider strings today, but this is a money-relevant
+// gate and an exact-string match would silently fail-closed to the flat
+// reservation hold on nothing worse than a differently-cased row, with
+// nothing reporting it. Normalizing here is cheaper than trusting every
+// future writer of provider_routes.provider to match case exactly.
+func SupportsIncludeUsage(provider string) bool {
+	return includeUsageSupportedProviders[strings.ToLower(strings.TrimSpace(provider))]
 }

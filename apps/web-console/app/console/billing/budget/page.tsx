@@ -60,6 +60,7 @@ export default async function BudgetSettingsPage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console/billing"
       topbar={

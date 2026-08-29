@@ -2,7 +2,9 @@ package anthropic
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,12 +14,51 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
-
-const maxBodyBytes = 4 << 20 // 4 MiB
 
 // chatCompletionsPath is the internal endpoint this surface delegates to.
 const chatCompletionsPath = "/v1/chat/completions"
+
+// readMessagesBody reads r.Body up to apierr.MaxRequestBodyBytes via
+// http.MaxBytesReader, which errors instead of silently truncating an
+// oversized body. Before this, io.LimitReader truncated silently; the
+// truncated bytes then failed json.Unmarshal and the caller saw a lying
+// "invalid JSON body" with no mention of size anywhere (issue #1250). A
+// too-large body now gets an honest 413 in Anthropic's own
+// request_too_large error type, naming the limit; any other read failure
+// keeps the prior generic message. errors.As distinguishes the two rather
+// than any truncate-then-fails-to-parse heuristic. Only ever called on the
+// real client-facing read (handleMessages, handleCountTokens), never on the
+// translated sub-request this surface delegates downstream, so it always
+// enforces the cap -- no apierr.IsTrustedBody check needed here.
+func readMessagesBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	// Reject a declared oversize body before reading anything, mirroring
+	// auth/owui_unwrap.go's ContentLength pre-check. This is a memory
+	// optimisation, not an error-delivery fix: it bounds the server's peak
+	// buffering for a declared-oversize body instead of reading up to the
+	// cap before erroring, but the client sees the 413 no later (often
+	// earlier), so it does not make an honest error any more reachable, and
+	// ContentLength is -1 when unknown (chunked), which fails this
+	// comparison and falls through to MaxBytesReader below, a no-op for
+	// that transfer encoding.
+	if r.ContentLength > apierr.MaxRequestBodyBytes {
+		writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, apierr.MaxRequestBodyBytes)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, apierr.RequestTooLargeMessage(), "")
+			return nil, false
+		}
+		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+		return nil, false
+	}
+	return raw, true
+}
 
 // Deps holds the runtime dependencies for the Anthropic handler.
 type Deps struct {
@@ -34,6 +75,22 @@ type Deps struct {
 	// id, that direct POST let a caller name a route instead of an alias and
 	// skip entitlement and metering in one move.
 	OpenAIChat http.Handler
+
+	// AuthorizeAPIKey resolves a "Bearer hk_..." Authorization header to a Hive
+	// API-key principal, returning the already-sanitized OpenAI-shaped refusal
+	// (and any headers that must ride with it) when it cannot.
+	//
+	// It exists for POST /v1/messages/count_tokens alone. Every other route on
+	// this surface delegates to OpenAIChat, which is itself the authority for
+	// an API-key principal; count_tokens never dispatches anywhere, so without
+	// this it could only see a session-cookie principal and 401'd every
+	// programmatic caller -- which is to say, essentially every real Anthropic
+	// SDK integration, since an API key is how they all authenticate (issue
+	// #1261).
+	//
+	// Nil leaves count_tokens session-only and fail-closed, the pre-existing
+	// behaviour.
+	AuthorizeAPIKey func(ctx context.Context, authHeader string) (*apierr.OpenAIError, map[string]string)
 }
 
 // Handler accepts Anthropic Messages requests, translates them to the internal
@@ -84,9 +141,8 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 
@@ -141,7 +197,16 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// Hand the lowered request to the OpenAI chat-completions chain. The alias
 	// travels unresolved on purpose: resolving it is the routing layer's job, and
 	// this surface must never name a route itself.
-	sub := r.Clone(r.Context())
+	// Translation can grow the body past what the client sent (Stream and
+	// StreamOptions are always added above; a string system prompt becomes a
+	// message object; text content becomes array form for vision or cache
+	// breakpoints), so a client body the inbound readMessagesBody check just
+	// cleared can land here over apierr.MaxRequestBodyBytes. Marking this
+	// server-constructed, already-in-memory body as trusted stops the
+	// delegated chain's own body-size cap from re-rejecting it with an
+	// honest-looking but wrong "exceeds the limit" error for a client body
+	// that never exceeded anything (#1273 review finding 2).
+	sub := r.Clone(apierr.WithTrustedBody(r.Context()))
 	sub.URL.Path = chatCompletionsPath
 	sub.URL.RawPath = ""
 	sub.RequestURI = chatCompletionsPath
@@ -159,23 +224,12 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 // handleCountTokens returns a local token count estimate for the request body.
 func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
-	user, ok := auth.UserFrom(r.Context())
-	if !ok || user == nil {
-		writeAnthropicError(w, http.StatusUnauthorized, "missing user", "")
-		return
-	}
-	if user.TenantID == uuid.Nil {
-		writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
-		return
-	}
-	if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
-		writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
+	if !h.authorizeCountTokens(w, r) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "body read error", "")
+	raw, ok := readMessagesBody(w, r)
+	if !ok {
 		return
 	}
 
@@ -204,6 +258,48 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	if encErr := json.NewEncoder(w).Encode(CountTokensResponse{InputTokens: estimated}); encErr != nil {
 		slog.Warn("anthropic count_tokens encode error", "err", encErr)
 	}
+}
+
+// authorizeCountTokens accepts either principal type this surface serves: a
+// JWT session user (checked for tenant and chat permission, as before) or a
+// Hive API key resolved through Deps.AuthorizeAPIKey. It writes the refusal
+// itself and reports whether the request may proceed.
+//
+// The two are checked in that order because the JWT middleware is what
+// populates auth.UserFrom; an "hk_" request is routed past it by auth.Selector
+// and therefore carries no session user at all, which is exactly why the
+// session-only guard this replaces rejected every API-key caller.
+func (h *Handler) authorizeCountTokens(w http.ResponseWriter, r *http.Request) bool {
+	if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
+		if user.TenantID == uuid.Nil {
+			writeAnthropicError(w, http.StatusForbidden, "no tenant for user", "")
+			return false
+		}
+		if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
+			writeAnthropicError(w, http.StatusForbidden, "chat not allowed", "")
+			return false
+		}
+		return true
+	}
+
+	if h.deps.AuthorizeAPIKey == nil {
+		writeAnthropicError(w, http.StatusUnauthorized, "missing user", "")
+		return false
+	}
+	authErr, headers := h.deps.AuthorizeAPIKey(r.Context(), r.Header.Get("Authorization"))
+	if authErr == nil {
+		return true
+	}
+	// Round-trip through the shared OpenAI writer so the status mapping
+	// (401 vs 403 vs 429 vs 503) stays the single implementation the rest of
+	// edge-api uses, then reshape the envelope for an Anthropic client. This
+	// never re-sanitizes: the authorizer's refusals are already customer-safe.
+	// reshapeInto, not a bare reshape, so the retry metadata WriteAuthFailure
+	// sets on a 429 or a 503 reaches the client instead of dying in the recorder.
+	rec := &headerlessRecorder{}
+	apierr.WriteAuthFailure(rec, authErr, headers)
+	rec.reshapeInto(w)
+	return false
 }
 
 // normalizeAPIKeyHeader rewrites an Anthropic x-api-key header to a standard

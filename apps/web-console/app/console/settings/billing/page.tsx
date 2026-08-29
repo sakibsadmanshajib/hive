@@ -108,6 +108,7 @@ export default async function BillingSettingsPage() {
         slug: viewer.current_account.slug,
       }}
       memberships={viewer.memberships}
+      viewer={viewer}
       user={{
         email: viewer.user.email,
         name: accountProfile.owner_name || null,

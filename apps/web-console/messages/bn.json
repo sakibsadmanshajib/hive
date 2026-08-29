@@ -13,7 +13,8 @@
     "settings": "সেটিংস",
     "featureGates": "ফিচার গেট",
     "marketplace": "মার্কেটপ্লেস",
-    "providers": "প্রোভাইডার"
+    "providers": "প্রোভাইডার",
+    "privacy": "গোপনীয়তা"
   },
   "Shell": {
     "workspace": "ওয়ার্কস্পেস",

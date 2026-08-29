@@ -161,7 +161,21 @@ func (o *Orchestrator) executeSync(
 		return
 	}
 
-	// 2c. Bound the request for a variable-price alias, before dispatch. Its
+	// 2c. Read the caller's own completion ceiling BEFORE any outbound rewrite
+	// (issue #1283). EnforceVariablePriceBounds below forces a ceiling Hive
+	// chose rather than one the caller asked for, so reading it afterwards
+	// would bound the charge by our own number and guarantee the caller
+	// nothing. 0 means they set none.
+	ceiling := requestedCompletionCeiling(endpoint, body)
+
+	// Then send the provider that same number. A body carrying two
+	// contradictory ceilings used to be forwarded verbatim while settlement
+	// held it to the smaller one, which let a caller pair max_tokens 1 with
+	// max_completion_tokens 100000 and buy a full-size generation for the price
+	// of one completion token. See pinCompletionCeiling; it only ever narrows.
+	body = pinCompletionCeiling(body, endpoint, ceiling)
+
+	// 2d. Bound the request for a variable-price alias, before dispatch. Its
 	// hold is only provably sufficient below a known request size and a known
 	// completion ceiling; see EnforceVariablePriceBounds. A pass-through for
 	// every fixed-price alias.
@@ -170,16 +184,6 @@ func (o *Orchestrator) executeSync(
 		return
 	}
 	body = boundedBody
-
-	// 2d. Reasoning headroom (issue #1171): on a pool whose members reserve
-	// reasoning budget, inflate the completion ceiling actually present in the
-	// body by that reserve, so hidden reasoning spends the reserve instead of
-	// starving visible content out of the caller's own budget. A no-op for
-	// every non-reserving alias: applyReasoningHeadroom returns the body
-	// unchanged when the reserve is 0 or no ceiling field was set.
-	if headroomBody, inflated := applyReasoningHeadroom(body, endpoint, route.ReasoningReserveTokens); inflated {
-		body = headroomBody
-	}
 
 	// 3. Start attempt
 	requestID := uuid.New().String()
@@ -326,6 +330,22 @@ func (o *Orchestrator) executeSync(
 		}
 	}
 
+	// 7c. Cap the metered completion count at the caller's own ceiling (issue
+	// #1283). This is the settlement half of the invariant: a request that
+	// specifies max_tokens: N is never billed for more than N completion
+	// tokens, whatever the provider reported. It clamps the ONE usage object
+	// both the customer response and the charge are derived from, and rewrites
+	// the already-marshalled body to match, so the number the caller reads and
+	// the number they pay for cannot diverge. A no-op when no ceiling was set
+	// or the response stayed inside it, which is the overwhelming majority.
+	//
+	// After 7b, not before: the retry above replaces normalized and usage
+	// wholesale, so a clamp applied first would be discarded on exactly the
+	// path the reserve was built for.
+	if clampUsageToCeiling(usage, route, ceiling, endpoint, model) {
+		normalized = rewriteNormalizedUsage(normalized, endpoint, usage)
+	}
+
 	// 8. Finalize reservation and record usage
 	if reservation.ID != "" {
 		// What the provider actually reported, or an estimate from the bytes
@@ -373,7 +393,7 @@ func (o *Orchestrator) executeSync(
 			}
 		} else {
 			actualCredits, confirmed, billable = settlementCredits(route, hasUsage,
-				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content)
+				cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outputTokens, prompt, content, ceiling)
 		}
 
 		// Zero-content capture (issue #1171): a completion that returned no
@@ -385,8 +405,17 @@ func (o *Orchestrator) executeSync(
 		// (hidden reasoning is real inference we paid for), which is why this
 		// captures rather than releases; what it may never do is bill the
 		// alias's service price for content that does not exist.
+		//
+		// The capture is bounded by the caller's own ceiling (#1283). The hold
+		// is a flat authorization floor, so capturing it whole against a
+		// request capped at a handful of completion tokens breaches the same
+		// invariant by a far wider margin than the overrun that reported it.
+		// capCaptureAtCeiling only ever lowers the figure and never to zero, so
+		// the fail-closed property this branch exists for is untouched.
 		if zeroContentCaptured {
-			actualCredits = reservation.Held()
+			actualCredits = capCaptureAtCeiling(route, ceiling,
+				captureInputTokens(hasUsage, cache.FreshInputTokens, endpoint, body),
+				cache.CacheReadTokens, cache.CacheWriteTokens, reservation.Held())
 			confirmed = false
 			billable = true
 		}

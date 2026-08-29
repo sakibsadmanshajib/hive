@@ -90,7 +90,11 @@ func (s *Service) ListKeyViews(ctx context.Context, accountID uuid.UUID) ([]KeyV
 		if err != nil {
 			return nil, err
 		}
-		views = append(views, buildKeyView(key, policy))
+		spend, err := s.repo.GetLifetimeSpend(ctx, key.ID)
+		if err != nil {
+			return nil, fmt.Errorf("apikeys: get lifetime spend: %w", err)
+		}
+		views = append(views, buildKeyView(key, policy, spend))
 	}
 	return views, nil
 }
@@ -105,7 +109,11 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 	if err != nil {
 		return KeyView{}, err
 	}
-	return buildKeyView(key, policy), nil
+	spend, err := s.repo.GetLifetimeSpend(ctx, keyID)
+	if err != nil {
+		return KeyView{}, fmt.Errorf("apikeys: get lifetime spend: %w", err)
+	}
+	return buildKeyView(key, policy, spend), nil
 }
 
 // CreateKey issues a new API key. The raw secret is returned once and
@@ -505,21 +513,36 @@ func defaultPolicy(keyID uuid.UUID) KeyPolicy {
 	}
 }
 
-func buildKeyView(key APIKey, policy KeyPolicy) KeyView {
+func buildKeyView(key APIKey, policy KeyPolicy, spendCredits int64) KeyView {
 	key = applyExpiry(key, time.Now())
 
+	// A limit is only reported when it is a limit. UpdatePolicy's upsert
+	// COALESCEs budget_limit_credits, so a nil in that column means "leave
+	// unchanged", not "clear": a key switched to budget_kind "none" keeps
+	// whatever ceiling it last carried in the row. Enforcement already ignores
+	// it (edge-api authz.CheckAccess requires budget_kind != "none" AND a
+	// non-nil limit), so reporting the stale number would put a figure on the
+	// console next to a key that is not capped at all, which is the one lie a
+	// spending-limit surface must never tell.
+	budgetLimitCredits := policy.BudgetLimitCredits
+	if policy.BudgetKind == "" || policy.BudgetKind == "none" {
+		budgetLimitCredits = nil
+	}
+
 	return KeyView{
-		ID:                key.ID,
-		Nickname:          key.Nickname,
-		Status:            key.Status,
-		RedactedSuffix:    key.RedactedSuffix,
-		CreatedAt:         key.CreatedAt,
-		UpdatedAt:         key.UpdatedAt,
-		ExpiresAt:         key.ExpiresAt,
-		LastUsedAt:        key.LastUsedAt,
-		ExpirationSummary: expirationSummary(key),
-		BudgetSummary:     budgetSummary(policy),
-		AllowlistSummary:  allowlistSummary(policy),
+		ID:                 key.ID,
+		Nickname:           key.Nickname,
+		Status:             key.Status,
+		RedactedSuffix:     key.RedactedSuffix,
+		CreatedAt:          key.CreatedAt,
+		UpdatedAt:          key.UpdatedAt,
+		ExpiresAt:          key.ExpiresAt,
+		LastUsedAt:         key.LastUsedAt,
+		ExpirationSummary:  expirationSummary(key),
+		BudgetSummary:      budgetSummary(policy),
+		AllowlistSummary:   allowlistSummary(policy),
+		SpendCredits:       spendCredits,
+		BudgetLimitCredits: budgetLimitCredits,
 	}
 }
 

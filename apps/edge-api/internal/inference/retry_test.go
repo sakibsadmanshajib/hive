@@ -279,3 +279,164 @@ func TestIsRouterExhaustion404LeavesTheBodyReadable(t *testing.T) {
 		t.Fatalf("body length = %d, want %d: the peek truncated the response", len(got), len(big))
 	}
 }
+
+
+// groqTopKRefusal is the real body LiteLLM returned on 2026-08-28 when an
+// Anthropic Messages request carrying top_k drew the free pool's Groq member,
+// trimmed to the part that matters. The customer saw "hive-free is not
+// available." for a field the pool's other members would have served.
+const groqTopKRefusal = `{"error":{"message":"litellm.BadRequestError: GroqException - {\"error\":{\"message\":\"property 'top_k' is unsupported\",\"type\":\"invalid_request_error\"}}","type":null,"param":null,"code":"400"}}`
+
+// TestDispatchWithRetry_StripsRefusedPassthroughField is the behavioural
+// assertion for the whole point of the strip: a request naming a passthrough
+// field must survive an upstream that refuses it, and the retry must actually
+// go out WITHOUT that field.
+func TestDispatchWithRetry_StripsRefusedPassthroughField(t *testing.T) {
+	origDelays := retryDelays
+	retryDelays = []time.Duration{0, 1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+	t.Cleanup(func() { retryDelays = origDelays })
+
+	calls := 0
+	secondBody := ""
+	fn := func(ctx context.Context, model string, body []byte) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return mkResp(400, groqTopKRefusal), nil
+		}
+		secondBody = string(body)
+		return mkResp(200, `{"object":"chat.completion"}`), nil
+	}
+
+	resp, err := dispatchWithRetry(context.Background(), "route-free-pool",
+		[]byte(`{"model":"hive-free","top_k":40,"temperature":0.5}`), fn)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(secondBody, "top_k") {
+		t.Errorf("retry body still carries top_k: %s", secondBody)
+	}
+	if !strings.Contains(secondBody, `"temperature":0.5`) {
+		t.Errorf("retry body lost temperature: %s", secondBody)
+	}
+	if !strings.Contains(secondBody, `"model":"hive-free"`) {
+		t.Errorf("retry body lost model: %s", secondBody)
+	}
+}
+
+// TestDispatchWithRetry_DoesNotStripCallerOwnedFields keeps the blast radius
+// tight. A 400 blaming a field that is part of the OpenAI surface proper is
+// the answer to what the caller asked for; silently dropping that field would
+// change the request and return a 200 for something nobody asked for.
+func TestDispatchWithRetry_DoesNotStripCallerOwnedFields(t *testing.T) {
+	origDelays := retryDelays
+	retryDelays = []time.Duration{0, 1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+	t.Cleanup(func() { retryDelays = origDelays })
+
+	calls := 0
+	fn := func(ctx context.Context, model string, body []byte) (*http.Response, error) {
+		calls++
+		return mkResp(400, `{"error":{"message":"property 'temperature' is unsupported"}}`), nil
+	}
+
+	resp, err := dispatchWithRetry(context.Background(), "route-free-pool",
+		[]byte(`{"model":"hive-free","temperature":0.5}`), fn)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1: a caller-owned field must not trigger a retry", calls)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(got), "temperature") {
+		t.Errorf("body was consumed by the classifier: %q", got)
+	}
+}
+
+// TestDispatchWithRetry_StripsEachFieldAtMostOnce bounds the loop. An upstream
+// that keeps naming the same field after it is gone must not spend the whole
+// retry ladder on it, and must still return a real response.
+func TestDispatchWithRetry_StripsEachFieldAtMostOnce(t *testing.T) {
+	origDelays := retryDelays
+	retryDelays = []time.Duration{0, 1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+	t.Cleanup(func() { retryDelays = origDelays })
+
+	calls := 0
+	fn := func(ctx context.Context, model string, body []byte) (*http.Response, error) {
+		calls++
+		return mkResp(400, groqTopKRefusal), nil
+	}
+
+	resp, err := dispatchWithRetry(context.Background(), "route-free-pool",
+		[]byte(`{"model":"hive-free","top_k":40}`), fn)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if resp == nil {
+		t.Fatal("resp = nil: the caller must always get a real response")
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2: one strip, then the refusal stands", calls)
+	}
+}
+
+func TestRefusedPassthroughField(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"groq wording", 400, groqTopKRefusal, "top_k"},
+		{"openai wording", 400, `{"error":{"message":"Unrecognized request argument supplied: top_k"}}`, "top_k"},
+		{"gemini wording", 400, `{"error":{"message":"Invalid JSON payload received. Unknown name \"top_k\""}}`, "top_k"},
+		{"anthropic wording", 400, `{"error":{"message":"thinking: Extra inputs are not permitted"}}`, "thinking"},
+		{"caller-owned field", 400, `{"error":{"message":"property 'temperature' is unsupported"}}`, ""},
+		{"unrelated 400", 400, `{"error":{"message":"messages: at least one message is required"}}`, ""},
+		{"not a 400", 422, groqTopKRefusal, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refusedPassthroughField(mkResp(tc.status, tc.body)); got != tc.want {
+				t.Errorf("refusedPassthroughField = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStripTopLevelField(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		field   string
+		wantOK  bool
+		wantOut string
+	}{
+		{"present", `{"a":1,"top_k":40}`, "top_k", true, `{"a":1}`},
+		{"absent", `{"a":1}`, "top_k", false, `{"a":1}`},
+		{"not json", `"not json"`, "top_k", false, `"not json"`},
+		{"nested only", `{"a":{"top_k":40}}`, "top_k", false, `{"a":{"top_k":40}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok := stripTopLevelField([]byte(tc.body), tc.field)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if string(out) != tc.wantOut {
+				t.Errorf("out = %s, want %s", out, tc.wantOut)
+			}
+		})
+	}
+}

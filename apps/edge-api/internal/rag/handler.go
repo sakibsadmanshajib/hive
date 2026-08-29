@@ -286,7 +286,8 @@ func (h *Handler) parseUpload(r *http.Request) (*uploadPayload, *uploadError) {
 func (h *Handler) textPayload(req UploadRequest) (*uploadPayload, *uploadError) {
 	if int64(len(req.Content)) > maxRawTextBytes {
 		return nil, &uploadError{status: http.StatusRequestEntityTooLarge,
-			msg: fmt.Sprintf("text content exceeds %d byte limit", maxRawTextBytes)}
+			code: apierrors.CodeRequestTooLarge,
+			msg:  fmt.Sprintf("text content exceeds %d byte limit", maxRawTextBytes)}
 	}
 	if req.MimeType == "" {
 		req.MimeType = "text/plain"
@@ -353,7 +354,8 @@ func (h *Handler) parseBinaryUpload(r *http.Request) (*uploadPayload, *uploadErr
 	}
 	if over {
 		return nil, &uploadError{status: http.StatusRequestEntityTooLarge,
-			msg: fmt.Sprintf("upload exceeds %d byte limit", h.maxUploadBytes)}
+			code: apierrors.CodeRequestTooLarge,
+			msg:  fmt.Sprintf("upload exceeds %d byte limit", h.maxUploadBytes)}
 	}
 	if len(data) == 0 {
 		return nil, &uploadError{status: http.StatusBadRequest, msg: "empty request body"}
@@ -399,12 +401,14 @@ func (h *Handler) convertForIngest(ctx context.Context, data []byte, filename, m
 		if errors.As(err, &convErr) && convErr.Rejected {
 			log.Printf("rag: conversion rejected file=%s class=%s", filename, convErr.Class)
 			status := http.StatusUnprocessableEntity
+			code := apierrors.CodeInvalidRequest
 			if convErr.Class == "payload_too_large" {
 				status = http.StatusRequestEntityTooLarge
+				code = apierrors.CodeRequestTooLarge
 			}
 			return "", &uploadError{
 				status: status,
-				code:   apierrors.CodeInvalidRequest,
+				code:   code,
 				msg: fmt.Sprintf("document conversion failed (%s): %s",
 					truncate(convErr.Class, 64), truncate(convErr.Detail, 300)),
 				class: convErr.Class,
@@ -513,6 +517,7 @@ func decodeUploadBase64(encoded string, maxBytes int64) ([]byte, *uploadError) {
 	if int64(len(cleaned))/4*3+3 > maxBytes {
 		return nil, &uploadError{
 			status: http.StatusRequestEntityTooLarge,
+			code:   apierrors.CodeRequestTooLarge,
 			msg:    fmt.Sprintf("decoded upload exceeds %d byte limit", maxBytes),
 		}
 	}

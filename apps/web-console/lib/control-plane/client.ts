@@ -1391,6 +1391,15 @@ export interface ApiKey {
   expiration_summary: { kind: string; label: string };
   budget_summary: { kind: string; label: string };
   allowlist_summary: { mode: string; group_names: string[]; label: string };
+  // Lifetime consumed credits (apps/control-plane/internal/apikeys keyViewItem
+  // spend_credits), read unconditionally off api_key_usage_rollups regardless
+  // of whether a cap is configured. Raw credits: render through
+  // lib/format/model-pricing.ts, never as a bare number.
+  spend_credits: number;
+  // Raw mirror of budget_summary.kind's limit; null means no cap. Used to
+  // pre-fill the edit form, since budget_summary.label only carries a
+  // rendered sentence.
+  budget_limit_credits: number | null;
   secret?: string;
 }
 
@@ -1576,6 +1585,9 @@ function decodeApiKey(value: JsonValue): ApiKey | null {
       }
     : { mode: "", group_names: [], label: "" };
 
+  const spendCredits = readNumberField(value, "spend_credits") ?? 0;
+  const budgetLimitCredits = readNumberField(value, "budget_limit_credits");
+
   const key: ApiKey = {
     id,
     nickname,
@@ -1588,6 +1600,8 @@ function decodeApiKey(value: JsonValue): ApiKey | null {
     expiration_summary: expirationSummary,
     budget_summary: budgetSummary,
     allowlist_summary: allowlistSummary,
+    spend_credits: spendCredits,
+    budget_limit_credits: budgetLimitCredits,
   };
 
   if (secret !== null) {
@@ -2060,6 +2074,45 @@ export async function rotateApiKey(
   }
 
   return key;
+}
+
+// UpdateApiKeyBudgetInput is the per-key credit cap the New Key modal and the
+// limits page write via POST .../policy. budgetKind is constrained to what
+// api_key_policies.budget_kind actually supports server-side ("none" clears
+// the cap, "lifetime" never resets, "monthly" resets on the first of the
+// month); there is no "daily"/"weekly" option because the schema has no
+// window_kind for either.
+export interface UpdateApiKeyBudgetInput {
+  budgetKind: "none" | "lifetime" | "monthly";
+  budgetLimitCredits: number | null;
+}
+
+// updateApiKeyBudget sets or clears a key's credit cap. This is the ONLY
+// call that makes the cap enforced server-side (apps/edge-api/internal/authz
+// CheckAccess reads budget_kind/budget_limit_credits off the resolved
+// snapshot on every request); a client that stopped short of this call and
+// only rendered a number would be a decorative, unenforced limit.
+export async function updateApiKeyBudget(
+  keyId: string,
+  input: UpdateApiKeyBudgetInput,
+): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/api-keys/${encodeURIComponent(keyId)}/policy`,
+    {
+      method: "POST",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({
+        budget_kind: input.budgetKind,
+        budget_limit_credits: input.budgetKind === "none" ? null : input.budgetLimitCredits,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update the key's credit limit");
+  }
 }
 
 // getApiKeyLimits and updateApiKeyLimits are the only entry points for the

@@ -34,7 +34,15 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
-		Usage: anthropicUsage(resp.Usage, model, resp.Model),
+		// Content is seeded with an empty, non-nil slice, and appended to
+		// below, so that a turn which produced neither text nor a tool call
+		// still serializes as "content":[]. A nil Go slice marshals to JSON
+		// null, and Anthropic's contract is that content is ALWAYS an array:
+		// every typed client iterates it unconditionally, so null is a
+		// TypeError rather than an empty turn (issue #1260). Both exits below
+		// are covered by seeding it here rather than at one of them.
+		Content: []ResponseBlock{},
+		Usage:   anthropicUsage(resp.Usage, model, resp.Model),
 	}
 
 	if len(resp.Choices) == 0 {
@@ -45,10 +53,8 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 	choice := resp.Choices[0]
 	out.StopReason = mapFinishReason(choice.FinishReason)
 
-	var blocks []ResponseBlock
-
 	if choice.Message.Content != "" {
-		blocks = append(blocks, ResponseBlock{
+		out.Content = append(out.Content, ResponseBlock{
 			Type: "text",
 			Text: choice.Message.Content,
 		})
@@ -59,7 +65,7 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 		if err != nil {
 			input = json.RawMessage(fmt.Sprintf(`{"_raw":%q}`, tc.Function.Arguments))
 		}
-		blocks = append(blocks, ResponseBlock{
+		out.Content = append(out.Content, ResponseBlock{
 			Type:  "tool_use",
 			ID:    tc.ID,
 			Name:  tc.Function.Name,
@@ -67,7 +73,6 @@ func FromOAIResponse(resp OAIResponse, clientAlias string) MessagesResponse {
 		})
 	}
 
-	out.Content = blocks
 	return out
 }
 

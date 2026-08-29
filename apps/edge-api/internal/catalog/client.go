@@ -127,5 +127,9 @@ func (c *Client) fetchSnapshot(ctx context.Context, path string) (Snapshot, erro
 		snapshot.Catalog = []CatalogModel{}
 	}
 
-	return snapshot, nil
+	// Customer-facing boundary: everything below this line is re-serialised
+	// verbatim by GET /v1/models and GET /catalog/models, so the guard sits
+	// here, on the single funnel both handlers share, rather than in either
+	// handler (issue #1284; see providerblind.go).
+	return redactSnapshot(snapshot), nil
 }

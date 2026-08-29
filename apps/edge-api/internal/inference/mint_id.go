@@ -1,6 +1,6 @@
 package inference
 
-import "github.com/google/uuid"
+import "github.com/sakibsadmanshajib/hive/packages/sanitize"
 
 // mintCompletionID returns a gateway-owned response id in the given OpenAI
 // id-family prefix ("chatcmpl" for chat completions, "cmpl" for legacy text
@@ -20,8 +20,13 @@ import "github.com/google/uuid"
 // pattern. Internal request/billing correlation never depends on this
 // value: that keys on attempt.ID, a separate id this gateway mints at
 // dispatch time regardless of what any upstream returns.
+//
+// Thin wrapper: the generator itself moved to packages/sanitize (issue
+// #1235) so apps/control-plane's local batch executor can mint the exact
+// same id shape without duplicating the one-line generator. Every call site
+// in this package is unchanged.
 func mintCompletionID(prefix string) string {
-	return prefix + "-" + uuid.New().String()
+	return sanitize.MintID(prefix)
 }
 
 // idPrefixForEndpoint returns the OpenAI id-family prefix matching an

@@ -130,6 +130,11 @@ func TestExecuteSync_ZeroContentLength_RetriesThenSucceeds(t *testing.T) {
 // branch: both members answer empty-length, so the request settles by
 // capturing the reservation hold (terminal_usage_confirmed=false) instead of
 // billing a full-price success for content that does not exist.
+//
+// The request deliberately sets NO completion ceiling, which is what leaves the
+// capture at the full hold: a caller who does set one bounds the capture too
+// (issue #1283), and TestExecuteSync_ZeroContentCaptureBoundedByCallerCeiling
+// pins that half.
 func TestExecuteSync_ZeroContentLength_Twice_CapturesHold(t *testing.T) {
 	litellm := newScriptedLiteLLM(t, []string{emptyLengthBody(76), emptyLengthBody(76)})
 	defer litellm.server.Close()
@@ -140,7 +145,7 @@ func TestExecuteSync_ZeroContentLength_Twice_CapturesHold(t *testing.T) {
 	defer acct.Close()
 
 	orch := newAuthorizedOrchestrator(acct.URL, routing.URL, litellm.server.URL)
-	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Say hello"}],"max_tokens":200}`)
+	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Say hello"}]}`)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -193,68 +198,6 @@ func TestExecuteSync_NonReservingAlias_NeverRetries(t *testing.T) {
 	}
 	if hdr := w.Header().Get(emptyContentHeader); hdr != "" {
 		t.Errorf("%s set on a non-reserving alias; must stay absent", emptyContentHeader)
-	}
-}
-
-// TestExecuteSync_ReservingAliasInflatesUpstreamMaxTokens is the headroom
-// regression guard: the ceiling edge-api dispatches upstream is the caller's
-// max_tokens plus the pool reserve, not the caller's figure alone.
-func TestExecuteSync_ReservingAliasInflatesUpstreamMaxTokens(t *testing.T) {
-	litellm := newScriptedLiteLLM(t, []string{contentBody()})
-	defer litellm.server.Close()
-	routing := newRoutingMockReserving(litellm.server.URL, 4096)
-	defer routing.Close()
-	rec := &accountingRecorder{}
-	acct := newAccountingMock(rec)
-	defer acct.Close()
-
-	orch := newAuthorizedOrchestrator(acct.URL, routing.URL, litellm.server.URL)
-	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"Say hello"}],"max_tokens":200}`)
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	orch.executeSync(context.Background(), w, req, EndpointChatCompletions, body, "gpt-4o",
-		NeedFlags{NeedChatCompletions: true}, DefaultHoldText, orch.litellm.ChatCompletion, normalizeChatCompletion)
-
-	sent := litellm.sentBody(0)
-	if !strings.Contains(sent, `"max_tokens":4296`) {
-		t.Errorf("upstream body = %s, want max_tokens inflated to caller's 200 + pool reserve 4096 = 4296", sent)
-	}
-}
-
-// --- unit tests over the two helpers ---
-
-func TestApplyReasoningHeadroomPassThrough(t *testing.T) {
-	// No ceiling set: nothing to protect, body untouched even at reserve 4096.
-	body := `{"model":"m","messages":[]}`
-	got, changed := applyReasoningHeadroom([]byte(body), EndpointChatCompletions, 4096)
-	if changed || string(got) != body {
-		t.Errorf("applyReasoningHeadroom(no ceiling) = (%q, %v); want unchanged", got, changed)
-	}
-	if _, changed := applyReasoningHeadroom([]byte(`{"max_tokens":200}`), EndpointChatCompletions, 0); changed {
-		t.Errorf("reserve 0 must be a pass-through")
-	}
-}
-
-func TestApplyReasoningHeadroomInflates(t *testing.T) {
-	got, changed := applyReasoningHeadroom([]byte(`{"model":"m","messages":[],"max_tokens":200,"max_completion_tokens":300}`), EndpointChatCompletions, 4096)
-	if !changed {
-		t.Fatalf("want inflation, got none: %s", got)
-	}
-	var probe struct {
-		MaxTokens           *int   `json:"max_tokens"`
-		MaxCompletionTokens *int   `json:"max_completion_tokens"`
-		Messages            []any  `json:"messages"`
-		Model               string `json:"model"`
-	}
-	if err := json.Unmarshal(got, &probe); err != nil {
-		t.Fatalf("rewritten body is not valid JSON: %v", err)
-	}
-	if probe.MaxTokens == nil || *probe.MaxTokens != 200+4096 {
-		t.Errorf("max_tokens = %v, want %d", probe.MaxTokens, 200+4096)
-	}
-	if probe.MaxCompletionTokens == nil || *probe.MaxCompletionTokens != 300+4096 {
-		t.Errorf("max_completion_tokens = %v, want %d", probe.MaxCompletionTokens, 300+4096)
 	}
 }
 

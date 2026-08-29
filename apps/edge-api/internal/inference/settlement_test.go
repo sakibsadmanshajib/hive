@@ -46,6 +46,7 @@ func TestSettlementCredits(t *testing.T) {
 		outputTokens     int64
 		promptBody       string
 		content          string
+		ceiling          int64
 		wantCredits      int64
 		wantConfirmed    bool
 		wantDelivered    bool
@@ -84,6 +85,22 @@ func TestSettlementCredits(t *testing.T) {
 			content:    strings.Repeat("y", 12_000),
 			// 1000 * 10500 + 1000 * 42000 = 52_500_000, / 1e6 = 52.5, round half up = 53.
 			wantCredits:   53,
+			wantConfirmed: false,
+			wantDelivered: true,
+		},
+		{
+			// Review finding 2 on PR #1305. Same estimate as the case above,
+			// but the caller capped the request at 8 completion tokens, so the
+			// 1000-token guess is held to 8 before it is priced.
+			// 1000 * 10500 + 8 * 42000 = 10_836_000, / 1e6 = 10.836, round half
+			// up = 11.
+			name:          "no usage block: a content estimate is bounded by the requested ceiling",
+			route:         hiveFastRoute,
+			hasUsage:      false,
+			promptBody:    strings.Repeat("x", 12_000),
+			content:       strings.Repeat("y", 12_000),
+			ceiling:       8,
+			wantCredits:   11,
 			wantConfirmed: false,
 			wantDelivered: true,
 		},
@@ -150,7 +167,7 @@ func TestSettlementCredits(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			credits, confirmed, delivered := settlementCredits(
-				tt.route, tt.hasUsage, tt.inputTokens, tt.cacheReadTokens, tt.cacheWriteTokens, tt.outputTokens, tt.promptBody, tt.content)
+				tt.route, tt.hasUsage, tt.inputTokens, tt.cacheReadTokens, tt.cacheWriteTokens, tt.outputTokens, tt.promptBody, tt.content, tt.ceiling)
 			if credits != tt.wantCredits {
 				t.Errorf("credits = %d, want %d", credits, tt.wantCredits)
 			}
