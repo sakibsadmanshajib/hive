@@ -561,6 +561,12 @@ services:
       # fan-out worker; edge-api has no sink of its own to configure. The
       # enterprise override adds no environment block for control-plane, so
       # local, cloud and enterprise all inherit these here.
+      #
+      # Note for anyone reading these values back in Go: ${VAR:-} puts the NAME
+      # in the container environment unconditionally, so every variable below
+      # is present-with-an-empty-value on a default deployment. The existing
+      # readers compare the value, which is immune to that. An os.LookupEnv
+      # presence check on any of them would read all seventeen as configured.
       ENABLE_AUDIT_SINK_ELK: ${ENABLE_AUDIT_SINK_ELK:-}
       AUDIT_SINK_ELK_URL: ${AUDIT_SINK_ELK_URL:-}
       AUDIT_SINK_ELK_API_KEY: ${AUDIT_SINK_ELK_API_KEY:-}
