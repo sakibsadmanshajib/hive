@@ -1017,6 +1017,30 @@ def test_no_prompt_template_default_is_baked_into_the_repo() -> None:
         ), f"{variable} is set for the demo box; that is a product decision, not a knob"
 
 
+def test_prompt_templates_are_logged_by_size_not_by_value() -> None:
+    """The startup line names every reconciled key with its value, which is
+    right for a model id and wrong for ten prompt templates: upstream's
+    `rag.template` default alone is about twenty five lines, so logging these
+    verbatim would push kilobytes of prose into the boot log on every single
+    start and bury the one line an operator reads it for. A prompt is also
+    not automatically safe to print, since an operator may put internal policy
+    text in one, and unlike the api keys above nothing here marks it as such.
+
+    Named with a length rather than dropped, so the log still answers the only
+    question it is read for, which is whether the key was reconciled at all."""
+    summary = hive_rag_env_config.log_summary(
+        {
+            "rag.template": "x" * 312,
+            "rag.embedding_model": "hive-embedding-default",
+        }
+    )
+    assert "rag.template=<312 chars>" in summary, summary
+    assert "x" * 20 not in summary, "the template's text was logged verbatim"
+    # The keys that are not prompts must be unaffected: their value IS the
+    # signal, which is the whole reason this module logs values at all.
+    assert "rag.embedding_model=hive-embedding-default" in summary, summary
+
+
 def test_env_example_documents_every_prompt_template() -> None:
     """An operator changing a prompt has no UI to do it in on this deployment,
     so .env.example is where they have to find the lever. A knob nobody can

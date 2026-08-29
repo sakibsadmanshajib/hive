@@ -467,10 +467,27 @@ def overrides(environ) -> dict:
 
 
 def log_summary(applied: dict) -> str:
-    """One-line, secret-free description of what was reconciled."""
-    return ", ".join(
-        key if key in SECRET_KEYS else f"{key}={applied[key]}" for key in sorted(applied)
-    )
+    """One-line, secret-free description of what was reconciled.
+
+    A secret is named without its value. A prompt template is named with its
+    length instead of its text: upstream's `rag.template` default alone runs to
+    about twenty five lines, so ten of these logged verbatim would push
+    kilobytes of prose into the boot log on every start and bury the line an
+    operator actually reads it for. A prompt is not automatically safe to print
+    either, since an operator may put internal policy text in one and nothing
+    marks it the way an api key is marked. Everything else keeps its value,
+    because for those the value IS the signal: the embedding model Open WebUI
+    will send is the one thing #722 never surfaced anywhere.
+    """
+
+    def rendered(key: str) -> str:
+        if key in SECRET_KEYS:
+            return key
+        if key in TEMPLATE_KEYS:
+            return f"{key}=<{len(applied[key])} chars>"
+        return f"{key}={applied[key]}"
+
+    return ", ".join(rendered(key) for key in sorted(applied))
 
 
 def permission_overrides(environ) -> dict:
