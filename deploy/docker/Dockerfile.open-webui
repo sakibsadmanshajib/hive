@@ -461,6 +461,33 @@ RUN python3 /tmp/apply_skill_group_grants_patch.py \
     && test "$(grep -c '# hive (#1396)' /app/backend/open_webui/routers/skills.py)" -eq 4 \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())"
 
+# issue #1397: skill.name (and, one check earlier, the primary-key id
+# slugified from it) was unique instance wide on a chat backend shared by
+# every Hive tenant, so two different tenants naming a skill the same thing
+# collided. Three parts, applied together: an Alembic migration drops the
+# single-column unique on name and adds a nullable tenant_group_id column
+# plus a composite (tenant_group_id, name) unique index; the model patch
+# teaches insert_new_skill to accept and persist that column, which pydantic
+# never exposes on any Skill response schema; the router patch resolves the
+# caller's tenant OWUI group at create time and prefixes the id with it, so
+# the PK check (which runs before name uniqueness) stops colliding too.
+# Pre-existing rows get tenant_group_id NULL and are left alone: NULL is
+# never equal to NULL under a UNIQUE index, so they collide with nothing and
+# need no guessed-tenant backfill. scripts/test_owui_skill_tenant_scope.py
+# proves the schema rebuild against a real sqlite3 connection (including a
+# mutation test: a same-tenant name collision must still fail) and exercises
+# the router's tenant-resolution helper directly.
+COPY deploy/docker/owui-patches/hive_skill_tenant_scope_migration.py /app/backend/open_webui/migrations/versions/hive_skill_tenant_scope_migration.py
+COPY deploy/docker/owui-patches/apply_skill_tenant_scope_model_patch.py /tmp/apply_skill_tenant_scope_model_patch.py
+COPY deploy/docker/owui-patches/apply_skill_tenant_scope_router_patch.py /tmp/apply_skill_tenant_scope_router_patch.py
+RUN python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/migrations/versions/hive_skill_tenant_scope_migration.py').read_text())" \
+    && python3 /tmp/apply_skill_tenant_scope_model_patch.py \
+    && test "$(grep -c '# hive (#1397)' /app/backend/open_webui/models/skills.py)" -eq 3 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/models/skills.py').read_text())" \
+    && python3 /tmp/apply_skill_tenant_scope_router_patch.py \
+    && test "$(grep -c '# hive (#1397)' /app/backend/open_webui/routers/skills.py)" -eq 3 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())"
+
 # issue #1191: two residuals from the #1190-family review that the #1186 sweep
 # had classified as false positives. chats.py clone_shared_chat_by_id let a
 # bare instance admin skip the shared-chat AccessGrants check and read (clone)
@@ -489,6 +516,7 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1186)' $B/routers/notes.py)" -eq 6 \
     && test "$(grep -c '# hive (#1186)' $B/routers/tools.py)" -eq 10 \
     && test "$(grep -c '# hive (#1186)' $B/routers/models.py)" -eq 5 \
+    && test "$(grep -c '# hive (#1186)' $B/routers/skills.py)" -eq 5 \
     && test "$(grep -c '# hive (#1191)' $B/routers/chats.py)" -eq 1 \
     && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to

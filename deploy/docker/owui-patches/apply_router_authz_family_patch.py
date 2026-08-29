@@ -9,6 +9,18 @@ gates like notes/chats/models, and response metadata such as the notes
 write_access indicator. On this shared chat instance every tenant OWNER is an
 instance admin, so role alone granted access to any tenant's resources.
 
+skills.py joined this family later (PR #1388 shipped the skills surface,
+issue #1186 was filed before that and never grew a skills.py entry). Its
+listing routes (GET /, GET /list, GET /export) already flag-gate correctly,
+matching the #960 predicate from day one, but the by-id read, toggle, update,
+access-update and delete routes still short-circuit on bare
+`user.role == 'admin'`, the exact shape this patch already fixes on every
+sibling router. This is not the same hole as #1396 (the skills half of which
+PR #1388 already closed, in the separate apply_skill_group_grants_patch.py,
+untouched by this file): that one is about which access GRANTS a non-admin
+write may attach, this one is about the admin role bypass on read/write of
+the resource itself.
+
 This patch rewrites every unflagged tenant-visibility bypass in the routers
 listed by issue #1186 to the #960 predicate: access iff owner, or AccessGrants
 grant, or admin when BYPASS_ADMIN_ACCESS_CONTROL is set. chats.py keeps its
@@ -326,6 +338,27 @@ EDITS = [
         "    if (\n        not " + FLAGGED + "\n        and model.user_id != user.id\n",
         1,
     ),
+    # ---------------- skills.py (BYPASS already imported) ----------------
+    # Shared by GetSkillById and ToggleSkillById, both shaped
+    # `user.role == 'admin' or skill.user_id == user.id or ...has_access(...)`.
+    (
+        "skills.py",
+        "            user.role == 'admin'\n            or skill.user_id == user.id\n",
+        "            " + FLAGGED + "  # hive (#1186)\n"
+        "            or skill.user_id == user.id\n",
+        2,
+    ),
+    # Shared by UpdateSkillById, UpdateSkillAccessById and DeleteSkillById,
+    # all three shaped `skill.user_id != user.id and not ...has_access(write)
+    # and user.role != 'admin'`.
+    (
+        "skills.py",
+        "        )\n        and user.role != 'admin'\n    ):",
+        "        )\n"
+        "        and not " + FLAGGED + "  # hive (#1186)\n"
+        "    ):",
+        3,
+    ),
 ]
 
 # Per-file expected marker totals AFTER patching; the Dockerfile build stage
@@ -342,6 +375,7 @@ EXPECTED_MARKERS = {
     "notes.py": 6,
     "tools.py": 10,
     "models.py": 5,
+    "skills.py": 5,
 }
 
 
