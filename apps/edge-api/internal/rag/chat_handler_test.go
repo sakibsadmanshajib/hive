@@ -790,11 +790,18 @@ func TestHandleChat_StreamingErrorFrameIsProviderBlind(t *testing.T) {
 		"plan and billing",
 		"settings/credits",
 		"https://",
-		"402",
 	} {
 		if strings.Contains(lower, strings.ToLower(forbidden)) {
 			t.Fatalf("upstream error text reached the customer: %q in %s", forbidden, body)
 		}
+	}
+	// The upstream status code, asserted on its JSON shape rather than as a
+	// bare "402": the citations frame carries random v4 UUIDs, and a hex
+	// triple in one of them collides with the literal about once in 140 runs
+	// (CodeRabbit finding on PR #1303). A flaky guard gets muted, which is
+	// worse than a narrower one.
+	if strings.Contains(body, `"code":402`) || strings.Contains(body, `"code": 402`) {
+		t.Fatalf("upstream error code reached the customer: %s", body)
 	}
 	assertNoLeak(t, body)
 

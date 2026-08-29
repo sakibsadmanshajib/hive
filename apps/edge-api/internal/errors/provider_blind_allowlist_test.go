@@ -193,3 +193,55 @@ func TestWriteProviderBlindUpstreamErrorKeepsRateLimitVerdictOn429(t *testing.T)
 		})
 	}
 }
+
+// TestWriteProviderBlindUpstreamErrorVetoesMixedMessages closes the bypass an
+// allowlist has by construction: a token licenses forwarding the WHOLE
+// message, so one upstream sentence carrying both an actionable clause and
+// account detail would carry the account detail out with it.
+//
+// Found by the Antigravity review stream on this pull request, not by a
+// probe against a live provider, so the fixtures are constructed rather than
+// measured. They are still the shape a chatty upstream produces when it
+// explains two things at once.
+func TestWriteProviderBlindUpstreamErrorVetoesMixedMessages(t *testing.T) {
+	for _, raw := range []string{
+		`{"error":{"message":"Organization org-12345 is over its quota, and this prompt also exceeds the maximum context length of 8192 tokens."}}`,
+		`{"error":{"message":"Invalid value for 'stream'. Also, your account balance is too low to continue."}}`,
+		`{"error":{"message":"Free tier accounts must be one of the supported regions."}}`,
+	} {
+		t.Run(raw[:45], func(t *testing.T) {
+			w := httptest.NewRecorder()
+			WriteProviderBlindUpstreamError(w, "hive-auto", http.StatusBadRequest, raw)
+			resp := decodeOpenAIError(t, w)
+			lower := strings.ToLower(resp.Error.Message)
+			for _, forbidden := range []string{"org-12345", "quota", "balance", "free tier", "account"} {
+				if strings.Contains(lower, forbidden) {
+					t.Fatalf("account detail rode out on an actionable token: %q in %q", forbidden, resp.Error.Message)
+				}
+			}
+			if resp.Error.Message != "hive-auto request failed." {
+				t.Fatalf("message = %q, want the collapsed fallback", resp.Error.Message)
+			}
+		})
+	}
+}
+
+// TestWriteProviderBlindUpstreamErrorRateLimitRuleIsPinnedOffThe429Fallback
+// exists because the 429 test above cannot pin the rule it names: with the
+// rate-limit guard deleted, a 429 falls through to fallbackProviderBlindMessage,
+// which returns the identical sentence for that status, so the test stays
+// green over a removed guard (Antigravity review finding on this pull
+// request, and the same "cannot go red" failure this repository keeps hitting).
+//
+// A non-429 status carrying rate-limit text is the case only the guard can
+// answer: the fallback for a 500 is "request failed."
+func TestWriteProviderBlindUpstreamErrorRateLimitRuleIsPinnedOffThe429Fallback(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteProviderBlindUpstreamError(w, "hive-auto", http.StatusInternalServerError,
+		`{"error":{"message":"Backend rate limit reached, retry shortly."}}`)
+
+	resp := decodeOpenAIError(t, w)
+	if resp.Error.Message != "hive-auto is temporarily rate limited." {
+		t.Fatalf("message = %q, want the rate-limit verdict on a non-429 status", resp.Error.Message)
+	}
+}

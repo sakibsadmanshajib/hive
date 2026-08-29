@@ -162,7 +162,8 @@ var providerBlindActionableTokens = []string{
 	// The request itself is malformed, and the field named is the customer's.
 	"invalid value", "invalid type", "invalid schema", "invalid format",
 	"unsupported parameter", "unsupported value", "unknown parameter",
-	"missing required parameter", "must be one of", "is required",
+	"missing required parameter", "must be one of", "must be between",
+	"is required", "cannot be empty", "required property", "parse error",
 	// The upstream refused the CONTENT, which only the customer can change.
 	"content filter", "content_filter", "content policy", "safety", "moderation", "flagged",
 	// Attachment shapes the customer controls.
@@ -183,12 +184,35 @@ func providerBlindCustomerActionable(httpStatus int, message string) bool {
 	default:
 		return false
 	}
+	// Veto first. An allowlist token licenses forwarding the WHOLE message,
+	// so a single upstream sentence that carries both ("Organization org-12345
+	// is over its quota, and this prompt also exceeds the maximum context
+	// length") would forward the account detail along with the actionable
+	// part. The veto is not the primary defence and is not a substitute for
+	// the allowlist above -- it is second, and it only ever collapses more.
+	for _, token := range providerBlindNeverForwardTokens {
+		if strings.Contains(message, token) {
+			return false
+		}
+	}
 	for _, token := range providerBlindActionableTokens {
 		if strings.Contains(message, token) {
 			return true
 		}
 	}
 	return false
+}
+
+// providerBlindNeverForwardTokens is vocabulary about OUR relationship with
+// the upstream: its funding, our tier, our organization. None of it is ever
+// the caller's to act on, so a message carrying any of it is collapsed even
+// when it also matches an actionable token. Kept tight and specific for the
+// usual substring reason.
+var providerBlindNeverForwardTokens = []string{
+	"quota", "billing", "credits", "payment", "insufficient",
+	"balance", "spend limit", "past due", "free tier", "prepaid",
+	"invoice", "subscription", "top up", "top-up", "upgrade your plan",
+	"organization",
 }
 
 func providerBlindResourceLabel(alias string) string {
