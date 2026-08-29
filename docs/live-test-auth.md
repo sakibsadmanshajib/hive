@@ -87,12 +87,51 @@ separate agents were blocked on credentials across that day and the one after.
 
 The password is not the only shared state on `demo@hive-demo.invalid`. It is
 also the account the owner demos to prospects, and every chat this account
-sends, every agent task it submits, and every API key it mints is real,
-visible in that account's own sidebar, task list and keys page, and today
-undeletable: there is no chat-delete, task-delete or account-delete route
-wired up yet (issues #828, #848). A suite that authenticates as this account
-and drives a real composer, a real task submit, or a real key mint leaves a
-permanent mark on the surface the owner is about to show someone.
+sends, every agent task it submits, and every API key it mints is real and
+visible in that account's own sidebar, task list and keys page. A suite that
+authenticates as this account and drives a real composer, a real task submit,
+or a real key mint leaves a mark on the surface the owner is about to show
+someone.
+
+**This paragraph used to say all three were undeletable, and that was wrong
+about chats.** The claim went uncorrected long enough to become received
+wisdom, and it is a large part of why nobody ever cleaned up: an agent reading
+it concluded there was nothing to be done. Measured against the running stack
+on 2026-08-29, per surface:
+
+* **Chats: deletable, and always were.** `DELETE /api/v1/chats/{id}` is live,
+  is reachable from the sidebar row menu behind a confirm dialog, and is
+  scoped to the calling user. It is a hard delete: the chat row and its
+  `chat_message` rows are removed, not flagged. A second signed-in account
+  attempting it is refused (401 on the read, 404 on the delete) and the
+  owner's row survives. `scripts/test_owui_chat_delete_authz.py` pins that
+  scoping so an upstream bump or an `owui-patches` rewrite cannot quietly
+  widen it. Archiving is a separate action and is the soft path.
+* **Agent tasks: no delete route.** `/internal/agent-tasks/...` offers create,
+  list, get, cancel, events and files, and nothing else. A submitted task is
+  permanent. Cancel stops it; it does not remove the row.
+* **Accounts: no delete route, deliberately.**
+  `tenant_billing_accounts.account_id` references `accounts(id)` `ON DELETE
+  RESTRICT`, so deleting an account that still funds a live tenant fails loudly
+  by design (issue #828).
+
+So a chat left on that account can be removed by whoever owns it, which is a
+reason to clean up rather than a reason to relax: a task or a key left there
+still cannot be.
+
+### This rule is now enforced, not merely written down
+
+`mintSession` in `tests/e2e/support/live-auth.mjs` is the single door every
+live session passes through, and it refuses `demo@hive-demo.invalid` outright.
+A run that genuinely only reads must say so, either with `readOnly: true` or
+`HIVE_LIVE_AUTH_READ_ONLY=1`.
+
+Be clear about what that buys: it is a declaration gate, not a write blocker.
+It cannot stop a run that has declared itself read only from then sending a
+message. What it removes is the silent default, so aiming a suite at this
+account becomes a deliberate act that shows up in a diff, which is exactly
+what was missing while the account collected 24 conversations of automation
+text, five of them on the day the guard was written.
 
 This happened. `docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json`
 records `"demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"`,
