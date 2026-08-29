@@ -147,14 +147,21 @@ echo "::endgroup::"
 read_free_gb || exit 1
 echo "reclaimed build cache: ${before_gb}G -> ${free_gb}G free on $target.$reclaim_note"
 
+# One sentence, carried into every branch below and into the step summary, so
+# whichever line a reader lands on has BOTH readings on it. Reporting only the
+# result would hide how close the box was, which is the difference between
+# "build cache accumulated again, as expected" and "something else is eating
+# the disk and the reclaim barely moved it".
+reclaimed="Unused build cache was already reclaimed: ${before_gb}G free before, ${free_gb}G after.$reclaim_note"
+
 if [ "$free_gb" -ge "$warn_gb" ]; then
   # Above the warn line only because of the reclaim. Still loud: a box that
   # needs this every deploy is a box whose cache is growing faster than its
   # headroom, and that is worth seeing before the floor stops it.
   echo "::warning::demo box was at ${before_gb}G free on $target, below the ${warn_gb}G warn line, and reached ${free_gb}G by reclaiming unused build cache.$reclaim_note"
   {
-    echo "### Demo box disk: ${before_gb}G free, ${free_gb}G after reclaiming build cache"
-    echo "Proceeding. Nothing but unused build cache was removed.$reclaim_note"
+    echo "### Demo box disk: ${free_gb}G free, above the ${warn_gb}G warn line after a reclaim"
+    echo "Proceeding. Nothing but unused build cache was removed. $reclaimed"
   } >> "$summary"
   exit 0
 fi
@@ -178,8 +185,6 @@ echo "::endgroup::"
 # --force, which refuses an image any container references. A prune, or an rmi
 # with --force, has no such backstop.
 hint="Reclaim safely by removing tagged images no container references and nothing in this repo names (superseded base images, old third-party versions); 'docker rmi' without --force refuses anything a container still holds. Do NOT run 'docker system prune -a' or 'docker image prune -a': both delete the previous stack images that are this box's only rollback path. Do NOT prune volumes: the database, the storage buckets and the chat data all live in them, with no off-box backup (issue #1000)."
-
-reclaimed="Unused build cache was already reclaimed: ${before_gb}G free before, ${free_gb}G after.$reclaim_note"
 
 if [ "$free_gb" -lt "$fail_gb" ]; then
   echo "::error::demo box has ${free_gb}G free on $target, below the ${fail_gb}G floor. Refusing to proceed. $reclaimed $hint"

@@ -178,6 +178,11 @@ run_seq() {
 # -f` took it to 23G on the day. It must proceed, and it must say out loud that
 # it only proceeded because of a reclaim.
 run_seq prune-rescues     "14G 23G" 0 "reclaimed build cache" "::error::"
+# Recovered clear of the warn line by the reclaim. Still warns, because a box
+# that only clears the line because of this step is a box whose cache is
+# growing faster than its headroom, and silence there is how it becomes a
+# refusal nobody saw coming.
+run_seq prune-clears-warn "14G 30G" 0 "::warning::"           "::error::"
 # Between the floor and the warn line after the reclaim: proceed, still warn.
 run_seq prune-partial     "14G 20G" 0 "::warning::"           "::error::"
 # A box whose problem is not build cache: the reclaim frees nothing, the pre
@@ -191,15 +196,27 @@ run_seq prune-fails       "14G 14G" 1 "::error::"             "" FAKE_DOCKER_FAI
 # Both numbers have to reach the log. A reclaim that reported only its result
 # would hide how close the box was, which is the signal an operator needs to
 # tell "build cache accumulated again" from "something else is eating the disk".
+# Both numbers have to appear TOGETHER, as the transition. Grepping the whole
+# output for each number separately would not have been a test: the guard
+# already prints the pre-reclaim reading unconditionally on its first line, so
+# "14G" is present even in an implementation that dropped `before_gb` from the
+# reclaim line entirely, which is the exact regression this guards. The
+# transition is the signal an operator needs to tell "build cache accumulated
+# again" from "something else is eating the disk", and it has to be one line.
 printf '14G\n23G\n' > "$tmp/seq.numbers"
 out=$(FAKE_FREE_SEQ_FILE="$tmp/seq.numbers" GITHUB_STEP_SUMMARY="$tmp/summary.numbers" bash "$gate" 2>&1 || true)
-for wanted in "14G" "23G"; do
-  if printf '%s' "$out" | grep -qF -- "$wanted"; then
-    echo "ok   [reclaim reports $wanted]"
-  else
-    fail "[reclaim-reports-both-numbers] '$wanted' never appears" "$out"
-  fi
-done
+if printf '%s' "$out" | grep -qF -- "reclaimed build cache: 14G -> 23G"; then
+  echo "ok   [reclaim-reports-the-transition]"
+else
+  fail "[reclaim-reports-the-transition] no single line carries both the before and after readings" "$out"
+fi
+# And it has to reach the step summary too, which is what a human reads on the
+# run page without opening the log.
+if grep -qF -- "14G free before, 23G after" "$tmp/summary.numbers"; then
+  echo "ok   [reclaim-reports-the-transition-in-the-summary]"
+else
+  fail "[reclaim-reports-the-transition-in-the-summary] the step summary omits one of the readings" "$(cat "$tmp/summary.numbers")"
+fi
 
 check() {
   local label="$1"; shift
