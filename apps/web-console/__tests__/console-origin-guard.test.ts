@@ -286,9 +286,10 @@ describe("every mutating console route is guarded", () => {
 
   it("finds the route tree", () => {
     // A walk that silently found nothing would make every assertion below pass
-    // vacuously. Eight files carry the nine handlers enumerated above.
+    // vacuously. Nine files carry the ten handlers enumerated above, plus the
+    // GET-only checkout/intent route, which needs no guard.
     expect(consoleApiDir).not.toBe("");
-    expect(files.length).toBeGreaterThanOrEqual(8);
+    expect(files.length).toBeGreaterThanOrEqual(9);
   });
 
   it("finds every mutating handler and sees the guard inside each one", () => {
