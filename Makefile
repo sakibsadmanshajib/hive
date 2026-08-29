@@ -33,6 +33,7 @@ test-scripts:
 	python3 scripts/test_owui_skill_tenant_scope.py
 	python3 scripts/owui-promote-instance-admin.py --self-check
 	python3 scripts/classify-upstream-refusal.py --selfcheck
+	python3 scripts/extract-sdk-failures.py --selfcheck
 	python3 scripts/report-free-pool-health.py --selfcheck
 	python3 scripts/test_caddy_owui_blocklist.py
 	python3 scripts/test_caddy_one_front_door.py

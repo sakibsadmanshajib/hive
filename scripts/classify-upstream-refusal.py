@@ -184,6 +184,22 @@ def count_cooldown_lines(text: str) -> int:
 
 def report(text: str) -> int:
     verdict, evidence = classify(text)
+
+    # Issue #1374. A refusal signature and a named test failure can both be
+    # present, and when they are, the test failure is the cause and the
+    # refusal is weather. One free-pool member spends its Gemini free-tier
+    # daily allowance most days; LiteLLM logs that 429, the pool routes around
+    # it, and the "Probe each free pool member" step reports it as routed
+    # around. Six tracking-issue comments on 2026-08-29 nonetheless headlined
+    # that 429 over failures that were stale expected-failure markers, a dead
+    # S3 endpoint and a broken total_tokens invariant.
+    #
+    # So: named failures win. The refusal still gets printed, in full, because
+    # it is real and occasionally it IS the cause; it just stops being the
+    # headline and stops being written as UPSTREAM_FAILURE_CLASS, which is
+    # what the tracking issue calls "the cause".
+    named = os.environ.get("SDK_FAILED_TESTS", "").strip()
+
     if verdict is None:
         print(
             "no upstream refusal signature in the litellm or edge-api logs, so "
@@ -213,15 +229,24 @@ def report(text: str) -> int:
                 print(line)
         return 0
 
-    print(f"::error::UPSTREAM REFUSAL, not a performance regression: {verdict}")
+    if named:
+        print(
+            "::notice::an upstream refusal signature IS in the logs, but named "
+            "SDK test failures exist, so this is context and not the cause. "
+            "The failing tests are annotated on the SDK suite step above. "
+            f"Refusal seen: {verdict}"
+        )
+    else:
+        print(f"::error::UPSTREAM REFUSAL, not a performance regression: {verdict}")
     print("matching lines (redacted, first 5):")
     for line in evidence[:5]:
         print(line)
 
     github_env = os.environ.get("GITHUB_ENV")
     if github_env:
+        key = "UPSTREAM_FAILURE_CONTEXT" if named else "UPSTREAM_FAILURE_CLASS"
         with open(github_env, "a", encoding="utf-8") as handle:
-            handle.write(f"UPSTREAM_FAILURE_CLASS={verdict}\n")
+            handle.write(f"{key}={verdict}\n")
     return 0
 
 
@@ -411,6 +436,9 @@ def _selfcheck() -> int:
         env_path = handle.name
     previous = os.environ.get("GITHUB_ENV")
     os.environ["GITHUB_ENV"] = env_path
+    # Popped so a shell that happens to export it cannot flip this assertion
+    # into the context branch below and make the cause-key contract untested.
+    ambient_named = os.environ.pop("SDK_FAILED_TESTS", None)
     try:
         assert report(REAL_UPSTREAM_429) == 0
         written = pathlib.Path(env_path).read_text(encoding="utf-8")
@@ -419,6 +447,8 @@ def _selfcheck() -> int:
             os.environ.pop("GITHUB_ENV", None)
         else:
             os.environ["GITHUB_ENV"] = previous
+        if ambient_named is not None:
+            os.environ["SDK_FAILED_TESTS"] = ambient_named
         os.unlink(env_path)
     assert written.startswith("UPSTREAM_FAILURE_CLASS="), written
     assert written.endswith("\n"), "GITHUB_ENV entries must be newline-terminated"
@@ -441,6 +471,36 @@ def _selfcheck() -> int:
         else:
             os.environ["GITHUB_ENV"] = previous
         os.unlink(env_path)
+
+    # Issue #1374's precedence rule. With named SDK failures present, the same
+    # real 429 must stop being reported as THE cause: it is written under a
+    # context key the tracking issue prints second, not under the class key it
+    # prints as the cause. This is the difference between the six comments
+    # that said "the provider rate limited us" over a storage defect and a
+    # report that names the storage defect.
+    with tempfile.NamedTemporaryFile("w+", delete=False) as handle:
+        env_path = handle.name
+    previous_named = os.environ.get("SDK_FAILED_TESTS")
+    os.environ["GITHUB_ENV"] = env_path
+    os.environ["SDK_FAILED_TESTS"] = "sdk-tests-js: tests/files/files.test.ts > uploads"
+    try:
+        assert report(REAL_UPSTREAM_429) == 0
+        written = pathlib.Path(env_path).read_text(encoding="utf-8")
+    finally:
+        if previous is None:
+            os.environ.pop("GITHUB_ENV", None)
+        else:
+            os.environ["GITHUB_ENV"] = previous
+        if previous_named is None:
+            os.environ.pop("SDK_FAILED_TESTS", None)
+        else:
+            os.environ["SDK_FAILED_TESTS"] = previous_named
+        os.unlink(env_path)
+    assert written.startswith("UPSTREAM_FAILURE_CONTEXT="), written
+    assert "UPSTREAM_FAILURE_CLASS=" not in written, (
+        "a refusal alongside named test failures must not be written as the "
+        "cause; that is the misreport issue #1374 is about: " + written
+    )
 
     print("ok: classify-upstream-refusal verdicts")
     return 0

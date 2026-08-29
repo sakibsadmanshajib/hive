@@ -1729,6 +1729,23 @@ jobs:
             tail -c 30000 "$log/$svc.log" || true
             if [ "$rc" != "0" ]; then fail=1; fi
           done
+
+          # Issue #1374. Until now this step's only annotation was
+          # `Process completed with exit code 1`, and the tracking issue it
+          # feeds carried whatever the refusal classifier below had decided.
+          # Between 00:59 and 12:09 on 2026-08-29 that pair filed one issue and
+          # eleven comments, six of them saying "the provider rate limited us
+          # (429)", over five unrelated defects: stale strict-XPASS markers
+          # (#1259, #1260, #1261, #1274), a stale vitest it.fails (#1317), the
+          # dead S3 endpoint (#1324), and a broken total_tokens invariant. The
+          # 429 was real and incidental every time: one free-pool member spends
+          # its free-tier daily allowance most days and the pool routes around
+          # it, which the probe step above already reports.
+          #
+          # This names the tests instead. It changes nothing about what passes.
+          if [ "$fail" != "0" ]; then
+            python3 ../../scripts/extract-sdk-failures.py "$log" || true
+          fi
           exit $fail
 
       # Issue #1088. A provider allowance this job spends was invisible until
@@ -1971,18 +1988,37 @@ jobs:
         uses: actions/github-script@v9
         env:
           # Written by the "Name the real cause" step above when it recognises
-          # an upstream refusal. Carried into the issue body so the first thing
-          # a reader sees is the cause, not a link to a run whose test output
-          # says "timed out" (issue #1088).
+          # an upstream refusal AND no SDK test was named. Carried into the
+          # issue body so the first thing a reader sees is the cause, not a
+          # link to a run whose test output says "timed out" (issue #1088).
           UPSTREAM_FAILURE_CLASS: ${{ env.UPSTREAM_FAILURE_CLASS }}
+          # The same refusal when named test failures DO exist. It is real but
+          # incidental (issue #1374), so it is printed after them and labelled
+          # as context rather than as the cause.
+          UPSTREAM_FAILURE_CONTEXT: ${{ env.UPSTREAM_FAILURE_CONTEXT }}
+          # Written by scripts/extract-sdk-failures.py on the SDK suite step.
+          # This is the fact the issue was missing for eleven comments on
+          # 2026-08-29: which test failed, and with what message.
+          SDK_FAILED_TESTS: ${{ env.SDK_FAILED_TESTS }}
         with:
           script: |
             const label = 'ci-failure:live-integration';
             const title = 'Live integration (SDK tests + smoke) is failing on main';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const cause = process.env.UPSTREAM_FAILURE_CLASS
-              ? `**Cause identified from the container logs:** ${process.env.UPSTREAM_FAILURE_CLASS}\n\n`
+            // Failing tests first, always. A tracking issue that leads with an
+            // incidental provider 429 sends every reader to the wrong place,
+            // which is what happened for a full day on issue #1374.
+            const named = (process.env.SDK_FAILED_TESTS || '').trim();
+            const tests = named
+              ? '**Failing tests:**\n' +
+                named.split('\n').map((line) => `- ${line}`).join('\n') + '\n\n'
               : '';
+            const context_ = process.env.UPSTREAM_FAILURE_CONTEXT
+              ? `Also in the container logs, as context rather than cause: ${process.env.UPSTREAM_FAILURE_CONTEXT}\n\n`
+              : '';
+            const cause = tests + (process.env.UPSTREAM_FAILURE_CLASS
+              ? `**Cause identified from the container logs:** ${process.env.UPSTREAM_FAILURE_CLASS}\n\n`
+              : '') + context_;
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
