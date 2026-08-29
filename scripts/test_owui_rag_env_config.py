@@ -757,6 +757,22 @@ def test_a_sub_megabyte_ceiling_is_refused() -> None:
             raise AssertionError(f"RAG_MAX_UPLOAD_BYTES={value} was accepted")
 
 
+def test_a_unicode_digit_ceiling_is_refused_not_crashed_on() -> None:
+    """`str.isdigit()` is true for characters `int()` then refuses, so a
+    ceiling of "²⁵" would leave this module raising ValueError out of a
+    function whose contract is RuntimeError, and the operator would get a
+    traceback naming neither the variable nor what to do. "٣" is the other
+    half: `int()` accepts it, so without an ASCII check it would silently
+    configure a three megabyte ceiling that no grep for a number would find."""
+    for value in ("²⁵", "٣٠"):
+        try:
+            hive_rag_env_config.overrides({"RAG_MAX_UPLOAD_BYTES": value})
+        except RuntimeError as error:
+            assert "RAG_MAX_UPLOAD_BYTES" in str(error), error
+        else:
+            raise AssertionError(f"RAG_MAX_UPLOAD_BYTES={value!r} was accepted")
+
+
 def test_allowlist_entries_written_with_a_leading_dot_still_match() -> None:
     """`.pdf,.txt` is the obvious thing to write, and upstream compares against
     an extension it has already stripped the dot from, so persisting the dot
@@ -837,10 +853,21 @@ def test_one_expression_sets_every_upload_ceiling() -> None:
             "chat upload cap is what issue #1428 is. The chat cap is derived from "
             "RAG_MAX_UPLOAD_BYTES by deploy/docker/owui-patches/hive_rag_env_config.py"
         )
-    occurrences = compose.count("${RAG_MAX_UPLOAD_BYTES:-26214400}")
-    assert occurrences == 3, (
+    # Matched without pinning the value, so raising the product's document
+    # ceiling stays a one-line edit in three places rather than four. What must
+    # not change is that the three agree: a test that pinned 26214400 would
+    # fail on a deliberate raise, which trains the next person to edit the test
+    # until it passes, and that is how a guard stops guarding.
+    defaults = re.findall(r"\$\{RAG_MAX_UPLOAD_BYTES:-([^}]*)\}", compose)
+    assert len(defaults) == 3, (
         f"expected the one ceiling expression on exactly three services "
-        f"(edge-api, markitdown, open-webui), found {occurrences}"
+        f"(edge-api, the markitdown sidecar, open-webui), found {len(defaults)}"
+    )
+    assert len(set(defaults)) == 1, (
+        f"the three services disagree about the default upload ceiling: "
+        f"{defaults}. They must interpolate one identical expression, or a "
+        f"deployment that sets nothing gets a different limit in chat than on "
+        f"its own ingest path, which is issue #1428"
     )
 
 

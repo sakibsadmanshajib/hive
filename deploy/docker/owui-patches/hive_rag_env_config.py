@@ -338,7 +338,13 @@ def derived_upload_cap(environ) -> dict:
         # value, so this is the enterprise/self-host path, not the demo one.
         return {}
 
-    if not raw.isdigit():
+    # isascii() as well as isdigit(), because str.isdigit() is true for
+    # characters int() then refuses: "²" (superscript two) is a digit by
+    # that test and a ValueError to int(), which would escape this function as
+    # an unhandled traceback instead of the RuntimeError below. Other Unicode
+    # digits, "٣" for instance, parse fine and would silently configure a
+    # ceiling nobody can grep for.
+    if not (raw.isascii() and raw.isdigit()):
         raise RuntimeError(
             f"{UPLOAD_CEILING_ENV} must be a whole number of BYTES, got "
             f"{raw!r}. A value that cannot be parsed would leave the deployment "
