@@ -44,23 +44,41 @@ set -euo pipefail
 fail_gb="${HIVE_DEPLOY_DISK_FLOOR_GB:-15}"
 warn_gb="${HIVE_DEPLOY_DISK_WARN_GB:-25}"
 target="${HIVE_DEPLOY_DISK_TARGET:-/var/lib/docker}"
+# Ceiling on the build cache reclaim below, in seconds. Overridable for the
+# same reason the thresholds are: 300 was measured against a 12.42 GB reclaim
+# on this box, and a box that has accumulated much more than that would have
+# its reclaim killed partway by a limit nobody can move without a release.
+# Deleting cache is incremental, so a killed prune keeps whatever it freed, but
+# the run would then be quietly less effective than it looks.
+reclaim_timeout_s="${HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S:-300}"
 
-# Both thresholds are reachable from a human-typed workflow_dispatch input, and
-# a bad value here does not fail, it silently stops gating. `[ 22 -lt bad ]`
-# exits 2, which an `if` treats as false, so the floor check is skipped and the
-# deploy proceeds with a stderr line nobody reads. A warn line below the floor
-# is the same hole by a different route: the `>= warn` early exit fires first
-# and returns 0 before the floor is ever compared. Refuse both, loudly.
-for pair in "HIVE_DEPLOY_DISK_FLOOR_GB=$fail_gb" "HIVE_DEPLOY_DISK_WARN_GB=$warn_gb"; do
+# All three are reachable from a human-typed workflow_dispatch input, and a bad
+# value here does not fail, it silently stops gating. `[ 22 -lt bad ]` exits 2,
+# which an `if` treats as false, so the floor check is skipped and the deploy
+# proceeds with a stderr line nobody reads. A warn line below the floor is the
+# same hole by a different route: the `>= warn` early exit fires first and
+# returns 0 before the floor is ever compared. Refuse all of them, loudly.
+for pair in \
+  "HIVE_DEPLOY_DISK_FLOOR_GB=$fail_gb" \
+  "HIVE_DEPLOY_DISK_WARN_GB=$warn_gb" \
+  "HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S=$reclaim_timeout_s"; do
   case "${pair#*=}" in
     "" | *[!0-9]*)
-      echo "::error::${pair%%=*} must be a non-negative whole number of GB, got '${pair#*=}'"
+      echo "::error::${pair%%=*} must be a non-negative whole number, got '${pair#*=}'"
       exit 1
       ;;
   esac
 done
 if [ "$warn_gb" -lt "$fail_gb" ]; then
   echo "::error::HIVE_DEPLOY_DISK_WARN_GB ($warn_gb) is below HIVE_DEPLOY_DISK_FLOOR_GB ($fail_gb), which would skip the floor check entirely"
+  exit 1
+fi
+# Zero is a valid argument to `timeout` and means no limit at all, which would
+# let a wedged prune hold the job until its own timeout-minutes kills it, and
+# that kill takes the disk check with it. Refuse it rather than accept a value
+# that silently removes the bound this variable exists to set.
+if [ "$reclaim_timeout_s" -eq 0 ]; then
+  echo "::error::HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S must be at least 1 second; 0 means no timeout, which would let a wedged reclaim run until the job is killed and take the disk check with it"
   exit 1
 fi
 
@@ -136,7 +154,7 @@ fi
 before_gb="$free_gb"
 reclaim_note=""
 echo "::group::docker builder prune -f"
-if timeout 300 docker builder prune -f; then
+if timeout "$reclaim_timeout_s" docker builder prune -f; then
   :
 else
   reclaim_note=" The build cache reclaim failed or timed out, so this is the space that was already free."

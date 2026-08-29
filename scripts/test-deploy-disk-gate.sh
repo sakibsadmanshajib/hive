@@ -279,6 +279,13 @@ bad_case floor-decimal         22G HIVE_DEPLOY_DISK_FLOOR_GB=7.5
 # warn under floor: 10 is >= warn 0, so without the inversion check the script
 # would exit 0 here and never compare against the 15 GB floor.
 bad_case warn-below-floor      10G HIVE_DEPLOY_DISK_WARN_GB=0
+# The reclaim ceiling rides the same validation, and its zero is worse than a
+# bad string: `timeout 0` means NO limit, so a wedged prune would run until the
+# job's own timeout-minutes killed it, taking the disk check with it. That is
+# the exact failure mode scripts/check-deploy-disk.sh exists to be immune to.
+bad_case reclaim-timeout-nonnumeric 22G HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S=bad
+bad_case reclaim-timeout-zero       22G HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S=0
+bad_case reclaim-timeout-negative   22G HIVE_DEPLOY_DISK_RECLAIM_TIMEOUT_S=-1
 
 # The failure message has to name the things that must NOT be run to reclaim,
 # because a full-disk failure is exactly when someone reaches for the biggest
