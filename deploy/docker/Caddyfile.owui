@@ -1,10 +1,12 @@
 # When an external terminator (Cloudflare Tunnel on the demo box) handles TLS,
 # Caddy itself only ever sees plain HTTP on :80 and would stamp
-# X-Forwarded-Proto: http on every upstream request. Both upstreams below
-# derive absolute URLs from that header -- Open WebUI's authlib builds its
-# OAuth redirect_uri from the request scheme rather than from WEBUI_URL, and
-# the agent console builds redirects from request.url -- so an http value
-# makes Supabase reject the redirect_uri with a 400. HIVE_CHAT_EXTERNAL_SCHEME
+# X-Forwarded-Proto: http on every upstream request. The upstream below derives
+# absolute URLs from that header -- Open WebUI's authlib builds its OAuth
+# redirect_uri from the request scheme rather than from WEBUI_URL -- so an http
+# value makes Supabase reject the redirect_uri with a 400. (The agent console,
+# which derived its redirects from request.url the same way, was the second
+# upstream this paragraph used to name; it is no longer served here, see the
+# @removedSurfaces block.) HIVE_CHAT_EXTERNAL_SCHEME
 # names the scheme users actually arrive on and defaults to http for plain
 # local and enterprise runs. Same failure family as the Caddyfile.artifacts
 # auto-HTTPS fix (#434): Caddy behind an external TLS terminator needs
@@ -165,8 +167,35 @@
   # this never touches /api/v1/notes and friends, and /workspace and
   # /workspace/knowledge stay reachable because Knowledge is the one workspace
   # surface Hive keeps.
+  #
+  # `agent-workspace` is here for a different reason than the rest of the list,
+  # and it is the whole of issue #540. That prefix used to reverse_proxy a
+  # second whole application, apps/agent-console, onto this listener. That app
+  # runs its own @supabase/ssr session, which its `middleware.ts` documents as
+  # deliberate, and it could never see the chat visitor's credential: chat login
+  # is Open WebUI's OIDC flow, so the browser holds no Supabase cookie on this
+  # origin at all, and the Supabase access token lives server side in the chat
+  # container where owui-patches/hive_agent_proxy.py resolves it per request and
+  # never returns it. So every visit landed on a full second sign in page,
+  # measured on the demo box on 2026-08-29: /agent-workspace redirected to
+  # /agent-workspace/tasks, which redirected to /agent-workspace/auth/sign-in.
+  #
+  # Answered rather than joined, deliberately. The join that matters already
+  # shipped in PR #951: the agent surface is a native route in this shell,
+  # calling /api/v1/hive/agent/* under Open WebUI's own session gate, and
+  # D-045 rules that the separate route, origin and login go away rather than
+  # being restyled. Joining the two sessions instead would have meant minting a
+  # browser-visible Supabase session out of a token this design deliberately
+  # keeps server side, widening what a chat-side XSS is worth, to serve a
+  # surface that is being deleted.
+  #
+  # `apps/agent-console` itself stays in the tree for now: `Agent console (type
+  # + unit + build)` is a required check on main, so deleting the app needs a
+  # branch-protection change and takes its e2e project and CI wiring with it.
+  # Nothing on this origin reaches it any more, which is the half that mattered.
+  # Structural guard: scripts/test_caddy_one_front_door.py.
   @removedSurfaces {
-    path_regexp removed (?i)^/+(?:playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
+    path_regexp removed (?i)^/+(?:agent-workspace|playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
   }
   respond @removedSurfaces 404
 
@@ -234,25 +263,37 @@
   }
   respond @adminMutationSubtree 404
 
-  # Blueprint Step 3.1 (#311) agent console sidecar. Path-prefixed, not a
-  # subdomain, so it shares this listener and the /admin, /signup, and
-  # mutation blocks above without any new Caddy site block or cert.
+  # `/api/v1/hive/*` is deliberately left to the catch-all below, and the
+  # reason is written here so a future reviewer does not have to re-derive it
+  # from three regexes.
   #
-  # Collision analysis: Open WebUI has no route under /agent-workspace (its
-  # own paths are the SPA root, /api/*, /ws, and /static/*), and Caddy
-  # directives of the same name run in the order they're written in this
-  # file (documented Caddyfile behaviour for repeated directives), so this
-  # matched reverse_proxy is always evaluated -- and can intercept --
-  # before the unmatched catch-all below ever sees the request. OWUI's own
-  # websocket traffic is untouched since it lives on a different path.
-  # Matches both the bare entry URL (/agent-workspace, no trailing slash --
-  # what a freshly-typed or bookmarked link looks like) and everything
-  # under it. The bare path proxies straight to the Next.js app's own root
-  # route, which (via basePath) redirects to /agent-workspace/tasks itself
-  # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
+  # That prefix is Hive's own FastAPI router inside the chat container
+  # (deploy/docker/owui-patches/hive_agent_proxy.py), and it has to stay
+  # browser-reachable: the native agent surface calls it from the page. It
+  # matches none of the blocks above, which is correct rather than accidental.
+  # `@blocked` lists literal segments after `api/v1/` and `hive` is not one;
+  # `@removedSurfaces` matches page routes only; `@adminMutation` globs
+  # `configs*`, `users/*`, `groups*`, `functions*` and `models*`, none of which
+  # match `hive/agent/tasks`, so the create and cancel POSTs stay reachable.
   #
+  # It is not the shape #770 and #771 blocked. Those are stock Open WebUI
+  # routers that proxy to a caller-supplied destination with a stored
+  # credential, and this deployment offers no such feature. This router is four
+  # named operations, every one behind Open WebUI's own `get_verified_user`,
+  # with the task id validated as a UUID and the outbound body rebuilt from two
+  # named fields. Blocking it here would break the feature and secure nothing.
+
+  # Agent-task API on the chat origin. The task console runs in the browser
+  # and calls edge-api directly, but edge-api serves no CORS headers at all,
+  # so a cross-origin base URL (api-hive.scubed.co while the page is served
+  # from the chat host) fails preflight and the console can neither list nor
+  # start tasks. Routing these paths through this same listener makes those
+  # calls same-origin, which needs no CORS. Auth is unchanged: edge-api still
+  # validates the caller's Supabase bearer token on every request. Scoped to
+  # /v1/agent/* on purpose -- the rest of the gateway API stays off this host.
   # Every reverse_proxy on this listener carries the same bounded dial retry,
-  # for the reason written out once here (#1407).
+  # for the reason written out once here (#1407). The three blocks below all
+  # point back at this paragraph.
   #
   # All 55 502s this origin served in the 24 hours to 2026-08-29T10:00Z fell
   # inside a deploy-demo-box.yml run window, in nine bursts of 4 to 40 seconds.
@@ -303,49 +344,8 @@
   # open-webui still takes chat down for seconds, and there were more than
   # forty deploys in the measured day. A health-gated cutover would remove
   # that window and is a separate change.
-  @agentConsole path /agent-workspace /agent-workspace/*
-  reverse_proxy @agentConsole agent-console:3000 {
-    lb_try_duration 30s
-    lb_try_interval 1s
-    header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
-    transport http {
-      response_header_timeout 60s
-      dial_timeout 5s
-    }
-  }
-
-  # `/api/v1/hive/*` is deliberately left to the catch-all below, and the
-  # reason is written here so a future reviewer does not have to re-derive it
-  # from three regexes.
-  #
-  # That prefix is Hive's own FastAPI router inside the chat container
-  # (deploy/docker/owui-patches/hive_agent_proxy.py), and it has to stay
-  # browser-reachable: the native agent surface calls it from the page. It
-  # matches none of the blocks above, which is correct rather than accidental.
-  # `@blocked` lists literal segments after `api/v1/` and `hive` is not one;
-  # `@removedSurfaces` matches page routes only; `@adminMutation` globs
-  # `configs*`, `users/*`, `groups*`, `functions*` and `models*`, none of which
-  # match `hive/agent/tasks`, so the create and cancel POSTs stay reachable.
-  #
-  # It is not the shape #770 and #771 blocked. Those are stock Open WebUI
-  # routers that proxy to a caller-supplied destination with a stored
-  # credential, and this deployment offers no such feature. This router is four
-  # named operations, every one behind Open WebUI's own `get_verified_user`,
-  # with the task id validated as a UUID and the outbound body rebuilt from two
-  # named fields. Blocking it here would break the feature and secure nothing.
-
-  # Agent-task API on the chat origin. The task console runs in the browser
-  # and calls edge-api directly, but edge-api serves no CORS headers at all,
-  # so a cross-origin base URL (api-hive.scubed.co while the page is served
-  # from the chat host) fails preflight and the console can neither list nor
-  # start tasks. Routing these paths through this same listener makes those
-  # calls same-origin, which needs no CORS. Auth is unchanged: edge-api still
-  # validates the caller's Supabase bearer token on every request. Scoped to
-  # /v1/agent/* on purpose -- the rest of the gateway API stays off this host.
   @agentApi path /v1/agent/*
   reverse_proxy @agentApi edge-api:8080 {
-    # Bounded dial retry across a container recreate, #1407. Reasoning at the
-    # @agentConsole block above.
     lb_try_duration 30s
     lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
@@ -361,8 +361,8 @@
   # single path on purpose -- the rest of /v1/* stays off this host.
   @featureGate path /v1/featuregate /v1/featuregate/
   reverse_proxy @featureGate edge-api:8080 {
-    # Bounded dial retry across a container recreate, #1407. Reasoning at the
-    # @agentConsole block above.
+    # Bounded dial retry across a container recreate, #1407. Reasoning above
+    # the @agentApi block.
     lb_try_duration 30s
     lb_try_interval 1s
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
@@ -390,8 +390,8 @@
   header @immutableAssets Cache-Control "public, max-age=31536000, immutable"
 
   reverse_proxy open-webui:8080 {
-    # Bounded dial retry across a container recreate, #1407. Reasoning at the
-    # @agentConsole block above. This is the block the 55 measured 502s were
+    # Bounded dial retry across a container recreate, #1407. Reasoning above
+    # the @agentApi block. This is the block the 55 measured 502s were
     # served from.
     lb_try_duration 30s
     lb_try_interval 1s
