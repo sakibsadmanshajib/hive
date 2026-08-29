@@ -6,6 +6,10 @@ scripts/post-pr-visual-proof.sh, not committed here, because a
 raw.githubusercontent.com link pinned to this branch's name would 404 the
 moment the branch is deleted at squash-merge (PR #867, D-042).
 
+capture.log holds two captures: the 2026-08-29 one taken after the branch was
+rebased onto main at 5e08d641, and the original 2026-08-23 one preserved
+verbatim underneath it.
+
 ## What wave 1 changed
 
 apps/web-console/app/oauth/consent/page.tsx is a Server Component that reads
