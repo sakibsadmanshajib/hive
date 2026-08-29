@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"errors"
+	"math/big"
 	"os"
 	"regexp"
 	"strconv"
@@ -103,11 +104,18 @@ func TestFixtureGrantCoversTheFlatChatHold(t *testing.T) {
 
 	// Margin: the seeder documents a hundred holds' worth, so hold it to that
 	// rather than to a floor it could quietly fall through.
-	if grant/hold < documentedHoldsPerFixtureGrant {
-		t.Errorf("fixture grant covers only %d whole holds (grant=%d hold=%d), want at least %d: "+
+	//
+	// math/big rather than int64 division because both operands are credit
+	// amounts, and this repository computes on money with math/big. Quo
+	// truncates toward zero, which is the floor-rather-than-round behaviour
+	// the ledger uses everywhere else, so a grant worth 99.9 holds reports 99
+	// and fails, which is the direction this guard wants to fail in.
+	holds := new(big.Int).Quo(big.NewInt(grant), big.NewInt(hold))
+	if holds.Cmp(big.NewInt(documentedHoldsPerFixtureGrant)) < 0 {
+		t.Errorf("fixture grant covers only %s whole holds (grant=%d hold=%d), want at least %d: "+
 			"a spec that sends more than one turn would start failing partway through. "+
 			"Re-tune FIXTURE_GRANT_CREDITS in the seeder rather than lowering this bound.",
-			grant/hold, grant, hold, documentedHoldsPerFixtureGrant)
+			holds, grant, hold, documentedHoldsPerFixtureGrant)
 	}
 }
 

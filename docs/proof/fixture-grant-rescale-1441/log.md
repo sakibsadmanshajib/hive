@@ -16,7 +16,7 @@ nothing. The proof below reloads the page and reads what actually persisted.
 
 ## Transcript
 
-```
+```text
 == navigate ==
 url: https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3D[REDACTED]%26retried%3D1
 title: Hive Console
