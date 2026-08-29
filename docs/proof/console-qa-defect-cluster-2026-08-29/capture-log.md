@@ -99,9 +99,20 @@ before  ...,=HYPERLINK( http://qa.invalid   qa2-csv )
 after   ...,"'=HYPERLINK(""http://qa.invalid"",""qa2-csv"")"
 ```
 
-A leading minus on a plain number is left alone, so the ledger's credits
-column still sums in a spreadsheet. `-1+1` is not a plain number and is still
-neutralised.
+A numeric column is left unprefixed so the ledger's credits column still sums
+in a spreadsheet. That exemption is carried by the cell's type rather than by
+sniffing the string, because a text column's `-001` is not a number the reader
+wants normalised to `-1` on the next save:
+
+```
+csvCell(-2000)    "-2000"     a number, from a numeric column
+csvCell("-001")   "'-001"     text, preserved exactly
+csvCell(" =1+1")  "' =1+1"    leading whitespace does not hide the payload
+```
+
+The leading-whitespace case is the standard bypass of a check anchored at
+index 0, since a spreadsheet that trims a cell on import sees what the raw
+first character hid.
 
 Covered here: the request logs export and the billing ledger export, the two
 the issue names. Not covered, and reported separately: Open WebUI's own admin

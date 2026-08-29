@@ -49,12 +49,15 @@ describe("blendedPriceNote", () => {
   });
 
   it("does not print a rate it does not have", () => {
-    const note = blendedPriceNote({
-      kind: "ok",
-      creditsPerMillion: null,
-      windowUnsupportedNote: undefined,
-    });
-
-    expect(note).not.toContain("0 credits per 1M tokens");
+    // Asserted as an exact string on purpose: a "does not contain" assertion
+    // here would go on passing if the function started returning
+    // "null credits per 1M tokens" or an empty string.
+    expect(
+      blendedPriceNote({
+        kind: "ok",
+        creditsPerMillion: null,
+        windowUnsupportedNote: undefined,
+      })
+    ).toBe("No blended price for this window.");
   });
 });

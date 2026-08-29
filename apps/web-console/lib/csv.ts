@@ -11,36 +11,50 @@
 // delivery vehicle, and in a multi-member workspace the person who names an
 // API key and the person who opens the export are not the same person.
 
-const FORMULA_LEAD = /^[=+\-@\t\r]/;
-
-// A plain number is exempt. Every debit in the billing ledger starts with a
-// minus sign, and prefixing those turns a numeric column into text, which
-// breaks SUM in the spreadsheet the export exists to feed. "-1+1" is not a
-// number and is still neutralised.
-const PLAIN_NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+// Leading whitespace is skipped before the first character is tested. A
+// spreadsheet that trims a cell on import sees the payload that " =1+1" hides
+// from a check anchored at index 0, and that is the standard bypass.
+// JavaScript's \s already covers the byte order mark and a non-breaking space
+// alongside the ASCII whitespace, and it covers the tab and the carriage
+// return that are themselves leading characters worth neutralising.
+const FORMULA_LEAD = /^\s*[=+\-@\t\r]/;
 
 const NEEDS_QUOTING = /[",\n\r]/;
 
 /**
- * Escape one value for a CSV cell: neutralise a formula-leading payload with a
- * single quote, then quote and double any embedded quote per RFC 4180.
+ * A cell is either text, which is always neutralised, or a number, which is
+ * never neutralised.
+ *
+ * The exemption is a property of the column rather than of the value, which is
+ * why it travels as a type instead of a regular expression that sniffs the
+ * string. Every debit in the billing ledger opens with a minus sign, so
+ * prefixing those would turn a numeric column into text and break SUM in the
+ * spreadsheet the export exists to feed. Sniffing instead would exempt a text
+ * value that merely looks numeric, and "-001" in a text column is not a number
+ * the reader wants normalised to -1 on the next save.
  */
-export function csvCell(value: string): string {
-  const neutralised =
-    FORMULA_LEAD.test(value) && !PLAIN_NUMBER.test(value) ? `'${value}` : value;
+export type CsvValue = string | number;
+
+/**
+ * Escape one value for a CSV cell: neutralise a formula-leading text payload
+ * with a single quote, then quote and double any embedded quote per RFC 4180.
+ */
+export function csvCell(value: CsvValue): string {
+  if (typeof value === "number") return String(value);
+  const neutralised = FORMULA_LEAD.test(value) ? `'${value}` : value;
   if (!NEEDS_QUOTING.test(neutralised)) return neutralised;
   return `"${neutralised.replace(/"/g, '""')}"`;
 }
 
-/** Join one row of already-stringified values. */
-export function csvRow(cells: readonly string[]): string {
+/** Join one row of values. */
+export function csvRow(cells: readonly CsvValue[]): string {
   return cells.map(csvCell).join(",");
 }
 
 /** Build a whole CSV document from a header row and its data rows. */
 export function toCsv(
   header: readonly string[],
-  rows: readonly (readonly string[])[]
+  rows: readonly (readonly CsvValue[])[]
 ): string {
   return [csvRow(header), ...rows.map(csvRow)].join("\n");
 }

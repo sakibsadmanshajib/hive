@@ -19,7 +19,9 @@ export function LedgerCsvExport({ entries }: LedgerCsvExportProps) {
       entries.map((entry) => [
         entry.created_at,
         entry.entry_type,
-        String(entry.credits_delta),
+        // A number, not a string, so the writer leaves it unprefixed and the
+        // column still sums in a spreadsheet.
+        entry.credits_delta,
         entry.idempotency_key,
       ])
     );

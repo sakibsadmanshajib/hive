@@ -49,23 +49,21 @@ export function UsageLogsCsv({ rows, keyNames }: UsageLogsCsvProps) {
       const key = row.api_key_id
         ? (keyNames[row.api_key_id] ?? `…${row.api_key_id.slice(-6)}`)
         : "—";
+      // Counts travel as numbers rather than strings so the writer leaves them
+      // unprefixed and the columns still sum and chart in a spreadsheet. An
+      // absent value stays an empty string, which is the whole point of the
+      // comment above.
       return [
         row.created_at,
         row.request_id,
         row.model_alias,
         row.status,
-        String(row.input_tokens),
-        String(row.output_tokens),
-        row.cache_read_tokens === undefined
-          ? ""
-          : String(row.cache_read_tokens),
-        row.cache_write_tokens === undefined
-          ? ""
-          : String(row.cache_write_tokens),
-        String(row.hive_credit_delta),
-        row.latency_ms === undefined || row.latency_ms < 0
-          ? ""
-          : String(row.latency_ms),
+        row.input_tokens,
+        row.output_tokens,
+        row.cache_read_tokens ?? "",
+        row.cache_write_tokens ?? "",
+        row.hive_credit_delta,
+        row.latency_ms === undefined || row.latency_ms < 0 ? "" : row.latency_ms,
         row.error_code ?? "",
         key,
       ];
