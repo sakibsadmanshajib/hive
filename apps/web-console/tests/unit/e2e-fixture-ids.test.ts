@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildIds,
   deriveUuid,
+  fixtureGrantIdempotencyKey,
   redactSecrets,
   withRunKey,
 } from "../e2e/support/e2e-fixture-seed.mjs";
@@ -125,6 +126,39 @@ describe("redactSecrets: URL-borne credentials", () => {
     );
     expect(redacted).toBe(
       "#provider_refresh_token=<redacted>&hashed_token=<redacted>"
+    );
+  });
+});
+
+// The grant's idempotency key is what decides whether a re-seed corrects an
+// under-funded fixture account or silently skips it. It used to be
+// `e2e-fixture-grant:<account_id>`, which combined with ignoreDuplicates meant
+// an account seeded during the 2026-08-23 rescale window stayed parked at the
+// stale amount forever: the key matched, so the corrected grant was never
+// written. Putting the amount in the key is what makes a changed amount a
+// different row (issue #1441).
+describe("fixture grant idempotency key", () => {
+  it("is stable for the same account and amount, so a re-seed is a no-op", () => {
+    expect(fixtureGrantIdempotencyKey("acct-1", 10_000_000_000)).toBe(
+      fixtureGrantIdempotencyKey("acct-1", 10_000_000_000)
+    );
+  });
+
+  it("changes when the amount changes, so a corrected grant tops up rather than being skipped", () => {
+    expect(fixtureGrantIdempotencyKey("acct-1", 1_000_000)).not.toBe(
+      fixtureGrantIdempotencyKey("acct-1", 10_000_000_000)
+    );
+  });
+
+  it("keeps two accounts apart", () => {
+    expect(fixtureGrantIdempotencyKey("acct-1")).not.toBe(
+      fixtureGrantIdempotencyKey("acct-2")
+    );
+  });
+
+  it("defaults to the shipped grant amount, so the key tracks the constant", () => {
+    expect(fixtureGrantIdempotencyKey("acct-1")).toBe(
+      `e2e-fixture-grant:acct-1:${10_000_000_000}`
     );
   });
 });
