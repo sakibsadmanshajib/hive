@@ -95,6 +95,16 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 
 	clampZeroCompletionUsage(resp.Usage, chatChoiceTexts(resp.Choices), upstreamID, aliasID, EndpointChatCompletions)
 
+	// usage.prompt_tokens_details and usage.completion_tokens_details are
+	// part of the shape an OpenAI SDK caller is entitled to, and an upstream
+	// that omits them makes the field come and go between two identical
+	// requests. That is exactly what the live conformance suite saw: the same
+	// assertion on the same alias passed in one run and failed in the next.
+	// normalizeReasoningUsage already existed for this and had no caller at
+	// all, so nothing was ever normalized. Zero-filling here, before the
+	// marshal, is what makes the field a promise instead of a coin flip.
+	normalizeReasoningUsage(resp.Usage)
+
 	normalized, err := json.Marshal(resp)
 	if err != nil {
 		return nil, nil, err
