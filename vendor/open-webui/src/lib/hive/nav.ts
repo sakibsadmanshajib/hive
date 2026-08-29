@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'projects' | 'artifacts' | 'knowledge' | 'scheduled';
+export type HiveNavIcon = 'projects' | 'artifacts' | 'knowledge' | 'skills' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -81,6 +81,28 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 		href: '/knowledge',
 		icon: 'knowledge',
 		activePaths: ['/knowledge']
+	},
+	{
+		/*
+		 * The user-created skills library. The owner asked for the ability to
+		 * add a skill, and everything behind one already worked: the table, the
+		 * /api/v1/skills router and the prompt injection in the chat middleware
+		 * were never removed. Only the surface and the permission were missing.
+		 *
+		 * '/skills', not '/workspace/skills'. Issue #783 removed the Workspace
+		 * tab and Caddyfile.owui's @removedSurfaces rule still 404s that path;
+		 * a row pointing there would be dead on arrival, and the target sidebar
+		 * grammar deletes the Workspace container outright.
+		 *
+		 * ponytail: flat for now. This belongs under a "Customize" destination
+		 * alongside the other per-account customisation; move it there when
+		 * that container exists rather than building one for a single item.
+		 */
+		id: 'skills',
+		label: 'Skills',
+		href: '/skills',
+		icon: 'skills',
+		activePaths: ['/skills']
 	},
 	{
 		id: 'scheduled',

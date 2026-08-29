@@ -1113,6 +1113,22 @@ services:
       # Its router refuses on the same flag across all 11 of its routes, so
       # unlike Notes it needs no path block.
       ENABLE_MEMORIES: "false"
+      # The user-created skills library. Upstream defaults this permission to
+      # false, which until 2026-08-23 was invisible here because every tenant
+      # OWNER was promoted to Open WebUI `admin` and passed the surrounding
+      # `role === 'admin' || <permission>` gates regardless. Since
+      # supabase/migrations/20260823_03_owui_role_never_admin.sql only a
+      # platform admin is, so leaving this false would ship the surface to
+      # nobody: the /skills page would bounce every customer home and
+      # POST /api/v1/skills/create would 401.
+      #
+      # `user.permissions` is one persisted config row holding the whole
+      # permission tree, so this line reaches a first boot only.
+      # owui-patches/hive_rag_env_config.py merges the leaf into the stored
+      # tree on every start, which is what makes it take effect on the demo
+      # box. Sharing is deliberately not granted alongside it: a skill stays
+      # private to the account that wrote it.
+      USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS: "true"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides

@@ -44,6 +44,9 @@ class FakeConfig:
         self.stored = dict(stored)
         self.upsert_calls = 0
 
+    async def get(self, key: str, default=None):
+        return self.stored.get(key, default)
+
     async def upsert(self, updates: dict) -> None:
         self.upsert_calls += 1
         self.stored.update(updates)
@@ -530,6 +533,126 @@ def test_reconciled_keys_are_loggable_without_the_secret() -> None:
     assert "audio.stt.openai.api_key" in summary, summary
     assert "hive-tts" in summary, summary
     assert "audio.tts.openai.api_key" in summary, summary
+
+
+# --------------------------------------------------------------------------
+# The permission tree, which is ONE persisted row and therefore cannot ride
+# the flat dictionaries above.
+#
+# `user.permissions` holds the whole nested permission tree in a single config
+# row (open_webui.config.DEFAULT_CONFIG). Writing a row keyed
+# "user.permissions.workspace.skills" would succeed, persist, and be read by
+# nothing at all: `utils/access_control.has_permission` walks the tree inside
+# the one row. That silent no-op is the reason these have their own seam.
+
+PERMISSIONS_KEY = "user.permissions"
+
+
+def _tree(**workspace) -> dict:
+    """A permission tree shaped like Open WebUI's own, trimmed to what these
+    tests read. Siblings are present so a merge that drops them fails."""
+    base = {"models": False, "knowledge": True, "prompts": False, "skills": False, "tools": False}
+    base.update(workspace)
+    return {
+        "workspace": base,
+        "sharing": {"public_skills": False},
+        "chat": {"controls": True, "system_prompt": True},
+    }
+
+
+def test_skills_permission_is_read_from_the_environment() -> None:
+    """The variable is Open WebUI's own name for this permission, so an
+    operator setting it gets the behaviour its documentation implies."""
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "true"}
+    ) == {("workspace", "skills"): True}
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "false"}
+    ) == {("workspace", "skills"): False}
+
+
+def test_unset_or_blank_permission_env_yields_nothing() -> None:
+    """Same posture as every other key here: an unset variable never clobbers
+    a persisted value, so a deployment that chose its own permissions keeps
+    them."""
+    assert hive_rag_env_config.permission_overrides({}) == {}
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "   "}
+    ) == {}
+
+
+def test_merge_sets_the_leaf_without_dropping_its_siblings() -> None:
+    """A whole-tree write is what reaches the database, so a merge that loses
+    a sibling silently revokes a permission nobody asked to change."""
+    before = _tree()
+    after = hive_rag_env_config.merge_permissions(before, {("workspace", "skills"): True})
+
+    assert after["workspace"]["skills"] is True
+    assert after["workspace"]["knowledge"] is True
+    assert after["workspace"]["models"] is False
+    assert after["sharing"] == {"public_skills": False}
+    assert after["chat"] == {"controls": True, "system_prompt": True}
+
+
+def test_merge_does_not_mutate_the_tree_it_was_given() -> None:
+    """Ledger-style immutability, and it is load bearing here: the caller
+    compares the merged tree against the stored one to decide whether to write
+    at all, which an in-place mutation would make impossible."""
+    before = _tree()
+    hive_rag_env_config.merge_permissions(before, {("workspace", "skills"): True})
+    assert before["workspace"]["skills"] is False
+
+
+def test_merge_creates_a_missing_branch() -> None:
+    """An older deployment's persisted tree predates a permission key, so the
+    branch may be absent rather than false."""
+    after = hive_rag_env_config.merge_permissions({}, {("workspace", "skills"): True})
+    assert after == {"workspace": {"skills": True}}
+
+
+def test_reconcile_writes_the_whole_permission_tree_back() -> None:
+    """The #722 trap applied to permissions: the row was seeded on first boot
+    with skills false and has outranked the environment ever since."""
+    config = FakeConfig({PERMISSIONS_KEY: _tree()})
+    reconcile(config, {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "true"})
+
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["skills"] is True
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["knowledge"] is True
+
+
+def test_reconcile_never_writes_a_flat_dotted_permission_row() -> None:
+    """The whole reason this seam is separate. A row nothing reads is worse
+    than no row, because the deployment then looks configured."""
+    config = FakeConfig({PERMISSIONS_KEY: _tree()})
+    reconcile(config, {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "true"})
+
+    assert "user.permissions.workspace.skills" not in config.stored
+
+
+def test_reconcile_leaves_permissions_alone_when_the_env_is_unset() -> None:
+    config = FakeConfig({PERMISSIONS_KEY: _tree(skills=True)})
+    reconcile(config, {})
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["skills"] is True
+
+
+def test_reconcile_skips_the_write_when_the_tree_already_agrees() -> None:
+    """No pointless row rewrite on every boot, and it proves the comparison is
+    against the merged tree rather than against the override alone."""
+    config = FakeConfig({PERMISSIONS_KEY: _tree(skills=True)})
+    reconcile(config, {"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "true"})
+    assert config.upsert_calls == 0
+
+
+def test_compose_grants_the_skills_permission() -> None:
+    """The deployment's own answer, read from the file that reaches the box.
+    A reconcile that works and a compose file that never sets the variable is
+    the shape that passes every unit test and changes nothing in production."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text()
+    assert re.search(
+        r"USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS:\s*\"?true\"?", compose
+    ), "docker-compose.yml does not grant workspace.skills"
 
 
 def main() -> None:

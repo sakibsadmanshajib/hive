@@ -118,6 +118,15 @@ REWRITES = (
         # first pass on the theory that Claude Enterprise ships Agent Skills,
         # so it had a counterpart; it does not on this deployment, where the
         # tab is the only thing that exists.
+        #
+        # 2026-08-29: there is a Hive skills product now, and it is NOT this
+        # tab. The owner asked for the ability to add a skill, so the surface
+        # ships at its own Hive route with its own navigation row, outside the
+        # Workspace container. The Workspace tab stays removed and
+        # Caddyfile.owui goes on 404ing its path, so this entry is unchanged
+        # and still correct. Like every rewrite in this table it now only
+        # guards against digest drift, because the bundle it edits is
+        # discarded by the frontend stage.
         surface="workspace-skills-tab",
         upstream="src/routes/(app)/workspace/+layout.svelte, the {#if ...workspace?.skills} tab",
         find=(

@@ -42,6 +42,15 @@
 		<path
 			d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
 		/>
+	{:else if name === 'skills'}
+		<!-- Lucide "sparkles", the reference product's own glyph for the
+		     customisation family. Same 24 grid and 1.5 stroke as its neighbours. -->
+		<path
+			d="M9.9 4.2 11 2l1.1 2.2 2.4.4-1.7 1.7.4 2.4L11 7.6 8.8 8.7l.4-2.4L7.5 4.6z"
+		/>
+		<path d="m18 13 .7 1.5 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z" />
+		<path d="M5.5 11.5 12 18l-3.5 3.5L2 15z" />
+		<path d="m9 15 3-3" />
 	{:else if name === 'scheduled'}
 		<!-- Lucide "clock", same 24 grid and stroke as the other two glyphs. -->
 		<circle cx="12" cy="12" r="10" />

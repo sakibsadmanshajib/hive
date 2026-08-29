@@ -129,6 +129,28 @@ ENV ENABLE_NOTES=false \
     ENABLE_MEMORIES=false \
     ENABLE_VERSION_UPDATE_CHECK=false
 
+# The user-created skills library, on by default for the same reason the four
+# above are off by default: the product's posture belongs to the image, not to
+# one compose file that a bare run or the next proof harness can fail to
+# repeat.
+#
+# Upstream defaults this permission to false. That was invisible here until
+# 2026-08-23, because every tenant OWNER was promoted to Open WebUI `admin`
+# and passed the surrounding `role === 'admin' || <permission>` gates
+# regardless; since supabase/migrations/20260823_03_owui_role_never_admin.sql
+# only a platform admin is. Leaving it false now would ship the surface to
+# nobody: /skills would bounce every customer home and POST
+# /api/v1/skills/create would answer 401.
+#
+# Unlike the flags above this is not its own config key. It is a leaf inside
+# the single persisted `user.permissions` row, so this line governs a first
+# boot and owui-patches/hive_rag_env_config.py merges it into an
+# already-booted deployment's stored tree. Sharing is deliberately not granted
+# with it: USER_PERMISSIONS_WORKSPACE_SKILLS_ALLOW_SHARING and its public twin
+# stay at upstream's false, so a skill is private to the account that wrote it
+# and no member can put authored text into another account's prompt.
+ENV USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS=true
+
 # Root cause of "(Open WebUI)" in /api/config, /manifest.json,
 # /opensearch.xml, and the client-rendered <title>/meta description: this
 # 2-line block. WEBUI_NAME itself is still fully configurable via env var
@@ -423,6 +445,22 @@ COPY deploy/docker/owui-patches/apply_router_authz_family_patch.py /tmp/apply_ro
 RUN python3 /tmp/apply_retrieval_authz_patch.py \
     && python3 /tmp/apply_router_authz_family_patch.py
 
+# issue #1396, the skills half. Open WebUI's shared grant filter,
+# utils/access_control.filter_allowed_access_grants, strips public grants and
+# individual user grants from a non-admin write and never inspects group
+# grants at all, so a hand-built payload can grant a resource to any group id
+# on this shared instance including another tenant's. Skills are where that
+# matters most, because a skill body is appended verbatim to the chat request
+# as a system message, making a cross-tenant grant prompt injection rather
+# than an over-broad share. Not reachable today (a non-admin cannot enumerate
+# another tenant's group id) but that is secrecy of an identifier rather than
+# an authorization check. #1396 tracks the general case across the other
+# routers; this closes the one whose payload reaches a model prompt.
+COPY deploy/docker/owui-patches/apply_skill_group_grants_patch.py /tmp/apply_skill_group_grants_patch.py
+RUN python3 /tmp/apply_skill_group_grants_patch.py \
+    && test "$(grep -c '# hive (#1396)' /app/backend/open_webui/routers/skills.py)" -eq 4 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())"
+
 # issue #1191: two residuals from the #1190-family review that the #1186 sweep
 # had classified as false positives. chats.py clone_shared_chat_by_id let a
 # bare instance admin skip the shared-chat AccessGrants check and read (clone)
@@ -540,4 +578,6 @@ RUN set -eu; \
       echo "the vendor social badges came back in the built bundle" >&2; exit 1; }; \
     ! grep -rqF '/admin/settings/code-execution' /app/build/_app/immutable || { \
       echo "the Open WebUI admin panel came back in the built bundle (#949)" >&2; exit 1; }; \
+    grep -rqF '/skills/create' /app/build/_app/immutable || { \
+      echo "the built bundle carries no user-created skills surface" >&2; exit 1; }; \
     echo "hive: shell present, removed surfaces absent"
