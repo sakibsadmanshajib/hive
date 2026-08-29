@@ -1198,9 +1198,13 @@ func main() {
 
 		// Scheduled agent tasks ("routines"): the CRUD surface plus the
 		// minute tick that turns due schedules into real tasks through
-		// agentTaskSvc.CreateTask — the SAME service path a manual creation
-		// uses, so metering, quota and engine gating apply to scheduled runs
-		// identically. The scheduler only starts when the engine itself is
+		// agentTaskSvc.CreateTask, the same service path a manual creation
+		// uses, so engine gating and the launcher's sandbox quota apply to
+		// scheduled runs identically. Metering does NOT come with that path;
+		// this comment claimed it did, in the same words as the two in
+		// agentsched that issue #1490 corrects, and the claim being in three
+		// places is why nobody checked it. Solvency is gated explicitly, just
+		// below. The scheduler only starts when the engine itself is
 		// configured (same gate as the poller above): without an engine every
 		// scheduled run would fail into last_error and burn a cadence per
 		// deployment restart for nothing.
@@ -1209,8 +1213,11 @@ func main() {
 		// creating a routine is refused outright for a tenant that cannot cover
 		// the floor, and every launch re-asks, because a tenant solvent when
 		// the routine was created can be insolvent by its tenth run.
-		// ledgerSvc is assigned in the same pool != nil arm above, so it is
-		// non-nil wherever this line runs.
+		// ledgerSvc is assigned in an earlier `if pool != nil` block, a
+		// different block from this one but guarded on the same condition:
+		// pool is assigned once, above both, and never reassigned. So it is
+		// non-nil wherever this line runs, and NewPgxSolvency's nil check is a
+		// guard against a future rewiring rather than against today's flow.
 		scheduleSolvency := agentsched.NewPgxSolvency(pool, ledgerSvc)
 		scheduleSvc := agentsched.NewService(scheduleRepo, scheduleSolvency, nil)
 		agentScheduleHandler = agentsched.NewHandler(scheduleSvc)

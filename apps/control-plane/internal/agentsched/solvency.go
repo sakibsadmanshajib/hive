@@ -77,23 +77,53 @@ func NewPgxSolvency(pool *pgxpool.Pool, balances balanceReader) Solvency {
 	return &pgxSolvency{pool: pool, balances: balances}
 }
 
+// deploymentEnterpriseEdge mirrors one of the two values allowed by
+// public.tenants.deployment's CHECK constraint
+// (20260516_01_phase19_tenants.sql), and the edge-api constant
+// metering.DeploymentEnterpriseEdge. Restated here rather than imported
+// because that constant lives in a different service and a different module.
+const deploymentEnterpriseEdge = "ENTERPRISE_EDGE"
+
 func (s *pgxSolvency) Check(ctx context.Context, tenantID uuid.UUID, floorCredits int64) error {
-	var accountID uuid.UUID
+	var deployment string
+	var accountID *uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		SELECT account_id FROM public.tenant_billing_accounts WHERE tenant_id = $1
-	`, tenantID).Scan(&accountID)
+		SELECT t.deployment, tba.account_id
+		FROM public.tenants t
+		LEFT JOIN public.tenant_billing_accounts tba ON tba.tenant_id = t.id
+		WHERE t.id = $1
+	`, tenantID).Scan(&deployment, &accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// An unmapped tenant has no billing account, so it holds no credits and
-		// cannot pay for a sandbox. Reported as insufficient rather than as a
-		// lookup failure because it is a settled answer, not an unknown one:
-		// the row's absence is durable state, and a retry reads the same thing.
+		// The tenant does not exist. Nothing can be charged for what its
+		// sandbox spends, so it does not get one. Reported as insufficient
+		// rather than as a lookup failure because it is a settled answer, not
+		// an unknown one: a retry reads exactly the same thing.
 		return ErrInsufficientCredits
 	}
 	if err != nil {
-		return fmt.Errorf("agentsched: resolve billing account: %w", err)
+		return fmt.Errorf("agentsched: resolve tenant billing state: %w", err)
 	}
 
-	balance, err := s.balances.GetBalance(ctx, accountID)
+	// Posture before balance, deliberately, and before the account is even
+	// looked at. A Hive Enterprise tenant runs its own box and has no prepaid
+	// relationship with Hive at all, so it holds no credits and never will.
+	// Refusing it for an empty balance would take routines off the air across
+	// the entire self-hosted product, which is a mode this repository ships,
+	// not a hypothetical. Same precedence and the same reason as the chat
+	// path's own posture check (apps/edge-api/internal/chat/billing.go, and
+	// the enterprise_shadow rule in metering/precedence.go), so the two
+	// surfaces answer an Enterprise tenant the same way.
+	if deployment == deploymentEnterpriseEdge {
+		return nil
+	}
+	if accountID == nil {
+		// A Hive Cloud tenant with no billing account cannot be charged for
+		// what the sandbox goes on to spend. This is the same state, and the
+		// same refusal, that the chat path reports as billing not configured.
+		return ErrInsufficientCredits
+	}
+
+	balance, err := s.balances.GetBalance(ctx, *accountID)
 	if err != nil {
 		return fmt.Errorf("agentsched: read balance: %w", err)
 	}

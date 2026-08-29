@@ -22,12 +22,16 @@ import (
 // It does NOT mean a scheduled run inherits the checks a manual one passes
 // before reaching this seam. This comment used to claim it did, and the claim
 // was false in the direction that mattered: agenttask.Service.CreateTask
-// meters nothing and asks nothing about the tenant's balance, and the
-// solvency gate on the manual route lives a layer above it in edge-api, which
-// the scheduler never traverses. A tenant at zero credits could therefore
-// create a routine and have it launch sandboxes on a cadence forever (issue
-// #1490). What closes that is the explicit s.solvency check in RunOnce below,
-// not this seam.
+// meters nothing and asks nothing about the tenant's balance.
+//
+// Nor does the manual route carry a solvency check that this path could be
+// said to skip. It has none today either; one is being added a layer above
+// CreateTask, in edge-api's own handler, by the separate change for issue
+// #669, and edge-api is a hop the scheduler never traverses in any case. So
+// when this comment was written neither half existed, and a tenant at zero
+// credits could create a routine and have it launch sandboxes on a cadence
+// forever (issue #1490). What closes that here is the explicit s.solvency
+// check in RunOnce below, not this seam and not anything upstream of it.
 type TaskCreator interface {
 	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions, bearerJWT string) (agenttask.Task, error)
 }
