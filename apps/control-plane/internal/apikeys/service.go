@@ -156,9 +156,26 @@ func (s *Service) requireBillingTenant(ctx context.Context, accountID uuid.UUID)
 	return nil
 }
 
-// CreateKey issues a new API key. The raw secret is returned once and
-// must not be logged, persisted, or included in list responses.
+// CreateKey issues a new API key under a freshly generated id. The raw secret
+// is returned once and must not be logged, persisted, or included in list
+// responses.
 func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
+	return s.CreateKeyWithID(ctx, accountID, actorUserID, uuid.New(), input)
+}
+
+// CreateKeyWithID is CreateKey under a caller-chosen key id.
+//
+// One caller, and it is the reason this exists: the per-task agent credential
+// (issue #1507) uses the agent task's own id as its key id, so the task row
+// needs no extra column to remember which credential its sandbox spends, and
+// revoking that credential is a pure function of the task. The id is the
+// table's primary key, so a collision fails the insert rather than overwriting
+// an existing key; nothing here trusts the caller to have picked a free one.
+//
+// Not reachable from the customer HTTP surface. Handler builds its
+// CreateKeyInput from the decoded request body and calls CreateKey, which
+// always generates the id itself, so no request field reaches this parameter.
+func (s *Service) CreateKeyWithID(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
 	if err := s.requireBillingTenant(ctx, accountID); err != nil {
 		return CreateKeyResult{}, err
 	}
@@ -168,7 +185,6 @@ func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUI
 		return CreateKeyResult{}, fmt.Errorf("apikeys: generate secret: %w", err)
 	}
 
-	keyID := uuid.New()
 	key := APIKey{
 		ID:              keyID,
 		AccountID:       accountID,

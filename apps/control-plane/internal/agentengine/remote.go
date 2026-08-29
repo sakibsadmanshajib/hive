@@ -73,6 +73,10 @@ func (r *Remote) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		"pack":         string(t.Pack),
 		"instructions": t.Instructions,
 		"bearer_jwt":   t.BearerJWT,
+		// The per-task gateway credential (#1507). Travels the same Unix
+		// socket the internal token already authenticates, never a network
+		// interface, and is never logged on either side.
+		"llm_api_key": t.LLMAPIKey,
 	}, &out)
 	if err != nil {
 		return "", err

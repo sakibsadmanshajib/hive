@@ -20,6 +20,11 @@ type Service struct {
 	// src is the optional event/files surface (nil when no engine arm is
 	// wired). See WithEventSource.
 	src EventSource
+	// creds mints the per-task gateway credential the sandbox spends, and
+	// revokes it when the task ends. Never nil: NewService defaults it to
+	// notConfiguredCredentials, which refuses every launch rather than let a
+	// sandbox fall back to the launcher's process-wide key (#1507).
+	creds TaskCredentials
 
 	// launches counts the background launch goroutines CreateTask starts.
 	// Nothing on the request path waits on it; see WaitIdle.
@@ -35,7 +40,7 @@ func NewService(repo Repository, engine Engine, opts ...ServiceOption) *Service 
 	if engine == nil {
 		engine = NotConfiguredEngine{}
 	}
-	s := &Service{repo: repo, engine: engine}
+	s := &Service{repo: repo, engine: engine, creds: notConfiguredCredentials{}}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -52,6 +57,20 @@ type ServiceOption func(*Service)
 // posture, not a caller error.
 func WithEventSource(src EventSource) ServiceOption {
 	return func(s *Service) { s.src = src }
+}
+
+// WithTaskCredentials attaches the per-task credential seam (#1507). Without
+// it a Service mints nothing and every launch fails closed, the same shape
+// edge-api's sessionbilling uses for a handler built without its accounting
+// seam: a surface that cannot attribute what a tenant spends must not launch
+// the thing that spends it. A nil argument is ignored rather than installed,
+// so a caller that wires this optionally cannot silently disarm it.
+func WithTaskCredentials(creds TaskCredentials) ServiceOption {
+	return func(s *Service) {
+		if creds != nil {
+			s.creds = creds
+		}
+	}
 }
 
 // engineUnavailableMessage is the customer-visible error_message persisted
@@ -232,7 +251,22 @@ func (s *Service) launch(ctx context.Context, t Task) {
 		})
 	}()
 
-	sessionRef, err := s.engine.Launch(launchCtx, t)
+	// The sandbox must spend a credential that resolves to THIS task's tenant,
+	// or it must not start at all (#1507). Falling back to the launcher's
+	// process-wide key is what made every tenant's agent inference settle
+	// against one Hive-owned account and charge the customer nothing, so a
+	// mint failure fails the task instead. Fail-closed, per D-034: never serve
+	// work the authorizing accounting step did not cover.
+	secret, err := s.creds.Mint(launchCtx, t)
+	if err != nil {
+		slog.Default().ErrorContext(ctx, "agenttask: could not mint the task's gateway credential, refusing to launch",
+			"task_id", t.ID, "tenant_id", t.TenantID, "error", err)
+		s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
+		return
+	}
+	t.LLMAPIKey = secret
+
+	sessionRef, err = s.engine.Launch(launchCtx, t)
 	switch {
 	case err == nil:
 		if _, terr := s.repo.Transition(ctx, t.TenantID, t.UserID, t.ID, StatusRunning, sessionRef, "", ""); terr != nil {
@@ -287,7 +321,42 @@ func (s *Service) recordLaunchFailure(ctx context.Context, t Task, message strin
 		slog.Default().WarnContext(ctx, "agenttask: could not record a failed launch",
 			"task_id", t.ID, "error", err)
 	}
+	RevokeTaskCredential(ctx, s.creds, t)
 }
+
+// RevokeTaskCredential ends one task's gateway credential, best effort.
+//
+// Exported because the two writers that take a task terminal live in different
+// types: Service (a launch that failed, a cancel) and Poller (a run that
+// finished, or that the poller declared dead). Both call this rather than
+// keeping their own copy, so there is one place that decides what a revocation
+// failure means.
+//
+// Never returns an error, and never blocks a terminal transition. By the time
+// it runs the task's terminal state is already recorded, and the credential
+// carries an expiry that ends it regardless, so a failure here is an operator
+// problem (a credential living longer than it should) rather than something
+// the customer can act on. nil creds is the poller's unwired posture and is
+// silently a no-op; a Service always has a non-nil one.
+func RevokeTaskCredential(ctx context.Context, creds TaskCredentials, t Task) {
+	if creds == nil {
+		return
+	}
+	revokeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), credentialRevokeTimeout)
+	defer done()
+	if err := creds.Revoke(revokeCtx, t); err != nil {
+		if errors.Is(err, ErrTaskCredentialsNotConfigured) {
+			return
+		}
+		slog.Default().WarnContext(revokeCtx, "agenttask: could not revoke the task's gateway credential, it stays live until it expires",
+			"task_id", t.ID, "tenant_id", t.TenantID, "error", err)
+	}
+}
+
+// credentialRevokeTimeout bounds one revocation. It is two database writes and
+// a cache invalidation, so seconds are generous; the expiry is what covers a
+// revocation that times out anyway.
+const credentialRevokeTimeout = 10 * time.Second
 
 // stopEngineSession stops one launcher session, which is what releases the
 // concurrency slot that session holds (issue #886). Errors are logged and
@@ -441,6 +510,13 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (T
 	// logged for an operator rather than returned. Tests wait on WaitIdle.
 	sessionRef := cancelled.EngineSessionRef
 	stopCtx := context.WithoutCancel(ctx)
-	s.background(func() { s.stopEngineSession(stopCtx, id, sessionRef) })
+	s.background(func() {
+		s.stopEngineSession(stopCtx, id, sessionRef)
+		// After the stop, not before: while the sandbox is still alive it may
+		// be mid-turn, and revoking first would fail that turn with an auth
+		// error the customer never caused. The task is already terminal
+		// either way.
+		RevokeTaskCredential(stopCtx, s.creds, cancelled)
+	})
 	return cancelled, nil
 }

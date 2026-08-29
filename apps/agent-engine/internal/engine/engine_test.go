@@ -36,6 +36,12 @@ import (
 // where a real deployment sends a gateway key.
 const fixtureCredential = "test-key-not-a-real-one"
 
+// perTaskFixtureCredential stands in for the credential control-plane mints on
+// one task's own tenant billing account (#1507). Deliberately different from
+// fixtureCredential, so a test can tell "spent the task's key" apart from
+// "spent the process-wide key", which is the whole distinction.
+const perTaskFixtureCredential = "test-per-task-key-not-a-real-one"
+
 type fakeAgentServer struct {
 	mu              sync.Mutex
 	conversationID  uuid.UUID
@@ -752,6 +758,78 @@ func TestSandboxEngine_Cancel_InterruptsAndKillsProcess(t *testing.T) {
 	}
 	if status != StatusCancelled {
 		t.Fatalf("expected cancelled after Cancel, got %s", status)
+	}
+}
+
+// Issue #1507: agent tasks charged their tenant nothing. The sandbox's model
+// calls did reach the gateway and were metered there, but they carried
+// Config.LLMAPIKey, one Hive-owned credential shared by every tenant, so the
+// charge landed on that account and the customer who submitted the task was
+// never billed. Control-plane now mints a credential on the task's own tenant
+// billing account and sends it with the launch; this is the assertion that the
+// launcher actually spends it.
+//
+// Both packs, because the live report observed the zero charge on
+// knowledge-work-pack and coding-pack alike.
+func TestSandboxEngine_Launch_PrefersThePerTaskCredentialOverTheProcessWideOne(t *testing.T) {
+	for _, pack := range []string{"knowledge-work-pack", "coding-pack"} {
+		t.Run(pack, func(t *testing.T) {
+			var fake *fakeAgentServer
+			e := newTestEngine(t, &fake)
+			e.cfg.LLMModel = "openai/hive-test-model"
+			e.cfg.LLMBaseURL = "https://gateway.example/v1"
+			e.cfg.LLMAPIKey = fixtureCredential
+
+			task := testTask()
+			task.Pack = pack
+			task.LLMAPIKey = perTaskFixtureCredential
+
+			if _, err := e.Launch(context.Background(), task); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+
+			req := fake.startConversationRequest()
+			if req.AgentSettings == nil {
+				t.Fatal("expected inline agent_settings")
+			}
+			// Value and provenance in one comparison: the key the sandbox is
+			// given must be the task's own, and must not be the process-wide
+			// one. Checking only "not empty" would pass against the defect,
+			// since the process-wide key is not empty either.
+			got := req.AgentSettings.LLM.APIKey
+			if got != perTaskFixtureCredential || got == e.cfg.LLMAPIKey {
+				t.Fatalf("llm.api_key is the process-wide credential, so this task's tenant is charged nothing (#1507); want the per-task one")
+			}
+		})
+	}
+}
+
+// A launcher newer than its control-plane still has to run: an empty per-task
+// credential keeps the configured one, which is the behaviour that shipped
+// before #1507 and is what a rolling deploy briefly produces.
+func TestSandboxEngine_Launch_FallsBackToTheConfiguredCredentialWhenTheTaskCarriesNone(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.cfg.LLMModel = "openai/hive-test-model"
+	e.cfg.LLMBaseURL = "https://gateway.example/v1"
+	e.cfg.LLMAPIKey = fixtureCredential
+
+	task := testTask()
+	// Asserted absent on purpose, and stated here rather than left implicit:
+	// this is the pre-#1507 shape, a task whose control-plane never minted a
+	// credential, and the launcher must not refuse it. Refusing is
+	// control-plane's job, where the attribution decision is actually made.
+	task.LLMAPIKey = ""
+
+	if _, err := e.Launch(context.Background(), task); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	req := fake.startConversationRequest()
+	if req.AgentSettings == nil {
+		t.Fatal("expected inline agent_settings")
+	}
+	if req.AgentSettings.LLM.APIKey != e.cfg.LLMAPIKey {
+		t.Fatal("llm.api_key did not fall back to the configured credential")
 	}
 }
 

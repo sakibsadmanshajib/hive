@@ -71,6 +71,14 @@ type launchRequest struct {
 	// apps/agent-engine/internal/engine.Task.BearerJWT's doc comment). Never
 	// logged.
 	BearerJWT string `json:"bearer_jwt"`
+	// LLMAPIKey is the per-task gateway credential control-plane minted on
+	// this task's own tenant billing account (#1507). When set it replaces the
+	// process-wide HIVE_AGENT_ENGINE_LLM_API_KEY for this session only, which
+	// is what makes the sandbox's model calls settle against the customer who
+	// submitted the task instead of the one Hive-owned account every tenant
+	// used to share. Empty keeps the configured key, so an older control-plane
+	// against a newer launcher behaves exactly as it did before. Never logged.
+	LLMAPIKey string `json:"llm_api_key"`
 }
 
 type launchResponse struct {
@@ -234,6 +242,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			Pack:         req.Pack,
 			Instructions: req.Instructions,
 			BearerJWT:    req.BearerJWT,
+			LLMAPIKey:    req.LLMAPIKey,
 		})
 		if err != nil {
 			log.Printf("agent-engine: launch task %s: %v", req.ID, err)
