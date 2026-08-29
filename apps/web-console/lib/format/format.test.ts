@@ -140,6 +140,13 @@ describe("formatUsdBalanceFromCredits", () => {
     expect(formatUsdBalanceFromCredits(99_996_364_207)).toBe("$99.99");
   });
 
+  it("truncates in credits, so a float product cannot shave a cent off a real balance", () => {
+    // 8.29 times 100 is 828.9999999999999 in IEEE 754, so truncating in
+    // dollars would print $8.28 here.
+    expect(formatUsdBalanceFromCredits(8_290_000_000)).toBe("$8.29");
+    expect(formatUsdBalanceFromCredits(1_230_000_000)).toBe("$1.23");
+  });
+
   it("keeps a sub-cent balance visible instead of printing zero", () => {
     expect(formatUsdBalanceFromCredits(662_000)).toBe("$0.000662");
   });

@@ -164,8 +164,15 @@ export function formatUsdBalanceFromCredits(credits: number): string {
   const usd = credits / CREDITS_PER_USD;
   const magnitude = Math.floor(Math.log10(Math.abs(usd)));
   const digits = Math.min(9, Math.max(2, 2 - magnitude));
-  const factor = 10 ** digits;
-  const truncated = Math.trunc(usd * factor) / factor;
+  // Truncate in credits rather than in dollars. The dollar product is a float:
+  // 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
+  // 828.9999999999999, and truncating that prints $8.28, understating a real
+  // balance by a cent. CREDITS_PER_USD is a power of ten and digits never
+  // exceeds nine, so creditsPerStep is an exact integer and this is exact for
+  // every integer balance.
+  const creditsPerStep = CREDITS_PER_USD / 10 ** digits;
+  const truncated =
+    (Math.trunc(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
