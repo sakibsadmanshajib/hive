@@ -112,7 +112,10 @@ describe("SDK typed exception classes", () => {
       expect(err).toBeInstanceOf(APIError);
       const apiErr = err as APIError;
       expect(apiErr.status).toBeGreaterThanOrEqual(400);
-      expect(apiErr.status).toBeLessThan(600);
+      // Below 500, not below 600. This test is named for never returning a
+      // 5xx, and an upper bound of 600 accepted exactly the failure it claims
+      // to rule out.
+      expect(apiErr.status).toBeLessThan(500);
     }
   }, 30000);
 });

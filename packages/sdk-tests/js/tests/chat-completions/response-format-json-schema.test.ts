@@ -45,7 +45,13 @@ describe("Chat Completions response_format: json_schema", () => {
     expect(typeof content).toBe("string");
 
     const parsed = JSON.parse(content!) as Record<string, unknown>;
-    expect(typeof parsed.city).toBe("string");
-    expect(typeof parsed.population_millions).toBe("number");
+    // The schema sets additionalProperties: false, so the object must be
+    // exactly these two keys. Checking the two types individually accepted a
+    // response carrying extra keys, which is the half of the schema contract
+    // that had no coverage at all.
+    expect(parsed).toEqual({
+      city: expect.any(String),
+      population_millions: expect.any(Number),
+    });
   });
 });

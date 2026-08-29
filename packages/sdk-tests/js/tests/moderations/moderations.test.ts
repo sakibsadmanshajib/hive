@@ -30,7 +30,9 @@ describe("Moderations (declared explicitly_unsupported_at_launch)", () => {
       // errors/unsupported-endpoint.test.ts for both).
       expect(body?.code).toBe("endpoint_unsupported");
       const message = body?.message as string | undefined;
-      expect(message ?? "").not.toMatch(/provider|upstream|openai/i);
+      expect(message ?? "").not.toMatch(
+        /provider|upstream|openai|groq|openrouter|deepseek|gemini/i,
+      );
     }
   });
 });

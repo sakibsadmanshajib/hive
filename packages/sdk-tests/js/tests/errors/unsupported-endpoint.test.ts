@@ -37,6 +37,9 @@ describe("Unsupported endpoint errors", () => {
       expect(message).not.toMatch(/provider/i);
       expect(message).not.toMatch(/upstream/i);
       expect(message).not.toMatch(/openai/i);
+      // The words above are the abstraction leaking. These are the leak
+      // itself, and only asserting the former let the latter through.
+      expect(message).not.toMatch(/groq|openrouter|deepseek|gemini/i);
     }
   });
 

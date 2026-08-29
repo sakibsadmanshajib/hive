@@ -82,7 +82,10 @@ describe("Chat Completions sampling parameters", () => {
     });
 
     expect(response.usage).toBeDefined();
-    expect(response.usage!.completion_tokens).toBeLessThanOrEqual(32);
+    // The ceiling the caller asked for, not a rounded-up version of it. An
+    // allowance of 32 here would pass a route that quietly capped at 32
+    // instead of 8, which is the same defect this test exists to catch.
+    expect(response.usage!.completion_tokens).toBeLessThanOrEqual(8);
   });
 
   it("honors stop sequences", async () => {
