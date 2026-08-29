@@ -4,7 +4,6 @@ import { NextIntlClientProvider } from "next-intl";
 
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import NotFound from "@/app/not-found";
-import { ObservabilityTiles } from "@/components/analytics/observability-tiles";
 import { DataTable } from "@/components/ui/data-table";
 import { formatDeltaPercent } from "@/components/analytics/analytics-overview-section";
 import type { ViewerMembership } from "@/lib/control-plane/client";
@@ -206,17 +205,11 @@ describe("404 page", () => {
   });
 });
 
-describe("observability tiles", () => {
-  it("never names a server-side environment variable in customer copy", () => {
-    // GRAFANA_BASE_URL is unset under vitest, so the two Grafana tiles render
-    // their disabled state, which is the branch that used to print the
-    // variable name straight into the page.
-    render(<ObservabilityTiles />);
-
-    expect(document.body.textContent ?? "").not.toContain("GRAFANA_BASE_URL");
-    expect(screen.getAllByText("Not available on this deployment.").length).toBe(2);
-  });
-});
+// The observability-tiles assertions that used to sit here now live beside the
+// component, in components/analytics/observability-tiles.test.tsx. The two
+// Grafana tiles they described were removed, so the disabled-state assertion no
+// longer had a subject, and the replacement guard needs to control
+// GRAFANA_BASE_URL per case rather than rely on it being unset under vitest.
 
 describe("delta percentage display cap", () => {
   it("prints exact figures below the cap", () => {
