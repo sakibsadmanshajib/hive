@@ -1275,9 +1275,41 @@ services:
       # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
       # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
-      # Serves rag.file.max_size to clients as file.max_size so MessageInput's
-      # size guard fires client-side instead of failing opaquely server-side (#1108 follow-up).
-      RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-}
+      # Chat upload limits (#1405). Both are persistent config, so both are
+      # reconciled by owui-patches/hive_rag_env_config.py for the same
+      # first-boot-wins reason as every key around them. This line existed from
+      # the #1108 follow-up with an EMPTY default and a comment claiming it
+      # served the client-side guard; it did not, because the key was missing
+      # from that reconcile map, so no value set here could reach a box that had
+      # already booted. Measured live 2026-08-29: a 28.6 MB attachment produced
+      # a composer chip and a POST that had still not returned after 105
+      # seconds, with no progress, no timeout and no error, and evil.exe
+      # uploaded and was processed with a 200.
+      #
+      # 25 is not a preference. RAG_MAX_UPLOAD_BYTES above is 26214400 on
+      # edge-api and on the markitdown sidecar, and Open WebUI multiplies its
+      # megabyte value by 1024 * 1024, so this is byte for byte the ceiling
+      # Hive already enforces on its own document ingest path. Accepting more
+      # in chat than the product accepts elsewhere would give two different
+      # answers to "how large a document can Hive read". Raise it in .env if a
+      # real document is refused; the refusal is immediate and names the limit,
+      # so it is visible rather than a stall.
+      RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-25}
+      # The allowlist is derived by a rule rather than by taste: everything this
+      # deployment can turn into text, which is Open WebUI's own
+      # `known_source_ext` plus the extensions `Loader._get_loader` names in its
+      # own branches (pdf, doc, docx, odt, ppt, pptx, xls, xlsx, csv, msg, rst,
+      # xml, html, htm, md, epub) plus txt. A narrower list would refuse a file
+      # the product could have read, which fails in front of a user and is worse
+      # than no cap. scripts/test_owui_rag_env_config.py asserts that derivation
+      # against the vendored loader, so an upstream bump that adds a format
+      # fails there rather than silently starting to refuse it.
+      #
+      # An allowlist is the only type control upstream offers, and it is needed
+      # because `_get_loader`'s final `else` falls back to TextLoader for any
+      # unrecognised extension: without one, an executable is "processed" into
+      # mojibake, stored, and served back on request.
+      RAG_ALLOWED_FILE_EXTENSIONS: ${RAG_ALLOWED_FILE_EXTENSIONS:-bash,bat,c,cmd,conf,cpp,cs,css,csv,dart,db2,doc,dockerfile,docx,env,epub,erl,ex,exs,go,h,hpp,hs,hsc,htm,html,ini,java,js,json,jsx,lhs,log,lua,m,md,mm,msg,nginxconf,odt,pdf,perl,php,pl,plsql,pm,ppt,pptx,ps1,py,r,rb,rs,rst,scala,sh,sql,svelte,swift,toml,ts,tsx,txt,vue,xls,xlsx,xml,yaml,yml}
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
       # first-boot-wins reason as the RAG keys above.

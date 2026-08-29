@@ -655,6 +655,161 @@ def test_compose_grants_the_skills_permission() -> None:
     ), "docker-compose.yml does not grant workspace.skills"
 
 
+# --------------------------------------------------------------------------
+# Chat upload limits (issue #1405).
+#
+# Measured live 2026-08-29: a 28.6 MB attachment produced a composer chip and a
+# POST that had not returned after 105 seconds, with no progress, no timeout and
+# no error, and a Windows executable uploaded and processed cleanly. Open WebUI
+# already enforces both, in the pinned image's own
+# `routers/files.py.upload_file_handler`: an extension outside
+# `rag.file.allowed_extensions` is refused with 400 before the bytes reach
+# storage, and a file over `rag.file.max_size` megabytes is refused with 413 and
+# the stored object deleted. Both were simply unset, because the compose
+# variable was never in the reconcile map and so was the #722 silent no-op.
+
+
+def test_upload_size_cap_is_reconciled_as_an_integer() -> None:
+    """The cap must persist as a JSON number, not the string the environment
+    carries. Open WebUI publishes this row straight to the browser as
+    `file.max_size` and `MessageInput.svelte` computes `max_size * 1024 * 1024`
+    from it, so a string happens to work in JavaScript and is still wrong: the
+    row a first boot would have seeded is an int (upstream parses the variable
+    with `int()`), and a type that differs from the seeded one is how the
+    boolean keys above went wrong before."""
+    config = FakeConfig({})
+    applied = reconcile(config, {"RAG_FILE_MAX_SIZE": "25"})
+    assert applied["rag.file.max_size"] == 25, applied
+    assert isinstance(applied["rag.file.max_size"], int), applied
+    assert config.stored["rag.file.max_size"] == 25, config.stored
+
+
+def test_upload_type_allowlist_is_reconciled_as_a_list() -> None:
+    """The load-bearing coercion. `upload_file_handler` evaluates
+    `file_extension not in allowed_file_extensions`, so persisting the raw
+    comma string would turn a membership test into a SUBSTRING test: `df` would
+    pass because `pdf` contains it, and any extension that happens to be a
+    substring of an allowed one would be admitted. Upstream's own parse of the
+    variable produces a list, and so must this."""
+    config = FakeConfig({})
+    applied = reconcile(config, {"RAG_ALLOWED_FILE_EXTENSIONS": "pdf, txt ,MD"})
+    assert applied["rag.file.allowed_extensions"] == ["pdf", "txt", "md"], applied
+    assert config.stored["rag.file.allowed_extensions"] == ["pdf", "txt", "md"]
+
+
+def test_a_malformed_size_cap_is_refused_rather_than_ignored() -> None:
+    """A cap that cannot be parsed must fail the container at startup naming the
+    variable, not boot with no cap. Silently dropping it is the exact failure
+    this module exists to end: the deployment would look configured and would
+    accept a 30 MB upload anyway."""
+    try:
+        hive_rag_env_config.overrides({"RAG_FILE_MAX_SIZE": "25MB"})
+    except RuntimeError as error:
+        assert "RAG_FILE_MAX_SIZE" in str(error), error
+    else:
+        raise AssertionError("a non-numeric RAG_FILE_MAX_SIZE was accepted")
+
+
+def test_unset_upload_limits_leave_the_persisted_values_alone() -> None:
+    """Same contract as every other key here: an unset or blank variable writes
+    nothing, so an administrator's own choice survives, and an enterprise
+    deployment that never sets these is not silently capped."""
+    config = FakeConfig({"rag.file.max_size": 50, "rag.file.allowed_extensions": ["pdf"]})
+    applied = reconcile(config, {"RAG_FILE_MAX_SIZE": "", "RAG_ALLOWED_FILE_EXTENSIONS": "  "})
+    assert "rag.file.max_size" not in applied, applied
+    assert "rag.file.allowed_extensions" not in applied, applied
+    assert config.stored["rag.file.max_size"] == 50, config.stored
+    assert config.stored["rag.file.allowed_extensions"] == ["pdf"], config.stored
+
+
+def _compose_text() -> str:
+    return (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+
+
+def _compose_allowed_extensions() -> list:
+    """The allowlist docker-compose.yml actually hands the container."""
+    match = re.search(
+        r"RAG_ALLOWED_FILE_EXTENSIONS:\s*\$\{RAG_ALLOWED_FILE_EXTENSIONS:-([^}]*)\}",
+        _compose_text(),
+    )
+    assert match, "docker-compose.yml does not set RAG_ALLOWED_FILE_EXTENSIONS"
+    return [ext.strip() for ext in match.group(1).split(",") if ext.strip()]
+
+
+def test_compose_sets_the_upload_size_cap() -> None:
+    """The reconcile only helps if compose names a value, and this variable has
+    been present with an EMPTY default since the #1108 follow-up, carrying a
+    comment that claimed it served the client-side guard. It never did: the key
+    was missing from the reconcile map, so the value could not reach a booted
+    box even when set. 25 is not a guess. `RAG_MAX_UPLOAD_BYTES` is already
+    26214400 on edge-api and on the markitdown sidecar, and Open WebUI
+    multiplies its megabyte value by 1024 * 1024, so 25 is byte for byte the cap
+    Hive already enforces on its own document ingest path."""
+    compose = _compose_text()
+    assert (
+        "RAG_FILE_MAX_SIZE: ${RAG_FILE_MAX_SIZE:-25}" in compose
+    ), "docker-compose.yml must cap chat uploads at the size the RAG path already enforces"
+    assert (
+        "RAG_MAX_UPLOAD_BYTES:-26214400" in compose
+    ), "the 25 MB chat cap is derived from RAG_MAX_UPLOAD_BYTES; if that moved, move both"
+
+
+def test_compose_allowlist_refuses_executables() -> None:
+    """The reported defect: `evil.exe` uploaded and was processed. An allowlist
+    is the only mechanism upstream offers, and the final `else` in
+    `Loader._get_loader` falls back to TextLoader for ANY unrecognised
+    extension, so without one every binary is 'processed' into mojibake and
+    stored."""
+    allowed = _compose_allowed_extensions()
+    for refused in ("exe", "zip", "dll", "bin", "so", "msi", "apk", "jar", "iso", "dmg"):
+        assert refused not in allowed, f"chat uploads must not accept .{refused}"
+    assert allowed, "an empty allowlist disables the check entirely upstream"
+
+
+def test_compose_allowlist_covers_every_format_this_deployment_can_read() -> None:
+    """The allowlist is derived by a rule, not by taste: everything Open WebUI
+    can turn into text. A cap that refuses a file the product could have read is
+    worse than no cap, because it fails in front of a user rather than in a log.
+
+    The rule is `known_source_ext` plus the extensions `Loader._get_loader`
+    names in its own branches. Asserted against the vendored source so an
+    upstream bump that adds a format fails here rather than silently starting to
+    refuse it."""
+    loaders = (
+        Path(__file__).resolve().parents[1]
+        / "vendor"
+        / "open-webui"
+        / "backend"
+        / "open_webui"
+        / "retrieval"
+        / "loaders"
+        / "main.py"
+    ).read_text(encoding="utf-8")
+    block = re.search(r"known_source_ext = \[(.*?)\]", loaders, re.S)
+    assert block, "known_source_ext moved; the allowlist derivation needs revisiting"
+    known = set(re.findall(r"'([^']+)'", block.group(1)))
+    documents = {
+        "pdf", "csv", "rst", "xml", "htm", "html", "md", "docx", "doc",
+        "xls", "xlsx", "ppt", "pptx", "msg", "odt", "epub", "txt",
+    }
+    allowed = set(_compose_allowed_extensions())
+    missing = sorted((known | documents) - allowed)
+    assert not missing, f"chat uploads would refuse formats the product can read: {missing}"
+
+
+def test_env_example_documents_the_upload_limits() -> None:
+    """Both variables are the operator's lever if a real document is refused
+    mid demo, so an operator has to be able to find them without reading
+    compose."""
+    env_example = (Path(__file__).resolve().parents[1] / ".env.example").read_text(
+        encoding="utf-8"
+    )
+    for variable in ("RAG_FILE_MAX_SIZE", "RAG_ALLOWED_FILE_EXTENSIONS"):
+        assert variable in env_example, f".env.example does not document {variable}"
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
