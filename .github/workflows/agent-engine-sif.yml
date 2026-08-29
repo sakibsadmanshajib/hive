@@ -23,11 +23,41 @@ on:
       - 'vendor/openhands/**'
       - 'apps/agent-engine/packs/**'
       - '.github/workflows/agent-engine-sif.yml'
+  schedule:
+    # Keeps an unexpired artifact alive for the current image inputs.
+    #
+    # agent-visual-proof.yml refuses to certify a ref with an image it cannot
+    # tie to that ref: it looks for an unexpired agent-engine-sif artifact
+    # whose run built the same deploy/apptainer, apps/agent-engine/packs and
+    # vendor/openhands trees. Those trees only change occasionally, and the
+    # triggers above only build on a change, while the artifact's 90 day
+    # retention runs regardless. Leave the image inputs alone for a quarter
+    # and the last matching artifact expires, after which every proof run
+    # hard-errors with "no unexpired agent-engine-sif artifact was built from
+    # these image inputs" for reasons no pull request caused. That is
+    # backwards: a stable tree would make the proof job less reliable, not
+    # more. Monthly is well inside the retention window, so a match always
+    # exists, and it revalidates agent-engine.def against upstream base image
+    # drift while it is at it.
+    #
+    # One way this can still lapse: GitHub disables a repository's scheduled
+    # workflows after 60 days with no activity, and the artifact then expires
+    # 30 days after that. The proof job's error message names this schedule
+    # for exactly that case, so a reader who hits it knows to check here
+    # before assuming their own ref caused it.
+    - cron: '0 4 1 * *'
   workflow_dispatch:
 
 concurrency:
   group: agent-engine-sif-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on a pull request branch only. On main both the
+  # push trigger and the monthly schedule resolve github.ref to
+  # refs/heads/main and so share one group, and cancelling either of those is
+  # a silent absence of the artifact everything downstream correlates
+  # against: agent-visual-proof.yml then hard-errors on a ref that changed
+  # nothing. A merge landing at 04:00 on the first of the month is unlikely
+  # and cheap to let queue, so let it queue.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
