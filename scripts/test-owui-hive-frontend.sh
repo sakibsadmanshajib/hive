@@ -53,7 +53,9 @@ for rel in \
 	chat/MessageInput.svelte \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
-	chat/Settings/Interface.svelte
+	chat/Settings/Interface.svelte \
+	workspace/Skills.svelte \
+	workspace/Skills/SkillEditor.svelte
 do
 	mkdir -p "$WORK/lib/components/${rel%/*}"
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"
@@ -76,7 +78,10 @@ ROUTES_SRC="$ROOT/vendor/open-webui/src/routes"
 for rel in \
 	+layout.svelte \
 	"(app)/+layout.svelte" \
-	"s/[id]/+page.svelte"
+	"s/[id]/+page.svelte" \
+	"(app)/skills/+page.svelte" \
+	"(app)/skills/create/+page.svelte" \
+	"(app)/skills/edit/+page.svelte"
 do
 	mkdir -p "$WORK/routes/$(dirname -- "$rel")"
 	cp "$ROUTES_SRC/$rel" "$WORK/routes/$rel"

@@ -18,6 +18,7 @@ describe('HIVE_NAV', () => {
 			'projects',
 			'artifacts',
 			'knowledge',
+			'skills',
 			'scheduled'
 		]);
 	});
@@ -58,6 +59,22 @@ describe('HIVE_NAV', () => {
 		// row read as dead on the demo box. The top-level route renders the
 		// read-only index instead.
 		expect(byId('knowledge').href).toBe('/knowledge');
+	});
+
+	it('points Skills at its own top-level route, not at the removed Workspace tab', () => {
+		// Issue #783 removed Workspace > Skills and Caddyfile.owui still 404s
+		// /workspace/skills, so a row pointing there would be dead on arrival.
+		// The surface it does point at is the user-created skills library.
+		expect(byId('skills').href).toBe('/skills');
+	});
+
+	it('links no row into the Workspace container at all', () => {
+		// Every one of Models, Prompts, Skills and Tools is 404'd at the proxy,
+		// and the target navigation deletes the container itself, so a
+		// /workspace href in this list is a row that cannot work.
+		for (const item of HIVE_NAV) {
+			expect(item.href.startsWith('/workspace')).toBe(false);
+		}
 	});
 
 	it('gives every row a unique id, a label and an in-app href', () => {

@@ -24,6 +24,13 @@ else: an administrator's other Open WebUI settings still persist normally,
 which is why this is a per-key reconcile rather than
 `ENABLE_PERSISTENT_CONFIG=false`.
 
+One seam here is not a key at all. `user.permissions` is a single row holding
+the whole nested permission tree, so a leaf inside it cannot be reconciled by
+naming a dotted key: that would write a row nothing reads. `PERMISSION_ENV`
+below carries the leaves the environment owns, and `reconcile` reads the tree,
+merges them in and writes the tree back. See that table for why
+`workspace.skills` is one of them.
+
 The embedding model itself is never hardcoded here. It comes from
 `RAG_EMBEDDING_MODEL` (compose derives it from `OWUI_RAG_EMBEDDING_ALIAS`), so
 the admin-selected alias and its dimension stay the single source of truth
@@ -38,6 +45,8 @@ reason, and as booleans rather than strings, because the non-empty string
 "false" is truthy on both sides of `/api/config` and would leave every one of
 those surfaces visible.
 """
+
+import copy
 
 # Open WebUI persisted config key -> the environment variable that owns it.
 # Key names are Open WebUI's own (open_webui.config.DEFAULT_CONFIG); the
@@ -159,6 +168,38 @@ FEATURE_CONFIG_ENV = {
     ),
 }
 
+# The user permission tree, which is ONE persisted row and therefore cannot
+# ride either dictionary above.
+#
+# `user.permissions` (open_webui.config.DEFAULT_CONFIG) holds the whole nested
+# permission tree in a single config row, and `Config.upsert` keys rows by the
+# exact string handed to it. Adding "user.permissions.workspace.skills" to
+# RAG_CONFIG_ENV would therefore succeed, persist, survive a restart, and be
+# read by nothing: `utils/access_control.has_permission` splits the permission
+# key and walks the tree inside the one row, so it never looks at a sibling
+# row. A row nothing reads is worse than no row, because the deployment then
+# looks configured. So this seam reads the tree, merges the leaves the
+# environment names, and writes the whole tree back.
+#
+# `workspace.skills` is here because the chat product now ships a user-created
+# skills library and the permission that gates it defaults to false upstream.
+# It matters now and did not before: until 2026-08-23 every tenant OWNER was
+# promoted to Open WebUI `admin` and passed every `role === 'admin' || <perm>`
+# gate regardless, and since
+# supabase/migrations/20260823_03_owui_role_never_admin.sql only a platform
+# admin is, so this permission governs every ordinary customer.
+#
+# Sharing is deliberately NOT here. `sharing.skills` and
+# `sharing.public_skills` stay at their upstream defaults, both false, so a
+# skill is private to the account that wrote it and no member can put authored
+# text into another account's prompt.
+PERMISSION_ENV = {
+    ("workspace", "skills"): "USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS",
+}
+
+# The single row every entry in PERMISSION_ENV lives inside.
+PERMISSIONS_KEY = "user.permissions"
+
 # Keys Open WebUI stores as a JSON boolean rather than a string. The value has
 # to be coerced on the way in: `features.enable_login_form` is published raw to
 # the browser, and the login page tests it for truthiness, so a persisted
@@ -251,9 +292,67 @@ def log_summary(applied: dict) -> str:
     )
 
 
+def permission_overrides(environ) -> dict:
+    """The permission leaves the environment explicitly sets, as {path: bool}.
+
+    A missing or blank variable yields no entry, exactly like `overrides`
+    above, so an unset variable never silently revokes a permission an
+    administrator chose. The parse matches upstream's own
+    (`os.getenv(...).lower() == 'true'`), so an unrecognised value means off
+    here for the same reason it does there.
+    """
+    applied = {}
+    for path, variable in PERMISSION_ENV.items():
+        value = (environ.get(variable) or "").strip()
+        if value:
+            applied[path] = value.lower() == "true"
+    return applied
+
+
+def merge_permissions(current: dict, overrides_by_path: dict) -> dict:
+    """Return a new tree with the named leaves set, siblings untouched.
+
+    A copy rather than an in-place edit, for two reasons. The caller compares
+    the result against the stored tree to decide whether to write at all,
+    which a mutation would make impossible, and a whole-tree write is what
+    reaches the database, so losing a sibling here would silently revoke a
+    permission nobody asked to change.
+
+    A branch that is absent, or present but not a dict, is created. An older
+    deployment's persisted tree predates whatever key was added since, so
+    absence is the normal case rather than corruption.
+    """
+    merged = copy.deepcopy(current) if isinstance(current, dict) else {}
+    for path, value in overrides_by_path.items():
+        node = merged
+        for key in path[:-1]:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        node[path[-1]] = value
+    return merged
+
+
 async def reconcile(config, environ) -> dict:
     """Overwrite the persisted keys the environment names. Returns them."""
     applied = overrides(environ)
     if applied:
         await config.upsert(applied)
+
+    by_path = permission_overrides(environ)
+    if by_path:
+        current = await config.get(PERMISSIONS_KEY) or {}
+        merged = merge_permissions(current, by_path)
+        # Compared rather than written unconditionally: this runs on every
+        # boot, and rewriting an identical row would make the startup log
+        # claim a permission changed on a start where nothing did.
+        if merged != current:
+            await config.upsert({PERMISSIONS_KEY: merged})
+            # Logged as the leaves that moved, not as the whole tree, which is
+            # large and mostly unrelated. The row written is still
+            # PERMISSIONS_KEY; nothing dotted is ever persisted.
+            applied[PERMISSIONS_KEY] = {
+                ".".join(path): value for path, value in by_path.items()
+            }
+
     return applied
