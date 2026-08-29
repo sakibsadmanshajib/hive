@@ -393,8 +393,15 @@ describe("the skills surface is inside the denominator", () => {
     expect(parseFloors(floorsFile).skills).toBe(1);
   });
 
-  it("fails the gate when the surface enumerates nothing", () => {
+  it("fails the gate when the surface is emptied or its entry point deleted", () => {
     const floors = parseFloors(floorsFile);
+    // Emptied: the spec appends to `swept` before it checks for zero controls,
+    // so this shape does reach floorFailures.
+    expect(
+      floorFailures(floors, [{ surface: "skills", enumerated: 0 }], (s) => s === "skills"),
+    ).toHaveLength(1);
+    // Entry point deleted: never swept at all, which is the other way a
+    // surface leaves the denominator without a word in the report.
     expect(floorFailures(floors, [], (surface) => surface === "skills")).toHaveLength(1);
     expect(
       floorFailures(floors, [{ surface: "skills", enumerated: 3 }], (s) => s === "skills"),

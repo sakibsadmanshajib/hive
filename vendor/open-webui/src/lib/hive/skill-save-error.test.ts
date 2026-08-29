@@ -172,7 +172,11 @@ describe('the create route is wired to it', () => {
 	 */
 	it('still says something when the client resolves null instead of throwing', () => {
 		expect(createRoute).toMatch(/}\s*else\s*if\s*\(\s*!\s*\w+\s*\)\s*{/);
-		// Two toast.error sites: the thrown-error arm and the silent-null arm.
-		expect(createRoute.match(/toast\.error\(/g) ?? []).toHaveLength(2);
+		// At least two toast.error sites: the thrown-error arm and the
+		// silent-null arm. Not an exact count, which would red this test for a
+		// third legitimate error toast it has nothing to say about.
+		expect(
+			(createRoute.match(/toast\.error\(/g) ?? []).length
+		).toBeGreaterThanOrEqual(2);
 	});
 });
