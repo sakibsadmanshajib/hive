@@ -283,7 +283,7 @@ jobs:
       # responds to ENOSPC by panicking and shutting the engine down, so a
       # migration that runs out of disk mid transaction takes down the stack
       # that is currently serving. See scripts/check-deploy-disk.sh.
-      - name: Refuse to migrate without disk headroom
+      - name: Reclaim build cache, then refuse to migrate without disk headroom
         env:
           HIVE_DEPLOY_DISK_FLOOR_GB: ${{ inputs.disk_floor_gb }}
         run: scripts/check-deploy-disk.sh
@@ -711,9 +711,11 @@ jobs:
     # vendored tree alone hit the cache and cost nothing extra.
     timeout-minutes: 30
     steps:
-      - name: Refuse to build without disk headroom
+      - name: Reclaim build cache, then refuse to build without disk headroom
         # FIRST step in this job. See scripts/check-deploy-disk.sh for why the
-        # position matters and how the thresholds were measured.
+        # position matters, how the thresholds were measured, and why the
+        # build cache reclaim (issue #1419) lives inside the guard rather than
+        # in a step of its own.
         working-directory: /home/sakib/hive
         env:
           HIVE_DEPLOY_DISK_FLOOR_GB: ${{ inputs.disk_floor_gb }}
@@ -2073,6 +2075,17 @@ jobs:
         # host systemd timer because the box has no passwordless sudo, and
         # this way the fix is repo-tracked. `if: always()` matters: a failed
         # build is exactly when unused cache layers pile up the fastest.
+        #
+        # This is no longer the reclaim that keeps the box deployable, and the
+        # `until=24h` filter is why (issue #1419). On a day of roughly 43
+        # merges every cache record is younger than 24 hours, so the filter
+        # excludes exactly the records consuming the disk and this step frees
+        # approximately nothing. The reclaim that matters now runs unfiltered
+        # inside scripts/check-deploy-disk.sh, at the front of both jobs and
+        # only below the warn line. This one stays because it is the only
+        # cleanup that runs on a box healthy enough that the guard exits
+        # silently, and because a build that failed halfway leaves cache no
+        # later deploy will reuse.
         if: always()
         run: docker builder prune -f --filter until=24h
 
