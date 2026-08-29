@@ -17,7 +17,6 @@ describe('HIVE_NAV', () => {
 		expect(HIVE_NAV.map((item) => item.id)).toEqual([
 			'projects',
 			'artifacts',
-			'knowledge',
 			'skills',
 			'scheduled'
 		]);
@@ -53,12 +52,15 @@ describe('HIVE_NAV', () => {
 		expect(byId('scheduled').href).toBe('/schedules');
 	});
 
-	it('points Knowledge at its own top-level route, outside the workspace permission guard (#1109)', () => {
-		// /workspace/knowledge sits behind the workspace layout's permission
-		// guard and bounced a non-admin straight home, which is what made this
-		// row read as dead on the demo box. The top-level route renders the
-		// read-only index instead.
-		expect(byId('knowledge').href).toBe('/knowledge');
+	it('ships no Knowledge row, because D-045 ruling 2 eliminates the destination (#1502)', () => {
+		// The ruling replaces Knowledge with Projects and Artifacts rather than
+		// renaming it. Projects reads the very same /api/v1/knowledge/ rows
+		// (lib/hive/projects/projects.ts) and can create, upload and delete, so
+		// the row was a second, weaker view of what the row above it already
+		// shows. The /knowledge ROUTE is untouched: removing a row is not
+		// deleting a page.
+		expect(HIVE_NAV.some((item) => item.id === 'knowledge')).toBe(false);
+		expect(HIVE_NAV.some((item) => item.href.startsWith('/knowledge'))).toBe(false);
 	});
 
 	it('points Skills at its own top-level route, not at the removed Workspace tab', () => {
@@ -91,7 +93,7 @@ describe('HIVE_NAV', () => {
 
 describe('isNavItemActive', () => {
 	const projects = byId('projects');
-	const knowledge = byId('knowledge');
+	const artifacts = byId('artifacts');
 
 	it('marks a row current on its own destination and below it', () => {
 		expect(isNavItemActive(projects, '/projects')).toBe(true);
@@ -101,12 +103,12 @@ describe('isNavItemActive', () => {
 
 	it('does not match a route that merely starts with the same characters', () => {
 		expect(isNavItemActive(projects, '/projects-archive')).toBe(false);
-		expect(isNavItemActive(knowledge, '/knowledgebase')).toBe(false);
+		expect(isNavItemActive(artifacts, '/artifacts-archive')).toBe(false);
 	});
 
 	it('treats an empty or missing pathname as no match, since no row links to it', () => {
 		expect(isNavItemActive(projects, '')).toBe(false);
-		expect(isNavItemActive(knowledge, '')).toBe(false);
+		expect(isNavItemActive(artifacts, '')).toBe(false);
 	});
 
 	it('marks exactly one row current on each row\'s own destination', () => {
@@ -114,12 +116,17 @@ describe('isNavItemActive', () => {
 			'/projects',
 			'/projects/abc',
 			'/artifacts',
-			'/knowledge',
+			'/skills',
 			'/schedules'
 		]) {
 			const active = HIVE_NAV.filter((item) => isNavItemActive(item, route));
 			expect(active.length).toBe(1);
 		}
+	});
+
+	it('marks no row current on /knowledge, which keeps its route and loses its row (#1502)', () => {
+		const active = HIVE_NAV.filter((item) => isNavItemActive(item, '/knowledge'));
+		expect(active.length).toBe(0);
 	});
 
 	it('marks no row current on the chat root, since Chats is no longer a nav row', () => {

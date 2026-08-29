@@ -1182,9 +1182,10 @@
 					</div>
 
 					<!--
-						Hive: Chats, Agents and Knowledge as labelled destinations. The
-						owner named the absence of the first two; the third was two clicks
-						deep behind a Workspace container this product does not ship.
+						Hive: the shell's own labelled destinations, described as data in
+						lib/hive/nav.ts. Projects and Artifacts are the pair D-045 ruling 2
+						names; Agents and Knowledge are deliberately absent from that list,
+						and the file says why beside each gap.
 					-->
 					<HiveShellNav />
 
