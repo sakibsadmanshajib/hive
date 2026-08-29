@@ -8,6 +8,7 @@ import {
   updateMarketplaceEntry,
   type MarketplaceEntryConfig,
 } from "@/lib/control-plane/client";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 interface PutBody {
   name?: string;
@@ -24,6 +25,10 @@ interface RouteParams {
 // attaches the caller's session bearer; the control-plane is the authority
 // on permission (platform-admin) and on existence.
 export async function PUT(request: Request, { params }: RouteParams): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {
@@ -65,7 +70,11 @@ export async function PUT(request: Request, { params }: RouteParams): Promise<Re
   }
 }
 
-export async function DELETE(_request: Request, { params }: RouteParams): Promise<Response> {
+export async function DELETE(request: Request, { params }: RouteParams): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

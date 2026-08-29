@@ -7,6 +7,7 @@ import {
   createMarketplaceEntry,
   type MarketplaceEntryConfig,
 } from "@/lib/control-plane/client";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 interface PostBody {
   kind?: string;
@@ -22,6 +23,10 @@ interface PostBody {
 // shape-checks and maps the upstream status class to a generic,
 // customer-safe message.
 export async function POST(request: Request): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

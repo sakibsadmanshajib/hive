@@ -7,6 +7,7 @@ import {
   updateProvider,
   type UpsertProviderInput,
 } from "@/lib/control-plane/client";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -17,6 +18,10 @@ interface RouteParams {
 // field; the control-plane is the authority on permission (platform-admin)
 // and on validation.
 export async function PUT(request: Request, { params }: RouteParams): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {

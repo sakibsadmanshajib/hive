@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { ControlPlaneError, createInvitation } from "@/lib/control-plane/client";
 import { parseMemberRole } from "@/lib/members/roles";
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
+import { refuseCrossOrigin } from "@/lib/http/same-origin";
 
 // Server-side proxy for sending a workspace invite (issue #111).
 //
@@ -19,6 +20,10 @@ import { resolveCanonicalOrigin } from "@/lib/http/origin";
 // generic, customer-safe `error` message. Auth/validation failures
 // short-circuit before any upstream call.
 export async function POST(request: Request): Promise<Response> {
+  // Cross-origin refusal, before the session lookup (issue #1457).
+  const refusal = refuseCrossOrigin(request);
+  if (refusal) return refusal;
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {
