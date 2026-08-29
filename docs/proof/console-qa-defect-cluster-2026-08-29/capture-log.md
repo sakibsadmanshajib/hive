@@ -198,10 +198,15 @@ from first paint and only becomes `saving` inside `toggle()`. A text scrape
 that walks `textContent` or `innerText` sees an `opacity-0` node, because
 opacity is not visibility. That is what the issue's text dump recorded.
 
-So the reported symptom, as rendered, never existed, and PR #1394 did not fix
-it either: that change addressed `Viewer.TenantID` resolution, whose failure
-mode on this page is the "Could not load feature gates" empty state, not
-`Saving…`.
+The distinction that matters for triage, since the two halves are both true:
+the `Saving…` node **is** present in the DOM on every row, and therefore in
+any text extraction, at all times. It is **not** visible to a person, and it
+is **not** in the accessibility tree, so a screen reader does not announce it
+either. The issue reported the first half as though it were the second.
+
+PR #1394 did not fix it either: that change addressed `Viewer.TenantID`
+resolution, whose failure mode on this page is the "Could not load feature
+gates" empty state, not `Saving…`.
 
 ## Files
 

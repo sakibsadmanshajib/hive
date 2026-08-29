@@ -63,6 +63,26 @@ describe("formatApiKeyGroup", () => {
     );
   });
 
+  it("bounds a nickname minted before the length cap existed", () => {
+    // The analytics table cell and the chart axis tick both take this string
+    // raw, and a key stored before issue #1400's cap landed can still carry
+    // 5000 characters. Naming keys on this surface must not hand that defect
+    // to a second table.
+    const long = key({ nickname: "A".repeat(5000) });
+    const rendered = formatApiKeyGroup(long.id, apiKeysById([long]));
+
+    expect(rendered.length).toBeLessThan(80);
+    expect(rendered).toContain("…");
+    expect(rendered).toContain("0fae3a");
+  });
+
+  it("leaves a nickname within the cap untouched", () => {
+    const ordinary = key({ nickname: "billing-prod-2026" });
+    expect(formatApiKeyGroup(ordinary.id, apiKeysById([ordinary]))).toBe(
+      "billing-prod-2026 (0fae3a)"
+    );
+  });
+
   it("keeps two keys that share a nickname distinguishable", () => {
     const a = key({ id: "aaaa1111-0000-0000-0000-000000000000", redacted_suffix: "aaaa" });
     const b = key({ id: "bbbb2222-0000-0000-0000-000000000000", redacted_suffix: "bbbb" });

@@ -48,6 +48,21 @@ export function resolveApiKeyGroup(
 }
 
 /**
+ * How much of a nickname a table cell or a chart axis tick will show. The
+ * nickname is bounded at the control plane now, but a key minted before that
+ * bound existed can still carry thousands of characters, and both of the
+ * surfaces this function feeds take the string raw with no truncation of
+ * their own (issue #1400).
+ */
+const MAX_LABEL_CHARS = 40;
+
+function clampLabel(label: string): string {
+  const chars = [...label];
+  if (chars.length <= MAX_LABEL_CHARS) return label;
+  return `${chars.slice(0, MAX_LABEL_CHARS).join("")}…`;
+}
+
+/**
  * One-line form for a table cell or a chart axis tick, where the label and
  * the masked tail cannot occupy separate columns. The tail is what keeps two
  * keys that share a nickname apart.
@@ -58,5 +73,5 @@ export function formatApiKeyGroup(
 ): string {
   const { label, suffix } = resolveApiKeyGroup(groupKey, keyById);
   if (groupKey === UNATTRIBUTED_GROUP_KEY) return label;
-  return `${label} (${suffix})`;
+  return `${clampLabel(label)} (${suffix})`;
 }
