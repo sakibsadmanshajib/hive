@@ -1,7 +1,11 @@
 # Visual proof: three console surfaces made honest
 
 Date: 2026-08-29
-Branch: fix/console-honest-surfaces
+Branch: fix/console-honest-surfaces at ba3bc21, which is the head this
+capture was taken from, after the two review fixes (credit-space
+truncation, and the em dash for an unreadable balance) landed. An earlier
+capture of the same four frames was taken before those two commits and is
+superseded by this one.
 Pull request: 1336
 Issues: 1328 (sign-up), 1331 (rotate), 1332 (credit denomination)
 
@@ -46,6 +50,7 @@ rotate links on api keys page: 0
 email inputs on the sign-up page: 0
 04-signin-no-create-link | http://proof1336:3000/auth/sign-in | Sign in to your console
 create-one links on the sign-in page: 0
+05-billing-balance | http://proof1336:3000/console/billing | Billing
 ```
 
 What each frame shows:
@@ -64,6 +69,11 @@ What each frame shows:
    "Something went wrong on our end. Reference AUTH-20260829T012555Z."
 4. `04-signin-no-create-link.png`, issue 1328. The sign-in page no longer
    links to that page at all, and says accounts are created by invitation.
+5. `05-billing-balance.png`, issue 1332. The second surface that renders the
+   same balance, drawn by the same component, so the two pages cannot drift
+   apart again. The ledger below it still counts in credits, which is
+   deliberate: that is the unit the ledger, the invoices and the spend-alert
+   threshold are denominated in.
 
 ## Cleanup
 
