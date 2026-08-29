@@ -681,6 +681,12 @@ services:
       # web-console-prod below (issue #1328).
       NEXT_PUBLIC_DISABLE_SELF_SERVE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      # Gateway base URL the console prints and pastes into its quickstart
+      # snippets. Deliberately not NEXT_PUBLIC_*: it is read at request time so
+      # a self-hosting customer re-points it without rebuilding our image
+      # (issue #550). Unset falls back to DEFAULT_API_BASE_URL, the hosted
+      # deployment's gateway.
+      HIVE_PUBLIC_API_BASE_URL: ${HIVE_PUBLIC_API_BASE_URL:-}
     # Dev-only `next dev` server: publishes raw 0.0.0.0:3000 with no Caddy and
     # no TLS in front of it, unlike web-console-prod below which sits behind
     # caddy-console. Docker's published ports bypass ufw's default-deny, so
@@ -771,6 +777,13 @@ services:
         condition: service_healthy
     environment:
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      # Same variable and same rationale as the dev service above: the console
+      # prints this as the gateway base URL and pastes it into the curl a
+      # developer copies straight after minting a key (issue #550). Runtime
+      # environment rather than a build arg on purpose, since a Hive Enterprise
+      # customer runs our image and does not build it. Unset falls back to the
+      # hosted deployment's gateway.
+      HIVE_PUBLIC_API_BASE_URL: ${HIVE_PUBLIC_API_BASE_URL:-}
     logging:
       driver: json-file
       options:
