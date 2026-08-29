@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,6 +90,18 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	// 1. Validate credits.
 	if err := ValidatePurchaseAmount(credits, rail); err != nil {
 		return nil, err
+	}
+
+	// The rail has to exist on this deployment before anything else happens.
+	// It is registered from its credentials at startup, so an absent one means
+	// this box can neither take the payment nor settle it. Asking last, which is
+	// what this used to do, meant a country lookup, a billing profile read, an
+	// FX snapshot and an inserted payment intent all happened first, leaving a
+	// stranded `created` intent behind on every attempt (issue #1449).
+	railImpl, ok := s.rails[rail]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s (set %s)", ErrRailNotConfigured, rail,
+			strings.Join(RailCredentialEnvs[rail], ", "))
 	}
 
 	// A checkout with no usable browser return origin would strand the payer
@@ -194,10 +207,6 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		CustomerEmail:   billingProfile.BillingContactEmail,
 	}
 
-	railImpl, ok := s.rails[rail]
-	if !ok {
-		return nil, fmt.Errorf("payments: no rail implementation for %s", rail)
-	}
 	initiateResult, err := railImpl.Initiate(ctx, initiateInput)
 	if err != nil {
 		return nil, fmt.Errorf("payments: rail initiate: %w", err)

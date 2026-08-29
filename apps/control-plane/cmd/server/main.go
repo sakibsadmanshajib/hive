@@ -914,16 +914,33 @@ func main() {
 		// FX service — wraps XE API with Redis cache.
 		fxSvc := payments.NewFXService(paymentHTTPClient, xeAccountID, xeAPIKey, redisClient)
 
-		// Rails — conditionally registered based on env var presence.
+		// Rails are registered only when the rail's whole credential set is
+		// present (payments.RailCredentialEnvs). A rail built from half a set
+		// can still redirect a payer and take their money while being unable to
+		// settle it, so an incomplete rail is left unregistered and named in a
+		// warning an operator can act on (issue #1449).
 		rails := make(map[payments.Rail]payments.PaymentRail)
-		if stripeSecretKey != "" {
-			rails[payments.RailStripe] = stripeRail.NewRail(stripeSecretKey, stripeWebhookSecret)
+		railBuilders := []struct {
+			rail  payments.Rail
+			build func() payments.PaymentRail
+		}{
+			{payments.RailStripe, func() payments.PaymentRail {
+				return stripeRail.NewRail(stripeSecretKey, stripeWebhookSecret)
+			}},
+			{payments.RailBkash, func() payments.PaymentRail {
+				return bkashRail.NewRail(paymentHTTPClient, bkashBaseURL, bkashAppKey, bkashAppSecret, bkashUsername, bkashPassword)
+			}},
+			{payments.RailSSLCommerz, func() payments.PaymentRail {
+				return sslcommerzRail.NewRail(paymentHTTPClient, sslcommerzBaseURL, sslcommerzStoreID, sslcommerzStorePasswd)
+			}},
 		}
-		if bkashAppKey != "" {
-			rails[payments.RailBkash] = bkashRail.NewRail(paymentHTTPClient, bkashBaseURL, bkashAppKey, bkashAppSecret, bkashUsername, bkashPassword)
-		}
-		if sslcommerzStoreID != "" {
-			rails[payments.RailSSLCommerz] = sslcommerzRail.NewRail(paymentHTTPClient, sslcommerzBaseURL, sslcommerzStoreID, sslcommerzStorePasswd)
+		for _, b := range railBuilders {
+			if missing := payments.MissingRailCredentials(b.rail, os.Getenv); len(missing) > 0 {
+				log.Printf("WARNING: payments: %s rail not registered, buying credits on it will be refused. Unset credential(s): %s",
+					b.rail, strings.Join(missing, ", "))
+				continue
+			}
+			rails[b.rail] = b.build()
 		}
 
 		log.Printf("payments: %d rail(s) active: %v", len(rails), func() []string {

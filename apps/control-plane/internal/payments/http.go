@@ -456,6 +456,13 @@ func classifyInitiateError(err error) (int, string) {
 		// Never name "FX" on a BD customer surface.
 		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
 	}
+	if errors.Is(err, ErrRailNotConfigured) {
+		// Deployment fault: no credentials for this rail, so nothing here can
+		// take a payment or settle one. Say the method is unavailable and that
+		// nothing was charged, name no provider, and leave the variable names
+		// in the log where an operator will read them (issue #1449).
+		return http.StatusServiceUnavailable, "this payment method is unavailable right now and nothing was charged"
+	}
 	if errors.Is(err, ErrReturnURLNotConfigured) {
 		// Deployment fault, not a customer fault: no console origin is configured,
 		// so a payer would be stranded after paying. Refuse before taking money and
