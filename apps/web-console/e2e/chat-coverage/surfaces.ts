@@ -99,8 +99,22 @@ export async function ensureSidebar(page: Page, open: boolean): Promise<void> {
   // while it is closed. So the button that ends the call visible is the
   // opposite one, and its absence means the sidebar is in neither state the
   // harness can name.
-  const actionNow = page.getByRole("button", { name: open ? /open sidebar/i : /close sidebar/i });
-  const actionAfter = page.getByRole("button", { name: open ? /close sidebar/i : /open sidebar/i });
+  //
+  // `.first()` on both, and it is load bearing rather than defensive. The
+  // collapsed Hive shell renders TWO controls named "Open Sidebar", measured
+  // live on 2026-08-29: `count()` returns 2 the moment the sidebar closes.
+  // Playwright's strict mode makes `isVisible()` on a two-element locator
+  // throw, the `.catch(() => false)` below swallows that into "not visible",
+  // and this function then reported a sidebar it had just successfully
+  // collapsed as impossible to pin. Every surface that pins the sidebar shut
+  // inherited the failure, which is most of the sweep, so the live gate could
+  // not complete against the shipped shell at all.
+  const actionNow = page
+    .getByRole("button", { name: open ? /open sidebar/i : /close sidebar/i })
+    .first();
+  const actionAfter = page
+    .getByRole("button", { name: open ? /close sidebar/i : /open sidebar/i })
+    .first();
   if (await actionNow.isVisible().catch(() => false)) {
     await actionNow.click().catch(() => {});
     await page.waitForTimeout(SETTLE);
@@ -154,6 +168,38 @@ export async function relocate(
   return all.find((c) => c.key === key);
 }
 
+/**
+ * Throws unless a `/skills` navigation actually landed on the skills index.
+ *
+ * Pulled out of the surface opener as a pure function so it can be proved able
+ * to fail without a browser. The failure it guards is not hypothetical: with
+ * `workspace.skills` false, `skills/+layout.svelte` redirects to `/`, and a
+ * surface opener that only navigates would then enumerate the chat home under
+ * the id `skills`, satisfy the floor, and prove a page full of working home
+ * controls while the surface it names does not exist.
+ *
+ * Both conditions are checked rather than either alone. The pathname catches
+ * the redirect, and the container catches a route that resolves but renders
+ * nothing, which a pathname check alone would call healthy.
+ *
+ * A throw here is recorded by the spec as `skills: could not open (...)`, which
+ * is a loud failure, and it is what makes the committed floor mean what its
+ * comment says it means.
+ */
+export function assertSkillsSurfaceLanded(pathname: string, containerVisible: boolean): void {
+  if (pathname !== "/skills") {
+    throw new Error(
+      `/skills redirected to ${pathname}; the skills surface is unreachable, which is what ` +
+        "workspace.skills reverting to its upstream default of false looks like",
+    );
+  }
+  if (!containerVisible) {
+    throw new Error(
+      "/skills resolved but #hv-skills-container is not on screen, so the index rendered nothing",
+    );
+  }
+}
+
 /** The surfaces that exist regardless of what the deployment contains. */
 export const STATIC_SURFACES: Surface[] = [
   {
@@ -187,6 +233,42 @@ export const STATIC_SURFACES: Surface[] = [
     open: async (page) => {
       await page.goto("/workspace", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(3000);
+    },
+  },
+  // The user-created skills library (PR #1388). A Hive route rather than a
+  // Workspace tab, so `discoverWorkspaceTabs` below never finds it: it
+  // enumerates `a[href^="/workspace/"]` and this surface lives at /skills,
+  // which is also why the proxy's `@removedSurfaces` rule still 404s
+  // /workspace/skills without touching it. Listed here so it is inside the
+  // denominator; without an entry it renders nothing and no gate notices.
+  //
+  // `delta` because this navigates rather than overlays, so without it the
+  // whole application shell that `(app)/+layout.svelte` renders around the
+  // index lands in this surface's count, double-counting controls the sweep
+  // already attributes to home and the sidebar. Against the home baseline the
+  // count is what /skills actually adds.
+  //
+  // The landing assertion is the load-bearing part. A bare goto is not enough,
+  // because `skills/+layout.svelte` calls `goto('/')` when
+  // `workspace.skills` is false, and that is the single failure this entry
+  // exists to catch: the permission lives in a persisted config row that no
+  // environment variable reaches on a booted deployment (#722). Without the
+  // assertion the sweep would land on the chat home, enumerate it under the id
+  // `skills`, clear the floor and prove every home control, reporting green
+  // over a surface that is entirely gone.
+  {
+    id: "skills",
+    delta: true,
+    open: async (page) => {
+      await page.goto("/skills", { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(3000);
+      assertSkillsSurfaceLanded(
+        new URL(page.url()).pathname,
+        await page
+          .locator("#hv-skills-container")
+          .isVisible()
+          .catch(() => false),
+      );
     },
   },
   {
