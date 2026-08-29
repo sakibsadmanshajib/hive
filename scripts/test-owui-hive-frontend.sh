@@ -79,6 +79,7 @@ for rel in \
 	+layout.svelte \
 	"(app)/+layout.svelte" \
 	"s/[id]/+page.svelte" \
+	"(app)/skills/+layout.svelte" \
 	"(app)/skills/+page.svelte" \
 	"(app)/skills/create/+page.svelte" \
 	"(app)/skills/edit/+page.svelte"

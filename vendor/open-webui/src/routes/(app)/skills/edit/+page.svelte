@@ -65,7 +65,5 @@
 </script>
 
 {#if skill}
-	<div class="hv-panel-region">
-		<SkillEditor {skill} {onSubmit} {disabled} edit />
-	</div>
+	<SkillEditor {skill} {onSubmit} {disabled} edit />
 {/if}

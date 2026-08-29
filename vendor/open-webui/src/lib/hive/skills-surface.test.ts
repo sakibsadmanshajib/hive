@@ -35,6 +35,17 @@ describe('the /skills surface', () => {
 		expect(routeExists('edit/+page.svelte')).toBe(true);
 	});
 
+	it('gives every page the workspace scroll container these components were written for', () => {
+		// Not cosmetic. The first proof capture rendered the list underneath the
+		// sidebar and pinned New Skill to the window corner, because these are
+		// upstream Workspace components and a bare flex region gives them
+		// neither the sidebar-width constraint nor the horizontal padding.
+		const layout = route('+layout.svelte');
+		expect(layout).toContain('md:max-w-[calc(100%-var(--sidebar-width))]');
+		expect(layout).toContain('px-3 md:px-[18px]');
+		expect(layout).toContain('overflow-y-auto');
+	});
+
 	it('renders the skills index from the component that already exists', () => {
 		// Reused verbatim rather than reimplemented: the list, the editor, the
 		// import path and the access dialog are all upstream code that works.
@@ -46,7 +57,9 @@ describe('the /skills surface', () => {
 		// here because this route deliberately sits outside that layout. Without
 		// it, a deployment that turned the permission off renders a New Skill
 		// button whose only outcome is a 401 from the create endpoint.
-		const source = route('+page.svelte');
+		// In the layout, so it covers the editor routes too. A guard on the
+		// index alone would leave /skills/create reachable by typing the URL.
+		const source = route('+layout.svelte');
 		expect(source).toContain('permissions?.workspace?.skills');
 		expect(source).toContain("goto('/')");
 	});

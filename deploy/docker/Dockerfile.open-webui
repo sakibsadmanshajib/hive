@@ -445,6 +445,22 @@ COPY deploy/docker/owui-patches/apply_router_authz_family_patch.py /tmp/apply_ro
 RUN python3 /tmp/apply_retrieval_authz_patch.py \
     && python3 /tmp/apply_router_authz_family_patch.py
 
+# issue #1396, the skills half. Open WebUI's shared grant filter,
+# utils/access_control.filter_allowed_access_grants, strips public grants and
+# individual user grants from a non-admin write and never inspects group
+# grants at all, so a hand-built payload can grant a resource to any group id
+# on this shared instance including another tenant's. Skills are where that
+# matters most, because a skill body is appended verbatim to the chat request
+# as a system message, making a cross-tenant grant prompt injection rather
+# than an over-broad share. Not reachable today (a non-admin cannot enumerate
+# another tenant's group id) but that is secrecy of an identifier rather than
+# an authorization check. #1396 tracks the general case across the other
+# routers; this closes the one whose payload reaches a model prompt.
+COPY deploy/docker/owui-patches/apply_skill_group_grants_patch.py /tmp/apply_skill_group_grants_patch.py
+RUN python3 /tmp/apply_skill_group_grants_patch.py \
+    && test "$(grep -c '# hive (#1396)' /app/backend/open_webui/routers/skills.py)" -eq 4 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())"
+
 # issue #1191: two residuals from the #1190-family review that the #1186 sweep
 # had classified as false positives. chats.py clone_shared_chat_by_id let a
 # bare instance admin skip the shared-chat AccessGrants check and read (clone)

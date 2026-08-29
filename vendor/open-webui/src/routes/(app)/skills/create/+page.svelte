@@ -51,8 +51,6 @@
 	});
 </script>
 
-<div class="hv-panel-region">
-	{#key skill}
-		<SkillEditor {skill} {onSubmit} {clone} />
-	{/key}
-</div>
+{#key skill}
+	<SkillEditor {skill} {onSubmit} {clone} />
+{/key}
