@@ -1,0 +1,17 @@
+HOME FACTS: {
+ "chipCount": 0,
+ "chipsHTMLPresent": false,
+ "greetingText": "none",
+ "greetingFont": "n/a",
+ "greetingSize": "n/a",
+ "bodyFont": "\"Hanken Grotesk\", \"Noto Sans Bengali\", ui-sans-serif, system-ui, sans-serif",
+ "serifLoaded": true,
+ "fontFamilies": "Inter | Archivo | Mona Sans | InstrumentSerif | Vazirmatn | Hanken Grotesk | Source Serif 4 | Geist Mono",
+ "navRows": "Projects->/projects ; Agents->/agents ; Knowledge->/knowledge ; Scheduled->/schedules"
+}
+MODEL MENU TEXT: Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b | 1m | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block containing def add(a, b): return a + b | 8m | hello | 15m | hello | 36m | hello | 3h | Previous 7 days | From the attached knowledge collection, state the inventory code for this demo walk. | 2d | Using only the attached file, state the inventory code for this demo walk. | 2d | Using only the attached document, state the inventory code for this demo walk. | 2d | Reply with exact
+k21-agents clicked "Agents" -> https://chat-hive.scubed.co/agents
+k22-scheduled clicked "Scheduled" -> https://chat-hive.scubed.co/schedules
+k23-knowledge-nav clicked "Knowledge" -> https://chat-hive.scubed.co/knowledge
+k24/k25 captured on https://chat-hive.scubed.co/c/c200b4f9-6417-4ac8-a5fb-991cfc3e8fca
+k26-dark-home captured

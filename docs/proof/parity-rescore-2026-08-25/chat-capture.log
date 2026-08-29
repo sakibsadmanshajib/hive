@@ -1,0 +1,14 @@
+k01-home / HTTP 200 url=https://chat-hive.scubed.co/ body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k02-model-menu opened
+k03-plus-menu FAILED: TimeoutError: locator.click: Timeout 8000ms exceeded.
+Call log:
+[2m  - waiting for locator('button[aria-label*=\'More\'], #chat-input-conta
+k04-streaming-midflight captured
+k05-reply-rendered url=https://chat-hive.scubed.co/c/c200b4f9-6417-4ac8-a5fb-991cfc3e8fca body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table, an inline code span, and a fenced python code block contain"
+k07-projects /projects HTTP 200 url=https://chat-hive.scubed.co/projects body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k08-artifacts /artifacts HTTP 200 url=https://chat-hive.scubed.co/artifacts body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k09-knowledge /knowledge HTTP 200 url=https://chat-hive.scubed.co/knowledge body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k10-scheduled /scheduled HTTP 200 url=https://chat-hive.scubed.co/scheduled body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k11-bogus-route /definitely-not-a-route HTTP 200 url=https://chat-hive.scubed.co/definitely-not-a-route body="Hive | New Chat | Search | Projects | Agents | Knowledge | Scheduled | Folders | Recents | Today | Reply with exactly this and nothing else: a level-2 heading 'Demo', one short sentence of prose, a bullet list of two items, a two-column two-row markdown table,"
+k12-account-menu captured
+k13-settings-modal captured
