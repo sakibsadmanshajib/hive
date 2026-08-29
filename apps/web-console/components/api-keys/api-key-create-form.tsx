@@ -87,6 +87,30 @@ interface CreateApiKeyResponse {
   secret?: string;
 }
 
+const CREATE_FAILED = "Failed to create key. Please try again.";
+
+function isErrorBody(value: unknown): value is { error: string } {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.error === "string" && candidate.error.trim() !== "";
+}
+
+/**
+ * A 409 is the one refusal on this endpoint the customer can act on: the
+ * workspace has no billing link, so the key would have been rejected by the API
+ * on its first request (issue #1330). Discarding that sentence and printing
+ * "please try again" would send them round a loop that cannot succeed.
+ *
+ * Every other status keeps the generic wording, because the proxy route answers
+ * those with a status class ("Upstream service error", "Forbidden") that tells
+ * a customer nothing and reads like a leak.
+ */
+export async function createKeyErrorMessage(response: Response): Promise<string> {
+  if (response.status !== 409) return CREATE_FAILED;
+  const body: unknown = await response.json().catch(() => null);
+  return isErrorBody(body) ? body.error : CREATE_FAILED;
+}
+
 function isApiKeyResponse(value: unknown): value is CreateApiKeyResponse {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -141,14 +165,14 @@ export function ApiKeyCreateForm() {
       });
 
       if (!response.ok) {
-        setError("Failed to create key. Please try again.");
+        setError(await createKeyErrorMessage(response));
         setLoading(false);
         return;
       }
 
       const data: unknown = await response.json();
       if (!isApiKeyResponse(data)) {
-        setError("Failed to create key. Please try again.");
+        setError(CREATE_FAILED);
         setLoading(false);
         return;
       }

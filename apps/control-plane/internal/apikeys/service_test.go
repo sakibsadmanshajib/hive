@@ -18,7 +18,11 @@ type stubRepo struct {
 	keyRatePolicy     map[uuid.UUID]RatePolicy
 	keyLimits         map[uuid.UUID]KeyLimits
 	tenantByAccount   map[uuid.UUID]uuid.UUID
-	events            []KeyEvent
+	// unmappedAccounts opts an account out of the default-mapped behaviour in
+	// GetTenantIDByAccountID below, i.e. it models the account that has no
+	// public.tenant_billing_accounts row (issue #1330).
+	unmappedAccounts map[uuid.UUID]bool
+	events           []KeyEvent
 	// lifetimeSpend mirrors what RecordUsageFinalization writes to the real
 	// 'lifetime' api_key_usage_rollups window: unconditional, summed across
 	// every model_alias, independent of budget_kind.
@@ -39,6 +43,7 @@ func newStubRepo() *stubRepo {
 		keyRatePolicy:     make(map[uuid.UUID]RatePolicy),
 		keyLimits:         make(map[uuid.UUID]KeyLimits),
 		tenantByAccount:   make(map[uuid.UUID]uuid.UUID),
+		unmappedAccounts:  make(map[uuid.UUID]bool),
 		lifetimeSpend:     make(map[uuid.UUID]int64),
 	}
 }
@@ -273,8 +278,21 @@ func (r *stubRepo) GetAccountRatePolicy(_ context.Context, accountID uuid.UUID) 
 	return defaultRatePolicy(), nil
 }
 
+// GetTenantIDByAccountID defaults to "mapped" for any account a test has not
+// said otherwise about. Minting a key now requires a billing tenant (issue
+// #1330), and an account carrying one is the ordinary production state, so
+// the default keeps every test that is not about provisioning free of
+// fixture noise. Opt out with unmappedAccounts.
 func (r *stubRepo) GetTenantIDByAccountID(_ context.Context, accountID uuid.UUID) (uuid.UUID, error) {
-	return r.tenantByAccount[accountID], nil
+	if r.unmappedAccounts[accountID] {
+		return uuid.Nil, nil
+	}
+	if tenantID, ok := r.tenantByAccount[accountID]; ok {
+		return tenantID, nil
+	}
+	tenantID := uuid.New()
+	r.tenantByAccount[accountID] = tenantID
+	return tenantID, nil
 }
 
 func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error {
@@ -1058,6 +1076,10 @@ func TestResolveSnapshotReturnsNilTenantIDWhenAccountUnmapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
+	// Minting now requires a mapping (issue #1330), but resolving must still
+	// tolerate its absence: every key issued before that gate existed is
+	// sitting on an account that may never have had one.
+	repo.unmappedAccounts[accountID] = true
 
 	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
 	if err != nil {

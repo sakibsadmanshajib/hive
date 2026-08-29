@@ -86,6 +86,12 @@ var ErrDisabled = errors.New("apikeys: key is not disabled")
 // ErrNotActive is returned when an operation requires an active key.
 var ErrNotActive = errors.New("apikeys: key is not active")
 
+// ErrAccountNotProvisioned is returned when a mint is attempted for an account
+// that has no public.tenant_billing_accounts row. edge-api fails such a key
+// closed on its very first request (authz.AuthSnapshot.TenantUUID, PR #1240),
+// so the key is dead the moment it is issued.
+var ErrAccountNotProvisioned = errors.New("apikeys: account has no billing tenant")
+
 // KeyPolicy holds the durable per-key policy configuration.
 type KeyPolicy struct {
 	APIKeyID           uuid.UUID

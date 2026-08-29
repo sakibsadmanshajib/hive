@@ -62,10 +62,31 @@ function statusSummary(status: number): string {
 // upstream refusal keeps its status here instead of collapsing into 502. A
 // member who is not allowed to create a key sees 403, an already revoked key
 // sees 409, and only a genuine transport or decode failure reads as 502.
+// codeSummary states the real reason for a refusal the customer can act on,
+// keyed on the upstream machine code rather than on upstream text, the same way
+// app/api/console/members/role/route.ts already does. The wording lives here,
+// so nothing the control-plane wrote reaches the browser.
+//
+// account_not_provisioned: the workspace has no tenant_billing_accounts row, so
+// the key would have been refused by the API on its first request (issue
+// #1330). "Conflict" is what this used to read as, which is exactly as opaque
+// as the 403 the customer used to receive later.
+function codeSummary(code: string | null): string | null {
+  switch (code) {
+    case "account_not_provisioned":
+      return "This workspace is not connected to billing yet, so a key created here would be rejected by the API. If you have more than one workspace, switch to the one that carries your billing and create the key there. Otherwise reload this page to finish workspace setup, then try again.";
+    default:
+      return null;
+  }
+}
+
 function errorResponse(err: unknown, fallback: string): Response {
   if (err instanceof ControlPlaneError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
-    return NextResponse.json({ error: statusSummary(status) }, { status });
+    return NextResponse.json(
+      { error: codeSummary(err.code) ?? statusSummary(status) },
+      { status },
+    );
   }
   return NextResponse.json({ error: fallback }, { status: 502 });
 }
