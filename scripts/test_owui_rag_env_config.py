@@ -710,6 +710,46 @@ def test_a_malformed_size_cap_is_refused_rather_than_ignored() -> None:
         raise AssertionError("a non-numeric RAG_FILE_MAX_SIZE was accepted")
 
 
+def test_a_zero_size_cap_is_refused() -> None:
+    """Zero is not merely a useless cap, it is a cap the two consumers read
+    oppositely. Open WebUI's server-side check is `if max_size and len(contents)
+    > ...`, where 0 is falsy and enforces nothing, while the browser's is
+    `file.size > max_size * 1024 * 1024`, where 0 rejects every file of non-zero
+    length. A deployment set to 0 would refuse every upload in the composer
+    while leaving the API accepting files of unlimited size, and would read as
+    a working cap."""
+    try:
+        hive_rag_env_config.overrides({"RAG_FILE_MAX_SIZE": "0"})
+    except RuntimeError as error:
+        assert "RAG_FILE_MAX_SIZE" in str(error), error
+    else:
+        raise AssertionError("a zero RAG_FILE_MAX_SIZE was accepted")
+
+
+def test_allowlist_entries_written_with_a_leading_dot_still_match() -> None:
+    """`.pdf,.txt` is the obvious thing to write, and upstream compares against
+    an extension it has already stripped the dot from, so persisting the dot
+    would produce a list that matches nothing and refuses every upload while
+    the deployment looks correctly configured. That is the same failure shape as
+    the substring trap above, reached from the other direction."""
+    config = FakeConfig({})
+    applied = reconcile(config, {"RAG_ALLOWED_FILE_EXTENSIONS": ".PDF, .txt , md"})
+    assert applied["rag.file.allowed_extensions"] == ["pdf", "txt", "md"], applied
+
+
+def test_an_allowlist_of_only_separators_is_refused() -> None:
+    """An empty list is falsy in upstream's `if process and
+    allowed_file_extensions`, so persisting one turns the type check off while
+    the deployment's own configuration says it is on."""
+    for value in (",", " . , ", ",,,"):
+        try:
+            hive_rag_env_config.overrides({"RAG_ALLOWED_FILE_EXTENSIONS": value})
+        except RuntimeError as error:
+            assert "RAG_ALLOWED_FILE_EXTENSIONS" in str(error), error
+        else:
+            raise AssertionError(f"{value!r} was accepted as an allowlist")
+
+
 def test_unset_upload_limits_leave_the_persisted_values_alone() -> None:
     """Same contract as every other key here: an unset or blank variable writes
     nothing, so an administrator's own choice survives, and an enterprise
@@ -789,7 +829,14 @@ def test_compose_allowlist_covers_every_format_this_deployment_can_read() -> Non
     ).read_text(encoding="utf-8")
     block = re.search(r"known_source_ext = \[(.*?)\]", loaders, re.S)
     assert block, "known_source_ext moved; the allowlist derivation needs revisiting"
-    known = set(re.findall(r"'([^']+)'", block.group(1)))
+    known = set(re.findall(r"['\"]([^'\"]+)['\"]", block.group(1)))
+    # Without this the test cannot fail: an upstream reformat that the regex
+    # stops matching yields an empty set, an empty set is a subset of anything,
+    # and the assertion below then reports full coverage over nothing.
+    assert len(known) > 20, (
+        f"only {len(known)} extensions were extracted from known_source_ext; "
+        "the vendored source was reformatted and this derivation is now blind"
+    )
     documents = {
         "pdf", "csv", "rst", "xml", "htm", "html", "md", "docx", "doc",
         "xls", "xlsx", "ppt", "pptx", "msg", "odt", "epub", "txt",

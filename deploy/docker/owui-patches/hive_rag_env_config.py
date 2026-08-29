@@ -253,8 +253,9 @@ INTEGER_KEYS = frozenset({"rag.file.max_size"})
 # raw comma string would silently turn a membership test into a SUBSTRING test:
 # an upload with extension `df` would be admitted because the string "pdf"
 # contains it, and so would every other extension that happens to be a
-# substring of an allowed one. Lowercased on the way in because the handler
-# lowercases the extension it compares against.
+# substring of an allowed one. Lowercased and stripped of any leading dot on
+# the way in, because the handler compares against an extension it has already
+# lowercased and stripped the dot from.
 LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 
 # Keys whose value must never be logged. The rest are named with their value,
@@ -317,27 +318,48 @@ def overrides(environ) -> dict:
             # goes on accepting a 30 MB upload, which is the silent-no-op
             # failure this whole module exists to end. Failing here surfaces as
             # a startup failure naming the variable.
-            if not value.isdigit():
+            #
+            # Zero is refused for a sharper reason than "it is not a useful
+            # cap". The two consumers disagree about what it means. Open
+            # WebUI's server-side check is `if max_size and len(contents) >
+            # ...`, where 0 is falsy, so the backend enforces nothing at all.
+            # The browser's is `file.size > max_size * 1024 * 1024`, where 0
+            # rejects every file of non-zero length. A deployment set to 0 would
+            # therefore refuse every upload in the composer while leaving the
+            # API accepting files of unlimited size, which is worse than either
+            # end of the range and would read as "the cap works".
+            if not value.isdigit() or int(value) == 0:
                 raise RuntimeError(
-                    f"{variable} must be a whole number of megabytes, got "
-                    f"{value!r}. Refusing to start with an upload cap that "
-                    f"cannot be enforced."
+                    f"{variable} must be a whole number of megabytes greater "
+                    f"than zero, got {value!r}. Zero disables the server-side "
+                    f"cap while making the composer refuse every file, and a "
+                    f"value that cannot be parsed would leave the deployment "
+                    f"looking capped while enforcing nothing."
                 )
             applied[key] = int(value)
         elif key in LIST_KEYS:
-            items = [item.strip().lower() for item in value.split(",") if item.strip()]
-            # A value that is all separators (",", " , ") parses to an empty
+            # The leading dot is stripped because an operator writing
+            # ".pdf,.txt" is writing the obvious thing, and upstream compares
+            # against an extension it has already stripped the dot from, so
+            # keeping the dot would persist a list that matches nothing and
+            # refuse every upload while looking correctly configured.
+            items = [
+                item.strip().lstrip(".").lower()
+                for item in value.split(",")
+                if item.strip().strip(".")
+            ]
+            # A value that is all separators (",", " . , ") parses to an empty
             # list, and an empty list is falsy in `if process and
             # allowed_file_extensions`, so persisting it would turn the check
-            # off while the deployment's own configuration says it is on. An
-            # operator who wants no allowlist leaves the variable unset, which
-            # is the branch above.
+            # off while the deployment's own configuration says it is on.
             if not items:
                 raise RuntimeError(
                     f"{variable} is set to {value!r}, which parses to no "
-                    f"extensions at all. An empty allowlist disables the check "
-                    f"entirely. Leave the variable unset for that, or name the "
-                    f"extensions to allow."
+                    f"extensions at all. An empty allowlist turns the type "
+                    f"check off entirely while the deployment still looks "
+                    f"configured. Name the extensions to allow. Removing the "
+                    f"allowlist altogether is a change to the compose default, "
+                    f"made deliberately, not something an empty value does."
                 )
             applied[key] = items
         else:
