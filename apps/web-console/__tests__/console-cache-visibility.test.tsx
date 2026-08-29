@@ -514,10 +514,11 @@ describe("deriveOverviewTiles", () => {
         keys: [apiKey({ id: "key-1", nickname: "Production" })],
       },
     });
-    // These rows are console and chat traffic that carried no API key at all,
-    // so "Deleted key" would assert something untrue about the account.
+    // The bucket mixes traffic that never carried a key with keys deleted
+    // after the fact, so the label and the suffix both have to hold for
+    // either. "Deleted key" does not.
     expect(result.topKeys[0].label).toBe("Unattributed");
-    expect(result.topKeys[0].suffix).toBe("no key");
+    expect(result.topKeys[0].suffix).toBe("no key on record");
   });
 
   it("labels a spend row 'Deleted key' only when the account's own key list genuinely has no match", () => {

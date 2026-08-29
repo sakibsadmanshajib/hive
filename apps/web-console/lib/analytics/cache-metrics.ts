@@ -559,15 +559,19 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
     .sort((a, b) => b.total_credits - a.total_credits)
     .slice(0, TOP_KEYS_LIMIT)
     .map((row) => {
-      // A NULL api_key_id groups here, and it is not a deleted key: console
-      // and chat traffic carries no API key at all (issue #1347). Labelling
-      // it "Deleted key" would assert something untrue about the account.
+      // A NULL api_key_id groups here. The bucket mixes causes that the row
+      // itself cannot tell apart (traffic that carried no key, an error
+      // before a key was resolved, a key deleted under ON DELETE SET NULL),
+      // so both the label and the suffix have to be true of all three. What
+      // is certainly false for the first two is "Deleted key", which is what
+      // the bucket rendered as before this fix (issue #1347), on a workspace
+      // whose spend there was chat traffic that never carried a key.
       const unattributed = row.group_key === UNATTRIBUTED_GROUP_KEY;
       const key = unattributed ? undefined : apiKeyById.get(row.group_key);
       return {
         id: row.group_key,
         label: unattributed ? "Unattributed" : key ? key.nickname : "Deleted key",
-        suffix: unattributed ? "no key" : (key?.redacted_suffix ?? row.group_key.slice(0, 8)),
+        suffix: unattributed ? "no key on record" : (key?.redacted_suffix ?? row.group_key.slice(0, 8)),
         credits: row.total_credits,
       };
     });
