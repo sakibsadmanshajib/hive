@@ -159,6 +159,12 @@ the backend, and the page states the window it actually served rather than
 labelling 7d rows as something else.
 
 
+Byte-identical to capture 01, in fact: both screenshots hash to
+2987283eaf04ca3177e3e213b78436f2. A prototype-chain window value now renders
+the 7d page exactly, pixel for pixel, rather than a crash page or a page
+claiming a window it did not fetch. Only capture 01 is posted to the pull
+request, since the second image carries no additional pixels.
+
 TEARDOWN
 ========
 
