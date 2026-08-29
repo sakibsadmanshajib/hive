@@ -1,7 +1,7 @@
 """Add tenant_group_id to skill table and scope name uniqueness to it (hive #1397)
 
 Revision ID: c3f8a2b91d07
-Revises: d4e5f6a7b8c9
+Revises: 42e2978c7933
 Create Date: 2026-08-29 00:00:00.000000
 
 Not an upstream file. Dropped into this deployment's migrations/versions
@@ -19,13 +19,20 @@ own patch (apply_skill_tenant_scope_router_patch.py) starts prefixing it, so
 two tenants naming a skill the same thing collided on the PK check before
 name uniqueness was ever reached.
 
-down_revision points at d4e5f6a7b8c9 (add_automation_tables), the true head
-of this deployment's migration chain: it is the one revision id in this
-directory that no other file lists as its own down_revision. If that
-assumption is ever wrong (a later migration exists in the real pinned image
-that this vendored mirror does not carry), Alembic's own upgrade command
-fails loudly with "Multiple head revisions are present", not silently -- this
-migration cannot both apply cleanly and leave the chain broken.
+down_revision points at 42e2978c7933 (add_memory_path_and_meta), the true
+head of this deployment's migration chain: it is the one revision id, of the
+48 files in this directory, that no other file lists as its own
+down_revision (verified with a script comparing the full revision set
+against the full down_revision set, not by spot-checking a handful of files
+by hand -- an earlier draft of this migration pointed at d4e5f6a7b8c9, which
+LOOKED like the head under a narrower regex that missed newer files using
+`down_revision = '...'` with no type annotation instead of `down_revision:
+Union[str, None] = '...'`, and is actually mid-chain, superseded by
+b7c8d9e0f1a2). If this assumption is ever wrong (a later migration exists in
+the real pinned image that this vendored mirror does not carry), Alembic's
+own upgrade command fails loudly with "Multiple head revisions are present",
+not silently -- this migration cannot both apply cleanly and leave the chain
+broken.
 
 Why raw SQL instead of op.batch_alter_table. SQLite implements an inline
 `Column(..., unique=True)` as an unnamed autoindex Alembic cannot target with
@@ -57,7 +64,7 @@ from alembic import op
 from open_webui.migrations.util import get_existing_tables
 
 revision: str = 'c3f8a2b91d07'
-down_revision: Union[str, None] = 'd4e5f6a7b8c9'
+down_revision: Union[str, None] = '42e2978c7933'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

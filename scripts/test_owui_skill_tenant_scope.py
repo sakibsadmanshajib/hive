@@ -30,6 +30,7 @@ Run: python3 scripts/test_owui_skill_tenant_scope.py
 import ast
 import asyncio
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -86,6 +87,45 @@ CREATE INDEX idx_skill_updated_at ON skill (updated_at);
 """
 
 
+VENDORED_MIGRATIONS = REPO_ROOT / "vendor/open-webui/backend/open_webui/migrations/versions"
+
+
+def true_migration_chain_head() -> str:
+    """The one revision id, across every file in VENDORED_MIGRATIONS, that no
+    other file lists as its own down_revision.
+
+    Real bug this caught in self-review before it shipped: an earlier draft
+    computed this by hand from a regex that only matched the older
+    `down_revision: Union[str, None] = '...'` annotated form. 19 of the 48
+    files in this directory use the newer unannotated `down_revision =
+    '...'` form instead, so that draft silently undercounted the file set,
+    named a MID-CHAIN revision as the head, and would have branched the real
+    chain on the next deploy (Alembic fails loudly on that, "Multiple head
+    revisions are present", but loud is still a broken deploy). Matching
+    both forms and comparing the full revision set against the full
+    down_revision set, rather than spot-checking a handful of files, is what
+    catches that class of mistake instead of repeating it.
+    """
+    revision_re = re.compile(r"^revision\s*(?::\s*str)?\s*=\s*'([a-f0-9]+)'", re.M)
+    down_revision_re = re.compile(r"^down_revision\s*(?::.*?)?\s*=\s*'([a-f0-9]+)'", re.M)
+    revisions, down_revisions = set(), set()
+    for f in VENDORED_MIGRATIONS.glob("*.py"):
+        text = f.read_text()
+        r = revision_re.search(text)
+        d = down_revision_re.search(text)
+        if r:
+            revisions.add(r.group(1))
+        if d:
+            down_revisions.add(d.group(1))
+    heads = revisions - down_revisions
+    if len(heads) != 1:
+        raise AssertionError(
+            f"expected exactly one migration chain head, found {sorted(heads)}; "
+            "the vendored migrations directory may have branched"
+        )
+    return heads.pop()
+
+
 def load_rebuild_sql() -> str:
     """Import REBUILD_SQL from the real migration file rather than copying
     it, so this test cannot drift from what actually ships."""
@@ -121,6 +161,17 @@ def insert(conn, id_, user_id, name, tenant_group_id="__omit__"):
 
 
 def run_schema_proof():
+    migration_source = MIGRATION.read_text()
+    down_revision_match = re.search(
+        r"^down_revision\s*(?::.*?)?\s*=\s*'([a-f0-9]+)'", migration_source, re.M
+    )
+    check(
+        "migration's down_revision points at the ACTUAL current chain head "
+        "(recomputed from all 48 vendored migration files, not assumed)",
+        down_revision_match is not None
+        and down_revision_match.group(1) == true_migration_chain_head(),
+    )
+
     rebuild_sql = load_rebuild_sql()
     check(
         "REBUILD_SQL adds tenant_group_id and a composite unique index",
@@ -175,6 +226,50 @@ def run_schema_proof():
     check("no row was silently dropped during the rebuild (4 rows survive)", total == 4)
 
     conn.close()
+
+    # A separate connection, exercising the EXACT statement-by-statement
+    # split-and-execute loop upgrade() actually runs (op.execute() cannot run
+    # a multi-statement script in one call, which is why upgrade() splits on
+    # ";\n" and loops rather than calling executescript() once, unlike the
+    # check above). str.strip() on the whole SQL block leaves the FINAL
+    # statement's trailing ";" attached (nothing after it for ";\n" to
+    # match), so this exercises the asymmetry directly rather than trusting
+    # that sqlite3 tolerates one trailing semicolon.
+    statements = [s.strip() for s in rebuild_sql.strip().split(";\n") if s.strip()]
+    check(
+        "REBUILD_SQL splits into exactly 7 statements on ';\\n'",
+        len(statements) == 7,
+    )
+    conn2 = sqlite3.connect(":memory:")
+    conn2.executescript(OLD_SCHEMA_SQL)
+    insert(conn2, "legacy-note-2", "user-legacy", "Legacy Note 2")
+    split_ok = True
+    try:
+        for statement in statements:
+            conn2.execute(statement)
+        conn2.commit()
+    except sqlite3.Error as e:
+        split_ok = False
+        print(f"    (statement-split path failed: {e})")
+    check(
+        "the real upgrade() statement-split-and-loop path (not executescript) "
+        "runs cleanly against a real connection",
+        split_ok,
+    )
+    if split_ok:
+        insert(conn2, "grp-x--research", "user-x", "Research", tenant_group_id="grp-x")
+        insert(conn2, "grp-y--research", "user-y", "Research", tenant_group_id="grp-y")
+        collision = False
+        try:
+            insert(conn2, "grp-x--research-2", "user-x", "Research", tenant_group_id="grp-x")
+        except sqlite3.IntegrityError:
+            collision = True
+        check(
+            "post-split-path migration: two tenants share a name, a third "
+            "same-tenant collision still fails",
+            collision,
+        )
+    conn2.close()
 
 
 # ---------------------------------------------------------------------------
