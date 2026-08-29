@@ -406,3 +406,129 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
             echo "opened the tracking issue"
           fi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # A second, independent watchdog in the same file, for the same class of
+  # defect: something that should have happened did not, and its absence was
+  # silent (issue #1491).
+  #
+  # The demo box's backup has two halves with opposite observability. The
+  # on-box half writes a status file and alerts on its own staleness, so it is
+  # visible and was genuinely healthy. The off-box half
+  # (scripts/pull-box-backups.sh) is a manual command on a dev machine that
+  # wrote nothing anywhere, so its silence was indistinguishable from its
+  # success. On 2026-08-29 it had not run for six days: sixteen consecutive
+  # green backup lines on the box, one day out of seven copied off it, and no
+  # signal anywhere. Same shape as the deploy drift the job above watches,
+  # which is why it lives here rather than in a workflow of its own.
+  #
+  # Why this lane. It is the repository's only scheduled workflow whose entire
+  # purpose is detecting a thing that silently did not happen, and it already
+  # files a deduped GitHub issue rather than relying on a red square in the
+  # Actions tab that nobody is watching (its own header argues that point at
+  # length). It also runs on a hosted runner, which this check needs, because
+  # the marker it reads is a repository variable rather than a file on the box.
+  #
+  # Why the marker is a repository variable. Nothing that runs on a schedule
+  # can read a file on the demo box: hosted runners have no SSH path to it,
+  # and the two workflows that do run on its self-hosted runner
+  # (post-deploy-verify.yml, rag-demo-readiness.yml) are triggered by deploys
+  # and labels, never by a clock. The remaining candidate, a check inside
+  # scripts/backup-box.sh run by the box's own hourly cron, would be inert on
+  # merge, because the box runs a copy installed by hand under
+  # /home/sakib/hive-backups/bin and merging to this repository does not touch
+  # it. A repository variable is the one store the writing machine can reach
+  # and a scheduled lane can read.
+  #
+  # No box contact, no credential and no backup artifact is involved here: the
+  # job reads one repository variable holding a timestamp and a date.
+  #
+  # Alerting deliberately differs from the job above. This one creates the
+  # tracking issue when none is open and otherwise says nothing. Staleness
+  # persists for days by nature, and on a 30 minute cadence the
+  # comment-every-time shape would post dozens of notifications a day about one
+  # unchanged fact, which is how a monitor gets muted. The job still exits
+  # non-zero on every stale run, so the red is continuous even when the
+  # notification is not.
+  # ──────────────────────────────────────────────────────────────────────────
+  offbox-backup-staleness:
+    name: Check the off-box backup copy is not stale
+    if: >-
+      ${{
+        github.event_name == 'schedule'
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-offbox-backup-check'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Written by scripts/pull-box-backups.sh, and by nothing else, after a
+      # verified pull. Unset is a legitimate state and the checker treats it as
+      # stale, never as "unknown, assume fine".
+      LAST_OFFBOX_BACKUP_PULL: ${{ vars.LAST_OFFBOX_BACKUP_PULL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Check the off-box pull marker
+        id: check
+        # No pipe around the checker: its exit status is the entire result, and
+        # the default shell here is `bash -e` without pipefail, so putting it on
+        # the left of a `| tee` would take tee's status instead and print a
+        # success line over a real failure.
+        run: |
+          set -uo pipefail
+          if node .github/ci/check-offbox-backup-freshness.mjs > offbox-check.txt 2>&1; then
+            stale=false
+          else
+            stale=true
+          fi
+          cat offbox-check.txt
+          echo "stale=$stale" >> "$GITHUB_OUTPUT"
+
+      - name: File the tracking issue and fail
+        if: steps.check.outputs.stale == 'true'
+        env:
+          TITLE: the off-box copy of the demo box backups has gone stale
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          detail=$(cat offbox-check.txt 2>/dev/null || echo '(the check produced no output, see the run log)')
+          body=$(printf '%s\n' \
+            "$detail" \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "The demo box takes encrypted backups twice a day and keeps 14 days of them," \
+            "but every one of those days lives on a single disk until someone copies it" \
+            "off. This check reads the marker that scripts/pull-box-backups.sh records" \
+            "after a verified pull. That marker is now older than the threshold, or" \
+            "missing entirely, so the off-box copy is behind the box by at least that" \
+            "much." \
+            "" \
+            "Fix: run \`scripts/pull-box-backups.sh\` on the dev machine holding the" \
+            "off-box copy. It pulls only encrypted artifacts, verifies their checksums," \
+            "and records the marker. Close this once a later run of this check is green." \
+            "" \
+            "This is issue #1491's failure mode. Where the durable off-box copy should" \
+            "ultimately live is a separate, open owner decision (#1492); this check only" \
+            "makes the staleness of whatever copy exists visible.")
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
+                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          if [ -n "${num:-}" ]; then
+            echo "tracking issue #$num is already open, not commenting again"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+            echo "opened the tracking issue"
+          fi
+          echo "::error::the off-box backup copy is stale, run scripts/pull-box-backups.sh"
+          exit 1

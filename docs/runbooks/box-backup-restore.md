@@ -43,6 +43,24 @@ machine, pulled encrypted only (scripts/pull-box-backups.sh). The passphrase
 also exists off-box at /home/sakib/hive-backups/etc/passphrase-hive-demo so a
 dead box does not take its own key down with it.
 
+That pull is manual, and its staleness is now observable (issue #1491). After a
+pull whose checksums verify, and only then, `scripts/pull-box-backups.sh`
+records the repository variable `LAST_OFFBOX_BACKUP_PULL` on
+`sakibsadmanshajib/hive`, holding the pull time and the newest day copied. A
+pull that fails verification leaves the previous value untouched and exits
+non-zero, so the marker never claims a copy that did not happen.
+`deploy-drift-watchdog.yml`'s `offbox-backup-staleness` job reads that variable
+every 30 minutes and fails, opening a tracking issue, once it is older than 72
+hours or missing entirely. Absent is treated as stale, never as unknown.
+
+Why a repository variable rather than a file on the box: nothing that runs on a
+schedule can read a file on the box. Hosted runners have no SSH path to it, and
+the two workflows that do run on its self-hosted runner are triggered by deploys
+and labels rather than by a clock, while a check added to this script would be
+inert until someone hand-copied the new version into
+`/home/sakib/hive-backups/bin`. Only encrypted artifacts still cross the
+network; the marker is a timestamp and a date and involves no credential.
+
 ## Schedule, retention, capacity
 
 - systemd USER timer `hive-box-backup.timer`: 03:15 and 15:15 UTC daily,
@@ -69,6 +87,20 @@ The script posts directly to Alertmanager's v2 API on the published host port
   through resolve_timeout once a later run succeeds (success posts nothing).
 - `HiveBoxBackupStale`: posted by any `--check` invocation when the last
   success exceeds 26 hours. Catches missed runs and dead schedulers.
+
+The off-box half has its own, separate signal, because it runs somewhere else
+and had none at all until issue #1491: `deploy-drift-watchdog.yml`'s
+`offbox-backup-staleness` job. It fails and opens a GitHub issue when the last
+verified pull is more than 72 hours old, and the failure text names
+`scripts/pull-box-backups.sh` as the fix.
+
+The 72-hour threshold is deliberately looser than the on-box 26 hours. The
+writing machine is a laptop that is off for stretches, and a Friday-evening to
+Monday-morning gap is about 63 hours, so an ordinary weekend has to stay silent
+or the alarm gets muted and the gap goes unobserved again. It stays well inside
+the box's own 14-day retention, so when it does fire every missing day is still
+recoverable from the box, and it is far tighter than the six days that actually
+elapsed unnoticed on 2026-08-29.
 
 At-a-glance checks, newest line tells the story:
 
@@ -223,7 +255,14 @@ The backup tar was created as `tar czf - -C / var/lib/storage`, so its entries c
 - True offsite destination: one encrypted copy lives on the dev machine, which
   stops the box-death scenario but not dev-machine-plus-box co-loss. Choosing
   the real offsite/object-store destination is an owner decision, tracked in
-  the follow-up issue filed alongside this change (#1100).
+  #1492. The staleness of whatever copy exists is now visible (#1491), which is
+  a different property: the alarm tells you the copy is behind, it does not
+  make the copy durable.
+- Scheduling the pull itself: deliberately not done. That machine is a laptop
+  and is off for long stretches, so a timer there would recreate an
+  unobservable half with a false sense of coverage, which is the failure this
+  is meant to end rather than repeat. Coverage equals however often someone
+  runs the pull, and the point of the marker is that everyone can see it.
 - Point-in-time recovery: pg_dump gives snapshots at run times, nothing finer.
 - Encryption is aes-256-cbc with a per-file salt and PBKDF2 (600k iterations);
   checksums detect corruption but are not signed, so an attacker who can write
