@@ -55,6 +55,7 @@ for rel in \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
 	chat/Settings/Interface.svelte \
+	common/RichTextInput.svelte \
 	workspace/Skills.svelte \
 	workspace/Skills/SkillEditor.svelte
 do
@@ -162,21 +163,35 @@ docker run --rm \
     # resolves. A major-only pin would let it pass with a different 5.x than
     # deploy/docker/Dockerfile.open-webui uses, which is a fresh way to get a
     # green check and a red deploy.
+    # Every version comes from the vendored lockfile, so this lane runs the
+    # EXACT versions the image build resolves. The tiptap trio is here because
+    # a guard may need to exercise the editor rather than only read its source:
+    # composer-literal-input.test.ts (issue #1399) types a corpus through the
+    # real ProseMirror input-rule pipeline and asserts the string the send path
+    # would serialize, which is the value the defect corrupted. Without these,
+    # that file cannot resolve its imports and the whole suite fails to collect.
     pinned=$(node -e "
       const lock = require(\"/work/owui-package-lock.json\");
       const pkgs = lock.packages || {};
-      const svelte = pkgs[\"node_modules/svelte\"];
-      const plugin = pkgs[\"node_modules/@sveltejs/vite-plugin-svelte\"];
-      if (!svelte || !svelte.version || !plugin || !plugin.version) {
-        console.error(\"svelte or its vite plugin absent from vendor/open-webui/package-lock.json\");
-        process.exit(1);
-      }
-      process.stdout.write(svelte.version + \" \" + plugin.version);
+      const want = [
+        \"svelte\",
+        \"@sveltejs/vite-plugin-svelte\",
+        \"@tiptap/core\",
+        \"@tiptap/pm\",
+        \"@tiptap/extension-typography\"
+      ];
+      const specs = want.map((name) => {
+        const entry = pkgs[\"node_modules/\" + name];
+        if (!entry || !entry.version) {
+          console.error(name + \" absent from vendor/open-webui/package-lock.json\");
+          process.exit(1);
+        }
+        return name + \"@\" + entry.version;
+      });
+      process.stdout.write(specs.join(\" \"));
     ")
-    svelte_version=${pinned% *}
-    plugin_version=${pinned#* }
-    echo "pinning svelte@$svelte_version and @sveltejs/vite-plugin-svelte@$plugin_version, the versions the image build resolves"
+    echo "pinning $pinned, the versions the image build resolves"
     npm install --no-save --no-audit --no-fund --loglevel=error \
-      vitest@2 @vitest/coverage-v8@2 "svelte@$svelte_version" "@sveltejs/vite-plugin-svelte@$plugin_version"
+      vitest@2 @vitest/coverage-v8@2 $pinned
     npx vitest run --coverage --coverage.include="lib/hive/**" --coverage.reporter=text
     node owui-hive-svelte-compile-check.mjs lib/hive'

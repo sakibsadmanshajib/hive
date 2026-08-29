@@ -766,7 +766,7 @@
 								lowlight
 							}),
 							// @tiptap/extension-typography is deliberately NOT registered
-							// here (issue #1399). Its twenty-one input rules rewrite the
+							// here (issue #1399). Its twenty-two input rules rewrite the
 							// text buffer as you type, not its presentation, so the
 							// rewritten string is what the send path serializes and what
 							// reaches the model: `--` became an em dash, `"` and `'`
@@ -778,7 +778,9 @@
 							// Code inside a formed fence was always exempt, because
 							// input rules do not run in a code block, but code typed as
 							// prose is the common case. Guarded by
-							// src/lib/hive/composer-literal-input.test.ts.
+							// src/lib/hive/composer-literal-input.test.ts, which fails if
+							// any module in this array registers text rewriting input
+							// rules, whatever name it is imported under.
 							TableKit.configure({
 								table: { resizable: true }
 							}),
