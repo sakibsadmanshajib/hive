@@ -41,8 +41,26 @@ var (
 func WriteProviderBlindUpstreamError(w http.ResponseWriter, alias string, httpStatus int, rawMessage string) {
 	errType := "api_error"
 	code := "upstream_error"
+	// responseStatus is what the CUSTOMER sees. It starts equal to httpStatus,
+	// the real upstream status, and only diverges for 402 below. httpStatus
+	// itself stays untouched so the operator log two lines down keeps the real
+	// value even after responseStatus is remapped.
+	responseStatus := httpStatus
 
 	switch httpStatus {
+	case http.StatusPaymentRequired:
+		// A 402 here is the upstream refusing for ITS OWN funding (our
+		// provider account's balance with OpenRouter, DeepSeek, or whoever),
+		// never the Hive customer's balance: CreateReservation already
+		// verified the customer's own credit before dispatch ever reached
+		// this point (D-034, fail closed). Relaying a literal 402 tells the
+		// customer the opposite, that THEY must pay, which is exactly the
+		// provider refusal being presented as a caller fault the way issue
+		// #1411 names. Treated as the same "temporarily unavailable" verdict
+		// a 503/504 already gets: it is an availability problem on Hive's
+		// side, not a request the caller can fix.
+		responseStatus = http.StatusServiceUnavailable
+		code = "upstream_unavailable"
 	case http.StatusTooManyRequests:
 		errType = "rate_limit_error"
 		code = "upstream_rate_limited"
@@ -57,9 +75,9 @@ func WriteProviderBlindUpstreamError(w http.ResponseWriter, alias string, httpSt
 		code = "invalid_request"
 	}
 
-	message := sanitizeProviderBlindMessage(alias, httpStatus, rawMessage)
+	message := sanitizeProviderBlindMessage(alias, responseStatus, rawMessage)
 	logProviderBlindUpstreamError(w, alias, httpStatus, rawMessage, message)
-	WriteError(w, httpStatus, errType, message, &code)
+	WriteError(w, responseStatus, errType, message, &code)
 }
 
 func sanitizeProviderBlindMessage(alias string, httpStatus int, raw string) string {
