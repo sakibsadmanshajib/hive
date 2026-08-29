@@ -2517,6 +2517,168 @@ jobs:
                 labels: [label],
                 body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
                   guidance() + '\n\n' +
-                  'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
+                  'Filed automatically, and closed automatically by the report-recovered job below once a run goes green. It will be refiled if it fails again.',
               });
+            }
+
+  report-recovered:
+    # The other half of report-failure above, and the reason it has to exist is
+    # already written on that job: it dedupes on a single open issue carrying
+    # the label below, so while one is open a genuine new failure is downgraded
+    # to a one-line comment with no guidance and no notification of its own.
+    # agent-workspace-coverage's own comment names that trap by name. It only
+    # stays theoretical if the issue closes when the workflow recovers, and
+    # nothing closed it: the instruction in the filed body, "close it once a
+    # run goes green", was addressed to a human with no reason to be watching,
+    # and no workflow in this repository has ever closed an issue it filed.
+    #
+    # Issue #1416 is the worked example. Filed 10:00 on 2026-08-29 for a disk
+    # floor refusal (run 33246772783, 14G free against the 15G floor), cause
+    # fixed and merged four hours later by PR #1424, then twenty-one
+    # consecutive green runs. The issue stayed open through all of them, still
+    # reading "The MIGRATION failed, so main is running against a stale
+    # schema", and was still being treated that evening as the top blocker on
+    # a demo box that had been deploying every merge all day. A tracker that
+    # cannot say "recovered" is a tracker that stops being read, which is the
+    # same trade refused everywhere else here: never swap a loud signal for a
+    # quiet one, and never leave a red flag flying over a green system.
+    #
+    # `needs` is deliberately identical to report-failure's, and the asymmetry
+    # is what makes it matter: a narrower list here would close an issue that a
+    # job outside the list had just filed, and a wider one would refuse to
+    # close on a job report-failure never tracked.
+    # .github/ci/lint-deploy-failure-reporter.mjs fails the build if the two
+    # lists drift apart or if this job is removed.
+    name: Report recovery
+    needs: [migrate, deploy, sdk-replay]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      # `actions: read` is what lets the script ask the API when this run
+      # started. Without it there is no run_started_at to compare against, the
+      # created-before-run check below cannot exist, and an issue opened while
+      # this deploy was still in flight -- describing a failure this run never
+      # disproved -- gets closed by it.
+      actions: read
+      issues: write
+    timeout-minutes: 5
+    # A notifier must never be able to change the verdict, the same rule
+    # post-deploy-verify.yml's reporter carries. A rate-limited or broken close
+    # cannot turn a green deploy red, and its worst case is the issue staying
+    # open, which is exactly today's behaviour.
+    #
+    # What continue-on-error must not buy is silence. It also suppresses
+    # GitHub's own failure notification, so a closer that breaks quietly -- a
+    # permissions regression, an issues.update schema change, a token scope
+    # removed -- leaves the tracking issue open forever with nobody told, which
+    # is issue #1416 again with the alarm taken out. The script therefore
+    # catches its own failure and shouts: core.error emits a `::error::`
+    # annotation on the run page and core.summary writes a line into the job
+    # summary. Neither workflow command changes a step's exit status on its
+    # own, so both are loud without touching the deploy verdict.
+    continue-on-error: true
+    steps:
+      - uses: actions/github-script@v9
+        continue-on-error: true
+        with:
+          script: |
+            const label = 'ci-failure:deploy-demo-box';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // report-failure files with the default GITHUB_TOKEN, so anything
+            // this workflow filed is authored by github-actions[bot]. Anything
+            // else carrying the label was opened by a person, or hand-labelled
+            // by one: GitHub creates a label on first use and then offers it
+            // to every contributor from the label list, so the string is not
+            // evidence of who filed it. Closing is destructive in a way
+            // commenting is not, since undoing a wrongful close needs a human
+            // to notice it first, so only this workflow's own issues close.
+            const filedBy = 'github-actions[bot]';
+            // Written into the note left on an issue this job declines to
+            // close, and read back before writing another one. Without it a
+            // hand-labelled issue would collect one comment per green deploy,
+            // which on this repo is one per merge.
+            const leftOpenMarker = '<!-- deploy-demo-box:left-open-for-review -->';
+            try {
+              const { data: run } = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+              });
+              const runStartedAt = Date.parse(run.run_started_at);
+              // The list api rather than the search api, for the same
+              // read-your-writes reason report-failure uses it: search is
+              // eventually consistent and would miss an issue filed minutes
+              // ago. Paginated, and every match is considered rather than only
+              // the first, because report-failure opens at most one but a
+              // second filed under this label would otherwise stay open
+              // forever and go on swallowing real failures as comments.
+              const open = await github.paginate(github.rest.issues.listForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: label,
+                per_page: 100,
+              });
+              for (const issue of open) {
+                const author = issue.user?.login;
+                let leaveOpen = null;
+                if (author !== filedBy) {
+                  leaveOpen = `it was opened by @${author} rather than ${filedBy}, so this workflow did not file it`;
+                } else if (!(Date.parse(issue.created_at) < runStartedAt)) {
+                  leaveOpen = `it was opened at ${issue.created_at}, after this run started at `
+                    + `${run.run_started_at}, so a green run that was already under way cannot have `
+                    + `disproved what it reports`;
+                }
+                if (leaveOpen) {
+                  // Skipping silently would recreate the #1416 shape on the
+                  // issues this job declines to touch: green system, red flag
+                  // still flying, nobody told. It says so once instead.
+                  const comments = await github.paginate(github.rest.issues.listComments, {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    per_page: 100,
+                  });
+                  if (comments.some((c) => (c.body ?? '').includes(leftOpenMarker))) {
+                    continue;
+                  }
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `${leftOpenMarker}\ndeploy-demo-box has since gone green: ${runUrl}.\n\n`
+                      + `Left OPEN for human review rather than closed automatically, because `
+                      + `${leaveOpen}. Close it by hand once someone confirms it is resolved.\n\n`
+                      + `Posted once per issue, not once per green run.`,
+                  });
+                  continue;
+                }
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Recovered: ${runUrl} is green. Migrations applied, the box was `
+                    + `recreated on the new images, and the post-deploy SDK replay passed.\n\n`
+                    + `Closed automatically. It will be refiled the next time this workflow fails.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+              }
+            } catch (err) {
+              const detail = err?.message ?? String(err);
+              const alarm = `report-recovered failed (${detail}). The deploy is green and unaffected, `
+                + `but any open ci-failure:deploy-demo-box issue was NOT closed and nothing else will `
+                + `notice: continue-on-error suppresses the usual failure notification. Fix the closer, `
+                + `then close the issue by hand.`;
+              core.error(alarm);
+              await core.summary
+                .addHeading('report-recovered failed', 3)
+                .addRaw(alarm)
+                .write();
+              throw err;
             }

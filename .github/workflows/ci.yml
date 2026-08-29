@@ -677,6 +677,18 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: node .github/ci/lint-deploy-paths-filter.mjs
 
+      # Deploy tracking-issue reporter symmetry (issue #1416).
+      # deploy-demo-box.yml dedupes every red run onto one open issue, so a
+      # stale open issue swallows the next unrelated outage as a comment.
+      # Nothing closed that issue on recovery until #1416, and #1416 itself sat
+      # open through twenty-one green runs still claiming a migration had
+      # failed. This asserts the file half and the close half exist, share a
+      # label, and watch the same jobs. Lives here for the same reason
+      # lint-deploy-paths-filter.mjs above does: a workflow-only change must
+      # not be able to remove a deploy guard without a required check noticing.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/lint-deploy-failure-reporter.mjs
+
       # Regression guard for deploy-drift-watchdog.yml's grace-window
       # freshness check. Before this test existed, that check read main's
       # tip commit date instead of the newest covered commit's date, so an
