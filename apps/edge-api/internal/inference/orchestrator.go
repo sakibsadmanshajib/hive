@@ -213,7 +213,7 @@ func (o *Orchestrator) executeSync(
 		ModelAlias:    model,
 		// A variable-price alias raises this from its catalog row; a fixed
 		// one keeps the flat endpoint default. See ReservationCredits.
-		EstimatedCredits: ReservationCredits(route, estimatedCredits),
+		EstimatedCredits: ReservationCredits(route, estimatedCredits, endpoint, body),
 		PolicyMode:       "strict",
 	})
 	endCreateReservation()

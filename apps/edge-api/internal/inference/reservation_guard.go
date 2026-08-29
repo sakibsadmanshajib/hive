@@ -41,12 +41,22 @@ func refuseOnReservationFailure(w http.ResponseWriter, endpoint, model string, e
 		// (accounting.PolicyError, see writeAccountingError); 429 is a rate
 		// limit on the reservation call itself. Both are quota verdicts, and
 		// both answer with the OpenAI-compatible insufficient_quota shape that
-		// SDKs already understand. Provider-blind and free of any currency,
-		// FX, USD or balance figure on purpose: this message reaches customers
-		// in Bangladesh, where exchange-rate language is not permitted.
+		// SDKs already understand: status 429, type and code
+		// insufficient_quota, unchanged, because that is what SDKs branch on.
+		//
+		// The two say DIFFERENT things to a human, though, and used to share
+		// one sentence borrowed from OpenAI: "You exceeded your current quota,
+		// please check your plan and billing details." On the 409 branch that
+		// was wrong twice over, since the customer has credit and Hive has no
+		// plans, and it sent them to a billing page that showed a positive
+		// balance (issue #1372). Provider-blind and free of any balance figure
+		// on purpose: this is an error body, not a billing surface.
 		code := "insufficient_quota"
-		apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
-			"You exceeded your current quota, please check your plan and billing details.", &code)
+		message := "Your available credit does not cover this request. Add credits, or send a shorter request, and try again."
+		if statusErr.StatusCode == http.StatusTooManyRequests {
+			message = "Too many requests right now. Please retry in a moment."
+		}
+		apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota", message, &code)
 		return true
 	}
 

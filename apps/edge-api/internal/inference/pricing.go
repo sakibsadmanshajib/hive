@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"strconv"
 
@@ -304,6 +305,19 @@ const (
 	// variable-price alias, forced onto the outbound request so a client
 	// cannot raise it.
 	VariablePriceMaxCompletionTokens = 16384
+	// VariablePricePromptCeilingUSD and VariablePriceCompletionCeilingUSD are
+	// provider.max_price on the variable-price routes in
+	// deploy/litellm/config.yaml, in USD per million tokens. They are the RATE
+	// half of the bound: the two caps above bound how many tokens one request
+	// can involve, and these bound what each of those tokens can cost, which
+	// together are what make a hold provable rather than a guess.
+	//
+	// Restated here because sizing a hold needs the number in Go, and the
+	// config file is not readable from a request path. That duplication is
+	// guarded, not hoped over: TestVariablePriceCeilingsMatchTheLiteLLMConfig
+	// reads the YAML and fails when these drift from it.
+	VariablePricePromptCeilingUSD     = 3
+	VariablePriceCompletionCeilingUSD = 15
 )
 
 // completionLimitFields names the request field that caps generated tokens for
@@ -430,19 +444,114 @@ const (
 // A variable-price alias cannot use that. Its cost is bounded by the
 // provider-side price ceiling configured on the route, not by a catalog price,
 // and a router can resolve to a model an order of magnitude dearer than the
-// flat default assumes. Its hold therefore comes from the catalog row, which
-// records both the number and the arithmetic behind it. The endpoint default
-// acts as a floor so this can only ever raise a hold, never lower one.
+// flat default assumes. Its hold is therefore derived from the bounds, and
+// bounded above by the catalog row, which records the whole-envelope figure and
+// the arithmetic behind it. The endpoint default acts as a floor.
+//
+// WHY THE HOLD IS SIZED PER REQUEST (issue #1372)
+//
+// The catalog figure prices the LARGEST request the bounds allow: a full
+// 256 KiB body generating a full 16,384 tokens, at the ceiling rate, about
+// 2.00 USD. Charging every request that hold made the alias unusable for
+// anyone holding less than that, whatever they were actually sending. An
+// account with 0.455 USD on it, enough for well over a thousand real turns,
+// was refused before a token was generated, and told it had exceeded a quota.
+//
+// The fix is not to hold less than a request can cost. It is to notice that
+// the bounds are per request and already known here: the body is in hand, and
+// EnforceVariablePriceBounds has already forced this request's completion
+// ceiling into it. Pricing THOSE two numbers at the same ceiling rate yields a
+// hold that still provably covers this request and is typically five to six
+// times smaller than the envelope. A short turn that cannot cost 2.00 USD is
+// no longer asked to prove it can pay 2.00 USD.
+//
+// The catalog figure stays the upper bound, so a drift in the Go ceiling
+// constants can only ever shrink a hold toward the value the migration proved,
+// never past it, and TestTheHoldProvablyCoversTheWorstBoundedRequest still
+// fails if that value stops covering the envelope.
 //
 // The hold is an authorization, not a price. Settlement releases it in full and
 // posts the real cost as the charge, so an oversized hold costs the customer
-// nothing beyond briefly reserving headroom.
-func ReservationCredits(route SelectRouteResult, endpointDefault int64) int64 {
+// nothing beyond briefly reserving headroom, and an undersized one is the far
+// worse direction: it lets a request cost more than the account was checked
+// against. That is why this narrows the hold only by arithmetic that keeps the
+// coverage proof intact, and falls back to the catalog figure whenever it
+// cannot compute one.
+func ReservationCredits(route SelectRouteResult, endpointDefault int64, endpoint string, body []byte) int64 {
 	estimate := route.Pricing.ReservationEstimateCredits
-	if estimate == nil || *estimate <= endpointDefault {
+	if estimate == nil {
 		return endpointDefault
 	}
-	return *estimate
+	hold := *estimate
+	if sized, ok := variablePriceRequestHold(endpoint, body); ok && sized < hold {
+		hold = sized
+	}
+	if hold <= endpointDefault {
+		return endpointDefault
+	}
+	return hold
+}
+
+// variablePriceRequestHold prices the most THIS request can cost, in credits,
+// at the same rate ceiling the route enforces upstream.
+//
+// Both quantities are upper bounds, not estimates:
+//
+//   - prompt: len(body) bytes is a rigorous upper bound on prompt tokens,
+//     because a token can never be fewer than one UTF-8 byte and the body also
+//     carries JSON structure that is not prompt text at all. The outbound
+//     rewrite that follows swaps the alias for a longer route name, so the body
+//     that ships is a few bytes larger than the one priced here; those bytes
+//     are the `model` field, which is not prompt text either, and the JSON
+//     scaffolding already counted as prompt tokens covers them many times over.
+//   - completion: the ceiling written into the body by
+//     EnforceVariablePriceBounds, which is VariablePriceMaxCompletionTokens or
+//     a smaller one the caller set. Reading it back from the bounded body is
+//     deliberate: what bounds the charge is the number that goes upstream, not
+//     the one the caller asked for.
+//
+// The USD figure goes through CreditsForUpstreamCost, the same function
+// settlement uses, so hold and charge carry the identical margin, credit unit,
+// rounding and one-credit floor (D-031, D-034, D-048) rather than a second
+// arithmetic that could disagree with it.
+//
+// ok is false when no bound can be computed, and every such case falls back to
+// the catalog's whole-envelope hold rather than to a smaller number:
+//
+//   - a body larger than VariablePriceMaxRequestBytes, which is outside the
+//     envelope the bounds prove and is refused a moment later anyway;
+//   - any pricing error, including the implausibility ceiling.
+func variablePriceRequestHold(endpoint string, body []byte) (int64, bool) {
+	promptTokenCeiling := int64(len(body))
+	if promptTokenCeiling > VariablePriceMaxRequestBytes {
+		return 0, false
+	}
+
+	completionCeiling := requestedCompletionCeiling(endpoint, body)
+	if completionCeiling <= 0 || completionCeiling > VariablePriceMaxCompletionTokens {
+		// No usable ceiling in the body means the caller is free to generate up
+		// to the cap, so the cap is what has to be held against. This is also
+		// the fallback for an endpoint that speaks no ceiling field at all.
+		completionCeiling = VariablePriceMaxCompletionTokens
+	}
+
+	worstUSD := new(big.Rat).Add(
+		new(big.Rat).Mul(
+			new(big.Rat).SetInt64(promptTokenCeiling),
+			big.NewRat(VariablePricePromptCeilingUSD, 1_000_000),
+		),
+		new(big.Rat).Mul(
+			new(big.Rat).SetInt64(completionCeiling),
+			big.NewRat(VariablePriceCompletionCeilingUSD, 1_000_000),
+		),
+	)
+
+	credits, err := CreditsForUpstreamCost(worstUSD)
+	if err != nil {
+		log.Printf("inference: could not size a per-request hold, falling back to the catalog hold endpoint=%s: %v", endpoint, err)
+		return 0, false
+	}
+	return credits, true
 }
 
 // UpstreamActualSettlement decides what to charge for a request against a

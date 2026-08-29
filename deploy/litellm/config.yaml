@@ -406,6 +406,38 @@ model_list:
             prompt: 3
             completion: 15
 
+  # route-openrouter-auto-live is the SAME arrangement for the customer-facing
+  # `hive-auto` alias, which 20260824_02_free_pool_router.sql moved onto
+  # openrouter/auto. It carries the same three load-bearing keys for the same
+  # three reasons, and it has to be stated HERE rather than left to the config
+  # sync: the generator owns only model, api_base and api_key, and merges every
+  # other key from this file field by field (litellmconfig.mergeParams). A
+  # provider_routes row alone therefore produced a live entry with no
+  # usage.include and no max_price at all, which is what the box was running
+  # (verified 2026-08-29 by reading /etc/litellm/config.yaml inside the running
+  # container).
+  #
+  # max_price is the load-bearing one: without it the rate half of the credit
+  # hold's coverage proof simply does not exist, so the hold is a number rather
+  # than a bound (issue #1372).
+  #
+  # usage.include is belt and braces rather than a repair. A live hive-auto turn
+  # on 2026-08-29 settled with terminal_usage_confirmed true even without it, so
+  # a cost does reach us on this path today. Setting it explicitly means the
+  # charge does not depend on that continuing to be true by default, which is
+  # the same reason its beta twin sets it rather than leaving it to the client.
+  - model_name: route-openrouter-auto-live
+    litellm_params:
+      model: openrouter/openrouter/auto
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        usage:
+          include: true
+        provider:
+          max_price:
+            prompt: 3
+            completion: 15
+
 
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries

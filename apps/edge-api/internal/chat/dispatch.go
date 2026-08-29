@@ -204,12 +204,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Bound the request for a variable-price alias, before anything is held or
+	// dispatched, exactly as the API path does (inference.dispatch step 2d).
+	// This path had no bound at all: a session turn on a variable-price alias
+	// went upstream with no size cap and no completion ceiling, so the only
+	// thing standing between it and an arbitrarily large charge was a hold
+	// sized for a request nobody had checked (issue #1372). The hold below is
+	// sized from THIS body, which is only honest once the body is the bounded
+	// one. A pass-through, and one comparison, for every fixed-price alias.
+	bounded, withinBounds := inference.EnforceVariablePriceBounds(w, route, inference.EndpointChatCompletions, clientModel, raw)
+	if !withinBounds {
+		return
+	}
+	raw = bounded
+
 	// Money path (#746): a session turn is served only once it can be
 	// charged. Every refusal inside startSettlement is written before a
 	// provider is reached, and the hold it takes reaches a terminal state
 	// exactly once -- finalized on the success path below, released by this
 	// deferred call on every other exit, never both and never neither.
-	settle, refused := h.startSettlement(r.Context(), w, user.TenantID, route, clientModel, requestID)
+	settle, refused := h.startSettlement(r.Context(), w, user.TenantID, route, clientModel, requestID, raw)
 	if refused {
 		return
 	}
