@@ -28,7 +28,7 @@ describe("Images", () => {
   // exception, so inside the try the catch below caught this suite own
   // assertion and re-reported it as "not an APIError". The real defect was
   // invisible behind a confusing message about instanceof.
-  it("images.generate either returns a real image or fails with a structured, provider-blind error (never a 5xx)", async () => {
+  it("images.generate either returns a real image or fails with a structured, provider-blind error (never an empty success)", async () => {
     let response: Awaited<ReturnType<typeof client.images.generate>>;
     try {
       response = await client.images.generate({

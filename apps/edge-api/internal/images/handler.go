@@ -293,9 +293,13 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 	// further away from the cause, and a retry loop built on it can never
 	// recover. Refuse it here, BEFORE settlement, so the flat hold is
 	// released rather than charged for nothing delivered.
+	//
+	// route.AliasID rather than the caller-supplied model string: it is the
+	// catalog canonical alias, so nothing a caller wrote can be reflected
+	// back through the error message.
 	if !hasImagePayload(imageResp.Data) {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, req.Model, http.StatusBadGateway, upstreamErrorSnippet(respBody))
+		apierrors.WriteProviderBlindUpstreamError(w, route.AliasID, http.StatusBadGateway, upstreamErrorSnippet(respBody))
 		return
 	}
 
@@ -482,7 +486,7 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 	// edit that returns no image is not an edit.
 	if !hasImagePayload(imageResp.Data) {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, http.StatusBadGateway, upstreamErrorSnippet(respBody))
+		apierrors.WriteProviderBlindUpstreamError(w, route.AliasID, http.StatusBadGateway, upstreamErrorSnippet(respBody))
 		return
 	}
 
