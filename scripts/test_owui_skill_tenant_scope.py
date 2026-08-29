@@ -309,6 +309,20 @@ def load_helper(source: str):
     return namespace["_hive_resolve_tenant_group_id"]
 
 
+def load_id_scope_fn(source: str):
+    """Extract the plain (sync, no I/O) _hive_id_scope function, the same
+    lift-out-and-exec technique load_helper uses for its async sibling."""
+    tree = ast.parse(source)
+    fn = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_hive_id_scope"
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<id_scope>", "exec"), namespace)
+    return namespace["_hive_id_scope"]
+
+
 def run(helper, groups, user):
     original = helper.__globals__.get("Groups")
     helper.__globals__["Groups"] = groups
@@ -446,6 +460,52 @@ def run_router_and_model_proof():
         "one shown to prospects, have no tenant_ group today; blocking them "
         "would be an outage, and None is safe under the composite index)",
         run(helper, groups, FakeUser("member-none")) is None,
+    )
+
+    # _hive_id_scope: the id SCOPE is broader than the resolved tenant group
+    # alone. Security-review finding on an earlier draft, fixed: that draft
+    # left every ungrouped member with the SAME empty id prefix, so two
+    # different ungrouped accounts still collided on id exactly as before
+    # this patch, and the PR description's "no error" claim for that case
+    # was wrong. This block is the regression test for the fix.
+    id_scope = load_id_scope_fn(patched_router)
+
+    check(
+        "id scope: an admin with no tenant group gets None (unprefixed, flat "
+        "platform-wide id namespace)",
+        id_scope(FakeUser("admin-x", role="admin"), None) is None,
+    )
+    check(
+        "id scope: a tenant-grouped member scopes to the tenant group, not "
+        "their own user id",
+        id_scope(FakeUser("member-a"), "grp-a") == "grp-a",
+    )
+    check(
+        "id scope: an UNGROUPED ordinary member falls back to their OWN user "
+        "id instead of None",
+        id_scope(FakeUser("member-x"), None) == "member-x",
+    )
+
+    def final_id(user, tenant_group_id, base):
+        scope = id_scope(user, tenant_group_id)
+        return f"{scope}--{base}" if scope else base
+
+    ungrouped_x = FakeUser("ungrouped-user-x")
+    ungrouped_y = FakeUser("ungrouped-user-y")
+    id_x = final_id(ungrouped_x, None, "research")
+    id_y = final_id(ungrouped_y, None, "research")
+    check(
+        "REGRESSION (reviewer finding): two DIFFERENT ungrouped members "
+        "creating a skill with the SAME name no longer collide on id -- "
+        "before the fix both computed the bare 'research' and the second "
+        "create 400d ID_TAKEN exactly as it did before this whole patch",
+        id_x != id_y and id_x == "ungrouped-user-x--research" and id_y == "ungrouped-user-y--research",
+    )
+    check(
+        "MUTATION-style control: the SAME ungrouped member reusing their own "
+        "name still computes the SAME id (genuine per-account duplicate "
+        "detection is not accidentally disabled by the fallback)",
+        final_id(ungrouped_x, None, "research") == id_x,
     )
 
     shutil.rmtree(tmp, ignore_errors=True)
