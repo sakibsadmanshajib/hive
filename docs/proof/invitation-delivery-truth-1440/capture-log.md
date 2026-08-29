@@ -52,6 +52,27 @@ seam the committed unit tests already mock through
    a throwaway Go test (`zz_visual_proof_test.go`, also deleted before commit)
    and screenshotted the same way at 760 wide.
 
+## Re-captured after review, 2026-08-29
+
+The shots below were retaken against the current head after two review-driven
+changes to this surface.
+
+The outcome and its one-time link now render in a single panel inside the invite
+card, held by a provider above the members table. They used to render inside the
+row that produced them, which review correctly identified as destroying the link:
+issuing calls `router.refresh()`, `DataTable` keys each row on its row key, and a
+row whose key changes remounts and takes its state with it. Nothing about that is
+visible in a screenshot, which is why it is asserted instead, in
+`apps/web-console/__tests__/members-invite-link-survives-refresh.test.tsx`. That
+test was proved load bearing by keying the provider on the first invitation's id,
+which is what holding the state in a row amounts to, and watching both cases fail.
+
+The warning under the link also changed. It said "Anyone holding this link can
+join the workspace as the invited address, so send it the way you would send a
+password", which overstated the risk: `AcceptInvitation` requires a verified
+session on the invited address, so the token alone is not sufficient. It now says
+the link joins the workspace "as the invited address, and only that address".
+
 ## Shot 1, `members-invited.png` and `members-invited-dark.png`
 
 The invite panel after issuing an invitation on a deployment with no mail
@@ -69,8 +90,8 @@ existed anywhere in the product and the acceptance token had already been
 discarded by the proxy route.
 
 Below the banner, the invitation link is shown in a read-only field with a Copy
-control, and the warning under it says the link is bearer equivalent and is
-shown once.
+control, and the warning under it says the link is shown once and joins the
+workspace as the invited address, and only that address.
 
 The card description above no longer asserts a send either. Before: "An email
 invite is sent with a sign-in link." After: "Creating an invitation produces a
