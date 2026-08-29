@@ -5,7 +5,12 @@ import { render } from 'svelte/server';
 import { readable } from 'svelte/store';
 
 import SettingsUsage from './SettingsUsage.svelte';
-import { formatUsdFromCredits, type CreditBalance, type CreditSnapshot } from './credits';
+import {
+	formatUsdBalanceFromCredits,
+	formatUsdFromCredits,
+	type CreditBalance,
+	type CreditSnapshot
+} from './credits';
 
 /*
  * Regression guard for the P0.5 settings retitle plus Usage tab wave (parity
@@ -47,8 +52,12 @@ const renderUsage = (initial: CreditSnapshot | null): string => {
 
 // Two deliberately different magnitudes. Equal figures would render the same
 // string in both slots and a transposition would be invisible, which is the
-// exact defect these assertions exist to catch.
-const AVAILABLE_CREDITS = 12_500_000_000;
+// exact defect these assertions exist to catch. The balance is deliberately
+// not a whole number of cents either: it renders $12.49 through the balance
+// formatter and $12.50 through the price formatter, so the row assertions
+// below pin which of the two the component actually calls rather than passing
+// either way (issue 1345).
+const AVAILABLE_CREDITS = 12_496_364_207;
 const USAGE_TODAY_CREDITS = 340_000_000;
 
 const snapshotFixture = (overrides: Partial<CreditBalance> = {}): CreditSnapshot => ({
@@ -220,16 +229,16 @@ describe('Usage tab, rendered', () => {
 		const balanceRow = html.slice(balanceLabel, todayLabel);
 		const todayRow = html.slice(todayLabel);
 
-		expect(balanceRow).toContain(formatUsdFromCredits(AVAILABLE_CREDITS));
+		expect(balanceRow).toContain(formatUsdBalanceFromCredits(AVAILABLE_CREDITS));
 		expect(balanceRow).not.toContain(formatUsdFromCredits(USAGE_TODAY_CREDITS));
 		expect(todayRow).toContain(formatUsdFromCredits(USAGE_TODAY_CREDITS));
-		expect(todayRow).not.toContain(formatUsdFromCredits(AVAILABLE_CREDITS));
+		expect(todayRow).not.toContain(formatUsdBalanceFromCredits(AVAILABLE_CREDITS));
 	});
 
 	it('keeps each figure in the slot its own test id names', () => {
 		const html = renderUsage(snapshotFixture());
 		expect(valueForTestId(html, 'usage-available-credits')).toBe(
-			formatUsdFromCredits(AVAILABLE_CREDITS)
+			formatUsdBalanceFromCredits(AVAILABLE_CREDITS)
 		);
 		expect(valueForTestId(html, 'usage-today-credits')).toBe(
 			formatUsdFromCredits(USAGE_TODAY_CREDITS)
@@ -243,9 +252,14 @@ describe('Usage tab, rendered', () => {
 	});
 
 	it('flags an empty balance rather than printing a bare zero', () => {
+		// Two decimals, which is what the balance formatter renders for an
+		// exact zero and what the console prints for the same account. The
+		// point of the assertion is unchanged: an empty balance is a real,
+		// readable dollar figure beside the badge, never a bare 0 and never a
+		// blank.
 		const html = renderUsage(snapshotFixture({ available_credits: 0 }));
 		expect(html).toContain('Out of credits');
-		expect(valueForTestId(html, 'usage-available-credits')).toBe('$0');
+		expect(valueForTestId(html, 'usage-available-credits')).toBe('$0.00');
 	});
 
 	it('flags a low balance below the shared threshold', () => {
