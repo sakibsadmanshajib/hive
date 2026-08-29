@@ -98,12 +98,61 @@ afterEach(() => {
 });
 
 describe("CheckoutModal behavior", () => {
-  it("pay button is gated until a rail is selectable (no enabled rails renders it disabled)", async () => {
-    stubFetch({ rails: optionsFixture({ rails: [{ rail: "bkash", currency: "BDT", label: "bKash", enabled: false }] }) });
+  // The deployed box serves exactly this: one rail, disabled, and the server's
+  // "nothing is selectable" ceiling of 0 alongside a minimum of 10,000,000.
+  // The modal used to render an empty rail fieldset, a permanently disabled
+  // Continue button with no explanation, and `min="10000000" max="0"` on the
+  // amount input.
+  const noRailFixture = () =>
+    optionsFixture({
+      rails: [{ rail: "stripe", currency: "USD", label: "Card", enabled: false }],
+      min_credits: 10_000_000,
+      max_credits: 0,
+    });
+
+  it("no selectable rail explains itself instead of offering a dead button", async () => {
+    stubFetch({ rails: noRailFixture() });
     render(<CheckoutModal accountCountryCode="US" onClose={vi.fn()} />);
-    await screen.findByText("Payment method");
-    const pay = screen.getByRole("button", { name: /continue to payment/i });
-    expect(buttonDisabled(pay)).toBe(true);
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/no payment method is available/i);
+    // Nothing to select, so nothing pretends to be selectable.
+    expect(screen.queryByText("Payment method")).toBeNull();
+    expect(screen.queryByRole("button", { name: /continue to payment/i })).toBeNull();
+    // The user can still leave the modal.
+    expect(screen.getByRole("button", { name: /keep balance/i })).toBeTruthy();
+  });
+
+  it("an inverted or zero purchase range never reaches the DOM", async () => {
+    // Both shapes that produced the live defect: nothing selectable with a zero
+    // ceiling, and a selectable rail whose ceiling sits below the floor.
+    const fixtures = [
+      noRailFixture(),
+      optionsFixture({ min_credits: 10_000_000, max_credits: 0 }),
+      optionsFixture({ min_credits: 0, max_credits: 0 }),
+    ];
+
+    for (const rails of fixtures) {
+      stubFetch({ rails });
+      const { unmount } = render(
+        <CheckoutModal accountCountryCode="US" onClose={vi.fn()} />,
+      );
+      await screen.findByRole("status");
+
+      for (const input of Array.from(
+        document.querySelectorAll<HTMLInputElement>("input[type=number]"),
+      )) {
+        const min = Number(input.min);
+        const max = Number(input.max);
+        expect(Number.isFinite(min) && Number.isFinite(max) && max >= min && min > 0).toBe(
+          true,
+        );
+      }
+      expect(screen.queryByRole("spinbutton")).toBeNull();
+
+      unmount();
+      cleanup();
+    }
   });
 
   it("increase and decrease step by credit_increment and clamp to min/max", async () => {

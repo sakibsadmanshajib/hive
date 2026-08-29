@@ -1860,6 +1860,27 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   ) {
     throw new Error("Failed to parse checkout rails response");
   }
+  // A purchase range whose ceiling sits below its floor is not renderable: it
+  // reached the live amount input as min="10000000" max="0", an invalid HTML5
+  // number range, because the console wrote the server's value straight into
+  // the attribute.
+  //
+  // The guard is conditional on a rail the payer can actually select, because
+  // `max_credits: 0` alongside no selectable rail is not corruption. The
+  // control plane computes that field as the most restrictive ceiling among
+  // ENABLED rails (`MostRestrictiveMaxCredits`), and 0 is its documented
+  // answer for a deployment that registered no rail credentials. That case is
+  // a real state the modal explains to the user, not a server error to raise.
+  const anyRailSelectable = rails.some((rail) => rail.enabled);
+  if (
+    anyRailSelectable &&
+    (!Number.isFinite(minCredits) ||
+      minCredits <= 0 ||
+      !Number.isFinite(maxCredits) ||
+      maxCredits < minCredits)
+  ) {
+    throw new Error("Failed to parse checkout rails response");
+  }
   return {
     rails,
     credit_increment: creditIncrement,
