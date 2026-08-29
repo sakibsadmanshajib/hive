@@ -1705,8 +1705,36 @@
 								</div>
 							</div>
 
-							<div class=" flex justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full" dir="ltr">
-								<div class="ml-1 self-end flex items-center flex-1 min-w-0">
+							<!--
+								hive (#1349): this row wraps rather than overlapping.
+
+								The left group used to be `flex-1 min-w-0`, so it shrank to
+								whatever was left after the model chip and the send controls
+								took their widths. Its own children do not shrink: the plus
+								button is `shrink-0` and `.hv-mode` (the Chat/Cowork toggle,
+								hive.css) is `flex-shrink: 0`, so below roughly 400px they
+								overflowed the shrunken group and painted straight over the
+								model chip. At 375px "Cowork" and "Hive Auto" printed on top
+								of each other, and Cowork was neither readable nor reliably
+								tappable.
+
+								Wrapping is the fix rather than shrinking, because there is
+								nothing here that can shrink honestly: truncating a two-word
+								mode label to "Cow..." is not a smaller control, it is a
+								broken one, and the labels are translated, so no width is
+								safe to assume. Below `sm` the group takes the whole line and
+								the model chip plus send controls wrap under it. From `sm` up
+								the basis returns to 0 and the layout is exactly what it was,
+								with `flex-wrap` left in place so any future overflow lands
+								on a second line instead of on top of the chip.
+							-->
+							<div
+								class=" flex flex-wrap gap-y-1.5 justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full"
+								dir="ltr"
+							>
+								<div
+									class="ml-1 self-end flex items-center grow shrink basis-full sm:basis-0 min-w-0"
+								>
 									<InputMenu
 										bind:files
 										selectedModels={selectedModelIds}

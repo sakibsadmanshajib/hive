@@ -1,0 +1,51 @@
+URL: http://localhost:3399/
+BODY HEAD: You've used < $0.01 today · < $0.01 remaining
+Good morning, User
+
+
+
+
+Chat
+Cowork
+Select a model
+Code
+Write
+Explain
+Analyze
+Open WebUI
+BOXES BEFORE COWORK: {"Chat":"x67-122 y401-429","Cowork":"x124-199 y401-429","modelChip":"x25-145 y441-469 text=Select a model"}
+BOXES AFTER COWORK: {"Chat":"x67-122 y383-411","Cowork":"x124-199 y383-411","modelChip":"x25-145 y423-451 text=Select a model"}
+BANNER TEXT: no banner element
+PAGE TEXT TAIL: You've used < $0.01 today · < $0.01 remaining
+Good morning, User
+
+
+
+
+Chat
+Cowork
+Select a model
+Knowledge work
+Code
+Write
+Explain
+Analyze
+Open WebUI
+USAGE PANEL TEXT:
+Settings
+Search
+General
+Account
+Usage
+Interface
+Audio
+Data Controls
+About
+Usage
+Organization credit balance
+Low
+< $0.01
+Organization usage today
+< $0.01
+Last updated: 2:57:25 AM
+Refresh

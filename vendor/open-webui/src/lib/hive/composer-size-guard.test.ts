@@ -45,6 +45,46 @@ describe('attachment size guard (#1108)', () => {
 	});
 });
 
+describe('the composer control row wraps rather than overlapping (#1349)', () => {
+	// At 375px the Chat/Cowork toggle overflowed the left group and painted
+	// over the model chip: "Cowork" occupied x124 to x199 and "Hive Auto"
+	// x145 to x272, fifty-four pixels of overlap with both labels drawn on
+	// top of each other. The group shrank (`flex-1 min-w-0`) while its own
+	// children could not (`shrink-0` on the plus button, `flex-shrink: 0` on
+	// `.hv-mode` in hive.css), so the shrinking moved the content out of the
+	// box rather than making it narrower.
+	//
+	// Source level rather than rendered, like the guards above: the row's
+	// geometry only exists in a browser, and the repo has no layout harness
+	// for the chat frontend. What is pinned here is the pair of declarations
+	// that make wrapping possible at all, either of which reverting alone
+	// brings the overlap back. The measured proof is the 375px screenshot on
+	// the pull request.
+	const row = (): string =>
+		between(
+			component('../components/chat/MessageInput.svelte'),
+			'hive (#1349): this row wraps',
+			'<ComposerModeToggle />'
+		);
+
+	it('the control row is allowed to wrap', () => {
+		// The parent's own class list, whole. A substring match anywhere in the
+		// block would still pass if `flex-wrap` were moved onto a child, which
+		// wraps nothing here and brings the overlap straight back.
+		expect(row()).toContain(
+			'class=" flex flex-wrap gap-y-1.5 justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full"'
+		);
+	});
+
+	it('the left group takes a full line below sm, so the model chip wraps under it', () => {
+		// The whole class list, not a substring of it. `flex-1` is
+		// `flex: 1 1 0%`, and a zero basis never forces a wrap: it shrinks the
+		// group to nothing instead and the overflow returns, which is the one
+		// mutation that reintroduces the defect.
+		expect(row()).toContain('grow shrink basis-full sm:basis-0 min-w-0');
+	});
+});
+
 describe('completion errors are visible (#1108)', () => {
 	it('chat:message:error toasts the error content instead of only setting state', () => {
 		const branch = between(

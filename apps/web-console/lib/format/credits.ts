@@ -140,6 +140,14 @@ export function formatPercent(
 export const CREDITS_PER_USD = 1_000_000_000;
 
 /**
+ * What a positive balance below one cent reads as. A bound, not a figure: at
+ * two decimals such a balance would render "$0.00", which is what an empty
+ * wallet renders, and the point of saying anything at all is that the wallet
+ * is not empty.
+ */
+export const SUB_CENT_BALANCE = "< $0.01";
+
+/**
  * Format a credit balance as the US dollars a customer reasons in.
  *
  * Rounded down, never up, which is the one behavioural difference from
@@ -150,14 +158,27 @@ export const CREDITS_PER_USD = 1_000_000_000;
  * balance driven negative by reservations overstates the hole rather than
  * flattering it.
  *
- * Precision follows the same rule as the pricing formatter (three significant
- * digits, at least two decimals, at most the nine that one credit occupies),
- * so a small real balance renders as "$0.000662" rather than a "$0.00" that
- * reads as empty.
+ * Two decimals, always. A balance is money, and money reads in cents: the
+ * per-value precision this used to borrow from the pricing formatter printed
+ * a real balance of 858 credits as "$0.000000858", nine significant figures
+ * in permanent chrome that no reader can act on. Nine decimals is the width
+ * of one credit, which is the right precision for a published per-million
+ * rate and the wrong precision for a wallet.
+ *
+ * What that precision was protecting is kept: a real, non-zero balance still
+ * never renders as the "$0.00" an empty wallet renders. A positive balance
+ * under one cent reads as SUB_CENT_BALANCE, a bound rather than a figure. A
+ * negative one needs no such case, because flooring moves it away from zero:
+ * one credit overdrawn already floors to "-$0.01".
  *
  * Locale is pinned to en-US for the same reason model-pricing pins it: the
  * unit is US dollars on every surface, and bn-BD renders the same amount as
  * "US$0.20", which reads as a second currency.
+ *
+ * The chat front end carries a byte-identical twin at
+ * vendor/open-webui/src/lib/hive/credits.ts. The two builds cannot share a
+ * module, so tools/lint-credit-balance-formatter-parity.mjs fails the build
+ * when they stop matching, which is how they diverged into #1344 and #1345.
  */
 export function formatUsdBalanceFromCredits(credits: number): string {
   // Zero is a real, readable balance. A non-finite value is not: it can only
@@ -170,22 +191,20 @@ export function formatUsdBalanceFromCredits(credits: number): string {
   if (credits === 0) {
     return "$0.00";
   }
-  const usd = credits / CREDITS_PER_USD;
-  const magnitude = Math.floor(Math.log10(Math.abs(usd)));
-  const digits = Math.min(9, Math.max(2, 2 - magnitude));
-  // Round in credits rather than in dollars. The dollar product is a float:
+  // Floor in credits rather than in dollars. The dollar product is a float:
   // 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
-  // 828.9999999999999, and rounding that down prints $8.28, understating a
-  // real balance by a cent. CREDITS_PER_USD is a power of ten and digits never
-  // exceeds nine, so creditsPerStep is an exact integer and this is exact for
-  // every integer balance.
-  const creditsPerStep = CREDITS_PER_USD / 10 ** digits;
-  const truncated =
-    (Math.floor(credits / creditsPerStep) * creditsPerStep) / CREDITS_PER_USD;
+  // 828.9999999999999, and flooring that prints $8.28, understating a real
+  // balance by a cent. CREDITS_PER_USD is a power of ten, so creditsPerCent is
+  // an exact integer and this is exact for every integer balance.
+  const creditsPerCent = CREDITS_PER_USD / 100;
+  const cents = Math.floor(credits / creditsPerCent);
+  if (cents === 0) {
+    return SUB_CENT_BALANCE;
+  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
-    maximumFractionDigits: digits,
-  }).format(truncated);
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
 }
