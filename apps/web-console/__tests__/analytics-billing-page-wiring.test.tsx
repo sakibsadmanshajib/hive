@@ -41,7 +41,11 @@ vi.mock("@/components/app-shell/console-shell", () => ({
 }));
 
 vi.mock("@/components/analytics/analytics-controls", () => ({
-  AnalyticsControls: () => <div data-testid="analytics-controls" />,
+  // Renders the window it was handed, so a page test can assert the control
+  // strip agrees with the window the fetches actually asked for.
+  AnalyticsControls: (props: { currentWindow: string }) => (
+    <div data-testid="analytics-controls">{props.currentWindow}</div>
+  ),
 }));
 vi.mock("@/components/analytics/usage-chart", () => ({
   UsageChart: () => <div data-testid="usage-chart" />,
@@ -439,6 +443,70 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     // this window. The page resolves the window first and asks for 7d.
     expect(urls.some((u) => u.includes("window=toString"))).toBe(false);
     expect(urls.some((u) => u.includes("window=7d"))).toBe(true);
+  });
+
+  it("serves a stale custom range URL as 7d and says 7d, never as the range it cannot fetch", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        if (url.endsWith("/api/v1/viewer")) return jsonResponse(200, VIEWER_PAYLOAD);
+        if (url.endsWith("/api/v1/accounts/current/profile")) {
+          return jsonResponse(200, PROFILE_PAYLOAD);
+        }
+        if (url.includes("/analytics/usage")) {
+          return jsonResponse(200, {
+            usage: [
+              {
+                group_key: "hive-auto",
+                total_input_tokens: 18,
+                total_output_tokens: 4,
+                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
+                // A round dollar figure keeps the rendered-text assertion
+                // below stable; the tile now formats this through
+                // formatUsdFromCredits rather than the raw integer.
+                total_credits_spent: 3_000_000_000,
+                request_count: 7,
+              },
+            ],
+          });
+        }
+        if (url.includes("/analytics/spend")) {
+          return jsonResponse(200, { spend: [] });
+        }
+        if (url.includes("/analytics/errors")) {
+          return jsonResponse(200, { errors: [] });
+        }
+        if (url.includes("/usage-events")) {
+          return jsonResponse(200, { events: [], next_cursor: null });
+        }
+        if (url.includes("/api-keys")) {
+          return jsonResponse(200, { items: [] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const mod = await import("../app/console/analytics/page");
+    const page = await mod.default({
+      searchParams: Promise.resolve({ tab: "overview", window: "custom:2026-01-01:2026-01-05" }),
+    });
+    render(page);
+
+    // The Custom control that produced this value is gone (issue #1338): no
+    // fetch on this page understood it, so the page served 7d rows under a
+    // heading naming the range. A stale link or a hand-typed URL can still
+    // carry one, and it resolves to 7d with the picker showing 7d, which is
+    // the window that was actually fetched.
+    expect(screen.queryByText(/Unable to load analytics/)).toBeNull();
+    screen.getByText("7");
+    expect(urls.some((u) => u.includes("custom%3A"))).toBe(false);
+    expect(urls.some((u) => u.includes("custom:"))).toBe(false);
+    expect(urls.some((u) => u.includes("window=7d"))).toBe(true);
+    // The control strip agrees with what was fetched rather than showing a
+    // selection nothing honoured.
+    expect(screen.getByTestId("analytics-controls").textContent).toBe("7d");
   });
 });
 

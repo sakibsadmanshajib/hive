@@ -5,7 +5,7 @@
  * hit rate over a slice of time the bounded sample never covered.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 interface ChartProps {
   children?: React.ReactNode;
@@ -33,6 +33,7 @@ vi.mock("recharts", () => {
 });
 
 import { Sparkline } from "@/components/analytics/sparkline";
+import { TimeWindowPicker } from "@/components/analytics/time-window-picker";
 
 describe("Sparkline", () => {
   // The capture arrays are module scoped, so a test asserting on index 0
@@ -53,5 +54,24 @@ describe("Sparkline", () => {
   it("does not bridge the gap a null bucket leaves", () => {
     render(<Sparkline values={[null, 0.5]} label="Trend across all 2 requests" />);
     expect(areaProps[areaProps.length - 1].connectNulls).toBe(false);
+  });
+});
+
+describe("TimeWindowPicker offers no control the page cannot honour", () => {
+  // The Custom control emitted a custom:from:to value that no fetch on the
+  // analytics page understood, so the page served 7d and labelled it as the
+  // range the user picked. It is gone until the range is threaded through for
+  // real (issue #1338), and this fails the moment it comes back without that.
+  it("renders the four preset windows and nothing else", () => {
+    render(<TimeWindowPicker currentWindow="7d" onWindowChange={() => {}} />);
+
+    const group = screen.getByRole("group", { name: "Time window" });
+    const labels = within(group)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(labels).toEqual(["24h", "7d", "30d", "90d"]);
+    expect(screen.queryByText("Custom")).toBeNull();
+    expect(screen.queryByLabelText("From")).toBeNull();
+    expect(screen.queryByLabelText("To")).toBeNull();
   });
 });

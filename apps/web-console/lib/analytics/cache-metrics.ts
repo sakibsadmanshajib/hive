@@ -297,7 +297,8 @@ export function sampleTimeSpan(
  * renders no note at all. This mirrors deriveCacheHitNote below, which
  * already made exactly this distinction for the cache-hit tile alone; every
  * other tile silently showing nothing on an unsupported window (a custom
- * range, reachable from the real "Custom" control in TimeWindowPicker, or
+ * range, which only a hand-typed query string produces now that the Custom
+ * control is gone (issue #1338), or
  * 90d for the sparkline half) was the gap this closes.
  */
 function overviewWindowNote(

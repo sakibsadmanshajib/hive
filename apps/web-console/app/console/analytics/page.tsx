@@ -50,8 +50,11 @@ function isValidGroupBy(value: string | undefined): value is GroupBy {
 // (parseAnalyticsFilter, apps/control-plane/internal/usage/http.go). An
 // unrecognized value therefore rendered 7d rows under a heading naming a
 // different window, on every panel at once, including the top keys panel,
-// which carries no window note of its own. That is reachable from the real
-// "Custom" control in TimeWindowPicker, not just a crafted query string.
+// which carries no window note of its own. The Custom control that used to
+// reach this with a "custom:from:to" value is gone (issue #1338), so what is
+// left here is a crafted or stale query string, and it resolves to 7d with
+// the picker showing 7d rather than a heading naming a window nothing
+// fetched.
 // Resolve the value once, here, and hand the resolved window to the fetches,
 // the tab links and the picker alike, so what the page says and what it
 // fetched are the same window.
