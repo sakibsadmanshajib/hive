@@ -157,27 +157,32 @@ def patched_chats_router(patches: tuple[str, ...] = CHATS_PATCHES) -> str:
     fallback would turn this whole module back into the pre-patch check it
     replaced.
     """
-    tmp = Path(tempfile.mkdtemp(prefix="owui-chat-authz-"))
-    # Every router, not the subset the family patch happens to rewrite today.
-    # An earlier version of this listed that subset by hand and went red the
-    # moment main added skills.py to the family (PR #1388): the patch reads
-    # every file in its own EXPECTED_MARKERS and raises FileNotFoundError on a
-    # missing one. Copying the directory means this file has no second copy of
-    # that list to keep in step.
-    for source in sorted(VENDORED_ROUTERS.glob("*.py")):
-        shutil.copy(source, tmp / source.name)
-    env = dict(os.environ)
-    env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
-    for patch in patches:
-        result = subprocess.run(
-            [sys.executable, str(PATCHES / patch)],
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise SystemExit(f"FAIL: {patch} failed:\n{result.stdout}{result.stderr}")
-    return (tmp / "chats.py").read_text(encoding="utf-8")
+    # TemporaryDirectory rather than mkdtemp: this used to leak a copy of every
+    # router per call, and the #1474 suite raised the call count from one per
+    # run to three. The copies are deleted on the way out, including when a
+    # patch fails, since the SystemExit unwinds through the context manager.
+    with tempfile.TemporaryDirectory(prefix="owui-chat-authz-") as tmpdir:
+        tmp = Path(tmpdir)
+        # Every router, not the subset the family patch happens to rewrite
+        # today. An earlier version of this listed that subset by hand and went
+        # red the moment main added skills.py to the family (PR #1388): the
+        # patch reads every file in its own EXPECTED_MARKERS and raises
+        # FileNotFoundError on a missing one. Copying the directory means this
+        # file has no second copy of that list to keep in step.
+        for source in sorted(VENDORED_ROUTERS.glob("*.py")):
+            shutil.copy(source, tmp / source.name)
+        env = dict(os.environ)
+        env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
+        for patch in patches:
+            result = subprocess.run(
+                [sys.executable, str(PATCHES / patch)],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise SystemExit(f"FAIL: {patch} failed:\n{result.stdout}{result.stderr}")
+        return (tmp / "chats.py").read_text(encoding="utf-8")
 
 
 # --- AST helpers ------------------------------------------------------------

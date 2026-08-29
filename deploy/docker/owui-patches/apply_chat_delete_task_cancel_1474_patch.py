@@ -166,9 +166,23 @@ def main():
     # Counting the call is not enough on its own: a rewrite that inserted both
     # copies and failed to remove the original would still count three markers.
     final = (ROUTERS / "chats.py").read_text()
-    handler_start = final.index("async def delete_chat_by_id(")
-    handler_end = final.index("\n@router.", handler_start)
-    handler = final[handler_start:handler_end]
+    # Sliced by AST line span rather than by searching for the next `@router.`
+    # decorator. The string search happened to be correct against today's
+    # source, and would silently widen the slice the moment upstream put an
+    # undecorated helper between two routes, which is the kind of drift this
+    # whole file exists to catch rather than to suffer.
+    handler_node = next(
+        (
+            node
+            for node in ast.walk(ast.parse(final))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "delete_chat_by_id"
+        ),
+        None,
+    )
+    assert handler_node is not None, "delete_chat_by_id not found after patching"
+    lines = final.splitlines(keepends=True)
+    handler = "".join(lines[handler_node.lineno - 1 : handler_node.end_lineno])
     assert handler.count(CANCEL_CALL) == 2, (
         "delete_chat_by_id should cancel from exactly its two arms after patching, "
         f"found {handler.count(CANCEL_CALL)} call(s)"
