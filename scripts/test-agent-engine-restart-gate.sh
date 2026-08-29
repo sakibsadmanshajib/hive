@@ -369,6 +369,35 @@ if [ "$(incarnation)" = "$pid_before" ]; then
 fi
 [ $failures -eq "$before_h" ] && echo "ok   [H] drift in the installed env file restarts instead of skipping"
 
+# --- case I: an unreadable installed artifact restarts, it does not abort ----
+#
+# `fingerprint_of` reads the installed artifacts, and sha256sum exits 1 on a
+# file it cannot read. Under `set -o pipefail` that aborts the installer before
+# the restart-and-repair branch, and since the permission does not change by
+# itself, every later deploy fails identically until someone fixes it by hand
+# on the box. Restarting repairs it instead, because `mv -f` over the installed
+# path needs write permission on the directory rather than on the file.
+before_i=$failures
+if [ "$(id -u)" = 0 ]; then
+  echo "skip [I] unreadable-artifact case needs a non-root uid, running as root"
+else
+  pid_before=$(incarnation)
+  chmod 000 "$runtime/bin/agent-engine"
+  run_installer "I unreadable-artifact" rebuilt-different-bytes openai/some-other-alias
+  if ! started; then
+    fail "[I] an unreadable installed binary did not restart the daemon" "$(cat "$STATE/calls")"
+  fi
+  if [ "$(incarnation)" = "$pid_before" ]; then
+    fail "[I] the daemon process was not replaced despite an unreadable installed binary"
+  fi
+  if [ ! -r "$runtime/bin/agent-engine" ]; then
+    fail "[I] the unreadable binary was not replaced by a readable one"
+  elif [ "$(cat "$runtime/bin/agent-engine")" != "rebuilt-different-bytes" ]; then
+    fail "[I] the unreadable binary was not overwritten by the freshly built one"
+  fi
+  [ $failures -eq "$before_i" ] && echo "ok   [I] an unreadable installed artifact restarts instead of aborting"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"
   exit 1

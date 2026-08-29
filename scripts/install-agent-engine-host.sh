@@ -221,9 +221,18 @@ export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNT
 fingerprint_of() {
   local f
   for f in "$@"; do
-    # Prints nothing when anything is missing, so a half-finished install can
-    # never compare equal to a complete one.
-    [ -f "$f" ] || return 0
+    # Prints nothing when anything is missing OR unreadable, so a
+    # half-finished install can never compare equal to a complete one, and an
+    # artifact this account cannot read resolves to "cannot verify, so
+    # restart" rather than killing the deploy. Without the -r half, a
+    # root-owned installed file (an accidental `sudo` bootstrap, a hand chmod
+    # on the box) makes sha256sum exit 1, and `set -o pipefail` turns that into
+    # an abort before the restart-and-repair branch is ever reached. Nothing
+    # about that condition changes between runs, so every later deploy fails
+    # the same way until someone fixes it by hand, while the restart path would
+    # have repaired it: `mv -f` over the installed path needs write permission
+    # on the directory, not on the file.
+    [ -f "$f" ] && [ -r "$f" ] || return 0
   done
   sha256sum "$@" | awk '{print $1}' | sha256sum | cut -d' ' -f1
 }
