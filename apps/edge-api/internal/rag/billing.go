@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
@@ -99,6 +100,28 @@ func readUsage(document []byte, alias, provider string) usageEnvelope {
 	return usageEnvelope{Usage: &decoded, rawDocument: document}
 }
 
+// settlement is one priced turn: what to charge, whether the figure is measured
+// truth, whether anything was delivered at all, and the two fields that make a
+// variable-price charge auditable afterwards.
+type settlement struct {
+	Credits   int64
+	Confirmed bool
+	Delivered bool
+	// GenerationID is the upstream's own handle for the generation this charge
+	// paid for. It exists only on the upstream_actual path, and it is the only
+	// thing that links a ledger row back to the thing it was billed for when a
+	// customer disputes a charge. Operator logs only, never an audit event: an
+	// upstream identifier can carry a provider name and audit_log fans out to
+	// third-party sinks.
+	GenerationID string
+	// Reason is the pricing verdict ("upstream_cost" when the cost was read,
+	// "upstream_cost_absent" and friends when it was not, "catalog_price" on
+	// the fixed-price path). Discarding it hid the difference between a charge
+	// derived from a reported cost and one that fell back to the hold, which is
+	// exactly the distinction this endpoint got wrong.
+	Reason string
+}
+
 // settleChat prices one completed grounded chat.
 //
 // The two branches are the two pricing modes an alias can be in, and they are
@@ -116,7 +139,7 @@ func readUsage(document []byte, alias, provider string) usageEnvelope {
 // delivered=false means nothing was produced, so there is no quantity to
 // charge and the caller releases the hold instead.
 func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope,
-	alias, content string, requestBody []byte) (credits int64, confirmed, delivered bool) {
+	alias, content string, requestBody []byte) settlement {
 
 	hasUsage := env.Usage != nil
 	var inTokens, outTokens int64
@@ -128,11 +151,32 @@ func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope
 
 	if route.Pricing.IsUpstreamActual() {
 		settled := inference.UpstreamActualSettlement(env.rawDocument, held, hasUsage, inTokens, outTokens, content)
-		return settled.Credits, settled.Confirmed, settled.Delivered
+		return settlement{
+			Credits: settled.Credits, Confirmed: settled.Confirmed, Delivered: settled.Delivered,
+			GenerationID: settled.GenerationID, Reason: settled.Reason,
+		}
 	}
-	return inference.ChatSettlementCredits(route, hasUsage,
+	credits, confirmed, delivered := inference.ChatSettlementCredits(route, hasUsage,
 		cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outTokens,
 		requestBody, content)
+	return settlement{Credits: credits, Confirmed: confirmed, Delivered: delivered, Reason: "catalog_price"}
+}
+
+// logSettlement records a variable-price charge with the upstream handle it was
+// derived from, so a disputed charge can be traced to the generation it paid
+// for. Operator log only, for the reason on settlement.GenerationID.
+//
+// The fixed-price path is not logged: its charge is reproducible from the
+// catalog row and the token counts already on the settlement, so there is
+// nothing here that the ledger row does not already carry.
+func logSettlement(requestID uuid.UUID, alias string, held int64, s settlement) {
+	if !s.Delivered || s.Reason == "catalog_price" {
+		return
+	}
+	slog.Info("rag chat: variable-price settlement",
+		"request_id", requestID, "alias", alias, "reason", s.Reason,
+		"credits", s.Credits, "confirmed", s.Confirmed,
+		"generation_id", s.GenerationID, "held_credits", held)
 }
 
 // meteredTokens is what the settlement row records alongside the charge: the

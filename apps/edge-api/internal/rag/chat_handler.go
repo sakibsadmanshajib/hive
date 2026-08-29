@@ -377,8 +377,9 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := readUsage(upstreamBody, req.Model, route.Provider)
-	credits, confirmed, delivered := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body)
-	if !delivered {
+	priced := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body)
+	logSettlement(requestID, req.Model, settle.Held(), priced)
+	if !priced.Delivered {
 		// Nothing was produced, so there is no quantity to charge and the
 		// deferred release returns the hold in full. A client that hung up is
 		// recorded as such rather than against the provider, the same
@@ -390,7 +391,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inTok, outTok, cacheRead, cacheWrite := env.meteredTokens(req.Model, route.Provider)
-	if settle.Finalize(credits, confirmed, inTok, outTok, cacheRead, cacheWrite) {
+	if settle.Finalize(priced.Credits, priced.Confirmed, inTok, outTok, cacheRead, cacheWrite) {
 		settled = true
 		return
 	}
@@ -694,8 +695,9 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		// Enterprise posture (D-027): nothing was held, so nothing settles.
 		return false, ""
 	}
-	credits, confirmed, delivered := settleChat(route, settle.Held(), env, alias, completion.String(), requestBody)
-	if !delivered {
+	priced := settleChat(route, settle.Held(), env, alias, completion.String(), requestBody)
+	logSettlement(requestID, alias, settle.Held(), priced)
+	if !priced.Delivered {
 		// Neither usage nor content ever reached the customer, so there is no
 		// quantity to charge and the hold goes back in full.
 		if r.Context().Err() != nil {
@@ -704,7 +706,7 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		return false, "upstream_error"
 	}
 	inTok, outTok, cacheRead, cacheWrite := env.meteredTokens(alias, route.Provider)
-	if settle.Finalize(credits, confirmed, inTok, outTok, cacheRead, cacheWrite) {
+	if settle.Finalize(priced.Credits, priced.Confirmed, inTok, outTok, cacheRead, cacheWrite) {
 		return true, ""
 	}
 	// The charge did not land, so the caller's deferred release hands the hold

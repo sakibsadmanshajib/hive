@@ -498,7 +498,13 @@ func main() {
 	// boundary, registered behind FeatureCowork like /v1/agent/tasks.
 	{
 		agentSchedClient := edgeagentsched.NewClient(resolveControlPlaneBaseURL())
-		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient)
+		// Money path (#669). Creating a routine is submitting a task on a
+		// timer, so it asks the same solvency question POST /v1/agent/tasks
+		// asks. Each firing of an existing routine is created by
+		// control-plane's scheduler directly and does not pass through here,
+		// which is a stated gap rather than a covered case.
+		agentSchedHandler := edgeagentsched.NewHandler(agentSchedClient).
+			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool})
 		agentSchedMux := http.NewServeMux()
 		agentSchedHandler.Register(agentSchedMux)
 		registerAgentScheduleRoutes(mux, featureGate, agentSchedMux)

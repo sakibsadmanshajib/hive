@@ -16,10 +16,12 @@ package rag
 //     positively per exit rather than inferred from the absence of a charge.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,6 +114,19 @@ type stubRAGBilling struct {
 
 func (s stubRAGBilling) ResolveState(context.Context, uuid.UUID) (metering.TenantBillingState, error) {
 	return s.state, s.err
+}
+
+// captureLogs redirects the default slog logger for one test. The upstream
+// generation id is operator-only (an upstream identifier can carry a provider
+// name, and audit_log fans out to third-party sinks), so the log is where it is
+// asserted from.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
 }
 
 func billableTenant() stubRAGBilling {
@@ -466,6 +481,7 @@ func TestRAGChatSettlesAnUpstreamActualAliasAtTheReportedCost(t *testing.T) {
 		{name: "streaming", stream: true, body: sseBody(upstreamCostFrame, "[DONE]")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
 			acct := &ragAccounting{}
 			h := newBilledChatHandler(t, acct, billableTenant(),
 				upstreamActualSelectRoute("route-test"),
@@ -493,6 +509,18 @@ func TestRAGChatSettlesAnUpstreamActualAliasAtTheReportedCost(t *testing.T) {
 			}
 			if !got.TerminalUsageConfirmed {
 				t.Error("a settlement priced from a reported upstream cost is confirmed, not an estimate")
+			}
+			// Same request, second property. The amount alone does not prove
+			// the cost was read from the right bytes: rewrapping the inner
+			// usage object as {"usage": ...} produces exactly this amount and
+			// silently empties the generation id, because the parser reads it
+			// from the document's top-level "id". Asserting both on ONE
+			// request is what tells those two apart.
+			if !strings.Contains(logs.String(), "generation_id=gen-abc") {
+				t.Errorf("settlement recorded no upstream generation id, so the charge has no audit handle back to the generation it paid for: %s", logs.String())
+			}
+			if !strings.Contains(logs.String(), "reason=upstream_cost") {
+				t.Errorf("settlement did not record the pricing verdict: %s", logs.String())
 			}
 			// The upstream cost and the upstream generation id are ours, never
 			// the customer's.
@@ -579,5 +607,28 @@ func TestRAGChatRefusesWhenRetrievedContextCrossesTheVariablePriceCeiling(t *tes
 	}
 	if reservations, _, _ := acct.counts(); reservations != 0 {
 		t.Errorf("a refused request took %d holds; the bound runs before the hold", reservations)
+	}
+}
+
+// A billing position that cannot be READ is not one that is known to be absent.
+// The request is refused rather than served, and no hold is taken against an
+// account nobody could resolve.
+func TestRAGChatRefusesWhenTheBillingLookupFails(t *testing.T) {
+	acct := &ragAccounting{}
+	h := newBilledChatHandler(t, acct,
+		stubRAGBilling{err: fmt.Errorf("billing lookup failed")},
+		fakeSelectRoute("route-test", nil), dispatchThatMustNotRun(t))
+
+	w := httptest.NewRecorder()
+	h.handleChat(w, chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	}, uuid.New()))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+	if reservations, _, _ := acct.counts(); reservations != 0 {
+		t.Errorf("a hold was taken against an unknown billing position: %d", reservations)
 	}
 }

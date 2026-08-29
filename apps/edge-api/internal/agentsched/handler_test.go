@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling/billingtest"
 )
 
 type fakeClient struct {
@@ -71,9 +72,107 @@ func userCtx(tenantID uuid.UUID) context.Context {
 	return auth.WithUser(context.Background(), &auth.User{ID: uuid.New(), TenantID: tenantID})
 }
 
-func TestScheduleRoutes_CRUDHappyPath(t *testing.T) {
+// billedHandler is the handler every test builds: creating a routine is gated
+// on solvency, so a handler without its accounting seam refuses.
+func billedHandler(t *testing.T, client ScheduleClient) *Handler {
+	t.Helper()
+	acct := &billingtest.Accounting{}
+	return NewHandler(client).WithBilling(acct.Client(t), billingtest.Billable())
+}
+
+func createScheduleReq(t *testing.T, tenantID uuid.UUID) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(createReq{
+		Name: "Morning digest", Instructions: "Summarize inbox", Schedule: "daily",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/schedules", bytes.NewReader(body))
+	return req.WithContext(userCtx(tenantID))
+}
+
+// A routine is a task submission on a timer, so a tenant who cannot pay is
+// refused here too. Gating only POST /v1/agent/tasks would leave this as the
+// documented way around that gate.
+func TestScheduleCreate_RefusesATenantThatCannotPay(t *testing.T) {
+	acct := &billingtest.Accounting{ReservationStatus: http.StatusConflict}
+	client := newFakeClient()
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Billable())
+
+	w := httptest.NewRecorder()
+	h.routeCollection(w, createScheduleReq(t, uuid.New()))
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient_quota") {
+		t.Errorf("body = %s, want insufficient_quota", w.Body.String())
+	}
+	if len(client.schedules) != 0 {
+		t.Error("a refused creation reached control-plane anyway")
+	}
+}
+
+// A billing position that cannot be read is not one that is known to be
+// absent, so this refuses rather than creating.
+func TestScheduleCreate_RefusesWhenTheBillingLookupFails(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	client := newFakeClient()
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Unreadable())
+
+	w := httptest.NewRecorder()
+	h.routeCollection(w, createScheduleReq(t, uuid.New()))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+	if len(client.schedules) != 0 {
+		t.Error("a routine was created against an unknown billing position")
+	}
+}
+
+// A handler built without its accounting seam refuses rather than creating a
+// routine it cannot check the balance for.
+func TestScheduleCreate_RefusesWhenBillingIsNotWired(t *testing.T) {
 	client := newFakeClient()
 	h := NewHandler(client)
+
+	w := httptest.NewRecorder()
+	h.routeCollection(w, createScheduleReq(t, uuid.New()))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+	if len(client.schedules) != 0 {
+		t.Error("an ungated creation wrote a routine")
+	}
+}
+
+// The launch hold is handed straight back in the same call, for the same
+// reason it is on POST /v1/agent/tasks (#600).
+func TestScheduleCreate_SolvencyHoldIsReleasedImmediately(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	h := NewHandler(newFakeClient()).WithBilling(acct.Client(t), billingtest.Billable())
+
+	w := httptest.NewRecorder()
+	h.routeCollection(w, createScheduleReq(t, uuid.New()))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
+	}
+	reservations, released := acct.Counts()
+	if reservations != 1 || released != 1 {
+		t.Fatalf("want one hold taken and handed back, got taken=%d released=%d", reservations, released)
+	}
+	if got := acct.Released()[0].Reason; got != "solvency_probe" {
+		t.Errorf("release reason = %q, want %q", got, "solvency_probe")
+	}
+}
+
+func TestScheduleRoutes_CRUDHappyPath(t *testing.T) {
+	client := newFakeClient()
+	h := billedHandler(t, client)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	tenantID := uuid.New()
@@ -113,7 +212,7 @@ func TestScheduleRoutes_CRUDHappyPath(t *testing.T) {
 
 func TestScheduleRoutes_UpdateToggleAndDelete(t *testing.T) {
 	client := newFakeClient()
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	tenantID := uuid.New()
@@ -173,7 +272,7 @@ func TestScheduleRoutes_UpdateToggleAndDelete(t *testing.T) {
 func TestScheduleRoutes_ValidationErrorsAre400Not500(t *testing.T) {
 	client := newFakeClient()
 	client.deleteErr = errors.New("boom")
-	h := NewHandler(client)
+	h := billedHandler(t, client)
 	mux := http.NewServeMux()
 	h.Register(mux)
 

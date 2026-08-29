@@ -322,7 +322,14 @@ func reserve(ctx context.Context, in Input, requirePricedRoute bool) (*Settlemen
 			// 409 is the control-plane's credit-policy rejection, 429 a rate
 			// limit on the reservation call. Both are quota verdicts.
 			slog.Info(in.Surface+" refused on quota", "request_id", in.RequestID, "alias", in.Alias)
-			return nil, &Refusal{Reason: "insufficient_quota", write: WriteInsufficientQuota}
+			// Same machine-readable verdict either way; only the human sentence
+			// differs, because "send a shorter request" is not an action a task
+			// submission has available.
+			write := WriteInsufficientQuota
+			if !requirePricedRoute {
+				write = WriteInsufficientQuotaForLaunch
+			}
+			return nil, &Refusal{Reason: "insufficient_quota", write: write}
 		}
 		slog.Error(in.Surface+" reservation failed", "err", err, "request_id", in.RequestID, "alias", in.Alias)
 		return nil, &Refusal{Reason: "reservation_failed", write: WriteReservationUnavailable}
@@ -451,6 +458,17 @@ func WriteInsufficientQuota(w http.ResponseWriter) {
 	code := "insufficient_quota"
 	apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
 		"Your available credit does not cover this request. Add credits, or send a shorter request, and try again.", &code)
+}
+
+// WriteInsufficientQuotaForLaunch is the credit refusal for a unit of work that
+// has no length the customer could shorten, which is what the inference wording
+// asks for. Status, type and code are deliberately identical to
+// WriteInsufficientQuota, since SDKs branch on those and this is still the same
+// quota verdict.
+func WriteInsufficientQuotaForLaunch(w http.ResponseWriter) {
+	code := "insufficient_quota"
+	apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
+		"Your available credit does not cover this task. Add credits and try again.", &code)
 }
 
 // WriteReservationUnavailable reports a reservation failure that is not a

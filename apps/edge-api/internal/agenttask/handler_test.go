@@ -4,19 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
-	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
-	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling/billingtest"
 )
 
 type fakeClient struct {
@@ -84,83 +80,13 @@ func userCtx(tenantID uuid.UUID) context.Context {
 	return auth.WithUser(context.Background(), &auth.User{ID: uuid.New(), TenantID: tenantID})
 }
 
-// fakeAccounting is a control-plane accounting surface that records the
-// solvency probe: the hold taken in front of a launch, and the release that
-// hands it straight back.
-type fakeAccounting struct {
-	mu sync.Mutex
-
-	reservationStatus int // non-zero to refuse the hold with this status
-
-	reservations []inference.CreateReservationInput
-	released     []inference.ReleaseReservationInput
-}
-
-func (f *fakeAccounting) server(t *testing.T) *httptest.Server {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/internal/usage/attempts", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(inference.AttemptResult{ID: "att_1", Status: "dispatching"})
-	})
-	mux.HandleFunc("/internal/accounting/reservations", func(w http.ResponseWriter, r *http.Request) {
-		var in inference.CreateReservationInput
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		f.mu.Lock()
-		f.reservations = append(f.reservations, in)
-		status, id := f.reservationStatus, fmt.Sprintf("res_%d", len(f.reservations))
-		f.mu.Unlock()
-		if status != 0 {
-			w.WriteHeader(status)
-			_, _ = io.WriteString(w, `{"error":"reservation exceeds available credits"}`)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(inference.ReservationResult{
-			ID: id, AccountID: in.AccountID, Status: "active", ReservedCredits: in.EstimatedCredits,
-		})
-	})
-	mux.HandleFunc("/internal/accounting/reservations/release", func(w http.ResponseWriter, r *http.Request) {
-		var in inference.ReleaseReservationInput
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		f.mu.Lock()
-		f.released = append(f.released, in)
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func (f *fakeAccounting) counts() (reservations, released int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.reservations), len(f.released)
-}
-
-// stubBilling is a tenant-to-account map with no database behind it.
-type stubBilling struct {
-	state metering.TenantBillingState
-	err   error
-}
-
-func (s stubBilling) ResolveState(context.Context, uuid.UUID) (metering.TenantBillingState, error) {
-	return s.state, s.err
-}
-
-func billableTenant() stubBilling {
-	return stubBilling{state: metering.TenantBillingState{
-		AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
-	}}
-}
-
 // billedHandler is the handler every test builds: submission is gated on
 // solvency, so a handler without its accounting seam refuses instead of
 // launching.
 func billedHandler(t *testing.T, client TaskClient) *Handler {
 	t.Helper()
-	acct := &fakeAccounting{}
-	return NewHandler(client).
-		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+	acct := &billingtest.Accounting{}
+	return NewHandler(client).WithBilling(acct.Client(t), billingtest.Billable())
 }
 
 func createReq(t *testing.T, tenantID uuid.UUID) *http.Request {
@@ -177,10 +103,9 @@ func createReq(t *testing.T, tenantID uuid.UUID) *http.Request {
 // agent-task half of #669: submission asked nothing about the balance, so the
 // refusal could not fire and the task ran.
 func TestHandleCreate_RefusesATenantThatCannotPay(t *testing.T) {
-	acct := &fakeAccounting{reservationStatus: http.StatusConflict}
+	acct := &billingtest.Accounting{ReservationStatus: http.StatusConflict}
 	client := newFakeClient()
-	h := NewHandler(client).
-		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Billable())
 
 	w := httptest.NewRecorder()
 	h.routeTasks(w, createReq(t, uuid.New()))
@@ -218,10 +143,9 @@ func TestHandleCreate_RefusesWhenBillingIsNotWired(t *testing.T) {
 // the task lifecycle, so a hold left open here would have nothing to finalize
 // it and would strand permanently (no expires_at, no reaper, #600).
 func TestHandleCreate_SolvencyHoldIsReleasedImmediately(t *testing.T) {
-	acct := &fakeAccounting{}
+	acct := &billingtest.Accounting{}
 	client := newFakeClient()
-	h := NewHandler(client).
-		WithBilling(inference.NewAccountingClient(acct.server(t).URL), billableTenant())
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Billable())
 
 	w := httptest.NewRecorder()
 	h.routeTasks(w, createReq(t, uuid.New()))
@@ -229,19 +153,17 @@ func TestHandleCreate_SolvencyHoldIsReleasedImmediately(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
 	}
-	reservations, released := acct.counts()
+	reservations, released := acct.Counts()
 	if reservations != 1 {
 		t.Fatalf("want exactly one solvency hold, got %d", reservations)
 	}
 	if released != 1 {
 		t.Fatalf("want the hold handed back in the same call, released = %d", released)
 	}
-	acct.mu.Lock()
-	defer acct.mu.Unlock()
-	if got := acct.reservations[0].EstimatedCredits; got != agentTaskLaunchFloor {
+	if got := acct.Reservations()[0].EstimatedCredits; got != agentTaskLaunchFloor {
 		t.Errorf("held %d credits, want the launch floor %d", got, agentTaskLaunchFloor)
 	}
-	if got := acct.released[0].Reason; got != "solvency_probe" {
+	if got := acct.Released()[0].Reason; got != "solvency_probe" {
 		t.Errorf("release reason = %q, want %q", got, "solvency_probe")
 	}
 }
@@ -250,11 +172,9 @@ func TestHandleCreate_SolvencyHoldIsReleasedImmediately(t *testing.T) {
 // it launches with no hold at all rather than being refused for a balance it
 // does not have.
 func TestHandleCreate_EnterpriseTenantTakesNoHold(t *testing.T) {
-	acct := &fakeAccounting{}
+	acct := &billingtest.Accounting{}
 	client := newFakeClient()
-	h := NewHandler(client).WithBilling(
-		inference.NewAccountingClient(acct.server(t).URL),
-		stubBilling{state: metering.TenantBillingState{Deployment: metering.DeploymentEnterpriseEdge}})
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Enterprise())
 
 	w := httptest.NewRecorder()
 	h.routeTasks(w, createReq(t, uuid.New()))
@@ -262,7 +182,7 @@ func TestHandleCreate_EnterpriseTenantTakesNoHold(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
 	}
-	if reservations, released := acct.counts(); reservations != 0 || released != 0 {
+	if reservations, released := acct.Counts(); reservations != 0 || released != 0 {
 		t.Errorf("enterprise tenant must take no hold: reservations=%d released=%d", reservations, released)
 	}
 }
@@ -605,5 +525,28 @@ func TestHandleEvents_FilesNotFoundIs404(t *testing.T) {
 		if rec.Code != 404 {
 			t.Errorf("%s for unknown task: status %d, want 404", suffix, rec.Code)
 		}
+	}
+}
+
+// A billing position that cannot be READ is not a position that is known to be
+// absent, and serving anyway is how free traffic happens. This branch had no
+// coverage on any surface: the whole check could be deleted with every suite
+// still green.
+func TestHandleCreate_RefusesWhenTheBillingLookupFails(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	client := newFakeClient()
+	h := NewHandler(client).WithBilling(acct.Client(t), billingtest.Unreadable())
+
+	w := httptest.NewRecorder()
+	h.routeTasks(w, createReq(t, uuid.New()))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", w.Code, w.Body.String())
+	}
+	if len(client.tasks) != 0 {
+		t.Error("a submission whose billing position could not be read launched a sandbox anyway")
+	}
+	if reservations, _ := acct.Counts(); reservations != 0 {
+		t.Errorf("a hold was taken against an unknown billing position: %d", reservations)
 	}
 }
