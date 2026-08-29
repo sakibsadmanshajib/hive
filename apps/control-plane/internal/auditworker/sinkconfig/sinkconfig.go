@@ -65,10 +65,17 @@ func enabled(key string) bool {
 // named in the second return value. It is skipped rather than fatal on
 // purpose: control-plane fronts every request on the deployment, and refusing
 // to boot over one misconfigured optional audit sink would trade a silent
-// export gap for a total outage. Skipping it silently is not acceptable
-// either, which is what the second return value is for: the caller reports
-// the discrepancy at boot instead of logging "no optional sinks configured"
-// at an operator who configured six.
+// export gap for a total outage, while the records themselves still land in
+// public.audit_log with the WAL fallback, the cold archive and the hash chain
+// behind them. Losing the SIEM copy is not losing the audit trail. Skipping it
+// silently is not acceptable either, which is what the second return value is
+// for: the caller reports the discrepancy at boot instead of logging "no
+// optional sinks configured" at an operator who configured six.
+//
+// The one condition that would make fail-fast correct instead: a deployment
+// under a regime that requires export-or-refuse, where processing a request
+// whose audit record cannot reach the SIEM is itself the violation. That is a
+// separate strict mode and a product decision, not a defect in this default.
 func FromEnv() (configured []sinks.Sink, skipped []string) {
 	configured = make([]sinks.Sink, 0, 6)
 	skipped = make([]string, 0, 6)

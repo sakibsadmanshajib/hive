@@ -97,11 +97,20 @@ func TestAuditSinkGatesAreNotARenderedControl(t *testing.T) {
 	//    then re-apply the migration and assert it is gone. Re-applying is
 	//    safe because the migration is two set-based deletes with no DDL.
 	seedRetiredSetting(t, ctx, pool, tenantID)
+
+	// A registered key alongside it, written through the sanctioned path. It
+	// is the other half of the guard: running the shipped file rather than a
+	// pasted copy is what catches an edit to that file, and the edit worth
+	// catching most is a DELETE that loses its WHERE clause. Without a row
+	// that must survive, a migration reduced to `DELETE FROM
+	// public.tenant_settings` would be executed here and would pass.
+	require.NoError(t, resolver.Set(ctx, tenantID, settings.EnableRAG, true, uuid.Nil))
+
 	var seeded int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*)::int FROM public.tenant_settings WHERE tenant_id = $1`,
 		tenantID).Scan(&seeded))
-	require.Equal(t, 1, seeded, "the seed itself must land, or the assertion below proves nothing")
+	require.Equal(t, 2, seeded, "the seeds themselves must land, or the assertions below prove nothing")
 
 	applyRetirementMigration(t, ctx, pool)
 
@@ -111,6 +120,16 @@ func TestAuditSinkGatesAreNotARenderedControl(t *testing.T) {
 		   FROM public.tenant_settings
 		  WHERE key::text LIKE 'ENABLE_AUDIT_SINK%'`).Scan(&lingering))
 	require.Zero(t, lingering, "stored audit sink settings must be deleted, not left orphaned")
+
+	var survivors int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*)::int
+		   FROM public.tenant_settings
+		  WHERE tenant_id = $1
+		    AND key = 'ENABLE_RAG'::public.tenant_setting_key`,
+		tenantID).Scan(&survivors))
+	require.Equal(t, 1, survivors,
+		"the migration must delete the six retired keys and nothing else")
 }
 
 // seedRetiredSetting writes a tenant_settings row for a retired audit sink key

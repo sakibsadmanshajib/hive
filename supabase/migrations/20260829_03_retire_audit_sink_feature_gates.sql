@@ -94,8 +94,20 @@
 -- tenant_settings.key to feature_gate_keys.key, which would look like the
 -- obvious answer: ENABLE_USAGE_METERING is a deliberately unregistered enum
 -- label that planned metering work intends to store (20260728_02, and
--- apps/edge-api/internal/metering/precedence.go), so that constraint would
--- block a feature rather than a defect.
+-- apps/edge-api/internal/metering/precedence.go, which treats the absence of a
+-- row for that key as a meaningful unset state), so that constraint would
+-- block a feature rather than a defect. The precise claim is "not while a
+-- deliberately unregistered label is in planned use", not "an FK here is wrong
+-- in principle": precedence.go itself floats registering the key as one of two
+-- ways to wire its read, and if that is how metering lands, the FK becomes
+-- viable again. Whoever picks up metering should decide it there.
+--
+-- A second, independent reason the FK is wrong for this file specifically: with
+-- tenant_settings.key referencing feature_gate_keys.key, the second DELETE
+-- below would fail while any stored row still pointed at a registry row being
+-- removed, so this migration would need ON DELETE CASCADE or a hard statement
+-- ordering to run at all. The absence of that constraint is what lets the two
+-- deletes stand independent of each other.
 --
 -- No DOWN migration, matching 20260715_04. Restoring these rows would restore
 -- the defect.
