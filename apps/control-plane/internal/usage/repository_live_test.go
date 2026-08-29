@@ -636,8 +636,10 @@ func TestSummariesByAPIKey_NullKeyGroupsAsUnattributed(t *testing.T) {
 		t.Fatalf("seed unattributed event: %v", err)
 	}
 
-	// Guard the fixture itself: if that row is not actually NULL, every
-	// assertion below would pass against a defect that is still present.
+	// Guard the fixture itself. The bucket assertions below would already
+	// fail if this row stopped being NULL, but they would fail pointing at the
+	// fix rather than at the fixture, which is the wrong place to send the
+	// reader. This says so directly instead.
 	var nullRows int
 	if err := pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM public.usage_events WHERE account_id = $1 AND api_key_id IS NULL`,
@@ -694,12 +696,20 @@ func TestSummariesByAPIKey_NullKeyGroupsAsUnattributed(t *testing.T) {
 		for _, row := range rows {
 			byKey[row.GroupKey] = row
 		}
-		if _, ok := byKey[keyID.String()]; !ok {
+		attributed, ok := byKey[keyID.String()]
+		if !ok {
 			t.Fatalf("expected a group keyed by the real api key %s, got %#v", keyID, rows)
 		}
 		unattributed, ok := byKey[UnattributedGroupKey]
 		if !ok {
 			t.Fatalf("expected the NULL key to group as %q, got %#v", UnattributedGroupKey, rows)
+		}
+		if attributed.RequestCount != 1 || attributed.TotalInputTokens != 100 || attributed.TotalOutputTokens != 50 {
+			t.Fatalf("attributed group: expected 1 request with 100 input and 50 output tokens, got %d with %d and %d",
+				attributed.RequestCount, attributed.TotalInputTokens, attributed.TotalOutputTokens)
+		}
+		if attributed.TotalCreditsSpent != 1000 {
+			t.Fatalf("attributed group: expected 1000 credits spent, got %d", attributed.TotalCreditsSpent)
 		}
 		if unattributed.RequestCount != 1 || unattributed.TotalInputTokens != 7 || unattributed.TotalOutputTokens != 3 {
 			t.Fatalf("unattributed group: expected 1 request with 7 input and 3 output tokens, got %d with %d and %d",
@@ -720,8 +730,8 @@ func TestSummariesByAPIKey_NullKeyGroupsAsUnattributed(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected a group keyed by the real api key %s, got %#v", keyID, rows)
 		}
-		if attributed.TotalCredits != 1000 {
-			t.Fatalf("attributed group: expected 1000 credits, got %d", attributed.TotalCredits)
+		if attributed.TotalCredits != 1000 || attributed.EntryCount != 1 {
+			t.Fatalf("attributed group: expected 1000 credits over 1 entry, got %d over %d", attributed.TotalCredits, attributed.EntryCount)
 		}
 		unattributed, ok := byKey[UnattributedGroupKey]
 		if !ok {

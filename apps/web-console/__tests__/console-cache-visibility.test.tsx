@@ -18,6 +18,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/client";
 import {
   bucketByTime,
   deriveBlendedCreditsPerMillion,
@@ -498,6 +499,25 @@ describe("deriveOverviewTiles", () => {
       },
     });
     expect(result.topKeys.map((k) => k.label)).toEqual(["Staging", "Production"]);
+  });
+
+  it("labels the unattributed bucket as Unattributed, never as a deleted key (issue #1347)", () => {
+    const result = deriveOverviewTiles({
+      timeWindow: "7d",
+      usage: [],
+      previousUsage: [],
+      cacheSample: null,
+      cacheSampleTruncated: false,
+      previousCacheSample: null,
+      topKeys: {
+        spend: [spendRow({ group_key: UNATTRIBUTED_GROUP_KEY, total_credits: 10 })],
+        keys: [apiKey({ id: "key-1", nickname: "Production" })],
+      },
+    });
+    // These rows are console and chat traffic that carried no API key at all,
+    // so "Deleted key" would assert something untrue about the account.
+    expect(result.topKeys[0].label).toBe("Unattributed");
+    expect(result.topKeys[0].suffix).toBe("no key");
   });
 
   it("labels a spend row 'Deleted key' only when the account's own key list genuinely has no match", () => {

@@ -10,8 +10,9 @@
  * covers. A cache hit rate whose sample is unstated is worse than no tile.
  *
  * No I/O in this file, by design: everything here is a pure function of data
- * already fetched by lib/analytics/overview-fetch.ts. Type-only imports from
- * control-plane/client are fine (they cost nothing at runtime); an actual
+ * already fetched by lib/analytics/overview-fetch.ts. Type imports from
+ * control-plane/client are fine, and so is the one contract constant this
+ * file compares against (a string, no I/O, issue #1347); an actual
  * fetch call here would not be.
  */
 import type {
@@ -20,6 +21,7 @@ import type {
   UsageEventRow,
   UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import { UNATTRIBUTED_GROUP_KEY } from "@/lib/control-plane/client";
 import {
   ANALYTICS_WINDOW_SPAN_MS,
   EVENT_SAMPLE_WINDOWS,
@@ -557,11 +559,15 @@ export function deriveOverviewTiles(input: OverviewDeriveInput): OverviewTiles {
     .sort((a, b) => b.total_credits - a.total_credits)
     .slice(0, TOP_KEYS_LIMIT)
     .map((row) => {
-      const key = apiKeyById.get(row.group_key);
+      // A NULL api_key_id groups here, and it is not a deleted key: console
+      // and chat traffic carries no API key at all (issue #1347). Labelling
+      // it "Deleted key" would assert something untrue about the account.
+      const unattributed = row.group_key === UNATTRIBUTED_GROUP_KEY;
+      const key = unattributed ? undefined : apiKeyById.get(row.group_key);
       return {
         id: row.group_key,
-        label: key ? key.nickname : "Deleted key",
-        suffix: key?.redacted_suffix ?? row.group_key.slice(0, 8),
+        label: unattributed ? "Unattributed" : key ? key.nickname : "Deleted key",
+        suffix: unattributed ? "no key" : (key?.redacted_suffix ?? row.group_key.slice(0, 8)),
         credits: row.total_credits,
       };
     });
