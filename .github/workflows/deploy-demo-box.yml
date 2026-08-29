@@ -722,14 +722,24 @@ jobs:
           fail_gb=10
           warn_gb=20
 
-          free_gb=$(df -BG --output=avail /var/lib/docker | tail -1 | tr -dc '0-9')
+          # Read df in its own command rather than inline in the pipeline.
+          # Under `set -euo pipefail` a failing df would otherwise kill the
+          # step before the checks below run, so the job would go red with no
+          # annotation saying why, which is the least useful way for a disk
+          # guard to fail.
+          if ! avail=$(df -BG --output=avail /var/lib/docker 2>&1); then
+            echo "::error::could not read free space on /var/lib/docker: $avail"
+            exit 1
+          fi
+          free_gb=$(printf '%s\n' "$avail" | tail -1 | tr -dc '0-9')
           if [ -z "$free_gb" ]; then
-            echo "::error::could not read free space on /var/lib/docker"
+            echo "::error::could not parse a size out of df: $avail"
             exit 1
           fi
 
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
           echo "free space on /var/lib/docker: ${free_gb}G (warn <${warn_gb}G, fail <${fail_gb}G)"
-          echo "### Demo box disk: ${free_gb}G free" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Demo box disk: ${free_gb}G free" >> "$summary"
 
           if [ "$free_gb" -ge "$warn_gb" ]; then
             exit 0
@@ -745,12 +755,12 @@ jobs:
 
           if [ "$free_gb" -lt "$fail_gb" ]; then
             echo "::error::demo box has ${free_gb}G free on /var/lib/docker, below the ${fail_gb}G floor. Refusing to build. $hint"
-            echo "Refused to build: below the ${fail_gb}G floor. $hint" >> "$GITHUB_STEP_SUMMARY"
+            echo "Refused to build: below the ${fail_gb}G floor. $hint" >> "$summary"
             exit 1
           fi
 
           echo "::warning::demo box has ${free_gb}G free on /var/lib/docker, below the ${warn_gb}G warn line. This deploy will proceed. $hint"
-          echo "Below the ${warn_gb}G warn line. $hint" >> "$GITHUB_STEP_SUMMARY"
+          echo "Below the ${warn_gb}G warn line. $hint" >> "$summary"
 
       - name: Install and restart the agent-engine launch daemon
         # Issue #780. Cowork tasks need an Apptainer sandbox per task, and

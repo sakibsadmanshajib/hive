@@ -45,9 +45,17 @@ SH
 chmod +x "$tmp/bin/docker"
 
 # $FAKE_FREE_GB is what the stubbed df reports, in the two-line shape
-# `df -BG --output=avail` produces. An empty value models an unreadable mount.
+# `df -BG --output=avail` produces. Two special values: an empty string models
+# a df that exits 0 but prints nothing usable, and "EXPLODE" models df failing
+# outright (no such mount, permission denied, a df build without --output).
+# The second case is the one worth guarding: under `set -euo pipefail` a df
+# inside the pipeline would abort the step with no annotation at all.
 cat > "$tmp/bin/df" <<'SH'
 #!/bin/sh
+if [ "${FAKE_FREE_GB}" = "EXPLODE" ]; then
+  echo "df: unrecognized option '--output=avail'" >&2
+  exit 1
+fi
 echo "Avail"
 echo "${FAKE_FREE_GB}"
 SH
@@ -96,7 +104,22 @@ run_case just-below-warn  19G   0       "::warning::"   "::error::"
 run_case at-floor         10G   0       "::warning::"   "::error::"
 run_case below-floor      9G    1       "::error::"     ""
 run_case near-empty       1G    1       "::error::"     ""
-run_case unreadable       ""    1       "::error::"     ""
+run_case unparseable      ""    1       "::error::"     ""
+run_case df-fails    EXPLODE    1       "::error::"     ""
+
+# GITHUB_STEP_SUMMARY is always set by Actions, but `set -u` turns an unset one
+# into a bare abort with no annotation, so the step must not depend on it.
+set +e
+out=$(FAKE_FREE_GB=30G bash "$tmp/gate.sh" 2>&1)
+status=$?
+set -e
+if [ "$status" != "0" ]; then
+  echo "FAIL [no-summary-var] exit $status, wanted 0 with GITHUB_STEP_SUMMARY unset"
+  echo "$out" | sed 's/^/       /'
+  failures=$((failures + 1))
+else
+  echo "ok   [no-summary-var]"
+fi
 
 # The failure message has to name the two things that must NOT be run to
 # reclaim, because a full-disk deploy failure is exactly when someone reaches
