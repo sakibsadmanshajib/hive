@@ -1,0 +1,5 @@
+URL: http://localhost:24503/
+assistant turn rendered, 20 chars
+POST /api/v1/audio/speech -> 200, 15385 bytes
+<audio> decoded: readyState>0, duration 2.479833s
+origins the page contacted: http://localhost:24503

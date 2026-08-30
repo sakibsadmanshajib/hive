@@ -117,16 +117,22 @@ func TestSpeechFailsAfterAllAttemptsSilent(t *testing.T) {
 }
 
 func TestSpeechNonWAVResponseIsNeverRetried(t *testing.T) {
-	// A non-WAV format (e.g. mp3) can't be validated for silence by this
-	// package, so it must be relayed on the first attempt regardless of
-	// content, even if the bytes happen to be all zero.
+	// A non-WAV RESPONSE can't be validated for silence by this package, so it
+	// must be relayed on the first attempt regardless of content, even if the
+	// bytes happen to be all zero.
+	//
+	// The request used to ask for response_format mp3 to arrange that. It no
+	// longer can: mp3 is refused at the request boundary now, because the route
+	// cannot produce it (#1381). Nothing about what this test covers changes,
+	// since the shape being exercised is the upstream's response body and the
+	// sequenced mock decides that on its own, whatever the request asked for.
 	allZeroMP3 := make([]byte, 500)
 	mock := newSequencedSpeechServer([][]byte{allZeroMP3, speechTestWAV(2000)})
 	defer mock.Close()
 
 	h := buildAudioHandler(mock.server.URL)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{"model":"hive-tts","input":"hello","voice":"alloy","response_format":"mp3"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{"model":"hive-tts","input":"hello","voice":"alloy","response_format":"wav"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-key")
 	w := httptest.NewRecorder()
