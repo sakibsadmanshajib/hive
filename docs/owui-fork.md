@@ -15,7 +15,6 @@ nothing in them may be cited to refuse fork work.
 |---|---|
 | `packages/hive-tokens/tokens.css` | Design tokens. Plain CSS custom properties, no framework, shared with the React applications. Outside the vendored tree on purpose, so the visual identity survives a change of chat engine |
 | `vendor/open-webui/src/lib/hive/` | Every Hive authored component and stylesheet in the fork |
-| `vendor/open-webui/src/routes/(app)/agents/` | The agent workspace as a destination in the shell |
 | `vendor/open-webui/src/routes/(app)/skills/` | The user-created skills library, as a Hive destination. Upstream's own editor and list components, mounted outside the Workspace container that issue #783 removed and that `deploy/docker/Caddyfile.owui` still 404s |
 
 Edits to upstream files are kept to insertion points a rebase can replay, and there are five:

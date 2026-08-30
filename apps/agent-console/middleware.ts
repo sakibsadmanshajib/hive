@@ -69,10 +69,13 @@ export async function middleware(request: NextRequest) {
 
   // Framing is now same-origin only, not forbidden.
   //
-  // The agent workspace is a destination inside the Hive shell: the chat
-  // frontend's /agents route renders it, and the same Caddy listener serves
-  // both under one origin (deploy/docker/Caddyfile.owui), so 'self' is a real
-  // origin check rather than a formality. Everything the previous 'none'
+  // The same Caddy listener serves this app and the chat shell under one
+  // origin (deploy/docker/Caddyfile.owui), so 'self' is a real origin check
+  // rather than a formality. This used to say the chat frontend's /agents
+  // route rendered the agent workspace as a destination in the shell; issue
+  // #1501 retired that route, and the agent surface is now a mode of the chat
+  // composer with no destination of its own (D-045). Nothing on that origin
+  // reaches this app any more; deleting it is issue #1464. Everything the previous 'none'
   // actually defended against, which is a third-party page framing this one to
   // harvest a click or a session, is still refused: 'self' matches the scheme,
   // host and port of this document and nothing else, and X-Frame-Options

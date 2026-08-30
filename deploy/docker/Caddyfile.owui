@@ -194,9 +194,27 @@
   # branch-protection change and takes its e2e project and CI wiring with it.
   # Nothing on this origin reaches it any more, which is the half that mattered.
   # The deletion, and everything wired to it, is issue #1464.
+  #
+  # `agents` joined this list in issue #1501. It was the LAST agent destination:
+  # a native page in this shell with its own submit form, its own pack selector
+  # and its own task list, unlinked from the sidebar but reachable by URL. It is
+  # not the same surface as `agent-workspace` above and was not removed with it.
+  # D-045 rules that the agent surface is a mode of the chat composer and not a
+  # destination, so a second place to start a run is the thing being retired,
+  # not the second origin it happened to sit on.
+  #
+  # Ordering that mattered: until issue #1500 shipped the composer's pack
+  # selector, `/agents` was the only way in the product to reach `coding-pack`,
+  # one of the six capabilities D-061 locks into the demo. Verified live on the
+  # deployed box before this landed rather than assumed.
+  #
+  # The two API prefixes below it are deliberately NOT matched here and must
+  # stay reachable: `/api/v1/hive/agent/*` is what the composer itself calls,
+  # and a loose `agent` prefix would take the working surface down along with
+  # the retired one.
   # Structural guard: scripts/test_caddy_one_front_door.py.
   @removedSurfaces {
-    path_regexp removed (?i)^/+(?:agent-workspace|playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
+    path_regexp removed (?i)^/+(?:agent-workspace|agents|playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
   }
   respond @removedSurfaces 404
 

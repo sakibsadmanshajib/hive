@@ -12,25 +12,31 @@ test.use({ storageState: "e2e/phase-19/owui/.auth/owui-user.json" });
  *
  * It then asserted, for one release, that /agents rendered an
  * `iframe[title="Agent workspace"]` and reached into it with a frameLocator.
- * Those assertions are inverted here, deliberately and by owner directive: the
+ * Those assertions were inverted, deliberately and by owner directive: the
  * frame booted apps/agent-console, a second whole application, inside the page,
  * which is why the agent surface never looked like the rest of the product.
- * What is asserted now is that there is no frame at all and that the composer
- * and the task list are this application's own DOM.
  *
- * The list assertion is deliberately about the credential path rather than
- * about rows. The browser holds no credential edge-api accepts, so every call
- * goes through the chat container's own proxy, which resolves the signed-in
- * user's Supabase token server side. A 401 there is exactly the failure mode
- * that design has, so a 401 must fail this test. A 403 must not: it is the
- * Cowork feature gate answering, which can only happen after the principal and
- * its tenant resolved, and the seeded fixture tenant does not hold that gate.
+ * Issue #1501 then retired /agents itself. The file keeps its name and its
+ * subject, and the assertions moved with the surface rather than dying with
+ * the route: the agent surface is a MODE of the chat composer (D-045), so what
+ * is asserted now is that there is no frame at all, that the composer is this
+ * application's own DOM, and that switching to Cowork changes what the next
+ * message does without navigating.
+ *
+ * The task-list assertions are gone, and their absence is deliberate rather
+ * than an oversight. /agents listed tasks on load and those assertions checked
+ * the painted rows against the proxy's response. The composer lists nothing on
+ * load, because a run IS a conversation and the conversation list is the task
+ * list, so there is no load-time call left to assert. Re-adding an equivalent
+ * would mean submitting a real run into a real sandbox on every nightly.
+ *
+ * `/agent-workspace` is a different surface and is NOT what #1501 removed: it
+ * already 404'd before this change.
  */
 
 const NAV_ROW = (id: string) => `[data-hive-nav="${id}"]`;
 const SIDEBAR = "#sidebar";
 const REMOVED_LAUNCHER = "#hive-agent-launcher";
-const TASKS_ENDPOINT = "/api/v1/hive/agent/tasks";
 /*
  * Deliberately NOT inside playwright-report-owui. The HTML reporter owns that
  * folder and clears it before writing the report at the end of the run, which
@@ -72,7 +78,7 @@ async function setSidebar(page: Page, state: "expanded" | "collapsed") {
 const visibleNavRow = (page: Page, id: string) =>
   page.locator(`${NAV_ROW(id)}:visible`).first();
 
-test("the sidebar carries labelled Chats, Agents and Knowledge destinations", async ({
+test("the sidebar carries its labelled destinations", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -83,7 +89,9 @@ test("the sidebar carries labelled Chats, Agents and Knowledge destinations", as
 
   for (const [id, label, href] of [
     ["chats", "Chats", "/"],
-    ["agents", "Agents", "/agents"],
+    // No Agents row. There never was one after #944, and issue #1501 deleted
+    // the unlinked /agents page this tuple pointed at, so asserting it here
+    // would assert a destination the product does not have.
     // The full path. /knowledge alone is a 404 on this deployment.
     ["knowledge", "Knowledge", "/workspace/knowledge"],
   ] as const) {
@@ -107,9 +115,25 @@ test("the injected launcher overlay is gone", async ({ page }) => {
   ).toHaveCount(0);
 });
 
-test("the agent workspace opens inside the shell and frames nothing", async ({
+test("the agent surface is a mode of the composer and frames nothing", async ({
   page,
 }) => {
+  /*
+   * This test used to drive /agents. Issue #1501 retired that page, and the
+   * gate follows the surface into the composer rather than dying with the
+   * route: the claims worth keeping were never about the URL, they were that
+   * the agent surface frames nothing and is this application's own DOM.
+   *
+   * What did NOT survive the move, stated plainly so a thinner test is not
+   * mistaken for a passing one. The old version polled
+   * GET /api/v1/hive/agent/tasks and asserted the painted rows against the
+   * response, because /agents listed tasks on load. The composer lists nothing
+   * on load: a run IS a conversation now, so the conversation list is the task
+   * list. Asserting that call here would mean submitting a real run into a
+   * real sandbox on every nightly, a cost this check does not need to pay to
+   * make its point. The submit path is covered by the composer unit suite and
+   * by the visual proof on the pull request instead.
+   */
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
@@ -118,131 +142,83 @@ test("the agent workspace opens inside the shell and frames nothing", async ({
     documentLoads += 1;
   });
 
-  // Recorded rather than asserted inline so the failure message can name the
-  // status, which is the whole diagnostic value of this check.
-  let tasksStatus: number | null = null;
-  let tasksBody: { tasks?: unknown } | null = null;
-  page.on("response", async (response) => {
-    if (new URL(response.url()).pathname !== TASKS_ENDPOINT) {
-      return;
-    }
-    tasksStatus = response.status();
-    if (response.status() === 200) {
-      try {
-        tasksBody = await response.json();
-      } catch {
-        tasksBody = null;
-      }
-    }
-  });
+  await expect(page.locator(SIDEBAR)).toBeVisible();
 
-  const row = page.locator(`${SIDEBAR} ${NAV_ROW("agents")}`).first();
-  await expect(row).toBeVisible();
-  await row.click();
+  // The composer is this application's own DOM, and switching to Cowork is a
+  // mode change rather than a hop to somewhere else (D-045).
+  const composer = page.locator("#chat-input");
+  await expect(composer).toBeVisible();
 
-  await page.waitForURL((url) => url.pathname === "/agents", { timeout: 15_000 });
-
-  // The shell survives the hop.
+  const cowork = page
+    .getByRole("radio", { name: "Cowork", exact: true })
+    .first();
   await expect(
-    page.locator(SIDEBAR),
-    "the sidebar disappeared, so this is still a separate page",
+    cowork,
+    "the Cowork mode toggle is missing from the composer",
   ).toBeVisible();
-  await expect(row).toHaveAttribute("aria-current", "page");
+  await cowork.click();
 
   // The claim this whole change exists to make.
   await expect(
     page.locator("iframe"),
-    "the agent surface must not frame anything, on this route or anywhere in it",
+    "the agent surface must not frame anything",
   ).toHaveCount(0);
 
   // An iframe count of zero is also true of a page that rendered nothing at
   // all, so every assertion below is a positive one: the surface has to paint
   // and work, not merely fail to contain a frame.
-  //
-  // The composer is this application's own DOM, it is the chat composer's
-  // container rather than a form that resembles one, and it takes input.
-  const composer = page.locator("#hive-agent-instructions");
-  await expect(composer).toBeVisible();
-  await expect(page.locator("#hive-agent-send")).toBeVisible();
+  const packs = page.locator("[data-hive-composer-pack]");
+  await expect(packs, "Cowork mode paints no pack selector").toBeVisible();
+  for (const [pack, label] of [
+    ["knowledge-work-pack", "Knowledge work"],
+    ["coding-pack", "Coding"],
+  ] as const) {
+    const segment = packs.locator(`[data-hive-pack="${pack}"]`);
+    await expect(segment, `the ${label} segment is missing`).toBeVisible();
+    await expect(segment).toContainText(label);
+    await segment.click();
+    // The selection reaches the store the submit path reads. Without this the
+    // segments could be inert and every assertion above would still pass,
+    // which is the exact defect issue #1500 was filed for.
+    await expect(packs).toHaveAttribute("data-hive-composer-pack", pack);
+  }
+
+  // The composer still takes input after the mode change.
   await composer.fill("Audit the webhook handlers for unvalidated input");
   await expect(composer).toHaveValue(
     "Audit the webhook handlers for unvalidated input",
   );
-  // The container is the shared one, not a lookalike: this id belongs to the
-  // component MessageInput.svelte renders too.
-  await expect(page.locator("#hive-agent-instructions").locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]").first()).toBeVisible();
-  for (const label of ["Knowledge work", "Coding"]) {
-    const option = page.getByText(label, { exact: true });
-    await expect(
-      option,
-      `the ${label} toggle is missing from the composer`,
-    ).toBeVisible();
-    await option.click();
-  }
 
-  await expect
-    .poll(() => tasksStatus, {
-      message: "the agent surface never called its own backend",
-      timeout: 20_000,
-    })
-    .not.toBeNull();
-  expect(
-    tasksStatus,
-    `GET ${TASKS_ENDPOINT} answered ${tasksStatus}. 401 means the server-side ` +
-      "proxy could not resolve the signed-in user's token, which is the one " +
-      "failure this design has; 403 is the Cowork gate, which can only answer " +
-      "after the principal and its tenant already resolved.",
-  ).not.toBe(401);
-  expect([200, 403]).toContain(tasksStatus);
-
-  // The list has to paint what the API actually returned. Without this, a
-  // surface that mounted and then rendered nothing would still satisfy every
-  // assertion above, which is the shape of green that cannot go red.
-  if (tasksStatus === 200) {
-    const rows = Array.isArray(tasksBody?.tasks) ? (tasksBody!.tasks as Array<Record<string, unknown>>) : [];
-    if (rows.length > 0) {
-      await expect(
-        page.locator("[data-hive-task-row]"),
-        "the API returned tasks and the list painted a different number of rows",
-      ).toHaveCount(rows.length);
-      // One row's own text, taken from the response rather than from a fixture.
-      // Rows that predate the goal field carry no instructions and must say so
-      // deliberately rather than rendering an empty line.
-      const first = rows[0];
-      const expected =
-        typeof first.instructions === "string" && first.instructions.trim() !== ""
-          ? first.instructions
-          : "No description was recorded for this task.";
-      await expect(
-        page.locator(`[data-hive-task-row="${first.id}"]`),
-      ).toContainText(expected);
-    } else {
-      await expect(
-        page.getByText("Nothing submitted yet"),
-        "no tasks came back, so the genuine empty state must be on screen",
-      ).toBeVisible();
-    }
-  } else {
-    // 403 is the Cowork gate. The surface must say so in the server's own
-    // words rather than showing a blank list that implies zero tasks.
-    await expect(
-      page.getByRole("alert"),
-      "a refused list must be stated, not rendered as an empty one",
-    ).toBeVisible();
-  }
-
-  expect(documentLoads, "the hop into the agent must be client-side").toBe(0);
+  expect(documentLoads, "switching mode must not navigate").toBe(0);
 });
 
-test("proof capture: the agent surface, natively, in both palettes", async ({
+test("proof capture: the agent surface as a composer mode, in both palettes", async ({
   page,
 }) => {
+  /*
+   * Retargeted from /agents by issue #1501.
+   *
+   * The old version captured two composers side by side, the agent page's and
+   * chat's, because the owner's acceptance criterion was that they look like
+   * one control rather than merely share a component. That comparison is over,
+   * and it ended in the strongest possible way: there is now literally one
+   * composer, so there is no second image to put beside the first. What is
+   * captured instead is that one composer in both of its modes, which is the
+   * claim D-045 actually makes, plus the class assertions that used to guard
+   * the extraction and now guard the survivor.
+   */
   await page.setViewportSize({ width: 1440, height: 900 });
 
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.goto("/agents");
-    await expect(page.locator("#hive-agent-instructions")).toBeVisible();
+    await page.goto("/");
+    await expect(page.locator("#chat-input")).toBeVisible();
+
+    await page
+      .getByRole("radio", { name: "Cowork", exact: true })
+      .first()
+      .click();
+    await expect(page.locator("[data-hive-composer-pack]")).toBeVisible();
 
     // The DOM evidence travels with the image rather than being asserted only
     // in a log: a screenshot cannot show the absence of a frame on its own.
@@ -250,80 +226,34 @@ test("proof capture: the agent surface, natively, in both palettes", async ({
     expect(frames, "iframe count must be zero in the captured DOM").toBe(0);
 
     await page.screenshot({
-      path: `${PROOF_DIR}/agents-native-${scheme}.png`,
+      path: `${PROOF_DIR}/cowork-native-${scheme}.png`,
       fullPage: true,
     });
   }
 
-  // The two composers, cropped to the control itself, from one build and one
-  // browser, so they can be put side by side and judged as one product or not.
-  // This is the owner's actual acceptance criterion: sharing a component is the
-  // means, looking like one control is the requirement.
   await page.emulateMedia({ colorScheme: "light" });
-
-  await page.goto("/agents");
-  const agentComposer = page
-    .locator("#hive-agent-instructions")
-    .locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]")
-    .first();
-  await expect(agentComposer).toBeVisible();
-  // Typed so the send button is in its enabled state for the capture, which is
-  // the state a reader is judging, and so the geometry below is asserted on a
-  // live control rather than a disabled one.
-  await page.locator("#hive-agent-instructions").fill("Rename the payslips in ascending order");
-  for (const cls of ["rounded-full", "p-1.5", "self-center"]) {
-    await expect(
-      page.locator("#hive-agent-send"),
-      `the shared send button lost ${cls}`,
-    ).toHaveClass(new RegExp(`(^|\\s)${cls}(\\s|$)`));
-  }
-  await expect(page.locator("#hive-agent-send")).toHaveAttribute(
-    "aria-label",
-    /\S/,
-  );
-  await agentComposer.screenshot({ path: `${PROOF_DIR}/composer-agent.png` });
-
   await page.goto("/");
+
   const chatComposer = page.locator("#message-input-container");
   await expect(chatComposer).toBeVisible();
   await chatComposer.screenshot({ path: `${PROOF_DIR}/composer-chat.png` });
+
+  // The same control with Cowork selected, cropped identically, so the two can
+  // be put side by side and judged as one control in two states.
+  await page.getByRole("radio", { name: "Cowork", exact: true }).first().click();
+  await expect(page.locator("[data-hive-composer-pack]")).toBeVisible();
+  await chatComposer.screenshot({ path: `${PROOF_DIR}/composer-cowork.png` });
   await page.screenshot({ path: `${PROOF_DIR}/chat-after.png`, fullPage: false });
 
   /*
-   * The same two composers again at 1280 by 720.
+   * The composer's shape, asserted class by class on chat's own container.
    *
-   * This is Playwright's default viewport, which is what owui.setup.ts runs at,
-   * and therefore the width of the only "before" capture of chat's composer
-   * that exists: the signed-in page in main's own nightly failure screenshot.
-   * A before at 1280 and an after at 1440 is not a comparison, because a reader
-   * cannot tell a layout change from a reflow, and that is exactly the
-   * judgement these images are for. Same width or it proves nothing.
-   */
-  await page.setViewportSize({ width: 1280, height: 720 });
-
-  await page.goto("/agents");
-  const agentComposer1280 = page
-    .locator("#hive-agent-instructions")
-    .locator("xpath=ancestor::*[contains(@class,'rounded-3xl')]")
-    .first();
-  await expect(agentComposer1280).toBeVisible();
-  await agentComposer1280.screenshot({ path: `${PROOF_DIR}/composer-agent-1280.png` });
-
-  await page.goto("/");
-  await expect(chatComposer).toBeVisible();
-  await chatComposer.screenshot({ path: `${PROOF_DIR}/composer-chat-1280.png` });
-
-  /*
-   * The extraction has to be invisible on the chat surface, and two images a
-   * human eyeballs is a weak way to prove that. These are the classes that
-   * carry the composer's shape, asserted on chat's own container, so drift in
-   * the extracted component fails here in words rather than in a screenshot
-   * comparison nobody can diff.
-   *
-   * Asserted class by class rather than as one pinned string: the class
-   * attribute is assembled from a conditional expression whose branches carry
-   * their own leading and trailing spaces, so an exact-string match would fail
-   * on whitespace and teach the next person to delete the assertion.
+   * These guarded an extraction that has since collapsed into a single
+   * component, so they now guard the one composer both modes render. Asserted
+   * class by class rather than as one pinned string: the class attribute is
+   * assembled from a conditional expression whose branches carry their own
+   * leading and trailing spaces, so an exact-string match would fail on
+   * whitespace and teach the next person to delete the assertion.
    */
   for (const cls of [
     "rounded-3xl",
@@ -334,7 +264,7 @@ test("proof capture: the agent surface, natively, in both palettes", async ({
   ]) {
     await expect(
       chatComposer,
-      `chat's composer container lost ${cls}, so the extraction was not invisible`,
+      `the composer container lost ${cls}`,
     ).toHaveClass(new RegExp(`(^|\\s)${cls}(\\s|$)`));
   }
 });
@@ -347,7 +277,7 @@ test("the collapsed rail keeps every destination", async ({ page }) => {
 
   await setSidebar(page, "collapsed");
 
-  for (const id of ["chats", "agents", "knowledge"]) {
+  for (const id of ["chats", "knowledge"]) {
     const row = visibleNavRow(page, id);
     await expect(row, `${id} vanished when the sidebar collapsed`).toBeVisible();
     // Collapsed rows carry no visible label, so the accessible name is the only

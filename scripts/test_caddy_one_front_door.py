@@ -96,19 +96,45 @@ def test_the_second_front_door_is_answered_not_proxied() -> None:
         assert pattern.match(path), path
 
 
-def test_refusing_the_console_path_spares_the_agent_surface_itself() -> None:
-    """The native surface and its API are on this same origin and must survive.
+def test_the_retired_agents_page_is_answered() -> None:
+    """`/agents` is retired too, and by this same matcher (issue #1501).
 
-    `/agents` is the page (vendor/open-webui/src/routes/(app)/agents), and the
-    two API prefixes are what it calls: `/api/v1/hive/agent/*` inside the chat
-    container and `/v1/agent/*` proxied to edge-api. A matcher written as a
-    loose `agent` prefix would take all three down, which is a worse outcome
-    than the second sign in it removes.
+    It was the last agent DESTINATION: a native page in this shell carrying its
+    own submit form, pack selector and task list, unlinked from the sidebar but
+    reachable by URL. D-045 rules the agent surface is a mode of the chat
+    composer rather than a place you go, so the second way to start a run is
+    what is being retired here, not the second origin `/agent-workspace` sat on.
+
+    Separate test from the API one below on purpose. These two assertions pull
+    in opposite directions across one regex, and a single test mixing them
+    would let a careless widening satisfy half of it while silently taking the
+    working composer down.
     """
     pattern = _removed_surface_pattern()
     for path in (
         "/agents",
         "/agents/",
+        "/AGENTS",
+        "/agents/anything",
+        "//agents",
+    ):
+        assert pattern.match(path), path
+
+
+def test_refusing_the_agents_page_spares_the_api_the_composer_calls() -> None:
+    """The composer's own API is on this origin and must survive.
+
+    `/api/v1/hive/agent/*` inside the chat container and `/v1/agent/*` proxied
+    to edge-api are what the composer's Cowork mode calls to start and follow a
+    run. A matcher written as a loose `agent` prefix would take both down,
+    which would retire the working surface along with the retired one.
+
+    The two near misses at the end are the reason this is a regex and not a
+    prefix: `/agent-workspaces` and `/agent-workspace-old` are not the removed
+    segment, and neither is anything merely starting with `agents`.
+    """
+    pattern = _removed_surface_pattern()
+    for path in (
         "/api/v1/hive/agent/tasks",
         "/api/v1/hive/agent/tasks/0b3f2c1e-7a5d-4e11-9c8b-2f6a1d3e4b57/events",
         "/api/v1/hive/credits/balance",
@@ -117,8 +143,28 @@ def test_refusing_the_console_path_spares_the_agent_surface_itself() -> None:
         # Not a prefix match: only the whole segment counts.
         "/agent-workspaces",
         "/agent-workspace-old",
+        "/agentsomething",
+        "/agents-archive",
     ):
         assert not pattern.match(path), path
+
+
+def test_the_agents_route_is_deleted_not_merely_answered() -> None:
+    """A 404 in the proxy is only half of retiring a destination (issue #1501).
+
+    Caddy sits in front of the deployed stack and nothing else. `npm run dev`
+    serves the SvelteKit routes directly, so a route file restored in the tree
+    would be a working second destination again for every developer, and the
+    @removedSurfaces rule above would not say a word about it.
+
+    Asserted here rather than in the frontend vitest suite on purpose. That
+    suite runs in a scratch tree which mirrors lib/hive recursively but copies
+    only a named handful of routes, so the same assertion there passes whether
+    or not the file exists. It was written that way first and measured: with
+    the route restored, all 282 tests still reported green.
+    """
+    route = ROOT / "vendor" / "open-webui" / "src" / "routes" / "(app)" / "agents"
+    assert not route.exists(), f"{route} is back; /agents was retired by issue #1501"
 
 
 def test_the_chat_listener_proxies_no_second_application() -> None:
