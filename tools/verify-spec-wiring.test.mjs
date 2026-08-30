@@ -169,10 +169,11 @@ assert.equal(
 // trips over.
 assert.equal(
   commandInsideContainer(
-    'docker run --rm --network "$HIVE_STACK_NETWORK" --user "$(id -u):$(id -g)" --shm-size=1g ' +
-      '-e HOME=/tmp -v "${{ github.workspace }}:/repo" -w /repo/apps/web-console -e CI ' +
+    'docker run --rm --name "$PROBE_CONTAINER" --network "$HIVE_STACK_NETWORK" ' +
+      '--user "$(id -u):$(id -g)" --shm-size=1g -e HOME=/tmp ' +
+      '-v "${{ github.workspace }}:/repo" -w /repo/apps/web-console -e CI ' +
       "-e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL " +
-      '"mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-noble" ' +
+      '"$PW_IMAGE" ' +
       "npm run e2e:agent-workspace",
   ),
   "npm run e2e:agent-workspace",

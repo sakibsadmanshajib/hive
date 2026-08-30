@@ -2358,6 +2358,13 @@ jobs:
       # scripts/test_selfhost_supabase_seam.py fails if this value and that
       # project name ever drift apart.
       HIVE_STACK_NETWORK: hive_default
+      # A deterministic, per-run name for the browser container, so the
+      # teardown step below can find it. Keyed on the run id and attempt
+      # rather than on a fixed string: the workflow concurrency group already
+      # serialises this workflow, but a re-run of the same run reuses the id,
+      # and a teardown that removed a fixed name would then be able to kill a
+      # container belonging to another attempt.
+      PROBE_CONTAINER: agent-workspace-probe-${{ github.run_id }}-${{ github.run_attempt }}
       # Minting a session needs all of these. live-auth.mjs uses the admin
       # one-time-token flow, which touches no password, and there is no
       # credential-rotating fallback in it (docs/live-test-auth.md).
@@ -2553,6 +2560,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm \
+            --name "$PROBE_CONTAINER" \
             --network "$HIVE_STACK_NETWORK" \
             --user "$(id -u):$(id -g)" \
             --shm-size=1g \
@@ -2563,8 +2571,33 @@ jobs:
             -e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL \
             -e SUPABASE_ANON_KEY -e SUPABASE_SERVICE_ROLE_KEY \
             -e HIVE_QA_AGENT_EMAIL -e E2E_RUN_KEY -e PLAYWRIGHT_JSON_OUTPUT_NAME \
-            "mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-noble" \
+            "$PW_IMAGE" \
             npm run e2e:agent-workspace
+        env:
+          # Bound here rather than interpolated into the command above. A
+          # workflow expression written inside a `run:` block is substituted
+          # as TEXT before the shell parses it, so its value can be read as
+          # script; through `env:` it is only ever a variable's value. This
+          # one comes from `node -p` on an installed package version and is
+          # not attacker controlled today, which is the reason it is worth
+          # fixing now rather than after the source changes.
+          PW_IMAGE: mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-noble
+
+      - name: Remove the probe container
+        # --rm deletes a container that EXITS. It does nothing for one that is
+        # still running when the job stops, and this job can stop that way in
+        # two ordinary situations: a cancelled run and the job timeout above.
+        # What would be left behind is a live Chromium process on the demo box
+        # holding the service-role key in its environment, with nothing to
+        # reap it. `if: always()` also runs on cancellation, which is the case
+        # that matters here; it is the same shape rag-demo-readiness.yml uses
+        # to reclaim its own container.
+        #
+        # Never fails the job: the ordinary path is that the container is
+        # already gone, and a teardown that turns a green run red would be
+        # traded away the first time it fired.
+        if: always()
+        run: docker rm -f "$PROBE_CONTAINER" >/dev/null 2>&1 || true
 
       - name: Build the coverage ledger
         # Always, so a red run still publishes which controls it proved and
