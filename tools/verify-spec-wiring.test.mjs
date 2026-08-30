@@ -170,8 +170,8 @@ assert.equal(
 assert.equal(
   commandInsideContainer(
     'docker run --rm --name "$PROBE_CONTAINER" --network "$HIVE_STACK_NETWORK" ' +
-      '--user "$(id -u):$(id -g)" --shm-size=1g -e HOME=/tmp ' +
-      '-v "${{ github.workspace }}:/repo" -w /repo/apps/web-console -e CI ' +
+      '--user "$run_as" --shm-size=1g -e HOME=/tmp ' +
+      '-v "$GITHUB_WORKSPACE:/repo" -w /repo/apps/web-console -e CI ' +
       "-e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL " +
       '"$PW_IMAGE" ' +
       "npm run e2e:agent-workspace",
@@ -211,6 +211,52 @@ assert.deepEqual(
   commandInsideContainer("docker run --rm --entrypoint=bash image:tag -c npm run e2e:agent-workspace"),
   { unmodelled: "--entrypoint" },
   "the --entrypoint=value form must be refused too",
+);
+
+// The image boundary is parsed, not guessed. An option VALUE can be any word,
+// including one of the command heads, and the earlier "scan for the first
+// npm/npx/playwright token" version returned `npm image:tag npx playwright
+// test` for the first case below. That string matches no invocation pattern,
+// so it was dropped in silence and a spec that does run would have measured as
+// dark. Found by CodeRabbit on this PR.
+assert.equal(
+  commandInsideContainer("docker run -e npm image:tag npx playwright test --project=agent-workspace"),
+  "npx playwright test --project=agent-workspace",
+  "an option value equal to a command head must not be mistaken for the command",
+);
+
+// An option this guard does not model leaves the image boundary unknown. It is
+// refused when a command head appears after it, and ignored otherwise: a
+// container running something unrelated is not this guard's business.
+assert.deepEqual(
+  commandInsideContainer("docker run --sysctl net.ipv4.ping_group_range=0 image:tag npm run e2e:agent-workspace"),
+  { unmodelled: "--sysctl" },
+  "an unmodelled option in front of a Playwright command must fail closed",
+);
+assert.equal(
+  commandInsideContainer("docker run --sysctl net.ipv4.ping_group_range=0 image:tag psql -c 'select 1'"),
+  null,
+  "an unmodelled option in front of an unrelated command must stay silent",
+);
+
+// The token after the image has to BE a command head. A bare image with a
+// path argument is not something this guard reads.
+assert.equal(
+  commandInsideContainer("docker run --rm postgres:16-alpine psql -tAc 'select 1'"),
+  null,
+  "a container running psql is not a Playwright invocation",
+);
+
+// ci.yml's real Caddyfile validation step, which carries --entrypoint and runs
+// nothing this guard reads. Refusing it would be a false positive, and the
+// first version of the refusal did exactly that: the guard went red naming a
+// container that has never selected a spec.
+assert.equal(
+  commandInsideContainer(
+    'docker run --rm -i --entrypoint caddy "$image"      validate --config - --adapter caddyfile',
+  ),
+  null,
+  "an --entrypoint container running something unrelated must stay silent",
 );
 
 console.log("verify-spec-wiring.test: PASS");

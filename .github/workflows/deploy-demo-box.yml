@@ -2510,11 +2510,12 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          run_as="$(id -u):$(id -g)"
           output=$(docker run --rm \
             --network "$HIVE_STACK_NETWORK" \
-            --user "$(id -u):$(id -g)" \
+            --user "$run_as" \
             -e HOME=/tmp \
-            -v "${{ github.workspace }}:/repo:ro" \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
             -w /repo \
             -e SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY \
             -e HIVE_DEMO_EMAIL -e HIVE_DEMO_TENANT_SLUG -e HIVE_DEMO_TENANT_NAME \
@@ -2559,13 +2560,14 @@ jobs:
         # plus the reporter's own status override) is unaffected either way.
         run: |
           set -euo pipefail
+          run_as="$(id -u):$(id -g)"
           docker run --rm \
             --name "$PROBE_CONTAINER" \
             --network "$HIVE_STACK_NETWORK" \
-            --user "$(id -u):$(id -g)" \
+            --user "$run_as" \
             --shm-size=1g \
             -e HOME=/tmp \
-            -v "${{ github.workspace }}:/repo" \
+            -v "$GITHUB_WORKSPACE:/repo" \
             -w /repo/apps/web-console \
             -e CI \
             -e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL \
