@@ -148,6 +148,20 @@ EDITS = [
 EXPECTED_MARKERS = {TARGET: 2}
 
 
+def is_note_guard(node) -> bool:
+    """Exactly `document_id.startswith('note:')`, and nothing that resembles it."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "startswith"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "document_id"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "note:"
+    )
+
+
 def main():
     already = all(
         (BACKEND / f).read_text().count(MARKER) == n
@@ -198,9 +212,41 @@ def main():
             f"expected exactly one `{call}` in yjs_document_update after "
             f"patching, found {body.count(call)}"
         )
-        # The guard must sit above the call, and inside the handler.
-        guard_at = body.rindex("if document_id.startswith('note:')", 0, body.index(call))
-        assert guard_at >= 0, f"`{call}` is not below a note-namespace guard"
+
+    # Each call must sit INSIDE a `document_id.startswith('note:')` branch, and
+    # this is asked of the AST rather than of the text. A string search for the
+    # guard above the call cannot distinguish "inside the branch" from "after
+    # the branch has closed", which is the one arrangement that would reopen the
+    # hole while keeping both the marker count and the call count correct.
+    guarded = set()
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.If):
+            continue
+        # Both shapes the patch produces: a bare
+        # `document_id.startswith('note:')` for the cancellation, and
+        # `document_id.startswith('note:') and data.get('data')` for the
+        # registration. An `or` is deliberately NOT accepted: it would widen the
+        # branch back open, which is the inversion this check exists to catch.
+        test = node.test
+        conjuncts = (
+            list(test.values)
+            if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And)
+            else [test]
+        )
+        if not any(is_note_guard(c) for c in conjuncts):
+            continue
+        for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                guarded.add(sub.func.attr)
+            elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                guarded.add(sub.func.id)
+
+    for name in ("stop_item_tasks", "create_task"):
+        assert name in guarded, (
+            f"`{name}` is not inside a document_id.startswith('note:') branch in "
+            "yjs_document_update, so it can still act on an id whose ownership "
+            "this handler never resolved"
+        )
 
     for filename, expected in EXPECTED_MARKERS.items():
         count = (BACKEND / filename).read_text().count(MARKER)
