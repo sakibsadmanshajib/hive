@@ -117,3 +117,15 @@ in those two strings, not in the projection this capture verified.
 sources ran again inside both image builds (`npm run test:frontend -- --run`),
 which printed `Test Files 20 passed (20)` and `Tests 272 passed (272)` on the
 `proof-1509` build and would have failed it otherwise.
+
+## Capture time versus branch head
+
+Both frames were taken from images built at commit `0afa411ae`, before this
+branch merged current `main` (which brought in #1518's composer pack selector,
+among others) and before the follow-up comment-only commit answering a review
+note. Neither changes the projection under test: the merge touches the composer
+row, the stores and the chat CSS, and the follow-up edits a doc comment only.
+The frontend unit suite was rerun on the merged tree and reports 20 files, 285
+tests passed, up from 272 because the merged work brought its own tests. The
+frames are kept rather than retaken, and their provenance is recorded here
+rather than left implicit.
