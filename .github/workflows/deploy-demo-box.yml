@@ -2435,6 +2435,18 @@ jobs:
         # dispatch creates fresh rather than reusing. Its FEATURE_GATES list
         # already includes ENABLE_COWORK, which is what the authenticated
         # controls below need to submit a task at all.
+        #
+        # continue-on-error: true is load bearing, not a shrug. Currently 404s
+        # (agent-workspace-controls.json's own minimum_proven_note): Caddyfile.
+        # supabase's @admin block refuses the whole /auth/v1/admin/* prefix at
+        # the public console origin this job reaches from, so this step cannot
+        # succeed from here today. Without this flag, GitHub Actions skips
+        # every later step by default on a failed one, which took the C25-C27
+        # unauthenticated group down with it the first time this ran (they need
+        # no identity at all). C28-C33 still fail, loudly and honestly, inside
+        # the probe itself once signIn() hits the identical wall trying to mint
+        # a session for whatever this step could not provision.
+        continue-on-error: true
         run: |
           set -euo pipefail
           output=$(python3 ../../scripts/seed-demo-owner.py)
