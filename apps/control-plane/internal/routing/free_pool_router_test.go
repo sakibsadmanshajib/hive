@@ -126,8 +126,14 @@ func TestFreePoolUpstreamModelsAreTheVerifiedOnes(t *testing.T) {
 		}
 	}
 
-	// The :free suffix is load-bearing on the OpenRouter member: without it the
-	// slug selects a PAID endpoint of the same model.
+	// HISTORICAL, and no longer live intent. This file pins what 20260824_02
+	// inserted, and that migration is frozen, so the pinned model and its
+	// load-bearing :free suffix are still asserted here. What the route holds
+	// TODAY is openrouter/openrouter/free, OpenRouter's own Free Models
+	// Router, set by 20260830_01_openrouter_free_models_router.sql because a
+	// pinned free model gets rate limited or retired without notice. Live
+	// intent is guarded in openrouter_free_models_router_test.go; do not read
+	// the assertion below as the current value.
 	dots := byRoute["route-free-pool-free"]["provider_model"]
 	if !strings.HasSuffix(dots, ":free") {
 		t.Errorf("pool's OpenRouter member %q lost its :free suffix; that selects a PAID endpoint", dots)

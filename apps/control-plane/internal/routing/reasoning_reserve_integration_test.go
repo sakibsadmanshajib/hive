@@ -22,14 +22,25 @@ import (
 //	go test -tags integration ./apps/control-plane/internal/routing/...
 
 // TestFreePoolReasoningReserveLiveRows pins the per-member reserves as DATA,
-// not as fixture: exactly the three reasoning members carry 4096 and the
-// non-reasoning dots member carries 0.
+// not as fixture: every member of the pool carries 4096.
+//
+// CHANGED 2026-08-30, and the reason is the whole point of the assertion. This
+// used to expect 0 on route-free-pool-free, because 20260826_01 set it that
+// way for a member pinned to dots-studio/dots-3-note-preview:free, a model
+// that does not reason. 20260830_01 repoints that member at openrouter/free,
+// OpenRouter's Free Models Router, which selects among whatever is free at the
+// moment of the request and advertises `reasoning` and `include_reasoning`; a
+// reasoning model can now answer there, and provider_capabilities has declared
+// supports_reasoning true for the route since 20260824_02. A reasoning model on
+// a zero reserve is the failure issue #1171 added this column for, so the
+// member joins the other three at 4096 rather than keeping a 0 whose
+// justification was deleted.
 func TestFreePoolReasoningReserveLiveRows(t *testing.T) {
 	pool := connectCatalogDB(t)
 	ctx := context.Background()
 
 	for routeID, want := range map[string]int{
-		"route-free-pool-free":   0,
+		"route-free-pool-free":   4096,
 		"route-free-pool-gemini": 4096,
 		"route-free-pool-groq":   4096,
 		"route-free-pool-groq-2": 4096,
