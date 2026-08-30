@@ -249,15 +249,9 @@ func (s *Service) launch(ctx context.Context, t Task) {
 		safely("recording a panicking launch as failed", func() {
 			s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
 		})
-		// Only when the panic happened after a successful mint. t.LLMAPIKey is
-		// set by this same function and the closure sees that assignment, so an
-		// empty one means no credential was ever issued and there is nothing to
-		// chase.
-		if t.LLMAPIKey != "" {
-			safely("revoking the credential of a panicking launch", func() {
-				revokeTaskCredential(ctx, s.creds, t)
-			})
-		}
+		// No separate revoke here: recordLaunchFailure above already revokes,
+		// gated on t.LLMAPIKey, which this closure observes because launch
+		// assigns it on the same variable.
 	}()
 
 	// The sandbox must spend a credential that resolves to THIS task's tenant,
@@ -345,19 +339,31 @@ func (s *Service) recordLaunchFailure(ctx context.Context, t Task, message strin
 		slog.Default().WarnContext(ctx, "agenttask: could not record a failed launch",
 			"task_id", t.ID, "error", err)
 	}
-	// Revoked even on the one branch where the sandbox may still be alive: a
-	// transport-level Launch failure can leave a session the launcher
-	// registered and this process never learned the reference for (#899), so
-	// there is nothing to stop first and the credential dies while the sandbox
-	// may still be running.
+	// Gated on a credential having actually been minted, and the gate is here
+	// rather than inside revokeTaskCredential because Cancel passes a
+	// repository-loaded Task whose LLMAPIKey is always empty by design and
+	// still has to revoke.
 	//
-	// That is the right direction, not an oversight. The row is now recorded
-	// FAILED, so the customer has been told this task produced nothing; an
-	// orphaned sandbox that kept its credential would go on spending that
-	// customer's credits on work they will never be shown, for as long as it
-	// happened to live. An auth error that kills it is the cheaper outcome,
-	// and the concurrency slot it holds is #899's problem either way.
-	revokeTaskCredential(ctx, s.creds, t)
+	// Without it, launch's own mint-failure branch reaches this function with an
+	// empty LLMAPIKey, the revoke finds no key, and the result is an
+	// ErrCredentialUnaccountedFor ERROR for a task that never had a credential.
+	// ErrNoBillingAccount is an ordinary mint failure, so that alert would fire
+	// falsely on every one of them, and a reason string built to catch #1507
+	// would become noise. That is the failure this PR exists to prevent, so it
+	// is not allowed to be introduced by the fix for it.
+	//
+	// When a credential DOES exist it is revoked even on the one branch where
+	// the sandbox may still be alive: a transport-level Launch failure can leave
+	// a session the launcher registered and this process never learned the
+	// reference for (#899), so there is nothing to stop first. That is the right
+	// direction, not an oversight. The row is now recorded FAILED, so the
+	// customer has been told this task produced nothing, and an orphaned sandbox
+	// keeping its credential would go on spending that customer's credits on
+	// work they will never be shown. An auth error that kills it is the cheaper
+	// outcome, and its concurrency slot is #899's problem either way.
+	if t.LLMAPIKey != "" {
+		revokeTaskCredential(ctx, s.creds, t)
+	}
 }
 
 // revokeTaskCredential ends one task's gateway credential, best effort.

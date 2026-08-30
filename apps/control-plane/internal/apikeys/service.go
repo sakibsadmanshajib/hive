@@ -399,9 +399,12 @@ func (s *Service) RevokeAgentTaskKey(ctx context.Context, taskID uuid.UUID) (API
 	if err := s.invalidateSnapshot(ctx, updated.TokenHash); err != nil {
 		return APIKey{}, err
 	}
-	// last_used_at rides back on the returned key on purpose: it is how the
-	// caller learns whether this credential ever settled a charge.
-	updated.LastUsedAt = existing.LastUsedAt
+	// updated carries last_used_at from the UPDATE's own RETURNING clause, and
+	// that is deliberately left alone. An earlier revision overwrote it with the
+	// value read by GetKeyByID above, which is stale: a credential can settle a
+	// charge in the window between that read and this write, and the caller uses
+	// this field to decide whether the task charged anything at all. Copying the
+	// pre-read value back would make such a task report as a zero charge.
 	return updated, nil
 }
 

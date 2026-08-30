@@ -18,8 +18,10 @@ package agenttask_test
 // leaving the customer uncharged, which is the defect verbatim.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -559,11 +561,21 @@ func TestPgxTaskCredentials_RevokeReadsWhetherTheCredentialEverSettledAnything(t
 	for _, tc := range []struct {
 		name       string
 		lastUsedAt *time.Time
+		wantReport bool
 	}{
-		{"settled nothing", nil},
-		{"settled at least one turn", &used},
+		{"settled nothing", nil, true},
+		{"settled at least one turn", &used, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The log is captured because the report IS the deliverable here.
+			// Asserting only that the issuer was called would hold identically
+			// for both rows, so the pair would prove nothing and deleting
+			// reportZeroCharge outright would leave this test green.
+			var logBuf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
 			keys := &fakeKeyIssuer{revokedLastUsedAt: tc.lastUsedAt}
 			creds := agenttask.NewPgxTaskCredentials(db, keys)
 			if err := creds.Revoke(context.Background(), task); err != nil {
@@ -571,6 +583,10 @@ func TestPgxTaskCredentials_RevokeReadsWhetherTheCredentialEverSettledAnything(t
 			}
 			if !keys.revokeCalled || keys.revokedKeyID != taskID {
 				t.Fatalf("revoked key %s (called=%v); want %s", keys.revokedKeyID, keys.revokeCalled, taskID)
+			}
+			got := strings.Contains(logBuf.String(), "agent_task_credential_settled_nothing")
+			if got != tc.wantReport {
+				t.Fatalf("zero-charge report present = %v, want %v; log: %s", got, tc.wantReport, logBuf.String())
 			}
 		})
 	}
