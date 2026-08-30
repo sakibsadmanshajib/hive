@@ -451,59 +451,10 @@ export const latestStepSeq = (steps: readonly RunStep[] | null | undefined): num
 	return highest;
 };
 
-/**
- * Drops the step that is only an echo of the turn's own content (#1509).
- *
- * A finished run used to say the same sentence twice, and the duplication was
- * not one payload appended twice: it was one payload arriving by two routes and
- * rendered by two components. The sandbox's closing assistant message reaches
- * this turn as a `message` event, which describeEvent turns into a step line,
- * AND as the task's `result_summary_ref`, which agent-engine fills from
- * FinalResponse and renderRun puts in the turn's content. Neither route is
- * wrong on its own: the event feed is the progress record and the final
- * response is the result. Rendering both is what is wrong, so the echo is
- * dropped here rather than either emission being suppressed upstream.
- *
- * Applied only once the run has settled, which is the only moment the duplicate
- * exists: while it is still going the turn's content is a status line, not the
- * summary, and nothing matches.
- *
- * Only the LAST match goes. An intermediate message that happened to repeat the
- * closing sentence is still a thing the agent said twice, and the step list is
- * where that is visible.
- *
- * The comparison is on the text because the wire carries nothing else to join
- * on: the event and the final response come from two different endpoints and
- * share no identifier. It is whitespace-insensitive, because the two routes
- * assemble the same message differently: normalizeEvent (agent-engine's
- * controlclient/events.go) joins an llm_message's content blocks with a single
- * space, while the final response keeps the message's own line breaks. Nothing
- * else is relaxed, so the rule's failure mode is that it does nothing and the
- * duplicate stays visible, never that it removes a line whose text is not
- * already on screen directly underneath it.
- *
- * One narrow prefix case on top of equality: a preview is cut at
- * maxPreviewRunes on the way out (events.go) and describeEvent marks such a
- * line, so a long closing message arrives here as a marked prefix of the
- * summary. The prefix comparison is applied ONLY to a line carrying that
- * marker, so an ordinary short step can never be dropped for accidentally
- * being the beginning of the summary.
- *
- * The equality branch is not scoped to a message step, and cannot be: RunStep
- * stores no event kind, every line carries the same `hive_agent_step` action.
- * So a tool_result, error or file step whose flattened preview is byte
- * identical to the flattened summary would also go. That is unlikely and it is
- * not harmful: the only line this drops is one whose text is already rendered
- * directly underneath it. (The prefix branch is incidentally narrower, because
- * describeEvent puts the marker at position 0 only for a message; every other
- * kind formats it as label, marker, colon, text.)
- *
- * One accepted side effect: latestStepSeq reads the lines the turn still holds,
- * so the dropped event sits above the stored cursor and a conversation reopened
- * later re-reads that one event, folds the echo back in, and drops it again in
- * the same pass. The persisted result is identical; the cost is one small
- * request per reopen, which is cheaper than carrying a second cursor field on
- * every turn to remember a line nobody should see.
+/*
+ * Two helpers for dropSummaryEcho below. They sit above its doc comment on
+ * purpose: TypeScript binds a leading block to the very next declaration, and
+ * that doc is about the exported function, not about whitespace collapsing.
  */
 const flatten = (value: string): string => (value ?? '').replace(/\s+/g, ' ').trim();
 
@@ -522,6 +473,80 @@ const echoesSummary = (description: string, summary: string): boolean => {
 	return false;
 };
 
+/**
+ * Drops the step that is only an echo of the turn's own content (#1509).
+ *
+ * A finished run used to say the same sentence twice, and the duplication was
+ * not one payload appended twice: it was one payload arriving by two routes and
+ * rendered by two components. The sandbox's closing assistant message reaches
+ * this turn as a `message` event, which describeEvent turns into a step line,
+ * AND as the task's `result_summary_ref`, which agent-engine fills from
+ * FinalResponse and renderRun puts in the turn's content. Neither route is
+ * wrong on its own: the event feed is the progress record and the final
+ * response is the result. Rendering both is what is wrong, so the echo is
+ * dropped here rather than either emission being suppressed upstream.
+ *
+ * Applied only once the run has settled, which is the only moment the duplicate
+ * exists: while it is still going the turn's content is a status line, not the
+ * summary, and nothing matches.
+ *
+ * The scan runs BACKWARDS and takes the first match, rather than testing the
+ * last element. The echo is usually last but not by construction: the event
+ * sync appends workspace `file` events after the mapped sandbox events in the
+ * same batch (eventsync.go), so a file first observed on the final pass gets a
+ * higher seq than the closing message and folds in below it. Taking the last
+ * match also leaves an intermediate repetition alone, which is a thing the
+ * agent really did say twice and belongs in the step list.
+ *
+ * The comparison is on the text because the wire carries nothing else to join
+ * on: the event and the final response come from two different endpoints and
+ * share no identifier.
+ *
+ * On the whitespace insensitivity, precisely, because the loose version of this
+ * sentence is misleading. A single-block `llm_message` needs none of it:
+ * normalizeEvent (agent-engine's controlclient/events.go) writes that block's
+ * text and trims, so the preview is the summary verbatim and plain equality
+ * would match. It is the multi-block message that needs it, because that loop
+ * joins the blocks with a single space while the final response keeps the
+ * message's own line breaks. That same multi-block case is also the one where
+ * the preview can be a strict SUPERSET of the summary, since the loop reads
+ * `text` off every block with no filter on block type: extra text at the front
+ * matches neither branch and the duplicate simply survives. So this rule can
+ * silently do nothing on a payload shape this box could not read (no Supabase
+ * credentials here). That is the benign direction and it is the only direction:
+ * the rule either removes the echo or leaves it, and it can never remove a line
+ * whose text is not already rendered directly underneath it. If the owed
+ * post-deploy capture still doubles, the fix is to read those two strings off
+ * the box, not to widen the comparison on a guess.
+ *
+ * One narrow prefix case on top of equality: a preview is cut at
+ * maxPreviewRunes on the way out (events.go) and describeEvent marks such a
+ * line, so a long closing message arrives here as a marked prefix of the
+ * summary. The prefix comparison is applied ONLY to a line carrying that
+ * marker, so an ordinary short step can never be dropped for accidentally
+ * being the beginning of the summary. That marker position is a contract with
+ * describeEvent's `message` arm rather than a general convention (every other
+ * arm goes through withPreview, which puts the marker after the label), so
+ * coworkMode.test.ts pins it by feeding describeEvent's own output into this
+ * function instead of hand-building the marked string.
+ *
+ * The equality branch is not scoped to a message step, and cannot be: RunStep
+ * stores no event kind, every line carries the same `hive_agent_step` action.
+ * So a tool_result, error or file step whose flattened preview is byte
+ * identical to the flattened summary would also go. That is unlikely and it is
+ * not harmful, for the same reason as above: the only line this drops is one
+ * whose text is already rendered directly underneath it.
+ *
+ * One accepted side effect: latestStepSeq reads the lines the turn still holds,
+ * so the dropped event sits above the stored cursor and a conversation reopened
+ * later re-reads that one event, folds the echo back in, and drops it again in
+ * the same pass. The persisted result is identical. The cost is one small
+ * request per reopen while any other step survives; for a run that answered
+ * with no tool calls at all the post-drop list is empty, latestStepSeq returns
+ * 0, and the reopen re-reads that run's events from the beginning, bounded by
+ * COWORK_EVENT_PAGES_PER_READ. Both are cheaper than carrying a second cursor
+ * field on every turn to remember a line nobody should see.
+ */
 export const dropSummaryEcho = (steps: readonly RunStep[], content: string): RunStep[] => {
 	const summary = flatten(content);
 	if (summary === '') {

@@ -572,6 +572,48 @@ describe('dropSummaryEcho', () => {
 		expect(kept.map((s) => s.description)).toEqual([echo, 'Using bash']);
 	});
 
+	it('drops the echo even when a file step lands after it (#1509 review)', () => {
+		// "The echo is the last step" is not a construction guarantee: the event
+		// sync appends workspace file events after the mapped sandbox events in
+		// the same batch (eventsync.go), so a file first seen on the final pass
+		// carries a higher seq than the closing message. The backwards scan is
+		// what makes that safe, and this is the ordering that catches a rewrite
+		// into a cheaper last-element check.
+		const kept = dropSummaryEcho(
+			[step('Using bash', 1), step(echo, 2), step('Workspace file: sixcap.txt', 3)],
+			summary
+		);
+		expect(kept.map((s) => s.description)).toEqual([
+			'Using bash',
+			'Workspace file: sixcap.txt'
+		]);
+	});
+
+	it('drops a shortened line describeEvent itself produced, not a hand-built one', () => {
+		// The prefix branch parses '(shortened) ' at position 0, which only
+		// describeEvent's message arm produces; every other arm goes through
+		// withPreview and puts the marker after the label. Building the marked
+		// string by hand in a test leaves that contract uncrossed, so this case
+		// runs the real producer into the real consumer: if the message arm ever
+		// adopts the withPreview shape, this fails instead of quietly passing.
+		const full = `${'sixcap '.repeat(400)}tail the wire cut off`;
+		const cut = Array.from(full).slice(0, 2000).join('');
+		const description = describeEvent({
+			seq: 9,
+			kind: 'message',
+			payload: { role: 'assistant', preview: cut },
+			created_at: ''
+		} as TaskEvent);
+		expect(description).not.toBeNull();
+		expect(description as string).toContain('(shortened)');
+
+		const kept = dropSummaryEcho(
+			[step('Using bash', 1), step(description as string, 2)],
+			full
+		);
+		expect(kept.map((s) => s.description)).toEqual(['Using bash']);
+	});
+
 	it('drops nothing when the turn has no content to echo', () => {
 		const steps = [step('Using bash', 1)];
 		expect(dropSummaryEcho(steps, '')).toEqual(steps);
