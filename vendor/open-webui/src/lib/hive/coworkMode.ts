@@ -21,7 +21,7 @@
  * transcript component as a chat.
  */
 
-import type { TaskEvent } from './agentTasks';
+import type { TaskEvent, TaskPack } from './agentTasks';
 
 export type ComposerMode = 'chat' | 'cowork';
 
@@ -31,39 +31,89 @@ export const isComposerMode = (value: unknown): value is ComposerMode =>
 	value === 'chat' || value === 'cowork';
 
 /*
- * The pack is derived, never chosen (#944).
+ * The pack the composer will send (#1500).
  *
- * The surface being replaced offered a segmented Coding / Knowledge control.
- * `agent_kind` still carries the distinction on the wire, but the coding pack
- * belongs to a Code panel this shell does not have, so offering it here would
- * be a control whose second segment produces a worse result on this surface.
- * The Home composer sends the knowledge work pack; when a Code panel exists it
- * passes its own mode through this function rather than growing a control.
+ * This used to be `packForMode()`, a function that took a mode and returned the
+ * knowledge-work pack whatever it was given. The comment above it argued that
+ * deriving the pack was safer than offering it, because the coding pack
+ * "belongs to a Code panel this shell does not have". That reasoning did not
+ * survive contact with the shipped product: the derivation made `coding-pack`
+ * unreachable from the chat surface entirely, and the only place left that
+ * could reach it was the `/agents` destination D-045 retires.
+ *
+ * HOW DIFFERENT THE TWO PACKS ACTUALLY ARE, so nobody re-derives it
+ * ----------------------------------------------------------------
+ * Less than the names suggest, and both pack manifests say so themselves.
+ * `apps/agent-engine/packs/coding-pack/AGENTS.md` and its knowledge-work twin
+ * both record that the two run at an identical sandbox trust tier, that both
+ * may run arbitrary shell, build and test commands, and that "the difference
+ * between packs is task framing and default tooling emphasis only". `Pack` in
+ * apps/agent-engine/internal/sandbox/launcher.go selects one bind mount
+ * (`ConfigDir` becomes `/opt/hive/pack`) and nothing else.
+ *
+ * The real difference is content: the knowledge-work pack ships three skills
+ * (doc-layout, deck-generation, code-canvas) that publish artifacts, and the
+ * coding pack ships none and frames the task around reading, editing and
+ * testing a codebase in /workspace. So a coding-flavoured prompt succeeding
+ * under the knowledge-work pack is expected rather than surprising, and is not
+ * evidence that the choice is cosmetic.
+ *
+ * The labels are the words the /agents route already used. A customer never
+ * reads `knowledge-work-pack`: the identifier stays on the wire, where the API
+ * and the `public.agent_tasks` CHECK constraint want it.
  */
-export const packForMode = (_mode: ComposerMode): 'knowledge-work-pack' => 'knowledge-work-pack';
+export interface ComposerPackOption {
+	value: TaskPack;
+	label: string;
+}
+
+export const COMPOSER_PACKS: readonly ComposerPackOption[] = [
+	{ value: 'knowledge-work-pack', label: 'Knowledge work' },
+	{ value: 'coding-pack', label: 'Coding' }
+];
+
+/*
+ * Knowledge work, because that is what this composer sent before the control
+ * existed. A different default would silently change what an existing user's
+ * next submission does, which is a behaviour change dressed up as a new
+ * control.
+ */
+export const DEFAULT_COMPOSER_PACK: TaskPack = 'knowledge-work-pack';
 
 /**
- * Arrow-key movement inside the radiogroup.
+ * Arrow-key movement inside a radiogroup.
  *
  * A `radiogroup` with two `radio` children announces as "Chat, selected, 1 of
  * 2" and moves with the arrow keys; two plain buttons announce as two
  * unrelated controls and move with Tab. The keyboard contract is the reason
  * for the role, so it is implemented rather than assumed, and it wraps at both
  * ends the way a native radio group does.
+ *
+ * Generic over the option list because the composer now has two of these
+ * groups, the mode and the pack, with the same contract. One copy, so a fix to
+ * the wrapping behaviour cannot land on one group and miss the other.
  */
-export const nextMode = (current: ComposerMode, key: string): ComposerMode | null => {
-	const index = COMPOSER_MODES.indexOf(current);
+const nextInGroup = <T>(options: readonly T[], current: T, key: string): T | null => {
+	const index = options.indexOf(current);
 	if (index === -1) {
 		return null;
 	}
 	if (key === 'ArrowRight' || key === 'ArrowDown') {
-		return COMPOSER_MODES[(index + 1) % COMPOSER_MODES.length];
+		return options[(index + 1) % options.length];
 	}
 	if (key === 'ArrowLeft' || key === 'ArrowUp') {
-		return COMPOSER_MODES[(index - 1 + COMPOSER_MODES.length) % COMPOSER_MODES.length];
+		return options[(index - 1 + options.length) % options.length];
 	}
 	return null;
 };
+
+export const nextMode = (current: ComposerMode, key: string): ComposerMode | null =>
+	nextInGroup(COMPOSER_MODES, current, key);
+
+const PACK_VALUES: readonly TaskPack[] = COMPOSER_PACKS.map((option) => option.value);
+
+export const nextPack = (current: TaskPack, key: string): TaskPack | null =>
+	nextInGroup(PACK_VALUES, current, key);
 
 /*
  * The projection of a run onto a transcript turn.

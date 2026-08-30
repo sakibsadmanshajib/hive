@@ -1,0 +1,42 @@
+URL under test: http://localhost:18500  (throwaway local container, no credential in any URL)
+image: hive-owui:pr1500, built from branch fix/1500-composer-pack-selector
+
+signed in as a throwaway local admin, the first account in an empty container
+password generated per run, never logged, dies with the container
+
+STEP 1  composer in Chat mode
+  capture: 01-chat-mode.png
+
+STEP 2  switch to Cowork mode
+  capture: 02-cowork-pack-row.png
+
+STEP 3  the query issue #1500 ran against the live box, re-run here
+        issue recorded: clickable elements matching "Knowledge work" -> count 0
+        now: clickable "Knowledge work" -> count 1
+        now: clickable "Coding"         -> count 1
+        pack radiogroup present -> 1
+        its aria-label          -> "Kind of task"
+        radios inside it        -> 2
+        store value on mount    -> knowledge-work-pack
+
+STEP 4  click "Coding"
+        store value now         -> coding-pack
+        Coding aria-checked     -> true
+        Knowledge aria-checked  -> false
+        Coding tabindex         -> 0
+        Knowledge tabindex      -> -1
+  capture: 03-coding-selected.png
+
+STEP 5  keyboard: ArrowLeft from Coding
+        store value now         -> knowledge-work-pack
+        focus moved to          -> knowledge-work-pack
+        ArrowRight returns to   -> coding-pack
+
+STEP 6  what the composer puts on the wire with "Coding" selected
+  capture: 04-coding-selected-with-brief.png
+        POST body the frontend sent -> {"pack":"coding-pack","instructions":"Create hello.py that prints HIVE-CODING-OK and run it with python3."}
+
+STEP 7  375px, where hive.css hides the neighbouring note
+        pack radiogroup still visible -> true
+        radios still present          -> 2
+  capture: 05-narrow-375px.png
