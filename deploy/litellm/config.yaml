@@ -512,10 +512,22 @@ model_list:
 #
 # The third line is the one that makes this safe: every other error class still
 # retries num_retries times. And the absorption for a genuine per-minute burst
-# is not lost, it moves one layer out: edge-api retries 429 itself, four
-# attempts inside about 2.9 seconds, and returns the final 429 verbatim
-# (apps/edge-api/internal/inference/retry.go). Fast absorption stays, the slow
-# multi-minute kind goes.
+# is not lost, it moves one layer out: every edge-api surface that dispatches
+# to this router retries a 429 itself, four attempts inside about 2.9 seconds,
+# and returns the final 429 verbatim (apps/edge-api/internal/inference/retry.go,
+# dispatchWithRetry, exported as inference.DispatchWithRetry).
+#
+# That was NOT true repo-wide when this comment first made the claim, and the
+# gap is what let issue #1564 ship: dispatchWithRetry was only ever called
+# from the API-key inference dispatcher. The browser/JWT session-chat surface
+# (internal/chat/dispatch.go) and the audio transcription surface
+# (internal/audio/handler.go) each made one bare HTTP call to this router with
+# no retry at all, so about 12 percent of browser chat sends died outright on
+# an exhausted free-pool member instead of trying one of the pool's other
+# healthy members. Fixed by exporting the one ladder and routing all three
+# surfaces through it, rather than each growing its own copy, so the
+# assumption above cannot go quietly false again on just one caller. Fast
+# absorption stays, the slow multi-minute kind goes.
 #
 # One caution found while measuring: LiteLLM classifies partly on message
 # CONTENT, not only on status code. A stub returning HTTP 500 whose body

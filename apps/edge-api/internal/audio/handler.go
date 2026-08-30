@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 )
 
@@ -712,19 +713,29 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
-	// Forward to LiteLLM.
+	// Forward to LiteLLM with the same bounded retry on 429/5xx the API-key
+	// chat surface uses (inference.DispatchWithRetry, backed by
+	// internal/inference/retry.go's dispatchWithRetry). Before this fix this
+	// handler made a single bare h.httpClient.Do call with no retry at all,
+	// the same defect as issue #1564's chat finding, on this transcription
+	// path. multipartBuf is already fully buffered above (bounded by the
+	// 25MB ParseMultipartForm cap), so its bytes can be replayed on every
+	// attempt; a fresh *http.Request is built each time because an
+	// http.Request's body can only be read once.
 	upstreamURL := h.litellmBaseURL + litellmPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, &multipartBuf)
-	if err != nil {
-		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
-		code := "upstream_error"
-		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
-		return
+	contentType := mw.FormDataContentType()
+	multipartBody := multipartBuf.Bytes()
+	dispatchToLiteLLM := func(ctx context.Context, _ string, body []byte) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Authorization", "Bearer "+h.masterKey)
+		return h.httpClient.Do(req)
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+h.masterKey)
 
-	resp, err := h.httpClient.Do(req)
+	resp, err := inference.DispatchWithRetry(ctx, litellmModel, multipartBody, dispatchToLiteLLM)
 	if err != nil {
 		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, http.StatusBadGateway, err.Error())

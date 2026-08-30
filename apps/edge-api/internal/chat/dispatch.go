@@ -3,6 +3,7 @@ package chat
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,24 +261,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := http.NewRequestWithContext(
-		r.Context(),
-		http.MethodPost,
-		strings.TrimRight(h.deps.LiteLLMURL, "/")+"/v1/chat/completions",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "build request")
-		return
-	}
-	upstream.Header.Set("Content-Type", "application/json")
-	upstream.Header.Set("X-Request-Id", requestID.String())
-	if h.deps.LiteLLMKey != "" {
-		upstream.Header.Set("Authorization", "Bearer "+h.deps.LiteLLMKey)
+	// Dispatch to LiteLLM with the same bounded retry on 429/5xx the API-key
+	// surface uses (inference.DispatchWithRetry, backed by
+	// internal/inference/retry.go's dispatchWithRetry). Before this fix this
+	// surface made a single bare h.deps.HTTP.Do call with no retry at all,
+	// which is what let a JWT chat send die on the first exhausted free-pool
+	// member instead of trying one of the pool's other healthy members
+	// (issue #1564). A fresh *http.Request is built on every attempt because
+	// an http.Request's body can only be read once.
+	dispatchToLiteLLM := func(ctx context.Context, litellmModel string, reqBody []byte) (*http.Response, error) {
+		upstream, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			strings.TrimRight(h.deps.LiteLLMURL, "/")+"/v1/chat/completions",
+			bytes.NewReader(reqBody),
+		)
+		if err != nil {
+			return nil, err
+		}
+		upstream.Header.Set("Content-Type", "application/json")
+		upstream.Header.Set("X-Request-Id", requestID.String())
+		if h.deps.LiteLLMKey != "" {
+			upstream.Header.Set("Authorization", "Bearer "+h.deps.LiteLLMKey)
+		}
+		return h.deps.HTTP.Do(upstream)
 	}
 
 	started := time.Now()
-	resp, err := h.deps.HTTP.Do(upstream)
+	resp, err := inference.DispatchWithRetry(r.Context(), route.LiteLLMModelName, body, dispatchToLiteLLM)
 	if err != nil {
 		releaseReason = "upstream_error"
 		apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "upstream unavailable")

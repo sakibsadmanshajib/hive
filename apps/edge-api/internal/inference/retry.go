@@ -197,6 +197,25 @@ var retryDelays = []time.Duration{
 	1800 * time.Millisecond,
 }
 
+// DispatchWithRetry exports dispatchWithRetry to the other dispatch surfaces
+// in this codebase (internal/chat, internal/audio) so that every path
+// talking to LiteLLM shares this exact retry ladder instead of each growing
+// its own copy. See dispatchWithRetry for the full behavior contract.
+//
+// This is the fix for issue #1564: the browser/JWT chat surface made one
+// bare HTTP call with no retry at all, while this API-key surface always
+// retried a 429 through dispatchWithRetry. deploy/litellm/config.yaml
+// deliberately sets router_settings.retry_policy.RateLimitErrorRetries to 0
+// on the assumption that edge-api retries 429s itself; that assumption only
+// held on this package's own callers, so a request that drew an exhausted
+// pool member on the JWT surface failed outright instead of trying a
+// different member. Exporting the same function here, rather than writing a
+// second retry loop in internal/chat or internal/audio, is what keeps the
+// two surfaces from drifting apart again.
+func DispatchWithRetry(ctx context.Context, litellmModel string, body []byte, dispatch func(ctx context.Context, litellmModel string, body []byte) (*http.Response, error)) (*http.Response, error) {
+	return dispatchWithRetry(ctx, litellmModel, body, dispatch)
+}
+
 // dispatchWithRetry wraps a DispatchFunc with bounded retries on 429 and
 // transient 5xx. The request body is reused verbatim on each attempt, so
 // callers must pass a fully-materialized []byte (not a stream).
