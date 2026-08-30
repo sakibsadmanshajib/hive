@@ -178,6 +178,26 @@ const NEUTRAL_FLAGS = new Set([
   "--pass-with-no-tests",
 ]);
 
+// The command heads this guard knows how to read. A container's command is
+// only read when its FIRST token is one of these; see commandInsideContainer.
+const COMMAND_HEADS = new Set(["npm", "npx", "playwright", "@playwright/test"]);
+
+// `docker run` options, split by whether they take the token after them. The
+// list is what this repository's workflows plausibly pass, not all of Docker:
+// anything outside it is refused rather than guessed at, the same posture
+// selectionOf takes with Playwright's own flags.
+const DOCKER_VALUE_OPTIONS = new Set([
+  "--network", "--user", "-u", "-e", "--env", "--env-file", "-v", "--volume",
+  "--mount", "-w", "--workdir", "--name", "--shm-size", "--ipc", "--platform",
+  "--pull", "--add-host", "--label", "-l", "--memory", "-m", "--cpus",
+  "--tmpfs", "--dns", "--security-opt", "--cap-add", "--cap-drop", "-p",
+  "--publish", "--entrypoint", "--restart", "--hostname", "-h",
+]);
+const DOCKER_BOOLEAN_OPTIONS = new Set([
+  "--rm", "-i", "-t", "-it", "-ti", "--init", "--privileged", "--quiet", "-d",
+  "--detach", "--read-only", "--interactive", "--tty",
+]);
+
 const PR_EVENTS = ["pull_request", "pull_request_target"];
 // GitHub's defaults when `on.pull_request.types` is omitted, plus the one a
 // draft marked ready for review fires. A `pull_request` trigger listing none
@@ -384,6 +404,69 @@ function tokenize(text) {
     .map((token) => token.replace(/^["']|["']$/g, ""));
 }
 
+/**
+ * The command a `docker run` starts, or null when the command is not one, or
+ * does not start anything this guard can read.
+ *
+ * A containerised run is still a run. deploy-demo-box.yml's
+ * agent-workspace-coverage job runs its probe inside a container attached to
+ * the stack's compose network, because the deployment's admin API is refused
+ * at the public origin and reachable only from in there (issue #1531). Without
+ * this, that invocation parses as nothing, its spec measures as dark, and the
+ * guard reports the exact opposite of the truth about a suite that does run.
+ *
+ * The container's own options are skipped rather than modelled, which is a
+ * deliberately weaker claim than the one selectionOf makes about Playwright's
+ * flags: a bind mount, a network, an environment variable or a user cannot
+ * change which spec files Playwright collects. One option can, by replacing
+ * the command outright, so `--entrypoint` is refused instead of skipped.
+ *
+ * The image boundary is parsed rather than guessed at, because an option VALUE
+ * can be any word at all. An earlier version of this function scanned for the
+ * first `npm`/`npx`/`playwright` token instead, and `docker run -e npm
+ * image:tag npx playwright test` then returned `npm image:tag npx playwright
+ * test`, which matches no invocation pattern and is dropped in silence: a real
+ * run measured as no run, which is this guard's whole failure mode. Found by
+ * CodeRabbit on this PR.
+ *
+ * @param {string} command
+ * @returns {string | { unmodelled: string } | null}
+ */
+// Fail closed, but only where it could be hiding something. An option this
+// function cannot read leaves the image boundary unknown, so a Playwright
+// command after it would be credited or dropped by guesswork and has to be
+// reported. A container running something else entirely is not this guard's
+// business: ci.yml runs `docker run --entrypoint caddy ... validate`, and
+// refusing that would be a false positive on every future container step too.
+function refuseIfItCouldBeAPlaywrightRun(rest, flag) {
+  return rest.some((token) => COMMAND_HEADS.has(token)) ? { unmodelled: flag } : null;
+}
+
+export function commandInsideContainer(command) {
+  const match = /^docker\s+run\s+(.*)$/.exec(command.trim());
+  if (!match) return null;
+  const tokens = tokenize(match[1]);
+
+  let i = 0;
+  for (; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token.startsWith("-")) break; // the image, so the command follows it
+    const flag = token.includes("=") ? token.slice(0, token.indexOf("=")) : token;
+    if (flag === "--entrypoint") return refuseIfItCouldBeAPlaywrightRun(tokens.slice(i), "--entrypoint");
+    if (token.includes("=")) continue; // --flag=value carries its own operand
+    if (DOCKER_VALUE_OPTIONS.has(flag)) {
+      i += 1;
+      continue;
+    }
+    if (DOCKER_BOOLEAN_OPTIONS.has(flag)) continue;
+    return refuseIfItCouldBeAPlaywrightRun(tokens.slice(i), flag);
+  }
+
+  const inner = tokens.slice(i + 1);
+  if (inner.length === 0 || !COMMAND_HEADS.has(inner[0])) return null;
+  return inner.join(" ");
+}
+
 // The argv of every Playwright run a single shell command starts. An npm
 // script is expanded into the argv it really runs, with any `-- <args>` the
 // workflow appended kept, because dropping them would measure a narrowed run
@@ -555,7 +638,19 @@ for (const file of workflowFiles()) {
     // A direct `npx playwright test` is still read from anywhere, and fails
     // below on its working directory rather than being quietly ignored.
     const visibleScripts = step.workingDirectory === WEB_CONSOLE ? scripts : {};
-    for (const command of shellCommands(step.run)) {
+    for (const rawCommand of shellCommands(step.run)) {
+      // A container's command is read as though the step ran it directly. The
+      // step's own working-directory still has to be the web console, checked
+      // below, which is where the npm scripts it may name resolve from.
+      const contained = commandInsideContainer(rawCommand);
+      if (contained !== null && typeof contained === "object") {
+        fail(
+          `${step.where}: \`${rawCommand}\` runs a container with \`${contained.unmodelled}\`, ` +
+            "which replaces the command it runs, so this guard cannot say which specs it reaches.",
+        );
+        continue;
+      }
+      const command = typeof contained === "string" ? contained : rawCommand;
       for (const invocation of playwrightInvocations(command, visibleScripts)) {
         if (step.workingDirectory !== WEB_CONSOLE) {
           fail(

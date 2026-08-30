@@ -2307,11 +2307,18 @@ jobs:
     # MANUAL ONLY until issues #881 and #886 are fixed, then delete this line.
     #
     # The suite creates one real agent task and cancels it. Per #886 a cancel
-    # never reaches the engine, so the sandbox keeps running and keeps its
-    # concurrency slot; two runs exhaust HIVE_QUOTA_USER_CONCURRENCY for the
-    # demo account and every later create is refused. On every push to main
-    # touching apps/web-console that would take the demo surface down for the
-    # day, which is a real cost to pay for a measurement.
+    # never reaches the engine, so the sandbox keeps running and keeps every
+    # resource it holds until it finishes on its own, roughly sixteen minutes
+    # of a 4G-limited sandbox on a 12G box that is also serving the demo. On
+    # every push to main touching apps/web-console that is a real cost to pay
+    # for a measurement.
+    #
+    # The quota half of this reasoning is no longer what binds, and saying so
+    # matters because it is the half that reads like the whole argument: since
+    # the identity below became run scoped, each dispatch creates its own user
+    # and tenant, so neither HIVE_QUOTA_USER_CONCURRENCY nor
+    # HIVE_QUOTA_TENANT_CONCURRENCY accumulates across runs and no later create
+    # is refused for that reason. The box's own memory is the cost that stays.
     #
     # Not in report-failure's `needs` either, for the same window: that job
     # dedupes on a single open label, so a job that is red for a known product
@@ -2319,20 +2326,52 @@ jobs:
     # failure to a comment on a stale issue, which is #553's blind spot
     # reopened.
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    # On the box, not on a GitHub-hosted runner, and that is the whole fix for
+    # issue #1531's second wall. Both the provisioning step and the probe's own
+    # signIn() need GoTrue's ADMIN API, which deploy/docker/Caddyfile.supabase
+    # refuses at the public console origin on purpose: the service-role key is
+    # server side and in network only, so a leaked one must not be usable from
+    # the internet. From ubuntu-latest there is no honest way to reach it, and
+    # the run that proved it (33297844600) failed exactly there, with
+    # `GET /admin/users -> 404` in provisioning and `generate_link ... (HTTP
+    # 404)` in every authenticated control.
+    #
+    # Nothing is exposed to make this work. The two steps below run inside the
+    # stack's own compose network instead, where the internal listener serves
+    # the admin API already, the same position scripts/stack-psql.sh puts psql
+    # in for the same reason. The public route set is untouched.
+    runs-on: [self-hosted, hive-demo]
     permissions:
       contents: read
     # One create in this suite launches a real sandbox, and control-plane's
-    # CreateTask is synchronous over that launch with a five-minute bound.
-    timeout-minutes: 25
+    # CreateTask is synchronous over that launch with a five-minute bound. The
+    # extra ten minutes over the old 25 are for the browser image: the first
+    # dispatch after a version bump pulls it, and a pull that overruns the
+    # timeout reads as a failed probe rather than as a slow download.
+    timeout-minutes: 35
     env:
       HIVE_CHAT_BASE_URL: https://chat-hive.scubed.co
-      # Minting a session needs all three. live-auth.mjs uses the admin
+      # The compose network the two containerised steps below attach to. Same
+      # default, and the same derivation, as scripts/stack-psql.sh: compose
+      # names a project's implicit network `<project>_default` and
+      # docker-compose.enterprise.yml pins `name: hive`.
+      # scripts/test_selfhost_supabase_seam.py fails if this value and that
+      # project name ever drift apart.
+      HIVE_STACK_NETWORK: hive_default
+      # A deterministic, per-run name for the browser container, so the
+      # teardown step below can find it. Keyed on the run id and attempt
+      # rather than on a fixed string: the workflow concurrency group already
+      # serialises this workflow, but a re-run of the same run reuses the id,
+      # and a teardown that removed a fixed name would then be able to kill a
+      # container belonging to another attempt.
+      PROBE_CONTAINER: agent-workspace-probe-${{ github.run_id }}-${{ github.run_attempt }}
+      # Minting a session needs all of these. live-auth.mjs uses the admin
       # one-time-token flow, which touches no password, and there is no
       # credential-rotating fallback in it (docs/live-test-auth.md).
       #
-      # The origin is the deployment's own public auth origin, which is the
-      # console origin (Caddy fronts GoTrue at /auth/v1 there, PR #992), taken
+      # The origin below is the deployment's own public auth origin, which is
+      # the console origin (Caddy fronts GoTrue at /auth/v1 there, PR #992),
+      # taken
       # from the same CONSOLE_URL expression the OIDC discovery check in this
       # file already uses. The two keys are named for the deployment rather
       # than read from secrets.SUPABASE_*, which name the hosted project
@@ -2340,6 +2379,15 @@ jobs:
       # dispatch-only job fails at session minting instead of authenticating
       # against a project that is not there.
       SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
+      # Where the ADMIN routes are served, which is deliberately NOT the origin
+      # above (live-auth.mjs's adminOrigin, Caddyfile.supabase's @admin block).
+      # Only the mint moves onto it: SUPABASE_URL stays the browser-facing
+      # origin because the cookie envelope's NAME is derived from that host
+      # (`sb-<first-hostname-label>-auth-token`), and the probe drives a real
+      # browser through the console and chat origins, which no in-network name
+      # resolves to. Conflating the two clears the 404 and produces a mint the
+      # app cannot see, which fails as a signed-out browser and names nothing.
+      SUPABASE_ADMIN_URL: http://caddy-supabase
       SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
       # Canonical run-scoped identity, same shape ci.yml, owui-nightly.yml and
@@ -2384,11 +2432,20 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+          for v in SUPABASE_URL SUPABASE_ADMIN_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
             [ -n "${!v:-}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
             echo "::error::this job mints a live session and needs:$missing. The two keys are the self-hosted deployment's own, provisioned as DEMO_SUPABASE_ANON_KEY and DEMO_SUPABASE_SERVICE_ROLE_KEY from the box's .env (issue #1531)."
+            exit 1
+          fi
+          # Same reasoning as the missing-variable check above, and the same
+          # reasoning as stack-psql.sh's: without the network the two steps
+          # below still run, resolve no hostname, and fail as though GoTrue
+          # were down. Name the real cause here instead.
+          if ! docker network inspect "$HIVE_STACK_NETWORK" >/dev/null 2>&1; then
+            echo "::error::the stack network '$HIVE_STACK_NETWORK' does not exist on this runner, so nothing can reach the internal Supabase gateway. Is the stack up on this box?"
+            docker network ls --format '  {{.Name}}'
             exit 1
           fi
 
@@ -2400,27 +2457,24 @@ jobs:
 
       - name: Install web-console deps
         run: npm ci
+        env:
+          # The browsers come from the container image below, so downloading a
+          # second copy onto the demo box on every dispatch buys nothing and
+          # costs disk on the machine serving the demo.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
+      # Tags the browser image below. The browsers now come from that image
+      # rather than from `playwright install --with-deps`, which is not a
+      # tidying: this job runs on the demo box, and `--with-deps` apt-installs
+      # onto the machine serving the demo. A container installs nothing, needs
+      # no sudo, and is the same position the probe has to run in anyway to
+      # reach the internal listener. The version has to match what npm ci put
+      # in node_modules, or Playwright refuses the mismatched browser build.
       - name: Read Playwright version
         id: pw
         run: |
           v=$(node -p "require('@playwright/test/package.json').version")
           echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
-
-      - name: Install Playwright browsers
-        if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit path)
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
 
       - name: Provision a per-run Cowork identity
         # A fresh identity every run (issues #848, #1476), not a secret naming
@@ -2436,25 +2490,47 @@ jobs:
         # already includes ENABLE_COWORK, which is what the authenticated
         # controls below need to submit a task at all.
         #
-        # continue-on-error: true is load bearing, not a shrug. Currently 404s
-        # (agent-workspace-controls.json's own minimum_proven_note): Caddyfile.
-        # supabase's @admin block refuses the whole /auth/v1/admin/* prefix at
-        # the public console origin this job reaches from, so this step cannot
-        # succeed from here today. Without this flag, GitHub Actions skips
-        # every later step by default on a failed one, which took the C25-C27
-        # unauthenticated group down with it the first time this ran (they need
-        # no identity at all). C28-C33 still fail, loudly and honestly, inside
-        # the probe itself once signIn() hits the identical wall trying to mint
-        # a session for whatever this step could not provision.
+        # In a container on the stack network, because this script needs BOTH
+        # /auth/v1/admin/* and /rest/v1, and the public listener serves
+        # neither: the admin group is refused by Caddyfile.supabase's @admin
+        # block, and PostgREST is not exposed publicly at all. That is why the
+        # first dispatch of this job (33297844600) died here on
+        # `GET /admin/users -> 404`. The internal listener serves both, so the
+        # step moves to where they already are rather than anything moving to
+        # it. SUPABASE_URL is overridden below for the same reason, and only
+        # for this step.
+        #
+        # continue-on-error: true stays, for the reason it was added rather
+        # than the wall it was added around: without it GitHub Actions skips
+        # every later step on a failed one, which took the C25-C27
+        # unauthenticated group down too (they need no identity at all). The
+        # job still goes red when this fails, because the probe's own signIn()
+        # then fails to mint for an account that was never provisioned, and
+        # this step's log carries the real cause.
         continue-on-error: true
         run: |
           set -euo pipefail
-          output=$(python3 ../../scripts/seed-demo-owner.py)
+          run_as="$(id -u):$(id -g)"
+          output=$(docker run --rm \
+            --network "$HIVE_STACK_NETWORK" \
+            --user "$run_as" \
+            -e HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -w /repo \
+            -e SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY \
+            -e HIVE_DEMO_EMAIL -e HIVE_DEMO_TENANT_SLUG -e HIVE_DEMO_TENANT_NAME \
+            -e HIVE_DEMO_ACCOUNT_SLUG -e HIVE_DEMO_ACCOUNT_NAME \
+            python:3.12-alpine python3 scripts/seed-demo-owner.py)
           generated_secret=$(printf '%s\n' "$output" | sed -n 's/^PASSWORD=//p')
           if [ -n "$generated_secret" ]; then
             echo "::add-mask::$generated_secret"
           fi
         env:
+          # The admin origin, for this step only: the script derives both its
+          # GoTrue base and its PostgREST base from this one value, so it is
+          # the whole of what it can reach. The job-level value stays the
+          # public console origin for the browser's sake.
+          SUPABASE_URL: ${{ env.SUPABASE_ADMIN_URL }}
           HIVE_DEMO_EMAIL: ${{ env.HIVE_QA_AGENT_EMAIL }}
           HIVE_DEMO_TENANT_SLUG: agent-workspace-coverage-${{ env.E2E_RUN_KEY }}
           HIVE_DEMO_TENANT_NAME: 'Agent Workspace Coverage'
@@ -2462,7 +2538,68 @@ jobs:
           HIVE_DEMO_ACCOUNT_NAME: 'Agent Workspace Coverage'
 
       - name: Run the agent workspace probe
-        run: npm run e2e:agent-workspace
+        # Also in a container on the stack network, because the mint is inside
+        # this process: signIn() shells out to live-auth.mjs, which posts to
+        # /auth/v1/admin/generate_link. The browser, by contrast, drives the
+        # PUBLIC console and chat origins, which is why SUPABASE_ADMIN_URL and
+        # SUPABASE_URL are both passed and are different values.
+        #
+        # The image supplies chromium, so nothing is installed on the box, and
+        # its tag is pinned to the version npm ci resolved. --user keeps every
+        # file this writes owned by the runner rather than by root: a
+        # root-owned test-results/ survives the job and breaks the NEXT run's
+        # checkout cleanup. --shm-size, because Docker's default 64M /dev/shm
+        # crashes chromium mid-run.
+        #
+        # GITHUB_STEP_SUMMARY is deliberately NOT passed in: its file lives
+        # outside the mounted workspace, and mounting the runner's temp
+        # directory into a browser container to reach it is a wider mount than
+        # the feature is worth. flake-reporter.ts writes its table to stdout
+        # first and only then appends to that file, so the flake detail is in
+        # this step's log rather than missing, and its gate (failOnFlakyTests
+        # plus the reporter's own status override) is unaffected either way.
+        run: |
+          set -euo pipefail
+          run_as="$(id -u):$(id -g)"
+          docker run --rm \
+            --name "$PROBE_CONTAINER" \
+            --network "$HIVE_STACK_NETWORK" \
+            --user "$run_as" \
+            --shm-size=1g \
+            -e HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/repo" \
+            -w /repo/apps/web-console \
+            -e CI \
+            -e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL \
+            -e SUPABASE_ANON_KEY -e SUPABASE_SERVICE_ROLE_KEY \
+            -e HIVE_QA_AGENT_EMAIL -e E2E_RUN_KEY -e PLAYWRIGHT_JSON_OUTPUT_NAME \
+            "$PW_IMAGE" \
+            npm run e2e:agent-workspace
+        env:
+          # Bound here rather than interpolated into the command above. A
+          # workflow expression written inside a `run:` block is substituted
+          # as TEXT before the shell parses it, so its value can be read as
+          # script; through `env:` it is only ever a variable's value. This
+          # one comes from `node -p` on an installed package version and is
+          # not attacker controlled today, which is the reason it is worth
+          # fixing now rather than after the source changes.
+          PW_IMAGE: mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-noble
+
+      - name: Remove the probe container
+        # --rm deletes a container that EXITS. It does nothing for one that is
+        # still running when the job stops, and this job can stop that way in
+        # two ordinary situations: a cancelled run and the job timeout above.
+        # What would be left behind is a live Chromium process on the demo box
+        # holding the service-role key in its environment, with nothing to
+        # reap it. `if: always()` also runs on cancellation, which is the case
+        # that matters here; it is the same shape rag-demo-readiness.yml uses
+        # to reclaim its own container.
+        #
+        # Never fails the job: the ordinary path is that the container is
+        # already gone, and a teardown that turns a green run red would be
+        # traded away the first time it fired.
+        if: always()
+        run: docker rm -f "$PROBE_CONTAINER" >/dev/null 2>&1 || true
 
       - name: Build the coverage ledger
         # Always, so a red run still publishes which controls it proved and
