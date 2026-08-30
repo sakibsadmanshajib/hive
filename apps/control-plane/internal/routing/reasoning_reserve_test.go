@@ -87,7 +87,15 @@ func singleSelect(t *testing.T, svc *Service, alias string) SelectionResult {
 // TestReasoningReserveMigrationTargetsTheRightMembers is the offline guard
 // over the migration text (sqlparse_test.go's positional style): the column
 // exists, exactly the three reasoning members are raised to 4096, and the
-// non-reasoning dots member is explicitly pinned at 0.
+// fourth member is explicitly pinned at 0.
+//
+// That pin is HISTORICAL and is no longer live intent. This file is frozen, so
+// its assertions stay, but 20260830_01 raises route-free-pool-free to 4096
+// alongside the others: the 0 was justified by that member being pinned to a
+// model that does not reason, and it is now pointed at OpenRouter's Free
+// Models Router, which can select one that does. Live intent is in
+// openrouter_free_models_router_test.go and in the live-row assertion in
+// reasoning_reserve_integration_test.go.
 func TestReasoningReserveMigrationTargetsTheRightMembers(t *testing.T) {
 	sql := stripSQLComments(readRepoFile(t, reasoningReserveMigrationRelPath))
 

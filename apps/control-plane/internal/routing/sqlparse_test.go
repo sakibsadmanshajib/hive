@@ -289,6 +289,14 @@ func insertRows(sql, table string) []map[string]string {
 
 // updateAssignments returns, for each UPDATE of <table> whose WHERE clause pins
 // a single <keyCol> = 'value', that value mapped to its SET assignments.
+// setKeywordRe and whereKeywordRe locate the SET and WHERE clauses of an
+// UPDATE regardless of the whitespace around them. See updateAssignments for
+// why this is not a literal string search.
+var (
+	setKeywordRe   = regexp.MustCompile(`(?is)\bset\b`)
+	whereKeywordRe = regexp.MustCompile(`(?is)\bwhere\b`)
+)
+
 func updateAssignments(sql, table, keyCol string) map[string]map[string]string {
 	out := map[string]map[string]string{}
 
@@ -297,24 +305,46 @@ func updateAssignments(sql, table, keyCol string) map[string]map[string]string {
 		if !strings.HasPrefix(lower, "update "+table) {
 			continue
 		}
-		setAt := strings.Index(lower, " set ")
-		whereAt := strings.Index(lower, " where ")
-		if setAt < 0 || whereAt < 0 || whereAt < setAt {
+		// Located on word boundaries, not on the literal " set " / " where ".
+		//
+		// Whitespace-sensitive matching silently skipped any statement whose
+		// SET or WHERE began a line, which is a formatting choice this repo's
+		// migrations make freely. The skip was invisible: the statement simply
+		// did not appear in the result, so a test folding over migrations read
+		// a stale value and passed. Found when a corpus fold in
+		// free_pool_billing_inertness_test.go grew a guard that fails when a
+		// statement names a row it could not read, and the guard fired on
+		// 20260826_01_route_reasoning_reserve.sql, whose UPDATE is perfectly
+		// well formed and single keyed but writes SET at the start of a line.
+		//
+		// \bset\b cannot match inside a column name like "offset": the
+		// character before those three letters is a word character, so there is
+		// no boundary there.
+		setLoc := setKeywordRe.FindStringIndex(lower)
+		whereLoc := whereKeywordRe.FindStringIndex(lower)
+		if setLoc == nil || whereLoc == nil || whereLoc[0] < setLoc[1] {
 			continue
 		}
+		setAt, whereAt := setLoc[1], whereLoc[0]
 
 		// Take the first `<keyCol> = '<literal>'` in the WHERE clause. Anything
 		// after it (an `AND price <> ...` re-runnability guard, for instance)
 		// is not part of the key, which an earlier hand-rolled version of this
 		// swallowed whole.
-		keyMatch := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(keyCol) + `\s*=\s*'([^']*)'`).FindStringSubmatch(stmt[whereAt:])
-		if keyMatch == nil {
+		//
+		// A bulk `<keyCol> IN ('a', 'b', 'c')` is read too, applying the same
+		// assignments to every listed key. Without it such a statement was
+		// skipped in silence, so a caller folding migrations into a row's
+		// effective state read a stale value and passed;
+		// 20260826_01_route_reasoning_reserve.sql raises three pool members
+		// exactly this way.
+		keyVals := updateKeyValues(stmt[whereAt:], keyCol)
+		if len(keyVals) == 0 {
 			continue
 		}
-		keyVal := keyMatch[1]
 
 		assigns := map[string]string{}
-		for _, part := range splitFields(stmt[setAt+5 : whereAt]) {
+		for _, part := range splitFields(stmt[setAt:whereAt]) {
 			eq := strings.Index(part, "=")
 			if eq < 0 {
 				continue
@@ -324,13 +354,38 @@ func updateAssignments(sql, table, keyCol string) map[string]map[string]string {
 		if len(assigns) == 0 {
 			continue
 		}
-		if existing, ok := out[keyVal]; ok {
+		for _, keyVal := range keyVals {
+			existing, ok := out[keyVal]
+			if !ok {
+				existing = map[string]string{}
+				out[keyVal] = existing
+			}
 			for k, v := range assigns {
 				existing[k] = v
 			}
-			continue
 		}
-		out[keyVal] = assigns
+	}
+	return out
+}
+
+// updateKeyValues extracts the key literals an UPDATE's WHERE clause pins,
+// covering both `<keyCol> = 'x'` and `<keyCol> IN ('x', 'y')`. Returns nil when
+// the clause is scoped some other way, which the caller treats as "cannot read
+// this statement" rather than as "this statement does not exist".
+func updateKeyValues(where, keyCol string) []string {
+	col := regexp.QuoteMeta(keyCol)
+
+	if m := regexp.MustCompile(`(?i)\b` + col + `\s*=\s*'([^']*)'`).FindStringSubmatch(where); m != nil {
+		return []string{m[1]}
+	}
+
+	inClause := regexp.MustCompile(`(?is)\b` + col + `\s+in\s*\(([^)]*)\)`).FindStringSubmatch(where)
+	if inClause == nil {
+		return nil
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(inClause[1], -1) {
+		out = append(out, m[1])
 	}
 	return out
 }
@@ -379,5 +434,80 @@ update public.model_aliases
 	}
 	if got["input_price_credits"] != "30" || got["lifecycle"] != "hidden" {
 		t.Errorf("update assignments parsed wrong: %#v", got)
+	}
+}
+
+// TestUpdateAssignmentsReadsBothKeyShapesAndAnyWhitespace pins the two shapes
+// that used to be skipped in SILENCE, which is the dangerous part: a skipped
+// statement is indistinguishable from a statement that does not exist, so a
+// caller folding migrations into a row's effective state read a stale value and
+// went green.
+//
+// Both shapes are real and already in supabase/migrations, not invented for
+// this test: 20260826_01_route_reasoning_reserve.sql writes SET at the start of
+// a line, and scopes three rows with an IN list.
+func TestUpdateAssignmentsReadsBothKeyShapesAndAnyWhitespace(t *testing.T) {
+	src := `
+update public.provider_routes
+set reasoning_reserve_tokens = 0
+where route_id = 'route-alpha'
+  and reasoning_reserve_tokens <> 0;
+
+update public.provider_routes
+   SET reasoning_reserve_tokens = 4096
+ WHERE route_id in ('route-beta', 'route-gamma');
+
+update public.provider_routes set provider_model = 'm/one' where route_id = 'route-alpha';
+`
+
+	got := updateAssignments(src, "public.provider_routes", "route_id")
+
+	// Newline before SET, and a later single-line statement merging onto the
+	// same key.
+	alpha, ok := got["route-alpha"]
+	if !ok {
+		t.Fatalf("route-alpha missing; a SET at the start of a line was skipped. got %v", got)
+	}
+	if alpha["reasoning_reserve_tokens"] != "0" {
+		t.Errorf("route-alpha reasoning_reserve_tokens = %q, want 0", alpha["reasoning_reserve_tokens"])
+	}
+	if alpha["provider_model"] != "m/one" {
+		t.Errorf("route-alpha provider_model = %q, want m/one", alpha["provider_model"])
+	}
+
+	// IN list: the same assignments reach every listed key.
+	for _, routeID := range []string{"route-beta", "route-gamma"} {
+		row, ok := got[routeID]
+		if !ok {
+			t.Fatalf("%s missing; an IN list was skipped. got %v", routeID, got)
+		}
+		if row["reasoning_reserve_tokens"] != "4096" {
+			t.Errorf("%s reasoning_reserve_tokens = %q, want 4096", routeID, row["reasoning_reserve_tokens"])
+		}
+	}
+
+	if len(got) != 3 {
+		t.Errorf("keys = %d, want 3; an extra key means a WHERE was misread", len(got))
+	}
+}
+
+// A column whose name merely ends in "set" must not be mistaken for the SET
+// keyword, which is what the word boundary in setKeywordRe buys.
+func TestUpdateAssignmentsDoesNotTreatOffsetAsTheSetKeyword(t *testing.T) {
+	src := `update public.provider_routes set window_offset = 5 where route_id = 'route-alpha';`
+
+	got := updateAssignments(src, "public.provider_routes", "route_id")
+	if got["route-alpha"]["window_offset"] != "5" {
+		t.Errorf("window_offset = %q, want 5; got %v", got["route-alpha"]["window_offset"], got)
+	}
+}
+
+// A WHERE scoped by something other than the key column yields nothing, so the
+// caller can tell "cannot read this" from "no such statement".
+func TestUpdateAssignmentsReturnsNothingForAnUnkeyedWhere(t *testing.T) {
+	src := `update public.provider_routes set health_state = 'disabled' where alias_id = 'hive-free';`
+
+	if got := updateAssignments(src, "public.provider_routes", "route_id"); len(got) != 0 {
+		t.Errorf("got %v, want no keys for a WHERE that does not pin route_id", got)
 	}
 }
