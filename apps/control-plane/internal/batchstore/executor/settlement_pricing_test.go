@@ -109,6 +109,10 @@ func TestDefaultCreditPolicy_FixedPriceRoundsHalfUpOnce(t *testing.T) {
 		// A zero output rate is legitimate (input-only metering) and must not
 		// be read as "no price".
 		{"one side priced", 1_000_000, 0, 10, 7, 10},
+		// A negative rate is a catalog defect, not a discount. It is clamped to
+		// zero so one component can never subtract from another: without the
+		// clamp this row settles at 10 - 7 = 3 credits instead of 10.
+		{"negative rate cannot subtract", 1_000_000, -1_000_000, 10, 7, 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := DefaultCreditPolicy{}.Credits(catalog.FixedPricing(tc.inRate, tc.outRate),

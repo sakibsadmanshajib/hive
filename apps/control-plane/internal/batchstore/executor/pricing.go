@@ -241,9 +241,15 @@ func creditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 func creditsForTokens(promptTokens, completionTokens int64, pricing catalog.CatalogPricing) int64 {
 	promptTokens = max(promptTokens, 0)
 	completionTokens = max(completionTokens, 0)
+	// Rates are clamped too, not just quantities. A negative price column is a
+	// catalog defect rather than a discount, and letting one through would let
+	// one component SUBTRACT from another component's charge, which is the
+	// only way this function could return less than the work actually cost.
+	inputRate := max(derefCredits(pricing.InputPriceCredits), 0)
+	outputRate := max(derefCredits(pricing.OutputPriceCredits), 0)
 
-	numerator := new(big.Int).Mul(big.NewInt(promptTokens), big.NewInt(derefCredits(pricing.InputPriceCredits)))
-	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(completionTokens), big.NewInt(derefCredits(pricing.OutputPriceCredits))))
+	numerator := new(big.Int).Mul(big.NewInt(promptTokens), big.NewInt(inputRate))
+	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(completionTokens), big.NewInt(outputRate)))
 
 	credits, ok := roundHalfUp(new(big.Rat).SetFrac(numerator, big.NewInt(creditsPerMillion)))
 	if !ok {
