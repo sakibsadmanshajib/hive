@@ -400,3 +400,27 @@ guarded namespace, never out of it.
 `yjs_document_leave` (`socket/main.py:772`) resolves no ownership at all before
 `YDOC_MANAGER.clear_document(document_id)` at `:799`. Out of scope for this pull
 request, and filed as its own issue rather than left in a review comment.
+
+## 9. Every guard line measured individually
+
+Added after the sibling branch for issue #1511 shipped a guard anchor that could
+never match: it was single quoted with a `\$` end-anchor, which a basic regular
+expression reads as a literal dollar character, so it returned zero before the
+patch and zero after. It had passed verification because the guard was exercised
+as one `&&` chain, and a chain cannot distinguish a line that MOVES from a line
+that is always true.
+
+So this branch's lines are measured one at a time, before and after the full
+twenty-patch chain, inside the pinned image:
+
+```
+=== BEFORE ===          === AFTER ===
+17 want=2  got=0        17 want=2  got=2    # hive (#1508) markers
+18 want=0  got=1        18 want=0  got=0    unguarded stop_item_tasks, 12 spaces
+19 want=0  got=1        19 want=0  got=0    the bare `if data.get('data'):` anchor
+20 want=0  got=1        20 want=0  got=0    the #1474 chats.py line
+```
+
+All three lines this branch adds move, and so does the pre-existing #1474 line.
+None of them is vacuous. Lines 1 to 16 are the other patches' marker counts, all
+zero to n.
