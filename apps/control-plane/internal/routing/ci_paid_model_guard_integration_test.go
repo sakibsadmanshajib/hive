@@ -459,7 +459,10 @@ func TestNoCISurfaceCallsAPaidCompletionModel(t *testing.T) {
 			// catalog. Reported, not enforced.
 			t.Logf("out of scope (not a completion alias): %s:%d %s = %s", b.file, b.line, b.name, b.alias)
 		case facts.upstreamFree:
-			// The intended state.
+			// The intended state. Logged rather than passed over in silence so
+			// that a run of this test IS the audit: every model value CI can
+			// choose, and its verdict, in one place a reviewer can read.
+			t.Logf("ok (upstream-free): %s:%d %s = %s", b.file, b.line, b.name, b.alias)
 		default:
 			exception, ok := findException(b.alias, b.file)
 			if !ok {
