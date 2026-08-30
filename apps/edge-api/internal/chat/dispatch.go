@@ -486,6 +486,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// at zero, and never bills a token count as though it were a credit amount.
 	var costCredits int64
 	var confirmed, delivered, zeroContent bool
+	// Hoisted out of the branch so the settlement can be logged AFTER the
+	// zero-content guard below has had its say (#1538). Logging it inside the
+	// branch printed the priced figure for a burn that was then absorbed, which
+	// reads as a charge that happened.
+	var variableSettled inference.VariableSettlement
 	if route.Pricing.IsUpstreamActual() {
 		// This alias has no catalog price. Its charge is the cost the upstream
 		// reported for this generation, times the standard margin. A cost that
@@ -493,19 +498,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// than at nothing, which is the whole point: this is the streaming path
 		// Open WebUI uses, so it is where a silent free-serve would do the most
 		// damage.
-		settled := inference.UpstreamActualSettlement(
+		variableSettled = inference.UpstreamActualSettlement(
 			rawUsagePayload, settle.Held(), hasUsage,
 			inTokens, outTokens, completion.String())
-		costCredits, confirmed, delivered = settled.Credits, settled.Confirmed, settled.Delivered
-		if delivered {
-			// generation_id is the audit handle for this charge. Operator log
-			// only: an upstream identifier can carry a provider name and
-			// audit_log fans out to third-party sinks.
-			slog.Info("session chat: variable-price settlement",
-				"request_id", requestID, "alias", clientModel, "reason", settled.Reason,
-				"credits", settled.Credits, "confirmed", settled.Confirmed,
-				"generation_id", settled.GenerationID, "held_credits", settle.Held())
-		}
+		costCredits, confirmed, delivered = variableSettled.Credits, variableSettled.Confirmed, variableSettled.Delivered
 	} else {
 		costCredits, confirmed, delivered, zeroContent = inference.ChatSettlementCredits(
 			route, hasUsage, cacheUsage.FreshInputTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens, outTokens, raw, completion.String(), shape)
@@ -524,6 +520,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// the counter must not be incremented twice for one turn.
 		costCredits, delivered, zeroContent = inference.ApplyZeroContentGuard(
 			route.AliasID, shape, completion.String(), costCredits, delivered, inTokens, outTokens)
+	}
+	if route.Pricing.IsUpstreamActual() && (delivered || zeroContent) {
+		// generation_id is the audit handle for this charge, and on a
+		// variable-price alias it is the only thing that recovers WHICH pool
+		// member served the request. Operator log only: an upstream identifier
+		// can carry a provider name and audit_log fans out to third-party
+		// sinks.
+		//
+		// An absorbed burn is logged too, for the same reason (#1538): a rise
+		// in absorbed credits is a routing signal, and a routing signal nobody
+		// can attribute to a member is not actionable. credits reads zero after
+		// the guard, which is what the customer was charged; what Hive absorbed
+		// is on hive_chat_zero_content_absorbed_credits_total and on the
+		// guard's own line.
+		slog.Info("session chat: variable-price settlement",
+			"request_id", requestID, "alias", clientModel, "reason", variableSettled.Reason,
+			"credits", costCredits, "confirmed", confirmed,
+			"generation_id", variableSettled.GenerationID, "held_credits", settle.Held(),
+			"absorbed_zero_content", zeroContent)
 	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
