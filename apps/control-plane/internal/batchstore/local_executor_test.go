@@ -15,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 )
@@ -23,6 +24,7 @@ import (
 type stubRoutingProvider struct {
 	provider string
 	model    string
+	pricing  catalog.CatalogPricing
 }
 
 func (s *stubRoutingProvider) SelectRoute(ctx context.Context, in routing.SelectionInput) (routing.SelectionResult, error) {
@@ -31,6 +33,7 @@ func (s *stubRoutingProvider) SelectRoute(ctx context.Context, in routing.Select
 		RouteID:          "route-1",
 		LiteLLMModelName: s.model,
 		Provider:         s.provider,
+		Pricing:          s.pricing,
 	}, nil
 }
 
@@ -62,9 +65,9 @@ func (q *stubPollQueue) Enqueue(ctx context.Context, payload BatchPollPayload) e
 
 // stubSubmitterFiles implements BatchFileStore.
 type stubSubmitterFiles struct {
-	mu      sync.Mutex
-	file    *filestore.File
-	updates []map[string]interface{}
+	mu       sync.Mutex
+	file     *filestore.File
+	updates  []map[string]interface{}
 	statuses []string
 }
 
@@ -306,7 +309,7 @@ func TestBatchWorker_HandlesBatchExecuteTask(t *testing.T) {
 	)
 	infer := &fakeInfer{
 		response: json.RawMessage(`{"ok":true,"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`),
-		usage:    &executor.Usage{TotalTokens: 3},
+		usage:    &executor.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
 		status:   200,
 	}
 	disp, err := executor.NewDispatcher(executor.Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, infer, nil)
@@ -317,6 +320,7 @@ func TestBatchWorker_HandlesBatchExecuteTask(t *testing.T) {
 		ID: "bx", AccountID: uuid.New().String(), InputFilePath: "batches/bx/input.jsonl",
 		ReservationID: uuid.New().String(), ModelAlias: "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini", ReservedCredits: 1000,
+		Pricing: catalog.FixedPricing(1_000_000, 1_000_000),
 	}}
 	ls := newFakeLineStoreLE()
 	rp := &fakeReservationLE{}
@@ -343,3 +347,51 @@ func TestBatchWorker_HandlesBatchExecuteTask(t *testing.T) {
 }
 
 var _ = strings.ToLower
+
+// stubBatchLoaderLE is the minimal BatchSnapshotLoader / FileLookup pair
+// pgxBatchStore.LoadBatch needs.
+type stubBatchLoaderLE struct{ batch *filestore.Batch }
+
+func (s *stubBatchLoaderLE) GetBatchByID(ctx context.Context, id string) (*filestore.Batch, error) {
+	return s.batch, nil
+}
+
+func (s *stubBatchLoaderLE) UpdateBatchStatus(ctx context.Context, batchID, status string, updates map[string]interface{}) error {
+	return nil
+}
+
+func (s *stubBatchLoaderLE) GetFileByID(ctx context.Context, id string) (*filestore.File, error) {
+	return &filestore.File{ID: id, StoragePath: "batches/bx/input.jsonl"}, nil
+}
+
+// TestPgxBatchStore_LoadBatchCarriesTheAliasPrice is the wiring guard for
+// issue #1473. Settlement can only charge the alias price if the price
+// actually reaches it, and it reaches it exactly one way: the SelectRoute call
+// LoadBatch already makes to resolve the LiteLLM model name also returns the
+// alias's pricing, which lands on the snapshot beside it.
+//
+// Without this the whole fix is inert in production while every unit test in
+// the executor package stays green, because those tests construct their
+// snapshots by hand.
+func TestPgxBatchStore_LoadBatchCarriesTheAliasPrice(t *testing.T) {
+	loader := &stubBatchLoaderLE{batch: &filestore.Batch{
+		ID: "bx", AccountID: uuid.New().String(), InputFileID: "file-1",
+		Endpoint: "/v1/chat/completions", ModelAlias: "hive-auto", EstimatedCredits: 1000,
+	}}
+	// hive-auto's real shape: upstream_actual, no price columns, a 2 USD hold.
+	routes := &stubRoutingProvider{provider: "openrouter", model: "openrouter/openrouter/auto",
+		pricing: catalog.UpstreamActualPricing(2_000_000_000)}
+
+	snap, err := NewPgxBatchStore(loader, loader, routes).LoadBatch(context.Background(), "bx")
+	if err != nil {
+		t.Fatalf("load batch: %v", err)
+	}
+	if !snap.Pricing.IsUpstreamActual() {
+		t.Fatalf("snapshot pricing mode = %q, want upstream_actual: the alias price never reached settlement",
+			snap.Pricing.PricingMode)
+	}
+	if snap.Pricing.ReservationEstimateCredits == nil || *snap.Pricing.ReservationEstimateCredits != 2_000_000_000 {
+		t.Fatalf("snapshot hold = %v, want 2000000000: without it a failed cost read has no fail-closed figure",
+			snap.Pricing.ReservationEstimateCredits)
+	}
+}

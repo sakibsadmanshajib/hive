@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 // ConcurrencyDefault is the default number of in-flight per-line dispatches.
@@ -107,6 +109,11 @@ type InputLine struct {
 	Body         json.RawMessage `json:"body"`
 	Alias        string          `json:"-"`
 	LiteLLMModel string          `json:"-"`
+	// Pricing is the alias's catalog price, injected alongside Alias and
+	// LiteLLMModel from the same SelectRoute call the snapshot already makes.
+	// Settlement branches on it rather than charging a flat per-token rate
+	// (issue #1473). Not serialized to the on-disk JSONL.
+	Pricing catalog.CatalogPricing `json:"-"`
 }
 
 // OutputLine is the OpenAI-shape success entry written to output.jsonl.
@@ -142,11 +149,16 @@ type ErrorObj struct {
 // DispatchResult is the per-line outcome the dispatcher returns to the
 // executor. Exactly one of Output or Error is non-nil.
 type DispatchResult struct {
-	CustomID         string
-	Output           *OutputLine
-	Error            *ErrorLine
-	Attempts         int
-	ConsumedCredits  int64
+	CustomID string
+	Output   *OutputLine
+	Error    *ErrorLine
+	Attempts int
+	// Settlement carries the charge AND its provenance on one value. They are
+	// not two fields on purpose: a regression that restores the amount while
+	// emptying the handle is exactly what an amount-only assertion misses, and
+	// there is no way to read one of these without the other in scope (issue
+	// #1473, acceptance 4). Zero value on a failed line, which charges nothing.
+	Settlement       LinePrice
 	UsedPromptTokens int64
 	UsedCompTokens   int64
 }

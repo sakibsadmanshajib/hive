@@ -10,7 +10,17 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
+
+// testFixedPricing is one credit per token on both sides: 1,000,000 credits
+// per million metered tokens. Deliberately equal to the flat rate settlement
+// used to charge, so a test written against it measures the QUANTITY billed
+// and nothing else.
+func testFixedPricing() catalog.CatalogPricing {
+	return catalog.FixedPricing(1_000_000, 1_000_000)
+}
 
 // fakeInference is a configurable test double for InferencePort.
 type fakeInference struct {
@@ -87,7 +97,7 @@ func TestDispatcher_BoundedConcurrency(t *testing.T) {
 		handler: func(ctx context.Context, attempt int, model string, body json.RawMessage) (json.RawMessage, *Usage, int, error) {
 			// Hold each call long enough that all 4 workers race against the cap.
 			time.Sleep(10 * time.Millisecond)
-			return json.RawMessage(`{}`), &Usage{TotalTokens: 1}, 200, nil
+			return json.RawMessage(`{}`), &Usage{PromptTokens: 1, TotalTokens: 1}, 200, nil
 		},
 	}
 	disp, err := NewDispatcher(Config{Concurrency: 4, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
@@ -106,6 +116,7 @@ func TestDispatcher_BoundedConcurrency(t *testing.T) {
 				Body:         mustBody(t, "alias-1", fmt.Sprintf("p%d", i)),
 				Alias:        "alias-1",
 				LiteLLMModel: "openrouter/gpt-4o-mini",
+				Pricing:      testFixedPricing(),
 			}
 		}
 		close(in)
@@ -140,7 +151,7 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 			if n < 3 {
 				return nil, nil, 503, errors.New("upstream unavailable")
 			}
-			return json.RawMessage(`{"ok":true}`), &Usage{TotalTokens: 7}, 200, nil
+			return json.RawMessage(`{"ok":true}`), &Usage{PromptTokens: 4, CompletionTokens: 3, TotalTokens: 7}, 200, nil
 		},
 	}
 	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
@@ -154,6 +165,7 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Error != nil {
 		t.Fatalf("expected success after retries, got error %+v", res.Error)
@@ -164,8 +176,8 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 	if res.Attempts != 3 {
 		t.Fatalf("attempts=%d want 3", res.Attempts)
 	}
-	if res.ConsumedCredits != 7 {
-		t.Fatalf("credits=%d want 7", res.ConsumedCredits)
+	if res.Settlement.Credits != 7 {
+		t.Fatalf("credits=%d want 7", res.Settlement.Credits)
 	}
 }
 
@@ -188,6 +200,7 @@ func TestDispatcher_4xxNoRetry(t *testing.T) {
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Output != nil {
 		t.Fatalf("expected error, got success")
@@ -198,8 +211,8 @@ func TestDispatcher_4xxNoRetry(t *testing.T) {
 	if res.Error.Error.Code != "invalid_request" {
 		t.Fatalf("code=%q want invalid_request", res.Error.Error.Code)
 	}
-	if res.ConsumedCredits != 0 {
-		t.Fatalf("credits=%d want 0", res.ConsumedCredits)
+	if res.Settlement.Credits != 0 {
+		t.Fatalf("credits=%d want 0", res.Settlement.Credits)
 	}
 }
 
@@ -212,7 +225,7 @@ func TestDispatcher_LineTimeout(t *testing.T) {
 			case <-ctx.Done():
 				return nil, nil, 0, ctx.Err()
 			case <-time.After(2 * time.Second):
-				return json.RawMessage(`{}`), &Usage{TotalTokens: 1}, 200, nil
+				return json.RawMessage(`{}`), &Usage{PromptTokens: 1, TotalTokens: 1}, 200, nil
 			}
 		},
 	}
@@ -231,6 +244,7 @@ func TestDispatcher_LineTimeout(t *testing.T) {
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
+		Pricing:      testFixedPricing(),
 	})
 	elapsed := time.Since(start)
 	if elapsed > 1*time.Second {
@@ -261,6 +275,7 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 		Body:         mustBody(t, "alias-1", ""),
 		Alias:        "alias-1",
 		LiteLLMModel: "openrouter/gpt-4o-mini",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Error == nil {
 		t.Fatalf("expected error result")
@@ -308,6 +323,7 @@ func TestDispatcher_OutputBodySanitized_StripsIdentityLeaks(t *testing.T) {
 		Body:         mustBody(t, "customer-alias-1", ""),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Output == nil || res.Output.Response == nil {
 		t.Fatalf("expected success output, got %+v", res)
@@ -375,6 +391,7 @@ func TestDispatcher_TruncatedResponseIsNeverASuccess(t *testing.T) {
 		Body:         mustBody(t, "customer-alias-1", ""),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Output != nil {
 		t.Fatalf("truncated response recorded as a success: %+v", res.Output)
@@ -385,8 +402,8 @@ func TestDispatcher_TruncatedResponseIsNeverASuccess(t *testing.T) {
 	if res.Error.Error.Code != "response_too_large" {
 		t.Fatalf("code=%q want response_too_large", res.Error.Error.Code)
 	}
-	if res.ConsumedCredits != 0 {
-		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	if res.Settlement.Credits != 0 {
+		t.Fatalf("credits=%d want 0 for a failed line", res.Settlement.Credits)
 	}
 	// Deterministic failure: MaxRetries=3 but a truncation is terminal on
 	// the first attempt, unlike a transient failure (PR #1253 review:
@@ -423,6 +440,7 @@ func TestDispatcher_UnparseableUpstreamBody_RetriesThenFails(t *testing.T) {
 		Body:         mustBody(t, "customer-alias-1", ""),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Output != nil {
 		t.Fatalf("unparseable 200 body recorded as success: %+v", res.Output)
@@ -433,8 +451,8 @@ func TestDispatcher_UnparseableUpstreamBody_RetriesThenFails(t *testing.T) {
 	if res.Error.Error.Code != "upstream_error" {
 		t.Fatalf("code=%q want upstream_error", res.Error.Error.Code)
 	}
-	if res.ConsumedCredits != 0 {
-		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	if res.Settlement.Credits != 0 {
+		t.Fatalf("credits=%d want 0 for a failed line", res.Settlement.Credits)
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("upstream called %d times, want exactly 3 (unparseable 2xx must retry up to MaxRetries)", got)
@@ -453,7 +471,7 @@ func TestDispatcher_UnparseableUpstreamBody_ThenSuccessOnRetry(t *testing.T) {
 			if n < 2 {
 				return json.RawMessage(`not valid json`), nil, 200, nil
 			}
-			return json.RawMessage(`{"id":"gen-x","model":"route-x","choices":[]}`), &Usage{TotalTokens: 5}, 200, nil
+			return json.RawMessage(`{"id":"gen-x","model":"route-x","choices":[]}`), &Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}, 200, nil
 		},
 	}
 	disp, err := NewDispatcher(Config{Concurrency: 1, MaxRetries: 3, LineTimeout: 5 * time.Second}, infer, nil)
@@ -467,6 +485,7 @@ func TestDispatcher_UnparseableUpstreamBody_ThenSuccessOnRetry(t *testing.T) {
 		Body:         mustBody(t, "customer-alias-1", ""),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Error != nil {
 		t.Fatalf("expected eventual success, got error %+v", res.Error)
@@ -572,9 +591,9 @@ func containsCI(haystack, needle string) bool {
 // never got as far as pricing it.
 type billingSpy struct{ calls atomic.Int32 }
 
-func (b *billingSpy) Credits(usage *Usage) int64 {
+func (b *billingSpy) Credits(_ catalog.CatalogPricing, _ *Usage, _ []byte) (LinePrice, error) {
 	b.calls.Add(1)
-	return 999_999
+	return LinePrice{Credits: 999_999, Confirmed: true, Reason: "spy"}, nil
 }
 
 // TestDispatcher_ErrorCarryingFrameIsNeverStoredOrBilled is the money-path
@@ -618,6 +637,7 @@ func TestDispatcher_ErrorCarryingFrameIsNeverStoredOrBilled(t *testing.T) {
 				Body:         mustBody(t, "customer-alias-1", ""),
 				Alias:        "customer-alias-1",
 				LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+				Pricing:      testFixedPricing(),
 			})
 			if res.Output != nil {
 				t.Fatalf("error-carrying 200 body stored as a completed line: %s", res.Output.Response.Body)
@@ -625,8 +645,8 @@ func TestDispatcher_ErrorCarryingFrameIsNeverStoredOrBilled(t *testing.T) {
 			if res.Error == nil {
 				t.Fatalf("expected a failed line, got neither output nor error")
 			}
-			if res.ConsumedCredits != 0 {
-				t.Fatalf("credits=%d want 0: an upstream error line must never be charged", res.ConsumedCredits)
+			if res.Settlement.Credits != 0 {
+				t.Fatalf("credits=%d want 0: an upstream error line must never be charged", res.Settlement.Credits)
 			}
 			if got := spy.calls.Load(); got != 0 {
 				t.Fatalf("credit policy consulted %d times for a refused line, want 0", got)
@@ -663,6 +683,7 @@ func TestDispatcher_DeclaredButEmptyErrorIsStoredNormally(t *testing.T) {
 		Body:         mustBody(t, "customer-alias-1", ""),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      testFixedPricing(),
 	})
 	if res.Error != nil {
 		t.Fatalf("healthy line with a declared-but-null error was refused: %+v", res.Error)

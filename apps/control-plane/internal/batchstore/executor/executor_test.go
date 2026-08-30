@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 // fakeBatchStore implements BatchStore in-memory.
@@ -18,11 +20,11 @@ type fakeBatchStore struct {
 	mu        sync.Mutex
 	snap      BatchSnapshot
 	completed *struct {
-		batchID                       string
-		completedLines, failedLines   int
-		outputFileID, errorFileID     string
-		overconsumed                  bool
-		completedAt                   time.Time
+		batchID                     string
+		completedLines, failedLines int
+		outputFileID, errorFileID   string
+		overconsumed                bool
+		completedAt                 time.Time
 	}
 }
 
@@ -39,11 +41,11 @@ func (f *fakeBatchStore) MarkCompleted(ctx context.Context, batchID string, comp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.completed = &struct {
-		batchID                       string
-		completedLines, failedLines   int
-		outputFileID, errorFileID     string
-		overconsumed                  bool
-		completedAt                   time.Time
+		batchID                     string
+		completedLines, failedLines int
+		outputFileID, errorFileID   string
+		overconsumed                bool
+		completedAt                 time.Time
 	}{batchID, completedLines, failedLines, outputFileID, errorFileID, overconsumed, completedAt}
 	return nil
 }
@@ -152,11 +154,11 @@ func (f *fakeFileRegistrar) Register(_ context.Context, accountID, purpose, file
 
 // fakeReservation records settlements.
 type fakeReservation struct {
-	mu                                          sync.Mutex
-	calls                                       int
-	lastActual                                  int64
-	lastOverconsumed                            bool
-	lastTerminalStatus                          string
+	mu                 sync.Mutex
+	calls              int
+	lastActual         int64
+	lastOverconsumed   bool
+	lastTerminalStatus string
 }
 
 func (f *fakeReservation) Settle(ctx context.Context, batchID, accountID, reservationID string, actualCredits int64, overconsumed bool, terminalStatus string) error {
@@ -207,7 +209,7 @@ func TestExecutor_MixedSuccessFailure(t *testing.T) {
 			if failIDs[id] {
 				return nil, nil, 400, errors.New("bad request")
 			}
-			return json.RawMessage(`{"id":"chatcmpl_x","choices":[]}`), &Usage{TotalTokens: 10}, 200, nil
+			return json.RawMessage(`{"id":"chatcmpl_x","choices":[]}`), &Usage{PromptTokens: 6, CompletionTokens: 4, TotalTokens: 10}, 200, nil
 		},
 	}
 	disp, err := NewDispatcher(Config{Concurrency: 4, MaxRetries: 2, LineTimeout: 5 * time.Second}, infer, nil)
@@ -217,7 +219,7 @@ func TestExecutor_MixedSuccessFailure(t *testing.T) {
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b1", AccountID: "acct", InputFileID: "f1", InputFilePath: "batches/b1/input.jsonl",
 		ReservationID: "res1", Endpoint: "/v1/chat/completions", ModelAlias: "alias-1",
-		LiteLLMModel:    "openrouter/gpt-4o-mini",
+		LiteLLMModel: "openrouter/gpt-4o-mini", Pricing: catalog.FixedPricing(1_000_000, 1_000_000),
 		ReservedCredits: 100000,
 	}}
 	ls := newFakeLineStore()
@@ -276,7 +278,7 @@ func TestExecutor_EmptyInput(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b2", AccountID: "acct", InputFilePath: "batches/b2/input.jsonl",
-		ReservationID: "res2", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservationID: "res2", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini", Pricing: catalog.FixedPricing(1_000_000, 1_000_000),
 		ReservedCredits: 100,
 	}}
 	ls := newFakeLineStore()
@@ -322,7 +324,7 @@ func TestExecutor_AllErrors(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b3", AccountID: "acct", InputFilePath: "batches/b3/input.jsonl",
-		ReservationID: "res3", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservationID: "res3", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini", Pricing: catalog.FixedPricing(1_000_000, 1_000_000),
 		ReservedCredits: 5000,
 	}}
 	ls := newFakeLineStore()
@@ -365,13 +367,13 @@ func TestExecutor_RestartResume(t *testing.T) {
 			dispatchedMu.Lock()
 			dispatched++
 			dispatchedMu.Unlock()
-			return json.RawMessage(`{"ok":true}`), &Usage{TotalTokens: 10}, 200, nil
+			return json.RawMessage(`{"ok":true}`), &Usage{PromptTokens: 6, CompletionTokens: 4, TotalTokens: 10}, 200, nil
 		},
 	}
 	disp, _ := NewDispatcher(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b4", AccountID: "acct", InputFilePath: "batches/b4/input.jsonl",
-		ReservationID: "res4", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservationID: "res4", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini", Pricing: catalog.FixedPricing(1_000_000, 1_000_000),
 		ReservedCredits: 100000,
 	}}
 	rp := &fakeReservation{}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
@@ -30,36 +32,38 @@ type InferencePort interface {
 	ChatCompletion(ctx context.Context, model string, body json.RawMessage) (respBody json.RawMessage, usage *Usage, statusCode int, err error)
 }
 
-// Usage carries the per-line token counts the dispatcher attributes credits with.
+// Usage carries the per-line token counts the dispatcher settles with.
 type Usage struct {
 	PromptTokens     int64
 	CompletionTokens int64
-	TotalTokens      int64
+	// TotalTokens is decoded because the upstream reports it, and it is
+	// deliberately never priced. It is not the sum of the two fields above:
+	// a thinking-capable route counts thought tokens in the total and not in
+	// the candidates, so charging it charges for tokens the customer never
+	// received (issues #1472 and #1473). The field is kept rather than
+	// deleted so the regression guard can feed a real total-exceeds-components
+	// shape through settlement and prove the total is ignored.
+	TotalTokens int64
 }
 
-// CreditPolicy converts per-line usage to credits. Default is the same model
-// edge-api uses: 1 credit per 1k prompt tokens + 1 credit per 1k completion
-// tokens, rounded up. Tests can inject simpler policies.
+// CreditPolicy settles one succeeded line at its alias's own price. An error
+// means the line cannot be priced at all and must be refused rather than
+// charged; priceLine documents which shapes fail closed to the hold and which
+// are refused outright. Tests can inject simpler policies.
 type CreditPolicy interface {
-	Credits(usage *Usage) int64
+	Credits(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []byte) (LinePrice, error)
 }
 
-// DefaultCreditPolicy applies the per-line credit formula. Numbers chosen to
-// match the existing creditsPerRequest fallback in batchstore/worker.go
-// (1000 credits per chat-completions call) when usage is unavailable.
+// DefaultCreditPolicy settles each line at its alias's price: catalog rates
+// per million tokens for a fixed-price alias, the provider-reported cost for
+// an upstream_actual one. See pricing.go for the whole decision.
 type DefaultCreditPolicy struct{}
 
-// Credits returns prompt + completion tokens (1 credit per token) — matches
-// the granularity of the existing accounting service. Returns 1000 (the
-// fallback per-call cost in batchstore/worker.go) if usage is nil.
-func (DefaultCreditPolicy) Credits(usage *Usage) int64 {
-	if usage == nil {
-		return 1000
-	}
-	if usage.TotalTokens > 0 {
-		return usage.TotalTokens
-	}
-	return usage.PromptTokens + usage.CompletionTokens
+// Credits settles one line. rawUpstreamBody must be the VERBATIM upstream
+// response body, before packages/sanitize strips usage.cost out of it, since
+// that field is the only place an upstream_actual line's charge comes from.
+func (DefaultCreditPolicy) Credits(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []byte) (LinePrice, error) {
+	return priceLine(pricing, usage, rawUpstreamBody)
 }
 
 // Dispatcher is a bounded worker pool that fans out per-line dispatches to
@@ -144,6 +148,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 			mintedID := sanitize.MintID("chatcmpl")
 			sanitizedBody, ok := sanitize.VariablePriceFrame(body, line.Alias, mintedID)
 			if ok {
+				// Settle from the RAW body, not the sanitized one:
+				// VariablePriceFrame strips usage.cost, which is where an
+				// upstream_actual alias's whole charge comes from (#1473).
+				price, priceErr := d.credits.Credits(line.Pricing, usage, body)
+				if priceErr != nil {
+					// No defensible figure to charge exists for this line, so
+					// it is neither charged nor delivered. Unreachable for any
+					// alias routing will select, since SelectRoute already
+					// refuses an unpriced alias before a batch runs.
+					log.Printf("executor: refusing to settle batch line alias=%s custom_id=%s: %v",
+						line.Alias, line.CustomID, priceErr)
+					return d.errResult(line.CustomID, "settlement_unavailable",
+						"this request could not be priced and was not delivered", attempt)
+				}
 				out := &OutputLine{
 					ID:       "batch_req_" + uuid.New().String(),
 					CustomID: line.CustomID,
@@ -151,10 +169,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 					Error:    nil,
 				}
 				res := DispatchResult{
-					CustomID:        line.CustomID,
-					Output:          out,
-					Attempts:        attempt,
-					ConsumedCredits: d.credits.Credits(usage),
+					CustomID:   line.CustomID,
+					Output:     out,
+					Attempts:   attempt,
+					Settlement: price,
 				}
 				if usage != nil {
 					res.UsedPromptTokens = usage.PromptTokens
@@ -256,8 +274,11 @@ func (d *Dispatcher) errResult(customID, code, message string, attempts int) Dis
 			Response: nil,
 			Error:    &ErrorObj{Code: code, Message: SanitizeMessage(message)},
 		},
-		Attempts:        attempts,
-		ConsumedCredits: 0,
+		Attempts: attempts,
+		// Settlement is left at its zero value: a failed line charges nothing
+		// and has no provenance to record, which is the one place a zero
+		// charge is correct because no work was delivered.
+		Settlement: LinePrice{},
 	}
 }
 
