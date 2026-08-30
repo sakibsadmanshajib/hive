@@ -136,19 +136,24 @@ def main():
         print("apply_task_upstream_auth_patch: already applied")
         return
 
+    # Every edit is applied in memory and the file is written ONCE, at the end.
+    # Writing per edit means a drifted anchor on the second one leaves the file
+    # half patched, and the first edit's anchor survives its own rewrite, so a
+    # re-run against that half patched file applies it a second time and lands a
+    # duplicated import that satisfies the marker count. A Docker RUN layer is
+    # discarded on failure so the image build cannot reach that state, but the
+    # invariant should not depend on which caller happens to be running this.
+    final = target.read_text()
     for old, new, expected in EDITS:
-        text = target.read_text()
-        found = text.count(old)
+        found = final.count(old)
         assert found == expected, (
             f"{TARGET}: anchor found {found} times, expected {expected}; upstream "
             "open-webui source shifted, patch needs updating. Anchor head: "
             f"{old[:90]!r}"
         )
-        patched = text.replace(old, new)
-        ast.parse(patched)  # fails the build if a rewrite produced invalid Python
-        target.write_text(patched)
+        final = final.replace(old, new)
 
-    final = target.read_text()
+    ast.parse(final)  # fails the build if a rewrite produced invalid Python
 
     assert final.count(MARKER) == EXPECTED_MARKERS, (
         f"expected exactly {EXPECTED_MARKERS} {MARKER} markers in {TARGET} after "
@@ -173,6 +178,10 @@ def main():
         "utils/chat.py gained a second generate_openai_chat_completion dispatch; "
         "it would reach the gateway with no per-user credential"
     )
+
+    # Every assertion above ran against the in-memory result, so nothing is
+    # written until the whole rewrite is known to be good.
+    target.write_text(final)
 
     print("apply_task_upstream_auth_patch: attached the per-user credential at the dispatch seam")
 
