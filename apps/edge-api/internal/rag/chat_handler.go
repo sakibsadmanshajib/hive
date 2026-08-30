@@ -407,7 +407,8 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := readUsage(upstreamBody, req.Model, route.Provider)
-	priced := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body)
+	priced := settleChat(route, settle.Held(), env, req.Model, contentOf(choices), body,
+		syncDeliveryShape(upstream))
 	logSettlement(requestID, req.Model, settle.Held(), priced)
 	if !priced.Delivered {
 		// Nothing was produced, so there is no quantity to charge and the
@@ -415,7 +416,13 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		// recorded as such rather than against the provider, the same
 		// distinction chat/dispatch.go:479 makes on the identical exit.
 		releaseReason = "upstream_error"
-		if r.Context().Err() != nil {
+		switch {
+		case priced.ZeroContent:
+			// Ahead of the disconnect arm: a blank answer is exactly what makes
+			// a customer close the tab, so filing a burn as an abandonment
+			// would lose the absorbed cost in the ledger (#1526).
+			releaseReason = "zero_content"
+		case r.Context().Err() != nil:
 			releaseReason = "client_disconnect"
 		}
 		return
@@ -559,6 +566,14 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 	// quantity when no usage block ever arrives.
 	var env usageEnvelope
 	var completion strings.Builder
+	// shapeAcc collects the delivery evidence the zero-content guard decides on
+	// (issue #1526). It is an inference.UsageAccumulator purely to reuse
+	// ObserveShape, which is the same tool-call, refusal and finish_reason
+	// reading the API-key relay does; nothing here reads its token fields.
+	// HasVisibleRefusal matters on this relay in particular: completion below
+	// accumulates delta.content only, so a refusal-only answer would otherwise
+	// look like no content at all.
+	var shapeAcc inference.UsageAccumulator
 	completed := false
 	// mintedID replaces the upstream's own id on every chunk of this
 	// stream, minted once and reused throughout: the map-based sanitizer
@@ -691,6 +706,7 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 					env = readUsage(sanitized, alias, route.Provider)
 					env.rawDocument = append([]byte(nil), payload...)
 				}
+				shapeAcc.ObserveShape(frame)
 				for _, choice := range frame.Choices {
 					if choice.Delta.Content != nil {
 						completion.WriteString(*choice.Delta.Content)
@@ -743,11 +759,24 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		// Enterprise posture (D-027): nothing was held, so nothing settles.
 		return false, ""
 	}
-	priced := settleChat(route, settle.Held(), env, alias, completion.String(), requestBody)
+	// completed is reused as the guard's completion evidence, unchanged: it is
+	// already "this relay reached the upstream's own [DONE]", which is the
+	// question the guard asks, and it is deliberately not the caller's socket
+	// state. A stream that ended some other way bills, which is the fail-closed
+	// direction (D-034) and leaves the audit gate above untouched.
+	shape := shapeAcc.Shape(inference.ZeroContentSurfaceRAGStream)
+	shape.Completed = completed
+	priced := settleChat(route, settle.Held(), env, alias, completion.String(), requestBody, shape)
 	logSettlement(requestID, alias, settle.Held(), priced)
 	if !priced.Delivered {
 		// Neither usage nor content ever reached the customer, so there is no
 		// quantity to charge and the hold goes back in full.
+		if priced.ZeroContent {
+			// Ahead of the disconnect test: a blank answer is exactly what
+			// makes a customer hang up, so filing a burn as an abandonment
+			// would lose the absorbed cost in the ledger (#1526).
+			return false, "zero_content"
+		}
 		if r.Context().Err() != nil {
 			return false, "client_disconnect"
 		}

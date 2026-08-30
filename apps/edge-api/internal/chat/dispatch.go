@@ -90,8 +90,23 @@ type sseEnvelope struct {
 			// nothing was produced, which released the hold and served it
 			// free.
 			Refusal string `json:"refusal,omitempty"`
+			// A tool-call-only turn is a complete, billable response that
+			// carries no text at all, so the zero-content guard has to be able
+			// to see one (issue #1526). Left undeclared, a tool call truncated
+			// at the caller's ceiling would present as a reasoning burn --
+			// empty, finished on "length" -- and be released free. Raw, because
+			// nothing here reads inside them: presence is the whole question.
+			ToolCalls    json.RawMessage `json:"tool_calls,omitempty"`
+			FunctionCall json.RawMessage `json:"function_call,omitempty"`
 		} `json:"delta,omitempty"`
 	} `json:"choices,omitempty"`
+}
+
+// rawPresent reports whether an undecoded JSON field was actually sent, as
+// opposed to absent or an explicit null. Providers spell "no tool call on this
+// delta" both ways.
+func rawPresent(f json.RawMessage) bool {
+	return len(f) > 0 && !bytes.Equal(f, []byte("null"))
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +306,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var rawUsagePayload []byte
 	var finishReason string
 	var completion strings.Builder
+	// shape is the evidence the zero-content guard decides on (issue #1526):
+	// what the relay delivered, and whether the upstream ended its own stream.
+	// Never the caller's socket state, which a blank answer is exactly what
+	// provokes -- see inference.isZeroContentStream for why an earlier revision
+	// keyed on that and suppressed the guard in the population it protects.
+	// Refusals need no flag here: this relay folds delta.refusal into
+	// completion, so a refusal-only answer already carries visible content.
+	shape := inference.DeliveryShape{Surface: inference.ZeroContentSurfaceSessionChat}
+	// sawDone records the upstream's own [DONE] sentinel, which stands however
+	// the caller's socket behaved afterwards. A client that closes the instant
+	// it receives [DONE] is the NORMAL ending of a blank stream, so a
+	// completion test that consulted only the live request context below would
+	// go false in exactly the population this guard exists for.
+	sawDone := false
 
 	// mintedID feeds SanitizeVariablePriceFrame below, which now sanitizes
 	// every frame of every alias: it has no memory of frames before it, so
@@ -379,6 +408,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if isDone {
+			sawDone = true
 			break
 		}
 		var envelope sseEnvelope
@@ -392,6 +422,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if choice.Delta.Refusal != "" {
 				completion.WriteString(choice.Delta.Refusal)
 			}
+			if rawPresent(choice.Delta.ToolCalls) || rawPresent(choice.Delta.FunctionCall) {
+				shape.HasToolCall = true
+			}
+			shape.ObserveFinishReason(choice.FinishReason)
 			if choice.FinishReason != "" {
 				finishReason = choice.FinishReason
 			}
@@ -429,6 +463,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		finishReason = "stream_error"
 	}
 
+	// Did the relay reach the upstream's own end of stream (#1526)? Either the
+	// sentinel arrived, or the body closed cleanly on a request that was never
+	// cancelled, which is how some providers end a stream with no sentinel at
+	// all. A scanner error, or a read that failed because the request context
+	// was cancelled, is a truncation rather than a completion and leaves this
+	// false, so the turn bills (D-034, fail closed). Same rule as inference's
+	// own relay, and deliberately not a test of whether the caller is still
+	// connected: see inference.DeliveryShape.
+	shape.Completed = sawDone || (streamErr == nil && r.Context().Err() == nil)
+
 	latency := int(time.Since(started).Milliseconds())
 
 	// The charge is the catalog price of the route that actually served the
@@ -440,7 +484,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// hold and open a reconciliation job. It never settles a delivered response
 	// at zero, and never bills a token count as though it were a credit amount.
 	var costCredits int64
-	var confirmed, delivered bool
+	var confirmed, delivered, zeroContent bool
 	if route.Pricing.IsUpstreamActual() {
 		// This alias has no catalog price. Its charge is the cost the upstream
 		// reported for this generation, times the standard margin. A cost that
@@ -462,8 +506,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"generation_id", settled.GenerationID, "held_credits", settle.Held())
 		}
 	} else {
-		costCredits, confirmed, delivered = inference.ChatSettlementCredits(
-			route, hasUsage, cacheUsage.FreshInputTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens, outTokens, raw, completion.String())
+		costCredits, confirmed, delivered, zeroContent = inference.ChatSettlementCredits(
+			route, hasUsage, cacheUsage.FreshInputTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens, outTokens, raw, completion.String(), shape)
 	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
@@ -490,7 +534,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Nothing was produced, so there is no quantity to charge. The deferred
 		// release hands the hold back in full.
 		releaseReason = "upstream_error"
-		if r.Context().Err() != nil {
+		switch {
+		case zeroContent:
+			// Ahead of the disconnect arm, not behind it, for the reason
+			// settleStream states at the same fork: the guard already requires
+			// a completed stream, and a blank answer is exactly what makes a
+			// customer close the tab, so labelling this a disconnect would file
+			// the commonest ending of a burn as an abandonment and lose the
+			// absorbed cost with it (#1526).
+			releaseReason = "zero_content"
+		case r.Context().Err() != nil:
 			releaseReason = "client_disconnect"
 		}
 		costCredits = 0
