@@ -229,7 +229,9 @@ const freePoolMinimumActiveMembers = 2
 func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 	state := foldMigrations(t)
 
-	active := 0
+	// Part one, over the KNOWN roster: pin what each route is, so a typo in a
+	// provider slug or an alias id is still caught on a row that has gone
+	// quiet. These say nothing about who is serving.
 	for routeID, wantProvider := range freePoolKnownMembers {
 		route, ok := state.routes[routeID]
 		if !ok {
@@ -242,39 +244,62 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 		if route["provider"] != wantProvider {
 			t.Errorf("pool member %s provider = %q, want %q", routeID, route["provider"], wantProvider)
 		}
-		if route["litellm_model_name"] != freePoolGroupName {
-			t.Errorf("pool member %s litellm_model_name = %q, want the one shared group %q; hive-free is a single endpoint by owner decision, so a second group name here is a second endpoint", routeID, route["litellm_model_name"], freePoolGroupName)
-		}
+	}
 
-		// A disabled member is emitted by nothing and can answer nothing, so it
-		// carries no obligation. Only the live ones have to agree.
-		if strings.EqualFold(route["health_state"], "disabled") {
+	// Part two, over the LIVE catalog: the invariant itself. Membership is read
+	// from the folded health_state, never from the roster above, for two
+	// reasons. A member removed by an unrelated capacity decision must not fail
+	// this guard (issue #1566 may disable the Gemini member over its 20
+	// requests a day free-tier cap). And a member ADDED must be checked rather
+	// than merely reported: an earlier version of this test rejected any active
+	// route missing from the roster, which meant the one row most likely to
+	// break uniformity was the one row whose capabilities never got asserted.
+	var activeIDs []string
+	for routeID, route := range state.routes {
+		if route["alias_id"] != freePoolAliasID || strings.EqualFold(route["health_state"], "disabled") {
 			continue
 		}
-		active++
+		activeIDs = append(activeIDs, routeID)
+	}
+	sort.Strings(activeIDs)
+
+	groups := map[string]bool{}
+	for _, routeID := range activeIDs {
+		route := state.routes[routeID]
+		groups[route["litellm_model_name"]] = true
 
 		caps, ok := state.caps[routeID]
 		if !ok {
-			t.Errorf("no provider_capabilities row survives the migration chain for pool member %s; every column defaults false and the group would serve nothing", routeID)
+			t.Errorf("no provider_capabilities row survives the migration chain for active pool member %s; every column defaults false and the group would serve nothing", routeID)
 			continue
 		}
 		if !isTrue(caps["tools_supported"]) {
-			t.Errorf("pool member %s carries tools_supported = %q. Every active member must, or the group cannot declare it and hive-free answers its own 400 to every response_format request again", routeID, caps["tools_supported"])
+			t.Errorf("active pool member %s carries tools_supported = %q. Every active member must, or the group cannot declare it and hive-free answers its own 400 to every tools, tool_choice or response_format request again", routeID, caps["tools_supported"])
 		}
 		if !isTrue(caps["supports_chat_completions"]) {
-			t.Errorf("pool member %s dropped supports_chat_completions", routeID)
+			t.Errorf("active pool member %s dropped supports_chat_completions", routeID)
 		}
 		if !isTrue(caps["supports_reasoning"]) {
-			t.Errorf("pool member %s dropped supports_reasoning", routeID)
+			t.Errorf("active pool member %s dropped supports_reasoning", routeID)
 		}
 		if isTrue(caps["supports_embeddings"]) {
-			t.Errorf("pool member %s claims supports_embeddings; this is a chat pool", routeID)
+			t.Errorf("active pool member %s claims supports_embeddings; this is a chat pool", routeID)
 		}
 		for _, flag := range soleCarrierFlags {
 			if isTrue(caps[flag]) {
-				t.Errorf("pool member %s claims media flag %s; those live on the auto-router successor, not in the pool", routeID, flag)
+				t.Errorf("active pool member %s claims media flag %s; those live on the auto-router successor, not in the pool", routeID, flag)
 			}
 		}
+	}
+
+	if len(activeIDs) < freePoolMinimumActiveMembers {
+		t.Errorf("only %d active member(s) left on alias %s (%v), want at least %d. Uniformity is satisfied vacuously by an empty pool, so this is the floor that stops a capacity decision from quietly turning a load-balanced pool into a single point of failure", len(activeIDs), freePoolAliasID, activeIDs, freePoolMinimumActiveMembers)
+	}
+
+	// One group, which is the owner's requirement (issue #1563) stated as a
+	// check rather than as a comment.
+	if len(groups) != 1 || !groups[freePoolGroupName] {
+		t.Errorf("alias %s resolves to groups %v, want exactly one, %q. Hive Free and a Hive Free tools variant cannot be two endpoints", freePoolAliasID, groups, freePoolGroupName)
 	}
 
 	// The retired member must actually be out. Left active it rejoins the
@@ -286,26 +311,6 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 	}
 	if !strings.EqualFold(retired["health_state"], "disabled") {
 		t.Errorf("%s health_state = %q, want disabled. It serves openrouter/openrouter/free, which picks among the zero-priced catalog per request; of the 20 zero-priced models only 10 list response_format, and five identical strict-schema probes conformed once. An active member that cannot honour the group's claim makes the claim false", freePoolRetiredMember, retired["health_state"])
-	}
-
-	if active < freePoolMinimumActiveMembers {
-		t.Errorf("only %d active member(s) left on alias %s, want at least %d. Uniformity is satisfied vacuously by an empty pool, so this is the floor that stops a capacity decision from quietly turning a load-balanced pool into a single point of failure", active, freePoolAliasID, freePoolMinimumActiveMembers)
-	}
-
-	// Exactly one group under this alias, which is the owner's requirement
-	// stated as a check rather than as a comment.
-	groups := map[string]bool{}
-	for routeID, route := range state.routes {
-		if route["alias_id"] != freePoolAliasID || strings.EqualFold(route["health_state"], "disabled") {
-			continue
-		}
-		groups[route["litellm_model_name"]] = true
-		if _, known := freePoolKnownMembers[routeID]; !known {
-			t.Errorf("unexpected active member %s on alias %s", routeID, freePoolAliasID)
-		}
-	}
-	if len(groups) != 1 || !groups[freePoolGroupName] {
-		t.Errorf("alias %s resolves to groups %v, want exactly one, %q. Hive Free and a Hive Free tools variant cannot be two endpoints", freePoolAliasID, groups, freePoolGroupName)
 	}
 }
 
