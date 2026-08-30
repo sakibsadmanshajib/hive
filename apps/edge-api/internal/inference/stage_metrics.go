@@ -58,6 +58,10 @@ var (
 		Name: "hive_zero_content_captured_total",
 		Help: "Sync chat completions that returned no visible content even after one retry and settled fail-closed by capturing the reservation hold instead of full price (issue #1171), by alias and endpoint.",
 	}, []string{"alias", "endpoint"})
+	streamZeroContentReleased = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_stream_zero_content_released_total",
+		Help: "Streams that relayed a well-formed sequence of chunks carrying no assistant-visible text at all, and had their reservation hold released instead of charged (issue #1326). The reasoning-burn signature: the upstream spent the caller's ceiling on hidden reasoning and finished on length. Every increment is inference Hive paid for and did not bill, so a rising rate is a provider to pull from the pool, not a billing regression.",
+	}, []string{"alias", "endpoint"})
 	streamRelayAborted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_stream_relay_aborted_total",
 		Help: "SSE relay loops (chat completions and Responses API) that ended on a genuine scanner read/token error rather than [DONE] or a client disconnect -- most commonly bufio.ErrTooLong, a single upstream line over the scanner's buffer limit (issue #1255). A client disconnect never increments this: ctx.Err() != nil is excluded so routine cancellations, the overwhelming majority of stream endings, do not bury the signal this counter exists to surface.",
@@ -97,7 +101,7 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 	// pre-existing state (declared but never registered), out of this PR's
 	// scope to change. streamRelayAborted is added here, alongside the
 	// counters that already were.
-	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted)
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased)
 	return m
 }
 
