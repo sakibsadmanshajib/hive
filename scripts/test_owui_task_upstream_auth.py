@@ -58,7 +58,9 @@ Run: python3 scripts/test_owui_task_upstream_auth.py
 
 import ast
 import asyncio
+import hashlib
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -75,6 +77,7 @@ VENDORED_BACKEND = REPO_ROOT / "vendor/open-webui/backend/open_webui"
 PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
 UNWRAP_GO = REPO_ROOT / "apps/edge-api/internal/auth/owui_unwrap.go"
+PINNED_CHAT_DIGEST = REPO_ROOT / "deploy/docker/owui-patches/pinned-chat-digest.json"
 
 PATCH = "apply_task_upstream_auth_patch.py"
 HELPER_MODULE = "hive_upstream_auth.py"
@@ -370,6 +373,111 @@ def run_leg(label: str, chat_source: str, helper, token=ACCESS_TOKEN):
     return observed, recorder
 
 
+# --- real-import smoke test (LOW 1 from the PR review) -----------------------
+#
+# Everything above lifts functions out with `ast` and execs them in a synthetic
+# namespace, which is the right way to isolate the logic but means no real
+# `import open_webui.utils.chat` ever happens. So the import topology this fix
+# depends on, a module-scope import of the helper into chat.py and a LAZY import
+# of middleware inside the helper, was verified only by hand against the pinned
+# image. A future edit hoisting that middleware import to module scope closes a
+# cycle and crash-loops the chat container, and nothing in CI would have gone
+# red first. An outage is not a loud failure.
+#
+# This reproduces the cycle's exact topology with the REAL helper file and
+# minimal stand-ins for the two upstream modules that form the loop:
+#
+#     middleware -> chat -> hive_upstream_auth -> (lazily) middleware
+#
+# then really imports it, in a fresh interpreter. The mutation leg hoists the
+# import the way the regression would and asserts the import DOES fail, so the
+# check cannot pass vacuously.
+CYCLE_STUBS = {
+    "open_webui/__init__.py": "",
+    "open_webui/utils/__init__.py": "",
+    # Imports chat at module scope and defines the symbol the helper wants AFTER
+    # that import, which is what upstream does and what makes the cycle bite: at
+    # the moment the helper would be imported, this module is already in
+    # sys.modules but has not bound the name yet.
+    "open_webui/utils/middleware.py": (
+        "from open_webui.utils.chat import generate_chat_completion  # noqa: F401\n"
+        "\n\n"
+        "async def get_system_oauth_token(request, user):\n"
+        "    return {'access_token': 'stub'}\n"
+    ),
+    # Imports the helper at module scope, exactly as the #1567 splice does.
+    "open_webui/utils/chat.py": (
+        "from open_webui.utils.hive_upstream_auth import (\n"
+        "    attach_upstream_auth as hive_attach_upstream_auth,\n"
+        ")\n"
+        "\n\n"
+        "async def generate_chat_completion(request, form_data, user):\n"
+        "    return await hive_attach_upstream_auth(request, form_data, user)\n"
+    ),
+}
+
+# Inserted beside the helper's other module-scope imports, which is where such
+# an edit would actually land. NOT prepended to the file: that lands above
+# `from __future__ import annotations` and fails with a SyntaxError instead,
+# which would make the mutation leg pass for the wrong reason and prove nothing
+# about circular imports.
+HOISTED_ANCHOR = "import logging\n"
+HOISTED_IMPORT = "import logging\nfrom open_webui.utils.middleware import get_system_oauth_token\n"
+
+
+def import_cycle_result(hoist_middleware_import: bool):
+    """Really import the loop in a fresh interpreter. Returns (ok, stderr)."""
+    with tempfile.TemporaryDirectory(prefix="owui-import-cycle-") as tmpdir:
+        tmp = Path(tmpdir)
+        for relative, body in CYCLE_STUBS.items():
+            path = tmp / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+
+        helper = (PATCHES / HELPER_MODULE).read_text(encoding="utf-8")
+        if hoist_middleware_import:
+            if helper.count(HOISTED_ANCHOR) != 1:
+                raise SystemExit(
+                    f"FAIL: cannot place the mutation import in {HELPER_MODULE}: "
+                    f"expected exactly one {HOISTED_ANCHOR!r}"
+                )
+            helper = helper.replace(HOISTED_ANCHOR, HOISTED_IMPORT)
+        (tmp / "open_webui/utils/hive_upstream_auth.py").write_text(helper, encoding="utf-8")
+
+        # A subprocess rather than importlib in this process: a fresh interpreter
+        # has an empty sys.modules, so the cycle is exercised from a cold start
+        # the way the container does it, not against whatever this test has
+        # already imported.
+        result = subprocess.run(
+            [sys.executable, "-c", "import open_webui.utils.middleware"],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0, result.stderr
+
+
+def check_import_cycle() -> None:
+    print("\nthe import topology, really imported")
+
+    ok, stderr = import_cycle_result(hoist_middleware_import=False)
+    detail = "" if ok else f": {stderr.strip()[-300:]}"
+    check(
+        ok,
+        "middleware -> chat -> hive_upstream_auth imports cleanly, so the "
+        f"helper's lazy middleware import closes no cycle{detail}",
+    )
+
+    # Mutation leg. Without it a green result above proves nothing: a stub set
+    # that could never deadlock would pass just as happily.
+    hoisted_ok, hoisted_stderr = import_cycle_result(hoist_middleware_import=True)
+    check(
+        not hoisted_ok and "partially initialized module" in hoisted_stderr,
+        "and hoisting that import to module scope really does break the import, "
+        "so this check cannot pass vacuously",
+    )
+
+
 def main() -> int:
     print("scripts/test_owui_task_upstream_auth.py")
 
@@ -378,6 +486,27 @@ def main() -> int:
         vendored is not None and pinned is not None and vendored == pinned,
         f"vendored frontend v{vendored} matches the pinned backend image v{pinned}, "
         "so patching the vendored tree describes the source the image runs",
+    )
+
+    # A version match is a weaker claim than it reads as: it compares
+    # package.json against a Dockerfile tag and says nothing about the one file
+    # this patch actually rewrites. PR CI never builds Dockerfile.open-webui, so
+    # without this the first sign of a drifted anchor is a failed deploy image
+    # build. The digest was taken from the pinned image itself; comparing the
+    # vendored file against it makes every other assertion in this suite a
+    # statement about the source the container runs, at the cost of one hash
+    # rather than a multi-gigabyte image pull on every pull request.
+    fixture = json.loads(PINNED_CHAT_DIGEST.read_text(encoding="utf-8"))
+    dockerfile_digest = DOCKERFILE.read_text(encoding="utf-8")
+    check(
+        fixture["image"] in dockerfile_digest,
+        "the fixture pins the same image digest Dockerfile.open-webui builds from",
+    )
+    vendored_chat = (VENDORED_BACKEND / "utils/chat.py").read_bytes()
+    check(
+        hashlib.sha256(vendored_chat).hexdigest() == fixture["sha256"],
+        "the vendored utils/chat.py is byte-identical to the pinned image's copy, "
+        "so the patch is exercised against the source the container runs",
     )
 
     helper = load_helper()
@@ -453,6 +582,8 @@ def main() -> int:
         recorder.upstream_auth() == f"Bearer {ACCESS_TOKEN}",
         "and the payload that actually left still carries the token",
     )
+
+    check_import_cycle()
 
     print("\nthe auth boundary itself is untouched")
     helper_source = (PATCHES / HELPER_MODULE).read_text(encoding="utf-8")
