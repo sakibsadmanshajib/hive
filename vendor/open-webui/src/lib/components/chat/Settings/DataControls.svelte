@@ -131,7 +131,8 @@
 			notifyError: (message) => toast.error(message),
 			notifySuccess: (message) => toast.success(message),
 			successMessage: $i18n.t('Archived all chats.'),
-			failureMessage: $i18n.t('Failed to archive all chats.')
+			failureMessage: $i18n.t('Failed to archive all chats.'),
+			staleViewMessage: $i18n.t('Archived all chats, but this view could not be refreshed.')
 		});
 
 	const deleteAllChatsHandler = async () =>
@@ -142,7 +143,8 @@
 			notifyError: (message) => toast.error(message),
 			notifySuccess: (message) => toast.success(message),
 			successMessage: $i18n.t('Deleted all chats.'),
-			failureMessage: $i18n.t('Failed to delete all chats.')
+			failureMessage: $i18n.t('Failed to delete all chats.'),
+			staleViewMessage: $i18n.t('Deleted all chats, but this view could not be refreshed.')
 		});
 
 	// Unarchiving restores a chat that may have been pinned, so the pinned

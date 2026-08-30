@@ -55,6 +55,7 @@ const action = (
 			},
 			successMessage: 'Deleted all chats.',
 			failureMessage: 'Failed to delete all chats.',
+			staleViewMessage: 'Deleted all chats, but this view could not be refreshed.',
 			...overrides
 		}
 	};
@@ -88,6 +89,49 @@ describe('runBulkChatAction, on a write the server accepted', () => {
 
 		expect(journal.events).toEqual(['write', 'navigate', 'error', 'success']);
 		expect(journal.errors).toEqual(['Network Problem']);
+	});
+
+	/*
+	 * `goto` can reject: a navigation cancelled by a beforeNavigate handler, or
+	 * a load error on the destination. Both handlers are async arrows wired
+	 * straight to `on:confirm`, so an escaping rejection has nowhere to go and
+	 * the user is left with their chats gone and no toast at all.
+	 */
+	it('does not reject when the navigation behind a committed write fails', async () => {
+		const { action: subject, journal } = action(async () => true, {
+			navigateHome: async () => {
+				throw new Error('Navigation cancelled');
+			}
+		});
+
+		await expect(runBulkChatAction(subject)).resolves.toBe(true);
+
+		expect(journal.events).toEqual(['write', 'error', 'refresh', 'success']);
+		expect(journal.errors).toEqual(['Navigation cancelled']);
+		expect(journal.successes).toEqual(['Deleted all chats.']);
+	});
+
+	/*
+	 * The message a post-write failure falls back to is never the one that says
+	 * the write failed, because by then it did not.
+	 */
+	it('never blames the write for a step that ran after it', async () => {
+		const { action: subject, journal } = action(async () => true, {
+			navigateHome: async () => {
+				throw undefined;
+			},
+			refresh: async () => {
+				throw undefined;
+			}
+		});
+
+		await runBulkChatAction(subject);
+
+		expect(journal.errors).toEqual([
+			'Deleted all chats, but this view could not be refreshed.',
+			'Deleted all chats, but this view could not be refreshed.'
+		]);
+		expect(journal.errors).not.toContain('Failed to delete all chats.');
 	});
 });
 
@@ -215,6 +259,29 @@ describe('Settings > Data Controls wiring (issue #866)', () => {
 		expect(source).toContain('on:confirm={archiveAllChatsHandler}');
 		expect(source).toContain('on:confirm={deleteAllChatsHandler}');
 		expect(source.match(/on:cancel=\{\(\) => \{/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+	});
+
+	/*
+	 * A string absent from the key catalogue is not merely untranslated, it is
+	 * untranslatable: i18next returns the key, so every locale renders English
+	 * and no locale has anywhere to put its own wording. This being a
+	 * Bangladesh-first product, the destructive-action toasts are a poor place
+	 * to accept that (review of this PR).
+	 */
+	it('registers every new toast string in the key catalogue', () => {
+		const catalogue = JSON.parse(readComponent('../i18n/locales/en-US/translation.json'));
+
+		for (const key of [
+			'Archived all chats.',
+			'Failed to archive all chats.',
+			'Archived all chats, but this view could not be refreshed.',
+			'Deleted all chats.',
+			'Failed to delete all chats.',
+			'Deleted all chats, but this view could not be refreshed.'
+		]) {
+			expect(dataControls()).toContain(`$i18n.t('${key}')`);
+			expect(Object.keys(catalogue)).toContain(key);
+		}
 	});
 
 	it('routes both handlers through the checked outcome', () => {

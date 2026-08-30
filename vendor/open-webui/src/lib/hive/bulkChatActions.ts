@@ -39,6 +39,13 @@ export type BulkChatAction = {
 	notifySuccess: (message: string) => void;
 	successMessage: string;
 	failureMessage: string;
+	/*
+	 * For a step that failed AFTER the write committed. Never failureMessage:
+	 * the chats really were archived or deleted, and saying otherwise over a
+	 * navigation or refetch failure is the same class of untruth this module
+	 * exists to remove, pointed the other way.
+	 */
+	staleViewMessage: string;
 };
 
 /*
@@ -53,8 +60,10 @@ export type BulkChatAction = {
 const errorText = (error: unknown, fallback: string): string => {
 	if (typeof error === 'string' && error.trim() !== '') return error;
 	if (error instanceof Error && error.message.trim() !== '') return error.message;
-	const detail = (error as { detail?: unknown } | null | undefined)?.detail;
-	if (typeof detail === 'string' && detail.trim() !== '') return detail;
+	if (typeof error === 'object' && error !== null && 'detail' in error) {
+		const detail = error.detail;
+		if (typeof detail === 'string' && detail.trim() !== '') return detail;
+	}
 	return fallback;
 };
 
@@ -82,15 +91,24 @@ export const runBulkChatAction = async (action: BulkChatAction): Promise<boolean
 		return false;
 	}
 
-	await action.navigateHome();
-
-	// The refetch can fail on its own, after a write that already landed.
-	// Reporting that as a failed delete would be false, and swallowing it would
-	// leave a stale sidebar with nothing said, so both facts are told.
-	try {
-		await action.refresh();
-	} catch (error) {
-		action.notifyError(errorText(error, action.failureMessage));
+	/*
+	 * Everything below here runs after the write committed, so neither step may
+	 * reject out of this function and neither may report a failed write.
+	 *
+	 * `navigateHome` used to be a bare await. SvelteKit's `goto` can reject (a
+	 * navigation cancelled by a beforeNavigate handler, a load error on the
+	 * destination), both handlers are async arrows wired straight to
+	 * `on:confirm`, and Svelte has nowhere to put that rejection: the user's
+	 * chats would be gone with neither toast shown. Both steps are guarded, both
+	 * run whatever the other did, and the success message is unconditional
+	 * because by this point the write has already happened.
+	 */
+	for (const step of [action.navigateHome, action.refresh]) {
+		try {
+			await step();
+		} catch (error) {
+			action.notifyError(errorText(error, action.staleViewMessage));
+		}
 	}
 
 	action.notifySuccess(action.successMessage);
