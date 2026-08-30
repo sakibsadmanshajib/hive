@@ -1,0 +1,221 @@
+Capture log for issue #298 (self-hosted SearXNG chat web search).
+All commands run 2026-08-30 from this PR's own worktree, against the
+committed deploy/searxng/settings.yml and the searxng service added to
+deploy/docker/docker-compose.yml. No credentials, tokens or secrets appear
+below; SEARXNG_SECRET used here is the compose dev fallback
+"hive-local-searxng-secret", not a production value.
+
+====================================================================
+1. Bring the real compose-wired service up (not a hand-typed `docker run`)
+====================================================================
+
+$ cd deploy/docker && docker compose --profile local up -d searxng
+ Network hive-agent-a7ab50cd50799a3eb-2e1382eb_default  Created
+ Volume "hive-agent-a7ab50cd50799a3eb-2e1382eb_searxng-data"  Created
+ Container hive-agent-a7ab50cd50799a3eb-2e1382eb-searxng-1  Started
+
+$ docker ps --filter "name=searxng" --format "{{.Names}}\t{{.Status}}"
+hive-agent-a7ab50cd50799a3eb-2e1382eb-searxng-1	Up 10 seconds (healthy)
+
+Healthcheck (wget --spider http://127.0.0.1:8080/healthz inside the
+container) passed on its own, confirming the committed settings.yml mount,
+the SEARXNG_SECRET environment override and the port mapping all wired up
+correctly through compose, not just through a manually-typed `docker run`.
+
+====================================================================
+2. Real JSON-API query through the compose-wired instance
+====================================================================
+
+$ curl -s "http://127.0.0.1:8888/search" --get \
+    --data-urlencode "q=hive api gateway" --data-urlencode "format=json" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); \
+        print('num_results:', len(d.get('results',[]))); \
+        print('unresponsive_engines:', d.get('unresponsive_engines'))"
+
+num_results: 10
+unresponsive_engines: [['brave', 'too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'CAPTCHA']]
+
+This confirms: JSON format is being served at all (`formats: [html, json]` in
+settings.yml took effect -- SearXNG 403s a JSON request otherwise), and a
+search returns a full page of results even with 3 of 4 configured engines
+suspended, because the 4th (bing here) still answered. See the issue #298
+comment and the PR body for the full engine-availability discussion.
+
+====================================================================
+3. Engine availability across 5 queries, standalone container
+   (same image + settings.yml, run before the compose service existed,
+   used to characterize behavior under sustained querying)
+====================================================================
+
+Query: test
+  latency_s: 0.69
+  unresponsive_engines: [['brave', 'too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'CAPTCHA']]
+  num_results: 10
+  engines_present_in_results: ['bing']
+
+Query: canadian mortgage rates
+  latency_s: 0.31
+  unresponsive_engines: [['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'Suspended: CAPTCHA']]
+  num_results: 10
+  engines_present_in_results: ['bing']
+
+Query: python asyncio task groups
+  latency_s: 0.30
+  unresponsive_engines: [['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'Suspended: CAPTCHA']]
+  num_results: 10
+  engines_present_in_results: ['bing']
+
+Query: capital of bangladesh
+  latency_s: 0.29
+  unresponsive_engines: [['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'Suspended: CAPTCHA']]
+  num_results: 10
+  engines_present_in_results: ['bing']
+
+Query: latest openai model release
+  latency_s: 0.28
+  unresponsive_engines: [['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA'], ['google', 'Suspended: CAPTCHA']]
+  num_results: 9
+  engines_present_in_results: ['bing']
+
+A one-off manual curl against a freshly started container, run before this
+5-query loop, DID get results attributed to brave, bing AND google together
+on a single cold query. The very next request (the "test" query above,
+request #2 to that same fresh container) already shows google/duckduckgo/
+brave suspended. Read together: this sandbox's egress IP tolerates roughly
+one query before Google/DuckDuckGo/Brave's anti-bot systems trip, after which
+only Bing keeps answering for the rest of the ~120s max_ban_time_on_fail
+window. That is the CAPTCHA risk issue #298 itself named for datacentre IP
+ranges. The demo box is on a residential connection, which is the favourable
+case per the issue, but that has NOT been verified here -- see the PR body's
+outstanding-verification note.
+
+====================================================================
+4. Before/after comparison, 5 hand-typed short queries
+   (deliberately NOT run through Open WebUI's query-generation step, to
+   isolate engine quality from issue #1567, the separate live defect where
+   query generation currently fails 100% of the time and sends the user's
+   raw message as the query)
+====================================================================
+
+--- BEFORE: replicating vendor/open-webui/backend/open_webui/retrieval/web/
+    duckduckgo.py exactly (ddgs library, safesearch=moderate, max_results=3,
+    backend=auto) ---
+
+Query: test
+  latency_s: 1.36
+  num_results: 3
+   - Test - Wikipedia | https://en.wikipedia.org/wiki/Test
+   - Test | https://grokipedia.com/page/Test
+   - Speedtest by Ookla - The Global Broadband Speed Test | https://www.speedtest.net/
+
+Query: canadian mortgage rates
+  latency_s: 1.68
+  num_results: 3
+   - Current Mortgage Rates | RBC Royal Bank of Canada | https://www.rbcroyalbank.com/mortgages/mortgage-rates.html
+   - Mortgages Rates - TD Canada Trust | https://www.td.com/ca/en/personal-banking/products/mortgages/mortgage-rates
+   - Today's Mortgage Rates in Canada - NerdWallet Canada | https://www.nerdwallet.com/ca/p/best/mortgages/current-mortgage-rates
+
+Query: python asyncio task groups
+  latency_s: 1.89
+  num_results: 3
+   - Coroutines and tasks -- Python 3.14.7 documentation | https://docs.python.org/3/library/asyncio-task.html
+   - Python Taskgroups with asyncIO - GeeksforGeeks | https://www.geeksforgeeks.org/python/python-taskgroups-with-asyncio/
+   - How to use asyncio.TaskGroup - SuperFastPython | https://superfastpython.com/asyncio-taskgroup/
+
+Query: capital of bangladesh
+  latency_s: 2.39
+  num_results: 3
+   - Capital of Bangladesh | https://en.wikipedia.org/wiki/Capital_of_Bangladesh
+   - Dhaka - Wikipedia | https://en.wikipedia.org/wiki/Dhaka
+   - Bangladesh - Wikipedia | https://en.wikipedia.org/wiki/Bangladesh
+
+Query: latest openai model release
+  latency_s: 2.17
+  num_results: 3
+   - Model Release Notes | OpenAI Help Center | https://help.openai.com/en/articles/9624314-model-release-notes
+   - OpenAI Release Notes - August 2026 Latest Updates - Releasebot | https://releasebot.io/updates/openai
+   - OpenAI Research | Release | OpenAI | https://openai.com/research/index/release/
+
+Note: this repo's ddgs-based path happened to survive this sandbox's IP
+reputation on this run; SearXNG's own duckduckgo engine (a different scraper,
+html.duckduckgo.com rather than ddgs's impersonation-based backend) did NOT,
+per section 3 above. Both are real, both ran against the same network at the
+same time; they are simply different code paths with different bot-detection
+exposure. This is exactly the "unranked, no page fetch" baseline issue #298
+describes: 3 results, no ranking, snippets only, no full-page content.
+
+--- AFTER: SearXNG search (score-ranked, sorted by search_searxng()) +
+    concurrent full-page fetch of the top 5 results (RESULT_COUNT=5,
+    matching WEB_SEARCH_RESULT_COUNT now set in docker-compose.yml /
+    deploy-demo-box.yml), simple GET+read per page, 10 concurrent workers,
+    approximating the langchain SafeWebBaseLoader default loader with
+    WEB_LOADER_CONCURRENT_REQUESTS=10 ---
+
+Query: test
+  search_latency_s: 0.62
+  page_fetch_latency_s (5 pages, concurrent): 0.55
+  total_latency_s: 1.18
+  4 of 5 pages fetched successfully (1 x HTTP 403 from a page that blocks
+  non-browser user agents)
+
+Query: canadian mortgage rates
+  search_latency_s: 0.27
+  page_fetch_latency_s (5 pages, concurrent): 0.45
+  total_latency_s: 0.73
+  3 of 5 pages fetched successfully
+
+  NOTE: by this point in the run, google/duckduckgo/brave were already
+  suspended per section 3's timeline, so bing was this query's only engine.
+  Bing's own results for this specific query, and for the two below, were
+  visibly off-topic under sustained load from this IP -- unrelated exam and
+  news sites rather than mortgage or capital-city content. Read this as a
+  second-order effect of the same anti-bot exposure (a single surviving
+  engine degrading under continued load), not as a defect in this PR's
+  wiring; it reinforces rather than undermines the need to confirm real
+  engine health from the demo box's own (residential) egress before treating
+  any specific engine's output as trustworthy in production.
+
+Query: python asyncio task groups
+  search_latency_s: 0.31
+  page_fetch_latency_s (5 pages, concurrent): 1.79
+  total_latency_s: 2.10
+  5 of 5 pages fetched successfully (one slow site, 1.78s, dominated this
+  query's total)
+
+Query: capital of bangladesh
+  search_latency_s: 0.27
+  page_fetch_latency_s (5 pages, concurrent): 1.61
+  total_latency_s: 1.88
+  4 of 5 pages fetched successfully
+
+Query: latest openai model release
+  search_latency_s: 0.30
+  page_fetch_latency_s (5 pages, concurrent): 0.85
+  total_latency_s: 1.14
+  3 of 5 pages fetched successfully
+
+Summary used to set WEB_SEARCH_RESULT_COUNT=5 and to turn
+BYPASS_WEB_SEARCH_WEB_LOADER off (docker-compose.yml / deploy-demo-box.yml
+carry the full reasoning): search-only latency stayed 0.27-0.69s across all
+runs; adding concurrent full-page fetch of 5 results added roughly 0.5-2s on
+top, dominated by the single slowest page rather than growing linearly with
+result count, because fetches run concurrently. Total end-to-end latency
+stayed under ~2.1s in every sample here.
+
+====================================================================
+5. Screenshot
+====================================================================
+
+searxng-01-html-search-live.png: headless Chrome
+(`google-chrome --headless=new`) against the compose-wired instance's own
+HTML search UI (http://127.0.0.1:8888/search?q=hive+api+gateway+bangladesh),
+real query, real results, engines "bing" and "brave" both visibly labelled
+under individual results, response time shown in the SearXNG UI itself
+(2.0 seconds for this specific capture).
+
+This screenshot proves the new retrieval backend itself, live, wired through
+this PR's own compose file and settings.yml. It is NOT a chat-surface
+screenshot: this builder sandbox has no Supabase, S3 or LLM provider
+credentials, so no working end-to-end Open WebUI chat session could be
+brought up here to search-and-answer against. See the PR body's "Visual
+proof scope" section for what that gap means and who owns closing it.

@@ -733,6 +733,69 @@ services:
         max-file: "3"
     restart: unless-stopped
 
+  # Self-hosted SearXNG, chat web search's retrieval backend (issue #298,
+  # replacing the DuckDuckGo scraper). Runs in the same three profiles as
+  # open-webui itself so it always starts alongside the chat surface: local
+  # dev, the self-hosted enterprise box, and the `chat` profile the demo
+  # deploy workflow adds on top of `local`.
+  #
+  # Configuration is the committed deploy/searxng/settings.yml, bind-mounted
+  # read-only rather than baked into a custom image, per issue #298
+  # acceptance criterion 2. It explicitly allow-lists four zero-cost,
+  # no-API-key engines (google, duckduckgo, brave, bing) via
+  # use_default_settings.engines.keep_only and enables the `json` output
+  # format the OWUI SearXNG adapter (vendor/open-webui/backend/open_webui/
+  # retrieval/web/searxng.py) always requests. See that file's own comments
+  # for the secret_key / SEARXNG_SECRET interaction.
+  #
+  # Verified live (2026-08-30, from the builder sandbox's own egress, not the
+  # demo box's residential one): a cold instance answers one query across
+  # google, brave and bing together, but google, duckduckgo and brave all
+  # trip CAPTCHA/rate-limit suspensions within the next request or two from
+  # that IP, leaving bing as the only engine that keeps answering under
+  # sustained querying. SearXNG's own per-engine suspension (search:
+  # suspended_times in the upstream default settings) means a suspended
+  # engine is dropped from that query's results rather than the whole search
+  # failing, so result counts stayed at 9-10 per query throughout rather than
+  # dropping to zero. Confirming whether google survives from the demo box's
+  # actual (residential) egress is a required post-deploy follow-up, tracked
+  # on issue #298, not assumed here.
+  searxng:
+    image: searxng/searxng:2026.8.29-d226b78bc@sha256:b36af7984b87191b595bc5301418ed6432c047668a4547ab531a7439b816fac3
+    profiles:
+      - local
+      - enterprise
+      - chat
+    volumes:
+      - ../searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-data:/var/cache/searxng/
+    environment:
+      # server.secret_key in settings.yml is bound to this environment
+      # variable at load time (searx/settings_defaults.py), overriding
+      # whatever placeholder is committed there. Generate a real value per
+      # deployment with `openssl rand -hex 32`; the fallback here is a dev
+      # convenience only, same pattern as CONTROL_PLANE_INTERNAL_TOKEN above.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-hive-local-searxng-secret}
+    # Loopback only, same rationale as redis above: nothing outside this box
+    # needs to reach SearXNG directly, open-webui talks to it over the
+    # internal compose network at http://searxng:8080. The bound port exists
+    # so a local operator can query it directly for debugging without
+    # exec-ing into the container.
+    ports:
+      - "127.0.0.1:8888:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
   web-console:
     image: hive-web-console:ci
     build:
@@ -1274,14 +1337,35 @@ services:
       # Web search. Opt-in via .env, default off (same pattern as
       # OWUI_E2E_MODE below) -- this service block is shared with the
       # enterprise profile, which must not silently inherit live outbound
-      # search calls. When enabled, duckduckgo is the only OWUI-supported
-      # engine needing zero API key/account signup (backend/open_webui/
-      # routers/retrieval.py engine=='duckduckgo' branch). Both bypass flags
-      # skip full-page fetch and RAG-embedding retrieval for search results
-      # (snippet-only), keeping this feature independent of the separate
-      # model-routing/embedding path.
+      # search calls.
+      #
+      # Issue #298: the engine is the self-hosted searxng service above, not
+      # the DuckDuckGo scraper (backend/open_webui/retrieval/web/
+      # duckduckgo.py) this used to point at. SearXNG aggregates multiple
+      # zero-API-key engines (google, duckduckgo, brave, bing -- configured
+      # in ../searxng/settings.yml) and score-ranks the combined results
+      # itself, instead of handing back one engine's unranked snippet list.
+      #
+      # Both bypass flags now default to false (fetch full result pages,
+      # then chunk/embed/retrieve them) rather than true (snippet-only, no
+      # rank). Measured cost of turning the loader on: 5 concurrent page
+      # fetches added roughly 0.5-2s on top of a roughly 0.3-0.6s SearXNG
+      # query, from the builder sandbox's own network (issue #298 comment
+      # has the full per-query numbers). Embedding stays off the bypass path
+      # deliberately: turning the loader on without it would otherwise dump
+      # full unchunked page text straight into the prompt, and this reuses
+      # the RAG_EMBEDDING_MODEL / RAG_OPENAI_API_BASE_URL pipeline already
+      # wired below for file-upload RAG (RAG_TOP_K: "5"), not a new spend
+      # category.
       ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-false}
       WEB_SEARCH_ENGINE: ${WEB_SEARCH_ENGINE:-}
+      SEARXNG_QUERY_URL: ${SEARXNG_QUERY_URL:-http://searxng:8080/search}
+      # Deliberate, not the undocumented library default of 3 (issue #298
+      # acceptance criterion 5). 5 keeps the concurrent page-fetch cost above
+      # bounded by the single slowest page rather than growing linearly, and
+      # matches RAG_TOP_K below so retrieval has as many chunked sources to
+      # choose from as the search itself returned.
+      WEB_SEARCH_RESULT_COUNT: ${WEB_SEARCH_RESULT_COUNT:-5}
       BYPASS_WEB_SEARCH_WEB_LOADER: ${BYPASS_WEB_SEARCH_WEB_LOADER:-false}
       BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: ${BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:-false}
       # Hive product branding. LICENSE-DECISION.md: Open WebUI image built from
@@ -2034,6 +2118,10 @@ volumes:
   prometheus-data:
   grafana-data:
   owui-data:
+  # searxng-data caches SearXNG's own favicon/response caches across container
+  # recreates. Not the search index (SearXNG holds no persistent index; every
+  # query fans out live to its upstream engines).
+  searxng-data:
   caddy-data:
   caddy-config:
   caddy-artifacts-data:

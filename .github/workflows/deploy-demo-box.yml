@@ -213,14 +213,24 @@ env:
   # profile, which must not silently inherit live outbound search calls; the
   # box's own .env is untracked, so this workflow is the versioned place where
   # the demo deployment turns the feature on. Shell env overrides --env-file
-  # during interpolation, so these four values win over anything the box's
-  # .env carries for them. duckduckgo needs no API key or account signup.
-  # Both bypass flags keep search snippet-only, decoupled from the RAG
-  # embedding path.
+  # during interpolation, so these values win over anything the box's .env
+  # carries for them.
+  #
+  # Issue #298: engine is the self-hosted searxng service (compose profiles
+  # local/enterprise/chat, same as open-webui, so `--profile chat` above
+  # already starts it), not the DuckDuckGo scraper this used to point at.
+  # Both bypass flags flipped from true (snippet-only) to their repo default
+  # of false: SearXNG's aggregated, score-ranked results get their pages
+  # fetched and then chunked/embedded/retrieved, instead of the model seeing
+  # only unranked snippets. See the docker-compose.yml comments on the
+  # searxng service and on these same four keys in the open-webui service
+  # for the measured latency and the embedding-cost reasoning.
   ENABLE_WEB_SEARCH: "true"
-  WEB_SEARCH_ENGINE: "duckduckgo"
-  BYPASS_WEB_SEARCH_WEB_LOADER: "true"
-  BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: "true"
+  WEB_SEARCH_ENGINE: "searxng"
+  SEARXNG_QUERY_URL: "http://searxng:8080/search"
+  WEB_SEARCH_RESULT_COUNT: "5"
+  BYPASS_WEB_SEARCH_WEB_LOADER: "false"
+  BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: "false"
 
 jobs:
   # ------------------------------------------------------------------
