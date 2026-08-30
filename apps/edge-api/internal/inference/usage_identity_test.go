@@ -39,9 +39,9 @@ import (
 // /v1/batches output lines, which decode the raw LiteLLM body in
 // apps/control-plane/internal/batchstore and never cross this package. That
 // path also PRICES total_tokens
-// (batchstore/executor/dispatcher.go:55-61), which makes the same shape an
-// overcharge there rather than a reporting defect, and it is corrected in
-// issue #1473 rather than here.
+// (DefaultCreditPolicy.Credits in batchstore/executor/dispatcher.go), which
+// makes the same shape an overcharge there rather than a reporting defect,
+// and it is corrected in issue #1473 rather than here.
 //
 // What is NOT changed, and is asserted here so a future change has to argue
 // with a test: the CHARGE. Settlement prices the components (prompt and
@@ -331,17 +331,17 @@ func TestStreamingRelay_TerminalUsageFrameSatisfiesIdentity(t *testing.T) {
 			t.Errorf("completion_tokens = %d, want 1: reasoning tokens are not folded into the billed component (D-055)", u.CompletionTokens)
 		}
 		// The other half of the same object, which this test used to be
-		// silent on. The fixture reports reasoning_tokens 26 inside a
-		// completion of 1, so a payload that corrects only the total still
-		// hands the caller a breakdown larger than the component it breaks
-		// down. See TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal
-		// for which side of that invariant is right and why.
+		// silent on. The fixture is the alongside convention (4 + 1 + 26 =
+		// 31), so 26 is a measurement, not a breakdown that happens to be too
+		// large, and the customer must receive the number the upstream
+		// actually reported. An earlier version of this change capped it at 1
+		// and handed the caller a fabricated figure.
 		if u.CompletionTokensDetails == nil {
 			t.Fatalf("relayed usage frame at position %d dropped completion_tokens_details entirely", f.position)
 		}
-		if u.CompletionTokensDetails.ReasoningTokens > u.CompletionTokens {
-			t.Errorf("relayed usage frame at position %d reports reasoning_tokens=%d inside completion_tokens=%d",
-				f.position, u.CompletionTokensDetails.ReasoningTokens, u.CompletionTokens)
+		if u.CompletionTokensDetails.ReasoningTokens != 26 {
+			t.Errorf("relayed usage frame at position %d reports reasoning_tokens=%d, want the measured 26",
+				f.position, u.CompletionTokensDetails.ReasoningTokens)
 		}
 	}
 }
@@ -384,60 +384,109 @@ func TestUsageIdentity_ToolCallOnlyTurnCorrectsTheTotalAndRecordsTheGap(t *testi
 	}
 }
 
-// TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal pins which side
-// of the reasoning-versus-completion invariant is correct.
+// --- the two conventions, decided from the wire shape ---
+
+// TestUsageIdentity_AlongsideConventionKeepsTheMeasuredReasoningCount is the
+// live #1472 shape with its breakdown present: 4 + 1 + 26 = 31, which is the
+// upstream saying, in its own arithmetic, that it counts reasoning ALONGSIDE
+// completion_tokens rather than inside it (Google reports totalTokenCount
+// inclusive of thoughtsTokenCount while candidatesTokenCount excludes it).
 //
-// completion_tokens_details is "the breakdown of completion tokens"
-// (types.go:175-180), so reasoning_tokens 26 against completion_tokens 1 is
-// arithmetically impossible under the same OpenAI contract this file exists to
-// enforce: a client computing visible output as completion minus reasoning
-// gets -25. clampUsageToCeiling (completion_ceiling.go:240-241) already caps
-// the breakdown for exactly that stated reason, and it is the side that is
-// right; EnforceUsageIdentity was the side that was wrong. Neither number is
-// priced, so this moves no money (CreditsForTokens, pricing.go:209, takes four
-// token arguments and reasoning is not among them).
+// 26 is therefore a measurement, and the customer receives it unchanged. An
+// earlier version of this change capped it at completion_tokens, on the theory
+// that a breakdown may not exceed the component it breaks down, and handed the
+// caller a fabricated 1 while 25 tokens survived only in a log line. Nothing
+// in edge-api computes reasoning_tokens; every adapter decodes it verbatim, so
+// it carries the upstream's convention rather than this package's assumption
+// about what the field means.
 //
-// The 26 is not destroyed, it is relocated: both the reported and the
-// corrected figure are on the log line, so the quantity stays recoverable
-// operator-side while the payload stops asserting two token conventions at
-// once.
-func TestUsageIdentity_ReasoningBreakdownFollowsACorrectedTotal(t *testing.T) {
+// The total IS restated, and that is lossless rather than an exception to the
+// same rule: the remainder is still on the wire in reasoning_tokens, so a
+// caller reading 5 and 26 recovers the upstream's 31 exactly. Nothing measured
+// is destroyed, and the quantity is on two counters besides.
+func TestUsageIdentity_AlongsideConventionKeepsTheMeasuredReasoningCount(t *testing.T) {
 	u := &UsageResponse{
 		PromptTokens:            4,
 		CompletionTokens:        1,
 		TotalTokens:             31,
 		CompletionTokensDetails: &CompletionTokensDetails{ReasoningTokens: 26},
 	}
+	NewStageMetrics(prometheus.NewRegistry())
+	unbilled := reasoningTokensUnbilled.WithLabelValues(reasoningAlongside)
+	before := testutil.ToFloat64(unbilled)
+
 	logs := captureLogs(t, func() {
 		EnforceUsageIdentity(u, "gen-abc", "hive-free", EndpointChatCompletions)
 	})
-	if u.TotalTokens != 5 || u.CompletionTokens != 1 || u.PromptTokens != 4 {
-		t.Fatalf("components or total wrong after the correction: %+v", u)
-	}
-	if u.CompletionTokensDetails.ReasoningTokens != 1 {
-		t.Errorf("reasoning_tokens = %d, want 1: a breakdown may not exceed the component it breaks down",
+
+	if u.CompletionTokensDetails.ReasoningTokens != 26 {
+		t.Errorf("reasoning_tokens = %d, want the measured 26: a quantity the upstream reported is never shrunk to satisfy an invariant it was not writing under",
 			u.CompletionTokensDetails.ReasoningTokens)
 	}
-	for _, want := range []string{"reported_reasoning_tokens=26", "corrected_reasoning_tokens=1"} {
-		if !strings.Contains(logs, want) {
-			t.Errorf("the log must carry %q so the reported quantity survives the correction; logs: %q", want, logs)
-		}
+	if u.TotalTokens != 5 || u.CompletionTokens != 1 || u.PromptTokens != 4 {
+		t.Fatalf("components or total wrong after the restatement: %+v", u)
+	}
+	if got := testutil.ToFloat64(unbilled); got != before+26 {
+		t.Errorf("unbilled reasoning counter = %v, want %v: this is the quantity the owner prices the D-055 decision against, so it cannot live in a log line",
+			got, before+26)
+	}
+	if !strings.Contains(logs, "convention=alongside") {
+		t.Errorf("the log must name the convention it decided on; logs: %q", logs)
 	}
 }
 
-// TestUsageIdentity_ReasoningBreakdownSurvivesAnUnderReportedTotal is the
-// guard for the deliberate asymmetry above, and it is a guard rather than
-// coverage: it passes before and after this change.
+// TestUsageIdentity_UnexplainedBreakdownIsRecordedAndPassedThrough is the
+// shape the previous version returned on before it looked at anything:
+// prompt 4, completion 1, total 5, reasoning 26. The identity holds, so the
+// early return fired, and the impossible breakdown went straight through the
+// guard that exists to catch it.
 //
-// The cap applies in the OVER direction only. An over-reporting total is the
-// upstream stating, in its own arithmetic, that it counts a class outside
-// completion_tokens. An UNDER-reporting one states no such thing, and the live
-// shape there is the zero-completion estimate, where completion_tokens is
-// Hive's own guess from the output text and reasoning_tokens is the upstream's
-// measurement; capping a measurement to fit a guess would delete the better
-// number. TestClampZeroCompletionUsage_ReasoningTokensPreserved covers that
-// path end to end; this covers the rule directly.
-func TestUsageIdentity_ReasoningBreakdownSurvivesAnUnderReportedTotal(t *testing.T) {
+// Neither convention describes this object: the inside arithmetic makes the
+// breakdown larger than its own component, and the alongside arithmetic wants
+// a total of 31. No second field carries a remainder here, so any figure
+// written would be invented. The upstream numbers are passed through untouched
+// and the fact is recorded as a quantity instead, which on this shape is the
+// ONLY record, because the total counters see a discrepancy of zero.
+func TestUsageIdentity_UnexplainedBreakdownIsRecordedAndPassedThrough(t *testing.T) {
+	u := &UsageResponse{
+		PromptTokens:            4,
+		CompletionTokens:        1,
+		TotalTokens:             5,
+		CompletionTokensDetails: &CompletionTokensDetails{ReasoningTokens: 26},
+	}
+	NewStageMetrics(prometheus.NewRegistry())
+	unbilled := reasoningTokensUnbilled.WithLabelValues(reasoningUnexplained)
+	before := testutil.ToFloat64(unbilled)
+
+	logs := captureLogs(t, func() {
+		EnforceUsageIdentity(u, "gen-abc", "hive-free", EndpointChatCompletions)
+	})
+
+	if u.PromptTokens != 4 || u.CompletionTokens != 1 || u.TotalTokens != 5 ||
+		u.CompletionTokensDetails.ReasoningTokens != 26 {
+		t.Errorf("an object no convention explains was rewritten: %+v (reasoning %d)", u, u.CompletionTokensDetails.ReasoningTokens)
+	}
+	if got := testutil.ToFloat64(unbilled); got != before+26 {
+		t.Errorf("unbilled reasoning counter = %v, want %v: on this shape the total counters record nothing, so silence here is silence everywhere",
+			got, before+26)
+	}
+	if !strings.Contains(logs, "convention=unexplained") {
+		t.Errorf("the log must name the classification; logs: %q", logs)
+	}
+}
+
+// TestUsageIdentity_ReasoningIsNeverRewrittenOnAnUnderReportedTotal covers the
+// third position reasoning can be in: a total that falls short of its own
+// components, which no convention explains, beside a reasoning count larger
+// than completion_tokens. The total is restated and the measurement is not.
+//
+// The live shape behind this is the zero-completion estimate, where
+// completion_tokens is Hive's own guess from the output text and
+// reasoning_tokens is the upstream's measurement. Shrinking a measurement to
+// fit a guess deletes the better number.
+// TestClampZeroCompletionUsage_ReasoningTokensPreserved covers that path end
+// to end; this covers the rule directly.
+func TestUsageIdentity_ReasoningIsNeverRewrittenOnAnUnderReportedTotal(t *testing.T) {
 	u := &UsageResponse{
 		PromptTokens:            4,
 		CompletionTokens:        1,
@@ -451,8 +500,7 @@ func TestUsageIdentity_ReasoningBreakdownSurvivesAnUnderReportedTotal(t *testing
 		t.Errorf("total_tokens = %d, want 5", u.TotalTokens)
 	}
 	if u.CompletionTokensDetails.ReasoningTokens != 26 {
-		t.Errorf("reasoning_tokens = %d, want 26 preserved: an under-reported total is not the outside-completion convention",
-			u.CompletionTokensDetails.ReasoningTokens)
+		t.Errorf("reasoning_tokens = %d, want the measured 26", u.CompletionTokensDetails.ReasoningTokens)
 	}
 }
 
@@ -503,7 +551,8 @@ func TestUsageIdentity_EmbeddingsWithZeroPromptTokensZeroesTheTotal(t *testing.T
 // disagree"; usageIdentityUnaccountedTokens answers "how many tokens went
 // unaccounted", which is the question the correction itself made harder to
 // answer by rewriting the total that usage_events.hive_credit_delta used to
-// carry (orchestrator.go:586, stream.go:918).
+// carry (recordCompletedEvent in orchestrator.go, recordInterruptedEvent in
+// stream.go).
 //
 // Asserting the label values incidentally pins the direction split, which
 // nothing else does on the over side.
@@ -552,6 +601,18 @@ func TestUsageIdentity_UnaccountedTokenSeriesExistBeforeAnyViolation(t *testing.
 	if got != 2 {
 		t.Errorf("the unaccounted-token metric exposes %d series at boot, want 2 (over and under): an operator querying it must not read \"no data\" and take it for zero violations", got)
 	}
+	// Same requirement for the reasoning counter, and it matters more there:
+	// on the unexplained shape nothing is rewritten and the total counters
+	// record nothing, so this series is the only evidence the shape was
+	// served at all. A series that appears on first use cannot be told apart
+	// from one nobody registered.
+	unbilled, err := testutil.GatherAndCount(reg, "hive_usage_reasoning_tokens_unbilled_total")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if unbilled != 2 {
+		t.Errorf("the unbilled-reasoning metric exposes %d series at boot, want 2 (alongside and unexplained)", unbilled)
+	}
 }
 
 // --- the relays that hand raw frame bytes to a customer ---
@@ -594,8 +655,13 @@ func TestUsageIdentityInFrame_CorrectsTheTotalAndLeavesEveryOtherMemberAlone(t *
 	if err := json.Unmarshal(decoded.Usage["completion_tokens_details"], &details); err != nil {
 		t.Fatalf("completion_tokens_details is not an object: %v", err)
 	}
-	if string(details["reasoning_tokens"]) != "1" {
-		t.Errorf("reasoning_tokens = %s, want 1", details["reasoning_tokens"])
+	// Guard, not coverage: this helper writes total_tokens and nothing else,
+	// so it is structurally incapable of touching the breakdown and this
+	// assertion passes before and after the convention rework. It goes red if
+	// anyone teaches the helper to patch reasoning_tokens, which is the shape
+	// the previous round shipped and this one retracts.
+	if string(details["reasoning_tokens"]) != "26" {
+		t.Errorf("reasoning_tokens = %s, want the measured 26 untouched", details["reasoning_tokens"])
 	}
 	if string(details["accepted_prediction_tokens"]) != "3" {
 		t.Errorf("a sibling breakdown member was dropped: %s", out)

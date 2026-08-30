@@ -81,9 +81,15 @@ func TestDispatchStreamHoldsTheUsageFrameToTheIdentity(t *testing.T) {
 	require.Equal(t, int64(4), usage.PromptTokens, "prompt_tokens must be untouched: the charge prices it")
 	require.Equal(t, int64(1), usage.CompletionTokens, "completion_tokens must be untouched: inflating it would bill a class that has never been billed (D-055)")
 	require.Equal(t, int64(5), usage.TotalTokens, "the customer received a total that disagrees with its own components")
-	require.NotNil(t, usage.CompletionTokensDetails, "the breakdown must survive the correction")
-	require.LessOrEqual(t, usage.CompletionTokensDetails.ReasoningTokens, usage.CompletionTokens,
-		"a breakdown may not claim more reasoning tokens than the component it breaks down")
+	// The two total_tokens assertions above are the red-driven ones. The two
+	// breakdown assertions below are a GUARD and pass before and after the
+	// convention rework, because EnforceUsageIdentityInFrame writes
+	// total_tokens and nothing else and so cannot reach the breakdown at all.
+	// They go red if anyone teaches it to, which is the shape the previous
+	// round of this branch shipped and this one retracts.
+	require.NotNil(t, usage.CompletionTokensDetails, "the breakdown must survive the restatement")
+	require.Equal(t, int64(26), usage.CompletionTokensDetails.ReasoningTokens,
+		"reasoning_tokens must reach the customer as the upstream measured it: the fixture is the alongside convention (4 + 1 + 26 = 31), so 26 is a measurement and any smaller figure here is one this gateway invented")
 }
 
 // relayedUsageBlock returns the usage block of the one relayed SSE frame that

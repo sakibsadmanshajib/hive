@@ -70,6 +70,10 @@ var (
 		Name: "hive_usage_identity_unaccounted_tokens_total",
 		Help: "TOKENS, not occurrences: the magnitude of every total_tokens disagreement corrected under issue #1472, summed. direction=\"over\" is the quantity an upstream counted and did not attribute to either component, which on a thinking model is the reasoning it charged us for and Hive did not bill; direction=\"under\" is the shortfall in the other direction. increase(hive_usage_identity_unaccounted_tokens_total{direction=\"over\"}[24h]) answers \"how many tokens went unaccounted yesterday\" on its own, with no join against the occurrence counter beside it.",
 	}, []string{"direction"})
+	reasoningTokensUnbilled = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hive_usage_reasoning_tokens_unbilled_total",
+		Help: "TOKENS, not occurrences: reasoning tokens Hive reported to the customer and did not bill, by the convention the upstream wrote its usage object in (issue #1472). convention=\"alongside\" is prompt plus completion plus reasoning equalling the total, the thoughts convention, where the reasoning count is real output the provider charged us for and no Hive charge prices it; convention=\"unexplained\" is reasoning exceeding completion while the total agrees with the components, which no convention describes and where nothing is rewritten. This is the series that puts a quantity in front of the owner pricing decision D-055 defers, and on the unexplained shape it is the only record, because the total counters see a discrepancy of zero there.",
+	}, []string{"convention"})
 	streamRelayAborted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hive_stream_relay_aborted_total",
 		Help: "SSE relay loops (chat completions and Responses API) that ended on a genuine scanner read/token error rather than [DONE] or a client disconnect -- most commonly bufio.ErrTooLong, a single upstream line over the scanner's buffer limit (issue #1255). A client disconnect never increments this: ctx.Err() != nil is excluded so routine cancellations, the overwhelming majority of stream endings, do not bury the signal this counter exists to surface.",
@@ -109,7 +113,7 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 	// pre-existing state (declared but never registered), out of this PR's
 	// scope to change. streamRelayAborted is added here, alongside the
 	// counters that already were.
-	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased, usageIdentityViolations, usageIdentityUnaccountedTokens)
+	reg.MustRegister(m.duration, cacheBillingMagnitudeGuardTrips, cacheBillingFallbackRateUsed, streamUsageBlockMissing, streamRelayAborted, streamZeroContentReleased, usageIdentityViolations, usageIdentityUnaccountedTokens, reasoningTokensUnbilled)
 	// Both direction series of the unaccounted-token counter are created here,
 	// at zero, rather than on the first violation. A CounterVec child does not
 	// exist until WithLabelValues creates it, so without this an operator
@@ -122,6 +126,8 @@ func NewStageMetrics(reg prometheus.Registerer) *StageMetrics {
 	// both costs two series in total.
 	usageIdentityUnaccountedTokens.WithLabelValues(usageIdentityOver)
 	usageIdentityUnaccountedTokens.WithLabelValues(usageIdentityUnder)
+	reasoningTokensUnbilled.WithLabelValues(reasoningAlongside)
+	reasoningTokensUnbilled.WithLabelValues(reasoningUnexplained)
 	return m
 }
 
