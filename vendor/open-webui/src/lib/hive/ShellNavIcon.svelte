@@ -37,11 +37,6 @@
 		<circle cx="19.5" cy="12" r="2.5" />
 		<path d="m13.8 17.7 3.9-3.9" />
 		<circle cx="12" cy="19.5" r="2.5" />
-	{:else if name === 'knowledge'}
-		<path d="M12 7v14" />
-		<path
-			d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
-		/>
 	{:else if name === 'skills'}
 		<!-- Lucide "sparkles", the reference product's own glyph for the
 		     customisation family. Same 24 grid and 1.5 stroke as its neighbours. -->

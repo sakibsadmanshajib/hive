@@ -10,7 +10,7 @@
  * future upstream tag reads as a file list rather than an archaeology exercise.
  */
 
-export type HiveNavIcon = 'projects' | 'artifacts' | 'knowledge' | 'skills' | 'scheduled';
+export type HiveNavIcon = 'projects' | 'artifacts' | 'skills' | 'scheduled';
 
 export interface HiveNavItem {
 	/** Stable id, used for the DOM id and as the test hook. */
@@ -61,27 +61,21 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	 * The '/agents' route itself survives, unlinked, so runs submitted before
 	 * this change are still reachable by URL. It gets no row.
 	 */
-	{
-		/*
-		 * D-045 ruling 2 eliminates Knowledge in favour of Projects and
-		 * Artifacts, and this row is therefore on borrowed time. It is not
-		 * deleted here because Projects does not hold RAG collections yet, so
-		 * removing the row today would take away the only way to reach them and
-		 * put nothing in its place, which is the failure mode #944 warns about
-		 * for the Agents row. It goes when Projects can hold what it holds.
-		 */
-		id: 'knowledge',
-		label: 'Knowledge',
-		// '/knowledge', not '/workspace/knowledge': the workspace layout's
-		// permission guard bounces a non-admin without the workspace.knowledge
-		// permission straight home (#1109), which made this row highlight and do
-		// nothing on the demo box. The /knowledge route sits outside that guard
-		// and renders a read-only index of the caller's own bases; an admin or a
-		// permitted account is forwarded to the full workspace surface.
-		href: '/knowledge',
-		icon: 'knowledge',
-		activePaths: ['/knowledge']
-	},
+	/*
+	 * There is no Knowledge row (#1502), and the condition the previous comment
+	 * here set for removing it has been met. That comment said the row stayed
+	 * only because Projects did not hold RAG collections yet; Projects reads
+	 * GET /api/v1/knowledge/ and writes through the same endpoints
+	 * (lib/hive/projects/projects.ts: listProjects, createProject,
+	 * addFileToProject, deleteProject), so the rows behind the two destinations
+	 * were already the same rows, and Projects is the one that can create,
+	 * upload and delete. D-045 ruling 2 eliminates Knowledge rather than
+	 * renaming it.
+	 *
+	 * The '/knowledge' ROUTE survives, unlinked, exactly as '/agents' does
+	 * above: removing a row is not deleting a page, and what should become of
+	 * that page is issue #1505, not this change.
+	 */
 	{
 		/*
 		 * The user-created skills library. The owner asked for the ability to
