@@ -103,9 +103,24 @@ func upstreamResponseFormat(requested string) string {
 
 // billableSeconds returns the whole seconds of audio a successful
 // transcription response accounts for, rounded up, and whether a duration
-// could be established at all. ok=false means the response carried no
-// duration: the request is unpriceable and must be refused, never charged at
-// a guess and never served free (D-034).
+// could be established at all. ok=false means the response reported nothing
+// this endpoint can meter: the request is unpriceable and must be refused,
+// never charged at a guess and never served free (D-034).
+//
+// Two sources are read, in this order (#680):
+//
+//  1. the top-level duration, which is what the provider reports when it
+//     reports one at all, and
+//  2. otherwise the largest segments[].end, which verbose_json carries per
+//     segment whether or not the top-level field is present.
+//
+// The order matters for the money: a body that carries a top-level duration is
+// priced from it alone and is charged exactly what it was charged before this
+// fallback existed. The fallback is never a maximum taken across both sources.
+// A segment end is a timestamp inside the submitted audio, so the largest of
+// them is bounded above by the real audio length and deriving from it cannot
+// charge for more audio than the caller sent. It is also the derivation
+// lastCueSeconds already applies to subtitle bodies.
 //
 // Rounding up to the second, and the float64 that JSON forces on the reported
 // duration, both stop here: everything downstream of this function is integer
@@ -120,18 +135,49 @@ func billableSeconds(body []byte, requestedFormat string) (int64, bool) {
 
 	var parsed struct {
 		Duration *float64 `json:"duration"`
+		Segments []struct {
+			End *float64 `json:"end"`
+		} `json:"segments"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Duration == nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return 0, false
 	}
-	seconds := int64(*parsed.Duration)
-	if float64(seconds) < *parsed.Duration {
+	if parsed.Duration != nil {
+		return ceilSeconds(*parsed.Duration), true
+	}
+
+	var longest float64
+	for _, segment := range parsed.Segments {
+		// A missing, null or non-positive end reports no audio, so it is
+		// skipped rather than treated as a zero-second transcription: zero
+		// would still be charged at the ten second provider minimum, which is
+		// a real charge for audio nothing in the body accounts for.
+		if segment.End == nil || *segment.End <= 0 {
+			continue
+		}
+		if *segment.End > longest {
+			longest = *segment.End
+		}
+	}
+	if longest <= 0 {
+		return 0, false
+	}
+	return ceilSeconds(longest), true
+}
+
+// ceilSeconds rounds a reported float64 duration up to whole seconds, flooring
+// at zero. A negative figure is nonsense from the upstream rather than a
+// negative charge, so it collapses to zero and is then billed at the provider
+// minimum, which is what a reported negative duration did before #680 too.
+func ceilSeconds(reported float64) int64 {
+	seconds := int64(reported)
+	if float64(seconds) < reported {
 		seconds++
 	}
 	if seconds < 0 {
-		return 0, true
+		return 0
 	}
-	return seconds, true
+	return seconds
 }
 
 // billedSeconds applies the upstream's own minimum billable duration.
