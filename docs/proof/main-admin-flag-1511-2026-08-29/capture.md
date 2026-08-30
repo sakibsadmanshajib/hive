@@ -520,3 +520,91 @@ Every transcript above was produced in Docker. The suite runs in
 `ghcr.io/open-webui/open-webui@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4`,
 whose `/app/backend/open_webui/main.py` was confirmed byte-identical to the
 vendored copy before any of it was trusted.
+
+---
+
+## CodeRabbit bot round, 2026-08-30
+
+The CLI stream returned two findings, recorded above. The bot then fired a third
+time once this pull request left draft, and found one thing the CLI, the security
+reviewer and I had all missed.
+
+### A guard line that could never match, written in the commit that fixed two others
+
+```
+    && test "$(grep -c '^    if chat_id.startswith(.local:.) or chat_id.startswith(.channel:.):\$' $B/main.py)" -eq 0 \
+```
+
+Single quoted, so the shell passes a literal `\$` through to `grep`, and in a
+basic regular expression that matches a dollar CHARACTER rather than end of line.
+Measured inside the pinned image:
+
+```
+single-quoted with backslash-dollar (the shipped line): 0
+single-quoted, plain dollar:                            2
+```
+
+Zero before the patch and zero after it. The neighbouring survivor pins are
+correct because they are double quoted, where the shell converts the escape
+before `grep` sees it, which is exactly why the inconsistency was invisible on a
+read.
+
+This is the third time this round that a guard turned out to verify nothing, and
+it was written in the commit that rebuilt these guards around identity because
+two earlier ones could not fail. So every line of the consolidated guard is now
+measured individually rather than as one `&&` chain, before and after the full
+twenty-patch chain, inside the pinned image:
+
+```
+=== BEFORE the patch chain ===        === AFTER the patch chain ===
+ 1 want=4    got=0                     1 want=4    got=4
+ ...                                   ...
+17 want=8    got=0                    17 want=8    got=8
+18 want=4    got=9                    18 want=4    got=4
+19 want=6    got=1                    19 want=6    got=6
+20 want=1    got=1                    20 want=1    got=1
+21 want=1    got=1                    21 want=1    got=1
+22 want=1    got=1                    22 want=1    got=1
+23 want=1    got=1                    23 want=1    got=1
+24 want=1    got=1                    24 want=1    got=1
+25 want=0    got=2                    25 want=0    got=0
+26 want=0    got=1                    26 want=0    got=0
+```
+
+Every line moves except 20 to 24, and those are the survivor pins, which are
+meant to read one in BOTH states: their job is to catch a survivor being
+displaced, not to detect the patch. Line 25 is the fixed anchor, two to zero.
+Line 18 is the bare admin count, nine to four; line 19 the positive spelling, one
+to six.
+
+Running the guard as a single chain, which is how the earlier verification did
+it, cannot distinguish a line that moves from a line that is always true. That is
+what let this through, and it is why the per-line measurement is now the record.
+
+### The channel helper's collaborators were unasserted
+
+The helper is the only new code this patch introduces, and every stub in the
+suite is `async` by construction, so a mock cannot tell a real `async def` from a
+synchronous one or from a name `main.py` never imported. Either mistake ships a
+container that raises on the first channel-scoped request while the suite stays
+green.
+
+Now asserted against the vendored source, which was confirmed byte-identical to
+the pinned image before any of this was trusted:
+
+```
+  ok: main.py imports Channels, which the channel helper calls
+  ok: main.py imports AccessGrants, which the channel helper calls
+  ok: models/channels.py declares `get_channel_by_id` as async, so awaiting it in the helper is correct
+  ok: models/channels.py declares `is_user_channel_member` as async, so awaiting it in the helper is correct
+  ok: models/access_grants.py declares `has_access` as async, so awaiting it in the helper is correct
+```
+
+### The stale marker count
+
+The adoption re-verification section said every claim below it was re-measured
+from scratch while still showing five markers, because it was written before the
+channel-arm repair moved the count to eight. It now carries a note naming which
+of its claims are superseded and which still hold. Not retro-edited into
+agreement: those transcripts are the record of what was observed at the time, and
+rewriting them would turn this log into a summary.
