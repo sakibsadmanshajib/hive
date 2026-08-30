@@ -87,13 +87,19 @@ var ciModelSurfaces = []struct {
 	{dir: "deploy/docker", extensions: []string{".yml", ".yaml"}, recurse: false},
 }
 
-// A binding only counts when its NAME ends in "model". That is what separates
+// A binding only counts when its NAME contains "model". That is what separates
 // "this value is the model a request will carry" from the many places an alias
 // id appears as prose, as a log-line fixture or as an argument to a metadata
 // endpoint. `HIVE_TEST_MODEL`, `HIVE_TOOLS_MODEL`, `RAG_CHAT_MODEL`, a shell
 // `model=` and a JSON `"model":` key all qualify; `CHAT_ALIASES`, a docstring's
 // `alias="..."` and `client.models.retrieve(...)` do not.
-var modelBindingName = regexp.MustCompile(`(?i)model$`)
+//
+// Substring rather than suffix, deliberately: a future `HIVE_MODEL_OVERRIDE`
+// would slip a suffix rule, and the cost of the wider rule is only that a
+// non-completion name like HIVE_PICKER_HIDDEN_MODEL_IDS gets classified and
+// logged as out of scope, which is noise rather than a false failure. Wrong in
+// the safe direction.
+var modelBindingName = regexp.MustCompile(`(?i)model`)
 
 // The binding shapes. The first is anchored at the start of a line, which is
 // what keeps a commented-out or narrated binding (every comment line in these
@@ -110,6 +116,11 @@ var bindingPatterns = []*regexp.Regexp{
 	// RE2 has no backreferences, so the quoting around the key is matched
 	// loosely rather than paired; a mismatched pair is harmless here.
 	regexp.MustCompile(`["']?\b(model)["']?\s*:\s*(["'][^"']*["'])`),
+	// `echo "NAME=value" >> "$GITHUB_ENV"`, the shape a workflow step uses to
+	// hand a value to later steps. No CI surface uses it for a model today;
+	// it is covered because it is the obvious way a future one would, and the
+	// anchored pattern above cannot see it (the line starts with `echo`).
+	regexp.MustCompile(`echo\s+["']?([A-Za-z_][A-Za-z0-9_]*)=([^"'>\s]+)`),
 }
 
 // ciModelBinding is one place in the repository where CI chooses a model.
