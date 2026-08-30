@@ -38,7 +38,7 @@ import (
 // return 404 and no response has ever reported a non-zero cached_tokens.
 
 const (
-	zenMigrationRelPath = "supabase/migrations/20260830_01_opencode_zen_keyless_provider.sql"
+	zenMigrationRelPath = "supabase/migrations/20260830_04_opencode_zen_keyless_provider.sql"
 	zenProviderSlug     = "opencode-zen"
 	zenRouteID          = "route-free-opencode-zen"
 	zenAliasID          = "hive-free-tools"

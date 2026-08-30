@@ -440,7 +440,7 @@ model_list:
 
   # ── OpenCode Zen, the keyless upstream (hive-free-tools) ────────────────────
   #
-  # Migration supabase/migrations/20260830_01_opencode_zen_keyless_provider.sql
+  # Migration supabase/migrations/20260830_04_opencode_zen_keyless_provider.sql
   # carries the provider, route, alias and measured capability rows. The two
   # headers below are the part the database cannot carry, and they are the
   # entire access mechanism, so they are stated HERE for the same reason
