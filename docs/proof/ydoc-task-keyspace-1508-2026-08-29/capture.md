@@ -285,6 +285,13 @@ deployed box. Same three reasons as #1474, all still true:
 ## Credentials
 
 No URL in this capture carries a credential, and no token, key, password or
-session appears in any line above or in the posted image, which renders exactly
-the transcripts reproduced here. Nothing required redaction and nothing was
+session appears in any line above. Nothing required redaction and nothing was
 redacted, stated so the absence of a redaction note is not read as an oversight.
+
+An earlier version of this paragraph, and of the pull request body, referred to
+"the posted image". No image was ever posted, on this pull request or on its
+sibling. The reference is removed rather than made true: a picture of a terminal
+transcript is not visual proof of anything, it is an unrelated frame substituted
+for an after state that does not exist yet, which is the substitution the
+visual-proof rule exists to forbid. The transcripts are here, in a file
+`npm run lint:proof-tokens` actually scans.
