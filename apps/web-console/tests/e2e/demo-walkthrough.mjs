@@ -653,12 +653,12 @@ async function main() {
       [
         "chat.completions",
         `${API}/v1/chat/completions`,
-        { model: "hive-default", messages: [{ role: "user", content: "Say OK." }], max_tokens: 10 },
+        { model: "hive-free", messages: [{ role: "user", content: "Say OK." }], max_tokens: 10 },
       ],
       [
         "messages",
         `${API}/v1/messages`,
-        { model: "hive-default", max_tokens: 10, messages: [{ role: "user", content: "Say OK." }] },
+        { model: "hive-free", max_tokens: 10, messages: [{ role: "user", content: "Say OK." }] },
       ],
     ]) {
       try {

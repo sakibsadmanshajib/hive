@@ -1494,13 +1494,15 @@ jobs:
           #
           # An alias is upstream-free when every route it can still serve from
           # dispatches an upstream that costs Hive nothing: an OpenRouter
-          # ':free' variant, or a member of the free pool's shared
-          # litellm_model_name. Identical predicate to
-          # ci_paid_model_guard_integration_test.go.
+          # ':free' variant, or a member of a free pool group. Identical
+          # predicate to ci_paid_model_guard_integration_test.go, prefix match
+          # included: the pool is being split into route-free-pool-tools and
+          # route-free-pool-open, and an equality test against the old single
+          # group name would call hive-free paid the day that lands.
           if ! verdicts=$(psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "
                 select r.alias_id || ' ' ||
                        case when bool_and(r.provider_model like '%:free'
-                                          or r.litellm_model_name = 'route-free-pool')
+                                          or r.litellm_model_name like 'route-free-pool%')
                             then 'free' else 'paid' end
                   from public.provider_routes r
                  where r.health_state not in ('disabled', 'eol')

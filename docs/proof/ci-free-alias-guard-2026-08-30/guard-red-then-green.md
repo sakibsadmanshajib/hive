@@ -178,3 +178,64 @@ Note the `deepseek-v4-pro` case. The name check that used to sit in the
 `Declare which provider account this run bills` step caught exactly that one
 alias and nothing else; this catches it as one instance of a general rule, and
 catches `hive-auto`, `hive-default` and an alias that does not exist as well.
+
+## Part 6. The pool-split coupling, and the new provider-qualified rule
+
+Added in the second review round. The independent reviewer found that pinning
+the free pool's group name by equality would redden a required check on `main`
+the moment PR #1556 splits the pool into `route-free-pool-tools` and
+`route-free-pool-open`: `hive-free` would stop matching, classify as PAID, and
+two individually correct changes would deadlock the branch between them.
+
+Step A below is that failure, reproduced deliberately by restoring the equality
+match. Note that the fixture alias in `TestSplitFreePoolStillResolvesAsFree`
+sits in THREE groups, the two #1556 introduces plus an invented third, so the
+test is about the prefix rule rather than about two strings.
+
+```text
+############################################################
+# A. Restore the equality match the review said would deadlock
+############################################################
+321:		           or r.litellm_model_name = $1
+--- PASS: TestNoCISurfaceCallsAPaidCompletionModel (0.74s)
+    ci_paid_model_guard_integration_test.go:973: an alias whose routes sit in 3 free pool groups classified as PAID. The pool group match is pinned to one literal name again, and splitting the pool will redden this guard on main.
+--- FAIL: TestSplitFreePoolStillResolvesAsFree (0.10s)
+FAIL
+
+############################################################
+# B. Restore the prefix match
+############################################################
+--- PASS: TestSplitFreePoolStillResolvesAsFree (0.47s)
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing	0.476s
+
+############################################################
+# C. Reintroduce a paid provider-qualified upstream id
+############################################################
+308:          OPENROUTER_DEFAULT_MODEL=openrouter/openai/gpt-4o-mini
+    ci_paid_model_guard_integration_test.go:682: .github/workflows/owui-nightly.yml:308 sets OPENROUTER_DEFAULT_MODEL to "openrouter/openai/gpt-4o-mini", a provider-qualified upstream model id that bypasses the alias catalog entirely and bills whatever that provider charges. Point it at a free upstream, or add an allowedUpstreamModelIDs entry saying why it is safe.
+--- FAIL: TestNoCISurfaceCallsAPaidCompletionModel (0.87s)
+FAIL
+
+############################################################
+# D. Revert it
+############################################################
+308:          OPENROUTER_DEFAULT_MODEL=
+--- PASS: TestNoCISurfaceCallsAPaidCompletionModel (0.91s)
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing	0.942s
+```
+
+Step C is the second new rule. An unresolved value used to be a silent pass. A
+provider-qualified upstream id now fails unless declared, because such an id
+never touches the alias catalog: it is substituted into
+`deploy/litellm/config.yaml` and dispatched straight at the provider, so no
+price or free-ness claim in this database applies to it. A bare literal is still
+only reported, since the gateway refuses a model it has no alias row for, and
+several of them are deliberate negative-path fixtures.
+
+What counts as provider-qualified is read from `custom_providers.litellm_prefix`
+rather than from "contains a slash". The first draft used the slash and
+immediately failed on six file paths assigned to variables whose names contain
+`MODEL`, for example `VENDORED_MODELS =
+"vendor/open-webui/backend/open_webui/models/chats.py"`. Asking the catalog which
+first segments are providers answers that without a list of file-extension
+exclusions that would go stale on the first new language.
