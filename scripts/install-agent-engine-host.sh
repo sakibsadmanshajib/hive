@@ -235,9 +235,18 @@ render_unit() {
   # A placeholder that survived rendering would install a unit whose ExecStart
   # is the literal string "@RUN_ENTRY@", which systemd accepts at write time
   # and fails only at start. Catch it here instead.
+  #
+  # Matched by SHAPE, not by listing the four names substituted directly
+  # above. Listing them is dead code by construction: every one of them has
+  # just been globally replaced, so none can reach this line. The failure worth
+  # catching is the opposite one, a token in a template that nobody added to
+  # the substitution list, and only a generic pattern sees that. Add
+  # @SOCKET_PATH@ to a template tomorrow and this fires instead of installing
+  # it verbatim.
   case "$content" in
-    *@RUN_ENTRY@*|*@PROBE@*|*@RUNTIME_DIR@*|*@UNIT_NAME@*)
-      echo "::error::unsubstituted placeholder left in $dest"; exit 1 ;;
+    *@[A-Z][A-Z_]*@*)
+      echo "::error::unsubstituted placeholder left in $dest: $(printf '%s' "$content" | grep -o '@[A-Z][A-Z_]*@' | sort -u | tr '\n' ' ')"
+      exit 1 ;;
   esac
   printf '%s\n' "$content" > "$dest"
 }

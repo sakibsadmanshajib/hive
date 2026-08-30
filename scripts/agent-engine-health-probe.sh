@@ -96,7 +96,14 @@ post_alert() {
   # when it was written.
   safe_desc="${description//\\/\\\\}"
   safe_desc="${safe_desc//\"/\\\"}"
-  safe_desc="${safe_desc//$'\n'/ }"
+  # Every C0 control character, not just newline. JSON forbids all of them
+  # unescaped, and a lone carriage return or tab reaching the body gets a 400
+  # from Alertmanager: `curl -f` then fails, the only trace is the WARN below,
+  # and the launcher stays down and unreported. systemd's own error text on the
+  # unit-state interpolation above is the realistic source, and it is not
+  # something this script controls. Flattening to spaces rather than escaping
+  # keeps the mail readable and cannot itself produce invalid JSON.
+  safe_desc=$(printf '%s' "$safe_desc" | tr -c '\11\40-\176' ' ')
 
   # An explicit endsAt, rather than leaning on Alertmanager's resolve_timeout.
   #

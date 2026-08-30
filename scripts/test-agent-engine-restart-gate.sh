@@ -611,6 +611,19 @@ before_k=$failures
 [ -f "$health_timer" ]   || fail "[K] no health probe timer was installed at $health_timer"
 grep -q "^ExecStart=$runtime/bin/agent-engine-health-probe.sh$" "$health_service" 2>/dev/null \
   || fail "[K] the health service does not run the installed probe copy" "$(grep '^ExecStart=' "$health_service" 2>/dev/null || true)"
+# The two Environment= lines, which nothing asserted. They carry @RUNTIME_DIR@
+# and @UNIT_NAME@, and an unsubstituted RUNTIME_DIR would point every probe run
+# at the wrong socket path and report the launcher down forever.
+grep -q "^Environment=RUNTIME_DIR=$runtime$" "$health_service" 2>/dev/null \
+  || fail "[K] the health service's RUNTIME_DIR was not rendered" "$(grep '^Environment=' "$health_service" 2>/dev/null || true)"
+grep -q "^Environment=UNIT_NAME=hive-agent-engine$" "$health_service" 2>/dev/null \
+  || fail "[K] the health service's UNIT_NAME was not rendered" "$(grep '^Environment=' "$health_service" 2>/dev/null || true)"
+# Every rendered unit, not just the launcher, must be free of placeholders.
+for rendered in "$unit_file" "$health_service" "$health_timer"; do
+  if grep -qE '@[A-Z][A-Z_]*@' "$rendered" 2>/dev/null; then
+    fail "[K] an unsubstituted placeholder survived into $rendered" "$(grep -oE '@[A-Z][A-Z_]*@' "$rendered" | sort -u | tr '\n' ' ')"
+  fi
+done
 grep -qE '^systemctl .* enable hive-agent-engine-health\.timer' "$STATE/calls" \
   || fail "[K] the health timer was never enabled" "$(cat "$STATE/calls")"
 grep -qE '^systemctl .* restart hive-agent-engine-health\.timer' "$STATE/calls" \
@@ -907,6 +920,35 @@ case "$out" in
 esac
 rm -f "$STATE/cron_readonly"
 [ $failures -eq "$before_u4" ] && echo "ok   [U4] a missing staleness watchdog fails the deploy"
+
+
+# --- case V: editing the watchdog must NOT restart the thing it watches -----
+#
+# The inverse of case L, and the property that protects in-flight Cowork
+# sessions. The installer states it deliberately: "The health probe and its two
+# units are outside the fingerprint on purpose in the other direction: changing
+# the watchdog must never restart the thing it watches." Until this case
+# existed that was asserted only by a hand run recorded in the pull request
+# body, so folding the health units into the fingerprint (an easy and
+# superficially reasonable edit, since the launcher unit was just folded in)
+# would have landed green here and started killing every in-flight sandbox on
+# any watchdog edit.
+before_v=$failures
+run_installer "V pre-watchdog-drift" rebuilt-different-bytes openai/some-other-alias
+pid_before=$(incarnation)
+printf 'task-in-flight' > "$STATE/session"
+printf '\n# drift\n' >> "$health_timer"
+printf '\n# drift\n' >> "$health_service"
+run_installer "V watchdog-drift" rebuilt-different-bytes openai/some-other-alias
+if stopped || started; then
+  fail "[V] editing the watchdog restarted the thing it watches" "$(cat "$STATE/calls")"
+fi
+[ "$(incarnation)" = "$pid_before" ] || fail "[V] the daemon was replaced by a watchdog-only change"
+[ -f "$STATE/session" ] || fail "[V] an in-flight session was killed by a watchdog-only change"
+# And the watchdog edit is still repaired, so this is not passing merely
+# because the installer ignored the files.
+grep -q '# drift' "$health_timer" && fail "[V] the drifted watchdog unit was not re-rendered"
+[ $failures -eq "$before_v" ] && echo "ok   [V] changing the watchdog does not restart the launcher"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"

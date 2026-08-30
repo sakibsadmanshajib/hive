@@ -63,17 +63,35 @@ case " $* " in
 esac
 # Alertmanager. Capture the body so the test can assert on the alertname that
 # would really have been sent, not merely that some POST happened.
+#
+# And VALIDATE it, because a stub that accepts anything cannot catch the thing
+# most worth catching here. The down path's description is not a fixed literal:
+# it interpolates a socket path and systemd's own unit-state text, so
+# post_alert's escaping is load bearing. A body that Alertmanager would answer
+# with 400 used to pass every case in this file and fail only on the box, where
+# curl -f's failure is swallowed into a journal WARN.
 prev=""
 for arg in "$@"; do
-  [ "$prev" = "-d" ] && printf '%s\n' "$arg" >> "$STATE/posted"
+  if [ "$prev" = "-d" ]; then
+    printf '%s\n' "$arg" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list), "alertmanager v2 wants an array, not a bare object"' \
+      || { echo "stub curl: the alert body is not something alertmanager would accept" >&2; exit 1; }
+    printf '%s\n' "$arg" >> "$STATE/posted"
+  fi
   prev="$arg"
 done
+case " $* " in
+  *" $ALERTMANAGER_EXPECT_URL "*) ;;
+  *) echo "stub curl: posted to an unexpected URL: $*" >&2; exit 1 ;;
+esac
 [ -f "$STATE/alertmanager_down" ] && exit 7
 exit 0
 SH
 
 chmod +x "$tmp/bin/"*
 export PATH="$tmp/bin:$PATH"
+# The v2 alerts endpoint, asserted by the stub. A probe that posted to
+# /api/v1/alerts would otherwise pass every case here and 404 on the box.
+export ALERTMANAGER_EXPECT_URL="http://localhost:9093/api/v2/alerts"
 
 failures=0
 fail() {
@@ -359,6 +377,40 @@ status=$?
 set -e
 [ "$status" = 0 ] && fail "[N] a misspelled mode ran anyway" "$out"
 [ $failures -eq "$before_n" ] && echo "ok   [N] an unknown argument is refused instead of silently running the full probe"
+
+
+# --- case O: the escaper must survive a description it did not author -------
+#
+# post_alert's escaping is the only thing between systemd's error text and a
+# 400 from Alertmanager, and a 400 here is silent: curl -f fails, the journal
+# gets one WARN, and the launcher stays down and unreported. The down path
+# interpolates $SOCKET_PATH, so a runtime directory holding a quote and a
+# backslash is enough to exercise it without inventing a new injection point.
+before_o=$failures
+hostile="$tmp/ru\"n\\time"
+mkdir -p "$hostile/run"
+printf '%s\n' "$(date +%s)" > "$hostile/health.last-success-epoch"
+# The unit must be ACTIVE and the socket absent, so the probe takes the branch
+# whose text actually interpolates $SOCKET_PATH. The not-active branch names
+# only the unit, so running this case through it would exercise nothing and
+# pass no matter what the escaper did.
+touch "$STATE/unit_active"
+: > "$posted"
+set +e
+out=$(env RUNTIME_DIR="$hostile" UNIT_NAME="hive-agent-engine" \
+  ALERTMANAGER_URL="http://localhost:9093" STALE_AFTER=900 \
+  bash "$probe" 2>&1)
+status=$?
+set -e
+# The stub rejects a body that is not valid JSON, so a broken escaper shows up
+# as a delivery failure rather than as a passing test.
+case "$out" in
+  *"alertmanager post failed"*)
+    fail "[O] a path containing a quote and a backslash produced a body alertmanager would reject" "$out" ;;
+esac
+alerted HiveAgentEngineDown \
+  || fail "[O] no alert survived a description containing shell-hostile characters" "$out"
+[ $failures -eq "$before_o" ] && echo "ok   [O] a description carrying quotes and backslashes still produces a valid body"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"
