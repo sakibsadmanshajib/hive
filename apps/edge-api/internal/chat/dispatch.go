@@ -3,6 +3,7 @@ package chat
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,24 +261,53 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := http.NewRequestWithContext(
-		r.Context(),
-		http.MethodPost,
-		strings.TrimRight(h.deps.LiteLLMURL, "/")+"/v1/chat/completions",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "build request")
-		return
+	// Dispatch to LiteLLM with the same bounded retry on 429/5xx the API-key
+	// surface uses (inference.DispatchWithRetry, backed by
+	// internal/inference/retry.go's dispatchWithRetry). Before this fix this
+	// surface made a single bare h.deps.HTTP.Do call with no retry at all,
+	// which is what let a JWT chat send die on the first exhausted free-pool
+	// member instead of trying one of the pool's other healthy members
+	// (issue #1564). A fresh *http.Request is built on every attempt because
+	// an http.Request's body can only be read once.
+	dispatchToLiteLLM := func(ctx context.Context, litellmModel string, reqBody []byte) (*http.Response, error) {
+		upstream, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			strings.TrimRight(h.deps.LiteLLMURL, "/")+"/v1/chat/completions",
+			bytes.NewReader(reqBody),
+		)
+		if err != nil {
+			return nil, err
+		}
+		upstream.Header.Set("Content-Type", "application/json")
+		upstream.Header.Set("X-Request-Id", requestID.String())
+		if h.deps.LiteLLMKey != "" {
+			upstream.Header.Set("Authorization", "Bearer "+h.deps.LiteLLMKey)
+		}
+		return h.deps.HTTP.Do(upstream)
 	}
-	upstream.Header.Set("Content-Type", "application/json")
-	upstream.Header.Set("X-Request-Id", requestID.String())
-	if h.deps.LiteLLMKey != "" {
-		upstream.Header.Set("Authorization", "Bearer "+h.deps.LiteLLMKey)
+
+	// Bound the WHOLE ladder to the same budget a single unretried call
+	// already had, rather than inventing a new number. h.deps.HTTP.Timeout
+	// applies per Do call, so without this a wedged upstream costs up to
+	// len(retryDelays) times that timeout instead of once (review finding on
+	// PR #1568: up to ~20 minutes on the 5-minute default instead of ~5).
+	// Reusing the existing timeout as the ladder's total deadline means the
+	// common, fast-failing case this PR exists for -- a 429/5xx that answers
+	// in milliseconds -- is untouched (nearly the whole budget survives for
+	// the eventual successful attempt), while a genuinely hung upstream now
+	// gets effectively one attempt's worth of patience, not four. A zero
+	// Timeout (an explicitly unbounded test client) is left unbounded here
+	// too, matching what an unretried call would have done.
+	dispatchCtx := r.Context()
+	if timeout := h.deps.HTTP.Timeout; timeout > 0 {
+		var cancel context.CancelFunc
+		dispatchCtx, cancel = context.WithTimeout(dispatchCtx, timeout)
+		defer cancel()
 	}
 
 	started := time.Now()
-	resp, err := h.deps.HTTP.Do(upstream)
+	resp, err := inference.DispatchWithRetry(dispatchCtx, route.LiteLLMModelName, body, dispatchToLiteLLM)
 	if err != nil {
 		releaseReason = "upstream_error"
 		apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "upstream unavailable")

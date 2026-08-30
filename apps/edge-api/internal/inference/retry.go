@@ -170,6 +170,15 @@ func refusedPassthroughField(resp *http.Response) string {
 // reporting whether the body actually carried it. A body that does not parse,
 // or does not carry the key, comes back untouched so the caller falls through
 // to returning the upstream error unchanged.
+//
+// Precondition callers must not break: this assumes body is JSON. It is
+// safe to call on a non-JSON body (internal/audio's multipart uploads, since
+// DispatchWithRetry was exported to that caller) only because json.Unmarshal
+// fails immediately and the untouched-body, false-ok path above is taken.
+// Do not change this function to fall back to a partial parse, a regex
+// substitution, or anything else that could "succeed" on non-JSON bytes: the
+// caller's contract for a false return is "body is unchanged," and a 25MB
+// multipart upload silently corrupted here would go straight upstream.
 func stripTopLevelField(body []byte, field string) ([]byte, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -195,6 +204,40 @@ var retryDelays = []time.Duration{
 	300 * time.Millisecond,
 	800 * time.Millisecond,
 	1800 * time.Millisecond,
+}
+
+// DispatchWithRetry exports dispatchWithRetry to the other dispatch surfaces
+// in this codebase (internal/chat, internal/audio) so that every path
+// talking to LiteLLM shares this exact retry ladder instead of each growing
+// its own copy. See dispatchWithRetry for the full behavior contract.
+//
+// This is the fix for issue #1564: the browser/JWT chat surface made one
+// bare HTTP call with no retry at all, while this API-key surface always
+// retried a 429 through dispatchWithRetry. deploy/litellm/config.yaml
+// deliberately sets router_settings.retry_policy.RateLimitErrorRetries to 0
+// on the assumption that edge-api retries 429s itself; that assumption only
+// held on this package's own callers, so a request that drew an exhausted
+// pool member on the JWT surface failed outright instead of trying a
+// different member. Exporting the same function here, rather than writing a
+// second retry loop in internal/chat or internal/audio, is what keeps the
+// two surfaces from drifting apart again. deploy/litellm/config.yaml names
+// exactly which surfaces call this and which do not; keep that list honest
+// when adding a new caller.
+//
+// body is replayed verbatim on every attempt and may be any content type,
+// not only JSON: internal/audio's caller passes a multipart body. Only the
+// passthrough-field-stripping arm below treats body as JSON, and it is a
+// documented no-op on anything else -- see the precondition note on
+// stripTopLevelField.
+//
+// This does not bound the CALL's total duration: ctx governs that, and a
+// caller whose own client has a per-request timeout (chat: 5 minutes, audio:
+// 120 seconds) should wrap ctx in its own context.WithTimeout at that same
+// budget before calling in, so a wedged upstream costs roughly one client
+// timeout rather than one per attempt. See the callers in
+// internal/chat/dispatch.go and internal/audio/handler.go.
+func DispatchWithRetry(ctx context.Context, litellmModel string, body []byte, dispatch dispatchFunc) (*http.Response, error) {
+	return dispatchWithRetry(ctx, litellmModel, body, dispatch)
 }
 
 // dispatchWithRetry wraps a DispatchFunc with bounded retries on 429 and
@@ -266,6 +309,8 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 			lastErr = err
 			// Only retry on transport errors if we have attempts left.
 			if i < len(retryDelays)-1 {
+				slog.Warn("upstream dispatch attempt failed; retrying",
+					"litellm_model", litellmModel, "attempt", i+1, "err", err)
 				continue
 			}
 			return nil, err
@@ -310,6 +355,8 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 			// result is discarded.
 			return lastResp, nil
 		}
+		slog.Warn("upstream returned a retryable status; retrying",
+			"litellm_model", litellmModel, "attempt", i+1, "status", resp.StatusCode)
 
 		// A spent periodic allowance resets on a calendar boundary, so the
 		// backoff buys nothing, while ONE re-dispatch is still worth making

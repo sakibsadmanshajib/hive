@@ -511,11 +511,55 @@ model_list:
 #                        4 upstream attempts, 13.27s, client sees 500
 #
 # The third line is the one that makes this safe: every other error class still
-# retries num_retries times. And the absorption for a genuine per-minute burst
-# is not lost, it moves one layer out: edge-api retries 429 itself, four
-# attempts inside about 2.9 seconds, and returns the final 429 verbatim
-# (apps/edge-api/internal/inference/retry.go). Fast absorption stays, the slow
-# multi-minute kind goes.
+# retries num_retries times, and SOME edge-api surfaces (named precisely
+# below, not all of them) restore the absorption one layer out via
+# inference.DispatchWithRetry (apps/edge-api/internal/inference/retry.go's
+# dispatchWithRetry): four attempts inside about 2.9 seconds of backoff,
+# returning the final 429 verbatim. Each covered caller also bounds the WHOLE
+# ladder to its own existing per-request client timeout (a
+# context.WithTimeout wrapping the call, not a new constant), so a wedged
+# upstream costs roughly one client timeout rather than four -- see the
+# dispatch closures in chat/dispatch.go and audio/handler.go.
+#
+# Naming this precisely, rather than as a repo-wide property, is the point.
+# Two earlier versions of this comment both overclaimed: the original said
+# "edge-api retries 429 itself", true only of the API-key dispatcher; a first
+# correction (issue #1564) widened that to "every edge-api surface that
+# dispatches to this router", which was also false and, left uncorrected,
+# would have told the next reader nothing was left to check. As of this fix,
+# the surfaces that DO retry a 429 through inference.DispatchWithRetry are:
+#
+#   - the API-key inference dispatcher (chat completions, completions,
+#     embeddings -- apps/edge-api/internal/inference/orchestrator.go,
+#     stream.go, stream_responses.go), the original caller, present since
+#     RateLimitErrorRetries: 0 was chosen
+#   - session chat, the browser/JWT surface
+#     (apps/edge-api/internal/chat/dispatch.go)
+#   - audio transcription and translation
+#     (apps/edge-api/internal/audio/handler.go, handleMultipartAudio)
+#
+# These do NOT retry a 429 from this router, so RateLimitErrorRetries: 0 is
+# NOT yet safe for them:
+#
+#   - /v1/audio/speech (apps/edge-api/internal/audio/handler.go,
+#     fetchSpeechOnce): maxSpeechAttempts is a real retry loop, but it exists
+#     for the silent-WAV defect and breaks on the first non-2xx status, a 429
+#     included
+#   - /v1/images/edits and /v1/images/generations
+#     (apps/edge-api/internal/images/handler.go): a single bare
+#     http.Client.Do, no retry. images/edits streams its request body from an
+#     io.Pipe, so unlike the audio handler's already-buffered multipart body,
+#     it cannot be routed through this ladder without buffering the upload
+#     first -- a real reason it is not covered yet, not an oversight to
+#     silently work around
+#   - RAG query embeddings (apps/edge-api/internal/rag/embed.go): a single
+#     bare call, no retry. This is Hive's own internal embedding call for
+#     RAG, not the customer-facing /v1/embeddings endpoint named above, which
+#     IS covered
+#
+# Whoever next touches one of the uncovered surfaces should either route it
+# through inference.DispatchWithRetry or update this list. Do not assume a
+# surface is covered because the ones above it are.
 #
 # One caution found while measuring: LiteLLM classifies partly on message
 # CONTENT, not only on status code. A stub returning HTTP 500 whose body
