@@ -117,6 +117,7 @@
 		TERMINAL_STATUSES
 	} from '$lib/hive/agentTasks';
 	import {
+		dropSummaryEcho,
 		foldRunSteps,
 		latestStepSeq,
 		renderRun,
@@ -2207,10 +2208,16 @@
 		turn.done = runTurnIsDone(task);
 		if (steps) {
 			// A step still open under a run that has settled would shimmer forever
-			// beneath a turn saying the task finished.
-			turn.statusHistory = turn.done ? settleRunSteps(steps) : steps;
+			// beneath a turn saying the task finished, and the run's closing
+			// message arrives both as a step and as the content just assigned
+			// above, which is why the settled list drops its echo of it (#1509).
+			turn.statusHistory = turn.done
+				? settleRunSteps(dropSummaryEcho(steps, turn.content))
+				: steps;
 		} else if (turn.done && turn.statusHistory) {
-			turn.statusHistory = settleRunSteps(turn.statusHistory as RunStep[]);
+			turn.statusHistory = settleRunSteps(
+				dropSummaryEcho(turn.statusHistory as RunStep[], turn.content)
+			);
 		}
 		history.messages[messageId] = turn;
 		history = history;
