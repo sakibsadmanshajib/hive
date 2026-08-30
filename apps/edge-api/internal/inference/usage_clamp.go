@@ -450,6 +450,22 @@ func classifyUsageConvention(usage *UsageResponse, reasoning int64) usageConvent
 //     the only record that a breakdown larger than its own component was
 //     served, since nothing is rewritten there and the total counters see a
 //     discrepancy of zero.
+//
+// One shape deliberately increments on every response, and it is worth naming
+// so nobody reads it as a defect later. An upstream that reports components
+// and omits total_tokens decodes to a total of 0, which no convention explains,
+// so it lands in the unknown branch as "under" on each response it serves.
+// That is correct: an absent derived field IS a disagreement with the
+// components, and filling it in is the one restatement that overrides no
+// reported figure at all. It is not expected to be common. Every provider this
+// gateway has routed to reports total_tokens, LiteLLM normalizes the usage
+// block, and no shape in this repository's fixtures omits it outside the
+// deliberate TotalAbsentIsFilledFromComponents case. If the rate does climb,
+// the reading is not "usage identity violations are up" but "one provider's
+// usage adapter stopped reporting a total", and usageIdentityViolations
+// carries the alias label that names which one. A counter that fires on every
+// response from some provider is noise, and noise gets ignored, which is the
+// same thing as having no counter at all.
 func EnforceUsageIdentity(usage *UsageResponse, upstreamID, aliasID, endpoint string) {
 	if usage == nil {
 		return

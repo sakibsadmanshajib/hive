@@ -327,16 +327,32 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		// the settlement below, which prices prompt and completion, cannot
 		// move. The counterpart correction for this handler's streaming half
 		// is EnforceUsageIdentityInFrame in the relay loop.
+		//
+		// The breakdown travels with the totals, and that is load-bearing
+		// rather than tidy. On the alongside convention the restatement
+		// replaces an upstream total of 31 with 5, and the only thing that
+		// makes that lossless is reasoning_tokens still being in the
+		// response: a client subtracts its way back to 31. This handler used
+		// to drop the breakdown on the floor, so the restatement destroyed a
+		// measured 26 here while preserving it on the other five surfaces,
+		// which is the same outcome the capping revision was rejected for by
+		// a different mechanism. It also made the alongside branch
+		// unreachable on this endpoint, so hive_usage_reasoning_tokens_unbilled_total
+		// could never fire in the population it was built to observe: the
+		// dashboard would have read clean forever while this path dropped
+		// every reasoning count.
 		held := inference.UsageResponse{
-			PromptTokens:     upstream.Usage.PromptTokens,
-			CompletionTokens: upstream.Usage.CompletionTokens,
-			TotalTokens:      upstream.Usage.TotalTokens,
+			PromptTokens:            upstream.Usage.PromptTokens,
+			CompletionTokens:        upstream.Usage.CompletionTokens,
+			TotalTokens:             upstream.Usage.TotalTokens,
+			CompletionTokensDetails: upstream.Usage.CompletionTokensDetails,
 		}
 		inference.EnforceUsageIdentity(&held, "", req.Model, inference.EndpointChatCompletions)
 		usage = &ChatUsage{
-			PromptTokens:     held.PromptTokens,
-			CompletionTokens: held.CompletionTokens,
-			TotalTokens:      held.TotalTokens,
+			PromptTokens:            held.PromptTokens,
+			CompletionTokens:        held.CompletionTokens,
+			TotalTokens:             held.TotalTokens,
+			CompletionTokensDetails: held.CompletionTokensDetails,
 		}
 		promptTokens, completionTokens, totalTokens = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
 	}
@@ -468,6 +484,13 @@ type upstreamChatResponse struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
 		TotalTokens      int64 `json:"total_tokens"`
+		// Decoded because the usage restatement below is only lossless while
+		// the reasoning count survives into the response (issue #1472). Left
+		// undecoded, this handler could not tell the alongside convention
+		// apart from an upstream that simply disagreed with itself, and the
+		// counter that exists to measure unbilled reasoning could never fire
+		// on this endpoint at all.
+		CompletionTokensDetails *inference.CompletionTokensDetails `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -630,9 +653,10 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 			// object, so a total that disagrees with its own components used
 			// to reach a /v1/rag/chat client verbatim. Applied before the
 			// read below so the audit counts and the bytes on the wire carry
-			// one number rather than two. It rewrites only total_tokens (and
-			// a reasoning breakdown that exceeds its own component), never
-			// prompt or completion, so the charge below cannot move.
+			// one number rather than two. It rewrites total_tokens and
+			// nothing else: no component, and no breakdown either, since
+			// reasoning_tokens is a measurement this gateway never restates.
+			// So the charge below cannot move.
 			sanitized = inference.EnforceUsageIdentityInFrame(sanitized, requestID.String(), alias, inference.EndpointChatCompletions)
 			// TOKEN COUNTS are read back off the sanitized frame rather than
 			// the raw one: VariablePriceFrame keeps usage (minus the upstream
