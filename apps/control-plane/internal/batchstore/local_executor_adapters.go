@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // BatchSnapshotLoader is the slice of filestore.Service the BatchStore adapter needs.
@@ -111,6 +111,7 @@ func (p *pgxBatchStore) LoadBatch(ctx context.Context, batchID string) (executor
 		ModelAlias:      batch.ModelAlias,
 		LiteLLMModel:    route.LiteLLMModelName,
 		ReservedCredits: batch.EstimatedCredits,
+		Pricing:         route.Pricing,
 	}
 	if batch.ReservationID != nil {
 		snap.ReservationID = *batch.ReservationID

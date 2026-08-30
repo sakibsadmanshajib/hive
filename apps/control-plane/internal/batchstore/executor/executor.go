@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 // BatchSnapshot is the slice of public.batches the executor needs to do its
@@ -28,6 +30,10 @@ type BatchSnapshot struct {
 	ModelAlias      string
 	LiteLLMModel    string
 	ReservedCredits int64
+	// Pricing is the alias's catalog price, resolved by the same SelectRoute
+	// call that resolves LiteLLMModel. Settlement charges from it instead of a
+	// flat per-token rate (issue #1473).
+	Pricing catalog.CatalogPricing
 }
 
 // LineRow is the persisted state of a single batch line. Mirrors public.batch_lines.
@@ -174,10 +180,10 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 			// with the persisted response body. Until then, expose enough
 			// diagnostic metadata for support to correlate.
 			body := map[string]any{
-				"resumed":              true,
-				"resume_reason":        "executor_restart_after_partial_run",
-				"original_attempt":     r.Attempt,
-				"original_consumed":    r.ConsumedCredits,
+				"resumed":           true,
+				"resume_reason":     "executor_restart_after_partial_run",
+				"original_attempt":  r.Attempt,
+				"original_consumed": r.ConsumedCredits,
 			}
 			if r.CompletedAt != nil {
 				body["original_completed_at"] = r.CompletedAt.UTC().Format(time.RFC3339Nano)
@@ -229,6 +235,7 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 			out := *line
 			out.Alias = batch.ModelAlias
 			out.LiteLLMModel = batch.LiteLLMModel
+			out.Pricing = batch.Pricing
 			select {
 			case <-ctx.Done():
 				return
@@ -251,11 +258,29 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 	for res := range out {
 		if res.Output != nil {
 			idx, _ := output.Append(res.Output)
-			if err := e.lines.MarkSucceeded(ctx, batchID, res.CustomID, res.Attempts, res.ConsumedCredits, idx); err != nil {
+			if err := e.lines.MarkSucceeded(ctx, batchID, res.CustomID, res.Attempts, res.Settlement.Credits, idx); err != nil {
 				log.Printf("executor: mark succeeded %s/%s: %v", batchID, res.CustomID, err)
 			}
+			// Provenance for the charge, logged rather than stored: batch_lines
+			// holds the amount and has no column for where it came from, and
+			// every other settlement surface logs the same handle rather than
+			// persisting it. generation_id is what recovers which model the
+			// router actually picked, since LiteLLM rewrites the response
+			// model field.
+			//
+			// A confirmed catalog price is the one case that logs nothing: its
+			// amount is in batch_lines, its rate is in the catalog, and its
+			// token counts are already recorded, so the line is fully
+			// reconstructable and a batch can carry fifty thousand of them.
+			// Everything else logs, because a fail-closed charge must be loud
+			// and a variable-price charge has no other record of its model.
+			if !res.Settlement.Confirmed || res.Settlement.Reason != "catalog_price" {
+				log.Printf("executor: settled batch line batch=%s custom_id=%s alias=%s credits=%d confirmed=%t reason=%s generation_id=%s",
+					batchID, res.CustomID, batch.ModelAlias, res.Settlement.Credits,
+					res.Settlement.Confirmed, res.Settlement.Reason, res.Settlement.GenerationID)
+			}
 			completed++
-			totalConsumed.Add(totalConsumed, big.NewInt(res.ConsumedCredits))
+			totalConsumed.Add(totalConsumed, big.NewInt(res.Settlement.Credits))
 		} else if res.Error != nil {
 			idx, _ := errs.Append(res.Error)
 			if err := e.lines.MarkFailed(ctx, batchID, res.CustomID, res.Attempts, idx, res.Error.Error.Message); err != nil {

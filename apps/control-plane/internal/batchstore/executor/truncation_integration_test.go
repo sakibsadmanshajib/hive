@@ -15,6 +15,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 // TestDispatcher_RealClientTruncation_NeverSucceeds is the end-to-end half
@@ -56,6 +57,7 @@ func TestDispatcher_RealClientTruncation_NeverSucceeds(t *testing.T) {
 		Body:         []byte(`{"model":"customer-alias-1","messages":[{"role":"user","content":"hi"}]}`),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      catalog.FixedPricing(1_000_000, 1_000_000),
 	})
 	if res.Output != nil {
 		t.Fatalf("oversized real-client response recorded as success: %+v", res.Output)
@@ -66,8 +68,8 @@ func TestDispatcher_RealClientTruncation_NeverSucceeds(t *testing.T) {
 	if res.Error.Error.Code != "response_too_large" {
 		t.Fatalf("code=%q want response_too_large", res.Error.Error.Code)
 	}
-	if res.ConsumedCredits != 0 {
-		t.Fatalf("credits=%d want 0 for a failed line", res.ConsumedCredits)
+	if res.Settlement.Credits != 0 {
+		t.Fatalf("credits=%d want 0 for a failed line", res.Settlement.Credits)
 	}
 }
 
@@ -95,6 +97,7 @@ func TestDispatcher_RealClientWithinCap_Succeeds(t *testing.T) {
 		Body:         []byte(`{"model":"customer-alias-1","messages":[{"role":"user","content":"hi"}]}`),
 		Alias:        "customer-alias-1",
 		LiteLLMModel: "openrouter/deepseek/deepseek-v4-pro-0813",
+		Pricing:      catalog.FixedPricing(1_000_000, 1_000_000),
 	})
 	if res.Error != nil {
 		t.Fatalf("unexpected failure: %+v", res.Error)
