@@ -38,10 +38,10 @@ import (
 // is dropped rather than corrected, since its contents are unknown; and the
 // /v1/batches output lines, which decode the raw LiteLLM body in
 // apps/control-plane/internal/batchstore and never cross this package. That
-// path also PRICES total_tokens
-// (DefaultCreditPolicy.Credits in batchstore/executor/dispatcher.go), which
-// makes the same shape an overcharge there rather than a reporting defect,
-// and it is corrected in issue #1473 rather than here.
+// path USED to price total_tokens as well, which made the same shape an
+// overcharge there rather than a reporting defect; PR #1524 fixed that under
+// issue #1473, and DefaultCreditPolicy.Credits now settles each line at its
+// alias's own price through priceLine.
 //
 // What is NOT changed, and is asserted here so a future change has to argue
 // with a test: the CHARGE. Settlement prices the components (prompt and

@@ -408,21 +408,31 @@ func classifyUsageConvention(usage *UsageResponse, reasoning int64) usageConvent
 //     session-chat surface into the same function. CreditsForTokens takes four
 //     token arguments and neither total_tokens nor reasoning_tokens is among
 //     them.
+//
 //   - Variable-price (upstream_actual) aliases price the COST the upstream
 //     reported for that generation, read from the raw response bytes by
 //     UpstreamActualSettlement (pricing.go). No token count of ours enters
 //     that charge at all.
-//   - The BATCH path prices total_tokens. DefaultCreditPolicy.Credits
-//     (apps/control-plane/internal/batchstore/executor/dispatcher.go) returns
-//     usage.TotalTokens whenever it is above zero and falls back to the
-//     component sum only otherwise, and it is live: the server main in
-//     apps/control-plane/cmd/server/main.go constructs the dispatcher with a
-//     nil policy, which NewDispatcher substitutes this default for. So on a
-//     /v1/batches line the 31-against-5 shape behind this issue is a 6.2x
-//     OVERCHARGE, not a reporting defect. That path decodes the raw LiteLLM
-//     body in batchstore/local_inference.go and never crosses this function,
-//     so nothing in this file reaches it. It is tracked in issue #1473 and
-//     corrected there, in the same function as its sibling defect, not here.
+//
+//   - The BATCH path USED to price total_tokens, and no longer does. Until PR
+//     #1524 (2026-08-30), DefaultCreditPolicy.Credits
+//     (apps/control-plane/internal/batchstore/executor/dispatcher.go) returned
+//     usage.TotalTokens whenever it was above zero and fell back to the
+//     component sum only otherwise, and it was live, so a /v1/batches line
+//     carrying the 31-against-5 shape behind this issue was a 6.2x OVERCHARGE
+//     rather than a reporting defect. That was issue #1473 and it is fixed:
+//     Credits now returns priceLine(pricing, usage, rawUpstreamBody), which
+//     settles each line at its alias's own price, and the Usage struct's
+//     TotalTokens field carries a comment saying it is decoded because the
+//     upstream reports it and deliberately never priced, with a regression
+//     guard feeding a total-exceeds-components shape through settlement to
+//     prove it is ignored.
+//
+//     Kept in this comment rather than deleted, because a reader arriving here
+//     is deciding whether total_tokens can reach money, and "it did on one
+//     path, here is which, and here is the change that ended it" is a more
+//     useful answer than silence. The path still never crosses this function:
+//     it decodes the raw LiteLLM body in batchstore/local_inference.go.
 //
 // So on the paths this function does cover, restating the total moves no money
 // in either direction. That is a statement about those paths, not a claim that
