@@ -489,6 +489,15 @@ export const latestStepSeq = (steps: readonly RunStep[] | null | undefined): num
  * marker, so an ordinary short step can never be dropped for accidentally
  * being the beginning of the summary.
  *
+ * The equality branch is not scoped to a message step, and cannot be: RunStep
+ * stores no event kind, every line carries the same `hive_agent_step` action.
+ * So a tool_result, error or file step whose flattened preview is byte
+ * identical to the flattened summary would also go. That is unlikely and it is
+ * not harmful: the only line this drops is one whose text is already rendered
+ * directly underneath it. (The prefix branch is incidentally narrower, because
+ * describeEvent puts the marker at position 0 only for a message; every other
+ * kind formats it as label, marker, colon, text.)
+ *
  * One accepted side effect: latestStepSeq reads the lines the turn still holds,
  * so the dropped event sits above the stored cursor and a conversation reopened
  * later re-reads that one event, folds the echo back in, and drops it again in
