@@ -92,6 +92,40 @@ func litellmModel(m ModelEntry) string {
 	return "openai/" + m.LiteLLMName
 }
 
+// NoCredentialPlaceholder is the literal emitted for a provider that has no
+// credential at all, i.e. one whose custom_providers.api_key_env is empty. It
+// is not a secret and cannot authenticate anywhere; it exists only because
+// LiteLLM refuses to construct an OpenAI client with no api_key value.
+//
+// custom_providers.api_key_env is NOT NULL and every seeded provider so far
+// named a real environment variable, so "os.environ/" + the column was
+// unconditional. That is exactly what an empty column cannot express: the
+// emitted string is then "os.environ/" with no variable name after it, which
+// LiteLLM resolves to nothing, so the OpenAI client is constructed with no
+// api_key and the deployment fails at request time with an error that names no
+// route. An empty column is therefore read here as "this provider is keyless"
+// and given a literal instead.
+//
+// The literal is deliberately a value that cannot authenticate anywhere. A
+// keyless upstream that ignores the Authorization header never looks at it, and
+// one that does look will answer 401 loudly rather than being handed a real
+// credential belonging to some other provider. Suppressing the header entirely
+// is not the generator's job and is not expressible in a LiteLLM api_key at
+// all: it is done per deployment with an extra_headers override in
+// deploy/litellm/config.yaml, which the merge preserves field by field (see
+// mergeParams).
+const NoCredentialPlaceholder = "keyless"
+
+// apiKeyValue returns the api_key string for one entry: an environment
+// reference for a keyed provider, the keyless literal for a provider with no
+// api_key_env.
+func apiKeyValue(m ModelEntry) string {
+	if strings.TrimSpace(m.APIKeyEnv) == "" {
+		return NoCredentialPlaceholder
+	}
+	return "os.environ/" + m.APIKeyEnv
+}
+
 // Generate builds a LiteLLM config.yaml byte slice from the provided model
 // entries. It does NOT read from DB itself; the caller supplies the entries.
 func Generate(cfg Config) ([]byte, error) {
@@ -116,7 +150,7 @@ func Generate(cfg Config) ([]byte, error) {
 			"litellm_params": map[string]interface{}{
 				"model":    model,
 				"api_base": m.APIBase,
-				"api_key":  "os.environ/" + m.APIKeyEnv,
+				"api_key":  apiKeyValue(m),
 			},
 		}
 		modelList = append(modelList, entry)
