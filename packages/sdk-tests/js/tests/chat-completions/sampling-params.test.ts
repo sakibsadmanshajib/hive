@@ -5,12 +5,13 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 // Same tools-capable pinned alias chat-completions.test.ts uses (see its
-// header comment for why hive-free is unsuitable here): temperature/top_p,
-// seed and logprobs are sampling knobs a routed model may or may not honor,
-// and this suite needs a route that answers deterministically enough to
-// assert real shapes rather than "some free-pool member or other."
+// header comment for why hive-free is unsuitable here, and for the live
+// verification behind the current default): temperature/top_p, seed and
+// logprobs are sampling knobs a routed model may or may not honor, and this
+// suite needs a route that answers deterministically enough to assert real
+// shapes rather than "some free-pool member or other."
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 /**
  * A provider-optional chat parameter has exactly two valid outcomes on a
@@ -91,10 +92,10 @@ describe("Chat Completions sampling parameters", () => {
   });
 
   it("honors max_tokens on the pinned single-route alias", async () => {
-    // A second route, not a second contract. deepseek-v4-flash reasons
-    // heavily and still respects the ceiling exactly, which is what makes an
-    // empty answer on this alias a reasoning burn rather than a dropped
-    // parameter (issue #1326 and the zero-content guard).
+    // A second route, not a second contract. This alias reasons heavily and
+    // still respects the ceiling exactly, which is what makes an empty answer
+    // on it a reasoning burn rather than a dropped parameter (issue #1326 and
+    // the zero-content guard).
     const response = await client.chat.completions.create({
       model: TOOL_CAPABLE_MODEL,
       messages: [{ role: "user", content: LONG_ANSWER_PROMPT }],

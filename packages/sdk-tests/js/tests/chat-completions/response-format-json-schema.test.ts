@@ -5,9 +5,11 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 // chat-completions.test.ts already covers response_format: json_object on
 // this same pinned alias; see its header comment for why hive-free cannot
-// stand in here (seeded tools_supported=false, correctly 400s).
+// stand in here (seeded tools_supported=false, correctly 400s), and for the
+// live evidence that hive-small's upstream returns message.content as a
+// string under both response_format modes.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 describe("Chat Completions response_format: json_schema", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

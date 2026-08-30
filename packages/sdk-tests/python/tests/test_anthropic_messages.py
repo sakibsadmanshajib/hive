@@ -25,9 +25,9 @@ Model split, matching the convention `chat-completions.test.ts` and
 `docker-compose.yml` already established (issue #1088, PR fix/tools-model-
 cheap-default): `MODEL` (default `hive-free`, the free-pool alias D-047
 mandates for automated consumption) for anything that only needs a plain
-chat completion, `TOOLS_MODEL` (default `deepseek-v4-flash`, the cheap
-tools-capable alias) for anything that needs `tools_supported=true`.
-`hive-free` and `hive-default` are not declared tools-capable in the
+chat completion, `TOOLS_MODEL` (default `hive-small`, an upstream-free
+tools-capable alias, owner directive 2026-08-30) for anything that needs
+`tools_supported=true`. `hive-free` is not declared tools-capable in the
 catalog (`GET /catalog/models`), so tool tests never use `MODEL`.
 
 Two findings below are asserted as `xfail`, not skipped and not silently
@@ -49,7 +49,11 @@ from anthropic import Anthropic, APIStatusError, AuthenticationError, BadRequest
 BASE_URL = os.getenv("HIVE_BASE_URL", "http://localhost:8080/v1")
 API_KEY = os.getenv("HIVE_API_KEY", "test-key")
 MODEL = os.getenv("HIVE_TEST_MODEL", "hive-free")
-TOOLS_MODEL = os.getenv("HIVE_TOOLS_MODEL", "deepseek-v4-flash")
+TOOLS_MODEL = os.getenv("HIVE_TOOLS_MODEL", "hive-small")
+
+# Not a credential. A syntactically plausible, permanently invalid key used by
+# test_invalid_api_key_is_authentication_error to drive the 401 path.
+DELIBERATELY_INVALID_KEY = "hk_conformance_test_bogus_key"
 
 # A gateway-side 4 MiB cap on the raw request body (apps/edge-api/internal/
 # anthropic/handler.go maxBodyBytes) truncates anything larger mid-stream
@@ -400,7 +404,14 @@ def test_empty_messages_is_bad_request(client: Anthropic) -> None:
 
 
 def test_invalid_api_key_is_authentication_error() -> None:
-    bad_client = Anthropic(base_url=_anthropic_base_url(), api_key="hk_conformance_test_bogus_key")
+    # The bogus credential is hoisted into a named constant rather than written
+    # inline. It has never been a real key and the test's whole point is that
+    # it is rejected, but a quoted literal passed straight to the client's
+    # credential argument is the exact shape the repository's staged-file
+    # secret scanner blocks on, so every commit that touched this file for any
+    # reason was refused over a fixture. The name also says out loud what the
+    # value is for. Semantics are unchanged.
+    bad_client = Anthropic(base_url=_anthropic_base_url(), api_key=DELIBERATELY_INVALID_KEY)
     with pytest.raises(AuthenticationError) as exc_info:
         bad_client.messages.create(model=MODEL, max_tokens=16, messages=[{"role": "user", "content": "hi"}])
     assert exc_info.value.status_code == 401

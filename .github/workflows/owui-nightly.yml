@@ -282,12 +282,35 @@ jobs:
           LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-litellm-dev-key}
           OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
           GROQ_API_KEY=${GROQ_API_KEY}
-          OPENROUTER_DEFAULT_MODEL=openrouter/openai/gpt-4o-mini
+          # Five of these six are DEAD and are now written empty rather than
+          # naming a model. deploy/litellm/config.yaml substitutes exactly one
+          # of them, OPENROUTER_AUTO_MODEL; grep the file for `os.environ/` and
+          # the others appear nowhere, because the 2026-08-22 catalog
+          # restructure retired the routes that read them. They are still
+          # written, as empty values, because docker-compose.yml interpolates
+          # all six into the litellm service and an undefined variable there is
+          # a warning on every invocation. ci.yml already passes them the same
+          # way, from repository variables that are unset.
+          #
+          # Emptying them is not tidying. Two of them, gpt-4o-mini and
+          # gpt-4.1-mini as OPENROUTER_DEFAULT_MODEL, were paid provider model
+          # ids written straight into a workflow, bypassing the alias catalog
+          # and therefore every price and free-ness claim this repository makes
+          # (owner directive 2026-08-30). Dead or not, an unread paid model id
+          # is not worth keeping.
+          #
+          # OPENROUTER_AUTO_MODEL stays populated because route-doc-vlm reads
+          # it, and it is the only multimodal route in the LiteLLM config. It
+          # is declared in allowedUpstreamModelIDs
+          # (apps/control-plane/internal/routing/ci_paid_model_guard_integration_test.go)
+          # and flagged for the owner there: it is paid, and no free
+          # vision-capable slug has been probed for this path.
+          OPENROUTER_DEFAULT_MODEL=
           OPENROUTER_AUTO_MODEL=openrouter/openai/gpt-4.1-mini
-          OPENROUTER_EMBEDDING_MODEL=openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free
-          OPENROUTER_EMBEDDING_FALLBACK_MODEL=openrouter/qwen/qwen3-embedding-8b
-          GROQ_FAST_MODEL=groq/openai/gpt-oss-20b
-          GROQ_REASONING_MODEL=groq/openai/gpt-oss-120b
+          OPENROUTER_EMBEDDING_MODEL=
+          OPENROUTER_EMBEDDING_FALLBACK_MODEL=
+          GROQ_FAST_MODEL=
+          GROQ_REASONING_MODEL=
           NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-$SUPABASE_URL}
           NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-$SUPABASE_ANON_KEY}
           SUPABASE_OAUTH_CLIENT_ID=${SUPABASE_OAUTH_CLIENT_ID:-}

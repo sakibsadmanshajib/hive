@@ -8,7 +8,7 @@ const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 // calls, and the multi-turn tool-result round trip. Same pinned alias, same
 // reason (see that file's header comment).
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 const WEATHER_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: "function",

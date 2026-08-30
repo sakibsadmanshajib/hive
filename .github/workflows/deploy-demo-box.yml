@@ -755,6 +755,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CONTROL_PLANE_INTERNAL_TOKEN: ${{ secrets.CONTROL_PLANE_INTERNAL_TOKEN }}
+          # FLAGGED FOR THE OWNER, deliberately not repointed (2026-08-30).
+          # This is not a CI call: it is passed to
+          # scripts/install-agent-engine-host.sh and becomes the model the
+          # DEPLOYED demo box's Cowork agent runs on, so moving it off
+          # hive-default changes what a customer gets, not what a pipeline
+          # spends. The free-alias-only directive covers CI, and the two
+          # workflows that genuinely run an agent inside CI
+          # (agent-visual-proof.yml, agent-stream-delta-proof.yml) were
+          # repointed at openai/hive-small. Recorded as a pinned entry in
+          # paidCompletionExceptions
+          # (apps/control-plane/internal/routing/ci_paid_model_guard_integration_test.go)
+          # so it stays visible instead of passing unremarked.
+          #
+          # The exclusion is NOT unconditional, and the caveat belongs here
+          # rather than in a review thread nobody reads later. The
+          # agent-workspace-coverage job in this same file creates one real
+          # agent task against the box this step just configured, so that task
+          # runs on exactly the model installed here. It is gated
+          # `if: github.event_name == 'workflow_dispatch'`, so no ordinary
+          # deploy reaches it, and per that job's own header a cancel never
+          # reaches the engine, so a dispatched run leaves a sandbox running on
+          # this model for roughly sixteen minutes. That is the one path where
+          # repointing this line would change what a pipeline spends rather
+          # than only what a customer gets. It is still an owner decision,
+          # because the same line decides the deployed agent's quality, but a
+          # dispatched coverage run is the case to weigh when making it.
           HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
           HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
           HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
@@ -2223,12 +2249,17 @@ jobs:
       # Capability tests (tools/response_format) cannot run on hive-free: its
       # pool members are seeded tools_supported=false until cross-member parity
       # is probed (#1115), and the edge correctly 400s those parameters there
-      # (run 32736430913). deepseek-v4-flash is the tools default (owner
-      # decision 2026-08-25, tools_supported=true verified live): pro burned
-      # 150 calls / 30.2M credits in one day of CI. Flash's `-latest` router
-      # showed message.content instability (run 32665985618); if it recurs the
-      # suite fails loudly and HIVE_TOOLS_MODEL gets repointed.
-      HIVE_TOOLS_MODEL: deepseek-v4-flash
+      # (run 32736430913).
+      #
+      # hive-small is the tools default (owner directive 2026-08-30: no CI
+      # pipeline may call a paid completion model). It is upstream-free, pins
+      # to route-free-small on
+      # openrouter/dots-studio/dots-3-note-preview:free, and that route is
+      # seeded tools_supported=true; the tool-calling and structured-output
+      # behaviour was verified live at cost 0 before this default moved. It
+      # replaces deepseek-v4-flash, which was paid and whose `-latest` router
+      # also showed message.content instability (run 32665985618).
+      HIVE_TOOLS_MODEL: hive-small
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v7

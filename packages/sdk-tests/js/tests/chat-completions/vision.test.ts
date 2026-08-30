@@ -4,7 +4,7 @@ import OpenAI, { APIError } from "openai";
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 // 1x1 red pixel PNG, inlined so this test needs no network fetch of its own
 // and no fixture file. Small enough that a vision-incapable route's context

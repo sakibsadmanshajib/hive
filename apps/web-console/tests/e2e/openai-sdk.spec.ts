@@ -6,7 +6,13 @@ const HIVE_API_KEY = process.env.HIVE_API_KEY ?? "";
 // (see the web-e2e-api job). The default web-e2e job leaves this unset so
 // the spec is skipped — there is no edge-api on http://localhost:8080 there.
 const EDGE_BASE_URL = process.env.EDGE_BASE_URL ?? "";
-const MODEL = process.env.HIVE_SDK_MODEL ?? "hive-default";
+// hive-free, not hive-default: this spec drives a real completion through the
+// running stack on every run, and hive-default is a paid completion alias
+// (owner directive 2026-08-30, guarded by
+// TestNoCISurfaceCallsAPaidCompletionModel). hive-free is the load-balanced
+// pool of Hive-owned free provider keys and needs nothing this spec exercises
+// beyond a plain chat completion.
+const MODEL = process.env.HIVE_SDK_MODEL ?? "hive-free";
 
 test.describe("openai sdk consumer hits edge-api", () => {
   test.skip(

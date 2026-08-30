@@ -5,7 +5,7 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 // D-056 / apps/edge-api/internal/inference/types.go: prompt_tokens_details
 // carries cached_tokens (json:"cached_tokens", not omitempty), and it is the
