@@ -319,8 +319,15 @@ test.describe("authenticated composer (Cowork mode)", () => {
     // ''`, so it needs a prompt that IS non-empty and trims to nothing.
     await page.locator("#chat-input").fill(" ");
     await page.keyboard.press("Enter");
+    // Only "enter instructions for Cowork" is reachable here, not "enter a
+    // prompt": the comment above the fill establishes the input is a single
+    // space, not an empty string, so submitHandler's first guard (userPrompt
+    // === '') never fires and only the Cowork-specific trim() === '' guard
+    // can produce a message. An OR with the unreachable branch would still
+    // pass today and would silently loosen the guarantee below what the cited
+    // source actually promises.
     await expect(
-      page.getByText(/enter a prompt|enter instructions for cowork/i),
+      page.getByText(/enter instructions for cowork/i),
       "a whitespace-only Cowork submission must be refused client side with a visible message",
     ).toBeVisible();
     expect(created, "no request should reach the agent task collection for a refused submission").toBe(
