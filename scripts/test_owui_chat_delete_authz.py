@@ -76,11 +76,18 @@ Deployment (deploy/docker/Caddyfile.owui):
 
 WHAT THIS DOES NOT COVER
 ------------------------
-`stop_item_tasks` runs at the top of the handler, before the admin split and
-before any ownership resolution, so a verified non-owner who holds a chat id
-can cancel that chat's in-flight completion by issuing a DELETE they are then
-refused. Filed as issue #1474; the 404 this file pins is the delete boundary,
-not that one.
+`stop_item_tasks` used to run at the top of the handler, before the admin split
+and before any ownership resolution, so a verified non-owner who held a chat id
+could cancel that chat's in-flight completion by issuing a DELETE they were then
+refused. That was issue #1474, and it is fixed: `owui-patches/
+apply_chat_delete_task_cancel_1474_patch.py` moves the call into each arm, below
+that arm's 404. It is not pinned HERE, deliberately. The properties above are
+claims about the handler's shape, and a shape assertion for the cancellation
+would come apart the moment the handler grows an early return or a helper that
+cancels on the way past. `scripts/test_owui_chat_delete_task_cancel.py` executes
+the patched handler instead and counts the cancellations a call actually
+performs, against the patch chain both with and without that patch. The 404 this
+file pins is the delete boundary; that file owns the side effect in front of it.
 
 Structural, no framework, no network.
 Run: python3 scripts/test_owui_chat_delete_authz.py
@@ -128,40 +135,86 @@ def check(condition: bool, message: str) -> None:
 
 # --- shipped source ---------------------------------------------------------
 
+# The build-time patches that touch routers/chats.py, in the order
+# Dockerfile.open-webui runs them. Kept as a module constant because
+# scripts/test_owui_chat_delete_task_cancel.py drives the same harness with a
+# shorter chain, to reproduce the pre-fix behaviour of the #1474 handler
+# against the real source rather than against a paraphrase of it.
+CHATS_PATCHES = (
+    "apply_router_authz_family_patch.py",
+    "apply_authz_residuals_1191_patch.py",
+    "apply_chat_delete_task_cancel_1474_patch.py",
+)
 
-def patched_chats_router() -> str:
+
+VENDOR_PACKAGE_JSON = REPO_ROOT / "vendor/open-webui/package.json"
+DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
+
+
+def vendored_and_pinned_versions() -> tuple[str | None, str | None]:
+    """The vendored frontend's version and the pinned backend image's tag.
+
+    Everything below patches the VENDORED tree and then claims to be describing
+    the source the IMAGE runs. That holds only while these two agree, and they
+    are bumped independently by design: the vendored tree exists to build the
+    frontend, the digest at Dockerfile.open-webui pins the backend. Nothing else
+    in the repository asserts they agree, so if they ever drift, every patch
+    test here stays green while asserting on source the image never runs, and an
+    anchor that no longer matches the real backend becomes a silent no-op rather
+    than a red test. The only surviving signal would then be the Dockerfile
+    drift guard, which runs on push to main, so the first sign of trouble would
+    be a failed deploy after merge rather than a failed check before it.
+    """
+    vendored = re.search(
+        r'"version"\s*:\s*"([^"]+)"', VENDOR_PACKAGE_JSON.read_text(encoding="utf-8")
+    )
+    pinned = re.search(
+        r"^FROM ghcr\.io/open-webui/open-webui:v([^@\s]+)",
+        DOCKERFILE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    return (
+        vendored.group(1) if vendored else None,
+        pinned.group(1) if pinned else None,
+    )
+
+
+def patched_chats_router(patches: tuple[str, ...] = CHATS_PATCHES) -> str:
     """routers/chats.py as the image runs it, not as the vendor ships it.
 
-    Runs the two build-time patches that touch this file, in the order
-    Dockerfile.open-webui runs them (family #1186, then residuals #1191). A
-    patch failure is fatal here rather than silently falling back to the
-    vendored text, because a fallback would turn this whole module back into
-    the pre-patch check it replaced.
+    Runs the build-time patches that touch this file, in the order
+    Dockerfile.open-webui runs them (family #1186, then residuals #1191, then
+    the pre-authorisation task cancellation #1474). A patch failure is fatal
+    here rather than silently falling back to the vendored text, because a
+    fallback would turn this whole module back into the pre-patch check it
+    replaced.
     """
-    tmp = Path(tempfile.mkdtemp(prefix="owui-chat-authz-"))
-    # Every router, not the subset the family patch happens to rewrite today.
-    # An earlier version of this listed that subset by hand and went red the
-    # moment main added skills.py to the family (PR #1388): the patch reads
-    # every file in its own EXPECTED_MARKERS and raises FileNotFoundError on a
-    # missing one. Copying the directory means this file has no second copy of
-    # that list to keep in step.
-    for source in sorted(VENDORED_ROUTERS.glob("*.py")):
-        shutil.copy(source, tmp / source.name)
-    env = dict(os.environ)
-    env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
-    for patch in (
-        "apply_router_authz_family_patch.py",
-        "apply_authz_residuals_1191_patch.py",
-    ):
-        result = subprocess.run(
-            [sys.executable, str(PATCHES / patch)],
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise SystemExit(f"FAIL: {patch} failed:\n{result.stdout}{result.stderr}")
-    return (tmp / "chats.py").read_text(encoding="utf-8")
+    # TemporaryDirectory rather than mkdtemp: this used to leak a copy of every
+    # router per call, and the #1474 suite raised the call count from one per
+    # run to three. The copies are deleted on the way out, including when a
+    # patch fails, since the SystemExit unwinds through the context manager.
+    with tempfile.TemporaryDirectory(prefix="owui-chat-authz-") as tmpdir:
+        tmp = Path(tmpdir)
+        # Every router, not the subset the family patch happens to rewrite
+        # today. An earlier version of this listed that subset by hand and went
+        # red the moment main added skills.py to the family (PR #1388): the
+        # patch reads every file in its own EXPECTED_MARKERS and raises
+        # FileNotFoundError on a missing one. Copying the directory means this
+        # file has no second copy of that list to keep in step.
+        for source in sorted(VENDORED_ROUTERS.glob("*.py")):
+            shutil.copy(source, tmp / source.name)
+        env = dict(os.environ)
+        env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
+        for patch in patches:
+            result = subprocess.run(
+                [sys.executable, str(PATCHES / patch)],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise SystemExit(f"FAIL: {patch} failed:\n{result.stdout}{result.stderr}")
+        return (tmp / "chats.py").read_text(encoding="utf-8")
 
 
 # --- AST helpers ------------------------------------------------------------
@@ -650,6 +703,24 @@ def main() -> int:
         if not path.exists():
             print(f"  FAIL: missing {path.relative_to(REPO_ROOT)}")
             return 1
+
+    # --- 0. The tree being patched is the tree that ships ---------------------
+    # Asserted before anything else, because every check below is worthless if
+    # this is false and none of them can tell.
+    print("\nvendored frontend tree vs pinned backend image")
+    vendored_version, pinned_version = vendored_and_pinned_versions()
+    check(
+        vendored_version is not None and pinned_version is not None,
+        "both the vendored version and the pinned image tag are readable "
+        f"(vendor={vendored_version}, pinned={pinned_version})",
+    )
+    check(
+        vendored_version == pinned_version,
+        "vendor/open-webui is the same open-webui version as the backend image "
+        f"pinned in Dockerfile.open-webui, so patching the vendored tree really "
+        f"does describe the source the image runs (vendor={vendored_version}, "
+        f"pinned={pinned_version})",
+    )
 
     # --- 1. The route handler, as the image runs it --------------------------
     print("\nrouters/chats.py DELETE /{id} (after owui-patches)")

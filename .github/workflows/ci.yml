@@ -707,6 +707,21 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-set-compose-project-name.sh
 
+      # Regression guards for the off-box backup staleness check (issue #1491).
+      # The first proves the checker's own negative controls (a stale marker, an
+      # absent marker and a future-dated one all fail, and the failure names the
+      # script to run) and that deploy-drift-watchdog.yml still invokes it, so
+      # deleting the check turns this required job red. The second proves the
+      # marker is written only after a verified pull, which is the whole
+      # property: a marker written ahead of its evidence would be one more
+      # surface asserting a state the system does not have. Neither touches the
+      # network, the box or GitHub; both stub their dependencies on PATH.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/check-offbox-backup-freshness.test.mjs
+
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-pull-box-backups.sh
+
       # Regression guard for deploy-demo-box.yml's pre-build disk gate
       # (issue #1098). Also stubs its dependencies on PATH, so no docker
       # daemon and no real filesystem are involved. Wired here for the same
