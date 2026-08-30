@@ -103,11 +103,29 @@ jobs:
       - name: Provision the dedicated settings-check identity
         # Idempotent (scripts/seed-demo-owner.py): the first run creates this
         # account, its own tenant, and an OWNER membership; every run after
-        # leaves them untouched (no password rotation, matching
-        # docs/live-test-auth.md). HIVE_DEMO_EMAIL/_TENANT_SLUG/_ACCOUNT_SLUG
-        # must be set together, which is why all three appear even though
-        # only the email is read again below.
-        run: python3 ../../scripts/seed-demo-owner.py >/dev/null
+        # leaves them untouched (no rotation, matching docs/live-test-auth.md).
+        # HIVE_DEMO_EMAIL/_TENANT_SLUG/_ACCOUNT_SLUG must be set together,
+        # which is why all three appear even though only the email is read
+        # again below.
+        #
+        # seed-demo-owner.py prints a real, freshly generated credential to
+        # stdout on the run that creates the account (nothing on every run
+        # after, since it never rotates one that already exists). Actions
+        # cannot mask a value it has not been told about in advance, and a
+        # value generated at runtime is exactly that case, so a plain
+        # redirect was the only thing standing between that credential and
+        # the public job log on the run that creates it. Captured into a
+        # variable instead, never echoed, and explicitly registered with
+        # ::add-mask:: so it is redacted if it ever surfaces in a later step
+        # regardless. Nothing needs to read it: the check below signs in
+        # through the magic-link flow, which needs no credential.
+        run: |
+          set -euo pipefail
+          output=$(python3 ../../scripts/seed-demo-owner.py)
+          generated_secret=$(printf '%s\n' "$output" | sed -n 's/^PASSWORD=//p')
+          if [ -n "$generated_secret" ]; then
+            echo "::add-mask::$generated_secret"
+          fi
         env:
           HIVE_DEMO_EMAIL: ${{ env.DEMO_ACCOUNT_EMAIL }}
           HIVE_DEMO_TENANT_SLUG: demo-chat-settings-check

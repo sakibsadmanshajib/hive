@@ -41,6 +41,7 @@ behaviour exactly as it was.
 """
 
 import os
+import re
 
 PROTECTED_ACCOUNT_BASES = frozenset(
     {
@@ -50,9 +51,24 @@ PROTECTED_ACCOUNT_BASES = frozenset(
     }
 )
 
+# A key shorter than this is guessable by accident: single common words
+# ("hive", "test", "demo", "e2e") were each a substring of some protected
+# base, which is exactly the bypass this floor closes alongside the exact-tag
+# match below. github.run_id-run_attempt and $(whoami)-$(date +%s) (the two
+# shapes E2E_RUN_KEY actually takes in this repo) are both well past it.
+MIN_RUN_KEY_LENGTH = 8
+
+# Trims the same character class live-auth.mjs's normaliseEmail trims, rather
+# than relying on each language's own idea of "whitespace": Python's
+# str.strip() folds in the C0 control range (U+001C included) and JS's
+# trim() does not, while JS's folds in U+FEFF and Python's does not. Either
+# disagreement lets the same address be refused by one entry point and
+# allowed by the other.
+_EDGE_CHARS = re.compile("^[\x00-\x20\x7f﻿]+|[\x00-\x20\x7f﻿]+$")
+
 
 def _normalise(email: str | None) -> str:
-    return (email or "").strip().lower()
+    return _EDGE_CHARS.sub("", email or "").lower()
 
 
 def _base(email: str) -> str:
@@ -64,6 +80,20 @@ def _base(email: str) -> str:
     if not sep:
         return email
     return f"{local.split('+', 1)[0]}@{domain}"
+
+
+def _tag(email: str) -> str:
+    """The `+tag` component of the local part only (`local+TAG@domain` ->
+    `TAG`), or `""` when there is none. The domain never participates: a
+    substring test against the whole address let `E2E_RUN_KEY=-` open every
+    protected base at once, since `-` (and plenty of other short keys) occurs
+    somewhere in nearly any address. Comparison against this tag is exact,
+    never substring.
+    """
+    local = email.partition("@")[0]
+    if "+" not in local:
+        return ""
+    return local.split("+", 1)[1]
 
 
 def is_shared_demo_account(email: str | None) -> bool:
@@ -96,20 +126,23 @@ def assert_not_shared_demo_account(
 
     Escapes, either of which lets a protected-base address through:
       * `read_only=True`, for a call site that only signs in and reads.
-      * `E2E_RUN_KEY` set in the environment and present in `email`, for a
-        run-scoped identity derived from one of these bases.
+      * `E2E_RUN_KEY` set in the environment, at least `MIN_RUN_KEY_LENGTH`
+        characters, and matching the `+tag` component of `email`'s local part
+        exactly, for a run-scoped identity derived from one of these bases.
     """
     if not is_shared_demo_account(email):
         return
     if read_only:
         return
-    run_key = os.environ.get("E2E_RUN_KEY", "").strip().lower()
-    if run_key and run_key in _normalise(email):
+    run_key = _normalise(os.environ.get("E2E_RUN_KEY"))
+    if len(run_key) >= MIN_RUN_KEY_LENGTH and _tag(_normalise(email)) == run_key:
         return
     raise SystemExit(
         f"error: {variable} is {_normalise(email)}, one of the shared accounts "
         "that accumulates automation litter when reused outside its own run "
-        f"(issues #848, #916, #1476). This run {doing}. Use a dedicated, "
-        "E2E_RUN_KEY-scoped identity instead, or pass read_only=True if this "
-        "call only signs in and reads. See docs/live-test-auth.md."
+        f"(issues #848, #916, #1476). This run {doing}. Use a dedicated "
+        f'identity carrying E2E_RUN_KEY as a "+tag" on the local part instead '
+        f'("local+$E2E_RUN_KEY@domain", at least {MIN_RUN_KEY_LENGTH} '
+        "characters), or pass read_only=True if this call only signs in and "
+        "reads. See docs/live-test-auth.md."
     )

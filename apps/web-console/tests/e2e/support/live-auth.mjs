@@ -130,6 +130,25 @@ export const PROTECTED_ACCOUNT_BASES = Object.freeze([
   "e2e-verified@scubed.com.bd",
 ]);
 
+// A key shorter than this is guessable by accident: single common words
+// ("hive", "test", "demo", "e2e") were each a substring of some protected
+// base, which is exactly the bypass this floor closes alongside the exact-tag
+// match below. github.run_id-run_attempt and $(whoami)-$(date +%s) (the two
+// shapes E2E_RUN_KEY actually takes in this repo) are both well past it.
+export const MIN_RUN_KEY_LENGTH = 8;
+
+// Trims the same character class Python's guard trims (shared_demo_account.py
+// _normalise), rather than relying on each language's own idea of
+// "whitespace": JS's String.prototype.trim() folds in U+FEFF and Python's
+// str.strip() does not, while Python's folds in the C0 control range
+// (U+001C included) and JS's does not. Either disagreement lets the same
+// address be refused by one entry point and allowed by the other.
+const EDGE_CHARS = /^[\x00-\x20\x7f﻿]+|[\x00-\x20\x7f﻿]+$/g;
+
+function normaliseEmail(email) {
+  return String(email ?? "").replace(EDGE_CHARS, "").toLowerCase();
+}
+
 // `local+tag@domain` -> `local@domain`. GoTrue does not fold the tag away
 // itself, so a stale or hardcoded tag on a protected base is still that base;
 // this is what lets the run-key check below see through it.
@@ -140,6 +159,18 @@ function baseAddress(normalisedEmail) {
   }
   const local = normalisedEmail.slice(0, at).split("+")[0];
   return `${local}${normalisedEmail.slice(at)}`;
+}
+
+// The `+tag` component of the local part only ("local+TAG@domain" -> "TAG"),
+// or "" when there is none. The domain never participates: a substring test
+// against the whole address let `E2E_RUN_KEY=-` open every protected base at
+// once, since "-" (and plenty of other short keys) occurs somewhere in nearly
+// any address. Comparison against this tag is exact, never substring.
+function localTag(normalisedEmail) {
+  const at = normalisedEmail.indexOf("@");
+  const local = at === -1 ? normalisedEmail : normalisedEmail.slice(0, at);
+  const plus = local.indexOf("+");
+  return plus === -1 ? "" : local.slice(plus + 1);
 }
 
 /**
@@ -184,24 +215,26 @@ function baseAddress(normalisedEmail) {
  * @param {{ readOnly?: boolean }} [options]
  */
 export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
-  const normalised = String(email ?? "").trim().toLowerCase();
+  const normalised = normaliseEmail(email);
   if (!normalised || !PROTECTED_ACCOUNT_BASES.includes(baseAddress(normalised))) {
     return;
   }
   if (readOnly) {
     return;
   }
-  const runKey = String(process.env.E2E_RUN_KEY ?? "").trim().toLowerCase();
-  if (runKey && normalised.includes(runKey)) {
+  const runKey = normaliseEmail(process.env.E2E_RUN_KEY);
+  if (runKey.length >= MIN_RUN_KEY_LENGTH && localTag(normalised) === runKey) {
     return;
   }
   throw new Error(
     `live-auth: refusing to mint a session for ${normalised}. It is one of ` +
       "the shared accounts that accumulates automation litter when reused " +
-      "outside its own run (issues #848, #916, #1476). Run as a dedicated, " +
-      "E2E_RUN_KEY-scoped identity instead. If this run only reads, say so " +
-      "at the call site with readOnly: true, or --read-only on this " +
-      "module's CLI. See docs/live-test-auth.md."
+      "outside its own run (issues #848, #916, #1476). Run as a dedicated " +
+      `identity carrying E2E_RUN_KEY as a "+tag" on the local part instead ` +
+      `("local+$E2E_RUN_KEY@domain", at least ${MIN_RUN_KEY_LENGTH} ` +
+      "characters). If this run only reads, say so at the call site with " +
+      "readOnly: true, or --read-only on this module's CLI. See " +
+      "docs/live-test-auth.md."
   );
 }
 

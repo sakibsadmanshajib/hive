@@ -197,8 +197,16 @@ tag away, so this guard does not either). A run that genuinely only reads must
 say so at the call site, with `readOnly: true`, or `--read-only` on that
 module's CLI. A run scoped to this run's `E2E_RUN_KEY` is let through instead:
 `assertNotSharedDemoAccount` reads that environment variable directly (never a
-per-call argument, which a caller could set to whatever makes the check pass)
-and checks whether it appears in the address.
+per-call argument, which a caller could set to whatever makes the check pass),
+and requires it to equal the `+tag` component of the address's local part
+exactly, at least `MIN_RUN_KEY_LENGTH` (8) characters. An earlier version of
+this check compared the run key against the whole address as a substring,
+domain included, which a security review of this PR found lets a short,
+common key open a protected base with its address completely unchanged
+(`E2E_RUN_KEY=-` opened all three bases; `hive`, `qa`, `test`, `e2e`, `2`,
+`bd`, `invalid`, and `demo` each opened at least one). The exact-tag
+comparison and the length floor both close that: the domain never
+participates, and neither does a bare protected base with no tag at all.
 
 That module is not the single door for the repository, and saying so would be
 the same kind of nearly-true sentence this document exists to correct. Three

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MIN_RUN_KEY_LENGTH,
   PROTECTED_ACCOUNT_BASES,
   assertNotSharedDemoAccount,
   mintSession,
@@ -12,12 +13,23 @@ import {
 // five of them on the day the guard was written (issues #848, #916). Issue
 // #1476 found three more shared accounts with the same accumulation cause and
 // flipped the guard from a denylist of that one address to an allowlist: a
-// protected base is refused unless it is scoped to this run's `E2E_RUN_KEY`
-// or the caller declares the run read only.
+// protected base is refused unless its address carries an exact `+tag` equal
+// to this run's `E2E_RUN_KEY` (at least MIN_RUN_KEY_LENGTH characters), or
+// the caller declares the run read only.
+//
+// An earlier version of this file compared the run key against the *whole*
+// address as a substring, domain included, which a security review found lets
+// a short, common key open a protected base with its address completely
+// unchanged: `E2E_RUN_KEY=-` opened all three bases; `hive` opened two;
+// `qa`/`test` opened `qa-tester@hive.test`; `e2e`/`2`/`bd` opened
+// `e2e-verified@scubed.com.bd`; `invalid`/`demo` opened
+// `demo@hive-demo.invalid`. The "bypass table" describe block below pins
+// every one of those keys, against every base, refused with no tag present.
 //
 // These tests are the enforcement. Deleting the guard, or letting the base
 // comparison drift (a stray capital, a trailing space, a `+tag` that should
-// not hide the base underneath it), turns them red.
+// not hide the base underneath it, a substring match standing in for an
+// exact one), turns them red.
 
 const DEMO_ACCOUNT = PROTECTED_ACCOUNT_BASES[0];
 
@@ -49,6 +61,26 @@ describe("assertNotSharedDemoAccount", () => {
     ).toThrow(/refusing to mint a session/i);
   });
 
+  it("refuses a leading U+FEFF the same as any other edge character", () => {
+    // JS's String.prototype.trim() already folds this in; the guard's own
+    // normaliser must not be looser than that in either direction, so this is
+    // pinned explicitly rather than left to trim()'s behaviour to change
+    // under it unnoticed.
+    expect(() => assertNotSharedDemoAccount(`﻿${DEMO_ACCOUNT}`)).toThrow(
+      /refusing to mint a session/i
+    );
+  });
+
+  it("refuses a trailing U+001C the same as any other edge character", () => {
+    // Python's str.strip() folds this in; JS's trim() does not on its own,
+    // so shared_demo_account.py's guard must agree with this one explicitly
+    // or the same address is refused by one entry point and allowed by the
+    // other.
+    expect(() =>
+      assertNotSharedDemoAccount(`qa-tester@hive.test\x1c`)
+    ).toThrow(/refusing to mint a session/i);
+  });
+
   it("allows a protected base only when the run declares itself read only", () => {
     expect(() =>
       assertNotSharedDemoAccount(DEMO_ACCOUNT, { readOnly: true })
@@ -56,16 +88,16 @@ describe("assertNotSharedDemoAccount", () => {
   });
 
   it("allows a protected base scoped to this run's E2E_RUN_KEY", () => {
-    vi.stubEnv("E2E_RUN_KEY", "run-42");
+    vi.stubEnv("E2E_RUN_KEY", "run-4242");
     expect(() =>
-      assertNotSharedDemoAccount("e2e-verified+run-42@scubed.com.bd")
+      assertNotSharedDemoAccount("e2e-verified+run-4242@scubed.com.bd")
     ).not.toThrow();
   });
 
   it("still refuses a different run's tag on the same base", () => {
-    vi.stubEnv("E2E_RUN_KEY", "run-42");
+    vi.stubEnv("E2E_RUN_KEY", "run-4242");
     expect(() =>
-      assertNotSharedDemoAccount("e2e-verified+run-99@scubed.com.bd")
+      assertNotSharedDemoAccount("e2e-verified+run-9999@scubed.com.bd")
     ).toThrow(/refusing to mint a session/i);
   });
 
@@ -73,6 +105,47 @@ describe("assertNotSharedDemoAccount", () => {
     vi.stubEnv("E2E_RUN_KEY", "");
     expect(() => assertNotSharedDemoAccount(DEMO_ACCOUNT)).toThrow(
       /refusing to mint a session/i
+    );
+  });
+
+  it("refuses the bare base even when a run key is set (no tag at all)", () => {
+    vi.stubEnv("E2E_RUN_KEY", "run-4242");
+    expect(() =>
+      assertNotSharedDemoAccount("e2e-verified@scubed.com.bd")
+    ).toThrow(/refusing to mint a session/i);
+  });
+
+  it("refuses a run key shorter than MIN_RUN_KEY_LENGTH even as an exact tag match", () => {
+    const shortKey = "x".repeat(MIN_RUN_KEY_LENGTH - 1);
+    vi.stubEnv("E2E_RUN_KEY", shortKey);
+    expect(() =>
+      assertNotSharedDemoAccount(`e2e-verified+${shortKey}@scubed.com.bd`)
+    ).toThrow(/refusing to mint a session/i);
+  });
+
+  it("refuses a run key that only resembles the domain, not the local-part tag", () => {
+    // The tag is "notrun", not the run key; "scubedotcombd" only resembles
+    // the domain "scubed.com.bd". Exact-tag comparison must still refuse
+    // this, proving the domain never participates in the match.
+    vi.stubEnv("E2E_RUN_KEY", "scubedotcombd");
+    expect(() =>
+      assertNotSharedDemoAccount("e2e-verified+notrun@scubed.com.bd")
+    ).toThrow(/refusing to mint a session/i);
+  });
+
+  describe("bypass table (substring-of-whole-address regression, not just the tag)", () => {
+    // Each key below is a substring of the bare address for at least one
+    // protected base. A substring-of-the-whole-address check (the bug this
+    // guards against) would let the matching base(s) through with the
+    // address completely unchanged, no +tag at all.
+    const bypassKeys = ["-", "hive", "qa", "test", "e2e", "2", "bd", "invalid", "demo"];
+
+    it.each(bypassKeys.flatMap((key) => PROTECTED_ACCOUNT_BASES.map((base) => [key, base])))(
+      "E2E_RUN_KEY=%s does not open %s (bare address, no tag)",
+      (key, base) => {
+        vi.stubEnv("E2E_RUN_KEY", key);
+        expect(() => assertNotSharedDemoAccount(base)).toThrow(/refusing to mint a session/i);
+      }
     );
   });
 
@@ -177,9 +250,9 @@ describe("mintSession refuses a protected base at the choke point", () => {
 
   it("lets a protected base through when it is scoped to E2E_RUN_KEY", async () => {
     const fetchSpy = armFetchTrap();
-    vi.stubEnv("E2E_RUN_KEY", "run-42");
+    vi.stubEnv("E2E_RUN_KEY", "run-4242");
     await expect(
-      mintSession({ email: "e2e-verified+run-42@scubed.com.bd" })
+      mintSession({ email: "e2e-verified+run-4242@scubed.com.bd" })
     ).rejects.toThrow(/the guard let a network call through/);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
