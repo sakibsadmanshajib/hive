@@ -1368,10 +1368,16 @@ jobs:
           echo "SDK suites will call alias: $HIVE_TEST_MODEL"
           echo "embedding suites will call: $HIVE_EMBEDDING_MODEL"
           echo "capability tests will call: $HIVE_TOOLS_MODEL"
-          if [ "$HIVE_TOOLS_MODEL" = "deepseek-v4-pro" ]; then
-            echo "::error::HIVE_TOOLS_MODEL resolved to deepseek-v4-pro, the expensive paid route that burned 150 calls and 30.2M credits in one day of CI (2026-08-25). The tools lane runs on hive-small, an upstream-free tools-capable alias; no CI lane may call a paid completion model at all (owner directive 2026-08-30, enforced by TestNoCISurfaceCallsAPaidCompletionModel)."
-            exit 1
-          fi
+          # There used to be a name check for deepseek-v4-pro here, the alias
+          # that burned 150 calls and 30.2M credits in one day of CI on
+          # 2026-08-25. It is gone, and not because the lesson stopped
+          # applying: a list of forbidden names only ever catches the one
+          # mistake already made. The replacement is the "Refuse to bill a
+          # paid completion alias" step below, which resolves whatever these
+          # two variables actually hold through the seeded catalog and rejects
+          # anything that is not upstream-free, deepseek-v4-pro included. It
+          # runs after the throwaway database exists, which is why it is a
+          # separate step rather than another branch here.
           if [ "$HIVE_TEST_MODEL" = "hive-free" ]; then
             echo "::notice::this run bills hive-free, the load-balanced pool of our own free provider keys. No customer-facing provider allowance is consumed. Pool-specific routing regressions (failover between keys) are covered only against the live box; a single-provider regression on any one pool member can still hide behind the other members."
           else
@@ -1448,6 +1454,89 @@ jobs:
           # the shared project's 15 session-mode client slots, and the job no
           # longer touches that project at all.
           echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
+
+      # Owner directive 2026-08-30: no CI pipeline may ever call a paid
+      # completion model.
+      #
+      # TestNoCISurfaceCallsAPaidCompletionModel holds that for every model
+      # value written down in this repository, which is most of them. It cannot
+      # hold it for these two, because both read a repository VARIABLE first
+      # (CI_LIVE_INTEGRATION_MODEL and CI_LIVE_INTEGRATION_TOOLS_MODEL) and a
+      # repository variable is not in any diff, so setting one to a paid alias
+      # would move this job's spend with nothing in the repository changing and
+      # no check going red. That is exactly the silent regression the directive
+      # is about, so the resolved value is checked here, at runtime, against
+      # the same catalog and the same rule the Go guard uses.
+      #
+      # Only these two are checked. HIVE_EMBEDDING_MODEL is exempt by the
+      # directive (paid embeddings are allowed), HIVE_TTS_MODEL and
+      # HIVE_STT_MODEL are not completion aliases, and HIVE_IMAGE_MODEL is a
+      # literal in this file that the Go guard already covers and flags.
+      #
+      # Fails closed in every direction: an alias with no enabled route, an
+      # alias absent from the catalog, and a psql error each fail the job
+      # rather than reading as "not paid".
+      - name: Refuse to bill a paid completion alias
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: hive_ci
+        run: |
+          set -uo pipefail
+
+          # One query for the whole catalog, then a lookup per variable. The
+          # alias never reaches SQL, which is both simpler than psql variable
+          # interpolation (which -c does not perform) and leaves nothing for a
+          # repository variable's contents to do inside a statement.
+          #
+          # An alias is upstream-free when every route it can still serve from
+          # dispatches an upstream that costs Hive nothing: an OpenRouter
+          # ':free' variant, or a member of the free pool's shared
+          # litellm_model_name. Identical predicate to
+          # ci_paid_model_guard_integration_test.go.
+          if ! verdicts=$(psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "
+                select r.alias_id || ' ' ||
+                       case when bool_and(r.provider_model like '%:free'
+                                          or r.litellm_model_name = 'route-free-pool')
+                            then 'free' else 'paid' end
+                  from public.provider_routes r
+                 where r.health_state not in ('disabled', 'eol')
+                 group by r.alias_id"); then
+            echo "::error::the catalog query failed, so it is unknown whether this run would bill a paid alias"
+            exit 1
+          fi
+          if [ -z "$verdicts" ]; then
+            echo "::error::the seeded catalog has no enabled route for any alias, so this check cannot classify anything and must not pass"
+            exit 1
+          fi
+
+          fail=0
+          for var in HIVE_TEST_MODEL HIVE_TOOLS_MODEL; do
+            alias_id="${!var}"
+            if [ -z "$alias_id" ]; then
+              echo "::error::$var is empty, so this job would call whatever a suite defaults to rather than the alias it selected"
+              fail=1
+              continue
+            fi
+            verdict=$(printf '%s\n' "$verdicts" | awk -v a="$alias_id" '$1 == a { print $2 }')
+            case "$verdict" in
+              free)
+                echo "$var = $alias_id is upstream-free"
+                ;;
+              paid)
+                echo "::error::$var resolves to '$alias_id', a PAID completion alias. No CI lane may call one (owner directive 2026-08-30). If this came from the CI_LIVE_INTEGRATION_MODEL or CI_LIVE_INTEGRATION_TOOLS_MODEL repository variable, clear it or point it at an upstream-free alias."
+                fail=1
+                ;;
+              *)
+                echo "::error::$var resolves to '$alias_id', which the seeded catalog has no enabled route for, so nothing here can say what it would bill"
+                fail=1
+                ;;
+            esac
+          done
+          [ "$fail" -eq 0 ]
 
       # Issues #1324 and #1380. The SDK conformance suites cover POST /v1/files
       # and the whole /v1/batches surface, which uploads its input file first,

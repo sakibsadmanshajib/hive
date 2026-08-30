@@ -40,10 +40,11 @@ package routing
 //
 // Keyed on capability data, never on a filename, a directory or a comment: an
 // alias is exempt when its own provider_capabilities rows declare embeddings
-// and declare no completion surface. hive-embedding-default qualifies (and
+// AND declare no completion surface. hive-embedding-default qualifies (and
 // needs to: its healthy fallback route is a paid qwen embedding model). A chat
 // alias cannot reach the exemption by being mentioned in a file that also
-// mentions embeddings.
+// mentions embeddings, and an alias declaring both embeddings and completions
+// cannot buy a completion exemption with an embedding flag either.
 //
 // WHAT RUNS THIS
 //
@@ -447,10 +448,17 @@ func TestNoCISurfaceCallsAPaidCompletionModel(t *testing.T) {
 		facts := aliases[b.alias]
 
 		switch {
-		case facts.embedding:
+		case facts.embedding && !facts.completion:
 			// The explicit, narrow exemption, keyed on the alias declaring
 			// embeddings in its own provider_capabilities rows and nowhere
 			// else. The directive permits paid embedding models.
+			//
+			// The `!facts.completion` half is load-bearing, not belt and
+			// braces: an alias declaring BOTH embeddings and chat completions
+			// would otherwise buy a completion exemption with an embedding
+			// flag. Such an alias falls through to the upstream-free check
+			// below, which is the correct treatment for something that can
+			// serve a paid completion.
 			t.Logf("embedding exemption: %s:%d %s = %s (paid embeddings are permitted by the directive)", b.file, b.line, b.name, b.alias)
 		case !facts.completion:
 			// Voice and any other non-completion alias. The directive is about

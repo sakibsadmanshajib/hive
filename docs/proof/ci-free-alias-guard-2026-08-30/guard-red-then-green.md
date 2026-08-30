@@ -126,3 +126,55 @@ above is a reasoning burn against a deliberately tiny `max_tokens` of 100 and
 
 `prompt_tokens_details.cached_tokens` is present and numeric on every response,
 which is what `usage-accounting.test.ts` asserts.
+
+## Part 5. The runtime half of the guard, exercised
+
+Added in review: a repository variable is not in any diff, so
+`CI_LIVE_INTEGRATION_MODEL` or `CI_LIVE_INTEGRATION_TOOLS_MODEL` set to a paid
+alias would move this job's spend with nothing in the repository changing and
+no static check going red. The `Refuse to bill a paid completion alias` step in
+`.github/workflows/ci.yml` closes that by resolving whatever the two variables
+actually hold through the seeded catalog, using the same predicate the Go guard
+uses.
+
+The step body below was extracted verbatim from the workflow with a YAML parser
+and executed against the same throwaway database, once per case.
+
+```
+== HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=hive-small
+HIVE_TEST_MODEL = hive-free is upstream-free
+HIVE_TOOLS_MODEL = hive-small is upstream-free
+   exit=0
+
+== HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=deepseek-v4-flash
+HIVE_TEST_MODEL = hive-free is upstream-free
+::error::HIVE_TOOLS_MODEL resolves to 'deepseek-v4-flash', a PAID completion alias. ...
+   exit=1
+
+== HIVE_TEST_MODEL=hive-default HIVE_TOOLS_MODEL=hive-small
+::error::HIVE_TEST_MODEL resolves to 'hive-default', a PAID completion alias. ...
+HIVE_TOOLS_MODEL = hive-small is upstream-free
+   exit=1
+
+== HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=deepseek-v4-pro
+::error::HIVE_TOOLS_MODEL resolves to 'deepseek-v4-pro', a PAID completion alias. ...
+   exit=1
+
+== HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=hive-auto
+::error::HIVE_TOOLS_MODEL resolves to 'hive-auto', a PAID completion alias. ...
+   exit=1
+
+== HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=not-a-real-alias
+::error::HIVE_TOOLS_MODEL resolves to 'not-a-real-alias', which the seeded catalog has no enabled route for, so nothing here can say what it would bill
+   exit=1
+
+== HIVE_TEST_MODEL= HIVE_TOOLS_MODEL=hive-small
+::error::HIVE_TEST_MODEL is empty, so this job would call whatever a suite defaults to rather than the alias it selected
+HIVE_TOOLS_MODEL = hive-small is upstream-free
+   exit=1
+```
+
+Note the `deepseek-v4-pro` case. The name check that used to sit in the
+`Declare which provider account this run bills` step caught exactly that one
+alias and nothing else; this catches it as one instance of a general rule, and
+catches `hive-auto`, `hive-default` and an alias that does not exist as well.
