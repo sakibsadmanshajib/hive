@@ -46,7 +46,7 @@ Not a pre-authorisation side effect. Both task endpoints resolve the chat before
 acting, so unlike #1474 and #1508 the ORDER is already correct. What is wrong is
 the WIDTH of the predicate: a bare `user.role != 'admin'` with no flag term,
 which is exactly the shape `apply_router_authz_family_patch.py` closes for issue
-#1186 on every router. `main.py` was never in that patch's file set, whose
+Issue #1186 on every router. `main.py` was never in that patch's file set, whose
 `EXPECTED_MARKERS` covers eleven modules under `routers/` and no top-level
 module, so these sites were not deliberately excluded, they were never looked at.
 
@@ -94,7 +94,7 @@ fails the build too.
 
 ## 1. Pre-fix: the defect, reproduced
 
-```
+```text
 pre-fix source: main.py WITHOUT the #1511 patch
   ok: the pre-fix source carries no # hive (#1511) marker
   ok: PRE-FIX: a non-owner administrator was handed the victim's task ids with ENABLE_ADMIN_CHAT_ACCESS off (observed ['task-for-e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
@@ -106,7 +106,7 @@ pre-fix source: main.py WITHOUT the #1511 patch
 
 ## 2. Post-fix
 
-```
+```text
 post-fix source: with the #1511 patch
   ok: the #1511 patch applied: 5 # hive (#1511) markers (found 5)
   ok: a non-owner administrator is handed NO task ids while the flag is off (observed [])
@@ -131,7 +131,7 @@ non-owner behave identically before and after.
 
 Patch replaced with a no-op that prints and returns:
 
-```
+```text
 post-fix source: with the #1511 patch
   FAIL: the #1511 patch applied: 5 # hive (#1511) markers (found 0)
   FAIL: a non-owner administrator is handed NO task ids while the flag is off (observed ['task-for-e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
@@ -154,7 +154,7 @@ FAILED: 5 check(s)
 
 ## 4. The patch applies to the pinned backend image
 
-```
+```text
 apply_main_admin_flag_1511_patch: flag-gated 5 bare admin bypasses on chat ownership in main.py (#1511)
 apply_main_admin_flag_1511_patch: already applied
 markers: 5
@@ -162,7 +162,7 @@ markers: 5
 
 with the emitted endpoint read back out of that container:
 
-```
+```python
 async def list_tasks_by_chat_id_endpoint(request: Request, chat_id: str, user=Depends(get_verified_user)):
     if chat_id.startswith('local:') or chat_id.startswith('channel:'):
         socket_id = chat_id[len('local:') :]
@@ -182,7 +182,7 @@ async def list_tasks_by_chat_id_endpoint(request: Request, chat_id: str, user=De
 
 ## 5. The Dockerfile drift guard goes red if the fix is dropped
 
-```
+```text
 --- guard with patch SKIPPED (must fail) ---
 guard correctly FAILED
 --- with the patch applied ---
@@ -241,7 +241,7 @@ Every claim below was re-measured from scratch. Nothing here is carried over.
 
 Run in Docker (`python:3.12-slim`), against the working tree:
 
-```
+```text
 main.py chat task endpoints honour ENABLE_ADMIN_CHAT_ACCESS (issue #1511)
   ok: the vendored tree and the pinned backend image are the same open-webui version (vendor=0.10.2, pinned=0.10.2)
   ok: docker-compose.yml still sets ENABLE_ADMIN_CHAT_ACCESS false, so the flag-off leg below is the deployed configuration and not a hypothetical
@@ -282,7 +282,7 @@ the patch. Measured here inside the pinned image
 `ghcr.io/open-webui/open-webui@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4`,
 both halves genuinely move:
 
-```
+```text
 === image identity ===
 	"version": "0.10.2",
 === BEFORE: drift guard on the unpatched image (must FAIL) ===
@@ -303,7 +303,7 @@ conditions that can be false, which is the property the sibling branch lacked.
 
 ### The five sites, read back out of that container
 
-```
+```text
 1338:                    # hive (#1511): a write into someone else's chat, so the
 1340-                    if not await Chats.is_chat_owner(chat_id, user.id) and not (user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS):
 1791:        if owner_id != user.id and not (user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS):
@@ -320,7 +320,7 @@ The patch is idempotent: applied twice, the second run prints
 **The patch replaced by a no-op.** Five red, including both behavioural
 assertions and both structural ones for the fifth site:
 
-```
+```text
 FAILED: 5 check(s)
   - the #1511 patch applied: 5 # hive (#1511) markers (found 0)
   - a non-owner administrator is handed NO task ids while the flag is off (observed ['task-for-e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
@@ -336,7 +336,7 @@ predicate that refuses the administrator unconditionally satisfies every
 carries `ENABLE_ADMIN_CHAT_ACCESS` as a conjunct and so still satisfies the
 patch's own AST postcondition:
 
-```
+```text
 post-fix source: with the #1511 patch
   ok: the #1511 patch applied: 5 # hive (#1511) markers (found 5)
   ok: a non-owner administrator is handed NO task ids while the flag is off (observed [])
@@ -404,7 +404,7 @@ because the two shared one branch would be a conflation rather than a decision.
 
 Observed, in both legs:
 
-```
+```text
 pre-fix source: main.py WITHOUT the #1511 patch
   ok: PRE-FIX: a channel member could NOT stop their own channel's generation, because the socket slice never resolved one (listed=[], refused=404)
 
@@ -444,7 +444,7 @@ branch header is gone.
 
 All three review mutations now fail at build time:
 
-```
+```text
 # mutation B, swap a benign survivor for a real bypass, totals conserved
 AssertionError: an unflagged admin bypass survived patching: "if chat is None or (chat.user_id != user.id and user.role != 'admin'):"
 
@@ -462,7 +462,7 @@ meant the None branch, the wrong-socket branch and the reconnected-socket branch
 were all invisible, which is exactly the path the channel slice breaks. It is now
 a real dict holding one socket, and three scenarios drive it:
 
-```
+```text
   ok: the owner of a temporary chat still lists and stops it by their own socket id (listed=['task-for-local:sid-victim-socket'], refused=None)
   ok: a stranger naming someone else's socket is refused (listed=[], refused=404)
   ok: an unresolvable socket id denies rather than admits, even for the owner (listed=[], refused=404)
@@ -478,7 +478,7 @@ located in the AST: exactly one `is_chat_owner` gate on an `else` branch of
 `chat_completion`, its predicate flag-gated and carrying no bare admin term, and
 its body still raising:
 
-```
+```text
 the chat-completions ownership check
   ok: the completions-path ownership check no longer carries a bare admin term
   ok: the chat-completions handler is still called chat_completion
@@ -495,7 +495,7 @@ now.
 
 ### The no-op mutant, re-run against the widened suite
 
-```
+```text
 FAILED: 7 check(s)
   - the #1511 patch applied: 8 # hive (#1511) markers (found 0)
   - a non-owner administrator is handed NO task ids while the flag is off (observed ['task-for-e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
@@ -531,7 +531,7 @@ reviewer and I had all missed.
 
 ### A guard line that could never match, written in the commit that fixed two others
 
-```
+```sh
     && test "$(grep -c '^    if chat_id.startswith(.local:.) or chat_id.startswith(.channel:.):\$' $B/main.py)" -eq 0 \
 ```
 
@@ -539,7 +539,7 @@ Single quoted, so the shell passes a literal `\$` through to `grep`, and in a
 basic regular expression that matches a dollar CHARACTER rather than end of line.
 Measured inside the pinned image:
 
-```
+```text
 single-quoted with backslash-dollar (the shipped line): 0
 single-quoted, plain dollar:                            2
 ```
@@ -555,7 +555,7 @@ two earlier ones could not fail. So every line of the consolidated guard is now
 measured individually rather than as one `&&` chain, before and after the full
 twenty-patch chain, inside the pinned image:
 
-```
+```text
 === BEFORE the patch chain ===        === AFTER the patch chain ===
  1 want=4    got=0                     1 want=4    got=4
  ...                                   ...
@@ -592,7 +592,7 @@ green.
 Now asserted against the vendored source, which was confirmed byte-identical to
 the pinned image before any of this was trusted:
 
-```
+```text
   ok: main.py imports Channels, which the channel helper calls
   ok: main.py imports AccessGrants, which the channel helper calls
   ok: models/channels.py declares `get_channel_by_id` as async, so awaiting it in the helper is correct
