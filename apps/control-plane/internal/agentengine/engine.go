@@ -36,6 +36,7 @@ func (e *Engine) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		Pack:         string(t.Pack),
 		Instructions: t.Instructions,
 		BearerJWT:    t.BearerJWT,
+		LLMAPIKey:    t.LLMAPIKey,
 	})
 }
 

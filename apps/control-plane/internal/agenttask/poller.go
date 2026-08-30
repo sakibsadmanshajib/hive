@@ -141,6 +141,12 @@ type PollerConfig struct {
 	Interval time.Duration
 	// Logger; nil defaults to slog.Default().
 	Logger *slog.Logger
+	// Credentials revokes a finished task's per-task gateway credential
+	// (#1507). The poller is where the overwhelming majority of tasks reach a
+	// terminal state, so it is where the credential normally ends. Nil is the
+	// unwired posture and means no revocation, which leaves the credential to
+	// its own expiry rather than failing the transition.
+	Credentials TaskCredentials
 }
 
 // Poller periodically advances every active (queued/running, launched) task
@@ -153,6 +159,7 @@ type Poller struct {
 	checker  StatusChecker
 	interval time.Duration
 	logger   *slog.Logger
+	creds    TaskCredentials
 
 	// taskFailuresMu guards taskFailures. RunOnce is exported, so a caller
 	// besides loop (which Start/Stop's own mutex serializes) could call it
@@ -187,7 +194,8 @@ func NewPoller(repo Repository, checker StatusChecker, cfg PollerConfig) *Poller
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Poller{repo: repo, checker: checker, interval: interval, logger: logger, taskFailures: make(map[uuid.UUID]int)}
+	return &Poller{repo: repo, checker: checker, interval: interval, logger: logger,
+		creds: cfg.Credentials, taskFailures: make(map[uuid.UUID]int)}
 }
 
 // taskFailureBudget converts maxTaskFailureDuration to a pass count using
@@ -376,6 +384,11 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 			"task_id", t.ID, "error", transErr)
 		return pollResult{}
 	}
+	// The run is over, so the credential that paid for it is over too (#1507).
+	// After the transition, never before: while the sandbox is still running
+	// it may be mid-turn, and a revoked key would fail that turn with an auth
+	// error nobody caused.
+	revokeTaskCredential(ctx, p.creds, t)
 	return pollResult{advanced: true} // the engine's own report, not the poller giving up
 }
 
@@ -436,6 +449,9 @@ func (p *Poller) failTask(ctx context.Context, t Task, message string) (advanced
 		return false
 	}
 	p.clearTaskFailure(t.ID)
+	// Same reasoning as the completion path above: the row is terminal, so
+	// the credential ends here rather than waiting out its expiry.
+	revokeTaskCredential(ctx, p.creds, t)
 	return true
 }
 

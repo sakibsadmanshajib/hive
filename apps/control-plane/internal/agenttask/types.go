@@ -73,6 +73,21 @@ type Task struct {
 	// requires the real user JWT rather than the internal service token this
 	// package's own HTTP surface is otherwise guarded by).
 	BearerJWT string
+
+	// LLMAPIKey is the per-task gateway credential the sandbox authenticates
+	// its model calls with, minted by Service.launch from TaskCredentials and
+	// carried to the engine on the same in-memory Task that carries
+	// BearerJWT. Like BearerJWT it is NOT a column on public.agent_tasks:
+	// Repository never reads or writes it, so a Task loaded back from the
+	// database always has it empty, and the secret exists only for as long as
+	// the launch that hands it over.
+	//
+	// It is what makes an agent task charge the tenant that submitted it
+	// (#1507). Without it the sandbox spends the launcher's one process-wide
+	// key and every tenant's inference settles against a single Hive-owned
+	// account, which is the defect. The credential's own id is this task's id;
+	// see credentials.go.
+	LLMAPIKey string
 }
 
 var (

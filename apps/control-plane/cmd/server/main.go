@@ -324,6 +324,11 @@ func main() {
 	var accountsHandler *accounts.Handler
 	var accountingHandler *accounting.Handler
 	var apikeysHandler *apikeys.Handler
+	// Hoisted out of the block that builds it because the agent-task wiring
+	// further down needs it too: an agent task mints a per-task API key on its
+	// own tenant's billing account so the sandbox's model calls settle against
+	// the customer who submitted it (#1507).
+	var apikeysSvc *apikeys.Service
 	var byokHandler *byok.Handler
 	var budgetsHandler *budgets.Handler
 	var invoicesHandler *invoices.Handler
@@ -501,7 +506,7 @@ func main() {
 		usageHandler = usage.NewHandler(usageSvc, accountsSvc)
 
 		apikeysRepo := apikeys.NewPgxRepository(pool)
-		apikeysSvc := apikeys.NewService(apikeysRepo, apikeys.NewRedisSnapshotCache(redisClient))
+		apikeysSvc = apikeys.NewService(apikeysRepo, apikeys.NewRedisSnapshotCache(redisClient))
 		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc).WithResolveHealth(resolveHealth)
 
 		accountingRepo := accounting.NewPgxRepository(pool)
@@ -1188,8 +1193,16 @@ func main() {
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
 		agentEngine, agentEngineStatus, agentEngineEvents := buildAgentEngine(egressSvc)
+		// Per-task gateway credential (#1507). Without it every sandbox spends
+		// the launcher's one Hive-owned key and the customer whose task it is
+		// is charged nothing; with it, the sandbox's model calls are ordinary
+		// API-key traffic on the customer's own billing account and settle
+		// through the money path that already works. A Service built without
+		// this refuses every launch rather than falling back.
+		agentTaskCreds := agenttask.NewPgxTaskCredentials(pool, apikeysSvc)
 		agentTaskSvc := agenttask.NewService(agentTaskRepo, agentEngine,
-			agenttask.WithEventSource(agentEngineEvents))
+			agenttask.WithEventSource(agentEngineEvents),
+			agenttask.WithTaskCredentials(agentTaskCreds))
 		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
 
 		// Issue #172 (ruling D-020): cross-chat user memory, four-verb
@@ -1210,6 +1223,9 @@ func main() {
 			poller := agenttask.NewPoller(agentTaskRepo, agentEngineStatus, agenttask.PollerConfig{
 				Interval: interval,
 				Logger:   slog.Default(),
+				// The poller is where nearly every task reaches a terminal
+				// state, so it is where the per-task credential normally ends.
+				Credentials: agentTaskCreds,
 			})
 			// Bound to runCtx so it stops cleanly on shutdown, same as the
 			// other background workers below (spend-alert cron, WAL drainer).

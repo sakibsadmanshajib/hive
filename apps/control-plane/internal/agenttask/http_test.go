@@ -23,7 +23,7 @@ import (
 // asynchronous over the launch (issue #881): any assertion about a launch
 // outcome has to wait for it with Service.WaitIdle first.
 func newTestHandler() (*agenttask.Handler, *agenttask.Service) {
-	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
+	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	return agenttask.NewHandler(svc), svc
 }
 
@@ -31,7 +31,7 @@ func newTestHandler() (*agenttask.Handler, *agenttask.Service) {
 // successfully, so created tasks land in StatusRunning rather than
 // immediately StatusFailed.
 func newRunningTestHandler() (*agenttask.Handler, *agenttask.Service) {
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-http-test"})
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-http-test"}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	return agenttask.NewHandler(svc), svc
 }
 

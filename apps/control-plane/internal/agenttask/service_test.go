@@ -277,7 +277,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 }
 
 func TestService_CreateTask_InvalidPack(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{})
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", "")
 	if !errors.Is(err, agenttask.ErrInvalidPack) {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
@@ -292,7 +292,7 @@ func TestService_CreateTask_InvalidPack(t *testing.T) {
 // "will never run" — see .wolf/buglog for the original report ("stuck
 // forever in queue, no error surfaced").
 func TestService_CreateTask_EngineNotConfigured_FailsVisibly(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
+	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	task := createSettled(t, svc, uuid.New(), uuid.New(), agenttask.PackCoding)
 	if task.Status != agenttask.StatusFailed {
 		t.Errorf("expected StatusFailed when engine not configured (must not stay queued forever), got %v", task.Status)
@@ -306,7 +306,7 @@ func TestService_CreateTask_EngineNotConfigured_FailsVisibly(t *testing.T) {
 }
 
 func TestService_CreateTask_NilEngineDefaultsToNotConfigured(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), nil)
+	svc := agenttask.NewService(newFakeRepository(), nil, agenttask.WithTaskCredentials(newFakeCredentials()))
 	task := createSettled(t, svc, uuid.New(), uuid.New(), agenttask.PackKnowledgeWork)
 	if task.Status != agenttask.StatusFailed {
 		t.Errorf("expected StatusFailed with nil engine (defaults to NotConfiguredEngine), got %v", task.Status)
@@ -314,7 +314,7 @@ func TestService_CreateTask_NilEngineDefaultsToNotConfigured(t *testing.T) {
 }
 
 func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-123"})
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-123"}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	task := createSettled(t, svc, uuid.New(), uuid.New(), agenttask.PackCoding)
 	if task.Status != agenttask.StatusRunning {
 		t.Errorf("expected StatusRunning, got %v", task.Status)
@@ -332,7 +332,7 @@ func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing
 // Get/List.
 func TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt(t *testing.T) {
 	engine := &fakeEngine{sessionRef: "session-123"}
-	svc := agenttask.NewService(newFakeRepository(), engine)
+	svc := agenttask.NewService(newFakeRepository(), engine, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", "test-user-jwt")
@@ -364,7 +364,7 @@ func TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt(t *testing.T) {
 // service.go's default case), just not this field.
 func TestService_CreateTask_EngineLaunchFails_SanitizesErrorMessage(t *testing.T) {
 	rawErr := "dial tcp acme-inference-provider.internal:443: connection refused"
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{err: errors.New(rawErr)})
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{err: errors.New(rawErr)}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	task := createSettled(t, svc, uuid.New(), uuid.New(), agenttask.PackCoding)
 	if task.Status != agenttask.StatusFailed {
 		t.Errorf("expected StatusFailed, got %v", task.Status)
@@ -383,7 +383,7 @@ func TestService_CreateTask_EngineLaunchFails_SanitizesErrorMessage(t *testing.T
 
 func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 	repo := newFakeRepository()
-	svc := agenttask.NewService(repo, &fakeEngine{})
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, ownerID, otherID := uuid.New(), uuid.New(), uuid.New()
 
 	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", "")
@@ -402,7 +402,7 @@ func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 
 func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	repo := newFakeRepository()
-	svc := agenttask.NewService(repo, &fakeEngine{})
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userA, userB := uuid.New(), uuid.New(), uuid.New()
 
 	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", ""); err != nil {
@@ -426,7 +426,7 @@ func TestService_Cancel_FromRunning(t *testing.T) {
 	// (terminal) rather than StatusQueued, so this uses a launching
 	// fakeEngine to reach the other cancellable state, StatusRunning.
 	eng := &fakeEngine{sessionRef: "session-cancel"}
-	svc := agenttask.NewService(newFakeRepository(), eng)
+	svc := agenttask.NewService(newFakeRepository(), eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 	created := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
 
@@ -449,7 +449,7 @@ func TestService_Cancel_FromRunning(t *testing.T) {
 // on a future launcher that recycles references, somebody else's).
 func TestService_Cancel_TerminalStateRejected(t *testing.T) {
 	eng := &fakeEngine{sessionRef: "s1"}
-	svc := agenttask.NewService(newFakeRepository(), eng)
+	svc := agenttask.NewService(newFakeRepository(), eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 	created := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
 	if _, err := svc.Cancel(context.Background(), tenantID, userID, created.ID); err != nil {
@@ -494,7 +494,7 @@ func TestService_Cancel_EngineSessionGoneDoesNotWarnAboutALeakedSlot(t *testing.
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
-	svc := agenttask.NewService(newFakeRepository(), sessionGoneEngine{sessionRef: "session-gone"})
+	svc := agenttask.NewService(newFakeRepository(), sessionGoneEngine{sessionRef: "session-gone"}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 	created := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
 
@@ -526,7 +526,7 @@ func TestService_Cancel_EngineSessionGoneDoesNotWarnAboutALeakedSlot(t *testing.
 // tell the engine, so the sandbox kept running and kept its slot.
 func TestService_Cancel_ReleasesEngineConcurrencySlot(t *testing.T) {
 	eng := newSlotEngine(1)
-	svc := agenttask.NewService(newFakeRepository(), eng)
+	svc := agenttask.NewService(newFakeRepository(), eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	first := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
@@ -565,7 +565,7 @@ func TestService_Cancel_ReleasesEngineConcurrencySlot(t *testing.T) {
 func TestService_CancelDuringLaunch_ReleasesTheSlotThatLaunchTook(t *testing.T) {
 	eng := newSlotEngine(1)
 	eng.launchGate = make(chan struct{})
-	svc := agenttask.NewService(newFakeRepository(), eng)
+	svc := agenttask.NewService(newFakeRepository(), eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created := createWithoutWaiting(t, svc, tenantID, userID)
@@ -598,7 +598,7 @@ func TestService_CancelDuringLaunch_ReleasesTheSlotThatLaunchTook(t *testing.T) 
 func TestService_Cancel_LosesRaceWithCompletion_LeavesEngineAlone(t *testing.T) {
 	repo := newFakeRepository()
 	eng := &fakeEngine{sessionRef: "session-race"}
-	svc := agenttask.NewService(repo, eng)
+	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created := createSettled(t, svc, tenantID, userID, agenttask.PackCoding)
@@ -628,7 +628,7 @@ func TestService_LaunchSucceedsButTransitionFails_TaskFailsVisibly(t *testing.T)
 	repo.failTransitionTo = agenttask.StatusRunning
 	repo.failTransitionErr = errors.New("pgx: connection pool exhausted")
 	eng := newSlotEngine(1)
-	svc := agenttask.NewService(repo, eng)
+	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
@@ -691,7 +691,7 @@ func (p *panickingRepository) Transition(ctx context.Context, tenantID, userID, 
 func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
 	repo := &panickingRepository{fakeRepository: newFakeRepository(), panicOn: agenttask.StatusRunning}
 	eng := newSlotEngine(1)
-	svc := agenttask.NewService(repo, eng)
+	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
@@ -719,7 +719,7 @@ func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
 func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
 	repo := &panickingRepository{fakeRepository: newFakeRepository()} // every Transition panics
 	eng := newSlotEngine(1)
-	svc := agenttask.NewService(repo, eng)
+	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", ""); err != nil {
@@ -735,7 +735,7 @@ func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
 }
 
 func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), panickingEngine{})
+	svc := agenttask.NewService(newFakeRepository(), panickingEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
@@ -771,7 +771,7 @@ func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
 func TestService_CreateTask_DoesNotBlockOnLaunch(t *testing.T) {
 	eng := newSlotEngine(1)
 	eng.launchGate = make(chan struct{})
-	svc := agenttask.NewService(newFakeRepository(), eng)
+	svc := agenttask.NewService(newFakeRepository(), eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
 	created := createWithoutWaiting(t, svc, tenantID, userID)
@@ -795,7 +795,7 @@ func TestService_CreateTask_DoesNotBlockOnLaunch(t *testing.T) {
 }
 
 func TestService_Cancel_UnknownTaskReturnsNotFound(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{})
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	if _, err := svc.Cancel(context.Background(), uuid.New(), uuid.New(), uuid.New()); !errors.Is(err, agenttask.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}

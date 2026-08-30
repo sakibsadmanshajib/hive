@@ -85,6 +85,19 @@ type Task struct {
 	// then just skips publishing, exactly as if the task were not a
 	// knowledge-work-pack task at all.
 	BearerJWT string
+
+	// LLMAPIKey is the per-task gateway credential control-plane minted on
+	// this task's own tenant billing account (#1507), and it is what the
+	// sandbox authenticates its model calls with. When set it replaces
+	// Config.LLMAPIKey for this session only.
+	//
+	// The defect it closes: with only the process-wide Config.LLMAPIKey, every
+	// tenant's sandbox spent one Hive-owned key, so the metering at the far
+	// end settled correctly against the wrong account and the customer whose
+	// task it was paid nothing. Empty is the pre-existing behaviour, kept so a
+	// launcher newer than its control-plane still runs. Never logged, never
+	// persisted, and it lives only as long as the session does.
+	LLMAPIKey string
 }
 
 // Status mirrors apps/control-plane/internal/agenttask.Status's values
@@ -529,12 +542,25 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		Workspace: controlclient.LocalWorkspace("/workspace"),
 	}
 	if e.cfg.LLMModel != "" {
+		// The task's own credential wins over the process-wide one (#1507).
+		// Config.LLMAPIKey belongs to a single Hive-owned account, so a
+		// session that spends it charges the customer nothing; t.LLMAPIKey is
+		// minted on the task's own tenant billing account, so the gateway's
+		// existing per-request settlement lands on the right customer with no
+		// second money path anywhere. Falls back rather than refusing: this
+		// process cannot tell an unattributed launch from an older
+		// control-plane, and control-plane is where that call is made and
+		// already fails the task closed.
+		apiKey := e.cfg.LLMAPIKey
+		if t.LLMAPIKey != "" {
+			apiKey = t.LLMAPIKey
+		}
 		settings := &controlclient.AgentSettings{
 			AgentKind: "openhands",
 			LLM: controlclient.LLMSettings{
 				Model:   e.cfg.LLMModel,
 				BaseURL: e.cfg.LLMBaseURL,
-				APIKey:  e.cfg.LLMAPIKey,
+				APIKey:  apiKey,
 				UsageID: "hive-agent",
 				// Always on, with no Config knob: a sandbox that cannot
 				// stream its tokens is of no use to any surface Hive is
