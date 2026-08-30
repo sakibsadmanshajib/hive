@@ -510,6 +510,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		costCredits, confirmed, delivered, zeroContent = inference.ChatSettlementCredits(
 			route, hasUsage, cacheUsage.FreshInputTokens, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens, outTokens, raw, completion.String(), shape)
 	}
+	if !zeroContent {
+		// Zero-content guard over the OTHER arm of the branch above (#1538).
+		// ChatSettlementCredits already applied it to a catalog-priced turn, so
+		// this reaches the variable-price arm, where UpstreamActualSettlement
+		// reports Delivered on any successful cost read and a reasoning burn on
+		// hive-auto was therefore charged the cost the upstream reported for
+		// tokens the customer never saw. Applied last, to whatever the branch
+		// settled at, exactly as settleStream applies it on the API-key path.
+		//
+		// Skipped when the guard already fired rather than run twice: a second
+		// pass would clear the flag the release reason below is read from, and
+		// the counter must not be incremented twice for one turn.
+		costCredits, delivered, zeroContent = inference.ApplyZeroContentGuard(
+			route.AliasID, shape, completion.String(), costCredits, delivered, inTokens, outTokens)
+	}
 	if servedModel != "" && servedModel != route.LiteLLMModelName {
 		// An upstream fallback that crosses an alias boundary serves one model
 		// and would be priced at another's rate (#743). The charge below still
