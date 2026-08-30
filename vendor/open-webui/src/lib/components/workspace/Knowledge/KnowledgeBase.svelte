@@ -1064,8 +1064,6 @@
 					if (directoryEntries.length > 0) {
 						await uploadDirectoryEntries(directoryEntries);
 					}
-				} else {
-					toast.error($i18n.t(`File not found.`));
 				}
 			}
 		}
@@ -1207,8 +1205,6 @@
 			if (fileInputElement) {
 				fileInputElement.value = '';
 			}
-		} else {
-			toast.error($i18n.t(`File not found.`));
 		}
 	}}
 />
