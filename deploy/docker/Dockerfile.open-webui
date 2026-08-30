@@ -530,8 +530,24 @@ RUN python3 /tmp/apply_chat_delete_task_cancel_1474_patch.py
 COPY deploy/docker/owui-patches/apply_ydoc_task_cancel_1508_patch.py /tmp/apply_ydoc_task_cancel_1508_patch.py
 RUN python3 /tmp/apply_ydoc_task_cancel_1508_patch.py
 
+# issue #1511: main.py keeps five chat-ownership decisions on a bare
+# `user.role != 'admin'` with no flag term, the exact shape
+# apply_router_authz_family_patch.py closes for #1186 on every router. main.py
+# was never in that patch's file set, so these were not excluded deliberately,
+# they were never looked at: both arms of GET /api/tasks/chat/{chat_id}, both
+# arms of its /stop sibling, and the existing-chat ownership check on the
+# chat-completions path, which admits a WRITE into another user's conversation.
+# Reachability, corrected from the issue as filed: tenant_role_from_db.py grants
+# 'admin' only to a login owning an account with is_platform_admin true, so this
+# is Hive platform staff and NOT every tenant OWNER. It is still wrong, because
+# compose sets ENABLE_ADMIN_CHAT_ACCESS false to say that not even a platform
+# admin gets cross-tenant chat access through the product surface, and these
+# five sites ignore that. Same fail-loud posture as the patches above.
+COPY deploy/docker/owui-patches/apply_main_admin_flag_1511_patch.py /tmp/apply_main_admin_flag_1511_patch.py
+RUN python3 /tmp/apply_main_admin_flag_1511_patch.py
+
 # Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191 +
-# #1474 + #1508):
+# #1474 + #1508 + #1511):
 # the exact expected marker count in every patched file so a vendor bump that
 # silently drops any single fix fails the image build instead of reopening a
 # cross-tenant hole (same failure mode class as #1162).
@@ -554,6 +570,8 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1508)' $B/socket/main.py)" -eq 2 \
     && test "$(grep -c '^            await stop_item_tasks(REDIS, document_id)$' $B/socket/main.py)" -eq 0 \
     && test "$(grep -c "^        if data.get('data'):\$" $B/socket/main.py)" -eq 0 \
+    && test "$(grep -c '# hive (#1511)' $B/main.py)" -eq 5 \
+    && test "$(grep -c "user.role != 'admin'" $B/main.py)" -eq 4 \
     && test "$(grep -c '^    await stop_item_tasks(request.app.state.redis, id)$' $B/routers/chats.py)" -eq 0
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
