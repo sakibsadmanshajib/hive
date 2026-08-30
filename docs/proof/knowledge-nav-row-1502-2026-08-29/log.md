@@ -79,3 +79,16 @@ container. It is not part of what this change touches.
 sources ran again inside the image build (`npm run test:frontend -- --run`,
 stage `frontend 8/9`), which printed `Test Files 20 passed (20)` and
 `Tests 264 passed (264)` and would have failed the build otherwise.
+
+## Capture time versus branch head
+
+The capture above was taken from `hive-owui:proof-1502`, built at commit
+`274da50a4`, before this branch merged current `main` (which brought in #1518's
+composer pack selector, among others). Nothing in that merge touches the shell
+navigation: the merged commits change the composer row, the stores and the
+chat CSS, and `HIVE_NAV`, `ShellNav.svelte` and `ShellNavIcon.svelte` are
+untouched by them. The frontend unit suite was rerun on the merged tree and
+reports 20 files, 277 tests passed, up from 264 because the merged work brought
+its own tests. Re-capturing would produce the identical sidebar, so the frame is
+kept rather than retaken, and its provenance is recorded here rather than left
+implicit.
