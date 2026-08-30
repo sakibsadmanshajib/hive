@@ -245,7 +245,7 @@ test.describe("sign-in entry (no session required)", () => {
       "ENABLE_LOGIN_FORM must be false on this deployment (deploy/docker/docker-compose.yml): " +
         "every account here is Hive-OIDC-only and has no Open WebUI password to submit through a " +
         "local form",
-    ).toBe(false);
+    ).toBe(true); // SABOTAGE: temporary, for the red/green gate-can-fail proof. Revert before merge.
     expect(
       body.oauth?.providers?.oidc,
       "the generic oidc provider (OAUTH_PROVIDER_NAME=Hive) must still be configured, or nothing " +
