@@ -29,7 +29,27 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
   if (!isRecord(value)) return false;
   // The isRecord narrowing types `value` as a structural object, so
   // `value.rails` access is type-safe without a widening cast.
-  return Array.isArray(value.rails);
+  if (!Array.isArray(value.rails)) return false;
+  // The three purchase bounds must be present and finite, not defaulted later.
+  // This modal fetches the rails endpoint directly and never goes through
+  // getCheckoutRails, so the decoder's own coherence guard does not cover it:
+  // an absent min_credits used to survive as the `?? 10_000_000` fallback
+  // below, which was a stale second copy of a money floor once the real one
+  // moved to 1.00 USD (issue #1450). Accepting the payload and then inventing
+  // the missing bound is how issue #1386 rendered a 1.00 USD ceiling against a
+  // real 100.00 USD one with nothing complaining.
+  //
+  // Absent bounds are tolerated only where nothing is purchasable, which is the
+  // control plane's documented answer for a deployment with no rail
+  // credentials: there is no amount field to render, so there is no bound to be
+  // wrong about.
+  const purchasable = value.rails.some(
+    (rail) => isRecord(rail) && rail.enabled === true,
+  );
+  if (!purchasable) return true;
+  return (
+    ["min_credits", "max_credits", "credit_increment"] as const
+  ).every((field) => Number.isFinite(value[field]));
 }
 
 // computeBlockSplitAmountMinor prices `credits` at `pricePerBlockMinor`

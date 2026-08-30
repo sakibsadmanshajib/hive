@@ -41,14 +41,14 @@ func TestCreditUnitConstantsMovedTogether(t *testing.T) {
 	if CreditIncrement != CreditsPerUSD/100 {
 		t.Fatalf("CreditIncrement = %d, want one cent (%d)", CreditIncrement, CreditsPerUSD/100)
 	}
-	// MinPurchaseCredits is deliberately NOT asserted here any more. It used
-	// to be pinned to one cent step, which is a bare number standing in for a
-	// property nobody had checked: the floor exists to clear the chat
-	// authorization hold, and pinned to one cent it was one tenth of one hold
-	// (issue #1450). What it must satisfy now is a relationship with a
-	// constant in another module, so the assertion lives in
-	// purchase_floor_test.go where that constant can be read. All this file
-	// still owes it is that it speaks the current unit in whole cent steps.
+	// What MinPurchaseCredits must CLEAR is deliberately not asserted here any
+	// more. It used to be pinned to one cent step, which is a bare number
+	// standing in for a property nobody had checked: the floor exists to clear
+	// the chat authorization hold, and pinned to one cent it was one tenth of
+	// one hold (issue #1450). That relationship is with constants in another
+	// module, so it is asserted in purchase_floor_test.go where they can be
+	// read. What this file still owes the constant, and asserts below, is that
+	// it speaks the current unit in whole cent steps.
 	if MinPurchaseCredits%CreditIncrement != 0 {
 		t.Fatalf("MinPurchaseCredits = %d, want a whole one-cent step of %d", MinPurchaseCredits, CreditIncrement)
 	}
@@ -73,8 +73,11 @@ func TestValidatePurchaseAmountSpeaksWholeCents(t *testing.T) {
 		{"one dollar", CreditsPerUSD, true},
 		{"stripe max", MaxPurchaseCreditsStripe, true},
 		{"half a cent above the floor", MinPurchaseCredits + CreditIncrement/2, false},
-		{"pre-rescale one-cent step", 1_000, false},
-		{"pre-rescale one dollar", oldCreditsPerUSD, false},
+		// Both pre-rescale figures are lifted above the floor for the same
+		// reason as the two cases above: at their bare values they now fail the
+		// floor, and would go on passing with the granularity check removed.
+		{"pre-rescale one-cent step, above the floor", MinPurchaseCredits + 1_000, false},
+		{"pre-rescale one dollar, above the floor", MinPurchaseCredits + oldCreditsPerUSD, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidatePurchaseAmount(tc.credits, RailStripe)

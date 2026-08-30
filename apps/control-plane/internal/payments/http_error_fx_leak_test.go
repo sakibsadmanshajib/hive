@@ -101,6 +101,23 @@ func TestClassifyInitiateError_SafeCategoriesPreserved(t *testing.T) {
 			wantMsg:  fmt.Sprintf("credits must be a multiple of %d", CreditIncrement),
 		},
 		{
+			// Issue #1450. Matched on the sentinel, so this case also proves the
+			// branch does not depend on the message text that the rail error
+			// interpolates a caller-supplied value into.
+			name:     "credits_below_minimum",
+			err:      fmt.Errorf("%w: credits must be at least %d, got %d", ErrBelowMinimumPurchase, MinPurchaseCredits, CreditIncrement),
+			wantCode: 400,
+			wantMsg:  fmt.Sprintf("credits must be at least %d", MinPurchaseCredits),
+		},
+		{
+			// A rail string crafted to contain another branch's phrase must not
+			// select that branch. Before the sentinel it did.
+			name:     "crafted_rail_cannot_borrow_the_minimum_branch",
+			err:      fmt.Errorf("payments: rail credits must be at least 1 not available for country BD"),
+			wantCode: 400,
+			wantMsg:  "selected payment rail is not available for this account",
+		},
+		{
 			name:     "credits_above_rail_maximum",
 			err:      errors.New(fmt.Sprintf("payments: credits must be at most %d for the selected payment method, got %d", MaxPurchaseCreditsStripe, 9_007_199_254_741_000)),
 			wantCode: 400,

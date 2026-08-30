@@ -46,10 +46,19 @@ const (
 	// FXFeeRate is the markup applied to the mid-rate for BDT conversions.
 	FXFeeRate = "0.05"
 
-	// CreditIncrement is the smallest purchasable credit step: one USD cent
-	// (ValidatePurchaseAmount rejects quantities that are not a whole
-	// multiple of it).
+	// CreditIncrement is the GRANULARITY of a purchase, one USD cent, not its
+	// smallest permitted size: ValidatePurchaseAmount rejects a quantity that
+	// is not a whole multiple of it, and separately rejects anything under
+	// MinPurchaseCredits. One cent has not been buyable since issue #1450.
 	CreditIncrement int64 = CreditsPerUSD / 100
+
+	// StripeMinimumChargeCredits is Stripe's own minimum charge for USD, 0.50
+	// (https://docs.stripe.com/currencies), expressed in credits. Stripe is the
+	// default and only non-BD rail, so a purchase under this is one the rail
+	// would refuse whatever this product thinks of it. Named here rather than
+	// left in prose because it is one of the two reasons the floor below is the
+	// size it is, and purchase_floor_test.go asserts it.
+	StripeMinimumChargeCredits int64 = CreditsPerUSD / 2
 
 	// ChatHoldCredits mirrors the authorization hold the data plane takes
 	// before it dispatches a chat request: edge-api's
@@ -70,16 +79,35 @@ const (
 	// must cover (issue #1450).
 	//
 	// Ten, not one. A minimum of exactly one hold is the same defect with a
-	// smaller radius: it funds a single message in flight and refuses the
-	// second concurrent one, and it does not cover a variable-price alias at
-	// all, because ChatHoldCredits is the endpoint FLOOR that edge-api's
-	// ReservationCredits raises per request for hive-auto from that request's
-	// own bounds (issue #1372). Ten holds is a session rather than a message:
-	// roughly ten ordinary turns of headroom, or at least two of the larger
-	// variable-price holds. It also puts the smallest purchase above Stripe's
-	// own $0.50 USD minimum charge, which the previous one-cent minimum was
-	// below, so the smallest quantity the product offered was one the default
-	// rail would have rejected outright.
+	// smaller radius: it funds a single request in flight and refuses the
+	// second concurrent one. Ten is not ten sequential turns, which would be a
+	// much larger number, since a hold is released at settlement and issue
+	// #1450's own live evidence has a real turn settling under one cent. It is
+	// ten CONCURRENT flat holds.
+	//
+	// The flat figure is not what binds on the product's default alias, and
+	// that is the reason ten rather than two. ChatHoldCredits is the endpoint
+	// FLOOR that edge-api's ReservationCredits raises per request for a
+	// variable-price alias such as hive-auto, sized from that request's own
+	// bounds (issue #1372). An ordinary hive-auto turn, one that sets no
+	// max_tokens and so holds against the full completion cap, sizes to about
+	// $0.34. Ten flat holds covers roughly three of those; two would not cover
+	// one.
+	//
+	// It also puts the smallest purchase at twice StripeMinimumChargeCredits.
+	// The previous one-cent minimum was below it, so the smallest quantity the
+	// product offered was one the default rail would have rejected outright.
+	//
+	// What the floor deliberately does NOT cover: a hive-auto body past roughly
+	// 152 KiB, whose sized hold exceeds $1.00, and the $2.00 catalog envelope
+	// that ReservationCredits falls back to when it cannot size a request at
+	// all. Neither is an ordinary chat message (the first is a 152 KiB single
+	// prompt, the second is a body over the 256 KiB cap that is refused a
+	// moment later anyway, or a pricing fault), and covering them by purchase
+	// floor rather than by sizing the hold would price the entry point of a
+	// Bangladesh-first prepaid product at $2.00. The hold being unrelated to
+	// the charge is the root defect and stays with issues #699 and #1372; this
+	// constant is not a substitute for it.
 	MinPurchaseHoldMultiple int64 = 10
 
 	// MinPurchaseCredits is the minimum credits purchasable in a single
@@ -125,6 +153,16 @@ var (
 	ErrIntentNotFound         = errors.New("payments: payment intent not found")
 	ErrBillingProfileRequired = errors.New("payments: billing profile required to initiate checkout")
 	ErrFXUnavailable          = errors.New("payments: FX rate unavailable")
+
+	// ErrBelowMinimumPurchase marks a purchase quantity under
+	// MinPurchaseCredits. It is a sentinel rather than a message the HTTP layer
+	// re-recognises by substring, because the neighbouring errors interpolate
+	// caller-supplied values: `rail %s not available for country %s` carries an
+	// unvalidated rail straight into the string, so a rail chosen to contain
+	// another branch's phrase can pick which canned 400 the payer gets. Nothing
+	// leaks and nothing is bypassed either way, but a new branch should not
+	// widen a set that is matched on text.
+	ErrBelowMinimumPurchase = errors.New("payments: purchase below the minimum")
 
 	// ErrEventRejected marks a webhook delivery the provider must NOT retry:
 	// the payload failed signature verification, or is not a payload this rail
@@ -305,7 +343,7 @@ func ValidatePurchaseAmount(credits int64, rail Rail) error {
 		return fmt.Errorf("payments: credits must be a multiple of %d, got %d", CreditIncrement, credits)
 	}
 	if credits < MinPurchaseCredits {
-		return fmt.Errorf("payments: credits must be at least %d, got %d", MinPurchaseCredits, credits)
+		return fmt.Errorf("%w: credits must be at least %d, got %d", ErrBelowMinimumPurchase, MinPurchaseCredits, credits)
 	}
 	if maxCredits := maxCreditsForRail(rail); credits > maxCredits {
 		return fmt.Errorf("payments: credits must be at most %d for the selected payment method, got %d", maxCredits, credits)

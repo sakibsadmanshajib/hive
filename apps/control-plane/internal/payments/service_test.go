@@ -439,7 +439,10 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 500, "https://cp.example.com", "https://console.example.com", "idem-004")
+	// Above the purchase floor, so granularity is the only rule that can reject
+	// it. A bare 500 sits under the floor since issue #1450 and would have kept
+	// this test green with the one-cent-step check deleted.
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, MinPurchaseCredits+500, "https://cp.example.com", "https://console.example.com", "idem-004")
 	if err == nil {
 		t.Error("expected error for a quantity that is not a whole one-cent step, got nil")
 	}

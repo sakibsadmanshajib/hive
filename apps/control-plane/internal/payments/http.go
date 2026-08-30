@@ -469,6 +469,13 @@ func classifyInitiateError(err error) (int, string) {
 		// keep the variable names in the log, not on the customer wire.
 		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
 	}
+	if errors.Is(err, ErrBelowMinimumPurchase) {
+		// Customer fault, and the one number they need is the floor. Matched on
+		// a sentinel rather than on message text, because the substring switch
+		// below is fed errors that interpolate the caller's own rail string
+		// (issue #1450).
+		return http.StatusBadRequest, fmt.Sprintf("credits must be at least %d", MinPurchaseCredits)
+	}
 	// Validation errors carry the customer-provided value only (credit
 	// count). The substrings below are safe — they do not echo FX rates,
 	// USD amounts, or any internal accounting detail.
@@ -478,8 +485,6 @@ func classifyInitiateError(err error) (int, string) {
 		return http.StatusBadRequest, "credits must be positive"
 	case strings.Contains(msg, "credits must be a multiple of"):
 		return http.StatusBadRequest, fmt.Sprintf("credits must be a multiple of %d", CreditIncrement)
-	case strings.Contains(msg, "credits must be at least"):
-		return http.StatusBadRequest, fmt.Sprintf("credits must be at least %d", MinPurchaseCredits)
 	case strings.Contains(msg, "credits must be at most"):
 		return http.StatusBadRequest, "credits exceed the maximum for the selected payment method"
 	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):
