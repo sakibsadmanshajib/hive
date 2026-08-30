@@ -3,7 +3,11 @@
 // authenticated tenant via RLS.
 package rag
 
-import "time"
+import (
+	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+)
 
 // DocumentStatus mirrors the rag_documents.status CHECK constraint.
 const (
@@ -89,11 +93,29 @@ type ChatChoice struct {
 	FinishReason *string     `json:"finish_reason"`
 }
 
-// ChatUsage mirrors the OpenAI usage object (token counts only).
+// ChatUsage mirrors the OpenAI usage object.
+//
+// CompletionTokensDetails is what keeps this endpoint's usage restatement
+// lossless (issue #1472). total_tokens is restated to the component sum when
+// an upstream counts reasoning ALONGSIDE completion rather than inside it, and
+// that restatement discards nothing only while the remainder is still
+// somewhere in the response. On a usage object with three fields it was not: a
+// client that could previously derive 26 from an upstream total of 31 read 5
+// with no breakdown anywhere and had no way back to the number. The reasoning
+// count therefore travels with the totals, exactly as it does on the four
+// API-key endpoints and on both SSE relays, so this endpoint stops being the
+// one surface where the restatement loses a measurement.
+//
+// Pointer with omitempty: a response from an upstream that reported no
+// breakdown carries no new member, so nothing changes for the ordinary case.
+// It reuses inference.CompletionTokensDetails rather than declaring a fourth
+// copy of the same three fields, so the shape here cannot drift from the shape
+// the rest of the gateway emits.
 type ChatUsage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens            int64                              `json:"prompt_tokens"`
+	CompletionTokens        int64                              `json:"completion_tokens"`
+	TotalTokens             int64                              `json:"total_tokens"`
+	CompletionTokensDetails *inference.CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 // ChatResponse is the JSON body returned by POST /v1/rag/chat.

@@ -95,6 +95,19 @@ func callSyncCtx(orch *Orchestrator, ctx context.Context) *httptest.ResponseReco
 }
 
 // captureLogs collects everything written to the standard logger while fn runs.
+//
+// ponytail: process-global by construction, so this helper is only safe while
+// no test in this package runs concurrently with another. log.SetOutput and
+// log.SetFlags mutate the standard logger for the whole process, and several
+// callers drive executeSync and executeStreaming, which dispatch settlement
+// work onto their own background contexts (freshSettlementCtx, stream.go). A
+// settlement goroutine that logs after its own test's defer has restored the
+// writer will write into whichever buffer the NEXT captureLogs installed.
+// Nothing in this package calls t.Parallel() today, so nothing fails from it;
+// adding t.Parallel() to any file that uses this helper is what would turn it
+// into a log assertion that passes or fails on timing, which reads as flake
+// rather than as the ordering bug it is. Upgrade path if that day comes: pass
+// a *log.Logger through the call chain instead of using the standard one.
 func captureLogs(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer

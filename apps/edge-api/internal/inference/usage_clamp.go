@@ -214,9 +214,10 @@ func collapsedByteLen(text string) int {
 }
 
 // clampZeroCompletionUsage rewrites usage.CompletionTokens when the upstream
-// provider returned 0 but the response actually carried output text. It then
-// recomputes total_tokens. A warning is logged so the billing team can track
-// upstream flake rate.
+// provider returned 0 but the response actually carried output text. A warning
+// is logged so the billing team can track upstream flake rate. It then hands
+// the object to EnforceUsageIdentity, which is what recomputes total_tokens --
+// on every shape, not only this one.
 //
 // outputTexts must contain every choice's text content (chat: message.content;
 // legacy completions: choice.text). Empty entries are ignored — they represent
@@ -227,23 +228,407 @@ func clampZeroCompletionUsage(usage *UsageResponse, outputTexts []string, upstre
 	if usage == nil {
 		return
 	}
-	if usage.CompletionTokens > 0 {
+	if usage.CompletionTokens == 0 {
+		var total int64
+		for _, t := range outputTexts {
+			total += estimateCompletionTokens(t)
+		}
+		// total == 0 with completion_tokens == 0 is the tool-call-only shape:
+		// chatChoiceTexts reads message.content and message.refusal and
+		// deliberately skips tool_calls, so a turn that emitted nothing but
+		// tool-call arguments legitimately has no text to estimate from.
+		// Leave the component alone -- an estimate of zero is not evidence of
+		// zero output, and D-055 names this exact shape.
+		//
+		// The identity below still runs on it, and the intended reading of
+		// that is deliberate rather than incidental: an upstream reporting
+		// prompt 200, completion 0, total 260 on such a turn is describing 60
+		// tokens of tool-call arguments it counted and did not attribute to
+		// either component. The response is corrected to 200, so the 60
+		// leaves the customer-facing payload as well as the ledger. That is
+		// the same call the identity makes everywhere else -- the payload
+		// states what Hive billed, and the unattributed quantity is carried
+		// operator-side (the log line and the unaccounted-token counter in
+		// EnforceUsageIdentity) rather than in a total no client can
+		// reconcile. It is NOT a verified zero of tool-call output, the trap
+		// D-056 documents for cache_write_tokens; it is an unmeasured
+		// quantity, and the counter is where it is measured.
+		// TestUsageIdentity_ToolCallOnlyTurnCorrectsTheTotalAndRecordsTheGap
+		// pins that reading.
+		if total > 0 {
+			log.Printf("inference: usage clamp engaged endpoint=%s alias=%s upstream_id=%s upstream_ct=0 estimated_ct=%d",
+				endpoint, aliasID, upstreamID, total)
+			usage.CompletionTokens = total
+		}
+	}
+	EnforceUsageIdentity(usage, upstreamID, aliasID, endpoint)
+}
+
+// Direction label values for the total_tokens counters, and convention label
+// values for the reasoning counter. Named rather than spelled inline because
+// NewStageMetrics pre-creates every series at boot and a typo in either place
+// would create an extra, permanently-zero one.
+const (
+	usageIdentityOver  = "over"
+	usageIdentityUnder = "under"
+
+	// reasoningAlongside: the upstream's own arithmetic is
+	// prompt + completion + reasoning == total, so it counts reasoning
+	// OUTSIDE completion_tokens. Google's generateContent reports
+	// totalTokenCount inclusive of thoughtsTokenCount while
+	// candidatesTokenCount excludes it; that is the shape behind issue #1472.
+	reasoningAlongside = "alongside"
+	// reasoningUnexplained: reasoning_tokens exceeds completion_tokens and
+	// the alongside arithmetic does not hold either, so NEITHER convention
+	// describes the object. Nothing is rewritten on this shape.
+	reasoningUnexplained = "unexplained"
+)
+
+// usageConvention is which token-accounting convention an upstream usage
+// object is written in, decided from the numbers on the wire and from nothing
+// else.
+//
+// Never from the provider or the model family, and that is a repository
+// lesson rather than a preference: OpenRouter reports OpenAI-inclusive usage
+// even for Claude models, which is why NormalizeCacheUsage already keys on
+// field presence for the same class of question. A model-family switch here
+// would be wrong for the same requests that one was wrong for.
+type usageConvention int
+
+const (
+	// conventionInside is OpenAI's: reasoning_tokens is a subset of
+	// completion_tokens and total_tokens is their sum with prompt_tokens, so
+	// the wire identity already holds.
+	conventionInside usageConvention = iota
+	// conventionAlongside is the thoughts convention: reasoning is counted in
+	// the total but excluded from completion_tokens.
+	conventionAlongside
+	// conventionUnknown is neither arithmetic holding. The object is not
+	// self-consistent under any convention this gateway knows.
+	conventionUnknown
+)
+
+// classifyUsageConvention decides the convention from the wire shape.
+//
+// Order matters. When reasoning is 0 or absent the two arithmetics coincide,
+// and inside is the right answer there: it is OpenAI's convention, it is what
+// the overwhelming majority of traffic is written in, and calling that shape
+// "alongside" would label every ordinary response as a thinking model.
+func classifyUsageConvention(usage *UsageResponse, reasoning int64) usageConvention {
+	sum := usage.PromptTokens + usage.CompletionTokens
+	switch {
+	case usage.TotalTokens == sum && reasoning <= usage.CompletionTokens:
+		// The breakdown clause is load-bearing, not decoration. A total that
+		// equals the component sum while reasoning_tokens exceeds
+		// completion_tokens is NOT the inside convention: under it the
+		// breakdown is a subset of the component. Classifying that shape as
+		// inside is what let it return early and reach a customer unexamined.
+		return conventionInside
+	case reasoning > 0 && usage.TotalTokens == sum+reasoning:
+		return conventionAlongside
+	default:
+		return conventionUnknown
+	}
+}
+
+// EnforceUsageIdentity holds a usage object to the OpenAI wire contract's
+// total_tokens identity, which defines total_tokens as prompt_tokens plus
+// completion_tokens rather than as an independently reported figure, and which
+// every OpenAI-compatible client assumes (issue #1472).
+//
+// Exported so the two relays that never build a typed usage object can reach
+// the same rule instead of writing a second copy of it by hand:
+// apps/edge-api/internal/rag's synchronous half calls this directly, and both
+// SSE relays call EnforceUsageIdentityInFrame below, which wraps it.
+//
+// # It never rewrites reasoning_tokens, and that is the whole design
+//
+// Nothing in edge-api computes reasoning_tokens. Every adapter decodes it
+// verbatim from the upstream, so the field carries whatever convention the
+// upstream wrote it in, and a rule derived from this package's own doc comment
+// about what the field "means" is a rule derived from an assumption.
+//
+// An earlier version of this function capped reasoning_tokens at
+// completion_tokens whenever it corrected a total downward, on the reasoning
+// that a breakdown may not exceed the component it breaks down. That was wrong
+// on exactly the shape this issue is about: when an upstream counts reasoning
+// ALONGSIDE completion rather than inside it, 26 is a real measurement and 1
+// is not a smaller version of it, so the cap handed the customer a fabricated
+// number and lost 25 tokens that survived only in a log line. A measured
+// upstream quantity is never shrunk here to satisfy an invariant the upstream
+// did not claim to be writing under.
+//
+// # What it does instead: classify, then act per convention
+//
+//   - conventionInside (prompt + completion == total). The identity already
+//     holds. Nothing is rewritten and nothing is logged, because a line on
+//     every well-formed request buries the ones that matter.
+//   - conventionAlongside (prompt + completion + reasoning == total). The
+//     upstream is self-consistent under its own convention. total_tokens is
+//     restated as the OpenAI derived figure so a client can reconcile it, and
+//     reasoning_tokens is left EXACTLY as measured, which is what makes the
+//     restatement lossless: the remainder is still on the wire, so a caller
+//     reads 5 and 26 and can recover the upstream's 31. The quantity is also
+//     recorded operator-side, in tokens, by both counters below.
+//   - conventionUnknown. Neither arithmetic holds, so no convention explains
+//     the object. Two sub-cases, handled differently on purpose:
+//     when total disagrees with the component sum, the total is restated and
+//     the signed discrepancy is recorded as a quantity; when the total agrees
+//     but reasoning_tokens exceeds completion_tokens, NOTHING is rewritten,
+//     because there is no second field carrying the remainder and any
+//     rewrite would be this gateway inventing a figure. It is recorded and
+//     passed through.
+//
+// # Why the correction never goes to the components
+//
+// Folding an unaccounted remainder into completion_tokens is what issue #1472
+// suggests, and it is the one option that is not available without an owner
+// ruling: completion_tokens is an input to the charge, so folding reasoning in
+// begins billing a quantity that has never been billed on these paths, which
+// D-055 forbids. Splitting the two (folding for the customer, billing the old
+// figure) is refused for the reason clampUsageToCeiling states in
+// completion_ceiling.go: one number in one place, so the caller can never read
+// a completion count they were not billed on. Whether Hive should bill thought
+// tokens at all is a pricing decision for the owner, and
+// hive_usage_reasoning_tokens_unbilled_total is what puts the quantity in
+// front of that decision.
+//
+// # Which paths price which number
+//
+// Stated concretely because an earlier version of this comment said "nothing
+// anywhere prices total_tokens", that was false, and a false statement here is
+// worse than no statement: this is the file the next person reads when they
+// ask which number the money comes from. By symbol, not by line, because
+// line-pinned citations into files another pull request is editing are stale
+// on merge.
+//
+//   - Per-token aliases price the COMPONENTS. settlementCredits (stream.go)
+//     passes prompt and completion, split into their cache classes, into
+//     CreditsForTokens, and ChatSettlementCredits (pricing.go) funnels the
+//     session-chat surface into the same function. CreditsForTokens takes four
+//     token arguments and neither total_tokens nor reasoning_tokens is among
+//     them.
+//
+//   - Variable-price (upstream_actual) aliases price the COST the upstream
+//     reported for that generation, read from the raw response bytes by
+//     UpstreamActualSettlement (pricing.go). No token count of ours enters
+//     that charge at all.
+//
+//   - The BATCH path USED to price total_tokens, and no longer does. Until PR
+//     #1524 (2026-08-30), DefaultCreditPolicy.Credits
+//     (apps/control-plane/internal/batchstore/executor/dispatcher.go) returned
+//     usage.TotalTokens whenever it was above zero and fell back to the
+//     component sum only otherwise, and it was live, so a /v1/batches line
+//     carrying the 31-against-5 shape behind this issue was a 6.2x OVERCHARGE
+//     rather than a reporting defect. That was issue #1473 and it is fixed:
+//     Credits now returns priceLine(pricing, usage, rawUpstreamBody), which
+//     settles each line at its alias's own price, and the Usage struct's
+//     TotalTokens field carries a comment saying it is decoded because the
+//     upstream reports it and deliberately never priced, with a regression
+//     guard feeding a total-exceeds-components shape through settlement to
+//     prove it is ignored.
+//
+//     Kept in this comment rather than deleted, because a reader arriving here
+//     is deciding whether total_tokens can reach money, and "it did on one
+//     path, here is which, and here is the change that ended it" is a more
+//     useful answer than silence. The path still never crosses this function:
+//     it decodes the raw LiteLLM body in batchstore/local_inference.go.
+//
+// So on the paths this function does cover, restating the total moves no money
+// in either direction. That is a statement about those paths, not a claim that
+// the total_tokens class is safe everywhere.
+//
+// # The record left behind
+//
+// Loud, never silent, and as a quantity rather than only as prose. Every
+// counter is incremented AFTER the object has actually been corrected rather
+// than before, so none of them can report a state the usage object has not
+// reached:
+//
+//   - usageIdentityViolations counts OCCURRENCES of a restated total, by
+//     alias, endpoint and direction.
+//   - usageIdentityUnaccountedTokens sums the TOKENS between the upstream
+//     total and the component sum, by direction. It exists because an
+//     occurrence count cannot answer "how many tokens went unaccounted
+//     yesterday", and because restating the total removes the only place that
+//     quantity used to be durable by accident: usage_events.hive_credit_delta
+//     carried usage.TotalTokens (recordCompletedEvent in orchestrator.go,
+//     recordInterruptedEvent in stream.go) and now carries the component sum.
+//   - reasoningTokensUnbilled sums the REASONING TOKENS Hive reported and did
+//     not bill, by convention. On the alongside shape it is the quantity an
+//     owner needs to price the D-055 decision. On the unexplained shape it is
+//     the only record that a breakdown larger than its own component was
+//     served, since nothing is rewritten there and the total counters see a
+//     discrepancy of zero.
+//
+// One shape deliberately increments on every response, and it is worth naming
+// so nobody reads it as a defect later. An upstream that reports components
+// and omits total_tokens decodes to a total of 0, which no convention explains,
+// so it lands in the unknown branch as "under" on each response it serves.
+// That is correct: an absent derived field IS a disagreement with the
+// components, and filling it in is the one restatement that overrides no
+// reported figure at all. It is not expected to be common. Every provider this
+// gateway has routed to reports total_tokens, LiteLLM normalizes the usage
+// block, and no shape in this repository's fixtures omits it outside the
+// deliberate TotalAbsentIsFilledFromComponents case. If the rate does climb,
+// the reading is not "usage identity violations are up" but "one provider's
+// usage adapter stopped reporting a total", and usageIdentityViolations
+// carries the alias label that names which one. A counter that fires on every
+// response from some provider is noise, and noise gets ignored, which is the
+// same thing as having no counter at all.
+func EnforceUsageIdentity(usage *UsageResponse, upstreamID, aliasID, endpoint string) {
+	if usage == nil {
+		return
+	}
+	var reasoning int64
+	if usage.CompletionTokensDetails != nil {
+		reasoning = usage.CompletionTokensDetails.ReasoningTokens
+	}
+	convention := classifyUsageConvention(usage, reasoning)
+	if convention == conventionInside {
 		return
 	}
 
-	var total int64
-	for _, t := range outputTexts {
-		total += estimateCompletionTokens(t)
+	sum := usage.PromptTokens + usage.CompletionTokens
+	// Signed: positive means the upstream's total exceeded its own components
+	// (tokens it counted and did not attribute), negative means it fell short.
+	// Zero on the shape where the total agrees and only the breakdown is
+	// impossible, which is why that shape is recorded on the reasoning counter
+	// instead.
+	unaccounted := usage.TotalTokens - sum
+
+	switch convention {
+	case conventionAlongside:
+		log.Printf("inference: usage identity violated endpoint=%s alias=%s upstream_id=%s prompt_tokens=%d completion_tokens=%d "+
+			"upstream_total_tokens=%d corrected_total_tokens=%d unaccounted_tokens=%d reported_reasoning_tokens=%d convention=%s: "+
+			"the upstream counts reasoning tokens alongside completion_tokens rather than inside it, so its total is self-consistent under its own "+
+			"convention; restating the total as the component sum, leaving reasoning_tokens exactly as measured so the remainder stays on the wire, "+
+			"and the charge is unchanged because it prices the components",
+			endpoint, aliasID, upstreamID, usage.PromptTokens, usage.CompletionTokens,
+			usage.TotalTokens, sum, unaccounted, reasoning, reasoningAlongside)
+		usage.TotalTokens = sum
+		recordTotalRestated(aliasID, endpoint, unaccounted)
+		reasoningTokensUnbilled.WithLabelValues(reasoningAlongside).Add(float64(reasoning))
+
+	case conventionUnknown:
+		if unaccounted == 0 {
+			// The total agrees with the components and reasoning_tokens still
+			// exceeds completion_tokens, so the object is impossible under the
+			// inside convention and not described by the alongside one either.
+			// Nothing here is rewritten: there is no second field carrying the
+			// remainder, so any figure this gateway wrote would be invented,
+			// and the reported measurements are passed through with the fact
+			// recorded instead.
+			log.Printf("inference: usage identity violated endpoint=%s alias=%s upstream_id=%s prompt_tokens=%d completion_tokens=%d "+
+				"total_tokens=%d reported_reasoning_tokens=%d convention=%s: "+
+				"reasoning_tokens exceeds completion_tokens while the total agrees with the components, so neither the inside nor the alongside "+
+				"convention describes this object; passing the upstream figures through untouched rather than inventing one",
+				endpoint, aliasID, upstreamID, usage.PromptTokens, usage.CompletionTokens,
+				usage.TotalTokens, reasoning, reasoningUnexplained)
+			reasoningTokensUnbilled.WithLabelValues(reasoningUnexplained).Add(float64(reasoning))
+			return
+		}
+		log.Printf("inference: usage identity violated endpoint=%s alias=%s upstream_id=%s prompt_tokens=%d completion_tokens=%d "+
+			"upstream_total_tokens=%d corrected_total_tokens=%d unaccounted_tokens=%d reported_reasoning_tokens=%d convention=%s: "+
+			"the upstream's total disagrees with its own components and no reasoning count explains the gap; reporting the component sum, "+
+			"and the charge is unchanged because it prices the components",
+			endpoint, aliasID, upstreamID, usage.PromptTokens, usage.CompletionTokens,
+			usage.TotalTokens, sum, unaccounted, reasoning, "unknown")
+		usage.TotalTokens = sum
+		recordTotalRestated(aliasID, endpoint, unaccounted)
+
+	case conventionInside:
+		// Unreachable: the early return above takes every inside object, and
+		// classifyUsageConvention only returns inside when the breakdown fits
+		// inside its own component. Left explicit so adding a fourth
+		// convention has to decide what happens here rather than falling
+		// through in silence.
 	}
-	if total == 0 {
-		// Legit empty completion (e.g. tool-call only). Leave usage alone.
-		return
+}
+
+// recordTotalRestated increments the two total_tokens counters, after the
+// restatement rather than before, and converts the signed discrepancy into the
+// magnitude the quantity series carries.
+func recordTotalRestated(aliasID, endpoint string, unaccounted int64) {
+	direction := usageIdentityOver
+	magnitude := unaccounted
+	if unaccounted < 0 {
+		direction = usageIdentityUnder
+		magnitude = -unaccounted
+	}
+	usageIdentityViolations.WithLabelValues(aliasID, endpoint, direction).Inc()
+	usageIdentityUnaccountedTokens.WithLabelValues(direction).Add(float64(magnitude))
+}
+
+// EnforceUsageIdentityInFrame holds the usage member of one already-sanitized
+// response frame to the same rule EnforceUsageIdentity applies to a typed
+// usage object, for the two relays that hand raw frame bytes to a customer and
+// never build one: session chat (apps/edge-api/internal/chat/dispatch.go,
+// which serves the Open WebUI front end) and RAG chat
+// (apps/edge-api/internal/rag/chat_handler.go). Before this existed, a
+// violating total reached both of those surfaces verbatim while the four
+// API-key endpoints were corrected, which is a guarantee that held in four
+// places out of six.
+//
+// total_tokens is the only key it ever writes, because it is the only field
+// EnforceUsageIdentity ever rewrites. It patches that one key in place and
+// leaves every other byte as the sanitizer produced it: re-marshalling a typed
+// UsageResponse instead would silently drop any usage member this package does
+// not declare, and packages/sanitize deliberately keeps usage as an open map
+// minus three cost fields, so a round trip through the struct would be a
+// second, invisible sanitiser.
+//
+// On any parse or encode failure the ORIGINAL bytes are returned. A failed
+// cosmetic rewrite must never break a frame already committed to the wire; the
+// charge on both callers prices components regardless of what these bytes say.
+// A frame carrying no usage member is returned untouched and logs nothing,
+// which is almost every frame of a stream.
+func EnforceUsageIdentityInFrame(frame []byte, upstreamID, aliasID, endpoint string) []byte {
+	if len(frame) == 0 {
+		return frame
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(frame, &fields); err != nil || fields == nil {
+		return frame
+	}
+	rawUsage, present := fields["usage"]
+	if !present {
+		return frame
+	}
+	var usageFields map[string]json.RawMessage
+	if err := json.Unmarshal(rawUsage, &usageFields); err != nil || usageFields == nil {
+		return frame
+	}
+	var usage UsageResponse
+	if err := json.Unmarshal(rawUsage, &usage); err != nil {
+		return frame
 	}
 
-	log.Printf("inference: usage clamp engaged endpoint=%s alias=%s upstream_id=%s upstream_ct=0 estimated_ct=%d",
-		endpoint, aliasID, upstreamID, total)
-	usage.CompletionTokens = total
-	usage.TotalTokens = usage.PromptTokens + total
+	totalBefore := usage.TotalTokens
+	EnforceUsageIdentity(&usage, upstreamID, aliasID, endpoint)
+	if usage.TotalTokens == totalBefore {
+		return frame
+	}
+
+	total, err := json.Marshal(usage.TotalTokens)
+	if err != nil {
+		log.Printf("inference: could not encode a corrected total into a relayed frame endpoint=%s alias=%s: %v", endpoint, aliasID, err)
+		return frame
+	}
+	usageFields["total_tokens"] = total
+
+	rebuiltUsage, err := json.Marshal(usageFields)
+	if err != nil {
+		log.Printf("inference: could not re-encode a corrected usage member endpoint=%s alias=%s: %v", endpoint, aliasID, err)
+		return frame
+	}
+	fields["usage"] = rebuiltUsage
+	out, err := json.Marshal(fields)
+	if err != nil {
+		log.Printf("inference: could not re-encode a relayed frame after a usage correction endpoint=%s alias=%s: %v", endpoint, aliasID, err)
+		return frame
+	}
+	return out
 }
 
 // chatChoiceTexts returns the text content of every chat completion choice.
