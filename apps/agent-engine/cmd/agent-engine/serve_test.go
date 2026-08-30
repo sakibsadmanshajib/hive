@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -518,13 +519,33 @@ func TestServeSocket_WireContract(t *testing.T) {
 	const socketURL = "http://agent-engine.internal" // host is never resolved; DialContext always dials the socket
 
 	t.Run("health is reachable without any auth", func(t *testing.T) {
+		// This case is about AUTH, not readiness. It used to assert 200,
+		// which was the same assertion only because /health was a static 200
+		// for everyone. Since issue #1510 it answers for the ability to
+		// launch, and this fixture deliberately points at a dummy SIF path,
+		// so a ready 200 is not available here and demanding one would be
+		// asserting the wrong thing.
+		//
+		// What must hold is that the endpoint is reachable with no token at
+		// all: never 401, never 503-for-missing-token, which is what
+		// authorized() returns when no token is configured. Anything else
+		// would mean the probe and the installer had to authenticate to ask
+		// whether the launcher is alive.
 		resp, err := client.Get(socketURL + "/health")
 		if err != nil {
 			t.Fatalf("GET /health: %v", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusUnauthorized {
+			t.Fatalf("/health demanded authentication (401); it must be reachable without a token")
+		}
+		body := readBody(t, resp)
+		if strings.Contains(body, "internal token") {
+			t.Fatalf("/health answered with an auth error rather than a readiness answer: %s", body)
+		}
+		// And whichever way it answers, it answers about readiness.
+		if !strings.Contains(body, `"status":"ok"`) && !strings.Contains(body, `"status":"unhealthy"`) {
+			t.Fatalf("expected a readiness payload from /health, got %s", body)
 		}
 	})
 
@@ -743,4 +764,304 @@ func TestResolveMCPConfigPath_FailsOpenWhenWriteFails(t *testing.T) {
 	if path != "" {
 		t.Fatalf("expected an empty path when the write fails, got %q", path)
 	}
+}
+
+// --- launch readiness (issue #1510) ---------------------------------------
+//
+// /health used to be a static 200, which reported that net/http was alive and
+// nothing about whether this daemon could launch anything.
+//
+// Two distinct outages, kept separate here on purpose rather than letting one
+// check take credit for both:
+//
+//   - The launcher PROCESS dies. The socket goes with it, so the five minute
+//     probe already catches that before it issues any request. Nothing below
+//     is about that case.
+//   - The launcher runs perfectly on top of a DELETED or HALF DOWNLOADED
+//     IMAGE. Only this endpoint can see that, and only if it actually looks.
+//     The installer deliberately keeps the SIF out of its restart fingerprint
+//     (hashing a multi-gigabyte image every deploy costs more than the
+//     restart it avoids, and sandbox.BuildArgv reads the file per launch), so
+//     nothing restarts on it either. With a static 200 every task would fail
+//     forever while the supervision reported green forever.
+
+// writeFakeSIF writes a file that passes the header check: the 32 byte launch
+// header, then the magic. Not a real image, deliberately, since the check is a
+// header check and depending on a real multi-gigabyte artifact would make this
+// suite depend on CI having built one.
+func writeFakeSIF(t *testing.T, path string) {
+	t.Helper()
+	header := []byte("#!/usr/bin/env run-singularity\n\x00")
+	if len(header) != sifMagicOffset {
+		t.Fatalf("fixture launch header is %d bytes, the format puts the magic at %d", len(header), sifMagicOffset)
+	}
+	body := append(header, []byte(sifMagic)...)
+	body = append(body, []byte("\x0001\x0002\x00padding")...)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readyDirs builds a tree where every precondition holds.
+func readyDirs(t *testing.T) (sif, packs, workspace, run string) {
+	t.Helper()
+	root := t.TempDir()
+	sif = filepath.Join(root, "agent-engine.sif")
+	packs = filepath.Join(root, "packs")
+	workspace = filepath.Join(root, "workspaces")
+	run = filepath.Join(root, "sessions")
+	writeFakeSIF(t, sif)
+	for _, d := range []string{packs, workspace, run} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return sif, packs, workspace, run
+}
+
+// stubApptainerOnPath points PATH at a directory holding an apptainer stub, so
+// the PATH arm is exercised in both directions instead of being skipped
+// because the test image has no real apptainer.
+func stubApptainerOnPath(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "apptainer"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+func hasFailureAbout(failures []string, substr string) bool {
+	for _, f := range failures {
+		if strings.Contains(f, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLaunchReadiness(t *testing.T) {
+	t.Run("a complete tree reports nothing", func(t *testing.T) {
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if got := launchReadiness(sif, packs, ws, run); len(got) != 0 {
+			t.Fatalf("expected a ready launcher to report nothing, got %v", got)
+		}
+	})
+
+	t.Run("apptainer missing from PATH", func(t *testing.T) {
+		// Total outage: the launcher execs apptainer by name for every task,
+		// and its absence is invisible until someone submits one.
+		t.Setenv("PATH", t.TempDir())
+		sif, packs, ws, run := readyDirs(t)
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "apptainer is not on PATH") {
+			t.Fatalf("expected a missing apptainer to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the image is absent", func(t *testing.T) {
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.Remove(sif); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "is not readable") {
+			t.Fatalf("expected a deleted image to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the image is empty", func(t *testing.T) {
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.WriteFile(sif, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "is empty") {
+			t.Fatalf("expected an empty image to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the image is truncated mid header", func(t *testing.T) {
+		// The half-downloaded case, which is what the installer's own
+		// curl-and-unzip path produces when interrupted. Non-empty, so a size
+		// check alone would report it healthy.
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.WriteFile(sif, []byte("#!/usr/bin/env run-sing"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "shorter than a SIF header") {
+			t.Fatalf("expected a truncated image to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the image is long enough but is not an image", func(t *testing.T) {
+		// An HTML error page saved under the image's name, which is what an
+		// artifact download returns once the token has expired. Long enough to
+		// pass both a size check and a short-read check.
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.WriteFile(sif, []byte(strings.Repeat("<html>not a sif</html>", 16)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "does not carry the SIF magic") {
+			t.Fatalf("expected a non-image file to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the packs directory is gone", func(t *testing.T) {
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.Remove(packs); err != nil {
+			t.Fatal(err)
+		}
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "packs directory") {
+			t.Fatalf("expected a missing packs directory to be reported, got %v", got)
+		}
+	})
+
+	t.Run("a state directory is not writable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores the mode, so this case cannot be expressed as root")
+		}
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.Chmod(run, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(run, 0o700) })
+		if got := launchReadiness(sif, packs, ws, run); !hasFailureAbout(got, "run directory") {
+			t.Fatalf("expected an unwritable run directory to be reported, got %v", got)
+		}
+	})
+
+	t.Run("the writability probe leaves nothing behind", func(t *testing.T) {
+		// It proves writability by creating a file. A probe that forgot to
+		// remove it would deposit 288 files a day into the workspace root.
+		stubApptainerOnPath(t)
+		sif, packs, ws, run := readyDirs(t)
+		for i := 0; i < 3; i++ {
+			if got := launchReadiness(sif, packs, ws, run); len(got) != 0 {
+				t.Fatalf("unexpected failures: %v", got)
+			}
+		}
+		for _, dir := range []string{ws, run} {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("the probe left %d file(s) in %s", len(entries), dir)
+			}
+		}
+	})
+
+	t.Run("every failure is reported, not just the first", func(t *testing.T) {
+		// A check that stopped at the first problem would send an operator to
+		// fix one thing and find the launcher still down.
+		t.Setenv("PATH", t.TempDir())
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.Remove(sif); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(packs); err != nil {
+			t.Fatal(err)
+		}
+		got := launchReadiness(sif, packs, ws, run)
+		if len(got) < 3 {
+			t.Fatalf("expected apptainer, image and packs all reported, got %v", got)
+		}
+	})
+
+	t.Run("the failure list is ordered", func(t *testing.T) {
+		// The directory checks iterate a map. Unsorted output would reorder
+		// itself between two probes of the same broken box and read as two
+		// different problems in the alert mail.
+		t.Setenv("PATH", t.TempDir())
+		sif, packs, ws, run := readyDirs(t)
+		if err := os.Remove(sif); err != nil {
+			t.Fatal(err)
+		}
+		got := launchReadiness(sif, packs, ws, run)
+		if !sort.StringsAreSorted(got) {
+			t.Fatalf("expected a stable ordering, got %v", got)
+		}
+	})
+}
+
+func TestHealthEndpointAnswersForTheAbilityToLaunch(t *testing.T) {
+	stubApptainerOnPath(t)
+	sif, packs, ws, run := readyDirs(t)
+
+	for _, v := range requiredServeEnvVars {
+		t.Setenv(v, "dummy-value")
+	}
+	t.Setenv("HIVE_AGENT_ENGINE_SIF_PATH", sif)
+	t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", packs)
+	t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", ws)
+	t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", run)
+
+	socket := filepath.Join(t.TempDir(), "s.sock")
+	go func() { _ = serve(socket, "http://127.0.0.1:1", "tok") }()
+	waitForSocket(t, socket)
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}}
+	get := func(t *testing.T) (int, string) {
+		t.Helper()
+		resp, err := client.Get("http://localhost/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(body)
+	}
+
+	t.Run("a ready launcher answers 200 with the existing payload", func(t *testing.T) {
+		// The payload shape is a contract: the installer greps this endpoint
+		// and so does the five minute probe.
+		code, body := get(t)
+		if code != http.StatusOK {
+			t.Fatalf("expected 200 from a ready launcher, got %d: %s", code, body)
+		}
+		if !strings.Contains(body, `"status":"ok"`) {
+			t.Fatalf("expected the existing ok payload to be preserved, got %s", body)
+		}
+	})
+
+	t.Run("deleting the image turns the same endpoint red", func(t *testing.T) {
+		// The whole point. Before this change the endpoint answered 200 here,
+		// forever, while every task failed.
+		if err := os.Remove(sif); err != nil {
+			t.Fatal(err)
+		}
+		code, body := get(t)
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 with the image deleted, got %d: %s", code, body)
+		}
+		if !strings.Contains(body, `"status":"unhealthy"`) {
+			t.Fatalf("expected an unhealthy payload, got %s", body)
+		}
+		if !strings.Contains(body, "is not readable") {
+			t.Fatalf("expected the payload to name the missing image, got %s", body)
+		}
+	})
+
+	t.Run("and it recovers without a restart", func(t *testing.T) {
+		// Readiness is evaluated per request rather than cached at start-up,
+		// which matters because the installer deliberately does not restart
+		// the daemon when only the image changed.
+		writeFakeSIF(t, sif)
+		code, body := get(t)
+		if code != http.StatusOK {
+			t.Fatalf("expected the restored image to make the same process healthy again, got %d: %s", code, body)
+		}
+	})
 }

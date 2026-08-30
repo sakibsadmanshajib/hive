@@ -111,10 +111,33 @@ above renders both halves out of `deploy/systemd-user/` and installs them into
   five minutes from an installed copy under the runtime directory, never from
   the repo checkout. It posts `HiveAgentEngineDown` to Alertmanager on
   `localhost:9093` when the unit is not active, the socket is missing, or
-  `/health` does not answer, and `HiveAgentEngineProbeStale` when its own last
-  success is older than fifteen minutes, so a probe run that did not happen
-  reads as down rather than as silence. Both route through the existing tree to
-  the hive-ops email receiver, the same channel `scripts/backup-box.sh` uses.
+  `/health` does not answer.
+* A **cron** entry runs the same script with `--check` every fifteen minutes,
+  and the different scheduler is the point. `--check` reads the last-success
+  stamp and nothing else, posting `HiveAgentEngineProbeStale` when no probe has
+  succeeded in fifteen minutes. A staleness check living only inside the timed
+  probe cannot fire when the timer stops, because the probe never runs: it
+  posts nothing, the firing alert lapses through Alertmanager's
+  `resolve_timeout`, and the silence reads as health. `--check` never writes the
+  stamp, since a second writer would keep it fresh forever and hide exactly the
+  condition it looks for. Same split `scripts/backup-box.sh` already uses on
+  this box for the same reason. Both alerts route through the existing tree to
+  the hive-ops email receiver.
+
+What that pair still does not cover, stated rather than implied: if cron and
+the systemd user manager are both dead, the box is dead, and that is
+`external-uptime-probe.yml`'s job from outside this box's own network path.
+
+`/health` answers for the ability to LAUNCH, not for the mux being alive. It
+checks that `apptainer` is on `PATH`, that the SIF exists and is non-empty,
+readable and carries the SIF magic, that the packs directory is present, and
+that the workspace and run directories are writable, returning 503 with the
+named failures when any of that is false. Two different outages, kept separate:
+a dead launcher PROCESS takes the socket with it and the probe sees that before
+it issues a request, while a deleted or half-downloaded IMAGE leaves a perfectly
+healthy process that cannot run a single task. The installer deliberately keeps
+the SIF out of its restart fingerprint, so nothing restarts on that and, until
+this check existed, nothing observed it either.
 
 Restarting the launcher kills the `apptainer` child holding every in-flight
 Cowork session, so the installer restarts it only when the built binary, the
@@ -128,9 +151,21 @@ At-a-glance checks on the box:
 systemctl --user status hive-agent-engine.service
 systemctl --user is-enabled hive-agent-engine.service     # expect: enabled
 systemctl --user list-timers hive-agent-engine-health.timer
+crontab -l | grep agent-engine-health-probe               # the staleness lane
 journalctl --user -u hive-agent-engine -n 100
 journalctl --user -u hive-agent-engine-health -n 50
+curl -sS --fail-with-body --unix-socket \
+  /home/sakib/agent-runtime/run/engine.sock http://localhost/health
 ```
+
+A rollback is safe. `scripts/normalize-agent-engine-unit.sh` runs before the
+installer on every deploy and hands the unit name back when the checkout being
+deployed predates the unit file, because `systemd-run` refuses a name that a
+fragment file already holds and `systemctl stop` does not unload a fragment.
+Without that guard, a checkout from before this change cannot deploy onto a box
+that has the unit, and the failing deploy stops the launcher on its way past.
+A full revert of this change reverts that guard too; the manual clear is in the
+script's own header.
 
 If the unit fails to start during a deploy, the installer's own `/health` gate
 fails that step and the deploy run goes red. If it dies later, systemd brings

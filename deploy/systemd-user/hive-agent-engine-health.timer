@@ -42,6 +42,15 @@ OnActiveSec=1min
 # restarts resetting OnActiveSec above.
 OnUnitActiveSec=5min
 
+# systemd defaults AccuracySec to one minute, so a five minute timer really
+# fires somewhere in a six minute window. That interacts badly with the fifteen
+# minute staleness threshold and with the alert lifetime the probe sets: three
+# late runs in a row is enough to trip a staleness alert about a schedule that
+# is working exactly as configured. One second costs a timer wakeup that the
+# kernel would have taken anyway for something else on a box running a full
+# docker stack, and it makes the cadence mean what it says.
+AccuracySec=1s
+
 Unit=hive-agent-engine-health.service
 
 [Install]

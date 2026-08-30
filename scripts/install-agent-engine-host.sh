@@ -341,11 +341,30 @@ recorded_fingerprint=$(cat "$FINGERPRINT_PATH" 2>/dev/null || true)
 # on purpose in the other direction: changing the watchdog must never restart
 # the thing it watches.
 # ---------------------------------------------------------------------------
-install -m 0755 "$REPO_DIR/scripts/agent-engine-health-probe.sh" "$PROBE_PATH"
-render_unit "$TEMPLATE_DIR/$HEALTH_NAME.service" "$HEALTH_SERVICE_PATH"
-render_unit "$TEMPLATE_DIR/$HEALTH_NAME.timer" "$HEALTH_TIMER_PATH"
+# Staged then renamed, not written in place, for the same reason the binary
+# and the env file are. `install` and `>` both truncate first and fill after,
+# so a run killed between those two steps leaves a half written probe on disk
+# that the timer will happily execute a minute later. `mv` within one
+# filesystem is a rename, so a reader sees either the whole old file or the
+# whole new one and never a prefix of either. The watchdog is exactly the
+# thing that must not be broken by an interrupted deploy, since a broken
+# watchdog is silent.
+install -m 0755 "$REPO_DIR/scripts/agent-engine-health-probe.sh" "$PROBE_PATH.next"
+mv -f "$PROBE_PATH.next" "$PROBE_PATH"
+render_unit "$TEMPLATE_DIR/$HEALTH_NAME.service" "$HEALTH_SERVICE_PATH.next"
+render_unit "$TEMPLATE_DIR/$HEALTH_NAME.timer" "$HEALTH_TIMER_PATH.next"
+mv -f "$HEALTH_SERVICE_PATH.next" "$HEALTH_SERVICE_PATH"
+mv -f "$HEALTH_TIMER_PATH.next" "$HEALTH_TIMER_PATH"
 mv -f "$STAGE_UNIT" "$UNIT_PATH"
-chmod 0644 "$UNIT_PATH"
+# Explicit on all three, not left to the umask. `umask 022` is in force here,
+# which happens to produce 0644, but that is a coincidence of where these
+# lines sit rather than a decision, and the umask above has already been
+# changed twice in this script. 0644 rather than 0600 deliberately: a unit
+# file carries only paths, systemd reads it as this same user either way, and
+# the sibling cloudflared.service on the box is 0664, so the tighter mode
+# would buy nothing and imply these files hold a secret. They do not; the
+# credentials are in $ENV_FILE at 0600, which $RUN_ENTRY sources.
+chmod 0644 "$UNIT_PATH" "$HEALTH_SERVICE_PATH" "$HEALTH_TIMER_PATH"
 systemctl --user daemon-reload
 
 # `enable` refuses a name currently held by a transient unit, which is exactly
@@ -365,10 +384,92 @@ fi
 systemctl --user enable "$HEALTH_NAME.timer" >/dev/null
 systemctl --user restart "$HEALTH_NAME.timer"
 
+# ---------------------------------------------------------------------------
+# The out-of-process observer for the observer.
+#
+# The timer above cannot report its own death. If it stops, or if the systemd
+# user manager stops, the probe never runs, it posts nothing, any firing alert
+# lapses, and the silence reads as health. A staleness check that lives only
+# inside the timed probe is therefore not a staleness check at all, which is
+# what an earlier draft of this change shipped.
+#
+# So the staleness lane runs from cron, a different scheduler under a different
+# daemon, exactly as scripts/backup-box.sh's `--check` watchdog already does on
+# this box for the same reason. `--check` reads the stamp and nothing else: it
+# does not probe the launcher and never writes the stamp, because a second
+# writer would keep the stamp fresh forever and hide the very condition it is
+# looking for.
+#
+# Every fifteen minutes against a fifteen minute threshold, so a timer that
+# dies is reported within half an hour at worst.
+CRON_LINE="*/15 * * * * $PROBE_PATH --check >/dev/null 2>&1"
+CRON_TAG="# hive-agent-engine health staleness watchdog (issue #1510)"
+if ! command -v crontab >/dev/null 2>&1; then
+  # Not fatal. The systemd timer is the primary lane and it is installed and
+  # asserted above; what is missing here is the backstop that notices the
+  # primary lane dying. On the demo box crontab exists and this branch never
+  # runs. It exists for the hosted-runner job that also executes this
+  # installer, where there is no cron and no long-lived box to watch.
+  echo "::warning::crontab is not available, so the staleness watchdog is not installed. The five minute timer still runs, but nothing would report the timer itself dying."
+else
+  # Idempotent, and rewritten every run rather than appended to, so a changed
+  # path or cadence takes effect instead of accumulating a second entry.
+  # `crontab -l` exits non-zero when the user has no crontab at all, which is
+  # the first-install case and not an error.
+  existing=$(crontab -l 2>/dev/null || true)
+  desired=$(printf '%s\n%s\n' "$CRON_TAG" "$CRON_LINE")
+  filtered=$(printf '%s\n' "$existing" | grep -vF "$CRON_TAG" | grep -vF "$PROBE_PATH --check" || true)
+  if [ "$(printf '%s\n%s\n' "$filtered" "$desired")" != "$(printf '%s\n' "$existing")" ]; then
+    printf '%s\n%s\n' "$filtered" "$desired" | sed '/^$/d' | crontab -
+    echo "staleness watchdog: installed cron entry, every 15 minutes"
+  else
+    echo "staleness watchdog: cron entry already current"
+  fi
+fi
+
+# The supervision state is ASSERTED, never merely printed.
+#
+# This used to be `echo "... $(systemctl --user is-enabled ...)"`. Command
+# substitution inside a word expansion does not trip `set -e`, and `echo`
+# returns its own 0, so a box where `enable` had silently not taken printed
+# "supervision: ... is disabled" and the installer exited 0, and the deploy
+# went green over a launcher that would not survive a reboot. Reporting a
+# state instead of requiring it is the same class of mistake the whole issue
+# is about, so this reads the state, requires it, and fails the deploy when it
+# is wrong.
+assert_supervised() {
+  local enabled_state active_state
+  enabled_state=$(systemctl --user is-enabled "$UNIT_NAME.service" 2>&1 || true)
+  active_state=$(systemctl --user is-active "$HEALTH_NAME.timer" 2>&1 || true)
+  if [ "$enabled_state" != "enabled" ]; then
+    echo "::error::$UNIT_NAME.service is '$enabled_state', not 'enabled'. It will not start after a reboot, so the launcher would stay down and every agent task would fail. Check: systemctl --user status $UNIT_NAME.service"
+    exit 1
+  fi
+  if [ "$active_state" != "active" ]; then
+    echo "::error::$HEALTH_NAME.timer is '$active_state', not 'active'. Nothing would report the launcher being down until someone ran a task. Check: systemctl --user list-timers $HEALTH_NAME.timer"
+    exit 1
+  fi
+  # The cron backstop, asserted on any host that has cron at all. Only warned
+  # about where there is no crontab binary, which is the hosted runner rather
+  # than the box.
+  if command -v crontab >/dev/null 2>&1; then
+    if ! crontab -l 2>/dev/null | grep -qF "$PROBE_PATH --check"; then
+      echo "::error::the staleness watchdog cron entry is missing. The five minute timer would be unobserved, so its own death would read as health. Check: crontab -l"
+      exit 1
+    fi
+  fi
+  echo "supervision: $UNIT_PATH enabled, $HEALTH_NAME.timer active, staleness cron present (all asserted, not assumed)"
+}
+
 daemon_healthy() {
   systemctl --user is-active --quiet "$UNIT_NAME.service" || return 1
   [ -S "$SOCKET_PATH" ] || return 1
-  curl -sS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health >/dev/null 2>&1
+  # -f, so a 503 is a failure rather than a body this discards. Since issue
+  # #1510 /health answers for the ability to LAUNCH and returns 503 with a
+  # named failure list when it cannot, and without -f curl exits 0 on that,
+  # which would let this skip a restart on a daemon that is reporting itself
+  # unable to run a single task.
+  curl -fsS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health >/dev/null 2>&1
 }
 
 if [ -n "$installed_fingerprint" ] \
@@ -381,7 +482,7 @@ if [ -n "$installed_fingerprint" ] \
   # unconditionally would report a healthy install on a box where the enable
   # silently did not take, which is the whole failure this change exists to
   # end.
-  echo "supervision: $UNIT_PATH is $(systemctl --user is-enabled "$UNIT_NAME.service"), $HEALTH_NAME.timer is $(systemctl --user is-active "$HEALTH_NAME.timer")"
+  assert_supervised
   echo "binary: $BIN_PATH (unchanged)"
   echo "agent-engine daemon already runs these exact artifacts; leaving PID $running_pid and its in-flight sessions alone"
   exit 0
@@ -428,7 +529,11 @@ for _ in $(seq 1 30); do
   [ -S "$SOCKET_PATH" ] && break
   sleep 1
 done
-if ! curl -sS --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health; then
+# --fail-with-body rather than plain -f: a 503 here carries the named list of
+# broken preconditions (a deleted image, a missing packs dir, apptainer gone
+# from PATH), and that list is the whole diagnosis. Plain -f discards the body
+# and would turn a precise failure into "exit 22".
+if ! curl -sS --fail-with-body --max-time 5 --unix-socket "$SOCKET_PATH" http://localhost/health; then
   echo
   echo "::error::agent-engine daemon did not answer /health on $SOCKET_PATH"
   systemctl --user status "$UNIT_NAME.service" --no-pager --lines=40 || true
@@ -450,4 +555,4 @@ echo
 (umask 077; printf '%s\n' "$want_fingerprint" > "$FINGERPRINT_PATH")
 chmod 0600 "$FINGERPRINT_PATH"
 echo "agent-engine daemon healthy on $SOCKET_PATH"
-echo "supervision: $UNIT_PATH is $(systemctl --user is-enabled "$UNIT_NAME.service"), $HEALTH_NAME.timer is $(systemctl --user is-active "$HEALTH_NAME.timer")"
+assert_supervised

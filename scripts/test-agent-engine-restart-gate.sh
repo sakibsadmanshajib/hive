@@ -141,6 +141,24 @@ case "$verb" in
   # skip path. Modelled as no-ops that mutate no daemon state, so a script that
   # smuggled a restart in behind one of them would still fail case B.
   daemon-reload) : ;;
+  # `disable --now` stops as well as unlinking, and the normalize guard relies
+  # on that, so the teardown half is modelled here exactly as it is for stop.
+  # A `disable` arm that only unlinked would let the guard look like it had
+  # taken the launcher down when it had not.
+  disable)
+    case "$target" in
+      *.timer) rm -f "$STATE/timer_enabled" ;;
+      *) rm -f "$STATE/enabled" ;;
+    esac
+    case " $* " in
+      *" --now "*)
+        case "$target" in
+          *.timer) rm -f "$STATE/timer_active" ;;
+          *) teardown ;;
+        esac
+        ;;
+    esac
+    ;;
   enable)
     # `enable` on a name a transient unit still holds is what systemd refuses,
     # so refuse it here too rather than let the installer's guard go untested.
@@ -148,11 +166,25 @@ case "$verb" in
       echo "stub systemctl: unit $target is transient or generated" >&2
       exit 1
     fi
-    echo enabled > "$STATE/enabled"
+    # A box where enable reports success and does not take. Rare, but it is
+    # precisely the state the installer used to paper over by PRINTING
+    # is-enabled inside an echo instead of requiring it, so it has to be
+    # expressible here or the assertion that replaced that echo has no guard.
+    if [ -f "$STATE/enable_broken" ]; then exit 0; fi
+    # Per target, not one shared marker. A single marker meant the health
+    # timer's own enable satisfied every "was the launcher enabled" assertion,
+    # so case M's check could not fail no matter what the installer did.
+    case "$target" in
+      *.timer) : > "$STATE/timer_enabled" ;;
+      *) : > "$STATE/enabled" ;;
+    esac
     ;;
   is-enabled)
     if [ -f "$STATE/transient" ]; then echo transient; exit 0; fi
-    if [ -f "$STATE/enabled" ]; then echo enabled; exit 0; fi
+    case "$target" in
+      *.timer) [ -f "$STATE/timer_enabled" ] && { echo enabled; exit 0; } ;;
+      *) [ -f "$STATE/enabled" ] && { echo enabled; exit 0; } ;;
+    esac
     echo disabled; exit 1
     ;;
   # `restart` is destructive here too, and modelling only its teardown half is
@@ -163,8 +195,14 @@ case "$verb" in
   # mask the kill again, so `stop` does not.
   stop|restart|start)
     case "$target" in
-      # The health timer is stateless from the daemon's point of view.
-      *.timer) : ;;
+      # The health timer holds no sandbox session, so start and restart only
+      # flip its own liveness marker and never touch the daemon.
+      *.timer)
+        case "$verb" in
+          stop) rm -f "$STATE/timer_active" ;;
+          start|restart) : > "$STATE/timer_active" ;;
+        esac
+        ;;
       *)
         case "$verb" in
           stop) teardown ;;
@@ -174,7 +212,29 @@ case "$verb" in
         ;;
     esac
     ;;
-  is-active) [ -f "$STATE/active" ] || exit 3 ;;
+  # Prints the state as well as setting the exit code, because the real one
+  # does and the installer's supervision assertion reads the printed word. A
+  # stub that only set an exit code made that assertion compare against an
+  # empty string, which is a check that can only ever fail.
+  #
+  # Timer and launcher are tracked separately: they are independent units, and
+  # a stub that answered for the launcher when asked about the timer would let
+  # a script that never started the timer pass the assertion.
+  is-active)
+    # --quiet means print nothing and answer with the exit code only, and the
+    # installer relies on that. A stub that printed anyway put stray output in
+    # every run.
+    quiet=0
+    case " $* " in *" --quiet "*) quiet=1 ;; esac
+    marker="$STATE/active"
+    case "$target" in *.timer) marker="$STATE/timer_active" ;; esac
+    if [ -f "$marker" ]; then
+      [ "$quiet" = 1 ] || echo active
+    else
+      [ "$quiet" = 1 ] || echo inactive
+      exit 3
+    fi
+    ;;
   show)
     case "$prop" in
       MainPID) [ -f "$STATE/active" ] && cat "$STATE/active" || echo 0 ;;
@@ -187,6 +247,38 @@ case "$verb" in
   # a loud failure rather than a silent success, so the next one to be added to
   # the installer cannot quietly pass through unmodelled.
   *) echo "stub systemctl: unhandled verb '$verb' in: $*" >&2; exit 64 ;;
+esac
+exit 0
+SH
+
+# crontab is STUBBED, and that is not optional tidiness. The installer installs
+# a cron entry for the staleness watchdog, and this suite runs on developer
+# machines and CI runners that have a real crontab. Without this stub the first
+# run of this file rewrote the developer's own user crontab to point at a
+# $TMPDIR path that is deleted seconds later, which is both a live side effect
+# on the host and a broken cron entry left behind. Measured, not theoretical:
+# it happened on the first run.
+#
+# It is a full model rather than a no-op, so the cron half of the install is
+# actually asserted below instead of silently skipped.
+cat > "$tmp/bin/crontab" <<'SH'
+#!/bin/sh
+echo "crontab $*" >> "$STATE/calls"
+case "${1:-}" in
+  -l)
+    [ -f "$STATE/crontab" ] || { echo "no crontab for stub" >&2; exit 1; }
+    cat "$STATE/crontab"
+    ;;
+  -r) rm -f "$STATE/crontab" ;;
+  -)
+    # A crontab that reports success and does not take. Rare in the wild, and
+    # the only way to express "the watchdog ended up absent" against an
+    # installer that writes it on every run, which is exactly the state the
+    # assertion has to catch.
+    if [ -f "$STATE/cron_readonly" ]; then cat > /dev/null; exit 0; fi
+    cat > "$STATE/crontab"
+    ;;
+  *)  echo "stub crontab: unhandled argument '${1:-}'" >&2; exit 64 ;;
 esac
 exit 0
 SH
@@ -594,6 +686,227 @@ if [ "$(incarnation)" != "$pid_before" ]; then
   fail "[N] the daemon process was replaced on an unchanged install"
 fi
 [ $failures -eq "$before_n" ] && echo "ok   [N] the skip survives the supervision changes"
+
+# --- cases O and P: the migration is safe from the OTHER direction too -----
+#
+# The direction cases A to N do not cover, and the one that actually broke the
+# demo box on 2026-08-29. `systemd-run --unit=X` refuses while a fragment file
+# for X exists, and `systemctl stop` does not unload a fragment, so a checkout
+# that predates the unit file cannot deploy onto a box that has one. Every
+# deploy from main failed at the launcher step and the launcher sat inactive
+# with no process, which is both agent capabilities down. The kill and recover
+# tests could never have caught it: this is coexistence, not resilience.
+#
+# scripts/normalize-agent-engine-unit.sh runs before the installer in
+# deploy-demo-box.yml and hands the name back when, and only when, this
+# checkout cannot manage a unit file.
+normalizer="$repo_root/scripts/normalize-agent-engine-unit.sh"
+run_normalizer() {
+  local repo="$1"
+  set +e
+  out=$(env REPO_DIR="$repo" RUNTIME_DIR="$runtime" XDG_CONFIG_HOME="$tmp/config" \
+    bash "$normalizer" 2>&1)
+  status=$?
+  set -e
+}
+
+# --- case O: on a checkout that ships the template, it must touch nothing ---
+#
+# This runs on every deploy of main forever. If it ever deleted a unit there,
+# it would take the supervision off the box on the very deploy that installed
+# it.
+before_o=$failures
+run_installer "O pre-normalize" rebuilt-different-bytes openai/some-other-alias
+pid_before=$(incarnation)
+run_normalizer "$repo_root"
+[ "$status" = 0 ] || fail "[O] the normalizer failed on a checkout that ships the template" "$out"
+[ -f "$unit_file" ] || fail "[O] the normalizer deleted the unit on a checkout that owns it" "$out"
+[ -f "$health_timer" ] || fail "[O] the normalizer deleted the health timer on a checkout that owns it"
+[ "$(incarnation)" = "$pid_before" ] || fail "[O] the normalizer stopped the daemon on a checkout that owns it"
+[ -f "$runtime/engine.fingerprint" ] || fail "[O] the normalizer cleared the fingerprint on a checkout that owns it"
+[ $failures -eq "$before_o" ] && echo "ok   [O] the normalizer is a no-op on a checkout that ships the unit template"
+
+# --- case P: on a checkout without the template, it must free the name ------
+#
+# Modelled with a repo directory that has no deploy/systemd-user, which is
+# exactly what a revert of the installer, a rollback deploy from older main, or
+# a branch predating #1510 looks like from the box's point of view.
+before_p=$failures
+old_checkout="$tmp/old-checkout"
+mkdir -p "$old_checkout/deploy/systemd-user"
+# The pre-#1510 tree had this directory, holding only the backup units. The
+# discriminator has to be the agent-engine template specifically, not the
+# directory, or the guard would never fire on a real revert.
+: > "$old_checkout/deploy/systemd-user/hive-box-backup.service"
+run_normalizer "$old_checkout"
+[ "$status" = 0 ] || fail "[P] the normalizer failed on a checkout without the template" "$out"
+[ -f "$unit_file" ] && fail "[P] the launcher unit file survived, so systemd-run will still refuse the name" "$out"
+[ -f "$health_service" ] && fail "[P] the health service file survived"
+[ -f "$health_timer" ] && fail "[P] the health timer file survived"
+[ -f "$runtime/engine.fingerprint" ] && fail "[P] the four artifact fingerprint survived, so the older installer would compare against a note about a different artifact set"
+[ -f "$STATE/enabled" ] && fail "[P] the unit was left enabled, so a reboot would fight the transient unit for the name"
+[ -f "$STATE/active" ] && fail "[P] the launcher was left running, so systemd-run would still find the name taken"
+case "$out" in
+  *"::warning::"*) : ;;
+  *) fail "[P] deleting a systemd unit was not announced loudly" "$out" ;;
+esac
+[ $failures -eq "$before_p" ] && echo "ok   [P] the normalizer frees the name, loudly, on a checkout that cannot manage a unit file"
+
+# --- case Q: and it stays quiet when there is nothing to hand back ----------
+before_q=$failures
+run_normalizer "$old_checkout"
+[ "$status" = 0 ] || fail "[Q] the normalizer failed on a box with no unit file" "$out"
+case "$out" in
+  *"::warning::"*) fail "[Q] the normalizer warned about a box it had nothing to do to" "$out" ;;
+esac
+[ $failures -eq "$before_q" ] && echo "ok   [Q] the normalizer is quiet on a box with no unit file to remove"
+
+
+# run_installer_variant runs the installer without asserting success, for the
+# cases below whose whole point is that it must FAIL.
+run_installer_variant() {
+  : > "$STATE/calls"
+  set +e
+  out=$(env \
+    FAKE_BINARY="rebuilt-different-bytes" \
+    REPO_DIR="$repo_root" \
+    RUNTIME_DIR="$runtime" \
+    XDG_CONFIG_HOME="$tmp/config" \
+    HIVE_AGENT_ENGINE_LLM_MODEL="openai/some-other-alias" \
+    HIVE_AGENT_ENGINE_LLM_BASE_URL="https://api-hive.example/v1" \
+    HIVE_AGENT_ENGINE_LLM_API_KEY="test-key" \
+    CONTROL_PLANE_INTERNAL_TOKEN="test-token" \
+    bash "$installer" 2>&1)
+  status=$?
+  set -e
+}
+
+# --- case R: an un-enabled unit is repaired without paying a restart --------
+#
+# The reason writing the unit, reloading and enabling all happen on every run
+# rather than only on the restart path. A box whose unit was disabled by hand,
+# or by a normalize run that a later deploy re-installed over, must come back
+# to enabled on the next deploy, and must not lose an in-flight Cowork session
+# to do it.
+before_r=$failures
+run_installer "R pre-disable" rebuilt-different-bytes openai/some-other-alias
+pid_before=$(incarnation)
+printf 'task-in-flight' > "$STATE/session"
+rm -f "$STATE/enabled"
+run_installer "R re-enable" rebuilt-different-bytes openai/some-other-alias
+[ -f "$STATE/enabled" ] || fail "[R] a disabled unit was left disabled by an otherwise unchanged install" "$(cat "$STATE/calls")"
+if stopped || started; then
+  fail "[R] repairing the enable state cost a restart" "$(cat "$STATE/calls")"
+fi
+[ -f "$STATE/session" ] || fail "[R] the in-flight session was killed while repairing the enable state"
+[ "$(incarnation)" = "$pid_before" ] || fail "[R] the daemon was replaced while repairing the enable state"
+[ $failures -eq "$before_r" ] && echo "ok   [R] a disabled unit is re-enabled without restarting the daemon"
+
+# --- case S: an enable that does not take must FAIL the deploy -------------
+#
+# THE guard for the reporting-instead-of-requiring defect. The installer used
+# to print `$(systemctl --user is-enabled ...)` inside an echo. Command
+# substitution in a word expansion does not trip `set -e`, and echo returns its
+# own 0, so a box where enable silently did not take printed
+# "supervision: ... is disabled" and the installer exited 0. The deploy went
+# green over a launcher that would not survive a reboot, which is this issue's
+# own defect reintroduced inside its fix.
+before_s=$failures
+touch "$STATE/enable_broken"
+rm -f "$STATE/enabled"
+run_installer_variant
+if [ "$status" = 0 ]; then
+  fail "[S] the installer reported success on a box where the unit is not enabled" "$out"
+fi
+case "$out" in
+  *"::error::"*"not 'enabled'"*) : ;;
+  *) fail "[S] the failure did not name the unit as not enabled" "$out" ;;
+esac
+rm -f "$STATE/enable_broken"
+[ $failures -eq "$before_s" ] && echo "ok   [S] an enable that does not take fails the deploy instead of printing itself"
+
+# --- case T: a transient unit must never reach the skip path silently -------
+#
+# The state cases A to N do not produce: the unit FILE is installed and its
+# fingerprint matches, but a transient unit still holds the name, so the
+# launcher that is actually running is not the one the file describes.
+# Skipping there would leave the box on an unsupervised transient unit while
+# the deploy reported the artifacts up to date, which reads as supervised and
+# is not.
+before_t=$failures
+run_installer "T pre-transient" rebuilt-different-bytes openai/some-other-alias
+touch "$STATE/transient"
+run_installer_variant
+# Either outcome is acceptable and both are loud: restart onto the unit file,
+# or fail the deploy. What must not happen is a silent exit 0 that leaves the
+# transient unit in place.
+if [ "$status" = 0 ] && [ -f "$STATE/transient" ]; then
+  fail "[T] the installer exited 0 leaving the launcher on an unsupervised transient unit" "$out"
+fi
+rm -f "$STATE/transient"
+[ $failures -eq "$before_t" ] && echo "ok   [T] a transient unit is never silently accepted by the skip path"
+
+
+# --- case U: the observer for the observer ---------------------------------
+#
+# The systemd timer cannot report its own death: if it stops, the probe never
+# runs, it posts nothing, the firing alert lapses, and the silence reads as
+# health. So the staleness lane runs from cron, a different scheduler under a
+# different daemon. An earlier draft of this change had the staleness check
+# living only inside the timed probe, which is not a staleness check at all.
+before_u=$failures
+run_installer "U cron" rebuilt-different-bytes openai/some-other-alias
+if [ ! -f "$STATE/crontab" ]; then
+  fail "[U] no cron entry was installed, so nothing observes the health timer" "$(cat "$STATE/calls")"
+else
+  grep -qF -- "--check" "$STATE/crontab" \
+    || fail "[U] the cron entry does not run the staleness-only mode" "$(cat "$STATE/crontab")"
+  grep -qF "$runtime/bin/agent-engine-health-probe.sh" "$STATE/crontab" \
+    || fail "[U] the cron entry does not point at the installed probe copy" "$(cat "$STATE/crontab")"
+fi
+[ $failures -eq "$before_u" ] && echo "ok   [U] a cron staleness watchdog observes the systemd timer"
+
+# --- case U2: installing it twice must not accumulate entries --------------
+#
+# It runs on every deploy. An append-only install would leave one more copy of
+# the line per merge, and cron would run the probe a dozen times a slot.
+before_u2=$failures
+run_installer "U2 cron-idempotent" rebuilt-different-bytes openai/some-other-alias
+occurrences=$(grep -cF -- "--check" "$STATE/crontab" 2>/dev/null || echo 0)
+[ "$occurrences" = 1 ] || fail "[U2] the cron entry appears $occurrences times after two installs" "$(cat "$STATE/crontab")"
+[ $failures -eq "$before_u2" ] && echo "ok   [U2] reinstalling does not accumulate cron entries"
+
+# --- case U3: an unrelated cron entry must survive -------------------------
+#
+# The install rewrites the crontab rather than appending to it, which is what
+# makes U2 hold. Rewriting someone else's crontab is a much worse failure than
+# a duplicated line, so the rewrite has to be surgical.
+before_u3=$failures
+printf '%s\n' "0 3 * * * /home/sakib/hive-backups/bin/backup-box.sh --check" > "$STATE/crontab"
+run_installer "U3 cron-preserve" rebuilt-different-bytes openai/some-other-alias
+grep -qF "backup-box.sh --check" "$STATE/crontab" \
+  || fail "[U3] installing the watchdog deleted an unrelated cron entry" "$(cat "$STATE/crontab")"
+grep -qF -- "agent-engine-health-probe.sh --check" "$STATE/crontab" \
+  || fail "[U3] the watchdog entry was not added alongside the existing one" "$(cat "$STATE/crontab")"
+[ $failures -eq "$before_u3" ] && echo "ok   [U3] an unrelated cron entry survives the install"
+
+# --- case U4: a missing cron entry must FAIL the deploy --------------------
+#
+# Same shape as case S. Installing the backstop and then not requiring it would
+# make its absence silent, which is the defect this whole change is about.
+before_u4=$failures
+rm -f "$STATE/crontab"
+: > "$STATE/cron_readonly"
+run_installer_variant
+if [ "$status" = 0 ]; then
+  fail "[U4] the installer reported success with no staleness watchdog installed" "$out"
+fi
+case "$out" in
+  *"::error::"*"staleness watchdog"*) : ;;
+  *) fail "[U4] the failure did not name the missing staleness watchdog" "$out" ;;
+esac
+rm -f "$STATE/cron_readonly"
+[ $failures -eq "$before_u4" ] && echo "ok   [U4] a missing staleness watchdog fails the deploy"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed"

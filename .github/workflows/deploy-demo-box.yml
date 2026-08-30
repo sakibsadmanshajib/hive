@@ -105,11 +105,17 @@ on:
       # without an entry, a fix to it would merge and never deploy.
       - 'scripts/install-agent-engine-host.sh'
       # Installed alongside the launcher by that same script, as the copy the
-      # hive-agent-engine-health.timer unit actually runs (issue #1510). It is
-      # the only thing that reports the launcher being down without a person
-      # submitting a task, so a fix to it that merged and never deployed would
-      # leave the box running a watchdog the repository no longer describes.
+      # hive-agent-engine-health.timer unit and the cron staleness watchdog
+      # actually run (issue #1510). It is the only thing that reports the
+      # launcher being down without a person submitting a task, so a fix to it
+      # that merged and never deployed would leave the box running a watchdog
+      # the repository no longer describes.
       - 'scripts/agent-engine-health-probe.sh'
+      # Invoked by the deploy job immediately before the installer, to hand the
+      # unit name back when this checkout cannot manage a unit file. Same blind
+      # spot as every other entry here, and a sharper one: this is the script
+      # that keeps a rollback deploy from failing at the launcher step.
+      - 'scripts/normalize-agent-engine-unit.sh'
       # All three halves of the hive_jwt_forward install (#556, #736). Without
       # these entries a fix to the installer itself would merge and never
       # deploy, the same blind spot the supabase/migrations entry above exists
@@ -768,7 +774,38 @@ jobs:
             CONTROL_PLANE_INTERNAL_TOKEN=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2-)
             export CONTROL_PLANE_INTERNAL_TOKEN
           fi
-          bash scripts/install-agent-engine-host.sh
+
+          # Migration guard (issue #1510), and it runs BEFORE the installer
+          # because it exists to clear the installer's path rather than to
+          # clean up after it.
+          #
+          # The launcher used to be started by `systemd-run --user
+          # --unit=hive-agent-engine`, a transient unit; it now runs under a
+          # persistent unit file of the same name. systemd refuses to create a
+          # transient unit while a fragment file of that name exists, and
+          # `systemctl stop` does not unload a fragment, so a checkout that
+          # predates the unit file cannot deploy onto a box that has one. That
+          # took this box's deploy down on 2026-08-29 and left the launcher
+          # inactive with no process, which is both agent capabilities down,
+          # and it surfaced here rather than in the change that caused it.
+          #
+          # A no-op on any checkout that ships the template, so every deploy of
+          # main after #1510 prints one line and moves on. It earns its keep on
+          # a rollback deploy, a revert of the installer alone, or a box
+          # migrated by hand ahead of the merge.
+          bash scripts/normalize-agent-engine-unit.sh
+
+          # Wrapped so the failure can name its own blast radius. When this
+          # step failed on 2026-08-29 the log said only that systemd-run had
+          # refused a unit name. It did not say that the launcher had just been
+          # stopped and left down, that Cowork and the coding agent were
+          # therefore both dead until someone deployed again, or that every
+          # later step in this job never ran. All three were true, twice, and
+          # a reader had to reconstruct them from the script source.
+          if ! bash scripts/install-agent-engine-host.sh; then
+            echo "::error::The agent-engine launcher install FAILED. This step stops the launcher before restarting it, so it is very likely DOWN right now, and while it is down every agent task fails: Cowork and the coding agent are both unavailable, and nothing restarts it on its own. Every step after this one in this job was skipped, so the rest of the deploy did not happen either. On the box: systemctl --user status hive-agent-engine.service and journalctl --user -u hive-agent-engine -n 100."
+            exit 1
+          fi
 
           # The installer just ran `go build` against THIS checkout as a Docker
           # bind mount (scripts/install-agent-engine-host.sh). In workspace

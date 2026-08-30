@@ -29,12 +29,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -341,6 +344,13 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		writeJSON(w, http.StatusOK, map[string]any{"files": files})
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		if failures := launchReadiness(sifPath, packsDir, workspaceRoot, runDir); len(failures) > 0 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"status": "unhealthy",
+				"failed": failures,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -386,6 +396,122 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		return err
 	}
 	return nil
+}
+
+// sifMagic is the SIF format identifier. A SIF file opens with a 32 byte
+// launch header (`#!/usr/bin/env run-singularity\n\0`) and this immediately
+// after it, verified by reading the header of the image the demo box actually
+// runs rather than from the format documentation.
+const sifMagic = "SIF_MAGIC"
+
+// sifMagicOffset is where that identifier begins.
+const sifMagicOffset = 32
+
+// launchReadiness answers the only question worth asking of this daemon: can
+// it launch a sandbox right now? It returns one human-readable string per
+// failed precondition, empty when the launcher is able to serve.
+//
+// Why this exists (issue #1510). /health used to be a static 200, which meant
+// it reported the mux was alive and nothing else. That is not a health check
+// for this process, it is a health check for net/http. The failure that
+// actually takes the launcher out is a missing, deleted or half-downloaded
+// SIF: the installer deliberately keeps the SIF out of its restart
+// fingerprint (hashing a multi-gigabyte image every deploy costs more than
+// the restart it avoids, and sandbox.BuildArgv reads the file per launch, so
+// a replaced image needs no restart), so nothing restarts on it and, with a
+// static 200, nothing could observe it either. Every task would fail forever
+// while the supervision reported green forever, which is the exact shape of
+// defect the supervision was added to end.
+//
+// What is checked, and why this set is sufficient for "can launch":
+//
+//   - `apptainer` resolvable on PATH. The launcher execs it by name for every
+//     task, so its absence is a total outage and is invisible until a launch.
+//   - The SIF exists, is non-empty, is readable by this process, and carries
+//     the SIF magic. The magic is what separates a real image from a
+//     truncated download or an HTML error page saved under the same name,
+//     and it costs one open and a 41 byte read.
+//   - The packs directory exists and is a directory. The pack is read per
+//     launch and a checkout reset or a bad REPO_DIR removes it.
+//   - The workspace root and the run directory are writable, proven by
+//     creating and removing a file rather than by inspecting a mode. Both are
+//     created 0700 at start-up, so the failure this catches is the one that
+//     arrives later: a full disk, or a filesystem remounted read only. Both
+//     are real on a single box, and this repository already has a deploy-time
+//     disk gate because of it.
+//
+// Deliberately NOT checked, so the omissions are decisions rather than
+// oversights:
+//
+//   - Control-plane reachability. The launcher calls it per launch to resolve
+//     the egress policy, so it is a genuine dependency, but it has its own
+//     health surface and its own alert. Folding it in here would turn every
+//     control-plane restart into a launcher-down page, and a monitor that
+//     fires on routine deploys is muted within a day.
+//   - Actually launching a sandbox. It is the only complete proof, and it
+//     takes minutes, consumes a concurrency slot and spends money on a model
+//     call. Not something to run every five minutes. The end-to-end proof
+//     belongs where it already lives, in the Cowork capture workflow.
+//   - `apptainer inspect` on the image. It would catch a corrupt interior
+//     that the magic check cannot, at the cost of a squashfs mount per probe.
+//     Split off deliberately rather than dropped silently: the magic catches
+//     the failure shape the installer's own download path produces, which is
+//     a truncated or absent file, and a corrupt interior has never occurred
+//     here.
+func launchReadiness(sifPath, packsDir, workspaceRoot, runDir string) []string {
+	var failures []string
+
+	if _, err := exec.LookPath("apptainer"); err != nil {
+		failures = append(failures, fmt.Sprintf("apptainer is not on PATH: %v", err))
+	}
+
+	switch info, err := os.Stat(sifPath); {
+	case err != nil:
+		failures = append(failures, fmt.Sprintf("sandbox image %s is not readable: %v", sifPath, err))
+	case info.IsDir():
+		failures = append(failures, fmt.Sprintf("sandbox image %s is a directory", sifPath))
+	case info.Size() == 0:
+		failures = append(failures, fmt.Sprintf("sandbox image %s is empty", sifPath))
+	default:
+		header := make([]byte, sifMagicOffset+len(sifMagic))
+		f, err := os.Open(sifPath)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("sandbox image %s cannot be opened: %v", sifPath, err))
+			break
+		}
+		n, err := io.ReadFull(f, header)
+		_ = f.Close()
+		switch {
+		case err != nil:
+			failures = append(failures, fmt.Sprintf("sandbox image %s is shorter than a SIF header (%d bytes read): %v", sifPath, n, err))
+		case string(header[sifMagicOffset:]) != sifMagic:
+			failures = append(failures, fmt.Sprintf("sandbox image %s does not carry the SIF magic, so it is not an Apptainer image", sifPath))
+		}
+	}
+
+	if info, err := os.Stat(packsDir); err != nil {
+		failures = append(failures, fmt.Sprintf("packs directory %s is not readable: %v", packsDir, err))
+	} else if !info.IsDir() {
+		failures = append(failures, fmt.Sprintf("packs path %s is not a directory", packsDir))
+	}
+
+	for label, dir := range map[string]string{"workspace root": workspaceRoot, "run directory": runDir} {
+		probe, err := os.CreateTemp(dir, ".health-*")
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s %s is not writable: %v", label, dir, err))
+			continue
+		}
+		name := probe.Name()
+		_ = probe.Close()
+		_ = os.Remove(name)
+	}
+
+	// Map iteration above is unordered, and an alert body that reorders
+	// itself between two probes of the same broken box reads as two different
+	// problems. Sorting also makes the test assertions independent of Go's
+	// map seed.
+	sort.Strings(failures)
+	return failures
 }
 
 // hostOf returns the hostname of an absolute http(s) URL, or "" for an empty

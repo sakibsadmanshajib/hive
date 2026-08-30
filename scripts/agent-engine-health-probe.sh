@@ -11,16 +11,36 @@
 # Run every five minutes by hive-agent-engine-health.timer. Silent when
 # healthy; posts to Alertmanager when not.
 #
-# Two alerts, and the second one is the point:
+# Two alerts, and TWO lanes, which is the part that took a correction to get
+# right:
 #
 #   HiveAgentEngineDown       the launcher is not answering right now.
-#   HiveAgentEngineProbeStale this probe itself has not succeeded in longer
-#                             than it should have, so a run did not happen.
+#   HiveAgentEngineProbeStale no probe has SUCCEEDED in longer than it should
+#                             have, so a scheduled run did not happen.
 #
-# Without the second, a probe that stops running produces silence, any firing
-# alert auto-resolves through Alertmanager's resolve_timeout, and the absence
-# reads as health. That is the exact shape this repository has already been
-# bitten by, so absence is made loud here rather than left implicit.
+# The staleness alert only means anything if something still runs when the
+# five minute systemd timer does not. A staleness check that lives only inside
+# the timed probe cannot fire when the timer stops: the probe never runs, it
+# posts nothing, any firing alert auto-resolves through Alertmanager's
+# resolve_timeout, and the absence reads as health. That is the exact shape
+# this repository has already been bitten by, and an earlier draft of this file
+# had it.
+#
+# So this script has two modes, the same split scripts/backup-box.sh already
+# uses on this box for the same reason:
+#
+#   (no argument)  full probe. Checks the launcher, alerts if it is down,
+#                  writes the last-success stamp. Run by
+#                  hive-agent-engine-health.timer every five minutes.
+#   --check        staleness only. Reads the stamp, alerts if it is old,
+#                  touches nothing and probes nothing. Run by a CRON entry,
+#                  deliberately a different scheduler from the systemd user
+#                  timer above, so the death of that timer, or of the whole
+#                  systemd user manager, still surfaces.
+#
+# What the pair still does NOT cover, stated rather than implied: if cron and
+# the user manager are both dead the box is dead, and that is
+# external-uptime-probe.yml's job, from outside this box's own network path.
 #
 # The channel is the one scripts/backup-box.sh already proved end to end:
 # Alertmanager's v2 API on the published host port, its existing routing tree
@@ -36,6 +56,13 @@
 # Handles no secrets and prints none: everything it touches is a Unix socket
 # health endpoint, a timestamp file and a fixed-literal alert body.
 set -euo pipefail
+
+MODE=full
+case "${1:-}" in
+  '') ;;
+  --check) MODE=check ;;
+  *) echo "usage: $(basename "$0") [--check]" >&2; exit 2 ;;
+esac
 
 RUNTIME_DIR="${RUNTIME_DIR:-/home/sakib/agent-runtime}"
 UNIT_NAME="${UNIT_NAME:-hive-agent-engine}"
@@ -54,23 +81,49 @@ STAMP_PATH="$RUNTIME_DIR/health.last-success-epoch"
 # literal strings only in labels and text, so nothing user-controlled and
 # nothing sensitive can reach the email body.
 # ---------------------------------------------------------------------------
+# Set by post_alert when a POST does not land. The caller uses it to decide
+# whether it may advance the last-success stamp, because advancing it after an
+# undelivered staleness alert would erase the only record that the alert was
+# owed.
+alert_delivery_failed=0
+
 post_alert() {
-  local alertname="$1" description="$2" body safe_desc
-  # Escape JSON-significant characters so a description that ever gains
-  # interpolated content cannot produce malformed JSON. All current call sites
-  # are fixed literals; this is the latent foot-gun guard.
+  local alertname="$1" description="$2" body safe_desc ends_at
+  # Escape JSON-significant characters. NOT a latent foot-gun guard: both call
+  # sites below interpolate live values (an age in seconds, a systemd unit
+  # state, a socket path), so this is load bearing today. An earlier version of
+  # this comment claimed the call sites were fixed literals, which was wrong
+  # when it was written.
   safe_desc="${description//\\/\\\\}"
   safe_desc="${safe_desc//\"/\\\"}"
   safe_desc="${safe_desc//$'\n'/ }"
+
+  # An explicit endsAt, rather than leaning on Alertmanager's resolve_timeout.
+  #
+  # resolve_timeout defaults to five minutes and this probe runs every five
+  # minutes, so an alert posted at T expires at almost exactly the moment the
+  # next post is due. Any jitter at all, and systemd timers have some by
+  # default, puts the expiry first: the alert resolves, the next run re-fires
+  # it, and hive-ops gets a resolved mail and a firing mail every five minutes
+  # for as long as the launcher stays down. A monitor that mails a flapping
+  # pair is muted within a day.
+  #
+  # Three intervals of headroom, so two consecutive posts can be late or lost
+  # before the alert lapses, and the resolution still arrives within fifteen
+  # minutes of the launcher actually coming back.
+  ends_at="$(date -u -d "@$(( $(date +%s) + 900 ))" +%Y-%m-%dT%H:%M:%SZ)"
+
   # Alertmanager v2 expects an ARRAY of alerts; a bare object is a 400.
-  body=$(printf '[{"labels":{"alertname":"%s","severity":"critical","job":"agent-engine","instance":"hive-demo"},"annotations":{"description":"%s"}}]' \
-    "$alertname" "$safe_desc")
+  body=$(printf '[{"labels":{"alertname":"%s","severity":"critical","job":"agent-engine","instance":"hive-demo"},"annotations":{"description":"%s"},"endsAt":"%s"}]' \
+    "$alertname" "$safe_desc" "$ends_at")
   # A delivery failure must be visible in the journal but must not mask the
-  # underlying condition, so it is reported and swallowed rather than allowed
-  # to abort the probe under `set -e`.
+  # underlying condition, so it is reported rather than allowed to abort the
+  # script under `set -e`. It is also RECORDED, because a dropped alert that
+  # the next run then makes unrepeatable is a signal lost for good.
   if ! curl -fsS -m 10 -XPOST "$ALERTMANAGER_URL/api/v2/alerts" \
       -H 'Content-Type: application/json' -d "$body" >/dev/null; then
     echo "WARN: alertmanager post failed for $alertname" >&2
+    alert_delivery_failed=1
   fi
 }
 
@@ -102,7 +155,21 @@ if [ -f "$STAMP_PATH" ]; then
     post_alert "HiveAgentEngineProbeStale" \
       "The agent-engine launcher health probe on the demo box last succeeded ${age}s ago, over the ${STALE_AFTER}s threshold. A scheduled probe run did not happen, so treat the launcher as unverified rather than healthy. Check: systemctl --user list-timers hive-agent-engine-health.timer"
     echo "stale: last success ${age}s ago exceeds ${STALE_AFTER}s"
+    stale=1
   fi
+fi
+
+# --check is the cron lane, and it stops here. It deliberately does not probe
+# the launcher and does not write the stamp: its only job is to notice that the
+# systemd timer has stopped producing successes, and a second lane that also
+# wrote the stamp would keep the stamp fresh forever and hide exactly the
+# condition it exists to find.
+if [ "$MODE" = check ]; then
+  if [ "${stale:-0}" = 1 ]; then
+    exit 1
+  fi
+  echo "check ok: the timed probe is producing successes"
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -129,5 +196,15 @@ fi
 # Only a successful probe advances the stamp, so the staleness check above
 # measures time since the launcher was last known good rather than time since
 # this script last ran.
+#
+# And not even then, if a staleness alert was owed and did not land. Advancing
+# the stamp after a dropped POST would make the next run compute a fresh age,
+# find nothing to report, and the alert that Alertmanager never received would
+# be one nobody ever hears about. Leaving the stamp alone costs one extra
+# staleness alert on the next run and keeps the signal repeatable.
+if [ "$alert_delivery_failed" = 1 ]; then
+  echo "WARN: not advancing the last-success stamp, an alert was owed and did not reach alertmanager" >&2
+  exit 1
+fi
 printf '%s\n' "$now" > "$STAMP_PATH"
 echo "ok: launcher healthy on $SOCKET_PATH"
