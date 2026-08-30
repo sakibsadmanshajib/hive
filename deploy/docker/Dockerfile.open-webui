@@ -514,8 +514,24 @@ RUN python3 /tmp/apply_authz_residuals_1191_patch.py
 COPY deploy/docker/owui-patches/apply_chat_delete_task_cancel_1474_patch.py /tmp/apply_chat_delete_task_cancel_1474_patch.py
 RUN python3 /tmp/apply_chat_delete_task_cancel_1474_patch.py
 
+# issue #1508: the same primitive as #1474, reached through socket.io instead of
+# HTTP. Task ids are ONE global keyspace: a chat completion registers under the
+# bare chat id (create_task(..., id=chat_id) in main.py), and the Yjs handler
+# used that same registry as a save debounce keyed on a client-supplied
+# document_id, resolving ownership only for 'note:'-prefixed ids. So a verified
+# user emitting ydoc:document:update for a bare chat UUID cancelled that chat's
+# in-flight completion. The room-membership test in front of it is not a
+# boundary: ydoc:document:join applies the same note-only check and then enters
+# the room unconditionally, so the caller satisfies it themselves. This confines
+# both task-registry calls to the namespace whose ownership the handler actually
+# resolves; nothing is lost, since document_save_handler already returns without
+# acting on any non-'note:' id. Entitlement is keyed on the caller's identity,
+# never on their connection. socket/main.py is touched by no other patch here.
+COPY deploy/docker/owui-patches/apply_ydoc_task_cancel_1508_patch.py /tmp/apply_ydoc_task_cancel_1508_patch.py
+RUN python3 /tmp/apply_ydoc_task_cancel_1508_patch.py
+
 # Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191 +
-# #1474):
+# #1474 + #1508):
 # the exact expected marker count in every patched file so a vendor bump that
 # silently drops any single fix fails the image build instead of reopening a
 # cross-tenant hole (same failure mode class as #1162).
@@ -535,6 +551,9 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1191)' $B/routers/chats.py)" -eq 1 \
     && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1 \
     && test "$(grep -c '# hive (#1474)' $B/routers/chats.py)" -eq 3 \
+    && test "$(grep -c '# hive (#1508)' $B/socket/main.py)" -eq 2 \
+    && test "$(grep -c '^            await stop_item_tasks(REDIS, document_id)$' $B/socket/main.py)" -eq 0 \
+    && test "$(grep -c "^        if data.get('data'):\$" $B/socket/main.py)" -eq 0 \
     && test "$(grep -c '^    await stop_item_tasks(request.app.state.redis, id)$' $B/routers/chats.py)" -eq 0
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
