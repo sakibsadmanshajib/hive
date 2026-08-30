@@ -38,12 +38,28 @@ package executor
 //     full hold. executor.Settle still clamps the batch total at the
 //     customer's reservation, so this can never charge past what was held,
 //     and it raises the overconsumed flag rather than settling quietly cheap.
-//   - An alias with no usable price at all, and a fixed-price alias whose
-//     provider reported no usage, are refused: no charge and no delivery,
-//     because there is no defensible figure to charge. routing.SelectRoute
-//     already rejects both shapes with ErrAliasNotPriced before a line runs,
-//     so neither is reachable today; they exist so the next catalog change is
-//     priced correctly instead of at one credit per token.
+//   - An alias with no usable price at all is refused: no charge and no
+//     delivery, because there is no defensible figure to charge.
+//     routing.SelectRoute already rejects that ALIAS SHAPE with
+//     ErrAliasNotPriced before a line runs, since it is static model_aliases
+//     configuration checked once per batch.
+//   - A fixed-price alias whose provider reported no billable token components
+//     is refused the same way, and this one is NOT covered by that guard.
+//     SelectRoute validates the catalog row, not the particular response a
+//     particular line came back with, and decodeUsage returns nil whenever an
+//     otherwise valid 2xx body simply omits its usage object. What makes it
+//     unreachable today is narrower and worth stating plainly: hive-auto is
+//     the only alias carrying supports_batch and it is upstream_actual, so no
+//     fixed-price alias reaches this branch at all. The moment one gains
+//     supports_batch the branch goes live, and the trade it makes is
+//     deliberate rather than incidental: a delivered completion that omits its
+//     usage block is DISCARDED rather than charged an approximate figure. The
+//     old code charged a flat 1000 credits for exactly this shape, which is a
+//     number nothing derived. Absorbing one upstream call is the fail-closed
+//     side of that choice, and quirky but valid upstream shapes are an
+//     observed phenomenon on this path, not a hypothetical, so whoever adds a
+//     fixed-price batch alias should decide deliberately whether an estimate
+//     is worth building rather than inherit this refusal by surprise.
 //
 // A confident zero cost alongside real tokens settles at the hold rather than
 // free, exactly as it does on the sync path, because we cannot tell a
@@ -370,6 +386,11 @@ func priceLine(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []b
 		// there is no hold to fall back to and no quantity to price. The old
 		// code charged a flat 1000 credits here, which was a fabricated
 		// number. Refuse instead.
+		//
+		// This is a RUNTIME property of one response, not an alias shape, so
+		// SelectRoute's ErrAliasNotPriced does not guard it. See the package
+		// comment above for why it is nonetheless unreachable today and what
+		// changes the day a fixed-price alias gains supports_batch.
 		//
 		// Zero components folds into the same refusal on purpose, and is not
 		// the same question as an empty completion: prompt tokens alone are a

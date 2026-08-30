@@ -255,11 +255,19 @@ func TestDefaultCreditPolicy_UpstreamActualFailsClosedToTheHold(t *testing.T) {
 }
 
 // TestDefaultCreditPolicy_RefusesAnUnpriceableLine covers the shapes where
-// there is no defensible figure to charge at all. All four are unreachable
-// today: routing.SelectRoute rejects an alias with neither a fixed price nor a
-// positive reservation estimate with ErrAliasNotPriced before a batch runs.
-// They are guarded anyway so the next catalog change is priced correctly
-// rather than at the fabricated flat 1000 credits the old code produced.
+// there is no defensible figure to charge at all. They are unreachable today,
+// but for two DIFFERENT reasons, and conflating them would leave the next
+// person trusting a guarantee that does not hold:
+//
+//   - The first four rows are ALIAS SHAPES. routing.SelectRoute rejects an
+//     alias with neither a fixed price nor a positive reservation estimate
+//     with ErrAliasNotPriced before a batch runs, because that is static
+//     model_aliases configuration checked once per batch.
+//   - The last two rows are RUNTIME properties of one response, which
+//     SelectRoute cannot see. They are unreachable only because hive-auto is
+//     the sole alias carrying supports_batch and it is upstream_actual, so no
+//     fixed-price alias reaches this branch at all today. Give a fixed-price
+//     alias a batch route and these go live.
 func TestDefaultCreditPolicy_RefusesAnUnpriceableLine(t *testing.T) {
 	zeroEstimate := int64(0)
 	for _, tc := range []struct {
