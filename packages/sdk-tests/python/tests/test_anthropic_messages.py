@@ -23,12 +23,18 @@ this repo has previously shipped 62 silent-skip sites that hid real gaps.
 
 Model split, matching the convention `chat-completions.test.ts` and
 `docker-compose.yml` already established (issue #1088, PR fix/tools-model-
-cheap-default): `MODEL` (default `hive-free`, the free-pool alias D-047
-mandates for automated consumption) for anything that only needs a plain
-chat completion, `TOOLS_MODEL` (default `hive-small`, an upstream-free
-tools-capable alias, owner directive 2026-08-30) for anything that needs
-`tools_supported=true`. `hive-free` is not declared tools-capable in the
-catalog (`GET /catalog/models`), so tool tests never use `MODEL`.
+cheap-default): `MODEL` for anything that only needs a plain chat
+completion, `TOOLS_MODEL` for anything that needs `tools_supported=true`.
+Both now default to `hive-free`, the free-pool alias D-047 mandates for
+automated consumption.
+
+They were different aliases until 2026-08-30 because `hive-free` was not
+declared tools-capable in the catalog (`GET /catalog/models`). That was a
+placeholder rather than a finding: its members had never been probed, and
+the column also gates `response_format`, so the gateway answered its own
+400 to requests every member could serve. The pool is now uniformly
+tool-capable, verified per member, and the two knobs stay separate only so
+a tools lane can still be repointed independently (issue #1563).
 
 Two findings below are asserted as `xfail`, not skipped and not silently
 loosened: `count_tokens` under API-key auth (issue #1261) and
@@ -49,7 +55,7 @@ from anthropic import Anthropic, APIStatusError, AuthenticationError, BadRequest
 BASE_URL = os.getenv("HIVE_BASE_URL", "http://localhost:8080/v1")
 API_KEY = os.getenv("HIVE_API_KEY", "test-key")
 MODEL = os.getenv("HIVE_TEST_MODEL", "hive-free")
-TOOLS_MODEL = os.getenv("HIVE_TOOLS_MODEL", "hive-small")
+TOOLS_MODEL = os.getenv("HIVE_TOOLS_MODEL", "hive-free")
 
 # Not a credential. A syntactically plausible, permanently invalid key used by
 # test_invalid_api_key_is_authentication_error to drive the 401 path.

@@ -73,15 +73,24 @@ var pendingMultiRouteAliases = map[string]string{
 
 // expectedMultiRouteAliases are aliases that legitimately carry MORE than one
 // enabled route, with the EXACT count required. The free pool
-// (20260824_02_free_pool_router.sql) puts four deployments behind one alias on
-// purpose: all four rows share litellm_model_name 'route-free-pool', so
+// (20260824_02_free_pool_router.sql) puts several deployments behind one alias
+// on purpose: every row shares litellm_model_name 'route-free-pool', so
 // whichever member SelectRoute picks dispatches the same load-balanced gateway
 // group at the alias's single fixed price. The D-032 ambiguity this file guards
 // (one price, unclear upstream cost) cannot arise when every member serves
 // under one gateway name at one catalog price. A member added or removed
 // without updating the expected count fails here loudly.
+//
+// Three since 20260830_03_free_pool_capability_truth.sql, down from four. The
+// OpenRouter member was disabled rather than kept: #1554 repointed it at the
+// Free Models Router, which picks among the zero-priced catalog per request,
+// and of the 20 zero-priced models only 10 support response_format at all.
+// Because dispatch addresses the GROUP and not the route, a group can only
+// declare what its weakest member supports, so keeping that member would have
+// held the whole pool's tools_supported at false. Owner decision (#1563):
+// hive-free is ONE endpoint, so the pool is made uniform instead of split.
 var expectedMultiRouteAliases = map[string]int{
-	"hive-free": 4,
+	"hive-free": 3,
 }
 
 // TestSeededAliasHasExactlyOneEnabledRoute enforces the owner's rule: one

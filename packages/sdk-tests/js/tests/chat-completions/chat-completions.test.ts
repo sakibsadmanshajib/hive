@@ -26,7 +26,7 @@ const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 // fails loudly by design; repoint HIVE_TOOLS_MODEL at another upstream-free
 // tools-capable alias instead of loosening the assertions.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-free";
 
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

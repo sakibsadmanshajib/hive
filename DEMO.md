@@ -19,20 +19,19 @@ The demo box deploys continuously from main. Anything merged is live minutes lat
 
 | Member | Upstream | Provider key env var |
 |---|---|---|
-| route-free-pool-free | Free Models Router, the whole free tier rather than one pinned model | `OPENROUTER_API_KEY` |
 | route-free-pool-gemini | gemini-flash-latest via Google's OpenAI-compatible endpoint | `GEMINI_API_KEY` |
-| route-free-pool-groq | Groq gpt-oss-20b | `GROQ_API_KEY` |
-| route-free-pool-groq-2 | Groq gpt-oss-20b | `GROQ_API_KEY_2` |
+| route-free-pool-groq | Groq qwen3.8-27b | `GROQ_API_KEY` |
+| route-free-pool-groq-2 | Groq qwen3.8-27b | `GROQ_API_KEY_2` |
 
 Automatic failover: an exhausted or failing key is cooled down by the router (3 failures, 30 second cooldown) and traffic moves to the surviving members, so one dead key never takes the alias down. Every upstream costs nothing; the alias is priced as a service at 0.001 USD input and 0.004 USD output per million tokens.
 
-The first member routes to a free TIER rather than to one pinned model, so a model being rate limited or retired no longer silently kills that pool slot. Which member answers is billing inert: `hive-free` is a fixed-price alias and routing resolves the price from the alias, never from the selected route.
+Every member is a named model rather than a router, which is what lets the alias declare its capabilities truthfully: LiteLLM balances across the group and nothing can predict which member answers, so a capability is only claimable when every member has it. Which member answers is billing inert: `hive-free` is a fixed-price alias and routing resolves the price from the alias, never from the selected route.
 
-Operator detail deliberately not repeated here, because it is not presentation material: the upstream free tier carries its own per-minute and per-day request ceiling that scales with the account's purchased credit, so raising it is a purchasing decision rather than a configuration one. The figures and the current balance are in `supabase/migrations/20260830_01_openrouter_free_models_router.sql`.
+Operator detail deliberately not repeated here, because it is not presentation material: each upstream carries its own per-minute and per-day ceiling. The Groq slots moved to qwen3.8-27b for a daily token allowance ten times the previous model's, on the same keys. The figures are in `supabase/migrations/20260830_03_free_pool_capability_truth.sql`.
 
 Two repoints shipped alongside the pool (PR #1115): `hive-auto` is now the real OpenRouter Auto Router billed at actual upstream cost, and `hive-default` moved to deepseek-v4-flash as the paid quality tier with verified tool support. CI and daily automated consumption run on `hive-free`, so testing never spends the demo budget (#1097).
 
-Stated honestly: `hive-free` rejects tool bearing requests at selection time (tools_supported is false until cross member parity is probed). Tools and structured output belong to `hive-default` and `hive-auto`. Reasoning works on the pool.
+Tool calling, structured output and reasoning all work on `hive-free`. Each member was verified before the claim was made: both Groq slots by live probe, the Gemini member against Google's own OpenAI-compatibility documentation. The OpenRouter member was removed from the pool rather than claimed for, because it now routes to a free TIER that picks a different model per request, and only half of those models support structured output at all.
 
 Backend hardening merged 2026-08-25, not a demo beat (nothing user visible changes): cache-aware billing (PR #1157, prices cache-read and cache-write tokens at their own catalog rate instead of the flat input rate) and Anthropic `cache_control` request passthrough (PR #1152). Confirmed live: the model catalog has no Anthropic model today, so `cache_control` has nothing to act on yet, and a direct query of `usage_events` right after deploy showed zero cache-bearing requests so far on any provider. The code and its tests are real and shipped; there is simply no live traffic exercising it yet.
 

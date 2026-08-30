@@ -1290,7 +1290,7 @@ jobs:
       # fails on any paid completion alias. Same override pattern as
       # HIVE_TEST_MODEL, and an override that names a paid alias is caught by
       # that guard rather than by a list of forbidden names here.
-      HIVE_TOOLS_MODEL: ${{ vars.CI_LIVE_INTEGRATION_TOOLS_MODEL || 'hive-small' }}
+      HIVE_TOOLS_MODEL: ${{ vars.CI_LIVE_INTEGRATION_TOOLS_MODEL || 'hive-free' }}
       # The suites' own default, named here rather than left implicit, because
       # the spend meter below asserts that no alias outside these is ever
       # billed by this job.

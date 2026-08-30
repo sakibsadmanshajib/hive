@@ -27,8 +27,14 @@ const freePoolMigrationRelPath = "supabase/migrations/20260824_02_free_pool_rout
 
 const freePoolGroupName = "route-free-pool"
 
-// freePoolMembers are the four deployments that must share the group name,
-// keyed to the provider slug each row routes through.
+// freePoolMembers are the four deployments this migration seeded under one
+// group name, keyed to the provider slug each row routes through.
+//
+// Still four here because this map describes what 20260824_02 wrote. The live
+// pool is three: 20260830_03_free_pool_capability_truth.sql disables
+// route-free-pool-free, whose upstream became a per-request router that cannot
+// honour the group's capability claim. The live membership is asserted by
+// TestFreePoolIsUniformlyToolCapable.
 var freePoolMembers = map[string]string{
 	"route-free-pool-free":   "openrouter",
 	"route-free-pool-gemini": "gemini",
@@ -375,12 +381,26 @@ func TestFreePoolDisablingRouteFreeAutoHandsOnTheSoleCarrierFlags(t *testing.T) 
 	}
 }
 
-// TestPoolCapabilitiesKeepToolsFalse pins the honesty claim: cross-provider
-// tool parity was never probed across the four members, so tools_supported
-// stays false on every pool row and tool traffic stays on the aliases that
-// verified it. supports_reasoning stays true (an under-claim on a pinned alias
-// is a 422, not a withheld feature), and embeddings stay false (chat models).
-func TestPoolCapabilitiesKeepToolsFalse(t *testing.T) {
+// TestPoolCapabilitiesAsSeededByThisMigration reads what THIS FILE inserted,
+// not what the catalog now holds, and the distinction is load-bearing.
+//
+// This migration seeded tools_supported false on all four members, recording
+// that cross-provider parity had never been probed. That was honest about the
+// evidence and wrong about the models: the column also gates response_format
+// (PR #206), so hive-free answered its own 400 to every structured-output
+// request for six days while three of the four members served it fine.
+//
+// The members were probed on 2026-08-30 and the pool is now uniformly
+// tool-capable, with the OpenRouter member retired from it, by
+// 20260830_03_free_pool_capability_truth.sql. The EFFECTIVE values are asserted
+// by TestFreePoolIsUniformlyToolCapable, which folds the whole migration chain.
+// The assertions below deliberately stay file-scoped: they pin what this
+// migration wrote, so a future edit to this file cannot quietly change history
+// out from under the correction that followed it.
+//
+// supports_reasoning stays true (an under-claim on a pinned alias is a 422, not
+// a withheld feature), and embeddings stay false (chat models).
+func TestPoolCapabilitiesAsSeededByThisMigration(t *testing.T) {
 	caps := map[string]map[string]string{}
 	for _, row := range insertRows(freePoolMigrationSQL(t), "public.provider_capabilities") {
 		caps[row["route_id"]] = row
@@ -393,7 +413,7 @@ func TestPoolCapabilitiesKeepToolsFalse(t *testing.T) {
 			continue
 		}
 		if strings.EqualFold(row["tools_supported"], "true") {
-			t.Errorf("pool route %s claims tools_supported; cross-provider parity was never verified, keep the claim off until it is probed", routeID)
+			t.Errorf("pool route %s claims tools_supported in THIS migration; it seeded false, and the correction lives in 20260830_03_free_pool_capability_truth.sql where the per-member evidence is recorded. Rewriting history here detaches that correction from its reason", routeID)
 		}
 		if !strings.EqualFold(row["supports_reasoning"], "true") {
 			t.Errorf("pool route %s drops supports_reasoning; reasoning requests against the pinned alias would 422", routeID)

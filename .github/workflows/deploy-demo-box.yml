@@ -2259,7 +2259,7 @@ jobs:
       # behaviour was verified live at cost 0 before this default moved. It
       # replaces deepseek-v4-flash, which was paid and whose `-latest` router
       # also showed message.content instability (run 32665985618).
-      HIVE_TOOLS_MODEL: hive-small
+      HIVE_TOOLS_MODEL: hive-free
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v7

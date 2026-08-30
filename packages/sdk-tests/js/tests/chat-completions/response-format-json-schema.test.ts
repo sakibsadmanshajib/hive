@@ -9,7 +9,7 @@ const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 // live evidence that hive-small's upstream returns message.content as a
 // string under both response_format modes.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-free";
 
 describe("Chat Completions response_format: json_schema", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

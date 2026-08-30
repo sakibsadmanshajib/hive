@@ -380,7 +380,7 @@ services:
       # modes were verified live at cost 0 before this default moved. It
       # replaces deepseek-v4-flash, which was paid and whose `-latest` router
       # also showed message.content instability (run 32665985618).
-      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-hive-small}
+      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-hive-free}
       # images/images.test.ts, audio/audio.test.ts: same propagation rule
       # (tools/lint-sdk-test-env-propagation.mjs) applies to every new
       # HIVE_* knob a suite reads. hive-auto is the only alias carrying
@@ -413,7 +413,7 @@ services:
       # alias, and hive-free is not one (its pool members are seeded
       # tools_supported=false). Same variable and same upstream-free default
       # as sdk-tests-js above.
-      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-hive-small}
+      HIVE_TOOLS_MODEL: ${HIVE_TOOLS_MODEL:-hive-free}
 
   sdk-tests-java:
     image: hive-sdk-tests-java:ci
