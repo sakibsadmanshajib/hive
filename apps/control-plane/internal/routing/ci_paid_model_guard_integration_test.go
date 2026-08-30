@@ -213,7 +213,10 @@ var paidCompletionExceptions = []paidCompletionException{
 			"upstream-free alias is an owner decision about agent quality, and it is flagged here " +
 			"rather than taken. The two workflows that genuinely run an agent inside CI " +
 			"(agent-visual-proof.yml, agent-stream-delta-proof.yml) were repointed and are not " +
-			"covered by this entry.",
+			"covered by this entry. Not unconditional: the agent-workspace-coverage job in that same " +
+			"workflow runs one real task on whatever this line installed, so a dispatched coverage run " +
+			"does spend on it. That job is gated on workflow_dispatch, so no ordinary deploy reaches " +
+			"it, and it is the case to weigh when the owner decides.",
 	},
 }
 

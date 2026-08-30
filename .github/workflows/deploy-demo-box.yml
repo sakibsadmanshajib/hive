@@ -767,6 +767,20 @@ jobs:
           # paidCompletionExceptions
           # (apps/control-plane/internal/routing/ci_paid_model_guard_integration_test.go)
           # so it stays visible instead of passing unremarked.
+          #
+          # The exclusion is NOT unconditional, and the caveat belongs here
+          # rather than in a review thread nobody reads later. The
+          # agent-workspace-coverage job in this same file creates one real
+          # agent task against the box this step just configured, so that task
+          # runs on exactly the model installed here. It is gated
+          # `if: github.event_name == 'workflow_dispatch'`, so no ordinary
+          # deploy reaches it, and per that job's own header a cancel never
+          # reaches the engine, so a dispatched run leaves a sandbox running on
+          # this model for roughly sixteen minutes. That is the one path where
+          # repointing this line would change what a pipeline spends rather
+          # than only what a customer gets. It is still an owner decision,
+          # because the same line decides the deployed agent's quality, but a
+          # dispatched coverage run is the case to weigh when making it.
           HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
           HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
           HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
