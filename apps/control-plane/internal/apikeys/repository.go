@@ -729,10 +729,24 @@ func parseTierOverrides(data []byte) map[string]TierLimit {
 	return out
 }
 
+// defaultRatePolicy is what an account or key with no rate policy row gets.
+//
+// Every limit is zero, meaning no limit. Owner directive 2026-08-30: Hive
+// imposes no default rate limit anywhere, and a rate limit exists only where
+// someone explicitly configured one. This used to return 60 requests and
+// 120000 tokens per minute, a pair nobody chose that the edge limiter then
+// enforced, and that the owner UI displayed to customers as "the baseline".
+// The schema-side halves of the same default are dropped by
+// supabase/migrations/20260830_02_no_default_rate_limits.sql.
+//
+// FreeTokenWeightTenths stays at 1. It is a WEIGHT, not a limit: it scales how
+// a free token counts toward the fraud windows, which are themselves off
+// (zero) by default. Zeroing it would score every request at nothing and
+// quietly neuter any window an operator later switches on.
 func defaultRatePolicy() RatePolicy {
 	return RatePolicy{
-		RateLimitRPM:          60,
-		RateLimitTPM:          120000,
+		RateLimitRPM:          0,
+		RateLimitTPM:          0,
 		RollingFiveHourLimit:  0,
 		WeeklyLimit:           0,
 		FreeTokenWeightTenths: 1,
