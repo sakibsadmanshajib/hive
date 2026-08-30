@@ -1496,9 +1496,13 @@ jobs:
           # dispatches an upstream that costs Hive nothing: an OpenRouter
           # ':free' variant, or a member of a free pool group. Identical
           # predicate to ci_paid_model_guard_integration_test.go, prefix match
-          # included: the pool is being split into route-free-pool-tools and
-          # route-free-pool-open, and an equality test against the old single
-          # group name would call hive-free paid the day that lands.
+          # included. The prefix was added for a proposed split into
+          # route-free-pool-tools and route-free-pool-open; the owner rejected
+          # that (issue #1563, hive-free is ONE endpoint) so the pool stays a
+          # single route-free-pool group. The prefix stays anyway: it costs
+          # nothing, it is what stops an equality test from calling hive-free
+          # paid if a group is ever renamed, and a guard that only works for
+          # today's exact string is the failure this one already had once.
           if ! verdicts=$(psql --no-psqlrc -qtAX -v ON_ERROR_STOP=1 -c "
                 select r.alias_id || ' ' ||
                        case when bool_and(r.provider_model like '%:free'

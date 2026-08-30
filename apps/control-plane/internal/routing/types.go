@@ -134,11 +134,12 @@ type SelectionResult struct {
 	// budget. Zero (the default for every non-reasoning alias) means dispatch
 	// the caller's max_tokens untouched.
 	//
-	// Per GROUP, not per alias, and since 2026-08-30 that distinction is live
-	// rather than theoretical: hive-free carries two litellm_model_name groups,
-	// route-free-pool for plain chat and route-free-pool-tools for tools and
-	// structured output. Two selections on the same alias can therefore return
-	// different figures here, and each is correct for the group it was computed
-	// over. Do not cache this against an alias id.
+	// Per GROUP, not per alias. Every alias in this catalog resolves to a single
+	// litellm_model_name today, hive-free included (issue #1563: it is one
+	// endpoint by owner decision), so the two coincide in practice. They are not
+	// the same thing, and the figure is computed over the group: an alias that
+	// ever carried two groups would return a different value per selection, each
+	// correct for the group it was computed over. Do not cache this against an
+	// alias id.
 	ReasoningReserveTokens int `json:"reasoning_reserve_tokens"`
 }

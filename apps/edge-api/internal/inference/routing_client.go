@@ -111,10 +111,10 @@ type SelectRouteResult struct {
 	// starving visible content out of the caller's own budget. Zero means the
 	// caller's max_tokens goes through untouched.
 	//
-	// Per GROUP, not per alias. Since 2026-08-30 hive-free resolves to
-	// route-free-pool for plain chat and route-free-pool-tools when the request
-	// carries tools or response_format, so two selections on one alias can carry
-	// different figures here, each correct for the group it was computed over.
+	// Per GROUP, not per alias. They coincide today because every alias resolves
+	// to one litellm_model_name, hive-free included (issue #1563: one endpoint by
+	// owner decision), but the figure is a property of the group, so an alias
+	// carrying two would return a different value per selection.
 	ReasoningReserveTokens int `json:"reasoning_reserve_tokens"`
 }
 
