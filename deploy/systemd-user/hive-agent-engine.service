@@ -11,7 +11,7 @@
 # control-plane.
 #
 # Installed and rendered by scripts/install-agent-engine-host.sh, which
-# substitutes the @RUN_ENTRY@ placeholder below and writes the result to
+# substitutes the ExecStart placeholder below and writes the result to
 # ~/.config/systemd/user/. Do not edit the installed copy: the installer
 # fingerprints it and will overwrite drift on the next deploy.
 #
