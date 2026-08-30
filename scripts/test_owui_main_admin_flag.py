@@ -59,13 +59,29 @@ COMPOSE = REPO_ROOT / "deploy/docker/docker-compose.yml"
 
 PATCH = "apply_main_admin_flag_1511_patch.py"
 MARKER = "# hive (#1511)"
-EXPECTED_MARKERS = 5
+EXPECTED_MARKERS = 8
 
 LIST_ENDPOINT = "list_tasks_by_chat_id_endpoint"
 STOP_ENDPOINT = "stop_tasks_by_chat_id_endpoint"
+# Present only in the patched source. The channel arm calls it, so it has to be
+# compiled alongside the endpoints; absent in the pre-fix leg, where the arm
+# that would call it does not exist either.
+CHANNEL_HELPER = "hive_channel_task_caller_is_entitled"
 
 VICTIM_CHAT_ID = "e85bb8ac-32f1-4bcb-a5af-2c56060ce571"
 VICTIM_ID = "owner-1"
+
+# The socket-scoped arm. `local:<socket id>` names a socket the server holds;
+# `channel:<channel id>` names a channel and can never resolve through the
+# session pool, whatever the slice, because a channel id is not a socket id.
+VICTIM_SOCKET = "sid-victim-socket"
+VICTIM_LOCAL_ID = f"local:{VICTIM_SOCKET}"
+CHANNEL_ID = "5f0b7e3a-1111-2222-3333-444455556666"
+VICTIM_CHANNEL_ID = f"channel:{CHANNEL_ID}"
+
+# Only this socket exists. Anything else resolves to None, which is what the
+# real pool does for an unknown or disconnected sid.
+SESSION_POOL = {VICTIM_SOCKET: VICTIM_ID}
 
 failures: list[str] = []
 
@@ -152,7 +168,7 @@ def compile_endpoints(source: str, admin_access: bool, recorder: Recorder):
     for node in ast.walk(tree):
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name in (LIST_ENDPOINT, STOP_ENDPOINT)
+            and node.name in (LIST_ENDPOINT, STOP_ENDPOINT, CHANNEL_HELPER)
         ):
             node.decorator_list = []
             wanted[node.name] = node
@@ -175,12 +191,38 @@ def compile_endpoints(source: str, admin_access: bool, recorder: Recorder):
     async def list_task_ids_by_item_id(redis, item_id):
         return [f"task-for-{item_id}"]
 
+    class Channel:
+        def __init__(self, channel_id: str):
+            self.id = channel_id
+            self.type = "group"
+
+    class Channels:
+        @staticmethod
+        async def get_channel_by_id(channel_id):
+            return Channel(channel_id) if channel_id == CHANNEL_ID else None
+
+        @staticmethod
+        async def is_user_channel_member(channel_id, user_id):
+            return user_id == VICTIM_ID
+
+    class AccessGrants:
+        @staticmethod
+        async def has_access(**kwargs):
+            return False
+
     namespace = {
         "Request": object,
         "Depends": lambda dep: None,
         "get_verified_user": object(),
         "Chats": Chats,
-        "get_user_id_from_session_pool": lambda socket_id: VICTIM_ID,
+        # A real session pool answers None for a socket it does not hold
+        # (socket/main.py: SESSION_POOL.get(sid)), and entries are removed on
+        # disconnect. A stub that answers the victim id for EVERY socket makes
+        # the None branch, the wrong-socket branch and the reconnected-socket
+        # branch invisible, and those are exactly the paths a bad slice breaks.
+        "get_user_id_from_session_pool": SESSION_POOL.get,
+        "Channels": Channels,
+        "AccessGrants": AccessGrants,
         "list_task_ids_by_item_id": list_task_ids_by_item_id,
         "stop_item_tasks": recorder.stop_item_tasks,
         "HTTPException": StubHTTPException,
@@ -189,8 +231,10 @@ def compile_endpoints(source: str, admin_access: bool, recorder: Recorder):
         "log": Log,
         "ENABLE_ADMIN_CHAT_ACCESS": admin_access,
     }
-    module = ast.Module(body=[wanted[LIST_ENDPOINT], wanted[STOP_ENDPOINT]],
-                        type_ignores=[])
+    body = [wanted[LIST_ENDPOINT], wanted[STOP_ENDPOINT]]
+    if CHANNEL_HELPER in wanted:
+        body.insert(0, wanted[CHANNEL_HELPER])
+    module = ast.Module(body=body, type_ignores=[])
     ast.fix_missing_locations(module)
     exec(compile(module, "<patched main.py>", "exec"), namespace)  # noqa: S102
     return namespace[LIST_ENDPOINT], namespace[STOP_ENDPOINT]
@@ -282,6 +326,139 @@ def run_leg(source: str, *, expect_leak: bool) -> None:
     )
 
 
+
+def run_socket_arm(source: str, *, post_fix: bool) -> None:
+    """The `local:` and `channel:` arm, which the chat scenarios never reach.
+
+    Split out rather than folded into run_leg because the channel half has no
+    pre-fix and post-fix symmetry to assert: before the fix nobody but an
+    administrator could ever pass it, and that is the regression being repaired.
+    """
+    # 5. The owner of a live temporary chat, named by their own socket.
+    listed, _ = call_list(source, user=OWNER, chat_id=VICTIM_LOCAL_ID)
+    refused, _ = call_stop(source, user=OWNER, chat_id=VICTIM_LOCAL_ID)
+    check(
+        listed["task_ids"] != [] and refused is None,
+        "the owner of a temporary chat still lists and stops it by their own "
+        f"socket id (listed={listed['task_ids']}, refused={refused})",
+    )
+
+    # 6. A stranger naming somebody else's socket. The pool resolves the real
+    #    owner, and the comparison is against the caller's authenticated id.
+    listed, _ = call_list(source, user=STRANGER, chat_id=VICTIM_LOCAL_ID)
+    refused, _ = call_stop(source, user=STRANGER, chat_id=VICTIM_LOCAL_ID)
+    check(
+        listed["task_ids"] == [] and refused == 404,
+        "a stranger naming someone else's socket is refused "
+        f"(listed={listed['task_ids']}, refused={refused})",
+    )
+
+    # 7. A socket the pool does not hold, which is what a disconnected or
+    #    invented sid looks like. It must FAIL CLOSED, and the owner is used as
+    #    the caller precisely because an arm that fell open would pass with a
+    #    stranger.
+    unknown = "local:sid-not-in-the-pool"
+    listed, _ = call_list(source, user=OWNER, chat_id=unknown)
+    refused, _ = call_stop(source, user=OWNER, chat_id=unknown)
+    check(
+        listed["task_ids"] == [] and refused == 404,
+        "an unresolvable socket id denies rather than admits, even for the "
+        f"owner (listed={listed['task_ids']}, refused={refused})",
+    )
+
+    # 8. The channel arm. THIS IS THE REGRESSION CHECK. `chat_id[len('local:'):]`
+    #    is a fixed six-character slice, so a `channel:` id yielded
+    #    `l:<channel id>` and the owner never resolved; the bare admin term was
+    #    the only way anything passed. Flag-gating that term without repairing
+    #    the arm makes a channel generation uncancellable by anyone.
+    listed, _ = call_list(source, user=OWNER, chat_id=VICTIM_CHANNEL_ID)
+    refused, _ = call_stop(source, user=OWNER, chat_id=VICTIM_CHANNEL_ID)
+    if post_fix:
+        check(
+            listed["task_ids"] != [] and refused is None,
+            "a channel member lists and stops their channel's generation "
+            f"(listed={listed['task_ids']}, refused={refused})",
+        )
+    else:
+        check(
+            listed["task_ids"] == [] and refused == 404,
+            "PRE-FIX: a channel member could NOT stop their own channel's "
+            "generation, because the socket slice never resolved one "
+            f"(listed={listed['task_ids']}, refused={refused})",
+        )
+
+    # 9. A non-member on the same channel is refused in both legs.
+    listed, _ = call_list(source, user=STRANGER, chat_id=VICTIM_CHANNEL_ID)
+    refused, _ = call_stop(source, user=STRANGER, chat_id=VICTIM_CHANNEL_ID)
+    check(
+        listed["task_ids"] == [] and refused == 404,
+        "a non-member is refused on the channel arm "
+        f"(listed={listed['task_ids']}, refused={refused})",
+    )
+
+
+def check_site_five(after: str) -> None:
+    """The chat-completions ownership check, pinned by POSITION as well as text.
+
+    Asserting the predicate's text alone answers a narrower question than it
+    looks: a refactor that kept the line verbatim and moved it somewhere it
+    never executes passes. So the node is located in the AST and its ancestry is
+    asserted, which is the same identity-over-text rule the patch postconditions
+    now follow.
+    """
+    tree = ast.parse(after)
+    handler = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "chat_completion"
+        ),
+        None,
+    )
+    check(handler is not None, "the chat-completions handler is still called chat_completion")
+    if handler is None:
+        return
+
+    # The guarded `raise` must still be the body of an `if` whose test is the
+    # flag-gated ownership predicate, and that `if` must sit on the `else:`
+    # branch of the is-new-chat split, which is where an EXISTING chat is
+    # handled. On the new-chat branch there is no owner to check yet.
+    sites = []
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.If):
+            continue
+        for sub in node.orelse:
+            for inner in ast.walk(sub):
+                if not isinstance(inner, ast.If):
+                    continue
+                text = ast.unparse(inner.test)
+                if "is_chat_owner" not in text:
+                    continue
+                sites.append((inner, text))
+
+    check(
+        len(sites) == 1,
+        f"exactly one is_chat_owner gate on an else branch of the "
+        f"chat-completions handler (found {len(sites)})",
+    )
+    if len(sites) != 1:
+        return
+    node, text = sites[0]
+    check(
+        "ENABLE_ADMIN_CHAT_ACCESS" in text,
+        f"and its predicate is flag-gated (unparsed: {text})",
+    )
+    check(
+        "user.role != 'admin'" not in text,
+        "and carries no bare admin term (unparsed above)",
+    )
+    check(
+        any(isinstance(s, ast.Raise) for s in ast.walk(ast.Module(body=list(node.body), type_ignores=[]))),
+        "and the guarded body still raises rather than having been emptied",
+    )
+
+
 def main() -> int:
     print("main.py chat task endpoints honour ENABLE_ADMIN_CHAT_ACCESS (issue #1511)")
 
@@ -303,6 +480,7 @@ def main() -> int:
     before = patched_main(apply_1511=False)
     check(MARKER not in before, f"the pre-fix source carries no {MARKER} marker")
     run_leg(before, expect_leak=True)
+    run_socket_arm(before, post_fix=False)
 
     print("\npost-fix source: with the #1511 patch")
     after = patched_main(apply_1511=True)
@@ -312,20 +490,15 @@ def main() -> int:
         f"(found {after.count(MARKER)})",
     )
     run_leg(after, expect_leak=False)
+    run_socket_arm(after, post_fix=True)
 
-    # The fifth site, which cannot be driven: covered structurally only, and
-    # named here so the behavioural coverage is not read as extending to it.
-    print("\nthe chat-completions ownership check (structural only)")
+    print("\nthe chat-completions ownership check")
     check(
         "if not await Chats.is_chat_owner(chat_id, user.id) and user.role != 'admin':"
         not in after,
         "the completions-path ownership check no longer carries a bare admin term",
     )
-    check(
-        "if not await Chats.is_chat_owner(chat_id, user.id) and not "
-        "(user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS):" in after,
-        "and carries the flag-gated one instead",
-    )
+    check_site_five(after)
 
     print()
     if failures:

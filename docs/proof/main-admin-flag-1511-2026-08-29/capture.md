@@ -336,3 +336,167 @@ image, and no live session could be minted from this checkout because it carries
 no `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_ANON_KEY`. No
 password was read, set, reset or rotated, and `demo@hive-demo.invalid` was not
 touched. Saying so plainly rather than substituting a stale or unrelated frame.
+
+---
+
+## Security review round, 2026-08-30
+
+No CRITICAL and no HIGH. One MEDIUM and three LOW, all acted on. The two that
+mattered are recorded here in full, because one of them is a functional
+regression this fix introduced.
+
+### The channel arm: a regression this patch created, now repaired
+
+The socket-scoped arm serves TWO prefixes:
+
+```python
+if chat_id.startswith('local:') or chat_id.startswith('channel:'):
+    socket_id = chat_id[len('local:') :]
+    owner_id = get_user_id_from_session_pool(socket_id)
+```
+
+`chat_id[len('local:'):]` is a fixed six-character slice. A `channel:` id is
+eight characters of prefix, so it yields `l:<channel id>`.
+
+**Making the slice prefix aware does NOT fix it**, and that is worth stating
+because it is the obvious reading of an off-by-two. The segment after `channel:`
+is a CHANNEL id, not a socket id, so `get_user_id_from_session_pool` returns
+`None` for it however the string is sliced. The owner never resolved, and the
+bare `user.role != 'admin'` term was the only way any caller ever passed that
+comparison.
+
+So flag-gating that term, with `ENABLE_ADMIN_CHAT_ACCESS` false, would have made
+a channel generation uncancellable by anyone at all, the channel's own members
+included. That is a regression introduced by the fix, not a pre-existing gap
+declined. It is repaired here rather than deferred, and "not reachable from
+today's frontend" was explicitly not allowed to decide it: reachability is a
+property of today's callers, not of the code.
+
+The repair routes `channel:` ids through channel entitlement, resolved the way
+`main.py` already resolves it when such a task is CREATED (membership for a
+group or direct-message channel, an AccessGrants write grant otherwise), and
+deliberately WITHOUT that gate's own `user.role != 'admin'` shortcut, so this
+patch does not introduce a new unflagged bypass while removing five. Stopping a
+channel task is therefore slightly stricter than creating one, which is the safe
+direction. `ENABLE_ADMIN_CHAT_ACCESS` is not consulted on that arm at all: it
+means cross-tenant CHAT access, and applying it to a channel-scoped id purely
+because the two shared one branch would be a conflation rather than a decision.
+
+Observed, in both legs:
+
+```
+pre-fix source: main.py WITHOUT the #1511 patch
+  ok: PRE-FIX: a channel member could NOT stop their own channel's generation, because the socket slice never resolved one (listed=[], refused=404)
+
+post-fix source: with the #1511 patch
+  ok: a channel member lists and stops their channel's generation (listed=['task-for-channel:5f0b7e3a-1111-2222-3333-444455556666'], refused=None)
+  ok: a non-member is refused on the channel arm (listed=[], refused=404)
+```
+
+Marker count moves from 5 to 8: the helper, plus a channel arm in each endpoint.
+
+### The guards now assert identity rather than counts
+
+The review's MEDIUM: the Dockerfile guard counted occurrences, so it could not
+tell a benign survivor from a bypass. It was measured and confirmed NOT vacuous,
+9 to 4 bare and 0 to 5 markers, so it does catch a dropped patch. It was blind to
+two mutations, both of which were built and run.
+
+The same shape appeared on the sibling branch for issue #1508, where the AST
+postcondition matched call NAMES rather than call nodes. Two guards built the
+same wrong way is a habit rather than an accident, so both were redesigned around
+the same rule: **assert that the specific decision at the specific site is
+correct, not that some number of things appear somewhere.**
+
+Here that means four things, all node-based or text-identity based:
+
+* every `user.role` comparison is classified by spelling, and the NEGATED ones
+  must number exactly the four reviewed survivors;
+* each of those four survivors is pinned by its own full line, so one cannot be
+  displaced by something else wearing its count;
+* the POSITIVE spelling is pinned too, at five rewritten sites plus the one
+  pre-existing benign use, because a bypass written as `user.role == 'admin' or
+  ...` is invisible to a count of the negated form by construction;
+* each of the five must genuinely be conjoined with the flag, asked of the node.
+
+The Dockerfile carries the same set, plus a line asserting the old two-prefix
+branch header is gone.
+
+All three review mutations now fail at build time:
+
+```
+# mutation B, swap a benign survivor for a real bypass, totals conserved
+AssertionError: an unflagged admin bypass survived patching: "if chat is None or (chat.user_id != user.id and user.role != 'admin'):"
+
+# mutation B2, same swap with a novel spelling no stale-string matches
+AssertionError: the surviving bare admin check "if not ENABLE_PUBLIC_ACTIVE_USERS_COUNT and user.role != 'admin':" is no longer present exactly once in main.py (found 0)
+
+# mutation A, a new bypass written in the positive form
+AssertionError: expected exactly 6 `user.role == 'admin'` comparisons in main.py after patching, found 7. An extra one is a bypass written in the positive form
+```
+
+### Both test findings
+
+**The session-pool stub answered for every socket.** `lambda socket_id: VICTIM_ID`
+meant the None branch, the wrong-socket branch and the reconnected-socket branch
+were all invisible, which is exactly the path the channel slice breaks. It is now
+a real dict holding one socket, and three scenarios drive it:
+
+```
+  ok: the owner of a temporary chat still lists and stops it by their own socket id (listed=['task-for-local:sid-victim-socket'], refused=None)
+  ok: a stranger naming someone else's socket is refused (listed=[], refused=404)
+  ok: an unresolvable socket id denies rather than admits, even for the owner (listed=[], refused=404)
+```
+
+The third is the fail-closed assertion, and the OWNER is deliberately the caller
+in it: an arm that fell open on an unresolvable socket would still pass with a
+stranger.
+
+**Site five was pinned by predicate TEXT, not by position.** A refactor that kept
+the line verbatim and moved it somewhere it never executes passed. It is now
+located in the AST: exactly one `is_chat_owner` gate on an `else` branch of
+`chat_completion`, its predicate flag-gated and carrying no bare admin term, and
+its body still raising:
+
+```
+the chat-completions ownership check
+  ok: the completions-path ownership check no longer carries a bare admin term
+  ok: the chat-completions handler is still called chat_completion
+  ok: exactly one is_chat_owner gate on an else branch of the chat-completions handler (found 1)
+  ok: and its predicate is flag-gated (unparsed: not await Chats.is_chat_owner(chat_id, user.id) and (not (user.role == 'admin' and ENABLE_ADMIN_CHAT_ACCESS)))
+  ok: and carries no bare admin term (unparsed above)
+  ok: and the guarded body still raises rather than having been emptied
+```
+
+The section heading no longer says "structural only", because the accurate
+reading was never "the code is right, just not run" but "the predicate text is
+right, the surrounding control flow is unasserted". The control flow is asserted
+now.
+
+### The no-op mutant, re-run against the widened suite
+
+```
+FAILED: 7 check(s)
+  - the #1511 patch applied: 8 # hive (#1511) markers (found 0)
+  - a non-owner administrator is handed NO task ids while the flag is off (observed ['task-for-e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
+  - and cancels nothing, refused with 404 (refused=None, cancelled=['e85bb8ac-32f1-4bcb-a5af-2c56060ce571'])
+  - a channel member lists and stops their channel's generation (listed=[], refused=404)
+  - the completions-path ownership check no longer carries a bare admin term
+  - and its predicate is flag-gated (unparsed: not await Chats.is_chat_owner(chat_id, user.id) and user.role != 'admin')
+  - and carries no bare admin term (unparsed above)
+```
+
+### One finding deliberately not fixed here
+
+`routers/channels.py` carries twenty-five occurrences of the same unflagged
+predicate and zero `# hive (#1186)` markers, so it was never in the family
+patch's scope. Filed as issue #1533 together with `yjs_document_leave`, framed as
+a recurring class rather than as a fourth site to patch by reflex.
+
+### Substrate
+
+Every transcript above was produced in Docker. The suite runs in
+`python:3.12-slim`; the patch and drift-guard measurements run inside
+`ghcr.io/open-webui/open-webui@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4`,
+whose `/app/backend/open_webui/main.py` was confirmed byte-identical to the
+vendored copy before any of it was trusted.
