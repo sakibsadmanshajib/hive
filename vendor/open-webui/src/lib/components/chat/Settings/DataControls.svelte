@@ -21,6 +21,7 @@
 		importChats
 	} from '$lib/apis/chats';
 	import { getImportOrigin, convertOpenAIChats } from '$lib/utils';
+	import { runBulkChatAction } from '$lib/hive/bulkChatActions';
 	import { onMount, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
@@ -96,10 +97,7 @@
 			toast.success(`Successfully imported ${res.length} chats.`);
 		}
 
-		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
-		pinnedChats.set(await getPinnedChatList(localStorage.token));
-		scrollPaginationEnabled.set(true);
+		await refreshChatLists();
 	};
 
 	const exportChats = async () => {
@@ -109,34 +107,50 @@
 		saveAs(blob, `chat-export-${Date.now()}.json`);
 	};
 
-	const archiveAllChatsHandler = async () => {
-		await goto('/');
-		await archiveAllChats(localStorage.token).catch((error) => {
-			toast.error(`${error}`);
-		});
-
+	/*
+	 * Both sidebar lists, refetched from the server (#866).
+	 *
+	 * Pinned chats are a second fetch feeding a second sidebar section. Archive
+	 * All used to empty that store by hand and Delete All used to leave it
+	 * untouched, so every pinned conversation stayed on screen, named and
+	 * clickable, after its row had been archived or deleted. Both now read the
+	 * lists back rather than asserting what they should contain.
+	 */
+	const refreshChatLists = async () => {
 		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
-		pinnedChats.set([]);
+		chats.set(await getChatList(localStorage.token, $currentChatPage));
+		pinnedChats.set(await getPinnedChatList(localStorage.token));
 		scrollPaginationEnabled.set(true);
 	};
 
-	const deleteAllChatsHandler = async () => {
-		await goto('/');
-		await deleteAllChats(localStorage.token).catch((error) => {
-			toast.error(`${error}`);
+	const archiveAllChatsHandler = async () =>
+		await runBulkChatAction({
+			write: () => archiveAllChats(localStorage.token),
+			navigateHome: () => goto('/'),
+			refresh: refreshChatLists,
+			notifyError: (message) => toast.error(message),
+			notifySuccess: (message) => toast.success(message),
+			successMessage: $i18n.t('Archived all chats.'),
+			failureMessage: $i18n.t('Failed to archive all chats.'),
+			staleViewMessage: $i18n.t('Archived all chats, but this view could not be refreshed.')
 		});
 
-		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
-		scrollPaginationEnabled.set(true);
-	};
+	const deleteAllChatsHandler = async () =>
+		await runBulkChatAction({
+			write: () => deleteAllChats(localStorage.token),
+			navigateHome: () => goto('/'),
+			refresh: refreshChatLists,
+			notifyError: (message) => toast.error(message),
+			notifySuccess: (message) => toast.success(message),
+			successMessage: $i18n.t('Deleted all chats.'),
+			failureMessage: $i18n.t('Failed to delete all chats.'),
+			staleViewMessage: $i18n.t('Deleted all chats, but this view could not be refreshed.')
+		});
 
+	// Unarchiving restores a chat that may have been pinned, so the pinned
+	// section is refetched here too rather than only the main list.
 	const handleArchivedChatsChange = async () => {
-		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
-
-		scrollPaginationEnabled.set(true);
+		await refreshChatLists();
 	};
 </script>
 
@@ -266,20 +280,27 @@
 				</div>
 			</div>
 
-			<div>
-				<div class="py-0.5 flex w-full justify-between">
-					<div class="self-center text-xs">{$i18n.t('Delete All Chats')}</div>
-					<button
-						class="p-1 px-3 text-xs flex rounded-sm transition"
-						on:click={() => {
-							showDeleteConfirmDialog = true;
-						}}
-						type="button"
-					>
-						<span class="self-center">{$i18n.t('Delete All')}</span>
-					</button>
+			<!-- Gated the way Import and Export above are, and for the same reason
+			     (#866). DELETE /api/v1/chats/ answers 401 to an ordinary user
+			     without the `chat.delete` permission, so offering the control to
+			     one is offering a button that cannot work. The `?? true` keeps
+			     upstream's own default, which is on. -->
+			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete ?? true)}
+				<div>
+					<div class="py-0.5 flex w-full justify-between">
+						<div class="self-center text-xs">{$i18n.t('Delete All Chats')}</div>
+						<button
+							class="p-1 px-3 text-xs flex rounded-sm transition"
+							on:click={() => {
+								showDeleteConfirmDialog = true;
+							}}
+							type="button"
+						>
+							<span class="self-center">{$i18n.t('Delete All')}</span>
+						</button>
+					</div>
 				</div>
-			</div>
+			{/if}
 		</div>
 
 		<div>
