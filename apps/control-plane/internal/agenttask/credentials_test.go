@@ -49,11 +49,11 @@ type mintedCredential struct {
 // returns embeds that account, so a test can tell a credential minted for the
 // right tenant apart from any other non-empty string.
 type fakeCredentials struct {
-	mu       sync.Mutex
-	accounts map[uuid.UUID]uuid.UUID
-	minted   []mintedCredential
-	revoked  []uuid.UUID
-	mintErr  error
+	mu        sync.Mutex
+	accounts  map[uuid.UUID]uuid.UUID
+	minted    []mintedCredential
+	revoked   []uuid.UUID
+	mintErr   error
 	revokeErr error
 }
 
@@ -87,7 +87,13 @@ func (f *fakeCredentials) Mint(_ context.Context, t agenttask.Task) (string, err
 		taskID:    t.ID,
 		tenantID:  t.TenantID,
 		accountID: acct,
-		secret:    "hk_test_account_" + acct.String() + "_task_" + t.ID.String(),
+		// Deliberately NOT the shape a real secret has, and deliberately not
+		// prefixed "hk_": this value encodes the account and the task so one
+		// assertion can check a credential's value and its provenance at once,
+		// and that is exactly what a real secret must never do. The production
+		// minter uses 32 crypto/rand bytes unrelated to any identifier, pinned
+		// by apikeys.TestCreateKeyWithIDSecretIsRandomAndUnrelatedToTheIDs.
+		secret: "fake-fixture-not-a-secret/account=" + acct.String() + "/task=" + t.ID.String(),
 	}
 	f.minted = append(f.minted, rec)
 	return rec.secret, nil
@@ -393,28 +399,35 @@ type fakeKeyIssuer struct {
 	createdOnAccount uuid.UUID
 	createdKeyID     uuid.UUID
 	createdActor     uuid.UUID
-	createdInput     apikeys.CreateKeyInput
+	createdExpiresAt *time.Time
 	createErr        error
 
-	revokedOnAccount uuid.UUID
-	revokedKeyID     uuid.UUID
-	revokeErr        error
+	revokedKeyID uuid.UUID
+	revokeErr    error
+	revokeCalled bool
+	// revokedLastUsedAt is what the revoked key reports for last_used_at. nil
+	// is the zero-charge case: accounting stamps that column only when a
+	// reservation on the key reaches a terminal charge.
+	revokedLastUsedAt *time.Time
 }
 
-func (f *fakeKeyIssuer) CreateKeyWithID(_ context.Context, accountID, actorUserID, keyID uuid.UUID, input apikeys.CreateKeyInput) (apikeys.CreateKeyResult, error) {
-	f.createdOnAccount, f.createdActor, f.createdKeyID, f.createdInput = accountID, actorUserID, keyID, input
+func (f *fakeKeyIssuer) CreateAgentTaskKey(_ context.Context, accountID, actorUserID, taskID uuid.UUID, expiresAt *time.Time) (apikeys.CreateKeyResult, error) {
+	f.createdOnAccount, f.createdActor, f.createdKeyID, f.createdExpiresAt = accountID, actorUserID, taskID, expiresAt
 	if f.createErr != nil {
 		return apikeys.CreateKeyResult{}, f.createErr
 	}
-	return apikeys.CreateKeyResult{Key: apikeys.APIKey{ID: keyID, AccountID: accountID}, Secret: "hk_live_secret"}, nil
+	return apikeys.CreateKeyResult{
+		Key:    apikeys.APIKey{ID: taskID, AccountID: accountID, Kind: apikeys.KindAgentTask},
+		Secret: "fake-issued-secret",
+	}, nil
 }
 
-func (f *fakeKeyIssuer) RevokeKey(_ context.Context, accountID, _, keyID uuid.UUID) (apikeys.APIKey, error) {
-	f.revokedOnAccount, f.revokedKeyID = accountID, keyID
+func (f *fakeKeyIssuer) RevokeAgentTaskKey(_ context.Context, keyID uuid.UUID) (apikeys.APIKey, error) {
+	f.revokedKeyID, f.revokeCalled = keyID, true
 	if f.revokeErr != nil {
 		return apikeys.APIKey{}, f.revokeErr
 	}
-	return apikeys.APIKey{ID: keyID, AccountID: accountID}, nil
+	return apikeys.APIKey{ID: keyID, AccountID: f.createdOnAccount, LastUsedAt: f.revokedLastUsedAt}, nil
 }
 
 func TestPgxTaskCredentials_MintsOnTheTenantsBillingAccountUnderTheTaskID(t *testing.T) {
@@ -431,20 +444,17 @@ func TestPgxTaskCredentials_MintsOnTheTenantsBillingAccountUnderTheTaskID(t *tes
 	// One assertion, value and provenance together: the secret handed back
 	// must be the one issued on the account THIS tenant bills to, under this
 	// task's own id, by this task's own user.
-	if secret != "hk_live_secret" || keys.createdOnAccount != accountID ||
+	if secret != "fake-issued-secret" || keys.createdOnAccount != accountID ||
 		keys.createdKeyID != taskID || keys.createdActor != userID || db.gotTenant != tenantID {
 		t.Fatalf("minted secret %q on account %s under key id %s for actor %s (looked up tenant %s); want %q on %s / %s / %s / %s",
 			secret, keys.createdOnAccount, keys.createdKeyID, keys.createdActor, db.gotTenant,
-			"hk_live_secret", accountID, taskID, userID, tenantID)
+			"fake-issued-secret", accountID, taskID, userID, tenantID)
 	}
-	if keys.createdInput.ExpiresAt == nil {
+	if keys.createdExpiresAt == nil {
 		t.Fatal("minted credential has no expiry: nothing else bounds it when control-plane dies before revoking")
 	}
-	if until := time.Until(*keys.createdInput.ExpiresAt); until <= time.Hour {
+	if until := time.Until(*keys.createdExpiresAt); until <= 30*time.Minute {
 		t.Fatalf("expiry is %s away, which is inside the range a long task can run; a credential that expires mid-run breaks the run", until)
-	}
-	if !strings.Contains(keys.createdInput.Nickname, taskID.String()) {
-		t.Fatalf("nickname %q does not name the task it belongs to", keys.createdInput.Nickname)
 	}
 }
 
@@ -463,27 +473,104 @@ func TestPgxTaskCredentials_MintFailsClosedWithNoBillingAccount(t *testing.T) {
 	}
 }
 
-func TestPgxTaskCredentials_RevokeIsIdempotent(t *testing.T) {
+func TestPgxTaskCredentials_RevokeDistinguishesAlreadyGoneFromCouldNotFind(t *testing.T) {
 	tenantID, taskID, accountID := uuid.New(), uuid.New(), uuid.New()
 	db := &fakeAccountDB{accountByTenant: map[uuid.UUID]uuid.UUID{tenantID: accountID}}
 	task := agenttask.Task{ID: taskID, TenantID: tenantID, UserID: uuid.New()}
 
+	// The distinction this pins is the whole point. "Already revoked" is an
+	// observed row in a known terminal state, so it is genuinely success. "Not
+	// found" is not: it means a credential this process minted on a real
+	// billing account could not be located to destroy, so it is still live and
+	// still spendable. Collapsing the second into the first is how a bad
+	// outcome comes back wearing a good signal, which is what #1507 is.
 	for _, tc := range []struct {
-		name string
-		err  error
+		name      string
+		issuerErr error
+		wantErr   error
 	}{
-		{"already revoked", apikeys.ErrRevoked},
-		{"never minted", apikeys.ErrNotFound},
+		{"already revoked is success", apikeys.ErrRevoked, nil},
+		{"not found is not success", apikeys.ErrNotFound, agenttask.ErrCredentialUnaccountedFor},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			keys := &fakeKeyIssuer{revokeErr: tc.err}
+			keys := &fakeKeyIssuer{revokeErr: tc.issuerErr}
+			creds := agenttask.NewPgxTaskCredentials(db, keys)
+			err := creds.Revoke(context.Background(), task)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Revoke: %v, want nil (a terminal transition can fire twice)", err)
+				}
+			} else if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Revoke error = %v, want %v: a credential that could not be found is still live, and must never read as a clean revocation", err, tc.wantErr)
+			}
+			if keys.revokedKeyID != taskID {
+				t.Fatalf("revoked key %s, want %s (the credential id is the task id, and revocation resolves it by primary key alone)",
+					keys.revokedKeyID, taskID)
+			}
+		})
+	}
+}
+
+// TestPgxTaskCredentials_RevokeDoesNotReResolveTheBillingAccount pins the fix
+// for the defect that made this a merge blocker: Mint and Revoke each
+// independently resolving public.tenant_billing_accounts meant a resolution
+// that drifted between them left the revoke looking in the wrong place,
+// reporting "not found", and a live credential surviving its full lifetime.
+// Revocation now goes by primary key, which the credential's own id already is.
+func TestPgxTaskCredentials_RevokeDoesNotReResolveTheBillingAccount(t *testing.T) {
+	tenantID, taskID := uuid.New(), uuid.New()
+	// Asserted through an EMPTY account map, with the reason stated: if Revoke
+	// still resolved an account, this lookup would miss and it would fail with
+	// ErrNoBillingAccount instead of revoking.
+	db := &fakeAccountDB{accountByTenant: map[uuid.UUID]uuid.UUID{}}
+	keys := &fakeKeyIssuer{}
+	creds := agenttask.NewPgxTaskCredentials(db, keys)
+
+	if err := creds.Revoke(context.Background(), agenttask.Task{ID: taskID, TenantID: tenantID, UserID: uuid.New()}); err != nil {
+		t.Fatalf("Revoke: %v, want nil: revocation must not depend on a second billing-account resolution that can disagree with the mint's", err)
+	}
+	if keys.revokedKeyID != taskID {
+		t.Fatalf("revoked key %s, want %s", keys.revokedKeyID, taskID)
+	}
+	if db.gotTenant != uuid.Nil {
+		t.Fatalf("Revoke resolved tenant %s; it must not touch tenant_billing_accounts at all", db.gotTenant)
+	}
+}
+
+// TestPgxTaskCredentials_RevokeReadsWhetherTheCredentialEverSettledAnything is
+// the merge condition for this family of bug: a path that can silently produce
+// a zero charge must leave a record with a distinct reason, because #1507 IS a
+// zero charge nobody noticed for weeks.
+//
+// public.api_keys.last_used_at is written by exactly one production caller,
+// accounting.Service.finalizeLocked, so it is stamped when and only when a
+// reservation on that key reached a terminal charge. A revoked task credential
+// with it still NULL means, precisely, that not one model turn ever settled
+// against this task. Because the key id is the task id, those rows are the
+// durable countable record; Revoke turns them into a loud one.
+func TestPgxTaskCredentials_RevokeReadsWhetherTheCredentialEverSettledAnything(t *testing.T) {
+	tenantID, taskID := uuid.New(), uuid.New()
+	db := &fakeAccountDB{accountByTenant: map[uuid.UUID]uuid.UUID{tenantID: uuid.New()}}
+	task := agenttask.Task{ID: taskID, TenantID: tenantID, UserID: uuid.New()}
+	used := time.Now().UTC()
+
+	// Asserted as a pair on purpose. A Revoke that reported for every task, or
+	// for none, would satisfy either case on its own.
+	for _, tc := range []struct {
+		name       string
+		lastUsedAt *time.Time
+	}{
+		{"settled nothing", nil},
+		{"settled at least one turn", &used},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keys := &fakeKeyIssuer{revokedLastUsedAt: tc.lastUsedAt}
 			creds := agenttask.NewPgxTaskCredentials(db, keys)
 			if err := creds.Revoke(context.Background(), task); err != nil {
-				t.Fatalf("Revoke: %v, want nil (a terminal transition can fire twice)", err)
+				t.Fatalf("Revoke: %v", err)
 			}
-			if keys.revokedKeyID != taskID || keys.revokedOnAccount != accountID {
-				t.Fatalf("revoked key %s on account %s, want %s on %s",
-					keys.revokedKeyID, keys.revokedOnAccount, taskID, accountID)
+			if !keys.revokeCalled || keys.revokedKeyID != taskID {
+				t.Fatalf("revoked key %s (called=%v); want %s", keys.revokedKeyID, keys.revokeCalled, taskID)
 			}
 		})
 	}

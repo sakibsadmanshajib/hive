@@ -64,13 +64,13 @@ func (r *pgxRepository) CreateKey(ctx context.Context, key APIKey) (APIKey, erro
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.api_keys
 			(id, account_id, nickname, token_hash, redacted_suffix, status,
-			 expires_at, created_by_user_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+			 expires_at, created_by_user_id, kind, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
 		RETURNING id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 	`, key.ID, key.AccountID, key.Nickname, key.TokenHash, key.RedactedSuffix,
-		string(key.Status), key.ExpiresAt, key.CreatedByUserID)
+		string(key.Status), key.ExpiresAt, key.CreatedByUserID, string(defaultedKind(key.Kind)))
 
 	return scanKey(row)
 }
@@ -79,7 +79,7 @@ func (r *pgxRepository) GetKeyByID(ctx context.Context, keyID uuid.UUID) (APIKey
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 		FROM public.api_keys
 		WHERE id = $1
 	`, keyID)
@@ -91,7 +91,7 @@ func (r *pgxRepository) GetKey(ctx context.Context, accountID, keyID uuid.UUID) 
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 		FROM public.api_keys
 		WHERE id = $1 AND account_id = $2
 	`, keyID, accountID)
@@ -103,9 +103,9 @@ func (r *pgxRepository) ListKeys(ctx context.Context, accountID uuid.UUID) ([]AP
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 		FROM public.api_keys
-		WHERE account_id = $1
+		WHERE account_id = $1 AND kind = 'user'
 		ORDER BY created_at DESC
 	`, accountID)
 	if err != nil {
@@ -131,7 +131,7 @@ func (r *pgxRepository) UpdateKeyState(ctx context.Context, accountID, keyID uui
 		WHERE id = $5 AND account_id = $6
 		RETURNING id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 	`, string(status), disabledAt, revokedAt, replacedBy, keyID, accountID)
 
 	return scanKey(row)
@@ -157,13 +157,13 @@ func (r *pgxRepository) CreateReplacementKey(ctx context.Context, oldKeyID uuid.
 	newRow := tx.QueryRow(ctx, `
 		INSERT INTO public.api_keys
 			(id, account_id, nickname, token_hash, redacted_suffix, status,
-			 expires_at, created_by_user_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+			 expires_at, created_by_user_id, kind, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
 		RETURNING id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 	`, newKey.ID, newKey.AccountID, newKey.Nickname, newKey.TokenHash, newKey.RedactedSuffix,
-		string(newKey.Status), newKey.ExpiresAt, newKey.CreatedByUserID)
+		string(newKey.Status), newKey.ExpiresAt, newKey.CreatedByUserID, string(defaultedKind(newKey.Kind)))
 
 	created, err := scanKey(newRow)
 	if err != nil {
@@ -177,7 +177,7 @@ func (r *pgxRepository) CreateReplacementKey(ctx context.Context, oldKeyID uuid.
 		WHERE id = $3
 		RETURNING id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 	`, rotatedAt, created.ID, oldKeyID)
 
 	old, err := scanKey(oldRow)
@@ -200,10 +200,11 @@ type scannable interface {
 func scanKey(row scannable) (APIKey, error) {
 	var k APIKey
 	var status string
+	var kind string
 	err := row.Scan(
 		&k.ID, &k.AccountID, &k.Nickname, &k.TokenHash, &k.RedactedSuffix, &status,
 		&k.ExpiresAt, &k.LastUsedAt, &k.CreatedByUserID, &k.DisabledAt, &k.RevokedAt,
-		&k.ReplacedByKeyID, &k.CreatedAt, &k.UpdatedAt,
+		&k.ReplacedByKeyID, &k.CreatedAt, &k.UpdatedAt, &kind,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -212,6 +213,7 @@ func scanKey(row scannable) (APIKey, error) {
 		return APIKey{}, err
 	}
 	k.Status = KeyStatus(status)
+	k.Kind = KeyKind(kind)
 	return k, nil
 }
 
@@ -551,7 +553,7 @@ func (r *pgxRepository) GetByTokenHash(ctx context.Context, tokenHash string) (A
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, account_id, nickname, token_hash, redacted_suffix, status,
 			expires_at, last_used_at, created_by_user_id, disabled_at, revoked_at,
-			replaced_by_key_id, created_at, updated_at
+			replaced_by_key_id, created_at, updated_at, kind
 		FROM public.api_keys
 		WHERE token_hash = $1
 	`, tokenHash)
@@ -752,4 +754,14 @@ func jsonbOrNil(values []string) interface{} {
 	}
 	data, _ := json.Marshal(values)
 	return string(data)
+}
+
+// defaultedKind keeps an APIKey built by older code, or by a test that does not
+// care, from writing an empty string into a CHECK-constrained column. There is
+// exactly one non-user caller and it sets Kind explicitly.
+func defaultedKind(k KeyKind) KeyKind {
+	if k == "" {
+		return KindUser
+	}
+	return k
 }

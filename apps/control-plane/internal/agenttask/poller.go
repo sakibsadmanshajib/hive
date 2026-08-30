@@ -388,7 +388,7 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 	// After the transition, never before: while the sandbox is still running
 	// it may be mid-turn, and a revoked key would fail that turn with an auth
 	// error nobody caused.
-	RevokeTaskCredential(ctx, p.creds, t)
+	revokeTaskCredential(ctx, p.creds, t)
 	return pollResult{advanced: true} // the engine's own report, not the poller giving up
 }
 
@@ -451,7 +451,7 @@ func (p *Poller) failTask(ctx context.Context, t Task, message string) (advanced
 	p.clearTaskFailure(t.ID)
 	// Same reasoning as the completion path above: the row is terminal, so
 	// the credential ends here rather than waiting out its expiry.
-	RevokeTaskCredential(ctx, p.creds, t)
+	revokeTaskCredential(ctx, p.creds, t)
 	return true
 }
 

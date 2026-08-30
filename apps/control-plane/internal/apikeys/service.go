@@ -160,22 +160,42 @@ func (s *Service) requireBillingTenant(ctx context.Context, accountID uuid.UUID)
 // is returned once and must not be logged, persisted, or included in list
 // responses.
 func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
-	return s.CreateKeyWithID(ctx, accountID, actorUserID, uuid.New(), input)
+	return s.createKey(ctx, accountID, actorUserID, uuid.New(), KindUser, input)
 }
 
-// CreateKeyWithID is CreateKey under a caller-chosen key id.
+// CreateAgentTaskKey mints the one short-lived credential an agent task's
+// sandbox spends, on that task's own tenant billing account (issue #1507).
 //
-// One caller, and it is the reason this exists: the per-task agent credential
-// (issue #1507) uses the agent task's own id as its key id, so the task row
-// needs no extra column to remember which credential its sandbox spends, and
-// revoking that credential is a pure function of the task. The id is the
-// table's primary key, so a collision fails the insert rather than overwriting
-// an existing key; nothing here trusts the caller to have picked a free one.
+// Deliberately NOT a general "create a key with the id and kind of your
+// choosing" primitive. It is the only caller that needs either, and a
+// primitive that let any caller pick a key's id and kind is a sharper tool
+// than this codebase has a use for. Everything the agent-task case needs is
+// fixed here: the id is the task's, the kind is KindAgentTask, and the
+// nickname is derived rather than passed.
 //
-// Not reachable from the customer HTTP surface. Handler builds its
-// CreateKeyInput from the decoded request body and calls CreateKey, which
-// always generates the id itself, so no request field reaches this parameter.
-func (s *Service) CreateKeyWithID(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
+// The key id IS the task id. That is load bearing: the task row needs no extra
+// column to remember which credential its sandbox spends, revocation is a pure
+// function of the task, and an operator reading public.api_keys can see which
+// task a key belongs to. Uniqueness is the table's primary key, so a second
+// mint for the same task fails the insert rather than quietly issuing a second
+// live credential.
+//
+// A predictable id is safe because the id is not what authenticates. The
+// secret is, and it comes from generateSecret: 32 crypto/rand bytes, unrelated
+// to taskID, accountID or actorUserID, pinned by
+// TestCreateKeyWithIDSecretIsRandomAndUnrelatedToTheIDs.
+//
+// Not reachable from the customer HTTP surface: Handler decodes a request body
+// into CreateKeyInput and calls CreateKey, which generates its own id and
+// leaves Kind empty (so KindUser). No request field reaches this function.
+func (s *Service) CreateAgentTaskKey(ctx context.Context, accountID, actorUserID, taskID uuid.UUID, expiresAt *time.Time) (CreateKeyResult, error) {
+	return s.createKey(ctx, accountID, actorUserID, taskID, KindAgentTask, CreateKeyInput{
+		Nickname:  "agent task " + taskID.String(),
+		ExpiresAt: expiresAt,
+	})
+}
+
+func (s *Service) createKey(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, kind KeyKind, input CreateKeyInput) (CreateKeyResult, error) {
 	if err := s.requireBillingTenant(ctx, accountID); err != nil {
 		return CreateKeyResult{}, err
 	}
@@ -186,6 +206,7 @@ func (s *Service) CreateKeyWithID(ctx context.Context, accountID, actorUserID, k
 	}
 
 	key := APIKey{
+		Kind:            kind,
 		ID:              keyID,
 		AccountID:       accountID,
 		Nickname:        input.Nickname,
@@ -318,6 +339,69 @@ func (s *Service) RevokeKey(ctx context.Context, accountID, actorUserID, keyID u
 		return APIKey{}, err
 	}
 
+	return updated, nil
+}
+
+// RevokeAgentTaskKey revokes one agent-task credential by its primary key, and
+// by nothing else (issue #1507).
+//
+// Why no account scope, unlike RevokeKey. The caller is agenttask's revocation
+// path, and the only account id it could pass is one it would have to re-derive
+// from public.tenant_billing_accounts, a second lookup that can disagree with
+// the one the mint used. If it disagrees, an account-scoped revoke does not
+// find the row, returns ErrNotFound, and a caller that reads that as "already
+// gone" leaves a live credential on a real billing account for its full
+// lifetime with nothing anywhere saying so. The scope was defence that
+// introduced the hole it defended.
+//
+// What replaces it is stronger, not weaker. The key id is the agent task's own
+// id, a primary key, so the lookup is exact and O(1); and the Kind check below
+// means this function CANNOT destroy a customer's own key even if it is handed
+// an id that belongs to one. RevokeKey keeps its account scope, because its
+// caller is an HTTP handler acting for a viewer and there the scope is the
+// authorization.
+//
+// ErrNotFound is returned, never swallowed. "This credential is already
+// revoked" (ErrRevoked, an observed row in a known state) and "I could not find
+// the thing I was told to destroy" are different states and the caller must be
+// able to tell them apart.
+func (s *Service) RevokeAgentTaskKey(ctx context.Context, taskID uuid.UUID) (APIKey, error) {
+	existing, err := s.repo.GetKeyByID(ctx, taskID)
+	if err != nil {
+		return APIKey{}, err
+	}
+	if existing.Kind != KindAgentTask {
+		// Refuses rather than proceeding: an id that resolves to a customer's
+		// own key here means the caller's premise is wrong, and revoking it
+		// would take away a key its owner is using.
+		return APIKey{}, ErrNotAgentTaskKey
+	}
+
+	existing = applyExpiry(existing, time.Now())
+	if existing.Status == KeyStatusRevoked {
+		return existing, ErrRevoked
+	}
+
+	now := time.Now()
+	updated, err := s.repo.UpdateKeyState(ctx, existing.AccountID, taskID, KeyStatusRevoked, nil, &now, nil)
+	if err != nil {
+		return APIKey{}, fmt.Errorf("apikeys: revoke agent task key: %w", err)
+	}
+
+	_ = s.repo.InsertEvent(ctx, KeyEvent{
+		ID:          uuid.New(),
+		APIKeyID:    taskID,
+		AccountID:   existing.AccountID,
+		EventType:   "revoked",
+		ActorUserID: existing.CreatedByUserID,
+	})
+
+	if err := s.invalidateSnapshot(ctx, updated.TokenHash); err != nil {
+		return APIKey{}, err
+	}
+	// last_used_at rides back on the returned key on purpose: it is how the
+	// caller learns whether this credential ever settled a charge.
+	updated.LastUsedAt = existing.LastUsedAt
 	return updated, nil
 }
 

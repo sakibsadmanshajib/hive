@@ -3,6 +3,7 @@ package apikeys
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,10 +92,16 @@ func (r *stubRepo) GetKey(_ context.Context, accountID, keyID uuid.UUID) (APIKey
 	return k, nil
 }
 
+// ListKeys mirrors the pgx repository's contract, kind filter included: the
+// real query is `WHERE account_id = $1 AND kind = 'user'`. A stub that returned
+// every kind would make the service look like it was doing the filtering, and
+// the test above would then pass against a repository that had lost the WHERE
+// clause entirely. What this stub cannot prove is the SQL itself; that is
+// TestListKeysExcludesAgentTaskKindLive's job, against a real database.
 func (r *stubRepo) ListKeys(_ context.Context, accountID uuid.UUID) ([]APIKey, error) {
 	var list []APIKey
 	for _, k := range r.keys {
-		if k.AccountID == accountID {
+		if k.AccountID == accountID && k.Kind == KindUser {
 			list = append(list, k)
 		}
 	}
@@ -397,6 +404,128 @@ func budgetWindowKey(apiKeyID uuid.UUID, budgetKind string, windowStart time.Tim
 }
 
 // --- tests ---
+
+// TestCreateKeyWithIDSecretIsRandomAndUnrelatedToTheIDs guards the one thing
+// that would turn the per-task agent credential (#1507) from a fix into a
+// vulnerability.
+//
+// That feature deliberately makes the key ID predictable: it is the agent
+// task's own id, so the task row needs no extra column and revocation needs no
+// lookup. A predictable id is fine, because the id is not what authenticates.
+// The SECRET is. If the secret were derived from the account id and the task
+// id, both of which appear in logs, API responses and the task's own URL,
+// anyone who could read either could mint the bearer token for a live billing
+// account. This test is what stops that from ever quietly becoming true.
+
+// TestListKeysHidesAgentTaskCredentialsButNotLookalikeUserKeys is the guard on
+// the discriminator itself.
+//
+// The per-task agent credential (#1507) puts one api_keys row in the customer's
+// account per agent task, which the customer did not create and cannot use. It
+// must not appear in their API Keys list. The obvious no-migration filter is a
+// nickname prefix, and this test is written so that a nickname filter FAILS it:
+// the second key below is a real customer key that happens to be named
+// "agent task backfill". Hiding that from its owner is a silent data-loss-shaped
+// bug, and no test written only against the agent-task naming would catch it.
+func TestListKeysHidesAgentTaskCredentialsButNotLookalikeUserKeys(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+	accountID, actorID, taskID := uuid.New(), uuid.New(), uuid.New()
+
+	if _, err := svc.CreateAgentTaskKey(context.Background(), accountID, actorID, taskID, nil); err != nil {
+		t.Fatalf("CreateAgentTaskKey: %v", err)
+	}
+	lookalike, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{Nickname: "agent task backfill"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	// The kinds are what the service actually decides, and they are the
+	// discriminator the SQL filters on. Asserted first and separately from the
+	// listing, so a stub that filtered wrongly could not make this pass.
+	agentKey, err := svc.GetKey(context.Background(), accountID, taskID)
+	if err != nil {
+		t.Fatalf("GetKey on the agent-task credential: %v", err)
+	}
+	if agentKey.Kind != KindAgentTask {
+		t.Fatalf("agent-task credential kind = %q, want %q", agentKey.Kind, KindAgentTask)
+	}
+	if lookalike.Key.Kind != KindUser {
+		t.Fatalf("customer key named %q got kind %q, want %q: kind must come from who minted it, never from the name",
+			lookalike.Key.Nickname, lookalike.Key.Kind, KindUser)
+	}
+
+	listed, err := svc.ListKeys(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != lookalike.Key.ID {
+		var got []string
+		for _, k := range listed {
+			got = append(got, k.ID.String()+" kind="+string(k.Kind)+" nickname="+k.Nickname)
+		}
+		t.Fatalf("ListKeys returned %v; want exactly the customer's own key %s. An agent-task credential in a customer's list is a key they cannot use; a customer key missing from it is their key hidden from them.",
+			got, lookalike.Key.ID)
+	}
+	if listed[0].Kind != KindUser {
+		t.Fatalf("listed key kind = %q, want %q", listed[0].Kind, KindUser)
+	}
+
+	// Reachability by id was already proven above, and it matters: "filter it
+	// out of the list" and "make it unreachable" are one careless WHERE clause
+	// apart, and an unreachable credential could never be revoked.
+}
+
+func TestCreateKeyWithIDSecretIsRandomAndUnrelatedToTheIDs(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	firstKeyID := uuid.New()
+	secondKeyID := uuid.New()
+
+	first, err := svc.CreateAgentTaskKey(context.Background(), accountID, actorID, firstKeyID, nil)
+	if err != nil {
+		t.Fatalf("CreateAgentTaskKey: %v", err)
+	}
+	second, err := svc.CreateAgentTaskKey(context.Background(), accountID, actorID, secondKeyID, nil)
+	if err != nil {
+		t.Fatalf("CreateAgentTaskKey: %v", err)
+	}
+
+	// The caller-chosen id is honoured, which is the whole point of the
+	// method, asserted here so the randomness checks below cannot pass by the
+	// method silently ignoring the id it was given.
+	if first.Key.ID != firstKeyID || second.Key.ID != secondKeyID {
+		t.Fatalf("key ids = %s, %s; want %s, %s", first.Key.ID, second.Key.ID, firstKeyID, secondKeyID)
+	}
+
+	// The identifiers must not appear in the secret in any form the caller
+	// could reconstruct: full uuid text, and the hex with dashes stripped.
+	for _, id := range []uuid.UUID{accountID, actorID, firstKeyID} {
+		text := id.String()
+		stripped := strings.ReplaceAll(text, "-", "")
+		if strings.Contains(first.Secret, text) || strings.Contains(first.Secret, stripped) {
+			t.Fatalf("secret embeds identifier %s: a bearer token derivable from ids that appear in logs and API responses is forgeable", text)
+		}
+	}
+
+	// Same account, same actor, adjacent calls: the secrets must still differ,
+	// which no derivation from the account or actor could guarantee.
+	if first.Secret == second.Secret {
+		t.Fatal("two credentials on the same account share a secret")
+	}
+	if first.Key.TokenHash == second.Key.TokenHash {
+		t.Fatal("two credentials on the same account share a token hash")
+	}
+	// Only the hash is stored. Asserted explicitly because the whole
+	// per-task-credential design assumes a stolen database row cannot be
+	// replayed as a bearer token.
+	if strings.Contains(first.Key.TokenHash, first.Secret) {
+		t.Fatal("stored token hash contains the raw secret")
+	}
+}
 
 func TestCreateKeyStoresHashAndRedactedSuffixOnly(t *testing.T) {
 	repo := newStubRepo()

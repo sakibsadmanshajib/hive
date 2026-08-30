@@ -408,3 +408,164 @@ func TestApplyReservationDelta_InsertThenAccumulate(t *testing.T) {
 		t.Fatalf("expected reservation 500+300=800 and consumption 200+100=300 accumulated, got reserved=%d consumed=%d", reserved, consumed)
 	}
 }
+
+// TestListKeysExcludesAgentTaskKindLive is the half of the agent-task key
+// filter (issue #1507) that only real Postgres can prove.
+//
+// The per-task credential puts one api_keys row per agent task on the
+// customer's own account, and those rows must never appear in their API Keys
+// list. The filter is a WHERE clause in pgxRepository.ListKeys, so a
+// fake-backed test cannot see it: the stub in service_test.go mirrors the
+// contract, which means a repository that lost the clause entirely would still
+// pass there. This package has shipped that exact mistake twice already (#1173
+// and #1204, both with fake-backed regression tests that could not catch the
+// incident they were written for), which is why this file exists at all.
+//
+// It also pins the half that a name-based filter would get wrong: the customer
+// key seeded below is deliberately named "agent task backfill". A query that
+// matched on the nickname would hide a customer's own key from them, silently,
+// and no test written only against agent-task naming would notice.
+func TestListKeysExcludesAgentTaskKindLive(t *testing.T) {
+	pool := newAPIKeysTestPool(t)
+	ctx := context.Background()
+	repo := NewPgxRepository(pool)
+	accountID := seedAPIKeysAccount(t, pool)
+
+	var ownerID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT owner_user_id FROM public.accounts WHERE id = $1`, accountID).Scan(&ownerID); err != nil {
+		t.Fatalf("read account owner: %v", err)
+	}
+
+	agentKeyID := uuid.New()
+	if _, err := repo.CreateKey(ctx, APIKey{
+		ID: agentKeyID, AccountID: accountID, Kind: KindAgentTask,
+		Nickname:  "agent task " + agentKeyID.String(),
+		TokenHash: "hash-agent-" + agentKeyID.String(), RedactedSuffix: "aaaaaa",
+		Status: KeyStatusActive, CreatedByUserID: ownerID,
+	}); err != nil {
+		t.Fatalf("create agent task key: %v", err)
+	}
+
+	userKeyID := uuid.New()
+	if _, err := repo.CreateKey(ctx, APIKey{
+		ID: userKeyID, AccountID: accountID, Kind: KindUser,
+		Nickname:  "agent task backfill",
+		TokenHash: "hash-user-" + userKeyID.String(), RedactedSuffix: "bbbbbb",
+		Status: KeyStatusActive, CreatedByUserID: ownerID,
+	}); err != nil {
+		t.Fatalf("create user key: %v", err)
+	}
+
+	listed, err := repo.ListKeys(ctx, accountID)
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != userKeyID || listed[0].Kind != KindUser {
+		var got []string
+		for _, k := range listed {
+			got = append(got, k.ID.String()+" kind="+string(k.Kind)+" nickname="+k.Nickname)
+		}
+		t.Fatalf("ListKeys returned %v; want exactly the customer's own key %s (kind %q). The customer key is deliberately NAMED like an agent-task key, so a nickname-based filter fails here.",
+			got, userKeyID, KindUser)
+	}
+
+	// Filtered out of the list, but still reachable by id, because revocation
+	// on the task's terminal transition resolves it by primary key. Stated
+	// explicitly: hiding it and losing it are one careless WHERE clause apart,
+	// and losing it means a live credential nothing can revoke.
+	found, err := repo.GetKeyByID(ctx, agentKeyID)
+	if err != nil {
+		t.Fatalf("GetKeyByID on the agent-task credential: %v; revocation resolves it by this exact call", err)
+	}
+	if found.Kind != KindAgentTask {
+		t.Fatalf("agent-task credential round-tripped kind %q, want %q", found.Kind, KindAgentTask)
+	}
+}
+
+// TestCreateKeyDefaultsKindToUserLive pins the migration's DEFAULT and the
+// repository's own defaulting together: every key that existed before the kind
+// column, and every key minted by a caller that does not set Kind, must be a
+// customer key. The opposite mistake would hide real customer keys from their
+// owners' lists, which is silent and unrecoverable from the UI.
+func TestCreateKeyDefaultsKindToUserLive(t *testing.T) {
+	pool := newAPIKeysTestPool(t)
+	ctx := context.Background()
+	repo := NewPgxRepository(pool)
+	accountID := seedAPIKeysAccount(t, pool)
+
+	var ownerID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT owner_user_id FROM public.accounts WHERE id = $1`, accountID).Scan(&ownerID); err != nil {
+		t.Fatalf("read account owner: %v", err)
+	}
+
+	keyID := uuid.New()
+	created, err := repo.CreateKey(ctx, APIKey{
+		ID: keyID, AccountID: accountID, // Kind deliberately left empty.
+		Nickname:  "legacy shaped key",
+		TokenHash: "hash-legacy-" + keyID.String(), RedactedSuffix: "cccccc",
+		Status: KeyStatusActive, CreatedByUserID: ownerID,
+	})
+	if err != nil {
+		t.Fatalf("create key without an explicit kind: %v", err)
+	}
+	if created.Kind != KindUser {
+		t.Fatalf("kind = %q for a key created without one, want %q", created.Kind, KindUser)
+	}
+	listed, err := repo.ListKeys(ctx, accountID)
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != keyID {
+		t.Fatalf("a key created without an explicit kind is missing from its owner's list: %v", listed)
+	}
+}
+
+// TestCreateKeyRejectsADuplicateIDLive proves the property the per-task agent
+// credential's whole design rests on (issue #1507): the credential's id IS the
+// agent task's id, so a second mint for one task must FAIL rather than quietly
+// issue a second live credential that nothing would ever revoke.
+//
+// It is here rather than in a fake-backed test because only real Postgres can
+// show it. The guarantee comes from api_keys.id being a primary key and the
+// insert carrying no ON CONFLICT clause, and a test double would happily accept
+// the second insert and report success, proving the opposite of what it looked
+// like it proved.
+func TestCreateKeyRejectsADuplicateIDLive(t *testing.T) {
+	pool := newAPIKeysTestPool(t)
+	ctx := context.Background()
+	repo := NewPgxRepository(pool)
+	accountID := seedAPIKeysAccount(t, pool)
+
+	var ownerID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT owner_user_id FROM public.accounts WHERE id = $1`, accountID).Scan(&ownerID); err != nil {
+		t.Fatalf("read account owner: %v", err)
+	}
+
+	taskID := uuid.New()
+	first := APIKey{
+		ID: taskID, AccountID: accountID, Kind: KindAgentTask,
+		Nickname:  "agent task " + taskID.String(),
+		TokenHash: "hash-first-" + taskID.String(), RedactedSuffix: "dddddd",
+		Status: KeyStatusActive, CreatedByUserID: ownerID,
+	}
+	if _, err := repo.CreateKey(ctx, first); err != nil {
+		t.Fatalf("first mint: %v", err)
+	}
+
+	second := first
+	second.TokenHash = "hash-second-" + taskID.String()
+	if _, err := repo.CreateKey(ctx, second); err == nil {
+		t.Fatal("a second key was issued under the same id: the task would hold two live credentials and revocation could only ever destroy one of them")
+	}
+
+	// And the first credential is untouched, still authenticating under its own
+	// hash. Asserted because "the second insert failed" and "the second insert
+	// clobbered the first" are both consistent with an error being returned.
+	found, err := repo.GetKeyByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetKeyByID after the rejected duplicate: %v", err)
+	}
+	if found.TokenHash != first.TokenHash {
+		t.Fatalf("token hash = %q after a rejected duplicate mint, want the original %q", found.TokenHash, first.TokenHash)
+	}
+}

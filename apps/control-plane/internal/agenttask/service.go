@@ -249,6 +249,15 @@ func (s *Service) launch(ctx context.Context, t Task) {
 		safely("recording a panicking launch as failed", func() {
 			s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
 		})
+		// Only when the panic happened after a successful mint. t.LLMAPIKey is
+		// set by this same function and the closure sees that assignment, so an
+		// empty one means no credential was ever issued and there is nothing to
+		// chase.
+		if t.LLMAPIKey != "" {
+			safely("revoking the credential of a panicking launch", func() {
+				revokeTaskCredential(ctx, s.creds, t)
+			})
+		}
 	}()
 
 	// The sandbox must spend a credential that resolves to THIS task's tenant,
@@ -259,11 +268,26 @@ func (s *Service) launch(ctx context.Context, t Task) {
 	// work the authorizing accounting step did not cover.
 	secret, err := s.creds.Mint(launchCtx, t)
 	if err != nil {
+		// No revocation attempt here, deliberately. Nothing was minted, so
+		// there is nothing to destroy, and calling revoke anyway would raise
+		// ErrCredentialUnaccountedFor for a task that never had a credential.
+		// That report has to mean something, and a benign path that raises it
+		// constantly is how it stops meaning anything.
+		//
+		// The error carries no secret: generateSecret returns "" on failure and
+		// the raw secret is never placed in an error value, so this chain is at
+		// worst "agenttask: mint task credential: apikeys: create: <db error>".
+		// task_id doubles as the credential's id, which is an identifier the
+		// customer already has, never a secret. The customer-visible field gets
+		// engineLaunchFailedMessage, which names nothing.
 		slog.Default().ErrorContext(ctx, "agenttask: could not mint the task's gateway credential, refusing to launch",
 			"task_id", t.ID, "tenant_id", t.TenantID, "error", err)
 		s.recordLaunchFailure(ctx, t, engineLaunchFailedMessage)
 		return
 	}
+	// Assigned to t, which the deferred recover above closes over, so that
+	// panic path can tell "a credential exists and must be revoked" from
+	// "nothing was ever minted".
 	t.LLMAPIKey = secret
 
 	sessionRef, err = s.engine.Launch(launchCtx, t)
@@ -321,33 +345,59 @@ func (s *Service) recordLaunchFailure(ctx context.Context, t Task, message strin
 		slog.Default().WarnContext(ctx, "agenttask: could not record a failed launch",
 			"task_id", t.ID, "error", err)
 	}
-	RevokeTaskCredential(ctx, s.creds, t)
+	// Revoked even on the one branch where the sandbox may still be alive: a
+	// transport-level Launch failure can leave a session the launcher
+	// registered and this process never learned the reference for (#899), so
+	// there is nothing to stop first and the credential dies while the sandbox
+	// may still be running.
+	//
+	// That is the right direction, not an oversight. The row is now recorded
+	// FAILED, so the customer has been told this task produced nothing; an
+	// orphaned sandbox that kept its credential would go on spending that
+	// customer's credits on work they will never be shown, for as long as it
+	// happened to live. An auth error that kills it is the cheaper outcome,
+	// and the concurrency slot it holds is #899's problem either way.
+	revokeTaskCredential(ctx, s.creds, t)
 }
 
-// RevokeTaskCredential ends one task's gateway credential, best effort.
+// revokeTaskCredential ends one task's gateway credential, best effort.
 //
-// Exported because the two writers that take a task terminal live in different
-// types: Service (a launch that failed, a cancel) and Poller (a run that
-// finished, or that the poller declared dead). Both call this rather than
-// keeping their own copy, so there is one place that decides what a revocation
-// failure means.
+// Package-scoped because the two writers that take a task terminal live in
+// different types here: Service (a launch that failed, a cancel) and Poller (a
+// run that finished, or that the poller declared dead). Both call this rather
+// than keeping their own copy, so one place decides what a revocation failure
+// means. Not exported: an exported symbol is a promise to callers who do not
+// exist, and on a credential-destroying function it is a surface someone
+// eventually calls from the wrong place.
 //
-// Never returns an error, and never blocks a terminal transition. By the time
-// it runs the task's terminal state is already recorded, and the credential
-// carries an expiry that ends it regardless, so a failure here is an operator
-// problem (a credential living longer than it should) rather than something
-// the customer can act on. nil creds is the poller's unwired posture and is
-// silently a no-op; a Service always has a non-nil one.
-func RevokeTaskCredential(ctx context.Context, creds TaskCredentials, t Task) {
+// Never returns an error and never blocks a terminal transition. By the time it
+// runs the task's terminal state is already recorded, so a failure here is an
+// operator problem rather than something the customer can act on. nil creds is
+// the poller's unwired posture and is silently a no-op; a Service always has a
+// non-nil one.
+//
+// The two failure shapes are logged at different levels on purpose. Anything
+// else is a WARN, because the credential's expiry still ends it. A credential
+// that could not be FOUND is an ERROR with its own reason string, because that
+// one means a live, spendable credential exists on a customer's billing account
+// and this process no longer knows how to stop it. That is the outcome #1507 is
+// made of, so it gets a signal loud enough that the next occurrence is not
+// discovered weeks later in a ledger.
+func revokeTaskCredential(ctx context.Context, creds TaskCredentials, t Task) {
 	if creds == nil {
 		return
 	}
 	revokeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), credentialRevokeTimeout)
 	defer done()
-	if err := creds.Revoke(revokeCtx, t); err != nil {
-		if errors.Is(err, ErrTaskCredentialsNotConfigured) {
-			return
-		}
+	err := creds.Revoke(revokeCtx, t)
+	switch {
+	case err == nil, errors.Is(err, ErrTaskCredentialsNotConfigured):
+		return
+	case errors.Is(err, ErrCredentialUnaccountedFor):
+		slog.Default().ErrorContext(revokeCtx, "agenttask: a task credential could not be found to revoke, so it is still live and still spendable",
+			"reason", "agent_task_credential_unaccounted_for",
+			"task_id", t.ID, "tenant_id", t.TenantID, "error", err)
+	default:
 		slog.Default().WarnContext(revokeCtx, "agenttask: could not revoke the task's gateway credential, it stays live until it expires",
 			"task_id", t.ID, "tenant_id", t.TenantID, "error", err)
 	}
@@ -512,11 +562,18 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (T
 	stopCtx := context.WithoutCancel(ctx)
 	s.background(func() {
 		s.stopEngineSession(stopCtx, id, sessionRef)
-		// After the stop, not before: while the sandbox is still alive it may
-		// be mid-turn, and revoking first would fail that turn with an auth
-		// error the customer never caused. The task is already terminal
-		// either way.
-		RevokeTaskCredential(stopCtx, s.creds, cancelled)
+		// Ordered after the stop attempt, but that attempt is a no-op when
+		// sessionRef is empty (a cancel that won the race against an in-flight
+		// launch), so this does NOT guarantee the sandbox is down before the
+		// credential dies. The comment that used to claim it did was wrong.
+		//
+		// The race is left alone because it resolves in the safe direction: the
+		// worst outcome is a still-starting sandbox that cannot authenticate
+		// and fails, which the launch path already records, against the
+		// alternative of a live credential outliving the sandbox it was minted
+		// for. The task is terminal either way, since the Transition above
+		// already succeeded.
+		revokeTaskCredential(stopCtx, s.creds, cancelled)
 	})
 	return cancelled, nil
 }

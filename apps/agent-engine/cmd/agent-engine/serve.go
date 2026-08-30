@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -134,6 +135,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		}
 	}
 
+	llmAPIKey := os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY")
 	llmBaseURL := os.Getenv("HIVE_AGENT_ENGINE_LLM_BASE_URL")
 	llmHost, err := hostOf(llmBaseURL)
 	if err != nil {
@@ -183,7 +185,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 		ResolveEgressHosts: resolveEgressHosts,
 		LLMModel:           llmModel,
 		LLMBaseURL:         llmBaseURL,
-		LLMAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
+		LLMAPIKey:          llmAPIKey,
 		BrowserTools:       browserTools,
 		// Unset is the normal state and is the pre-existing behaviour: no
 		// agent_context reaches the sandbox at all and the vendored SDK's
@@ -245,8 +247,21 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			LLMAPIKey:    req.LLMAPIKey,
 		})
 		if err != nil {
-			log.Printf("agent-engine: launch task %s: %v", req.ID, err)
-			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			// Defence in depth, against BOTH credentials this launch carried.
+			//
+			// Traced rather than assumed: what controlclient puts in
+			// StatusError.Detail is the agent-server's own RESPONSE body, not
+			// an echo of the request, so no leak is known on this path today.
+			// What makes it worth guarding anyway is that the agent-server is
+			// FastAPI, whose validation errors do include the offending input
+			// in the response body, and the payload being validated is the one
+			// carrying the credential. This line writes that detail to the
+			// journal and returns it to control-plane, which logs it again, so
+			// a regression there would deposit a live credential in two logs
+			// with nothing to notice it.
+			detail := redactCredentials(err.Error(), req.LLMAPIKey, llmAPIKey)
+			log.Printf("agent-engine: launch task %s: %s", req.ID, detail)
+			writeJSON(w, http.StatusBadGateway, errorResponse{Error: detail})
 			return
 		}
 		log.Printf("agent-engine: launched task %s as session %s", req.ID, ref)
@@ -462,4 +477,28 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// redactCredentials removes raw credentials from text bound for a log line or
+// an error response.
+//
+// It exists because the agent-server is FastAPI: a 422 on the inline
+// agent_settings payload echoes the offending input back in its validation
+// detail, and that payload carries the LLM credential. controlclient copies
+// that detail verbatim into StatusError, so without this the secret reaches
+// the launcher's journal and control-plane's log, from an error path nobody
+// tests and nothing alerts on.
+//
+// Substring replacement rather than a key-shaped regex on purpose: it needs no
+// guess about how the far end formatted, quoted or truncated the value, and
+// the two credentials a launch actually holds are right here. Empty secrets
+// are skipped, so this never turns an ordinary message into redaction noise.
+func redactCredentials(text string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, secret, "[redacted credential]")
+	}
+	return text
 }

@@ -17,10 +17,27 @@ const (
 	KeyStatusExpired  KeyStatus = "expired"
 )
 
+// KeyKind is what minted a key and who it is for. It is the structural
+// discriminator the customer's key list filters on, deliberately not the
+// nickname: a display string is not an identity, and a customer who names
+// their own key "agent task backfill" must not have it hidden from them.
+type KeyKind string
+
+const (
+	// KindUser is a customer-created key. The only kind ListKeys returns.
+	KindUser KeyKind = "user"
+	// KindAgentTask is one short-lived credential minted per agent task so the
+	// sandbox's inference settles against the tenant that submitted it
+	// (issue #1507). Its id is that task's own id. Never listed to a customer,
+	// who did not create it and cannot use it.
+	KindAgentTask KeyKind = "agent_task"
+)
+
 // APIKey is the durable API-key record. Raw secrets are never stored.
 type APIKey struct {
 	ID              uuid.UUID
 	AccountID       uuid.UUID
+	Kind            KeyKind
 	Nickname        string
 	TokenHash       string
 	RedactedSuffix  string
@@ -86,6 +103,11 @@ type RotateKeyResult struct {
 
 // ErrNotFound is returned when a key is not found.
 var ErrNotFound = errors.New("apikeys: not found")
+
+// ErrNotAgentTaskKey is returned when RevokeAgentTaskKey is handed an id that
+// resolves to a key of some other kind. Never silently ignored: it means the
+// caller's premise about what that id identifies is wrong.
+var ErrNotAgentTaskKey = errors.New("apikeys: key is not an agent task credential")
 
 // ErrRevoked is returned when an operation is attempted on a revoked key.
 var ErrRevoked = errors.New("apikeys: key is revoked")
