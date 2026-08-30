@@ -1,4 +1,14 @@
-# main.py chat task endpoints ignored ENABLE_ADMIN_CHAT_ACCESS: capture log, 2026-08-29
+# main.py admin-bypass flag gate: capture log, 2026-08-29
+
+> **Read the dated sections in order.** Everything above the
+> "Security review round, 2026-08-30" heading is the record as it stood on
+> 2026-08-29, when the patch rewrote five sites and the marker count was **5**.
+> The review round that follows repairs a channel-arm regression, which adds a
+> helper and one arm per endpoint and moves the count to **8**. The earlier
+> transcripts are left verbatim rather than retro-edited, because they are the
+> evidence for what was observed at the time, but every "5 markers" line below
+> this banner is superseded by the 2026-08-30 section. The current, shipping
+> numbers are the ones in that section.
 
 Issue #1511, third sibling from the security review of PR #1496 after #1474
 (merged) and #1508. Branch `fix/1511-task-endpoints-admin-flag`.

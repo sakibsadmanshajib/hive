@@ -29,11 +29,37 @@ the post-fix code observed refusing. The flag is then turned ON and the same
 administrator is observed allowed again, which is what distinguishes "gated on
 the flag" from "admins locked out".
 
+`run_socket_arm` covers the OTHER branch of both endpoints, which the chat
+scenarios never reach:
+
+  * the owner of a `local:` temporary chat, named by their own socket id;
+  * a stranger naming somebody else's socket, refused because the pool resolves
+    the real owner and the comparison is against the caller's authenticated id;
+  * a socket the pool does not hold, which is what a disconnected or invented
+    sid looks like, asserted to DENY. The owner is deliberately the caller in
+    that case: an arm that fell open on an unresolvable socket would still
+    refuse a stranger for the ordinary reason, so only the owner can detect it;
+  * the `channel:` arm, in both legs. `chat_id[len('local:'):]` is a fixed
+    six-character slice, so a `channel:` id yielded `l:<channel id>` and no
+    owner ever resolved, which means flag-gating the admin term made a channel
+    generation uncancellable by anyone. The pre-fix leg observes that; the
+    post-fix leg observes a channel member able to stop their own generation and
+    a non-member still refused.
+
 The fifth site the patch rewrites, the chat-completions ownership check, is NOT
-driven here: it sits deep inside a several-hundred-line handler that cannot be
-lifted out and executed against stubs the way these two can. It is covered
-structurally instead, by the patch's own AST postcondition, and this file says
-so rather than implying the behavioural coverage extends to it.
+driven behaviourally: it sits deep inside a several-hundred-line handler that
+cannot be lifted out and executed against stubs the way these two can.
+
+`check_site_five` pins it in the AST rather than in the text, because a
+predicate matched as a string is pinned to nothing that survives a refactor
+which keeps the string. It asserts that the handler still exists under its own
+name, that there is exactly ONE `is_chat_owner` gate and that it sits on an
+`else` branch (the existing-chat arm, so a migration to the new-chat arm is
+caught), that the predicate read back through `ast.unparse` carries the flag and
+no bare admin term, and that the guarded body still contains a `raise` so it
+cannot be emptied while keeping its shape. What is still unasserted, said plainly
+rather than left to be discovered: that `Chats.is_chat_owner` means what it means
+today.
 
 Structural, no framework, no network, no Redis.
 Run: python3 scripts/test_owui_main_admin_flag.py
