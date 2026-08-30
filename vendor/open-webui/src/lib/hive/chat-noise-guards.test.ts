@@ -25,12 +25,34 @@ describe('dead Integrations tab branches (issue #1258)', () => {
 	});
 });
 
-describe('cancelled file picker (issue #847, partial)', () => {
+describe('cancelled file picker (issue #847)', () => {
 	// A cancelled picker fires change with an empty FileList, which is
 	// indistinguishable from selecting nothing, so reporting it as an error
 	// told every user who backed out of the dialog that a file was missing.
-	it.each(['chat', 'channel'])('the %s composer stays quiet on an empty selection', (dir) => {
-		expect(component(dir, 'MessageInput.svelte')).not.toContain('File not found.');
+	//
+	// Every file picker in the product carried the same copy-pasted handler,
+	// six occurrences across the five files below, so the two composers were
+	// fixed first and the rest listed here. Pinning all five files together is
+	// what stops the next copy of the pattern from being pasted back in on
+	// whichever surface was left out.
+	it.each([
+		['chat', 'MessageInput.svelte'],
+		['channel', 'MessageInput.svelte'],
+		['workspace/Knowledge', 'KnowledgeBase.svelte'],
+		['workspace/Models', 'Knowledge.svelte'],
+		['admin/Users/UserList', 'AddUserModal.svelte']
+	])('%s/%s stays quiet on an empty selection', (dir, file) => {
+		expect(component(dir, file)).not.toContain('File not found.');
+	});
+
+	// The admin CSV import is the one site where the branch is reachable by
+	// pressing Submit with nothing chosen, so it keeps a message. It has to
+	// name that state rather than a lookup that never happened, otherwise
+	// deleting the toast would leave Submit doing nothing at all.
+	it('the admin CSV import names the empty picker instead', () => {
+		expect(component('admin/Users/UserList', 'AddUserModal.svelte')).toContain(
+			"$i18n.t('No file selected')"
+		);
 	});
 });
 

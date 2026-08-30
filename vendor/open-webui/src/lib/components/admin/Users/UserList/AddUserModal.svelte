@@ -133,7 +133,11 @@
 
 				reader.readAsText(file, 'utf-8');
 			} else {
-				toast.error($i18n.t('File not found.'));
+				// Not a missing file: nothing was ever chosen. Submitting the
+				// CSV tab with an empty picker is the only way to reach this,
+				// and the old wording described a failed lookup that never ran
+				// (issue #847).
+				toast.error($i18n.t('No file selected'));
 			}
 		}
 

@@ -57,7 +57,10 @@ for rel in \
 	chat/Settings/Interface.svelte \
 	common/RichTextInput.svelte \
 	workspace/Skills.svelte \
-	workspace/Skills/SkillEditor.svelte
+	workspace/Skills/SkillEditor.svelte \
+	workspace/Knowledge/KnowledgeBase.svelte \
+	workspace/Models/Knowledge.svelte \
+	admin/Users/UserList/AddUserModal.svelte
 do
 	mkdir -p "$WORK/lib/components/${rel%/*}"
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"
