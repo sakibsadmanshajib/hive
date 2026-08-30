@@ -187,22 +187,37 @@ func foldedCapabilityColumns(caps map[string]map[string]string) []string {
 	return cols
 }
 
-// freePoolToolCapableMembers are the members that remain in the pool and carry
-// the capability claim, keyed to the provider slug each one runs through.
+// freePoolKnownMembers maps every route this alias has ever carried to the
+// provider slug it runs through, so a typo in a provider column is still caught.
+// Membership of the LIVE pool is NOT read from here: it is read from the folded
+// health_state, deliberately.
 //
-// route-free-pool-free is deliberately absent. It is the OpenRouter member, now
-// on the Free Models Router, and it is disabled by
-// 20260830_03_free_pool_capability_truth.sql rather than being given a flag it
-// cannot honour on every request.
-var freePoolToolCapableMembers = map[string]string{
+// The invariant this file defends is uniformity, not a roster. Naming three
+// specific routes as "must be active" would make an unrelated capacity decision
+// fail this guard for the wrong reason: the Gemini member is capped at 20
+// requests a day on Google's free tier (issue #1566) and may be disabled or
+// repointed by a change that has nothing to do with capability. That change
+// must not turn this guard red, and equally it must not be able to quietly
+// empty the pool. Hence: whoever is active must be uniform, and enough of them
+// must remain.
+var freePoolKnownMembers = map[string]string{
+	"route-free-pool-free":   "openrouter",
 	"route-free-pool-gemini": "gemini",
 	"route-free-pool-groq":   "groq",
 	"route-free-pool-groq-2": "groq-2",
 }
 
 // freePoolRetiredMember is the member that leaves so the rest can make an
-// honest claim.
+// honest claim. It is the OpenRouter one, now on the Free Models Router, which
+// picks a different model per request: of the 20 zero-priced models only 10
+// support response_format at all, and five identical strict-schema probes
+// conformed once. It is disabled rather than given a flag it cannot honour.
 const freePoolRetiredMember = "route-free-pool-free"
+
+// freePoolMinimumActiveMembers is the floor below which the pool has stopped
+// being a load-balanced pool. Two, so one exhausted key still has somewhere to
+// fail over to, which is the whole reason the group exists.
+const freePoolMinimumActiveMembers = 2
 
 // TestFreePoolIsUniformlyToolCapable is the correction itself, and the shape
 // the owner's one-endpoint rule forces.
@@ -214,7 +229,8 @@ const freePoolRetiredMember = "route-free-pool-free"
 func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 	state := foldMigrations(t)
 
-	for routeID, wantProvider := range freePoolToolCapableMembers {
+	active := 0
+	for routeID, wantProvider := range freePoolKnownMembers {
 		route, ok := state.routes[routeID]
 		if !ok {
 			t.Errorf("no provider_routes row survives the migration chain for pool member %s", routeID)
@@ -229,9 +245,13 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 		if route["litellm_model_name"] != freePoolGroupName {
 			t.Errorf("pool member %s litellm_model_name = %q, want the one shared group %q; hive-free is a single endpoint by owner decision, so a second group name here is a second endpoint", routeID, route["litellm_model_name"], freePoolGroupName)
 		}
+
+		// A disabled member is emitted by nothing and can answer nothing, so it
+		// carries no obligation. Only the live ones have to agree.
 		if strings.EqualFold(route["health_state"], "disabled") {
-			t.Errorf("pool member %s is disabled; the group loses a member and eventually the capability", routeID)
+			continue
 		}
+		active++
 
 		caps, ok := state.caps[routeID]
 		if !ok {
@@ -268,6 +288,10 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 		t.Errorf("%s health_state = %q, want disabled. It serves openrouter/openrouter/free, which picks among the zero-priced catalog per request; of the 20 zero-priced models only 10 list response_format, and five identical strict-schema probes conformed once. An active member that cannot honour the group's claim makes the claim false", freePoolRetiredMember, retired["health_state"])
 	}
 
+	if active < freePoolMinimumActiveMembers {
+		t.Errorf("only %d active member(s) left on alias %s, want at least %d. Uniformity is satisfied vacuously by an empty pool, so this is the floor that stops a capacity decision from quietly turning a load-balanced pool into a single point of failure", active, freePoolAliasID, freePoolMinimumActiveMembers)
+	}
+
 	// Exactly one group under this alias, which is the owner's requirement
 	// stated as a check rather than as a comment.
 	groups := map[string]bool{}
@@ -276,7 +300,7 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 			continue
 		}
 		groups[route["litellm_model_name"]] = true
-		if _, known := freePoolToolCapableMembers[routeID]; !known {
+		if _, known := freePoolKnownMembers[routeID]; !known {
 			t.Errorf("unexpected active member %s on alias %s", routeID, freePoolAliasID)
 		}
 	}
