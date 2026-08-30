@@ -773,8 +773,14 @@ services:
       # server.secret_key in settings.yml is bound to this environment
       # variable at load time (searx/settings_defaults.py), overriding
       # whatever placeholder is committed there. Generate a real value per
-      # deployment with `openssl rand -hex 32`; the fallback here is a dev
-      # convenience only, same pattern as CONTROL_PLANE_INTERNAL_TOKEN above.
+      # deployment with `openssl rand -hex 32`; the literal fallback here is
+      # a dev convenience only, same pattern as CONTROL_PLANE_INTERNAL_TOKEN
+      # above -- it is NOT what reaches the demo box. PR review on #1570
+      # (issue #298) flagged that this fallback would otherwise ship there
+      # unchanged: deploy-demo-box.yml now sets SEARXNG_SECRET from the
+      # SEARXNG_SECRET repository secret (a real generated value), which
+      # overrides this default the same way it overrides the web-search
+      # flags above.
       SEARXNG_SECRET: ${SEARXNG_SECRET:-hive-local-searxng-secret}
     # Loopback only, same rationale as redis above: nothing outside this box
     # needs to reach SearXNG directly, open-webui talks to it over the
@@ -1368,6 +1374,21 @@ services:
       WEB_SEARCH_RESULT_COUNT: ${WEB_SEARCH_RESULT_COUNT:-5}
       BYPASS_WEB_SEARCH_WEB_LOADER: ${BYPASS_WEB_SEARCH_WEB_LOADER:-false}
       BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: ${BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:-false}
+      # PR review on #1570 (issue #298), MEDIUM: turning the loader on above
+      # without an explicit timeout leaves SafeWebBaseLoader's aiohttp
+      # session at its library default (300s total) with 3 retries, so one
+      # slow page an authenticated user steers into the top search results
+      # ties up this request for minutes. 12s is chosen against the actual
+      # page-fetch latencies measured for this change (0.16-1.79s across the
+      # sampled queries, docs/proof/searxng-web-search-298-2026-08-30/
+      # capture.log): about 7x the slowest real page observed, so it will
+      # not clip a legitimately slow-but-real page, while bounding the worst
+      # case per URL to roughly 3 x 12s attempts plus the retry backoff
+      # (2s + 3s + 4.5s) sleep, about 45s total, down from the previous
+      # unbounded/~900s+ ceiling. This is a time bound, not a size bound; see
+      # deploy/docker/owui-patches/apply_web_loader_bounds_patch.py for the
+      # separate memory-side cap the same review asked for.
+      WEB_LOADER_TIMEOUT: ${WEB_LOADER_TIMEOUT:-12}
       # Hive product branding. LICENSE-DECISION.md: Open WebUI image built from
       # Dockerfile.open-webui, which strips the upstream " (Open WebUI)" suffix
       # that env.py forces onto any custom WEBUI_NAME (see that Dockerfile for

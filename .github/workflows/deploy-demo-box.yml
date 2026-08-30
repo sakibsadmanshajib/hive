@@ -231,6 +231,14 @@ env:
   WEB_SEARCH_RESULT_COUNT: "5"
   BYPASS_WEB_SEARCH_WEB_LOADER: "false"
   BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: "false"
+  # PR review on #1570 (issue #298): the compose fallback
+  # (SEARXNG_SECRET:-hive-local-searxng-secret) is a dev convenience only, and
+  # this workflow overrode nothing, so that literal would otherwise have
+  # shipped to the deployed box unchanged. Same pattern as
+  # CONTROL_PLANE_INTERNAL_TOKEN below: a real value, generated once with
+  # `openssl rand -hex 32` and stored as the SEARXNG_SECRET repository
+  # secret, wins here instead.
+  SEARXNG_SECRET: ${{ secrets.SEARXNG_SECRET }}
 
 jobs:
   # ------------------------------------------------------------------

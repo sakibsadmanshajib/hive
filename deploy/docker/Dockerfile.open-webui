@@ -258,6 +258,17 @@ RUN python3 /tmp/apply_web_search_ratelimit_patch.py \
     && grep -q 'a rate limit is an error, not an empty result set' /app/backend/open_webui/retrieval/web/duckduckgo.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/web/duckduckgo.py').read_text())"
 
+# PR #1570 review on issue #298, MEDIUM: SafeWebBaseLoader._fetch() read an
+# entire page response into memory with no size limit, so an authenticated
+# user could steer a very large page into the top web-search results and
+# balloon this container's memory per fetch even once WEB_LOADER_TIMEOUT
+# (docker-compose.yml) bounds the time side. See the patch script's own
+# docstring for the full reasoning and the chosen 10 MiB ceiling.
+COPY deploy/docker/owui-patches/apply_web_loader_bounds_patch.py /tmp/apply_web_loader_bounds_patch.py
+RUN python3 /tmp/apply_web_loader_bounds_patch.py \
+    && grep -q 'hive: stream with a hard byte cap' /app/backend/open_webui/retrieval/web/utils.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/web/utils.py').read_text())"
+
 # #772: remove the stock Open WebUI surfaces that have no Hive counterpart --
 # Workspace > Models (a second, instance-wide model registry that duplicates
 # the Hive catalog), Workspace > Prompts, Workspace > Tools, the Playground,
