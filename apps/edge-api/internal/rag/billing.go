@@ -187,9 +187,19 @@ func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope
 		// tokens the customer never saw. Applied last, to whatever the branch
 		// settled at, exactly as settleStream does on the API-key path.
 		//
-		// Skipped when the guard already fired rather than run twice: a second
-		// pass would clear the flag both callers read their release reason
-		// from, and the counter must not be incremented twice for one turn.
+		// Skipped when the guard already fired, and the reason is exactly one
+		// thing: a second pass returns ZeroContent FALSE, because the first
+		// firing set Delivered false and the guard early-returns on that. Both
+		// callers read their release reason from that flag, so an unconditional
+		// call downgrades every catalog-priced burn to "upstream_error" and
+		// loses the ledger signal this whole change exists to produce.
+		// Measured, not assumed: removing this skip and the identical one in
+		// chat/dispatch.go turns four existing tests red, two of them stating
+		// the mechanism outright as release reason = "upstream_error", want
+		// "zero_content".
+		//
+		// It is NOT protection against double counting. The same early return
+		// means a second pass can never reach the absorbed-credits counter.
 		priced.Credits, priced.Delivered, priced.ZeroContent = inference.ApplyZeroContentGuard(
 			route.AliasID, shape, content, priced.Credits, priced.Delivered, inTokens, outTokens)
 	}
