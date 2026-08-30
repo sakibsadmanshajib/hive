@@ -31,6 +31,7 @@ test-scripts:
 	python3 scripts/test_owui_knowledge_authz.py
 	python3 scripts/test_owui_chat_delete_authz.py
 	python3 scripts/test_owui_chat_delete_task_cancel.py
+	python3 scripts/test_owui_bulk_chat_authz.py
 	python3 scripts/test_owui_ydoc_task_cancel.py
 	python3 scripts/test_owui_main_admin_flag.py
 	python3 scripts/test_shared_demo_account.py

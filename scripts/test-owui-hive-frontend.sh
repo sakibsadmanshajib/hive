@@ -48,6 +48,7 @@ for rel in \
 	chat/SettingsModal.svelte \
 	chat/ModelSelector/Selector.svelte \
 	chat/Settings/Account.svelte \
+	chat/Settings/DataControls.svelte \
 	chat/Settings/General.svelte \
 	chat/Settings/Advanced/AdvancedParams.svelte \
 	chat/MessageInput.svelte \
