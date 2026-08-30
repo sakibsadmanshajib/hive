@@ -735,7 +735,19 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return h.httpClient.Do(req)
 	}
 
-	resp, err := inference.DispatchWithRetry(ctx, litellmModel, multipartBody, dispatchToLiteLLM)
+	// Bound the WHOLE ladder to h.httpClient's own existing 120-second
+	// timeout rather than inventing a new number: that timeout applies per
+	// Do call, so without this a wedged upstream costs up to len(retryDelays)
+	// times 120s instead of once, re-uploading this request's multipart body
+	// (up to the 25MB ParseMultipartForm cap) on every attempt (review
+	// finding on PR #1568). Reusing the client's own timeout as the ladder's
+	// total deadline leaves the common, fast-failing case this PR exists for
+	// untouched, and caps a genuinely hung upstream to roughly one attempt's
+	// patience instead of four.
+	dispatchCtx, cancel := context.WithTimeout(ctx, h.httpClient.Timeout)
+	defer cancel()
+
+	resp, err := inference.DispatchWithRetry(dispatchCtx, litellmModel, multipartBody, dispatchToLiteLLM)
 	if err != nil {
 		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, http.StatusBadGateway, err.Error())

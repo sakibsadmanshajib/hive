@@ -31,7 +31,8 @@ func TestAudioTranslationRetriesUpstream429ThenSucceeds(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := buildAudioHandler(upstream.URL)
+	acc := &mockAudioAccounting{reservationID: "res-test"}
+	h := buildAudioHandlerWithAccounting(upstream.URL, acc)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -52,5 +53,19 @@ func TestAudioTranslationRetriesUpstream429ThenSucceeds(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&attempts); got < 2 {
 		t.Fatalf("expected the handler to retry the upstream after the first 429, got %d attempt(s)", got)
+	}
+
+	// PR #1568 review: a retried request must take exactly one hold and
+	// settle it exactly once. A future refactor that moved CreateReservation
+	// inside the dispatch closure would take a fresh hold per attempt, and
+	// these three assertions are what would turn red if that happened.
+	if acc.createCount != 1 {
+		t.Fatalf("expected exactly one reservation across the retried request, got %d", acc.createCount)
+	}
+	if acc.finalizeCount != 1 {
+		t.Fatalf("expected exactly one settlement across the retried request, got %d", acc.finalizeCount)
+	}
+	if acc.releaseCount != 0 {
+		t.Fatalf("a successful retried request must not release its hold, got %d release(s)", acc.releaseCount)
 	}
 }

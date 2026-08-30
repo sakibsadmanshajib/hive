@@ -287,8 +287,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return h.deps.HTTP.Do(upstream)
 	}
 
+	// Bound the WHOLE ladder to the same budget a single unretried call
+	// already had, rather than inventing a new number. h.deps.HTTP.Timeout
+	// applies per Do call, so without this a wedged upstream costs up to
+	// len(retryDelays) times that timeout instead of once (review finding on
+	// PR #1568: up to ~20 minutes on the 5-minute default instead of ~5).
+	// Reusing the existing timeout as the ladder's total deadline means the
+	// common, fast-failing case this PR exists for -- a 429/5xx that answers
+	// in milliseconds -- is untouched (nearly the whole budget survives for
+	// the eventual successful attempt), while a genuinely hung upstream now
+	// gets effectively one attempt's worth of patience, not four. A zero
+	// Timeout (an explicitly unbounded test client) is left unbounded here
+	// too, matching what an unretried call would have done.
+	dispatchCtx := r.Context()
+	if timeout := h.deps.HTTP.Timeout; timeout > 0 {
+		var cancel context.CancelFunc
+		dispatchCtx, cancel = context.WithTimeout(dispatchCtx, timeout)
+		defer cancel()
+	}
+
 	started := time.Now()
-	resp, err := inference.DispatchWithRetry(r.Context(), route.LiteLLMModelName, body, dispatchToLiteLLM)
+	resp, err := inference.DispatchWithRetry(dispatchCtx, route.LiteLLMModelName, body, dispatchToLiteLLM)
 	if err != nil {
 		releaseReason = "upstream_error"
 		apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "upstream unavailable")

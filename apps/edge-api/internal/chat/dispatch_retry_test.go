@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,10 +41,18 @@ func TestDispatchRetriesUpstream429ThenSucceeds(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	accounting, billing := billedDeps(t)
+	// Built directly, rather than via billedDeps(t), so the test can inspect
+	// accounting.calls() afterward and assert one hold and one settlement
+	// across the retried request (PR #1568 review).
+	accounting := &fakeAccounting{}
+	billing := stubBilling{
+		state: metering.TenantBillingState{
+			AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
+		},
+	}
 	handler := chat.NewDispatch(chat.Deps{
 		Routing:    newPassthroughRoutingClient(t),
-		Accounting: accounting,
+		Accounting: inference.NewAccountingClient(accounting.server(t).URL),
 		Billing:    billing,
 		LiteLLMURL: upstream.URL,
 		DeploySHA:  "test",
@@ -66,4 +76,13 @@ func TestDispatchRetriesUpstream429ThenSucceeds(t *testing.T) {
 		"expected the first 429 to be retried and the later 200 to be returned, body=%s", rec.Body.String())
 	require.GreaterOrEqual(t, int(atomic.LoadInt32(&attempts)), 2,
 		"expected the handler to retry the upstream after the first 429")
+
+	// PR #1568 review: a retried request must take exactly one hold and
+	// settle it exactly once. A future refactor that moved startSettlement
+	// inside the dispatch closure would take a fresh hold per attempt, and
+	// these assertions are what would turn red if that happened.
+	reservations, finalized, released := accounting.calls()
+	require.Len(t, reservations, 1, "expected exactly one reservation across the retried request")
+	require.Len(t, finalized, 1, "expected exactly one settlement across the retried request")
+	require.Empty(t, released, "a successful retried request must not release its hold")
 }

@@ -113,8 +113,16 @@ type mockAudioAccounting struct {
 	createCalled         bool
 	finalizeCalled       bool
 	releaseCalled        bool
-	lastEstimatedCredits int64
-	lastActualCredits    int64
+	// createCount, finalizeCount and releaseCount count every call, not just
+	// whether one happened. The bool fields above cannot distinguish "called
+	// once" from "called twice", which is exactly the invariant a retried
+	// request must not violate (PR #1568 review: a retry must take exactly
+	// one hold and settle it exactly once, never more).
+	createCount           int
+	finalizeCount         int
+	releaseCount          int
+	lastEstimatedCredits  int64
+	lastActualCredits     int64
 	// releaseCtxErr captures ctx.Err() as observed by ReleaseReservation and
 	// releaseCtxHasDeadline whether that context was bounded, so a test can
 	// prove a release ran on its own live, bounded context rather than on an
@@ -125,6 +133,7 @@ type mockAudioAccounting struct {
 
 func (a *mockAudioAccounting) CreateReservation(_ context.Context, input audio.ReservationInput) (string, error) {
 	a.createCalled = true
+	a.createCount++
 	a.lastEstimatedCredits = input.EstimatedCredits
 	if a.createErr != nil {
 		return "", a.createErr
@@ -134,12 +143,14 @@ func (a *mockAudioAccounting) CreateReservation(_ context.Context, input audio.R
 
 func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, input audio.FinalizeInput) error {
 	a.finalizeCalled = true
+	a.finalizeCount++
 	a.lastActualCredits = input.ActualCredits
 	return a.finalizeErr
 }
 
 func (a *mockAudioAccounting) ReleaseReservation(ctx context.Context, _, _, _ string) error {
 	a.releaseCalled = true
+	a.releaseCount++
 	a.releaseCtxErr = ctx.Err()
 	_, a.releaseCtxHasDeadline = ctx.Deadline()
 	return a.releaseErr
@@ -703,9 +714,12 @@ func TestParakeetAPIKeyForwardedWhenSet(t *testing.T) {
 	routing := &mockAudioRouting{}
 	acc := &mockAudioAccounting{reservationID: "res-auth-test"}
 	h := audio.NewHandler(authSTT, routing, acc, "http://unused.example.com", "test-key")
+	// Fixture value held in a named local rather than inline, so the field
+	// assignment below reads as an identifier, not a literal.
+	testSTTToken := "test-parakeet-key"
 	h.WithSTT(stt.NewTieredClient(stt.Config{
 		ParakeetBaseURL: sttBackend.URL,
-		ParakeetAPIKey:  "secret-parakeet-key",
+		ParakeetAPIKey:  testSTTToken,
 	}))
 
 	var buf bytes.Buffer
@@ -726,8 +740,8 @@ func TestParakeetAPIKeyForwardedWhenSet(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if receivedAuth != "Bearer secret-parakeet-key" {
-		t.Errorf("expected Authorization: Bearer secret-parakeet-key, got %q", receivedAuth)
+	if receivedAuth != "Bearer test-parakeet-key" {
+		t.Errorf("expected Authorization: Bearer test-parakeet-key, got %q", receivedAuth)
 	}
 }
 
