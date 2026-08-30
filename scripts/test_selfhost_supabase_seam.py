@@ -651,6 +651,36 @@ def test_the_wrapper_default_network_is_the_compose_project_network() -> None:
     )
 
 
+def test_the_coverage_job_mints_from_inside_the_stack_network() -> None:
+    """GoTrue's admin API is refused at the public listener on purpose
+    (Caddyfile.supabase's @admin block), so the agent workspace coverage job can
+    provision an identity and mint a session only from inside the compose
+    network. It ran on a GitHub-hosted runner once, on 2026-08-30, and every
+    authenticated control failed with HTTP 404 while the three unauthenticated
+    ones passed, which read as a broken surface rather than as a runner in the
+    wrong place (issue #1531). Moving the job back to a hosted runner, dropping
+    --network from either step, or renaming the compose project without
+    following it here, all reproduce that with no other symptom."""
+    job = _job_block("agent-workspace-coverage")
+    assert "runs-on: [self-hosted, hive-demo]" in job, (
+        "the coverage job no longer runs on the box, so neither its provisioning "
+        "step nor its probe can reach the admin API"
+    )
+    match = re.search(r"HIVE_STACK_NETWORK:\s*([A-Za-z0-9_.-]+)", job)
+    assert match, "the coverage job declares no HIVE_STACK_NETWORK"
+    project = project_name(ENT_TEXT)
+    assert project, "docker-compose.enterprise.yml declares no project name"
+    assert match.group(1) == f"{project}_default", (
+        f"the coverage job attaches to {match.group(1)!r} but the compose "
+        f"project is {project!r}, whose default network is {project}_default"
+    )
+    for step in ("Provision a per-run Cowork identity", "Run the agent workspace probe"):
+        assert '--network "$HIVE_STACK_NETWORK"' in _step_block(job, step), (
+            f"the {step!r} step does not attach to the stack network, so the "
+            "admin API is unreachable from it"
+        )
+
+
 def test_the_wrapper_forwards_every_parameter_the_deriver_maps() -> None:
     """derive-pooler-dsn.py turns a DSN query parameter into a PG* variable, and
     scripts/stack-psql.sh is what carries PG* variables into the container. A

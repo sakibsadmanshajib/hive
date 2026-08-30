@@ -360,6 +360,37 @@ is far easier to leak into a log, a trace, or a screenshot.
 If either call fails, the helper throws with the reason. There is no fallback
 path that rotates anything, and adding one re-opens the incident above.
 
+### The admin API is not on the public origin, and must not be put there
+
+Step 1 above is an admin route, and on the self-hosted deployment
+`deploy/docker/Caddyfile.supabase` answers 404 to the whole `/auth/v1/admin/*`
+prefix on the public listener, deliberately: the service-role key is used
+server side and in network only, so a leaked one must not be usable from the
+internet. `/auth/v1/invite` and `/auth/v1/oauth/clients/register` are refused
+there for the same reason, and `/rest/v1` is not published publicly at all.
+The internal listener serves all of it.
+
+So a run that mints from outside the box fails on step 1 with `generate_link
+... (HTTP 404)`, and a provisioning script that also uses PostgREST
+(`scripts/seed-demo-owner.py`) fails even earlier. That is not a
+misconfiguration to fix by widening the public route set. Move the caller
+instead: run it inside the stack's compose network, the position
+`scripts/stack-psql.sh` already puts `psql` in for the same reason.
+
+`SUPABASE_ADMIN_URL` is how a caller says where the admin API is. `live-auth.mjs`
+mints against it and falls back to `SUPABASE_URL` when it is unset, so nothing
+changes for a caller that has one origin for both.
+
+**Do not simply point `SUPABASE_URL` at the internal listener.** It is used for
+a second, unrelated thing: `sessionCookies` derives the cookie NAME from it
+(`sb-<first-hostname-label>-auth-token`, `SupabaseClient.ts:294`), so an
+internal hostname there produces a session envelope under a name the deployed
+app never reads. The mint then succeeds, the browser stays signed out, and
+nothing names the cause. `deploy-demo-box.yml`'s `agent-workspace-coverage`
+job is the worked example: it runs on the box, passes both values, and keeps
+`SUPABASE_URL` on the public console origin because that is also the origin
+its browser walks the OAuth hop through.
+
 ### Proof it mutates nothing
 
 Recorded live against the demo account on 2026-08-08, before and after a full

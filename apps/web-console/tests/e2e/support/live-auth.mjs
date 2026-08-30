@@ -69,7 +69,10 @@
 // run declares itself read only (assertNotSharedDemoAccount below, or
 // --read-only on this CLI).
 //
-// Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY.
+// Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY, plus
+// SUPABASE_ADMIN_URL wherever the admin API is not served on SUPABASE_URL (see
+// adminOrigin below).
+//
 // Nothing this module prints contains a token, a password or a key: every
 // message goes through redactSecrets (e2e-fixture-seed.mjs), which scrubs
 // credentials in URL fragments as well as query strings. Safe to run verbose.
@@ -90,6 +93,27 @@ function requiredEnv(name) {
     );
   }
   return value;
+}
+
+// The origin that answers GoTrue's ADMIN routes, which is not always the origin
+// the browser holds a session for.
+//
+// deploy/docker/Caddyfile.supabase refuses /auth/v1/admin/* at the PUBLIC
+// listener on purpose: the service-role key is used server side and in network
+// only, so a leaked one must not be usable from the internet. The admin API is
+// served on the in-network listener alone. A run positioned inside that network
+// therefore points SUPABASE_ADMIN_URL at it and leaves SUPABASE_URL as the
+// browser-facing origin, because the two values are used for different things:
+// mintSession talks to the admin API, while sessionCookies has to key the
+// cookie envelope on the host each app was BUILT with
+// (`sb-<first-hostname-label>-auth-token`, SupabaseClient.ts:294). One value
+// cannot be right for both once they differ, and the failure if they are
+// conflated is silent: the mint succeeds and the app still reads as signed
+// out. sso-wave1-fixture.mjs already makes this same split by hand.
+//
+// Unset, this is SUPABASE_URL and nothing changes for any existing caller.
+function adminOrigin() {
+  return (process.env.SUPABASE_ADMIN_URL ?? "").trim() || requiredEnv("SUPABASE_URL");
 }
 
 function fail(stage, detail) {
@@ -241,12 +265,16 @@ export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
 /**
  * Mints a live session for an existing account. Changes no credential.
  *
+ * `supabaseUrl` is the ADMIN origin (SUPABASE_ADMIN_URL, falling back to
+ * SUPABASE_URL), which is not necessarily the origin the browser talks to.
+ * See adminOrigin above.
+ *
  * @param {{ email: string, supabaseUrl?: string, serviceRoleKey?: string, anonKey?: string, readOnly?: boolean }} options
  * @returns {Promise<{ access_token: string, refresh_token: string, expires_at: number, userId: string }>}
  */
 export async function mintSession({
   email,
-  supabaseUrl = requiredEnv("SUPABASE_URL"),
+  supabaseUrl = adminOrigin(),
   serviceRoleKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
   anonKey = requiredEnv("SUPABASE_ANON_KEY"),
   readOnly = false,
