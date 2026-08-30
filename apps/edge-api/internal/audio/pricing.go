@@ -14,6 +14,7 @@ package audio
 
 import (
 	"encoding/json"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -169,13 +170,21 @@ func billableSeconds(body []byte, requestedFormat string) (int64, bool) {
 // at zero. A negative figure is nonsense from the upstream rather than a
 // negative charge, so it collapses to zero and is then billed at the provider
 // minimum, which is what a reported negative duration did before #680 too.
+//
+// A figure too large for an int64 collapses to zero for the same reason, and
+// explicitly rather than incidentally: Go leaves a float64 to int64 conversion
+// implementation-dependent when the value does not fit, so the same nonsense
+// duration that yields the minimum charge on amd64 could saturate to
+// math.MaxInt64 elsewhere and bill an astronomical figure for a short clip.
+// The guard is a no-op on the amd64 the services are built for and makes the
+// outcome the same on every architecture.
 func ceilSeconds(reported float64) int64 {
+	if reported <= 0 || reported >= math.MaxInt64 {
+		return 0
+	}
 	seconds := int64(reported)
 	if float64(seconds) < reported {
 		seconds++
-	}
-	if seconds < 0 {
-		return 0
 	}
 	return seconds
 }

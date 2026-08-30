@@ -463,6 +463,26 @@ func TestTranscriptionTopLevelDurationWinsOverLongerSegments(t *testing.T) {
 	assertWithinOneCredit(t, "finalized charge", acc.lastActualCredits, catalogCharge(reported, sttCreditsPerMillionSeconds))
 }
 
+// A segment end too large for an int64 is nonsense from the upstream, and it
+// must not be able to bill an astronomical figure for a short clip. Go leaves
+// the float64 to int64 conversion implementation-dependent for a value that
+// does not fit, so this asserts the outcome the guard makes uniform: the
+// figure collapses to zero and the request is charged the provider minimum.
+// It holds on amd64 without the guard, which is why it is a portability
+// regression guard rather than a test of the defect this branch fixes.
+func TestTranscriptionDoesNotBillAnAbsurdSegmentEnd(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte(`{"text":"hi","segments":[{"start":0.0,"end":1e300}]}`), 200, "application/json")
+	defer mock.Close()
+
+	h, acc, _ := buildPricedAudioHandler(mock.server.URL, sttCreditsPerMillionSeconds, "seconds")
+	w := postAudioMultipart(t, h, "/v1/audio/transcriptions", "hive-stt", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	assertWithinOneCredit(t, "finalized charge", acc.lastActualCredits, catalogCharge(10, sttCreditsPerMillionSeconds))
+}
+
 // Neither present: the fallback must not manufacture a zero second duration,
 // which the ten second provider minimum would then turn into a real charge for
 // audio nobody can account for. With no top-level duration and no usable
