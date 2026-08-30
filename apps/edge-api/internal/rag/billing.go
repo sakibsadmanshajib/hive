@@ -120,6 +120,11 @@ type settlement struct {
 	// derived from a reported cost and one that fell back to the hold, which is
 	// exactly the distinction this endpoint got wrong.
 	Reason string
+	// ZeroContent narrows Delivered=false: the turn produced tokens the
+	// customer could not read (issue #1526). It is what the caller records as
+	// the release reason, so a reasoning burn is distinguishable in the ledger
+	// from a provider that died or a customer who hung up on a blank answer.
+	ZeroContent bool
 }
 
 // settleChat prices one completed grounded chat.
@@ -138,8 +143,13 @@ type settlement struct {
 //
 // delivered=false means nothing was produced, so there is no quantity to
 // charge and the caller releases the hold instead.
+// shape carries the delivery evidence the zero-content guard decides on, built
+// by whichever half of this handler is settling: the streaming relay's own
+// accumulator, or the choices of a fully decoded response body. It is only
+// consulted on the fixed-price branch, because that is the branch that reaches
+// ChatSettlementCredits.
 func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope,
-	alias, content string, requestBody []byte) settlement {
+	alias, content string, requestBody []byte, shape inference.DeliveryShape) settlement {
 
 	hasUsage := env.Usage != nil
 	var inTokens, outTokens int64
@@ -156,10 +166,43 @@ func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope
 			GenerationID: settled.GenerationID, Reason: settled.Reason,
 		}
 	}
-	credits, confirmed, delivered := inference.ChatSettlementCredits(route, hasUsage,
+	credits, confirmed, delivered, zeroContent := inference.ChatSettlementCredits(route, hasUsage,
 		cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outTokens,
-		requestBody, content)
-	return settlement{Credits: credits, Confirmed: confirmed, Delivered: delivered, Reason: "catalog_price"}
+		requestBody, content, shape)
+	return settlement{
+		Credits: credits, Confirmed: confirmed, Delivered: delivered,
+		Reason: "catalog_price", ZeroContent: zeroContent,
+	}
+}
+
+// syncDeliveryShape is the non-streaming half's delivery evidence (issue
+// #1526).
+//
+// Completed is true unconditionally, and that is not a shortcut. On a stream
+// the flag answers "did the upstream finish saying what it was going to say",
+// which settlement cannot otherwise know; a response body that has already been
+// read to the end and decoded answers it by construction, since both had to
+// succeed before this line runs. Forcing the streaming test onto this path
+// would instead make the guard permanently unreachable here, which is the
+// silent-absence shape rather than a conservative one.
+//
+// HasToolCall stays false because this endpoint cannot produce one:
+// dispatchBody carries model, messages and stream options and nothing else, so
+// no tools field ever reaches the provider, and upstreamChatResponse
+// accordingly does not decode tool_calls. If this handler ever forwards tools,
+// that field and this line have to arrive together, or a tool call truncated at
+// the ceiling would read as a reasoning burn and be served free.
+func syncDeliveryShape(upstream upstreamChatResponse) inference.DeliveryShape {
+	shape := inference.DeliveryShape{
+		Surface:   inference.ZeroContentSurfaceRAGSync,
+		Completed: true,
+	}
+	for _, choice := range upstream.Choices {
+		if choice.FinishReason != nil {
+			shape.ObserveFinishReason(*choice.FinishReason)
+		}
+	}
+	return shape
 }
 
 // logSettlement records a variable-price charge with the upstream handle it was

@@ -161,17 +161,141 @@ func isEmptyLengthCompletion(normalized []byte) bool {
 //     it could have carried the entire visible answer. StreamCompleted stays
 //     false on that path, so the stream bills.
 func isZeroContentStream(acc *UsageAccumulator, content string) bool {
-	if acc == nil || content != "" {
+	if acc == nil {
 		return false
 	}
-	if acc.HasToolCall || acc.HasVisibleRefusal {
-		return false
-	}
-	if !acc.StreamCompleted {
-		return false
-	}
-	return acc.SawFinish && !acc.SawNonLengthFinish
+	return isZeroContent(acc.Shape(""), content)
 }
+
+// Shape projects everything an accumulator observed about delivery onto the
+// form the guard reads, for a relay outside this package that accumulates
+// through ObserveShape but settles through ChatSettlementCredits (issue #1526).
+// The caller supplies the surface label and, if its own notion of completion
+// differs from StreamCompleted, overwrites Completed after.
+func (a *UsageAccumulator) Shape(surface string) DeliveryShape {
+	return DeliveryShape{
+		Surface:            surface,
+		HasToolCall:        a.HasToolCall,
+		HasVisibleRefusal:  a.HasVisibleRefusal,
+		Completed:          a.StreamCompleted,
+		SawFinish:          a.SawFinish,
+		SawNonLengthFinish: a.SawNonLengthFinish,
+	}
+}
+
+// DeliveryShape is the evidence isZeroContent decides on, in the one form every
+// settling surface can produce (issue #1526).
+//
+// It exists because the guard above reads a *UsageAccumulator, and the
+// accumulator belongs to this package's own SSE relay. The Open WebUI session
+// chat relay and both halves of /v1/rag/chat settle through
+// ChatSettlementCredits with their own decoders and never build one, so the
+// only way for them to reach the same predicate was to name the facts it needs
+// separately from the type that happened to hold them. A second predicate
+// written per surface is how two rules that are supposed to agree drift apart.
+//
+// Surface is the label the absorbed-credits counter is broken down by, so a
+// rise can be attributed to the surface that produced it. It is never part of
+// the emptiness decision.
+type DeliveryShape struct {
+	Surface            string
+	HasToolCall        bool
+	HasVisibleRefusal  bool
+	Completed          bool
+	SawFinish          bool
+	SawNonLengthFinish bool
+}
+
+// ObserveFinishReason folds one finish_reason into the shape, from a relayed
+// stream chunk or from a choice of a whole response body. Empty means the
+// choice carried none, which is not a finish at all.
+func (s *DeliveryShape) ObserveFinishReason(reason string) {
+	if reason == "" {
+		return
+	}
+	s.SawFinish = true
+	if !isLengthFinish(reason) {
+		s.SawNonLengthFinish = true
+	}
+}
+
+// isLengthFinish is the single spelling of the reasoning-burn finish reason.
+// Both the accumulator and DeliveryShape fold through it so the two cannot
+// disagree about what "ran out of ceiling" looks like on the wire.
+func isLengthFinish(reason string) bool {
+	return strings.EqualFold(reason, "length")
+}
+
+// isZeroContent is the predicate itself, stated once for every surface.
+//
+// COMPLETED ON A NON-STREAMING SETTLEMENT. "The stream completed" has no
+// meaning for a response that never streamed, and forcing the streaming test
+// onto one would make the guard unreachable there: nothing sets a completion
+// flag on a body that arrived whole. The property the streaming flag stands in
+// for is "everything this response was going to say has already been said", and
+// a fully decoded response body satisfies that by construction, since the read
+// and the decode both had to succeed before any settlement ran. So a
+// non-streaming caller passes Completed: true and emptiness is decided on the
+// content and the finish reasons alone, which is exactly what the sync guard
+// (isEmptyLengthCompletion) has always done: it reads choices and consults no
+// notion of completion anywhere.
+func isZeroContent(shape DeliveryShape, content string) bool {
+	if content != "" {
+		return false
+	}
+	if shape.HasToolCall || shape.HasVisibleRefusal {
+		return false
+	}
+	if !shape.Completed {
+		return false
+	}
+	return shape.SawFinish && !shape.SawNonLengthFinish
+}
+
+// Surface label values for chatZeroContentAbsorbedCredits. Every one of them is
+// created at registration, so a dashboard can tell "no burns on this surface"
+// apart from "this surface never reached the guard at all".
+const (
+	// ZeroContentSurfaceSessionChat is the Open WebUI session chat relay
+	// (internal/chat), which is the surface the product demo runs on.
+	ZeroContentSurfaceSessionChat = "session_chat"
+	// ZeroContentSurfaceRAGStream is the streaming half of /v1/rag/chat.
+	ZeroContentSurfaceRAGStream = "rag_stream"
+	// ZeroContentSurfaceRAGSync is the non-streaming half of /v1/rag/chat.
+	ZeroContentSurfaceRAGSync = "rag_sync"
+)
+
+// chatZeroContentAbsorbedCredits is the money signal for the three surfaces
+// that settle through ChatSettlementCredits, and the sibling of
+// streamZeroContentAbsorbedCredits above:
+//
+//	increase(hive_chat_zero_content_absorbed_credits_total[1d])
+//
+// WHAT THE FIGURE IS. The credits the request would have been charged: the
+// resolved alias's catalog price applied to the tokens the upstream reported
+// burning, computed in int64 credits and converted to float64 only here, at the
+// Prometheus boundary. Nothing reads the value back into a charge.
+//
+// WHY IT KEYS ON THE GUARD'S OWN VERDICT. The counter has to be able to fire on
+// every path it claims to cover, and the way that goes wrong is keying it on a
+// quantity one of the paths never has: hive_usage_reasoning_tokens_unbilled_total
+// could not increment on /v1/rag/chat at all, because that handler dropped
+// completion_tokens_details before the counter's branch was reached, so the
+// dashboard would have read clean forever while the loss continued (issue
+// #1472). This one increments at the moment the guard fires, inside the
+// function all three surfaces call, from credits the same call has already
+// computed. There is no per-surface precondition left that could be false.
+//
+// WHAT IT COUNTS, PRECISELY. Credits DECLINED at settlement, not holds proven
+// returned. The release is the caller's own deferred call and this function
+// cannot observe its outcome; a release that fails is already an ERROR log from
+// sessionbilling.Settlement.Release ("release failed, hold may be stranded"),
+// which is where that half of the story stays. The streaming guard can split
+// released from release_failed because it performs the release itself.
+var chatZeroContentAbsorbedCredits = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "hive_chat_zero_content_absorbed_credits_total",
+	Help: "Credits Hive absorbed on session chat and RAG chat turns that returned no assistant-visible text at all and were therefore not billed (issue #1526), by surface. Sum it over a window to get what the absorption cost, with no join and no price lookup. All three surface series exist from process start, so zero reads as zero and an absent series means the recording path itself is broken. A rising total is a routing signal: the pool is sending work to members that burn the caller's ceiling on hidden reasoning. It counts credits declined at settlement; a hold whose release then failed is an ERROR log from the release call, not a series here.",
+}, []string{"surface"})
 
 // Outcome label values for streamZeroContentAbsorbedCredits. Both series are
 // created at registration so a dashboard can tell "no burns" apart from "this
@@ -248,7 +372,14 @@ var streamZeroContentAbsorbedCredits = prometheus.NewCounterVec(prometheus.Count
 // second registration site costs one call in main.go and avoids a guaranteed
 // conflict on a shared MustRegister line.
 func RegisterZeroContentMetrics(reg prometheus.Registerer) {
-	reg.MustRegister(streamZeroContentAbsorbedCredits)
+	reg.MustRegister(streamZeroContentAbsorbedCredits, chatZeroContentAbsorbedCredits)
 	streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleased).Add(0)
 	streamZeroContentAbsorbedCredits.WithLabelValues(zeroContentOutcomeReleaseFailed).Add(0)
+	for _, surface := range []string{
+		ZeroContentSurfaceSessionChat,
+		ZeroContentSurfaceRAGStream,
+		ZeroContentSurfaceRAGSync,
+	} {
+		chatZeroContentAbsorbedCredits.WithLabelValues(surface).Add(0)
+	}
 }

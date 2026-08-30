@@ -158,7 +158,10 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 			continue
 		}
 		a.SawFinish = true
-		if !strings.EqualFold(*choice.FinishReason, "length") {
+		// isLengthFinish, not a second strings.EqualFold written out here: it is
+		// the one spelling of what "ran out of ceiling" looks like on the wire,
+		// shared with DeliveryShape.ObserveFinishReason (issue #1526).
+		if !isLengthFinish(*choice.FinishReason) {
 			a.SawNonLengthFinish = true
 		}
 	}

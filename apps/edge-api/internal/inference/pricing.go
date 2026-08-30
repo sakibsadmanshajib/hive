@@ -260,17 +260,45 @@ func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens
 // never from the flat hold. confirmed is true only when the upstream itself
 // reported token counts. delivered is false only when nothing was produced at
 // all, in which case the caller must release its hold in full rather than
-// charge anything.
+// charge anything. zeroContent narrows that: it says the turn produced tokens
+// the customer could not read, so the caller records its release under a reason
+// that tells a reasoning burn apart from a provider that died or a customer who
+// hung up.
+//
+// ZERO-CONTENT GUARD, the shared half (issue #1526). PR #1499 stopped a
+// reasoning burn billing on the API-key streaming path, in settleStream. The
+// three surfaces that settle here (Open WebUI session chat, and both halves of
+// /v1/rag/chat) never pass through that function, so a model that spent the
+// caller's whole ceiling on hidden reasoning and returned nothing readable went
+// on settling at full catalog price on the surface the product demo runs on.
+// The guard lives at this one function rather than in each caller: three copies
+// of one money rule is how they drift, and a fourth caller would arrive
+// unguarded. See isZeroContent for what "no visible content" means, what it
+// deliberately excludes, and what "completed" means for a response that never
+// streamed.
 func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64,
-	requestBody []byte, content string) (credits int64, confirmed bool, delivered bool) {
+	requestBody []byte, content string, shape DeliveryShape) (credits int64, confirmed bool, delivered bool, zeroContent bool) {
 	// The completion ceiling is read from the same request bytes, so a content
 	// estimate on this surface is bounded by what the caller asked for exactly
 	// as it is on the API-key path (#1283, review finding 2). Reading it here
 	// rather than taking it as an argument keeps the one detail a second caller
 	// could get wrong in the same place promptText already is.
-	return settlementCredits(route, hasUsage, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
+	credits, confirmed, delivered = settlementCredits(route, hasUsage, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
 		promptText(EndpointChatCompletions, requestBody), content,
 		requestedCompletionCeiling(EndpointChatCompletions, requestBody))
+	if !delivered || !isZeroContent(shape, content) {
+		return credits, confirmed, delivered, false
+	}
+	// Counted before the return, from the figure this call has already priced:
+	// this is the only point at which the burn's price exists at all, since
+	// every caller discards it the moment delivered comes back false.
+	chatZeroContentAbsorbedCredits.WithLabelValues(shape.Surface).Add(float64(credits))
+	log.Printf("inference: chat_zero_content surface=%s alias=%s absorbed_credits=%d upstream_prompt_tokens=%d upstream_completion_tokens=%d: the turn returned no assistant-visible text, releasing the hold instead of charging (#1526)",
+		shape.Surface, route.AliasID, credits, freshInputTokens+cacheReadTokens+cacheWriteTokens, outputTokens)
+	// Zero rather than the priced figure. No caller charges on a false
+	// delivered, and this way one that forgot to check could only ever serve
+	// the burn free, which is the direction this guard already decided on.
+	return 0, confirmed, false, true
 }
 
 // Request bounds for a variable-price alias.
