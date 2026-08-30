@@ -63,6 +63,15 @@ do
 	cp "$COMPONENT_SRC/$rel" "$WORK/lib/components/$rel"
 done
 
+# The application's writable store module. coworkMode.test.ts pins the two
+# composer stores against it: `composerMode` and `composerPack` are declared
+# here rather than in lib/hive (this module is reached by everything, and
+# importing lib/hive from it would invert the dependency), so their defaults
+# would otherwise be hand-duplicated with nothing checking that the copy still
+# agrees with lib/hive's own constant.
+mkdir -p "$WORK/lib/stores"
+cp "$ROOT/vendor/open-webui/src/lib/stores/index.ts" "$WORK/lib/stores/index.ts"
+
 # The two locale catalogues the settings guard reads. en-US is the key
 # catalogue every other locale is generated from, and bn-BD is the first
 # market, so a rename that silently drops a translated string fails here
