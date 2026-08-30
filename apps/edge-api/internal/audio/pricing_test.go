@@ -463,24 +463,91 @@ func TestTranscriptionTopLevelDurationWinsOverLongerSegments(t *testing.T) {
 	assertWithinOneCredit(t, "finalized charge", acc.lastActualCredits, catalogCharge(reported, sttCreditsPerMillionSeconds))
 }
 
-// A segment end too large for an int64 is nonsense from the upstream, and it
-// must not be able to bill an astronomical figure for a short clip. Go leaves
-// the float64 to int64 conversion implementation-dependent for a value that
-// does not fit, so this asserts the outcome the guard makes uniform: the
-// figure collapses to zero and the request is charged the provider minimum.
-// It holds on amd64 without the guard, which is why it is a portability
-// regression guard rather than a test of the defect this branch fixes.
-func TestTranscriptionDoesNotBillAnAbsurdSegmentEnd(t *testing.T) {
-	mock := newMockLiteLLMAudio([]byte(`{"text":"hi","segments":[{"start":0.0,"end":1e300}]}`), 200, "application/json")
-	defer mock.Close()
-
-	h, acc, _ := buildPricedAudioHandler(mock.server.URL, sttCreditsPerMillionSeconds, "seconds")
-	w := postAudioMultipart(t, h, "/v1/audio/transcriptions", "hive-stt", "")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+// A malformed segment must never cost the caller a response that reported a
+// usable top-level duration. Making segments a decode target means a segment
+// shape this struct does not expect produces an UnmarshalTypeError, and
+// encoding/json saves that error and carries on, so the duration is decoded
+// and available even when the error is returned. Refusing on the error would
+// turn a body that priced correctly before this branch into a 502 with the
+// hold released and nothing charged, which is the outage shape #680 exists to
+// remove, driven entirely by provider-controlled bytes.
+func TestTranscriptionTopLevelDurationSurvivesMalformedSegments(t *testing.T) {
+	const reported = 120
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"segment end is a string", `{"text":"x","duration":120.0,"segments":[{"start":0.0,"end":"12.0"}]}`},
+		{"segment end is out of float64 range", `{"text":"x","duration":120.0,"segments":[{"start":0.0,"end":1e400}]}`},
+		{"segments is an object", `{"text":"x","duration":120.0,"segments":{"a":1}}`},
+		{"segments is a number", `{"text":"x","duration":120.0,"segments":7}`},
 	}
-	assertWithinOneCredit(t, "finalized charge", acc.lastActualCredits, catalogCharge(10, sttCreditsPerMillionSeconds))
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockLiteLLMAudio([]byte(tc.body), 200, "application/json")
+			defer mock.Close()
+
+			h, acc, _ := buildPricedAudioHandler(mock.server.URL, sttCreditsPerMillionSeconds, "seconds")
+			w := postAudioMultipart(t, h, "/v1/audio/transcriptions", "hive-stt", "")
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200 for a body carrying a usable duration, got %d: %s", w.Code, w.Body.String())
+			}
+			assertWithinOneCredit(t, "finalized charge", acc.lastActualCredits, catalogCharge(reported, sttCreditsPerMillionSeconds))
+		})
+	}
+}
+
+// A duration longer than any audio a caller could have submitted is upstream
+// nonsense, and the doc comment's claim that a segment end is bounded by the
+// real audio length is an assumption about a well behaved provider, not
+// something this function can enforce. Charging it in full is worse than a
+// large charge: creditsForQuantity reaches metering.ChargeCredits, which
+// returns quotient.Int64(), and big.Int.Int64 is undefined when the value does
+// not fit, so a sufficiently large quantity silently wraps and a wrap to a
+// negative value finalizes as a credit grant rather than a charge.
+//
+// A plausibility ceiling refuses rather than clamps, so nothing is charged at
+// a guess (D-034). It applies to every arm, because each one reads a figure
+// the upstream chose: the top-level duration, the segment ends, and the
+// subtitle cue timestamps, where an absurd hours field also survives
+// strconv.ParseInt's range clamp.
+func TestTranscriptionRefusesAnAbsurdDuration(t *testing.T) {
+	cases := []struct {
+		name   string
+		format string
+		body   string
+	}{
+		{"segment end below MaxInt64 but far past any real audio", "", `{"text":"x","segments":[{"start":0.0,"end":9e18}]}`},
+		{"segment end past float64 to int64 range", "", `{"text":"x","segments":[{"start":0.0,"end":1e300}]}`},
+		{"top-level duration far past any real audio", "", `{"text":"x","duration":9e18}`},
+		{"subtitle cue hours far past any real audio", "srt", "1\n2562047788015:00:00,000 --> 2562047788015:00:01,000\nhello\n"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentType := "application/json"
+			if tc.format == "srt" {
+				contentType = "text/plain"
+			}
+			mock := newMockLiteLLMAudio([]byte(tc.body), 200, contentType)
+			defer mock.Close()
+
+			h, acc, _ := buildPricedAudioHandler(mock.server.URL, sttCreditsPerMillionSeconds, "seconds")
+			w := postAudioMultipart(t, h, "/v1/audio/transcriptions", "hive-stt", tc.format)
+
+			if w.Code == http.StatusOK {
+				t.Fatalf("expected a refusal for an implausible duration, got 200 charging %d credits", acc.lastActualCredits)
+			}
+			if acc.finalizeCalled {
+				t.Errorf("expected no finalize for an implausible duration, charged %d credits", acc.lastActualCredits)
+			}
+			if !acc.releaseCalled {
+				t.Error("expected the hold to be released when the request is refused")
+			}
+		})
+	}
 }
 
 // Neither present: the fallback must not manufacture a zero second duration,

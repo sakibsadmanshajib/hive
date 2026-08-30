@@ -41,6 +41,12 @@ const (
 // footnote, fetched 2026-08-01). A one second clip costs us ten seconds.
 const minBillableSeconds = 10
 
+// maxBillableSeconds is the longest transcription this endpoint will meter. A
+// day of continuous audio is far past anything a single upload can carry, so a
+// reported duration above it is upstream nonsense rather than a very long
+// clip, and the response is refused rather than charged (#680 review).
+const maxBillableSeconds = 24 * 60 * 60
+
 // sttEstimatedSeconds is the audio length assumed for the pre-dispatch hold on
 // a transcription. A duration is not knowable before the upstream reports one,
 // and the hold is an authorization floor rather than a cap: a settlement that
@@ -118,10 +124,14 @@ func upstreamResponseFormat(requested string) string {
 // The order matters for the money: a body that carries a top-level duration is
 // priced from it alone and is charged exactly what it was charged before this
 // fallback existed. The fallback is never a maximum taken across both sources.
-// A segment end is a timestamp inside the submitted audio, so the largest of
-// them is bounded above by the real audio length and deriving from it cannot
-// charge for more audio than the caller sent. It is also the derivation
-// lastCueSeconds already applies to subtitle bodies.
+// A segment end is a timestamp inside the submitted audio, so on any well
+// behaved upstream the largest of them is bounded above by the real audio
+// length and deriving from it cannot charge for more audio than the caller
+// sent. It is also the derivation lastCueSeconds already applies to subtitle
+// bodies. That bound is an expectation about the provider rather than
+// something this package can enforce, which is what maxBillableSeconds in
+// meterableSeconds is for: every arm here answers to it, including the
+// top-level duration and the subtitle cues.
 //
 // Rounding up to the second, and the float64 that JSON forces on the reported
 // duration, both stop here: everything downstream of this function is integer
@@ -130,8 +140,14 @@ func billableSeconds(body []byte, requestedFormat string) (int64, bool) {
 	if isSubtitleFormat(requestedFormat) {
 		// Subtitle cues are timestamped, so the last cue's end time IS the
 		// duration. A body with no cues at all (silence, no speech detected)
-		// yields zero, which the minimum below still charges for.
-		return lastCueSeconds(body), true
+		// yields zero, which the minimum below still charges for. The cue
+		// hours field is upstream-chosen like every other figure here, so it
+		// answers to the same plausibility ceiling.
+		seconds := lastCueSeconds(body)
+		if seconds > maxBillableSeconds {
+			return 0, false
+		}
+		return seconds, true
 	}
 
 	var parsed struct {
@@ -140,11 +156,20 @@ func billableSeconds(body []byte, requestedFormat string) (int64, bool) {
 			End *float64 `json:"end"`
 		} `json:"segments"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	// A decode error is fatal only when it left no usable duration behind.
+	// encoding/json saves the first UnmarshalTypeError and carries on
+	// decoding, so a segment shape this struct does not expect (a string end,
+	// an out-of-range number, segments arriving as an object) returns an error
+	// with parsed.Duration already populated. Refusing on the error alone
+	// would turn a body that priced correctly before the segment fallback
+	// existed into a 502 with nothing charged, which is the outage this change
+	// exists to remove. The fallback's own parse failure degrades to the
+	// both-absent decision below instead of poisoning the primary path.
+	if err := json.Unmarshal(body, &parsed); err != nil && parsed.Duration == nil {
 		return 0, false
 	}
 	if parsed.Duration != nil {
-		return ceilSeconds(*parsed.Duration), true
+		return meterableSeconds(*parsed.Duration)
 	}
 
 	var longest float64
@@ -163,30 +188,45 @@ func billableSeconds(body []byte, requestedFormat string) (int64, bool) {
 	if longest <= 0 {
 		return 0, false
 	}
-	return ceilSeconds(longest), true
+	return meterableSeconds(longest)
 }
 
-// ceilSeconds rounds a reported float64 duration up to whole seconds, flooring
-// at zero. A negative figure is nonsense from the upstream rather than a
-// negative charge, so it collapses to zero and is then billed at the provider
-// minimum, which is what a reported negative duration did before #680 too.
+// meterableSeconds rounds a reported float64 duration up to whole seconds and
+// reports whether it is a figure this endpoint will meter at all.
 //
-// A figure too large for an int64 collapses to zero for the same reason, and
-// explicitly rather than incidentally: Go leaves a float64 to int64 conversion
-// implementation-dependent when the value does not fit, so the same nonsense
-// duration that yields the minimum charge on amd64 could saturate to
-// math.MaxInt64 elsewhere and bill an astronomical figure for a short clip.
-// The guard is a no-op on the amd64 the services are built for and makes the
-// outcome the same on every architecture.
-func ceilSeconds(reported float64) int64 {
-	if reported <= 0 || reported >= math.MaxInt64 {
-		return 0
+// Above maxBillableSeconds it is not. Every figure that reaches here was
+// chosen by the upstream, and the claim that a segment end is bounded by the
+// real audio length is an assumption about a well behaved provider rather than
+// something this package can enforce, so a value past any audio a caller could
+// have submitted is nonsense and the response is refused rather than charged.
+// Refusing rather than clamping keeps it consistent with D-034: a clamp would
+// bill a guessed maximum for a body that reported nothing usable.
+//
+// The ceiling is also what keeps the arithmetic downstream in range.
+// creditsForQuantity reaches metering.ChargeCredits, which computes in big.Int
+// and returns quotient.Int64(), and big.Int.Int64 is undefined when the value
+// does not fit, so a large enough quantity wraps silently and a wrap to a
+// negative value finalizes as a credit grant rather than a charge. That
+// exposure is the shared helper's, tracked in issue #1547; the ceiling here
+// puts every audio charge far below the boundary rather than waiting for it.
+//
+// Below the ceiling the arithmetic is unchanged. A NaN cannot reach the int64
+// conversion, whose result Go leaves implementation-dependent for a value the
+// type cannot represent. A zero or negative figure still collapses to zero and
+// is then billed at the provider minimum, which is what a reported negative
+// duration did before #680 too.
+func meterableSeconds(reported float64) (int64, bool) {
+	if math.IsNaN(reported) || reported > maxBillableSeconds {
+		return 0, false
+	}
+	if reported <= 0 {
+		return 0, true
 	}
 	seconds := int64(reported)
 	if float64(seconds) < reported {
 		seconds++
 	}
-	return seconds
+	return seconds, true
 }
 
 // billedSeconds applies the upstream's own minimum billable duration.
