@@ -1,0 +1,111 @@
+# Capture log, live post-deploy pass, 2026-08-30
+
+Box HEAD: bbcf1118b fix: replace the demo-account denylist with an E2E_RUN_KEY allowlist (#1528)
+Stack recreated: 2026-08-30 03:14:39 UTC
+Chat surface: https://chat-hive.scubed.co
+Identity: post-deploy-verify@hive-verify.invalid (tenant 63b75a82-d6f6-4626-a1f5-ab8bed53a654, account a0634c83-4060-4724-9a80-ebaaa285953a)
+Conversation: https://chat-hive.scubed.co/c/81d93d3f-f83c-4b15-88c8-47397e16f1e8
+
+## Browser console log, submission pass
+```
+[2026-08-30T03:21:51.600Z] minted session for post-deploy-verify@hive-verify.invalid user=9f3866c9-3874-4574-afda-1e339246e821
+[2026-08-30T03:21:51.861Z] cookie names: sb-console-hive-auth-token
+[2026-08-30T03:21:52.454Z] landed on https://chat-hive.scubed.co/
+[2026-08-30T03:21:57.265Z] signed in, composer visible at https://chat-hive.scubed.co/
+[2026-08-30T03:21:57.347Z] shot 01-chat-signed-in.png
+[2026-08-30T03:21:57.390Z] D: sidebar rows = ["Projects","Artifacts","Skills","Scheduled"]
+[2026-08-30T03:21:57.390Z] D: a[href=/knowledge] count = 0; nav entries matching /knowledge/i = []
+[2026-08-30T03:21:57.461Z] shot 02-sidebar.png
+[2026-08-30T03:21:58.951Z] shot 03-cowork-mode.png
+[2026-08-30T03:21:58.971Z] A: clickable "Knowledge work"=1 "Coding"=1; data-hive-pack knowledge=1 coding=1
+[2026-08-30T03:21:59.640Z] A: after clicking Coding, aria-checked=true, radiogroup data-hive-composer-pack=coding-pack
+[2026-08-30T03:21:59.714Z] shot 04-coding-selected.png
+[2026-08-30T03:22:00.313Z] shot 05-prompt-typed.png
+[2026-08-30T03:22:00.486Z] submitted
+[2026-08-30T03:22:05.595Z] shot 06-submitted.png
+[2026-08-30T03:22:05.595Z] conversation url: https://chat-hive.scubed.co/c/81d93d3f-f83c-4b15-88c8-47397e16f1e8
+[2026-08-30T03:22:05.601Z] settled=true after 0s
+[2026-08-30T03:22:09.680Z] shot 07-cowork-settled.png
+[2026-08-30T03:22:09.732Z] transcript written (791 chars)
+```
+
+## Browser console log, settled re-open pass
+```
+url https://chat-hive.scubed.co/c/81d93d3f-f83c-4b15-88c8-47397e16f1e8
+shot 10-settled-collapsed.png
+occurrences of HIVE-CODING-OK in page text: 5
+shot 11-settled-expanded.png
+```
+
+## Settled transcript, step list expanded (page text)
+```
+Chat Conversation
+
+Create hello.py that prints HIVE-CODING-OK, run it with python3, and report the exact stdout
+
+Workspace file: hello.py
+Used file_editor: create File created successfully at: /workspace/hello.py text FileEditorObservation print("HIVE-CODING-OK") /workspace/hello.py
+Used terminal: python3 hello.py [?2004lHIVE-CODING-OK
+[?2004h text workspace/conversations/a78ef43f297545cb8cb7363cbea7e2ba/observations TerminalObservation ubuntu0 /usr/local/bin/python
+[The command completed with exit code 0.] sakib /workspace
+Workspace file: hello.py
+
+Done. Created /workspace/hello.py with:
+
+python
+Collapse
+Copy
+1
+print("HIVE-CODING-OK")
+
+Ran it with python3 hello.py (exit code 0).
+
+Exact stdout:
+
+Collapse
+Copy
+1
+HIVE-CODING-OK
+
+(The terminal wrapper also emitted bracketed-paste control sequences [?2004l/[?2004h, but the program's own stdout was exactly HIVE-CODING-OK.)
+
+You've used < $0.01 today · $0.19 remaining
+```
+
+## Database readings (read-only psql on the box)
+```
+-- agent_tasks
+                  id                  |    pack     |  status   |          created_at           |          started_at           |          finished_at
+ cdf605fd-5c1e-471a-b425-e5f65740b626 | coding-pack | succeeded | 2026-08-30 03:22:01.730597+00 | 2026-08-30 03:22:20.183216+00 | 2026-08-30 03:22:54.727012+00
+
+-- api_keys (per-task credential, PR #1519)
+ id=cdf605fd-5c1e-471a-b425-e5f65740b626
+ account_id=a0634c83-4060-4724-9a80-ebaaa285953a
+ kind=agent_task  status=revoked
+ created_at=2026-08-30 03:22:01.738862+00
+ expires_at=2026-08-30 05:22:01.737661+00
+ last_used_at=2026-08-30 03:22:49.280753+00
+ revoked_at=2026-08-30 03:22:54.731923+00
+
+-- credit_ledger_entries, account a0634c83, 03:21:55 to 03:23:10
+ reservation_hold    | -100000000 | 03:22:01.703400 | {"endpoint": "agent_tasks", "model_alias": "agent-task", "policy_mode": "strict"}
+ reservation_release |  100000000 | 03:22:01.714893 | {"reason": "solvency_probe", "endpoint": "agent_tasks"}
+ reservation_hold    | -100000000 | 03:22:21.448916 | {"endpoint": "chat_completions", "model_alias": "hive-default"}
+ usage_charge        |    -248162 | 03:22:39.985069 | {"endpoint": "chat_completions", "terminal_confirmed": true}
+ reservation_release |  100000000 | 03:22:39.990454 | {"captured_credits": 248162}
+ reservation_hold    | -100000000 | 03:22:40.496038 | {"endpoint": "chat_completions", "model_alias": "hive-default"}
+ usage_charge        |    -718901 | 03:22:43.132824 | {"endpoint": "chat_completions", "terminal_confirmed": true}
+ reservation_release |  100000000 | 03:22:43.137970 | {"captured_credits": 718901}
+ reservation_hold    | -100000000 | 03:22:43.513716 | {"endpoint": "chat_completions", "model_alias": "hive-default"}
+ usage_charge        |     -54839 | 03:22:45.129745 | {"endpoint": "chat_completions", "terminal_confirmed": true}
+ reservation_release |  100000000 | 03:22:45.134234 | {"captured_credits": 54839}
+ reservation_hold    | -100000000 | 03:22:46.043509 | {"endpoint": "chat_completions", "model_alias": "hive-default"}
+ usage_charge        |    -125506 | 03:22:49.260139 | {"endpoint": "chat_completions", "terminal_confirmed": true}
+ reservation_release |  100000000 | 03:22:49.264728 | {"captured_credits": 125506}
+
+-- request_attempts for those four reservations
+ 448dec8a-afd6-4463-8bb8-458d8a26a445 | a0634c83-... | chat_completions | hive-default | completed | api_key_id=cdf605fd-5c1e-471a-b425-e5f65740b626 | 03:22:21.432998
+ c2bf695a-b84a-419e-a502-e2277a3b4259 | a0634c83-... | chat_completions | hive-default | completed | api_key_id=cdf605fd-5c1e-471a-b425-e5f65740b626 | 03:22:40.479102
+ 690416b3-dc7a-44e4-ab58-283faedff97a | a0634c83-... | chat_completions | hive-default | completed | api_key_id=cdf605fd-5c1e-471a-b425-e5f65740b626 | 03:22:43.495600
+ 2d066e22-1aea-4350-8ec3-8462b36a700a | a0634c83-... | chat_completions | hive-default | completed | api_key_id=cdf605fd-5c1e-471a-b425-e5f65740b626 | 03:22:46.027497
+```
