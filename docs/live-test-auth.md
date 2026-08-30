@@ -188,9 +188,25 @@ still cannot be.
 ### This rule is now enforced, not merely written down
 
 `mintSession` in `tests/e2e/support/live-auth.mjs` is the single door every
-JavaScript live session passes through, and it refuses `demo@hive-demo.invalid`
-outright. A run that genuinely only reads must say so at the call site, with
-`readOnly: true`, or `--read-only` on that module's CLI.
+JavaScript live session passes through, and `assertNotSharedDemoAccount`
+refuses a protected base address outright: `demo@hive-demo.invalid`,
+`qa-tester@hive.test`, and `e2e-verified@scubed.com.bd` (a `+`-tagged address,
+such as the `e2e-verified+qafunded-...@` one issue #1476 found with 21
+accumulated conversations, is still that same base; GoTrue does not fold the
+tag away, so this guard does not either). A run that genuinely only reads must
+say so at the call site, with `readOnly: true`, or `--read-only` on that
+module's CLI. A run scoped to this run's `E2E_RUN_KEY` is let through instead:
+`assertNotSharedDemoAccount` reads that environment variable directly (never a
+per-call argument, which a caller could set to whatever makes the check pass),
+and requires it to equal the `+tag` component of the address's local part
+exactly, at least `MIN_RUN_KEY_LENGTH` (8) characters. An earlier version of
+this check compared the run key against the whole address as a substring,
+domain included, which a security review of this PR found lets a short,
+common key open a protected base with its address completely unchanged
+(`E2E_RUN_KEY=-` opened all three bases; `hive`, `qa`, `test`, `e2e`, `2`,
+`bd`, `invalid`, and `demo` each opened at least one). The exact-tag
+comparison and the length floor both close that: the domain never
+participates, and neither does a bare protected base with no tag at all.
 
 That module is not the single door for the repository, and saying so would be
 the same kind of nearly-true sentence this document exists to correct. Three
@@ -210,26 +226,40 @@ the two halves of one rule cannot drift apart again.
 each of those three scripts actually calls the guard rather than describing it
 in a docstring, and it runs in `make test-scripts`, a required check.
 
-What this is still not is an allowlist. Requiring every address to carry
-`E2E_RUN_KEY` would also cover `qa-tester@hive.test` and the other shared
-identities that collect the same litter, and that is the right end state, but
-two scheduled workflows authenticate as persistent identities with no run key
-today (`demo-chat-settings-check.yml`, and `owui-nightly.yml`, which sets
-`OWUI_E2E_RUN_KEY` rather than `E2E_RUN_KEY`). Those need run-key-scoped
-identities provisioned first; tracked as issue #1476 rather than turned red
-here.
+This used to be a denylist of exactly `demo@hive-demo.invalid` (issue #1462).
+Issue #1476 replaced it with the allowlist described above, after fixing the
+two callers it would otherwise have turned red with nothing to replace them:
+`demo-chat-settings-check.yml` now provisions and signs in as its own
+dedicated, workflow-only identity (`scripts/seed-demo-owner.py`, idempotent)
+rather than the shared `HIVE_QA_AGENT_EMAIL` / `HIVE_QA_TESTER_EMAIL` account
+several other suites also reuse, and `owui-nightly.yml` now derives
+`OWUI_E2E_RUN_KEY` from the same `E2E_RUN_KEY` the rest of this document
+describes, rather than computing an independent copy of it.
+
+The three bases the guard checks are still hardcoded in `shared_demo_account.py`
+and `live-auth.mjs`, short of a genuinely address-free rule. `HIVE_VERIFY_EMAIL`
+(`verify-control-plane.py`, `post-deploy-verify.py`) is operator-declared with
+no default, and `verify-rag-roundtrip.py`'s address is its own dedicated
+literal; neither is one of the three bases, and neither carries an
+`E2E_RUN_KEY`. `post-deploy-verify.py`'s `ledger` check in particular spends a
+real completion on every `deploy-demo-box` completion, autonomously, with no
+run key set in that workflow, so a rule that required one universally would
+have traded the incident this issue fixes for an identical one on the deploy
+path. Scoping the requirement to the three known bases keeps that path, and
+every other caller whose address is not one of them, exactly as it was.
 
 The declaration is deliberately not an environment variable. An env var belongs
 to whoever set it, so one line in a workflow's `env:` block would switch the
 guard off for every step in that job, invisibly, and for reasons unrelated to
-the suite that inherits it. An argument sits where a reviewer reads it.
+the suite that inherits it. A `readOnly` argument, or the CLI's `--read-only`
+flag, sits where a reviewer reads it.
 
 Be clear about what that buys: it is a declaration gate, not a write blocker.
 It cannot stop a run that has declared itself read only from then sending a
-message. What it removes is the silent default, so aiming a suite at this
-account becomes a deliberate act that shows up in a diff, which is exactly
-what was missing while the account collected 24 conversations of automation
-text, five of them on the day the guard was written.
+message. What it removes is the silent default, so aiming a suite at one of
+these accounts becomes a deliberate act that shows up in a diff, which is
+exactly what was missing while the demo account collected 24 conversations of
+automation text, five of them on the day the original guard was written.
 
 This happened. `docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json`
 records `"demo@hive-demo.invalid -> hive-coverage-77811 survived a reload"`,
@@ -239,14 +269,14 @@ and 'interaction-coverage proof' entries," on that same account. Issue #848
 tracks the cleanup and the standing fix.
 
 So: a suite that only signs in and reads (a redirect check, a rendered
-heading, an unclicked button) is fine against the demo account. A suite that
-sends a message, submits a task, or mints a key must run as a dedicated,
-non-demo identity instead, the same way the plain E2E suite already does with
-its `E2E_RUN_KEY`-scoped fixture accounts (see above), or the way
+heading, an unclicked button) is fine against a protected account. A suite
+that sends a message, submits a task, or mints a key must run as a dedicated,
+run-key-scoped identity instead, the same way the plain E2E suite already does
+with its `E2E_RUN_KEY`-scoped fixture accounts (see above), or the way
 `seed-owui-e2e-user.py --account-slug` stands up a billing account of its
 own rather than sharing one. Do not add a new literal fallback to
-`demo@hive-demo.invalid` anywhere in this codebase; the existing ones are
-being removed, not extended.
+`demo@hive-demo.invalid`, `qa-tester@hive.test`, or `e2e-verified@scubed.com.bd`
+anywhere in this codebase; the existing ones are being removed, not extended.
 
 `scripts/verify-control-plane.py` is NOT an example of the read-only case,
 despite never rotating a password: its "api-key lifecycle" check mints a real

@@ -119,37 +119,92 @@ async function postJson(url, headers, body) {
   return { ok: response.ok, status: response.status, body: parsed, text };
 }
 
-// The shared account the owner demonstrates to prospects. An address, not a
-// credential, so it may live in a tracked file (docs/live-test-auth.md).
-export const SHARED_DEMO_ACCOUNT = "demo@hive-demo.invalid";
+// Base addresses that accumulate automation litter when reused outside their
+// own run (issue #1476's four-row table: `e2e-verified+qafunded-...@` is a
+// `+`-tagged instance of the `e2e-verified@scubed.com.bd` base below, not a
+// fourth base). Addresses, not credentials, so they may live in a tracked file
+// (docs/live-test-auth.md).
+export const PROTECTED_ACCOUNT_BASES = Object.freeze([
+  "demo@hive-demo.invalid",
+  "qa-tester@hive.test",
+  "e2e-verified@scubed.com.bd",
+]);
+
+// A key shorter than this is guessable by accident: single common words
+// ("hive", "test", "demo", "e2e") were each a substring of some protected
+// base, which is exactly the bypass this floor closes alongside the exact-tag
+// match below. github.run_id-run_attempt and $(whoami)-$(date +%s) (the two
+// shapes E2E_RUN_KEY actually takes in this repo) are both well past it.
+export const MIN_RUN_KEY_LENGTH = 8;
+
+// Trims the same character class Python's guard trims (shared_demo_account.py
+// _normalise), rather than relying on each language's own idea of
+// "whitespace": JS's String.prototype.trim() folds in U+FEFF and Python's
+// str.strip() does not, while Python's folds in the C0 control range
+// (U+001C included) and JS's does not. Either disagreement lets the same
+// address be refused by one entry point and allowed by the other.
+const EDGE_CHARS = /^[\x00-\x20\x7f﻿]+|[\x00-\x20\x7f﻿]+$/g;
+
+function normaliseEmail(email) {
+  return String(email ?? "").replace(EDGE_CHARS, "").toLowerCase();
+}
+
+// `local+tag@domain` -> `local@domain`. GoTrue does not fold the tag away
+// itself, so a stale or hardcoded tag on a protected base is still that base;
+// this is what lets the run-key check below see through it.
+function baseAddress(normalisedEmail) {
+  const at = normalisedEmail.indexOf("@");
+  if (at === -1) {
+    return normalisedEmail;
+  }
+  const local = normalisedEmail.slice(0, at).split("+")[0];
+  return `${local}${normalisedEmail.slice(at)}`;
+}
+
+// The `+tag` component of the local part only ("local+TAG@domain" -> "TAG"),
+// or "" when there is none. The domain never participates: a substring test
+// against the whole address let `E2E_RUN_KEY=-` open every protected base at
+// once, since "-" (and plenty of other short keys) occurs somewhere in nearly
+// any address. Comparison against this tag is exact, never substring.
+function localTag(normalisedEmail) {
+  const at = normalisedEmail.indexOf("@");
+  const local = at === -1 ? normalisedEmail : normalisedEmail.slice(0, at);
+  const plus = local.indexOf("+");
+  return plus === -1 ? "" : local.slice(plus + 1);
+}
 
 /**
- * Refuses a session for the shared demo account unless the caller has declared
- * the run read only.
+ * Refuses a session for a protected base address unless the caller has
+ * declared the run read only, or the address is scoped to this run's
+ * `E2E_RUN_KEY`.
  *
  * docs/live-test-auth.md has said since it was written that a write-capable
- * suite must never authenticate as this account, because every chat it sends
- * and every task it submits lands permanently in the sidebar the owner is
- * about to show someone. Nothing enforced that. The account accumulated 24
- * conversations of automation text, five of them on the day this guard was
- * written, and the reason nobody cleaned up is that the same document also
- * claimed the rows were undeletable (issues #848, #916).
+ * suite must never authenticate as the shared demo account, because every
+ * chat it sends and every task it submits lands permanently in the sidebar
+ * the owner is about to show someone. Nothing enforced that. The account
+ * accumulated 24 conversations of automation text, five of them on the day
+ * this guard was written (issues #848, #916). Three more shared accounts
+ * carry the same accumulation cause (issue #1476), which is why this checks
+ * a base address rather than one literal.
  *
  * This is the one door every live session already passes through, so the rule
  * is checked once here rather than in each suite that could forget it.
  *
  * ponytail: a declaration gate, not a write blocker. It cannot stop a run that
  * declares itself read only from then writing; what it removes is the silent
- * default, so pointing a suite at this account becomes a deliberate, greppable
- * act instead of an accident. A real write blocker would need a per-request
- * proxy, which is a great deal of machinery for a rule one line can state.
+ * default, so pointing a suite at one of these accounts becomes a deliberate,
+ * greppable act instead of an accident. A real write blocker would need a
+ * per-request proxy, which is a great deal of machinery for a rule one line
+ * can state.
  *
- * The declaration is per call, and deliberately not an environment variable.
- * An env var belongs to whatever set it, so one line in a workflow's `env:`
- * block would switch this off for every step in the job, invisibly and for
- * reasons unrelated to the suite that inherits it. A `readOnly` argument, or
- * the CLI's `--read-only` flag, sits at the call site where a reviewer reads
- * it.
+ * The `readOnly` declaration is per call, and deliberately not an environment
+ * variable: one line in a workflow's `env:` block would switch it off for
+ * every step in the job, invisibly and for reasons unrelated to the suite
+ * that inherits it. `E2E_RUN_KEY` is read from the environment here rather
+ * than accepted as an argument, on purpose: it is the run's own identity, not
+ * a per-call claim a caller could set to whatever makes the check pass, and
+ * every run-scoped fixture address is already built from the same value
+ * (`e2e-fixture-seed.mjs`'s `runScopedEmail`, `e2e-auth-creds.ts`).
  *
  * Accepts a missing address rather than throwing on one: mintSession rejects an
  * empty email itself, with a message about the missing argument, and this guard
@@ -160,19 +215,26 @@ export const SHARED_DEMO_ACCOUNT = "demo@hive-demo.invalid";
  * @param {{ readOnly?: boolean }} [options]
  */
 export function assertNotSharedDemoAccount(email, { readOnly = false } = {}) {
-  if (String(email ?? "").trim().toLowerCase() !== SHARED_DEMO_ACCOUNT) {
+  const normalised = normaliseEmail(email);
+  if (!normalised || !PROTECTED_ACCOUNT_BASES.includes(baseAddress(normalised))) {
     return;
   }
   if (readOnly) {
     return;
   }
+  const runKey = normaliseEmail(process.env.E2E_RUN_KEY);
+  if (runKey.length >= MIN_RUN_KEY_LENGTH && localTag(normalised) === runKey) {
+    return;
+  }
   throw new Error(
-    `live-auth: refusing to mint a session for ${SHARED_DEMO_ACCOUNT}. This is ` +
-      "the shared account the owner demos to prospects, and anything a run " +
-      "creates on it (a chat, an agent task, an API key) is visible on that " +
-      "surface. Run as a dedicated E2E_RUN_KEY-scoped identity instead. If " +
-      "this run only reads, say so at the call site with readOnly: true, or " +
-      "--read-only on this module's CLI. See docs/live-test-auth.md."
+    `live-auth: refusing to mint a session for ${normalised}. It is one of ` +
+      "the shared accounts that accumulates automation litter when reused " +
+      "outside its own run (issues #848, #916, #1476). Run as a dedicated " +
+      `identity carrying E2E_RUN_KEY as a "+tag" on the local part instead ` +
+      `("local+$E2E_RUN_KEY@domain", at least ${MIN_RUN_KEY_LENGTH} ` +
+      "characters). If this run only reads, say so at the call site with " +
+      "readOnly: true, or --read-only on this module's CLI. See " +
+      "docs/live-test-auth.md."
   );
 }
 

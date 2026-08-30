@@ -49,7 +49,19 @@ jobs:
     env:
       CHAT_URL: ${{ vars.CHAT_URL || 'https://chat-hive.scubed.co' }}
       CONSOLE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
-      DEMO_ACCOUNT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL || secrets.HIVE_QA_TESTER_EMAIL }}
+      # A dedicated identity for this workflow alone (issue #1476), replacing
+      # the shared HIVE_QA_AGENT_EMAIL / HIVE_QA_TESTER_EMAIL account this used
+      # to resolve to. That account is reused by several other suites too
+      # (agent-workspace probes, chat-coverage), which is the same
+      # accumulation cause the issue's four-account table describes, and the
+      # "Repair demo account settings" step below genuinely writes, so it
+      # cannot honestly declare itself read-only to a guard that would
+      # otherwise refuse a shared, non-run-scoped address
+      # (assertNotSharedDemoAccount, live-auth.mjs). The "Provision" step
+      # below creates this address the first time this workflow runs, and
+      # leaves it untouched on every run after, so drift genuinely
+      # accumulates on it between runs the way this check needs it to.
+      DEMO_ACCOUNT_EMAIL: demo-chat-settings-check@hive-e2e.invalid
       # The deployment's public auth origin is the console origin (Caddy fronts
       # GoTrue at /auth/v1 there, PR #992), so this reuses CONSOLE_URL rather
       # than carrying a second copy of the same hostname. secrets.SUPABASE_URL
@@ -73,10 +85,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
       - name: Check the inputs this job cannot run without
+        # DEMO_ACCOUNT_EMAIL is a workflow-level literal now (issue #1476), not
+        # a secret, so it cannot be missing; only the three Supabase values
+        # below still come from secrets.
         run: |
           set -euo pipefail
           missing=""
-          for v in DEMO_ACCOUNT_EMAIL SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
             [ -n "${!v:-}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
@@ -85,6 +100,38 @@ jobs:
           fi
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Provision the dedicated settings-check identity
+        # Idempotent (scripts/seed-demo-owner.py): the first run creates this
+        # account, its own tenant, and an OWNER membership; every run after
+        # leaves them untouched (no rotation, matching docs/live-test-auth.md).
+        # HIVE_DEMO_EMAIL/_TENANT_SLUG/_ACCOUNT_SLUG must be set together,
+        # which is why all three appear even though only the email is read
+        # again below.
+        #
+        # seed-demo-owner.py prints a real, freshly generated credential to
+        # stdout on the run that creates the account (nothing on every run
+        # after, since it never rotates one that already exists). Actions
+        # cannot mask a value it has not been told about in advance, and a
+        # value generated at runtime is exactly that case, so a plain
+        # redirect was the only thing standing between that credential and
+        # the public job log on the run that creates it. Captured into a
+        # variable instead, never echoed, and explicitly registered with
+        # ::add-mask:: so it is redacted if it ever surfaces in a later step
+        # regardless. Nothing needs to read it: the check below signs in
+        # through the magic-link flow, which needs no credential.
+        run: |
+          set -euo pipefail
+          output=$(python3 ../../scripts/seed-demo-owner.py)
+          generated_secret=$(printf '%s\n' "$output" | sed -n 's/^PASSWORD=//p')
+          if [ -n "$generated_secret" ]; then
+            echo "::add-mask::$generated_secret"
+          fi
+        env:
+          HIVE_DEMO_EMAIL: ${{ env.DEMO_ACCOUNT_EMAIL }}
+          HIVE_DEMO_TENANT_SLUG: demo-chat-settings-check
+          HIVE_DEMO_TENANT_NAME: 'Demo Settings Check'
+          HIVE_DEMO_ACCOUNT_SLUG: demo-chat-settings-check
+          HIVE_DEMO_ACCOUNT_NAME: 'Demo Settings Check'
       - name: Check demo account settings
         # Classifies the two failure shapes the unchanged detector script can
         # produce, by its own printed output rather than its exit code, since
