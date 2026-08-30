@@ -546,6 +546,20 @@ RUN python3 /tmp/apply_ydoc_task_cancel_1508_patch.py
 COPY deploy/docker/owui-patches/apply_main_admin_flag_1511_patch.py /tmp/apply_main_admin_flag_1511_patch.py
 RUN python3 /tmp/apply_main_admin_flag_1511_patch.py
 
+# Security review, MEDIUM (PR #1525): upstream's own default for this flag,
+# read in config.py as os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True'), is
+# permissive. A malformed value already fails closed (anything that is not
+# case-insensitive 'true' yields False), but ABSENCE fails OPEN, and the only
+# thing standing between this image and that state was one line in
+# docker-compose.yml. An operator running this image outside that compose
+# file, on its own unit, in a debug container, or under an overlay that
+# redefines rather than extends the environment block, got every site above
+# reopened silently. Setting the image default itself to false means absence
+# now fails CLOSED, and docker-compose.yml's own line stays as a second,
+# redundant layer rather than the only one; an operator who wants the
+# permissive posture back still can, by setting the variable explicitly.
+ENV ENABLE_ADMIN_CHAT_ACCESS=false
+
 # Consolidated drift guard for ALL owui authz patches (#1056 + #1186 + #1191 +
 # #1474 + #1508 + #1511):
 # the exact expected marker count in every patched file so a vendor bump that

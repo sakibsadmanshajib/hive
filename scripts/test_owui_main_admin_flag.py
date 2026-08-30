@@ -82,6 +82,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VENDORED_BACKEND = REPO_ROOT / "vendor/open-webui/backend/open_webui"
 PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 COMPOSE = REPO_ROOT / "deploy/docker/docker-compose.yml"
+DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
 
 PATCH = "apply_main_admin_flag_1511_patch.py"
 MARKER = "# hive (#1511)"
@@ -423,6 +424,37 @@ def run_socket_arm(source: str, *, post_fix: bool) -> None:
     )
 
 
+def eval_site_five_predicate(text: str, *, role: str, flag: bool) -> bool:
+    """Execute the exact predicate text, not a stand-in, for one behavioural cell.
+
+    `text` is `ast.unparse(inner.test)` from the position-pinned site. Re-running
+    it, rather than grepping it for a substring, is what turns "the string
+    ENABLE_ADMIN_CHAT_ACCESS appears somewhere in here" into "the code actually
+    branches on it": a mutation can keep every name the substring check wants
+    while making the predicate a tautology, and only execution catches that.
+
+    A non-owner is fixed by construction. An owner takes `not is_chat_owner(...)`
+    to False and the `and` short-circuits before the second conjunct runs at
+    all, so the owner leg can never distinguish a real gate from a gutted one;
+    only the non-owner cells can, which is why all four are non-owner.
+    """
+
+    class Chats:
+        @staticmethod
+        async def is_chat_owner(_chat_id, _user_id):
+            return False
+
+    namespace = {
+        "chat_id": VICTIM_CHAT_ID,
+        "user": User("stranger-eval", role),
+        "ENABLE_ADMIN_CHAT_ACCESS": flag,
+        "Chats": Chats,
+    }
+    src = f"async def _predicate():\n    return {text}\n"
+    exec(compile(src, "<site five predicate>", "exec"), namespace)  # noqa: S102
+    return asyncio.run(namespace["_predicate"]())
+
+
 def check_site_five(after: str) -> None:
     """The chat-completions ownership check, pinned by POSITION as well as text.
 
@@ -471,10 +503,27 @@ def check_site_five(after: str) -> None:
     if len(sites) != 1:
         return
     node, text = sites[0]
-    check(
-        "ENABLE_ADMIN_CHAT_ACCESS" in text,
-        f"and its predicate is flag-gated (unparsed: {text})",
-    )
+    # Behavioural, not textual: run the exact predicate over every non-owner
+    # cell of role x flag and require it to deny in three of the four and
+    # admit only where role is admin AND the flag is on. A mutation that
+    # neuters the guard while preserving every name the old substring check
+    # wanted (e.g. `not (FLAGGED or True)`) makes the guard fire in ZERO
+    # cells, which is what this loop is built to catch.
+    for role, flag_on in (
+        ("user", False),
+        ("user", True),
+        ("admin", False),
+        ("admin", True),
+    ):
+        fires = eval_site_five_predicate(text, role=role, flag=flag_on)
+        expect_fires = not (role == "admin" and flag_on)
+        check(
+            fires == expect_fires,
+            "the site-five guard "
+            f"{'fires' if expect_fires else 'stands down'} for a non-owner "
+            f"with role={role!r} flag={flag_on} "
+            f"(observed fires={fires}, predicate: {text})",
+        )
     check(
         "user.role != 'admin'" not in text,
         "and carries no bare admin term (unparsed above)",
@@ -531,6 +580,18 @@ def main() -> int:
         'ENABLE_ADMIN_CHAT_ACCESS: "false"' in compose,
         "docker-compose.yml still sets ENABLE_ADMIN_CHAT_ACCESS false, so the "
         "flag-off leg below is the deployed configuration and not a hypothetical",
+    )
+
+    # Security review, MEDIUM (PR #1525): upstream's own default is permissive
+    # (config.py: os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True')), so absence of
+    # the compose line above fails OPEN on any deployment that does not repeat
+    # it. The image itself must set the closed default, so absence fails
+    # CLOSED everywhere this image runs, compose file or not.
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    check(
+        "ENV ENABLE_ADMIN_CHAT_ACCESS=false" in dockerfile,
+        "Dockerfile.open-webui sets the image-level default to false, so a "
+        "deployment that never repeats the compose line still fails closed",
     )
 
     print("\npre-fix source: main.py WITHOUT the #1511 patch")
