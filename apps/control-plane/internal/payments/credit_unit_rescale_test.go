@@ -91,27 +91,13 @@ func TestValidatePurchaseAmountSpeaksWholeCents(t *testing.T) {
 	}
 }
 
-// TestPredefinedTiersAreCentSteps keeps the suggested purchase buttons on
-// whole cent multiples of the current unit.
-//
-// The exact cent values are no longer pinned here. They were {1, 5, 10, 50,
-// 100}, and that list is precisely how issue #1450 shipped: the assertion
-// matched the constants exactly and so proved only that nobody had retyped
-// them, while two of the five tiers could not buy a single chat message. The
-// property that matters, every tier at or above the purchase floor, is
-// asserted against the floor in purchase_floor_test.go. What stays here is the
-// unit: whole cent steps, so a tier could not survive a future rescale
-// unscaled.
-func TestPredefinedTiersAreCentSteps(t *testing.T) {
-	if len(PredefinedTiers) == 0 {
-		t.Fatal("PredefinedTiers is empty")
-	}
-	for i, tier := range PredefinedTiers {
-		if tier%CreditIncrement != 0 {
-			t.Errorf("tier[%d] = %d is not a whole one-cent step of %d", i, tier, CreditIncrement)
-		}
-	}
-}
+// The tier assertions that used to sit here are gone rather than updated.
+// They pinned {1, 5, 10, 50, 100} cents, which matched the constants exactly
+// and so proved only that nobody had retyped them, which is how issue #1450
+// shipped two tiers that could not buy one chat message. Every property a tier
+// must now hold, including the whole-cent unit this file cares about, is
+// asserted against the purchase floor in purchase_floor_test.go, and a second
+// copy here would be a strict subset that cannot go red on its own.
 
 // --- The data migration -----------------------------------------------------
 

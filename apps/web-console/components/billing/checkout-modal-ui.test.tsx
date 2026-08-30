@@ -123,6 +123,30 @@ describe("CheckoutModal behavior", () => {
     expect(screen.getByRole("button", { name: /keep balance/i })).toBeTruthy();
   });
 
+  // A payload the type guard rejects used to set neither the options nor an
+  // error, so the modal sat on "Loading payment options…" forever with nothing
+  // to click and nothing in the console. Fail closed is right on a money
+  // surface; fail silent is not, because a permanent spinner is
+  // indistinguishable from a slow network and gives the payer nothing to do.
+  //
+  // Two payloads, so this cannot pass by the guard happening to accept one of
+  // them: bounds missing entirely, and a bound present but not a number.
+  for (const [name, payload] of [
+    ["bounds missing while a rail is selectable", { rails: [{ rail: "bkash", currency: "BDT", label: "bKash", enabled: true }] }],
+    ["a bound that is not a number", { ...optionsFixture(), max_credits: "lots" }],
+  ] as const) {
+    it(`says so instead of spinning forever: ${name}`, async () => {
+      stubFetch({ rails: payload as unknown as CheckoutOptions });
+      render(<CheckoutModal accountCountryCode="BD" onClose={vi.fn()} />);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/came back unusable/i);
+      expect(screen.queryByText(/loading payment options/i)).toBeNull();
+      // And nothing invents a bound to render an amount field against.
+      expect(screen.queryByRole("spinbutton")).toBeNull();
+    });
+  }
+
   it("an inverted or zero purchase range never reaches the DOM", async () => {
     // The healthy case is in this list on purpose. Without it the attribute
     // assertion below would only ever iterate an empty NodeList, which is a

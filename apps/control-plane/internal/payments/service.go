@@ -109,7 +109,10 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	}
 	available := AvailableRails(countryCode)
 	if !railIn(rail, available) {
-		return nil, fmt.Errorf("payments: rail %s not available for country %s", rail, countryCode)
+		// %q, not %s: both values are caller-influenced and neither is
+		// constrained to a known set, so an unquoted one can forge a line in the
+		// log this design treats as the trustworthy half of the error split.
+		return nil, fmt.Errorf("%w: rail %q not available for country %q", ErrRailNotAvailable, rail, countryCode)
 	}
 
 	// Only now, once the caller is entitled to this rail at all, ask whether the

@@ -31,13 +31,21 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
   // `value.rails` access is type-safe without a widening cast.
   if (!Array.isArray(value.rails)) return false;
   // The three purchase bounds must be present and finite, not defaulted later.
-  // This modal fetches the rails endpoint directly and never goes through
-  // getCheckoutRails, so the decoder's own coherence guard does not cover it:
-  // an absent min_credits used to survive as the `?? 10_000_000` fallback
-  // below, which was a stale second copy of a money floor once the real one
-  // moved to 1.00 USD (issue #1450). Accepting the payload and then inventing
-  // the missing bound is how issue #1386 rendered a 1.00 USD ceiling against a
-  // real 100.00 USD one with nothing complaining.
+  //
+  // Defence in depth, and second in line rather than first. The relative fetch
+  // below is served by the console's own proxy route
+  // (app/api/v1/accounts/current/[...path]/route.ts), which calls
+  // getCheckoutRails, so lib/control-plane/client.ts already refuses an absent
+  // or incoherent bound whenever a rail is selectable and the route answers
+  // 502. That is the real guard, and it is the one to fix if this behaviour
+  // ever needs to change. An earlier revision of this comment claimed the modal
+  // bypassed the decoder; it does not, on any deployment this repo ships.
+  //
+  // What this adds is that the modal cannot be made to invent a money bound if
+  // it is ever pointed somewhere the decoder is not, because inventing a
+  // missing bound is how issue #1386 rendered a 1.00 USD ceiling against a real
+  // 100.00 USD one with nothing complaining, and the `?? 10_000_000` fallback
+  // below is a stale copy of a floor that moved to 1.00 USD in issue #1450.
   //
   // Absent bounds are tolerated only where nothing is purchasable, which is the
   // control plane's documented answer for a deployment with no rail
@@ -114,6 +122,15 @@ export function CheckoutModal({
           if (data.min_credits) {
             setCreditAmount(data.min_credits);
           }
+        } else {
+          // Without this the guard failing set neither `options` nor
+          // `fetchError`, so the modal sat on "Loading payment options…"
+          // forever with no alert, no retry and nothing in the console. Fail
+          // closed is right on a money surface; fail silent is not, and a
+          // permanent spinner is indistinguishable from a slow network.
+          setFetchError(
+            "The payment options for this account came back unusable, so credits cannot be bought here right now. Your balance and your existing API keys are unaffected. Refresh in a moment, and contact support if it keeps happening.",
+          );
         }
       } catch (err: unknown) {
         const message =
@@ -215,12 +232,24 @@ export function CheckoutModal({
     }
   }
 
-  // Fallbacks are whole one-cent steps at the current credit unit
-  // (1 USD = 1e9 credits since the 2026-08-23 rescale); the server normally
-  // supplies all three.
-  const increment = options?.credit_increment ?? 10_000_000;
-  const minCredits = options?.min_credits ?? 10_000_000;
-  const maxCredits = options?.max_credits ?? 1_000_000_000;
+  // No fallbacks. These used to default to a one-cent floor and a 1.00 USD
+  // ceiling, which were a stale copy of the server's bounds: the floor moved to
+  // 1.00 USD in issue #1450 and the ceiling was already 100.00 USD, and a
+  // defaulted bound is how issue #1386 rendered the wrong ceiling with nothing
+  // complaining. An absent bound is now simply absent, `boundsAreCoherent`
+  // below reads it as incoherent, and the modal explains itself instead of
+  // inventing a money figure. Three copies of a purchase bound was the defect
+  // class this change exists to remove, so it does not get to keep a third.
+  //
+  // NaN rather than `undefined` only so the arithmetic below stays typed as
+  // `number` without threading an optional through every call site. It is not a
+  // fallback: `Number.isFinite(NaN)` is false, so `boundsAreCoherent` is false,
+  // `canPurchase` is false, and the amount field is never rendered. The point
+  // is that no plausible-looking money figure is invented, and NaN cannot be
+  // mistaken for one the way `10_000_000` was.
+  const increment = options?.credit_increment ?? Number.NaN;
+  const minCredits = options?.min_credits ?? Number.NaN;
+  const maxCredits = options?.max_credits ?? Number.NaN;
 
   // A deployment with no rail credentials registered returns every rail
   // disabled, and with it a purchase ceiling of 0 (the control plane's

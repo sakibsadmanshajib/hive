@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"errors"
 	"math/big"
 	"os"
 	"regexp"
@@ -62,7 +63,10 @@ func readEdgeConst(t *testing.T, path, name string) int64 {
 		t.Fatalf("read %s: %v (this guard needs edge-api's constants; if the file moved, move this path with it)", path, err)
 	}
 
-	decl := regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(name) + `[ \t]+(?:int64[ \t]+)?=[ \t]*([0-9_]+)[ \t]*(?://[^\n]*)?$`)
+	// Two shapes, because edge-api uses both: a member of a `const (...)` block,
+	// and a standalone `const NAME = value` line. Optional `int64` for the one
+	// typed constant. Everything else still fails to match, and loudly.
+	decl := regexp.MustCompile(`(?m)^[ \t]*(?:const[ \t]+)?` + regexp.QuoteMeta(name) + `[ \t]+(?:int64[ \t]+)?=[ \t]*([0-9_]+)[ \t]*(?://[^\n]*)?$`)
 	matches := decl.FindAllStringSubmatch(string(source), -1)
 	if len(matches) != 1 {
 		t.Fatalf("found %d declarations of `%s = <literal>` in %s, want exactly 1; it is no longer a plain literal this guard can read, so re-express the relationship rather than deleting the guard", len(matches), name, path)
@@ -84,10 +88,27 @@ func readEdgeConst(t *testing.T, path, name string) int64 {
 // That is the hold for an empty body which sets no max_tokens, so the whole
 // figure is the completion cap priced at the ceiling rate and carried through
 // the margin, exactly as variablePriceRequestHold and CreditsForUpstreamCost do
-// it (apps/edge-api/internal/inference/pricing.go, upstream_cost.go). Every
-// real request holds at least this. Rationals throughout, because the source
-// arithmetic is exact and a float here would introduce a disagreement the
-// guard would then be measuring instead of the constants.
+// it (apps/edge-api/internal/inference/pricing.go, upstream_cost.go). Rationals
+// throughout, because the source arithmetic is exact and a float here would
+// introduce a disagreement the guard would then be measuring instead of the
+// constants.
+//
+// It is the minimum over requests that set NO completion ceiling, not over all
+// requests: clampCompletionLimit takes the smaller of the cap and a caller's
+// own max_tokens, so a request that sets one sizes below this figure. The
+// distinction matters because the overstatement is what a later reader would
+// cite to weaken the guard. The no-ceiling case is the ordinary one, and it is
+// all the argument needs.
+//
+// Range of validity, named rather than assumed: two clamps sit between this
+// recomputation and the real hold. CreditsForUpstreamCost refuses past
+// maxChargeableCredits and ReservationCredits then falls back to the catalog
+// envelope, and ReservationCredits takes the smaller of the envelope and the
+// sized hold in any case. So this figure is a lower bound on the real hold only
+// while it stays under that ceiling, which is why it is capped to it below:
+// past that point a raised constant would make this test demand a floor above
+// any hold the code can actually take, which is a false red on a money
+// constant and no better than a false green.
 func smallestVariablePriceHold(t *testing.T) int64 {
 	t.Helper()
 
@@ -104,7 +125,25 @@ func smallestVariablePriceHold(t *testing.T) int64 {
 
 	// Truncate rather than round, so this stays a lower bound on the real hold
 	// and the assertion below can never fail on a rounding artefact.
-	return new(big.Int).Quo(credits.Num(), credits.Denom()).Int64()
+	whole := new(big.Int).Quo(credits.Num(), credits.Denom())
+
+	// Range-checked before it becomes an int64. readEdgeConst accepts anything
+	// ParseInt accepts, so a fat-fingered ceiling rate above roughly 4e11 would
+	// wrap this negative, the comparison below would read as satisfied, and the
+	// guard would pass green on precisely the mutation it exists to catch. A
+	// silent false pass is the one outcome this file declares fatal.
+	if !whole.IsInt64() {
+		t.Fatalf("the smallest variable-price hold does not fit in an int64 (%s credits); one of edge-api's variable-price constants is implausible", whole)
+	}
+
+	// Capped at the same ceiling the production conversion refuses past, so
+	// this stays a lower bound on a hold the code can really take rather than
+	// drifting above every reachable hold.
+	maxChargeable := readEdgeConst(t, edgeAPIUpstreamCostRelPath, "maxChargeableCredits")
+	if sized := whole.Int64(); sized < maxChargeable {
+		return sized
+	}
+	return maxChargeable
 }
 
 // TestMinimumPurchaseCoversTheChatHoldWithMargin is the guard issue #1450 asks
@@ -174,9 +213,13 @@ func TestMinimumPurchaseClearsTheRailMinimum(t *testing.T) {
 func TestMinimumPurchaseCoversAVariablePriceHold(t *testing.T) {
 	smallest := smallestVariablePriceHold(t)
 
+	// big.Int for the product too, for the same reason the conversion above is
+	// range-checked: `smallest * holdsRequired` as an int64 can wrap negative
+	// and turn the comparison into a silent pass.
 	const holdsRequired = 2
-	if want := smallest * holdsRequired; MinPurchaseCredits < want {
-		t.Fatalf("MinPurchaseCredits = %d, want at least %d (%d x the smallest variable-price hold %d): a buyer of the minimum cannot fund an ordinary turn on a variable-price alias",
+	want := new(big.Int).Mul(big.NewInt(smallest), big.NewInt(holdsRequired))
+	if new(big.Int).SetInt64(MinPurchaseCredits).Cmp(want) < 0 {
+		t.Fatalf("MinPurchaseCredits = %d, want at least %s (%d x the smallest variable-price hold %d): a buyer of the minimum cannot fund an ordinary turn on a variable-price alias",
 			MinPurchaseCredits, want, holdsRequired, smallest)
 	}
 }
@@ -227,7 +270,12 @@ func TestSuggestedTiersClearTheMinimum(t *testing.T) {
 // incoherent range, leaving the modal blaming the server for a range the server
 // chose. Latent today, since the smallest ceiling is a hundred times the floor.
 func TestTheFloorFitsUnderEveryRailCeiling(t *testing.T) {
-	for _, rail := range []Rail{RailStripe, RailBkash, RailSSLCommerz} {
+	// AvailableRails("BD") rather than a hand-written list, because it is the
+	// existing enumeration and the superset: a fourth rail added there is
+	// covered here automatically, and a hand-written list would leave the one
+	// test whose whole point is comparing a per-rail constant to the global
+	// floor blind to exactly the new constant.
+	for _, rail := range AvailableRails("BD") {
 		t.Run(string(rail), func(t *testing.T) {
 			ceiling := maxCreditsForRail(rail)
 			if ceiling < MinPurchaseCredits {
@@ -259,11 +307,24 @@ func TestValidatePurchaseAmountEnforcesTheFloor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidatePurchaseAmount(tc.credits, RailStripe)
-			if tc.ok && err != nil {
-				t.Fatalf("want accept, got %v", err)
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("want accept, got %v", err)
+				}
+				return
 			}
-			if !tc.ok && err == nil {
+			if err == nil {
 				t.Fatalf("want reject of %d credits, got nil", tc.credits)
+			}
+			// The sentinel, not merely an error. Asserting only that something
+			// was returned leaves the `%w` verb in ValidatePurchaseAmount joined
+			// to classifyInitiateError's errors.Is by nothing: drop the verb and
+			// this test stays green while production falls through the substring
+			// switch to the opaque "checkout failed", costing the payer the one
+			// number they need. That is this change's own thesis, so it has to
+			// hold for this change's own error.
+			if !errors.Is(err, ErrBelowMinimumPurchase) {
+				t.Fatalf("want ErrBelowMinimumPurchase for %d credits, got %v", tc.credits, err)
 			}
 		})
 	}

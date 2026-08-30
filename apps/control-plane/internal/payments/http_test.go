@@ -244,7 +244,7 @@ func TestInitiateCheckout_HappyPath(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":10000000,"idempotency_key":"test-key-123"}`
+	body := fmt.Sprintf(`{"rail":"stripe","credits":%d,"idempotency_key":"test-key-123"}`, payments.MinPurchaseCredits)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -273,7 +273,7 @@ func TestInitiateCheckout_MissingBillingProfile(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":10000000,"idempotency_key":"test-key-456"}`
+	body := fmt.Sprintf(`{"rail":"stripe","credits":%d,"idempotency_key":"test-key-456"}`, payments.MinPurchaseCredits)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -301,14 +301,30 @@ func TestInitiateCheckout_InvalidCredits(t *testing.T) {
 	resolver := &stubAccountResolver{accountID: uuid.New()}
 	h := newHandler(svc, resolver)
 
-	body := `{"rail":"stripe","credits":500,"idempotency_key":"test-key-789"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
+	// One case per rule, each sitting above the other rules' thresholds, so no
+	// case can pass for another's reason. A bare 500 used to be both off-step
+	// and, since issue #1450, below the floor, so it would have stayed green
+	// with either check deleted.
+	for _, tc := range []struct {
+		name    string
+		credits int64
+	}{
+		{"not a whole cent step", payments.MinPurchaseCredits + 500},
+		{"below the purchase floor", payments.MinPurchaseCredits - payments.CreditIncrement},
+		{"not positive", -payments.CreditIncrement},
+		{"above the rail ceiling", payments.MaxPurchaseCreditsStripe + payments.CreditIncrement},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"rail":"stripe","credits":%d,"idempotency_key":"test-key-789"}`, tc.credits)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/checkout/initiate", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rr.Code)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %d credits, got %d", tc.credits, rr.Code)
+			}
+		})
 	}
 }
 

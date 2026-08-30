@@ -98,16 +98,37 @@ const (
 	// The previous one-cent minimum was below it, so the smallest quantity the
 	// product offered was one the default rail would have rejected outright.
 	//
-	// What the floor deliberately does NOT cover: a hive-auto body past roughly
-	// 152 KiB, whose sized hold exceeds $1.00, and the $2.00 catalog envelope
-	// that ReservationCredits falls back to when it cannot size a request at
-	// all. Neither is an ordinary chat message (the first is a 152 KiB single
-	// prompt, the second is a body over the 256 KiB cap that is refused a
-	// moment later anyway, or a pricing fault), and covering them by purchase
-	// floor rather than by sizing the hold would price the entry point of a
-	// Bangladesh-first prepaid product at $2.00. The hold being unrelated to
-	// the charge is the root defect and stays with issues #699 and #1372; this
-	// constant is not a substitute for it.
+	// What the floor deliberately does NOT cover, stated precisely because the
+	// imprecise version of this list was wrong in a way that mattered:
+	//
+	//  1. A dispatched body past roughly 152 KiB, whose sized hold exceeds
+	//     $1.00. On /v1/chat/completions that means a 152 KiB prompt, which is
+	//     not an ordinary message. On /v1/rag/chat it does NOT: the body the
+	//     hold is sized from is the customer's messages PLUS the retrieved
+	//     grounding block (rag/chat_handler.go), so a one-line question with a
+	//     large top_k reaches the same size. top_k is a request field capped at
+	//     100, and chunks target about 2 KiB, so a top_k in the high seventies
+	//     puts the grounding block alone over the line. That is issue #1450
+	//     again on a surface this constant cannot fix, because the fix there is
+	//     to bound the grounding block or size the hold from the customer's
+	//     half, not to raise what people must pay.
+	//  2. The $2.00 catalog envelope ReservationCredits falls back to when it
+	//     cannot size a request at all, which is a body over the 256 KiB cap
+	//     that is refused a moment later anyway, or a pricing fault.
+	//
+	// Covering either by purchase floor rather than by sizing the hold would
+	// price the entry point of a Bangladesh-first prepaid product at $2.00 to
+	// close cases a payer cannot reach with an ordinary message. The hold being
+	// unrelated to the charge is the root defect and stays with issues #699 and
+	// #1372; this constant is not a substitute for it.
+	//
+	// What the guards actually enforce is a multiple of 7, not 10: $0.70 clears
+	// both StripeMinimumChargeCredits and two smallest variable-price holds.
+	// Ten is the chosen value and $0.30 of that is deliberate headroom above
+	// the enforced minimum, so lowering it to 8 or 9 is a product decision the
+	// tests will allow and lowering it to 6 is one they will stop. Said plainly
+	// here because claiming the tests pin 10 when they pin 7 is the same kind
+	// of overstatement this change exists to remove.
 	MinPurchaseHoldMultiple int64 = 10
 
 	// MinPurchaseCredits is the minimum credits purchasable in a single
@@ -163,6 +184,18 @@ var (
 	// leaks and nothing is bypassed either way, but a new branch should not
 	// widen a set that is matched on text.
 	ErrBelowMinimumPurchase = errors.New("payments: purchase below the minimum")
+
+	// ErrRailNotAvailable marks a rail the account's country cannot select.
+	//
+	// A sentinel for the same reason as the one above, and it is the error that
+	// made the reason concrete: its message interpolates BOTH the caller's raw
+	// rail string and the account's country code, neither of which is
+	// constrained to a known set. A rail or a country containing another
+	// branch's phrase could therefore pick which canned 400 the payer got.
+	// Nothing leaked and nothing was bypassed, since every branch returns a
+	// fixed string and all of them answer 400, but text is not an identity and
+	// should not be used as one on this path.
+	ErrRailNotAvailable = errors.New("payments: rail not available for this account")
 
 	// ErrEventRejected marks a webhook delivery the provider must NOT retry:
 	// the payload failed signature verification, or is not a payload this rail
