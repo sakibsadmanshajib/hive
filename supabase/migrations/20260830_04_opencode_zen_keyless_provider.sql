@@ -129,6 +129,39 @@
 --   hard wall is a separate change owned by another agent, and is deliberately
 --   not touched here.
 --
+--   NAMED SO THE HANDOFF DOES NOT FALL BETWEEN TWO PULL REQUESTS. That change
+--   is PR #1558, and as written it does NOT close this route's gap. Its
+--   classifier reads Retry-After and X-RateLimit-Reset first and only falls
+--   through to its prose table when neither header is present, which is this
+--   upstream's case; and none of the patterns in allowanceWallSignals matches
+--   'FreeUsageLimitError', because the generic row wants a daily or monthly
+--   qualifier next to the quota word and this body carries neither. So until
+--   that table gains a row keyed on FreeUsageLimitError, an exhausted
+--   allowance here is still classified transient and still costs four
+--   attempts and about 2.9 seconds, every one of them another request to a
+--   third party that has just said stop. The row belongs to whichever of
+--   #1558 and this pull request merges SECOND. If this one merged first, that
+--   is the outstanding work; nothing in this file can do it, since the
+--   classifier is not addressable from the catalog.
+--
+-- BLAST RADIUS, STATED RATHER THAN MITIGATED
+--   This alias joins the 'default' policy group, and its price is a
+--   bookkeeping entry rather than a throttle: a 1,000 in / 500 out turn
+--   settles at 3,000 credits, which is $0.000003. Once PR #1557 removes
+--   defaultRatePolicy, the only bound on this route is an explicit
+--   account_rate_policies or api_key_rate_policies row, and this file
+--   deliberately creates none, because the owner has directed that no default
+--   limits exist. The consequence is therefore accepted rather than
+--   overlooked, and it is worse here than on the existing free pool: that
+--   pool is four members holding our own provider keys, each with its own
+--   upstream quota and failover between them, whereas this is a single pinned
+--   route against a SHARED ANONYMOUS allowance with nowhere to fail over to.
+--   One tenant running flat out exhausts it for every tenant at once, and
+--   saturates the same LiteLLM worker pool the paid routes use. Whoever wants
+--   a bound on this route seeds an explicit rate policy for it; that is a
+--   deployment decision, not a catalog one, which is why it is recorded here
+--   instead of being invented in this migration.
+--
 -- RE-RUNNABILITY
 --   Every statement is an INSERT with ON CONFLICT DO NOTHING. A second run
 --   affects zero rows and errors on nothing. There are no UPDATEs at all,
@@ -158,6 +191,17 @@ insert into public.custom_providers (
 on conflict (slug) do nothing;
 
 -- ─── 2. The alias, before any route references it ───────────────────────────
+--
+-- The summary carries a DATA-HANDLING DISCLOSURE, which no other alias in this
+-- catalog needs. Every other upstream here is reached through an account we
+-- hold, and that account is what a data processing relationship attaches to.
+-- This one is reached anonymously: there is no account, no agreement, and no
+-- deletion path for whatever a customer prompt carries upstream. The alias is
+-- public and in the 'default' group, so this string is what a customer reads
+-- while choosing a model, and the tradeoff belongs there rather than only in
+-- this header. It follows the catalog's provider-blind convention: it
+-- describes the RELATIONSHIP, not the vendor. Guarded by
+-- TestOpenCodeZenAliasDisclosesTheAnonymousUpstream.
 
 insert into public.model_aliases (
     alias_id,
@@ -177,7 +221,7 @@ insert into public.model_aliases (
         'hive-free-tools',
         'hive',
         'Hive Free Tools',
-        'Free-tier alias that also offers tool calling and structured output. Served from a single verified route, so a request that needs tools or a JSON schema is answered rather than refused.',
+        'Free-tier alias that also offers tool calling and structured output. Served anonymously by a third-party endpoint we hold no account with, so no data processing agreement and no deletion path covers what a prompt carries upstream. Choose a paid alias for anything confidential.',
         'public',
         'stable',
         'fixed',

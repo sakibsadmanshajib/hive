@@ -217,6 +217,34 @@ func TestOpenCodeZenAliasIsFixedPriced(t *testing.T) {
 	}
 }
 
+// TestOpenCodeZenAliasDisclosesTheAnonymousUpstream. Every other upstream in
+// this catalog is reached through an account we hold, and that account is what
+// a data processing relationship attaches to. This one is reached anonymously:
+// no account, no agreement, no deletion path for whatever a customer prompt
+// carries upstream. The alias is public and in the 'default' group, so the
+// summary is what a customer reads while choosing a model, and that is where
+// the tradeoff has to be visible. A silent edit removing it would leave the
+// disclosure only in a migration header no customer reads.
+func TestOpenCodeZenAliasDisclosesTheAnonymousUpstream(t *testing.T) {
+	summary := zenRow(t, "public.model_aliases", "alias_id", zenAliasID)["summary"]
+
+	for _, want := range []string{"anonymously", "no account", "deletion path"} {
+		if !strings.Contains(strings.ToLower(summary), want) {
+			t.Errorf("alias %s summary does not say %q; the customer-facing string is the only place this tradeoff is visible at model-choice time.\nsummary: %s",
+				zenAliasID, want, summary)
+		}
+	}
+
+	// Provider-blind, per the catalog convention: the disclosure describes the
+	// relationship, not the vendor.
+	for _, forbidden := range []string{"opencode", "zen"} {
+		if strings.Contains(strings.ToLower(summary), forbidden) {
+			t.Errorf("alias %s summary names the vendor (%q); catalog summaries stay provider-blind.\nsummary: %s",
+				zenAliasID, forbidden, summary)
+		}
+	}
+}
+
 // TestOpenCodeZenAliasIsReachable. An alias absent from the policy groups is
 // invisible to a default-tier key however correct its price, and a pinned
 // policy with the wrong fallback_order names a route that does not exist.
