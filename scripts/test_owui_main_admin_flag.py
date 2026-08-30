@@ -485,6 +485,37 @@ def check_site_five(after: str) -> None:
     )
 
 
+def check_channel_helper_dependencies() -> None:
+    """The channel helper's collaborators must exist, and must be awaitable.
+
+    The helper is the only NEW code this patch introduces, and every stub in this
+    file is `async` by construction, so a mock cannot tell a real `async def` from
+    a synchronous one or from a name that main.py never imported. Both mistakes
+    ship a container that raises on the first channel-scoped request while this
+    suite stays green, which is the shape of false green this file exists to
+    avoid. Asserted against the vendored source, which was confirmed
+    byte-identical to the pinned image.
+    """
+    main_src = (VENDORED_BACKEND / "main.py").read_text(encoding="utf-8")
+    for name in ("Channels", "AccessGrants"):
+        check(
+            f"import {name}" in main_src,
+            f"main.py imports {name}, which the channel helper calls",
+        )
+
+    for module, methods in (
+        ("models/channels.py", ("get_channel_by_id", "is_user_channel_member")),
+        ("models/access_grants.py", ("has_access",)),
+    ):
+        src = (VENDORED_BACKEND / module).read_text(encoding="utf-8")
+        for method in methods:
+            check(
+                f"async def {method}(" in src,
+                f"{module} declares `{method}` as async, so awaiting it in the "
+                "helper is correct",
+            )
+
+
 def main() -> int:
     print("main.py chat task endpoints honour ENABLE_ADMIN_CHAT_ACCESS (issue #1511)")
 
@@ -517,6 +548,9 @@ def main() -> int:
     )
     run_leg(after, expect_leak=False)
     run_socket_arm(after, post_fix=True)
+
+    print("\nthe channel helper's collaborators")
+    check_channel_helper_dependencies()
 
     print("\nthe chat-completions ownership check")
     check(

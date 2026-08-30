@@ -227,6 +227,16 @@ than trusted. The branch was also rebased onto `origin/main` at `9f510c5d3`.
 
 Every claim below was re-measured from scratch. Nothing here is carried over.
 
+> **Superseded in part.** This section is the adoption re-verification, taken
+> before the security review round that follows it. Its transcripts still show
+> **5 markers**, which was correct at the time. The review round then repaired
+> the channel-arm regression, which adds a helper plus one arm per endpoint and
+> moves the count to **8**. Everything else in this section still holds: the
+> reachability correction, the flag-off and flag-on legs, the owner and
+> non-owner cases, and the drift guard being non-vacuous. Only the marker count
+> and the emitted-code listing below it are out of date, and the 2026-08-30
+> security review section carries the current ones.
+
 ### The suite still reproduces and still passes
 
 Run in Docker (`python:3.12-slim`), against the working tree:

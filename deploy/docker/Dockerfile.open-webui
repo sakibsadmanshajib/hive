@@ -578,7 +578,7 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c "^                if user.role != 'admin':\$" $B/main.py)" -eq 1 \
     && test "$(grep -c "^        if not ENABLE_PUBLIC_ACTIVE_USERS_COUNT and user.role != 'admin':\$" $B/main.py)" -eq 1 \
     && test "$(grep -c "^                    if user.role == 'admin' and user_count is not None\$" $B/main.py)" -eq 1 \
-    && test "$(grep -c '^    if chat_id.startswith(.local:.) or chat_id.startswith(.channel:.):\$' $B/main.py)" -eq 0 \
+    && test "$(grep -c '^    if chat_id.startswith(.local:.) or chat_id.startswith(.channel:.):$' $B/main.py)" -eq 0 \
     && test "$(grep -c '^    await stop_item_tasks(request.app.state.redis, id)$' $B/routers/chats.py)" -eq 0
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
