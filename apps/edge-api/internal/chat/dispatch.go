@@ -309,8 +309,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// shape is the evidence the zero-content guard decides on (issue #1526):
 	// what the relay delivered, and whether the upstream ended its own stream.
 	// Never the caller's socket state, which a blank answer is exactly what
-	// provokes -- see inference.isZeroContentStream for why an earlier revision
-	// keyed on that and suppressed the guard in the population it protects.
+	// provokes -- see inference.DeliveryShape and the guard beside it for why an
+	// earlier revision keyed on that and suppressed the guard in the population
+	// it protects.
 	// Refusals need no flag here: this relay folds delta.refusal into
 	// completion, so a refusal-only answer already carries visible content.
 	shape := inference.DeliveryShape{Surface: inference.ZeroContentSurfaceSessionChat}
