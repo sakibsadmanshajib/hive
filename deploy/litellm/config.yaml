@@ -438,6 +438,48 @@ model_list:
             prompt: 3
             completion: 15
 
+  # ── OpenCode Zen, the keyless upstream (hive-free-tools) ────────────────────
+  #
+  # Migration supabase/migrations/20260830_01_opencode_zen_keyless_provider.sql
+  # carries the provider, route, alias and measured capability rows. The two
+  # headers below are the part the database cannot carry, and they are the
+  # entire access mechanism, so they are stated HERE for the same reason
+  # route-openrouter-auto-live states its extra_body here: the config generator
+  # owns exactly model, api_base and api_key and merges every other
+  # litellm_params key from this file field by field
+  # (litellmconfig.mergeParams). A provider_routes row alone would therefore
+  # produce a live entry with no headers at all, which answers 429 to every
+  # request while the repository, the pull request and CI all look correct.
+  #
+  # `User-Agent: opencode` IS the access gate. This endpoint takes no
+  # credential; what it checks is the client identity in the User-Agent.
+  # Measured 2026-08-30, direct to the endpoint: `opencode` and
+  # `opencode-cli/1.0.0` answer 200, while `Mozilla/5.0`, curl's default and
+  # the OpenAI client's own `AsyncOpenAI/Python 2.33.0` all answer 429
+  # FreeUsageLimitError. There is no TLS fingerprinting involved: plain curl
+  # with the right header is served.
+  #
+  # The empty `Authorization` is not decoration either. LiteLLM cannot build an
+  # OpenAI client with no api_key at all, so the generator emits the literal
+  # `keyless` for a provider whose api_key_env is empty, and without this
+  # override that literal reaches the upstream as `Bearer keyless`. Measured
+  # through the pinned image (v1.98.0) against the real endpoint: with both
+  # headers, 200; with only the User-Agent, 401 "Invalid API key"; with
+  # neither, 429. Any non-empty bearer token is rejected, so "no token" has to
+  # be said explicitly rather than left to a placeholder.
+  #
+  # Deliberately NOT joined to the free pool's shared model_name: this
+  # deployment supports tools and json_schema and the pool's members do not, and
+  # LiteLLM load-balances across a shared name regardless of what Hive selected.
+  - model_name: route-free-opencode-zen
+    litellm_params:
+      model: openai/big-pickle
+      api_base: https://opencode.ai/zen/v1
+      api_key: keyless
+      extra_headers:
+        User-Agent: opencode
+        Authorization: ""
+
 
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
