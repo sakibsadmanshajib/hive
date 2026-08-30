@@ -1,183 +1,86 @@
 {
-  "surface": "agent-workspace (Cowork, apps/agent-console, served at /agent-workspace)",
+  "surface": "Cowork (composer mode toggle plus pack row, apps/agent-console retired; served natively at the chat origin, vendor/open-webui/src/lib/hive/)",
   "consumed_by": "apps/web-console/scripts/build-agent-workspace-coverage.mjs",
-  "minimum_proven": 19,
-  "minimum_proven_note": "The coverage floor. The build script exits non-zero when fewer controls are proven than this, so coverage cannot quietly collapse: without it, one renamed secret skips the whole authenticated group, every skipped control still counts as accounted for, and the job reports a cheerful green. Demonstrated: a run report with the authenticated group skipped scores 8 of 24 and the builder exits 1 on this floor. RATCHET UP ONLY, and never by the run doing the checking: nothing in this repository writes this number, it moves only in a deliberate commit a human or an agent has to justify in review. Lowering it to make a run pass is the exact failure it exists to catch, because a genuine drop in coverage is the signal rather than the noise. Set to 19, the count a real run against the demo box proved on 2026-08-14. It rises to 23 the day issues #881 and #886 are fixed, because the four controls in the create test are red on those two defects and nothing else, and to 24 when HIVE_QA_AGENT_PASSWORD is provisioned for C8.",
-  "note": "The control ledger. It is edited by hand, and control C23 in agent-workspace-flows.spec.ts checks that hand against the deployed page: it enumerates every focusable control the two screens actually render and requires the set to equal the `dom` values below. A control that ships without an entry here fails that test rather than quietly shrinking the denominator. Entries with an empty `dom` are behaviours rather than elements (a redirect, an API status, an error state), so nothing in the DOM can enumerate them. The coverage file is generated from a live run and is not committed; see the build script. Never renumber an id once a run has used it.",
+  "minimum_proven": 3,
+  "minimum_proven_note": "The coverage floor. RATCHET UP ONLY, and never by the run doing the checking: this number moves only in a deliberate commit a human or an agent has to justify in review. Held at 3 (C25-C27) on 2026-08-30 rather than raised to 9, after two live dispatches found the real blocker on C28-C33 is one level deeper than a missing secret. First fix, landed and confirmed: HIVE_QA_AGENT_EMAIL is no longer read from a secret that was never provisioned (creating it would have been refused by PR #1528's protected-base allowlist, or recreated the litter-accumulation pattern issues #848/#1476 exist to end); the job now computes a fresh, run-scoped address every dispatch and provisions it with scripts/seed-demo-owner.py, same idempotent script and shape demo-chat-settings-check.yml already uses (PR #1528). That step then failed on a second, independent bug (Cloudflare's bot rule answering 403 'error code: 1010' to urllib's default User-Agent, exact same root cause and fix as scripts/post-deploy-verify.py and scripts/preflight-supabase-config.py), fixed in the same script. With both of those fixed, the step still fails: GET /auth/v1/admin/users answers a bodiless 404, which is Caddy's own bare `respond 404` (deploy/docker/Caddyfile.supabase's `@admin path /auth/v1/admin /auth/v1/admin/* ...`, commit 7c101c5e0 / PR #960, 2026-08-23), not GoTrue -- the public console origin refuses the ENTIRE /auth/v1/admin/* prefix at the gateway, deliberately, as a security boundary. That prefix covers both seed-demo-owner.py's /admin/users lookup and live-auth.mjs's own /admin/generate_link mint, so this blocks not just provisioning but the sign-in mechanism this whole authenticated group depends on, from any GitHub-hosted runner reaching the deployment over the public internet. `.github/workflows/rag-demo-readiness.yml` already documents and works around the identical wall for a different script (verify-rag-roundtrip.py), by running on `[self-hosted, hive-demo]` and calling the admin API at `http://caddy-supabase` (Caddyfile.supabase's `supabase_internal` snippet, reachable only from inside the compose network, port 80, no @admin block) via `docker compose --profile tools run ... toolchain`. The same shape would fix this job's provisioning step, but this job also drives a REAL BROWSER (Playwright/Chromium) for the OAuth hop and every composer assertion, which verify-rag-roundtrip.py does not: moving this job to self-hosted would mean installing and running Chromium directly on the production demo box for the first time in this repo, a materially bigger and more resource-sensitive change than swapping one script's SUPABASE_URL. That decision, and the follow-up PR to make it, is deliberately left open rather than made unilaterally inside a test-repoint task. The floor stays at 3 until it lands; C28-C33 fail loudly with the 404 quoted above in the meantime, which is the correct and informative failure, not a silent gap.",
+  "note": "The control ledger. It is edited by hand. C33 checks that hand against the deployed composer narrowly (see not_present below for why this is not a whole-page sweep): it counts the Cowork mode and pack radiogroup segments and requires the counts to equal what a two-mode, two-pack design implies. A control that ships without an entry here fails the 'no test in this run' check in build-agent-workspace-coverage.mjs rather than quietly shrinking the denominator. Entries with an empty `dom` are behaviours rather than elements (a redirect, an API response body, an API status), so nothing in a DOM sweep can enumerate them. The coverage file is generated from a live run and is not committed; see the build script. Never renumber an id once a run has used it.",
+  "retired": {
+    "ids": ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23", "C24"],
+    "why": "Every one of these measured apps/agent-console served at https://chat-hive.scubed.co/agent-workspace: a standalone app with its own Supabase-email-password sign-in form, its own /tasks page, a Cancel button per row, an empty state and a retry banner. Confirmed live 2026-08-29: both /agent-workspace and /agent-workspace/auth/sign-in return 404 (deploy/docker/Caddyfile.owui's @removedSurfaces block; PR #951; D-045). The surface was not deleted, it moved: Cowork is now a mode of the chat composer (vendor/open-webui/src/lib/hive/ComposerModeToggle.svelte, ComposerCoworkRow.svelte, Chat.svelte's submitCoworkRun/applyCoworkRun/followCoworkRun), and a run renders as a transcript turn rather than a row on a separate page. Removed rather than kept as dead entries with an empty `dom`, because build-agent-workspace-coverage.mjs fails loudly on any declared control with no matching [C#] test in the run (\"control(s) have no test in this run\"), and nothing in this rewrite tests the old DOM. C9 (Back to chat link) has no successor: the composer surface has no separate page to link back from, it is the chat app itself. C1-C5/C8 (the email/password sign-in form and its validation) have no successor either: ENABLE_LOGIN_FORM is false on this deployment (deploy/docker/docker-compose.yml), so that form is never in the DOM to test, on either surface. Some function survives, at the SEPARATE /agents route (vendor/open-webui/src/lib/hive/AgentTasks.svelte, still live, 200, per issue #1501's 2026-08-29 finding), which is owned by issue #1501 and out of scope here: its own coverage, if it gets one, is a different ledger."
+  },
   "not_present": [
     {
-      "what": "Live transcript or output pane",
-      "why": "The task console has no live transcript surface yet (task-console.tsx: \"There is no live transcript yet\"), so there is no control to enumerate.",
-      "guard": "C23 asserts the tasks screen renders no role=log element, so this claim fails the run the day a transcript ships."
+      "what": "Cancel control",
+      "why": "The composer surface renders a run as transcript text only (coworkMode.ts's renderRun): there is no Cancel button anywhere in Chat.svelte's cowork path. C32 still proves the server-side cancel contract (POST .../cancel), called directly against the API for containment, exactly as the retired C17 did, but there is no UI control to enumerate for it.",
+      "guard": "C33 asserts the composer's Cowork radiogroups hold exactly two mode segments and, once switched, exactly two pack segments, so a Cancel button (or anything else) added to that scoped region fails the count rather than silently expanding unlisted."
+    },
+    {
+      "what": "A sign-in screen DOM sweep (the retired C24's role)",
+      "why": "OAUTH_AUTO_REDIRECT is true on this deployment with exactly one provider configured (deploy/docker/docker-compose.yml): an unauthenticated visitor is bounced out of Open WebUI's own /auth page and into the Hive OIDC provider before a person (or a Playwright locator) could reliably read a stable DOM there. A whole-DOM sweep of a page the app itself does not linger on is a race, not a guard, so it is not attempted. C25 and C26 instead assert the two properties that hold regardless of exactly where the bounce lands: the visitor never reaches signed-in content, and the server's own config confirms the local form is off and the Hive provider is configured."
     }
   ],
   "controls": [
     {
-      "id": "C1",
-      "description": "Sign-in: email input",
-      "requires_creds": false,
-      "screen": "sign-in",
-      "dom": "input[email]#email"
-    },
-    {
-      "id": "C2",
-      "description": "Sign-in: password input",
-      "requires_creds": false,
-      "screen": "sign-in",
-      "dom": "input[password]#password"
-    },
-    {
-      "id": "C3",
-      "description": "Sign-in: submit button (invalid credentials path)",
-      "requires_creds": false,
-      "screen": "sign-in",
-      "dom": "button[submit]:Sign in"
-    },
-    {
-      "id": "C4",
-      "description": "Sign-in: error alert region",
+      "id": "C25",
+      "description": "Unauthenticated chat entry never reaches signed-in app content (Open WebUI's own client-side auth guard, routes/(app)/+layout.svelte, redirects or the OAuth auto-redirect carries the browser further)",
       "requires_creds": false,
       "screen": "sign-in",
       "dom": ""
     },
     {
-      "id": "C5",
-      "description": "Sign-in: required attributes are advisory only, because the form is noValidate, so an empty submit reaches the server and surfaces the same error as a wrong password",
+      "id": "C26",
+      "description": "The chat origin's own GET /api/config reports enable_login_form false and the oidc provider configured, matching ENABLE_LOGIN_FORM=false / OAUTH_PROVIDER_NAME=Hive in deploy/docker/docker-compose.yml",
       "requires_creds": false,
       "screen": "sign-in",
       "dom": ""
     },
     {
-      "id": "C6",
-      "description": "Unauthenticated /agent-workspace redirects to sign-in",
-      "requires_creds": false,
-      "screen": "sign-in",
-      "dom": ""
-    },
-    {
-      "id": "C7",
-      "description": "Unauthenticated /agent-workspace/tasks redirects to sign-in",
-      "requires_creds": false,
-      "screen": "sign-in",
-      "dom": ""
-    },
-    {
-      "id": "C8",
-      "description": "Sign-in: submit button (valid credentials path)",
-      "requires_creds": true,
-      "screen": "sign-in",
-      "dom": ""
-    },
-    {
-      "id": "C9",
-      "description": "AppHeader: Back to chat link",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "a:Back to chat"
-    },
-    {
-      "id": "C10",
-      "description": "Task composer: instructions textarea",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "textarea#task-instructions"
-    },
-    {
-      "id": "C11",
-      "description": "Pack radio: Coding",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "input[radio]=coding-pack"
-    },
-    {
-      "id": "C12",
-      "description": "Pack radio: Knowledge work",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "input[radio]=knowledge-work-pack"
-    },
-    {
-      "id": "C13",
-      "description": "Start task button with empty instructions shows inline validation and fires no request",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "button[submit]:Start task"
-    },
-    {
-      "id": "C14",
-      "description": "Ctrl+Enter submits the composer",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C15",
-      "description": "Task create round-trips through POST /v1/agent/tasks and the new row appears in the list",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C16",
-      "description": "EngineNotice reflects the deployment's current runtime state, so it is absent while a real agent runtime is configured",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C17",
-      "description": "Cancel button is offered on a non-terminal row, moves that row to Cancelled and is then withdrawn, and a second cancel on the now-terminal task is refused server side with 409. It does NOT stop the sandbox: control-plane's Engine interface has only Launch and Service.Cancel is a bare database transition, so no code path from this button can reach the running sandbox at all (issue #886). Any wording claiming this control stops a task would be a false proof.",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": "button[button]:Cancel"
-    },
-    {
-      "id": "C18",
-      "description": "Empty state (\"Nothing submitted yet\") when the list holds no tasks",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C19",
-      "description": "Task list load failure renders the retry/reload banner",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C20",
-      "description": "Task create failure renders its own error, keeps the draft text",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C21",
-      "description": "Expired session reported instead of a silent failure on submit",
-      "requires_creds": true,
-      "screen": "tasks",
-      "dom": ""
-    },
-    {
-      "id": "C22",
-      "description": "GET /v1/agent/tasks requires auth (401 unauthenticated)",
+      "id": "C27",
+      "description": "GET /api/v1/hive/agent/tasks (the chat-origin proxy, deploy/docker/owui-patches/hive_agent_proxy.py) requires auth: 401 unauthenticated",
       "requires_creds": false,
       "screen": "api",
       "dom": ""
     },
     {
-      "id": "C23",
-      "description": "Every focusable control the task console renders in the light DOM is claimed by this ledger, and no live transcript pane exists yet",
+      "id": "C28",
+      "description": "A minted session lands on the chat home (new-chat ready), not stuck outside the app",
       "requires_creds": true,
-      "screen": "tasks",
+      "screen": "composer",
       "dom": ""
     },
     {
-      "id": "C24",
-      "description": "Every focusable control the sign-in screen renders in the light DOM is claimed by this ledger. Deliberately outside the authenticated group, so the denominator guard is not disabled by the same missing environment variable that would collapse the numerator.",
-      "requires_creds": false,
-      "screen": "sign-in",
+      "id": "C29",
+      "description": "Chat/Cowork mode toggle: a two-segment radiogroup defaulting to Chat, and selecting Cowork reveals the pack row",
+      "requires_creds": true,
+      "screen": "composer",
+      "dom": "[data-hive-mode]"
+    },
+    {
+      "id": "C30",
+      "description": "Cowork pack row: Knowledge work/Coding radios default to Knowledge work and reflect selection",
+      "requires_creds": true,
+      "screen": "composer",
+      "dom": "[data-hive-pack]"
+    },
+    {
+      "id": "C31",
+      "description": "Submitting blank/whitespace-only instructions in Cowork mode is refused client side and fires no request to the agent task collection",
+      "requires_creds": true,
+      "screen": "composer",
+      "dom": ""
+    },
+    {
+      "id": "C32",
+      "description": "Cowork submission round-trips through POST /api/v1/hive/agent/tasks, the transcript turn renders the run's queued/running text, and the created task is cancelled server side in a finally whatever happens. Does NOT prove the sandbox stopped: control-plane's Engine interface has only Launch and Service.Cancel is a bare database transition (issue #886), unchanged from the retired C17.",
+      "requires_creds": true,
+      "screen": "composer",
+      "dom": ""
+    },
+    {
+      "id": "C33",
+      "description": "The composer's Cowork controls are exactly two mode segments, and once Cowork is selected, exactly two pack segments -- a narrow, scoped denominator guard (see not_present above for why it is not a whole-composer sweep)",
+      "requires_creds": true,
+      "screen": "composer",
       "dom": ""
     }
   ]

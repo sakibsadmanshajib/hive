@@ -154,6 +154,15 @@ def env(name: str) -> str:
 
 REQUEST_TIMEOUT_SECONDS = 15
 
+# Every request this script sends carries an explicit User-Agent, and that is
+# load bearing rather than politeness (same fix as scripts/post-deploy-verify.py
+# and scripts/preflight-supabase-config.py, same root cause): the demo hostnames
+# sit behind Cloudflare, whose bot rules answer 403 "error code: 1010" to the
+# literal default urllib sends (`Python-urllib/3.x`). Measured live against
+# console-hive.scubed.co's /auth/v1/admin/users (deploy-demo-box.yml's
+# agent-workspace-coverage job, run 33290707452, 2026-08-30), not guessed.
+USER_AGENT = "hive-seed-demo-owner/1 (+https://github.com/sakibsadmanshajib/hive)"
+
 
 def request(base, headers, method, path, body=None, params=None, prefer=None):
     url = base + path
@@ -161,6 +170,7 @@ def request(base, headers, method, path, body=None, params=None, prefer=None):
         url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode() if body is not None else None
     req_headers = dict(headers)
+    req_headers.setdefault("User-Agent", USER_AGENT)
     if prefer:
         req_headers["Prefer"] = prefer
     req = urllib.request.Request(url, data=data, method=method, headers=req_headers)

@@ -2342,14 +2342,23 @@ jobs:
       SUPABASE_URL: ${{ vars.CONSOLE_URL || 'https://console-hive.scubed.co' }}
       SUPABASE_ANON_KEY: ${{ secrets.DEMO_SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
-      # Optional. The spec defaults to the demo account, which is named in
-      # docs/proof/live-auth-helper-2026-08-08/README.md and is not a
-      # credential. Set this secret to point the run at a different identity.
-      HIVE_QA_AGENT_EMAIL: ${{ secrets.HIVE_QA_AGENT_EMAIL }}
-      # Optional, and the only reason C8 is unproven when it is absent: that
-      # control is the password submit path itself. Never rotate a shared
-      # account's password to manufacture one.
-      HIVE_QA_AGENT_PASSWORD: ${{ secrets.HIVE_QA_AGENT_PASSWORD }}
+      # Canonical run-scoped identity, same shape ci.yml, owui-nightly.yml and
+      # agent-visual-proof.yml already use. Referenced from the "Provision a
+      # per-run Cowork identity" step's own env below (job env is visible
+      # there; see that step's comment for why this is a fresh identity every
+      # run rather than a secret naming one fixed account).
+      E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+      # No longer a secret (issue #1531 follow-up: HIVE_QA_AGENT_EMAIL and
+      # HIVE_QA_AGENT_PASSWORD were never provisioned, and provisioning them to
+      # name a shared account would either be refused by PR #1528's protected-
+      # base allowlist, if that account happened to be one of the three, or
+      # recreate the exact litter-accumulation pattern issues #848/#1476 exist
+      # to end, if it were not). Computed here instead: a fresh, run-scoped
+      # address the "Provision a per-run Cowork identity" step below creates
+      # new every dispatch. Not one of PROTECTED_ACCOUNT_BASES either way
+      # (live-auth.mjs), so the +tag is for uniqueness, not to satisfy that
+      # guard.
+      HIVE_QA_AGENT_EMAIL: agent-workspace-coverage+${{ github.run_id }}-${{ github.run_attempt }}@hive-e2e.invalid
       # Both generated files land in test-results/, which the repo .gitignore
       # already excludes. Nothing this job produces is ever committed: a
       # checked-in coverage snapshot reports the same ratio forever, including
@@ -2412,6 +2421,45 @@ jobs:
       - name: Install Playwright system deps (cache hit path)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
+
+      - name: Provision a per-run Cowork identity
+        # A fresh identity every run (issues #848, #1476), not a secret naming
+        # one fixed shared account. C32 below creates a real, currently
+        # undeletable agent task on whatever account signs in, so reusing one
+        # fixed identity across every dispatch would pile that garbage onto a
+        # single account forever; a run-scoped identity isolates each run's
+        # one task row into its own disposable account nobody ever signs into
+        # again instead. scripts/seed-demo-owner.py is idempotent and never
+        # rotates an existing account's password (docs/live-test-auth.md); a
+        # run-scoped email has never existed before this step, so every
+        # dispatch creates fresh rather than reusing. Its FEATURE_GATES list
+        # already includes ENABLE_COWORK, which is what the authenticated
+        # controls below need to submit a task at all.
+        #
+        # continue-on-error: true is load bearing, not a shrug. Currently 404s
+        # (agent-workspace-controls.json's own minimum_proven_note): Caddyfile.
+        # supabase's @admin block refuses the whole /auth/v1/admin/* prefix at
+        # the public console origin this job reaches from, so this step cannot
+        # succeed from here today. Without this flag, GitHub Actions skips
+        # every later step by default on a failed one, which took the C25-C27
+        # unauthenticated group down with it the first time this ran (they need
+        # no identity at all). C28-C33 still fail, loudly and honestly, inside
+        # the probe itself once signIn() hits the identical wall trying to mint
+        # a session for whatever this step could not provision.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          output=$(python3 ../../scripts/seed-demo-owner.py)
+          generated_secret=$(printf '%s\n' "$output" | sed -n 's/^PASSWORD=//p')
+          if [ -n "$generated_secret" ]; then
+            echo "::add-mask::$generated_secret"
+          fi
+        env:
+          HIVE_DEMO_EMAIL: ${{ env.HIVE_QA_AGENT_EMAIL }}
+          HIVE_DEMO_TENANT_SLUG: agent-workspace-coverage-${{ env.E2E_RUN_KEY }}
+          HIVE_DEMO_TENANT_NAME: 'Agent Workspace Coverage'
+          HIVE_DEMO_ACCOUNT_SLUG: agent-workspace-coverage-${{ env.E2E_RUN_KEY }}
+          HIVE_DEMO_ACCOUNT_NAME: 'Agent Workspace Coverage'
 
       - name: Run the agent workspace probe
         run: npm run e2e:agent-workspace
