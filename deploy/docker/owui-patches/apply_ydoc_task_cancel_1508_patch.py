@@ -67,6 +67,34 @@ connection state, it is exactly what the attacker already controls, and a guard
 that keys on the connection rather than on who the caller is would be the same
 class of defect wearing a fix's clothing.
 
+WHY `startswith('note:')` IS ENOUGH, INCLUDING THE PART THAT LOOKS WRONG
+-----------------------------------------------------------------------
+There is a real discrepancy here and it is safe, so it is written down rather
+than left for the next reader to find and "fix".
+
+The ownership check this guard rides on resolves `note_id = document_id.split(':')[1]`
+(`socket/main.py:715`), the FIRST segment only, while both task calls key on the
+WHOLE `document_id`. So a caller who owns note X can still reach the registry
+with `note:X:<anything>`, an id whose suffix was checked against nothing.
+
+It reaches nothing, for three separate reasons, all of which have to hold:
+
+  1. The registry is exact keyed. `list_task_ids_by_item_id` does `SMEMBERS` on
+     `...:tasks:item:<item_id>` (`tasks.py:135`, `:74`) with no pattern match, so
+     there is no prefix reach from one key into another.
+  2. No chat id can begin with `note:`. The three shapes the chat side ever
+     registers are a bare chat UUID, `local:<socket_id>` and
+     `channel:<channel_id>` (`main.py:1638`, branched at `:1783` and `:1801`).
+     The confined namespace and the chat namespace are disjoint.
+  3. `normalize_document_id` (`socket/main.py:534`) rewrites `note_` to `note:`
+     and nothing else, so it can only move an id INTO the guarded namespace,
+     never out of it, and the value the guard tests is the value handed to the
+     registry.
+
+Widening the guard to reject a second colon would therefore buy nothing and
+would break nothing either; it is left alone because the three facts above are
+the actual boundary and a fourth check would imply they are not trusted.
+
 WHY THIS LOSES NOTHING
 ----------------------
 `note:` is the only namespace any client ever uses. The single call site that
@@ -162,6 +190,24 @@ def is_note_guard(node) -> bool:
     )
 
 
+def is_registry_call(node) -> bool:
+    """A task-registry call keyed on `document_id`, matched by shape.
+
+    `stop_item_tasks(REDIS, document_id)` or
+    `create_task(REDIS, debounced_save(), document_id)`. Whitespace inside the
+    call is invisible to the AST, which is the point: an exact-literal text
+    count is defeated by one extra space, and that is how a decoy hides.
+    """
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("stop_item_tasks", "create_task")
+        and bool(node.args)
+        and isinstance(node.args[-1], ast.Name)
+        and node.args[-1].id == "document_id"
+    )
+
+
 def main():
     already = all(
         (BACKEND / f).read_text().count(MARKER) == n
@@ -201,24 +247,36 @@ def main():
         None,
     )
     assert handler is not None, "yjs_document_update not found after patching"
-    lines = final.splitlines(keepends=True)
-    body = "".join(lines[handler.lineno - 1 : handler.end_lineno])
-
-    for call in (
-        "await stop_item_tasks(REDIS, document_id)",
-        "await create_task(REDIS, debounced_save(), document_id)",
-    ):
-        assert body.count(call) == 1, (
-            f"expected exactly one `{call}` in yjs_document_update after "
-            f"patching, found {body.count(call)}"
+    # Every registry call in this handler must be THE call the patch guarded, and
+    # must sit inside a live `document_id.startswith('note:')` branch. Both
+    # halves are asked of the node, not of its name and not of the surrounding
+    # text, because a name is trivially seeded from somewhere else.
+    #
+    # This postcondition IS the drift guard for this patch, so it gets the same
+    # scrutiny the patch does. Its previous form collected the NAMES of calls
+    # appearing anywhere inside any qualifying branch, which a dead branch
+    # holding decoy calls satisfies while both real calls stay unguarded. That
+    # mutation passed this assertion and both Dockerfile greps; only the
+    # behavioural suite caught it. A guard on a guard that a decoy can satisfy is
+    # the same defect it exists to catch, one level up.
+    matched = [
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call) and is_registry_call(node)
+    ]
+    for name in ("stop_item_tasks", "create_task"):
+        n = sum(1 for c in matched if c.func.id == name)
+        assert n == 1, (
+            f"expected exactly one `{name}(..., document_id)` call in "
+            f"yjs_document_update after patching, found {n}. A second one is "
+            "either an unguarded copy or a decoy seeding the containment check "
+            "below"
         )
 
-    # Each call must sit INSIDE a `document_id.startswith('note:')` branch, and
-    # this is asked of the AST rather than of the text. A string search for the
-    # guard above the call cannot distinguish "inside the branch" from "after
-    # the branch has closed", which is the one arrangement that would reopen the
-    # hole while keeping both the marker count and the call count correct.
-    guarded = set()
+    # The ancestry set: every call node reachable from the body of an `if` whose
+    # test carries a live `document_id.startswith('note:')` conjunct. Identity,
+    # so a structurally identical call elsewhere cannot stand in for this one.
+    guarded_nodes = set()
     for node in ast.walk(handler):
         if not isinstance(node, ast.If):
             continue
@@ -235,17 +293,23 @@ def main():
         )
         if not any(is_note_guard(c) for c in conjuncts):
             continue
+        # A branch conjoined with a falsey literal is dead, and a dead branch
+        # guards nothing. Refusing it here is what stops "guarded, but never
+        # runs" from reading as "guarded".
+        if any(
+            isinstance(c, ast.Constant) and not c.value for c in conjuncts
+        ):
+            continue
         for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
-            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
-                guarded.add(sub.func.attr)
-            elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-                guarded.add(sub.func.id)
+            if isinstance(sub, ast.Call):
+                guarded_nodes.add(id(sub))
 
-    for name in ("stop_item_tasks", "create_task"):
-        assert name in guarded, (
-            f"`{name}` is not inside a document_id.startswith('note:') branch in "
-            "yjs_document_update, so it can still act on an id whose ownership "
-            "this handler never resolved"
+    for call in matched:
+        assert id(call) in guarded_nodes, (
+            f"`{call.func.id}` at line {call.lineno} is not inside a live "
+            "document_id.startswith('note:') branch in yjs_document_update, so "
+            "it can still act on an id whose ownership this handler never "
+            "resolved"
         )
 
     for filename, expected in EXPECTED_MARKERS.items():

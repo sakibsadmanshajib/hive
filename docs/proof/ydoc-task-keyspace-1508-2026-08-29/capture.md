@@ -295,3 +295,108 @@ transcript is not visual proof of anything, it is an unrelated frame substituted
 for an after state that does not exist yet, which is the substitution the
 visual-proof rule exists to forbid. The transcripts are here, in a file
 `npm run lint:proof-tokens` actually scans.
+
+---
+
+## 8. Security review round, and the guard on the guard
+
+The mandatory security review found no authorization bypass through the shipped
+guard, and one HIGH about the durability of the postcondition that protects it.
+It is fixed here, and the fix is verified by re-running the reviewer's own
+mutant.
+
+### The postcondition matched names, not nodes
+
+`guarded` was a set of call NAMES unioned across every qualifying branch, so a
+dead branch holding decoy calls seeded it while both real calls stayed
+unguarded. Reproduced exactly as posted, against the pinned image:
+
+```
+apply_ydoc_task_cancel_1508_patch: ydoc task-registry calls confined to the note namespace whose ownership the handler resolves (#1508)
+PATCH EXIT=0
+markers: 2
+unguarded 12-space stop_item_tasks: 0
+```
+
+Exit 0, with the emitted handler carrying `if ... and False:` decoys above two
+real unguarded calls. Only the behavioural suite caught it, and
+`make test-scripts` is required at `.github/workflows/ci.yml:883`, so it was
+never shippable. That is not the point. This postcondition IS the drift guard
+for this patch, and a drift guard a decoy can satisfy is the same defect it
+exists to catch, one level up.
+
+Rebuilt around node identity. `is_registry_call` matches by shape rather than by
+exact text, so whitespace cannot hide a decoy; the count is asserted on matched
+NODES rather than on string occurrences; the containment set holds `id(node)` for
+every call reachable from a LIVE note-guard branch; and a branch conjoined with a
+falsey literal is refused, so "guarded but never runs" cannot read as "guarded".
+
+Three mutants, all now caught at build time:
+
+```
+# the reviewer's, decoys plus re-indentation
+AssertionError: expected exactly one `stop_item_tasks(..., document_id)` call in yjs_document_update after patching, found 2. A second one is either an unguarded copy or a decoy seeding the containment check below
+
+# one call, moved below the branch after it closes
+AssertionError: `stop_item_tasks` at line 742 is not inside a live document_id.startswith('note:') branch in yjs_document_update, so it can still act on an id whose ownership this handler never resolved
+
+# one call, inside a branch conjoined with False
+AssertionError: `stop_item_tasks` at line 741 is not inside a live document_id.startswith('note:') branch in yjs_document_update, so it can still act on an id whose ownership this handler never resolved
+```
+
+### The `create_task` half of the Dockerfile guard, and why the obvious line is wrong
+
+The review asked for a symmetric twelve-space grep on
+`await create_task(REDIS, debounced_save(), document_id)`. Measured before
+adding it, and it does not work: unlike the cancellation, that rewrite does not
+change the call's indentation. The unguarded and guarded forms both sit at
+twelve spaces, because the patch edits the `if` line above rather than wrapping
+the call:
+
+```
+=== AFTER, with the twelve-space create_task line ===
+  markers: 2
+  unguarded stop_item_tasks: 0
+  unguarded create_task: 1
+```
+
+One after the patch, so that line would have failed the build on correct code.
+It is the same mistake as the eight-space anchor in section 6, in the other
+direction: an indentation pattern that does not distinguish guarded from
+unguarded for this rewrite shape.
+
+Anchored on the site instead of on the indentation. The unguarded form is
+preceded by `        if data.get('data'):` and the guarded form is preceded by
+`        if document_id.startswith('note:') and data.get('data'):`, so the bare
+`if` line is what identifies the unfixed site:
+
+```
+=== BEFORE ===
+  markers: 0
+  unguarded stop_item_tasks (12sp): 1
+  unguarded create_task guard line: 1
+=== AFTER ===
+  markers: 2
+  unguarded stop_item_tasks (12sp): 0
+  unguarded create_task guard line: 0
+DRIFT GUARD LINES PASS
+```
+
+All three lines move. None of them is vacuous.
+
+### The residual the review checked and did not ask to change
+
+`socket/main.py:715` resolves ownership on `document_id.split(':')[1]`, the first
+segment, while both calls key the whole `document_id`, so `note:X:<anything>` is
+reachable by the owner of note X with an unchecked suffix. It reaches nothing,
+for three reasons that all have to hold, and they are now written into the patch
+docstring rather than left to be re-derived: the registry is exact keyed
+(`tasks.py:135`, `:74`), no chat id can begin with `note:` (`main.py:1638`,
+`:1783`, `:1801`), and `normalize_document_id` can only move an id into the
+guarded namespace, never out of it.
+
+### One finding deliberately not fixed here
+
+`yjs_document_leave` (`socket/main.py:772`) resolves no ownership at all before
+`YDOC_MANAGER.clear_document(document_id)` at `:799`. Out of scope for this pull
+request, and filed as its own issue rather than left in a review comment.
