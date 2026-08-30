@@ -13,7 +13,7 @@ model, and every one of them reported `cost: 0`.
 
 ## Part 1. A reintroduced paid value turns the guard red, and reverting turns it green
 
-```
+```text
 ############################################################
 # STEP 1. Reintroduce a paid completion alias in ci.yml
 ############################################################
@@ -47,7 +47,7 @@ alias below did not exist when the guard was written, is named nowhere in it,
 and the guard source is not touched between red and green. It is seeded into
 the catalog, referenced from a CI surface, and caught on the first run.
 
-```
+```text
 ############################################################
 # STEP 1. Seed a brand new PAID alias the guard has never seen
 ############################################################
@@ -80,7 +80,7 @@ deleted all three.
 
 ## Part 3. The classifier's own report, from the same database
 
-```
+```text
 --- PASS: TestUpstreamFreeCompletionAliasesExist
     upstream-free completion aliases: hive-fast, hive-free, hive-medium, hive-small
     upstream-free and tools-capable: hive-fast, hive-medium, hive-small
@@ -93,7 +93,7 @@ Every probe below went to OpenRouter's public endpoint against
 and therefore what `hive-small` resolves to. Every response reported
 `"cost": 0`.
 
-```
+```text
 -- forced tool_choice {"type":"function"} --
 finish_reason = tool_calls, one tool_calls entry, arguments {"city": "Dhaka"}
 
@@ -140,7 +140,7 @@ uses.
 The step body below was extracted verbatim from the workflow with a YAML parser
 and executed against the same throwaway database, once per case.
 
-```
+```text
 == HIVE_TEST_MODEL=hive-free HIVE_TOOLS_MODEL=hive-small
 HIVE_TEST_MODEL = hive-free is upstream-free
 HIVE_TOOLS_MODEL = hive-small is upstream-free

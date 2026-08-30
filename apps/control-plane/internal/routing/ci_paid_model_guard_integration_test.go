@@ -124,11 +124,14 @@ var bindingPatterns = []*regexp.Regexp{
 }
 
 // ciModelBinding is one place in the repository where CI chooses a model.
+// An empty alias means the scanner found a model-shaped literal the catalog
+// could not resolve; `raw` carries it so the report can name it.
 type ciModelBinding struct {
 	file  string
 	line  int
 	name  string
 	alias string
+	raw   string
 }
 
 // aliasFacts is what the catalog says about one alias, folded across every
@@ -154,13 +157,19 @@ type aliasFacts struct {
 //     the capability, so the entry cannot outlive its own justification.
 //   - capability empty: the value does not configure a CI call at all, it
 //     configures the deployed product. Repointing it is a product decision the
-//     owner owns, not a CI spend decision. These carry `surfaces` so the
-//     allowance is pinned to the exact file and cannot spread.
+//     owner owns, not a CI spend decision.
 //
-// surfaces, when non-empty, limits an entry to those repository paths.
+// EVERY entry is scoped, and both scopes are ANDed. `bindings` names the
+// binding names it covers, `surfaces` the repository paths. An entry that
+// named neither would exempt its alias from every surface in the repository,
+// which is how an exemption written for one endpoint quietly becomes a licence
+// to bill that alias for plain chat. TestEveryPaidCompletionExceptionIsScoped
+// refuses an unscoped entry outright, and
+// TestFlaggedExceptionsDoNotExemptOtherBindings proves the scoping bites.
 type paidCompletionException struct {
 	alias      string
 	capability string
+	bindings   []string
 	surfaces   []string
 	reason     string
 }
@@ -169,6 +178,7 @@ var paidCompletionExceptions = []paidCompletionException{
 	{
 		alias:      "hive-auto",
 		capability: "supports_image_generation",
+		bindings:   []string{"HIVE_IMAGE_MODEL"},
 		reason: "The image suite (packages/sdk-tests/js/tests/images/images.test.ts) has to send a " +
 			"model that reaches SelectRoute for a NeedImageGeneration request, and hive-auto is the " +
 			"only alias in the catalog declaring supports_image_generation at all. No upstream-free " +
@@ -177,6 +187,7 @@ var paidCompletionExceptions = []paidCompletionException{
 	},
 	{
 		alias:    "hive-default",
+		bindings: []string{"HIVE_AGENT_ENGINE_LLM_MODEL"},
 		surfaces: []string{".github/workflows/deploy-demo-box.yml"},
 		reason: "Not a CI call. This value is passed to scripts/install-agent-engine-host.sh and " +
 			"becomes the model the DEPLOYED demo box's Cowork agent runs on, so moving it changes " +
@@ -188,17 +199,42 @@ var paidCompletionExceptions = []paidCompletionException{
 	},
 }
 
-// appliesTo reports whether this exception covers a binding found at relPath.
-func (e paidCompletionException) appliesTo(relPath string) bool {
-	if len(e.surfaces) == 0 {
-		return true
+// appliesTo reports whether this exception covers a specific binding. Both
+// scopes are required when present, and an entry with neither covers nothing:
+// the zero value must not be a blanket allowance.
+func (e paidCompletionException) appliesTo(b ciModelBinding) bool {
+	if len(e.bindings) == 0 && len(e.surfaces) == 0 {
+		return false
 	}
-	for _, surface := range e.surfaces {
-		if surface == relPath {
+	if len(e.bindings) > 0 && !contains(e.bindings, b.name) {
+		return false
+	}
+	if len(e.surfaces) > 0 && !contains(e.surfaces, b.file) {
+		return false
+	}
+	return true
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
 			return true
 		}
 	}
 	return false
+}
+
+// findPaidCompletionException is package level rather than a closure so
+// TestFlaggedExceptionsDoNotExemptOtherBindings can call the same code the
+// guard calls, instead of a re-implementation that could agree with itself
+// while both were wrong.
+func findPaidCompletionException(b ciModelBinding) (paidCompletionException, bool) {
+	for _, e := range paidCompletionExceptions {
+		if e.alias == b.alias && e.appliesTo(b) {
+			return e, true
+		}
+	}
+	return paidCompletionException{}, false
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +399,9 @@ func hasExtension(name string, extensions []string) bool {
 
 func bindingsIn(relPath, body string, aliases map[string]aliasFacts) []ciModelBinding {
 	var out []ciModelBinding
+	// Keyed on line rather than byte offset: two patterns can match the same
+	// binding at different offsets (a JSON `model` key is also a line-anchored
+	// assignment), and reporting it twice is noise in the audit.
 	seen := map[string]bool{}
 
 	for _, pattern := range bindingPatterns {
@@ -376,17 +415,42 @@ func bindingsIn(relPath, body string, aliases map[string]aliasFacts) []ciModelBi
 			if !modelBindingName.MatchString(strings.TrimSpace(name)) {
 				continue
 			}
-			for _, alias := range aliasTokensIn(value, aliases) {
-				key := fmt.Sprintf("%d|%s|%s", match[0], name, alias)
+			resolved := aliasTokensIn(value, aliases)
+			line := 1 + strings.Count(body[:match[0]], "\n")
+
+			if len(resolved) == 0 {
+				// Nothing in this right-hand side is a catalog alias. Report
+				// the model-shaped literals so an unknown one is visible by
+				// name rather than vanishing, and skip anything that is only a
+				// variable reference, which names no model at all.
+				for _, literal := range modelShapedLiterals(value) {
+					key := fmt.Sprintf("%d|%s|?%s", line, name, literal)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					out = append(out, ciModelBinding{
+						file: relPath,
+						line: line,
+						name: strings.TrimSpace(name),
+						raw:  literal,
+					})
+				}
+				continue
+			}
+
+			for _, alias := range resolved {
+				key := fmt.Sprintf("%d|%s|%s", line, name, alias)
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
 				out = append(out, ciModelBinding{
 					file:  relPath,
-					line:  1 + strings.Count(body[:match[0]], "\n"),
+					line:  line,
 					name:  strings.TrimSpace(name),
 					alias: alias,
+					raw:   alias,
 				})
 			}
 		}
@@ -410,6 +474,27 @@ func groupText(body string, match []int, group int) string {
 // including it swallowed the whole of `${HIVE_TEST_MODEL:-hive-default}` as a
 // single token, which matched nothing and hid four paid compose defaults.
 var tokenRe = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9_./~-]*`)
+
+// modelShapedLiteralRe matches a lowercase, hyphen or slash bearing token, the
+// shape every model id in this repository takes: `hive-small`, `gpt-4o`,
+// `openrouter/openai/gpt-4o-mini`. It deliberately excludes a bare word and an
+// uppercase environment variable name, neither of which names a model.
+var modelShapedLiteralRe = regexp.MustCompile(`\b[a-z0-9][a-z0-9._~]*(?:[-/][A-Za-z0-9._~:-]+)+\b`)
+
+// modelShapedLiterals returns the distinct model-shaped literals in a
+// right-hand side, in order.
+func modelShapedLiterals(value string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, literal := range modelShapedLiteralRe.FindAllString(value, -1) {
+		if seen[literal] {
+			continue
+		}
+		seen[literal] = true
+		out = append(out, literal)
+	}
+	return out
+}
 
 // aliasTokensIn returns every catalog alias id named anywhere in a right-hand
 // side. A provider prefix (`openai/hive-default`, which is how the agent engine
@@ -438,6 +523,17 @@ func aliasTokensIn(value string, aliases map[string]aliasFacts) []string {
 // TestNoCISurfaceCallsAPaidCompletionModel is the directive. Every model value
 // on a CI surface must resolve to an upstream-free completion alias, to an
 // embedding alias, or to a declared exception.
+//
+// A model value the catalog cannot resolve is REPORTED by name and does not
+// fail. Spend is the thing being guarded, and an alias the gateway has no row
+// for cannot bill anything: it is refused at selection, so a typo is a broken
+// suite rather than a leak. Failing on it would also be wrong on its face,
+// because two kinds of unresolvable value are deliberate here, the invalid
+// model literals in the negative-path suites (`gpt-4o` against an endpoint
+// that must 404) and the upstream provider model ids that feed LiteLLM's
+// config template. The runtime override half of the same concern, a repository
+// variable holding a paid alias that no static scan can see, is covered by the
+// "Refuse to bill a paid completion alias" step in ci.yml instead.
 func TestNoCISurfaceCallsAPaidCompletionModel(t *testing.T) {
 	aliases := loadAliasFacts(t)
 	bindings := scanCIModelBindings(t, aliases)
@@ -446,16 +542,13 @@ func TestNoCISurfaceCallsAPaidCompletionModel(t *testing.T) {
 		t.Fatal("scanned every CI surface and found no model binding at all; the scanner is broken, and a broken scanner passes this guard for free")
 	}
 
-	findException := func(alias, relPath string) (paidCompletionException, bool) {
-		for _, e := range paidCompletionExceptions {
-			if e.alias == alias && e.appliesTo(relPath) {
-				return e, true
-			}
-		}
-		return paidCompletionException{}, false
-	}
-
 	for _, b := range bindings {
+		if b.alias == "" {
+			// Reported, never fatal. See this test's header for why.
+			t.Logf("unresolved (no catalog alias): %s:%d %s = %s", b.file, b.line, b.name, b.raw)
+			continue
+		}
+
 		facts := aliases[b.alias]
 
 		switch {
@@ -483,7 +576,7 @@ func TestNoCISurfaceCallsAPaidCompletionModel(t *testing.T) {
 			// choose, and its verdict, in one place a reviewer can read.
 			t.Logf("ok (upstream-free): %s:%d %s = %s", b.file, b.line, b.name, b.alias)
 		default:
-			exception, ok := findException(b.alias, b.file)
+			exception, ok := findPaidCompletionException(b)
 			if !ok {
 				t.Errorf("%s:%d sets %s to %q, a PAID completion alias (pricing_mode %s). CI may only call upstream-free completion aliases. Repoint it at one, or add a paidCompletionExceptions entry naming the capability no free alias provides.",
 					b.file, b.line, b.name, b.alias, facts.pricingMode)
@@ -573,5 +666,73 @@ func TestUpstreamFreeCompletionAliasesExist(t *testing.T) {
 		t.Error("no upstream-free completion alias declares tools_supported, so the tool and structured-output suites have nowhere free to run; that is an owner decision, not a silent downgrade")
 	} else {
 		t.Logf("upstream-free and tools-capable: %s", strings.Join(freeWithTools, ", "))
+	}
+}
+
+// TestEveryPaidCompletionExceptionIsScoped refuses an entry that names neither
+// a binding nor a surface. Such an entry would exempt its alias from every
+// model value in the repository, which is how an exemption written for one
+// endpoint becomes a licence to bill that alias for plain chat.
+func TestEveryPaidCompletionExceptionIsScoped(t *testing.T) {
+	for _, e := range paidCompletionExceptions {
+		if len(e.bindings) == 0 && len(e.surfaces) == 0 {
+			t.Errorf("the exception for %s is unscoped: it names no binding and no surface, so it exempts that alias everywhere", e.alias)
+		}
+	}
+}
+
+// TestFlaggedExceptionsDoNotExemptOtherBindings proves the scoping bites. It
+// calls the same findPaidCompletionException the guard calls, so it cannot
+// agree with a re-implementation while both are wrong.
+//
+// The case that matters is the first: hive-auto is exempt as an IMAGE model
+// because no upstream-free alias can generate an image, and that must not
+// license a plain chat completion on the same paid alias.
+func TestFlaggedExceptionsDoNotExemptOtherBindings(t *testing.T) {
+	cases := []struct {
+		name    string
+		binding ciModelBinding
+		want    bool
+	}{
+		{
+			name:    "hive-auto as a chat model is NOT exempt",
+			binding: ciModelBinding{file: ".github/workflows/ci.yml", name: "HIVE_TEST_MODEL", alias: "hive-auto"},
+			want:    false,
+		},
+		{
+			name:    "hive-auto as a tools model is NOT exempt",
+			binding: ciModelBinding{file: ".github/workflows/ci.yml", name: "HIVE_TOOLS_MODEL", alias: "hive-auto"},
+			want:    false,
+		},
+		{
+			name:    "hive-auto as the image model IS exempt",
+			binding: ciModelBinding{file: ".github/workflows/ci.yml", name: "HIVE_IMAGE_MODEL", alias: "hive-auto"},
+			want:    true,
+		},
+		{
+			name:    "the deployed agent model is exempt only on the deploy workflow",
+			binding: ciModelBinding{file: ".github/workflows/deploy-demo-box.yml", name: "HIVE_AGENT_ENGINE_LLM_MODEL", alias: "hive-default"},
+			want:    true,
+		},
+		{
+			name:    "the same binding on a CI agent workflow is NOT exempt",
+			binding: ciModelBinding{file: ".github/workflows/agent-visual-proof.yml", name: "HIVE_AGENT_ENGINE_LLM_MODEL", alias: "hive-default"},
+			want:    false,
+		},
+		{
+			name:    "hive-default as a chat model is NOT exempt anywhere",
+			binding: ciModelBinding{file: ".github/workflows/deploy-demo-box.yml", name: "HIVE_TEST_MODEL", alias: "hive-default"},
+			want:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got := findPaidCompletionException(tc.binding)
+			if got != tc.want {
+				t.Errorf("findPaidCompletionException(%s in %s as %s) = %v, want %v",
+					tc.binding.alias, tc.binding.file, tc.binding.name, got, tc.want)
+			}
+		})
 	}
 }
