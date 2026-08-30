@@ -16,10 +16,10 @@ import (
 // retryableStatuses are upstream response codes where a retry is worth trying:
 // 429 (rate limited by upstream) and transient gateway errors.
 var retryableStatuses = map[int]bool{
-	http.StatusTooManyRequests:     true, // 429
-	http.StatusBadGateway:          true, // 502
-	http.StatusServiceUnavailable:  true, // 503
-	http.StatusGatewayTimeout:      true, // 504
+	http.StatusTooManyRequests:    true, // 429
+	http.StatusBadGateway:         true, // 502
+	http.StatusServiceUnavailable: true, // 503
+	http.StatusGatewayTimeout:     true, // 504
 }
 
 // litellmRouterExhaustionMarker is LiteLLM's own wording when its router gives
@@ -223,7 +223,23 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 	// keeps naming the same field cannot loop.
 	stripped := map[string]bool{}
 
+	// skipBackoff is set when the PREVIOUS attempt hit a spent periodic
+	// allowance rather than a transient rate limit. The next attempt still
+	// happens, because it is LiteLLM's chance to land on a different pool
+	// member, but it happens immediately: waiting 1.8 seconds for a window
+	// that resets at midnight UTC converts a fast, correct, actionable answer
+	// into a slow one. See allowance_wall.go.
+	skipBackoff := false
+
+	// wallsSeen bounds the no-wait failover to one attempt; see where it is
+	// incremented for why more than one is the wrong shape.
+	wallsSeen := 0
+
 	for i, delay := range retryDelays {
+		if skipBackoff {
+			delay = 0
+			skipBackoff = false
+		}
 		if delay > 0 {
 			wait := delay + jitter(delay)
 			select {
@@ -234,11 +250,15 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 				return nil, ctx.Err()
 			case <-time.After(wait):
 			}
-			// Discard the previous retryable response; we're about to replace it.
-			if lastResp != nil {
-				drainAndClose(lastResp)
-				lastResp = nil
-			}
+		}
+		// Discard the previous retryable response; we're about to replace it.
+		// Outside the delay branch on purpose: an allowance wall re-dispatches
+		// with no wait at all, and leaving this inside would leak that
+		// response's body and its pooled connection on exactly the path that
+		// retries fastest.
+		if i > 0 && lastResp != nil {
+			drainAndClose(lastResp)
+			lastResp = nil
 		}
 
 		resp, err := dispatch(ctx, litellmModel, body)
@@ -280,11 +300,36 @@ func dispatchWithRetry(ctx context.Context, litellmModel string, body []byte, di
 			return resp, nil
 		}
 
-		// Retryable status. Hold onto it so we can return it if all attempts fail.
+		// Retryable status. Hold onto it so we can return it if all attempts
+		// fail, and decide whether the next attempt is worth waiting for.
 		lastResp = resp
 		if i == len(retryDelays)-1 {
+			// Terminal attempt. Deliberately NOT classified: the verdict could
+			// only change how long to wait, and there is no next attempt to
+			// wait for, so classifying here would buy an 8 KiB body read whose
+			// result is discarded.
 			return lastResp, nil
 		}
+
+		// A spent periodic allowance resets on a calendar boundary, so the
+		// backoff buys nothing, while ONE re-dispatch is still worth making
+		// because it is LiteLLM's chance to pick a different pool member.
+		//
+		// Exactly one, and the bound matters. The failover argument is spent
+		// after the first re-dispatch: a wall seen twice means the pool is
+		// walled, not that this member is, and continuing would fire the whole
+		// ladder back to back at full speed during precisely the event this was
+		// built for, a pool-wide daily exhaustion. So the second wall returns.
+		// See allowance_wall.go.
+		if isAllowanceWall(resp) {
+			wallsSeen++
+			if wallsSeen > 1 {
+				return lastResp, nil
+			}
+			skipBackoff = true
+			continue
+		}
+		skipBackoff = false
 	}
 
 	// Unreachable in practice: the loop either returns or retries.
