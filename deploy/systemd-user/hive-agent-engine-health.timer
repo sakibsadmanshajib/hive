@@ -1,0 +1,57 @@
+[Unit]
+# Cadence for the agent-engine launcher health probe (issue #1510).
+#
+# Five minutes bounds how long a launcher that cannot be restarted back to
+# health can sit unnoticed. It is deliberately much tighter than
+# hive-box-backup.timer's twice-daily schedule, because a dead backup costs a
+# day of recovery point and a dead launcher costs every agent task on the box
+# starting immediately.
+#
+# The probe is a socket call and a timestamp comparison, so running it 288
+# times a day costs nothing measurable.
+Description=Hive agent-engine launcher health probe schedule (every five minutes)
+
+[Timer]
+# Monotonic rather than OnCalendar, and so deliberately without
+# Persistent=true, which systemd honours only for calendar timers and would be
+# a decorative no-op here.
+#
+# OnActiveSec, not OnBootSec, and that distinction was measured rather than
+# reasoned about. OnBootSec is relative to the manager starting, so on a box
+# that booted days ago it is already in the past and the first probe fires the
+# instant the timer starts. The installer restarts this timer on every run, and
+# on a run that also restarts the launcher those two collide: the probe ran
+# inside the launcher's own restart window on the demo box on 2026-08-29 and
+# posted a HiveAgentEngineDown alert about a launcher that was mid-redeploy and
+# healthy nine seconds later. A monitor that cries wolf on an ordinary deploy
+# gets muted within a day, and a muted monitor is worse than none because it
+# still reads as coverage.
+#
+# OnActiveSec is relative to this timer's own activation instead, so every
+# start, install or boot alike, gets a one minute grace period before the first
+# probe. That is comfortably longer than the twenty seconds a full launcher
+# reinstall takes and short enough that a launcher which genuinely fails to
+# come back is reported within the minute.
+OnActiveSec=1min
+
+# Paces every later run from the end of the previous PROBE rather than from
+# this timer's activation, so a slow run cannot stack against its own next
+# slot. It also means a box being redeployed repeatedly cannot starve the
+# probe: systemd takes the earliest of the configured elapse points, so the
+# five minute bound from the last actual run survives any number of timer
+# restarts resetting OnActiveSec above.
+OnUnitActiveSec=5min
+
+# systemd defaults AccuracySec to one minute, so a five minute timer really
+# fires somewhere in a six minute window. That interacts badly with the fifteen
+# minute staleness threshold and with the alert lifetime the probe sets: three
+# late runs in a row is enough to trip a staleness alert about a schedule that
+# is working exactly as configured. One second costs a timer wakeup that the
+# kernel would have taken anyway for something else on a box running a full
+# docker stack, and it makes the cadence mean what it says.
+AccuracySec=1s
+
+Unit=hive-agent-engine-health.service
+
+[Install]
+WantedBy=timers.target

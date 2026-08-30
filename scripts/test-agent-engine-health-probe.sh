@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+# Regression guard for scripts/agent-engine-health-probe.sh (issue #1510).
+#
+# The probe is the only thing that reports the agent-engine launcher being down
+# without a person submitting a task and watching it fail, so the ways it can
+# be quietly wrong are all the same shape: it stays silent when it should not.
+# Three of them are covered here because none of them would show up on the box
+# until the day they mattered.
+#
+#   1. It reports healthy on a launcher that is not serving. Each of the three
+#      conditions is asserted separately, because a probe that only checked the
+#      unit state would report green on a wedged daemon and a probe that only
+#      curled the socket would report green with the unit gone if a stale
+#      socket file were left behind.
+#   2. It treats its own absence as health. A probe run that never happened
+#      posts nothing, any firing alert auto-resolves through Alertmanager's
+#      resolve_timeout, and the silence reads as coverage. The staleness arm is
+#      what makes an absent run loud, so it is asserted in both directions.
+#   3. It advances its own last-success stamp on a run where the launcher was
+#      down, which would make the staleness arm above permanently blind.
+#
+# No systemd, no launcher and no Alertmanager needed: `systemctl` and `curl` are
+# stubbed on PATH, the same trick scripts/test-agent-engine-restart-gate.sh
+# uses. The curl stub captures every posted alert body so the assertions read
+# what would actually have been sent.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+probe="$repo_root/scripts/agent-engine-health-probe.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/state"
+runtime="$tmp/runtime"
+mkdir -p "$runtime/run"
+
+export STATE="$tmp/state"
+stamp="$runtime/health.last-success-epoch"
+posted="$STATE/posted"
+
+cat > "$tmp/bin/systemctl" <<'SH'
+#!/bin/sh
+# Only ever asked `is-active`. Anything else is a probe that grew a new
+# dependency without this stub learning about it, and that must be loud.
+case " $* " in
+  *" is-active "*) [ -f "$STATE/unit_active" ] || exit 3 ;;
+  *) echo "stub systemctl: unexpected call: $*" >&2; exit 64 ;;
+esac
+exit 0
+SH
+
+# Two very different calls arrive here: the /health probe over the Unix socket,
+# and the Alertmanager POST. Telling them apart on --unix-socket keeps the
+# alert capture from swallowing health probes and vice versa.
+cat > "$tmp/bin/curl" <<'SH'
+#!/bin/sh
+case " $* " in
+  *" --unix-socket "*)
+    [ -f "$STATE/health_ok" ] || exit 7
+    echo '{"status":"ok"}'
+    exit 0
+    ;;
+esac
+# Alertmanager. Capture the body so the test can assert on the alertname that
+# would really have been sent, not merely that some POST happened.
+#
+# And VALIDATE it, because a stub that accepts anything cannot catch the thing
+# most worth catching here. The down path's description is not a fixed literal:
+# it interpolates a socket path and systemd's own unit-state text, so
+# post_alert's escaping is load bearing. A body that Alertmanager would answer
+# with 400 used to pass every case in this file and fail only on the box, where
+# curl -f's failure is swallowed into a journal WARN.
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-d" ]; then
+    printf '%s\n' "$arg" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list), "alertmanager v2 wants an array, not a bare object"' \
+      || { echo "stub curl: the alert body is not something alertmanager would accept" >&2; exit 1; }
+    printf '%s\n' "$arg" >> "$STATE/posted"
+  fi
+  prev="$arg"
+done
+case " $* " in
+  *" $ALERTMANAGER_EXPECT_URL "*) ;;
+  *) echo "stub curl: posted to an unexpected URL: $*" >&2; exit 1 ;;
+esac
+[ -f "$STATE/alertmanager_down" ] && exit 7
+exit 0
+SH
+
+chmod +x "$tmp/bin/"*
+export PATH="$tmp/bin:$PATH"
+# The v2 alerts endpoint, asserted by the stub. A probe that posted to
+# /api/v1/alerts would otherwise pass every case here and 404 on the box.
+export ALERTMANAGER_EXPECT_URL="http://localhost:9093/api/v2/alerts"
+
+failures=0
+fail() {
+  echo "FAIL $1"
+  shift
+  [ $# -gt 0 ] && printf '%s\n' "$1" | sed 's/^/       /'
+  failures=$((failures + 1))
+}
+
+out=""
+status=0
+run_probe() {
+  : > "$posted"
+  set +e
+  out=$(env \
+    RUNTIME_DIR="$runtime" \
+    UNIT_NAME="hive-agent-engine" \
+    ALERTMANAGER_URL="http://localhost:9093" \
+    STALE_AFTER=900 \
+    bash "$probe" 2>&1)
+  status=$?
+  set -e
+}
+
+alerted() { grep -q "\"alertname\":\"$1\"" "$posted"; }
+
+# seed_stamp <seconds-ago> writes a last-success stamp a known distance in the
+# past. Every case that cares about the stamp seeds it rather than inheriting
+# whatever the previous case left, because an inherited stamp written in the
+# same wall-clock second as the write under test is indistinguishable from no
+# write at all, and the assertion then passes for the wrong reason.
+seed_stamp() { printf '%s\n' "$(( $(date +%s) - $1 ))" > "$stamp"; }
+
+# A real AF_UNIX inode, not a plain file: the probe asserts `[ -S ... ]`, which
+# a `touch`ed regular file would fail, and the "no socket" arm would then be the
+# only one this suite ever exercised.
+bind_socket() {
+  python3 - "$runtime/run/engine.sock" <<'PY'
+import socket, sys, os
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+s = socket.socket(socket.AF_UNIX)
+s.bind(path)
+PY
+}
+
+healthy_launcher() { touch "$STATE/unit_active" "$STATE/health_ok"; bind_socket; }
+
+# --- case A: a healthy launcher is silent and stamps itself -----------------
+
+before_a=$failures
+healthy_launcher
+rm -f "$stamp"
+run_probe
+[ "$status" = 0 ] || fail "[A] the probe failed against a healthy launcher" "$out"
+[ -s "$posted" ] && fail "[A] a healthy launcher posted an alert" "$(cat "$posted")"
+[ -f "$stamp" ] || fail "[A] a successful probe did not write its last-success stamp"
+# A missing stamp is a first-ever run, not staleness. Alerting on it would fire
+# once on every fresh box install for no reason at all.
+alerted HiveAgentEngineProbeStale && fail "[A] the first run with no stamp reported itself stale"
+[ $failures -eq "$before_a" ] && echo "ok   [A] a healthy launcher is silent and records its success"
+
+# --- case B: the unit not running is loud ------------------------------------
+
+before_b=$failures
+rm -f "$STATE/unit_active"
+# 60 seconds ago: fresh against the 900 second threshold so this case tests the
+# down path and not the stale path, and far enough from `now` that a write
+# would change the value. Inheriting case A's stamp made this assertion
+# vacuous, since a stamp rewritten inside the same second compares equal.
+seed_stamp 60
+stamp_before=$(cat "$stamp")
+run_probe
+[ "$status" = 0 ] && fail "[B] the probe exited 0 with the launcher unit not running" "$out"
+alerted HiveAgentEngineDown || fail "[B] no HiveAgentEngineDown alert was posted" "$out"
+# The whole staleness arm goes blind if a failed run advances the stamp.
+[ "$(cat "$stamp")" = "$stamp_before" ] \
+  || fail "[B] a failed probe advanced its own last-success stamp"
+[ $failures -eq "$before_b" ] && echo "ok   [B] an inactive unit posts HiveAgentEngineDown and does not stamp"
+
+# --- case C: an active unit with no socket is loud --------------------------
+#
+# Separate from B because it sends an operator somewhere else: the launcher
+# process is alive and something removed or never created its socket.
+before_c=$failures
+touch "$STATE/unit_active"
+rm -f "$runtime/run/engine.sock"
+run_probe
+[ "$status" = 0 ] && fail "[C] the probe exited 0 with no socket present" "$out"
+alerted HiveAgentEngineDown || fail "[C] a missing socket posted no alert" "$out"
+case "$out" in *"no socket"*) : ;; *) fail "[C] the alert did not name the missing socket" "$out" ;; esac
+[ $failures -eq "$before_c" ] && echo "ok   [C] an active unit with no socket posts HiveAgentEngineDown"
+
+# --- case D: a wedged daemon is loud ----------------------------------------
+#
+# The case a unit-state-only check would report green on: the process is up,
+# systemd is satisfied, and it answers nothing.
+before_d=$failures
+bind_socket
+rm -f "$STATE/health_ok"
+run_probe
+[ "$status" = 0 ] && fail "[D] the probe exited 0 against a daemon that did not answer /health" "$out"
+alerted HiveAgentEngineDown || fail "[D] a wedged daemon posted no alert" "$out"
+case "$out" in *"/health"*) : ;; *) fail "[D] the alert did not name the health endpoint" "$out" ;; esac
+[ $failures -eq "$before_d" ] && echo "ok   [D] a wedged daemon posts HiveAgentEngineDown"
+
+# --- case E: THE GUARD. An absent probe run must read as down ---------------
+#
+# Without this arm, a probe that stops running produces silence, the firing
+# alert resolves itself through resolve_timeout, and the absence reads as
+# health. That is the exact failure this repository has already been bitten by,
+# so it gets an explicit test rather than a comment.
+before_e=$failures
+healthy_launcher
+printf '%s\n' "$(( $(date +%s) - 1000 ))" > "$stamp"
+run_probe
+alerted HiveAgentEngineProbeStale \
+  || fail "[E] a last success older than the threshold did not post HiveAgentEngineProbeStale" "$out"
+# Staleness is about the schedule, not the launcher, so a stale stamp on a
+# currently healthy launcher must not also claim the launcher is down.
+alerted HiveAgentEngineDown \
+  && fail "[E] a stale stamp on a healthy launcher wrongly claimed the launcher was down" "$(cat "$posted")"
+[ "$status" = 0 ] || fail "[E] a stale stamp on a healthy launcher should still exit 0" "$out"
+[ $failures -eq "$before_e" ] && echo "ok   [E] a probe run that did not happen reads as down, not as silence"
+
+# --- case F: and a fresh stamp does not cry wolf ----------------------------
+#
+# The other half of E. A monitor that fires on an ordinary run gets muted
+# within a day, and a muted monitor is worse than none because it still reads
+# as coverage.
+before_f=$failures
+seed_stamp 60
+run_probe
+alerted HiveAgentEngineProbeStale && fail "[F] a fresh stamp reported itself stale" "$(cat "$posted")"
+[ "$status" = 0 ] || fail "[F] the probe failed on a fresh healthy run" "$out"
+[ $failures -eq "$before_f" ] && echo "ok   [F] a fresh stamp stays quiet"
+
+# --- case G: a corrupt stamp must not silently disable the staleness arm ----
+#
+# `$(( now - garbage ))` is a fatal arithmetic error under `set -e`, which would
+# abort the probe before it ever checked the launcher: a truncated or
+# half-written stamp would take the whole watchdog offline silently.
+#
+# Two shapes, because the obvious guard only catches the first. A stamp of
+# non-digits is caught by a digit filter; a stamp with a leading zero is all
+# digits and passes that filter, and bash then reads it as octal, so "08"
+# is the same fatal arithmetic error arriving through the guard rather than
+# around it.
+before_g=$failures
+for corrupt in 'not-a-number' '08'; do
+  printf '%s\n' "$corrupt" > "$stamp"
+  run_probe
+  alerted HiveAgentEngineProbeStale || fail "[G] a corrupt stamp ($corrupt) did not read as stale" "$out"
+  [ "$status" = 0 ] || fail "[G] a corrupt stamp ($corrupt) aborted the probe instead of reading as stale" "$out"
+done
+[ $failures -eq "$before_g" ] && echo "ok   [G] a corrupt stamp, non-numeric or octal-looking, reads as stale rather than aborting the probe"
+
+# --- case H: a dead Alertmanager must not hide the underlying failure -------
+before_h=$failures
+rm -f "$STATE/unit_active"
+touch "$STATE/alertmanager_down"
+run_probe
+[ "$status" = 0 ] && fail "[H] an undeliverable alert turned a down launcher into a green probe" "$out"
+case "$out" in *"alertmanager post failed"*) : ;; *) fail "[H] the delivery failure was not reported" "$out" ;; esac
+rm -f "$STATE/alertmanager_down"
+[ $failures -eq "$before_h" ] && echo "ok   [H] a failed alert delivery is reported and does not mask the failure"
+
+
+# --- case I: every alert carries an explicit endsAt -------------------------
+#
+# Without one, Alertmanager falls back to resolve_timeout, which defaults to
+# five minutes, and this probe runs every five minutes. The alert then expires
+# at almost exactly the moment the next post is due, so any jitter resolves it
+# and the next run re-fires it: hive-ops gets a resolved mail and a firing mail
+# every five minutes for as long as the launcher is down, and a monitor that
+# mails a flapping pair is muted within a day.
+before_i=$failures
+healthy_launcher
+rm -f "$STATE/unit_active"
+seed_stamp 60
+run_probe
+grep -q '"endsAt"' "$posted" \
+  || fail "[I] the alert carries no endsAt, so it will flap against resolve_timeout" "$(cat "$posted")"
+# It must be in the FUTURE. An endsAt in the past is an immediate resolve,
+# which is worse than none: the alert would never be seen at all.
+ends=$(sed -n 's/.*"endsAt":"\([^"]*\)".*/\1/p' "$posted" | head -1)
+if [ -z "$ends" ]; then
+  fail "[I] could not parse endsAt out of the posted body" "$(cat "$posted")"
+elif [ "$(date -u -d "$ends" +%s)" -le "$(date -u +%s)" ]; then
+  fail "[I] endsAt is not in the future, so the alert resolves immediately: $ends"
+fi
+[ $failures -eq "$before_i" ] && echo "ok   [I] alerts carry a future endsAt instead of relying on resolve_timeout"
+
+# --- case J: a dropped alert must not be made unrepeatable ------------------
+#
+# The stale arm alerts, the POST fails, and the probe then goes on to succeed
+# and rewrite the stamp. The next run computes a fresh age, finds nothing to
+# report, and the alert Alertmanager never received is one nobody ever hears
+# about. One dropped packet, signal gone for good.
+before_j=$failures
+healthy_launcher
+seed_stamp 1200
+touch "$STATE/alertmanager_down"
+stamp_before=$(cat "$stamp")
+run_probe
+[ "$(cat "$stamp")" = "$stamp_before" ] \
+  || fail "[J] the stamp was advanced after a staleness alert failed to deliver, so the signal is gone"
+[ "$status" = 0 ] && fail "[J] a run whose alert never landed reported success" "$out"
+rm -f "$STATE/alertmanager_down"
+# And the next run, with delivery working again, must still find it stale.
+run_probe
+alerted HiveAgentEngineProbeStale \
+  || fail "[J] the staleness condition was not still reportable on the next run" "$out"
+[ $failures -eq "$before_j" ] && echo "ok   [J] a dropped alert leaves the condition repeatable"
+
+# --- case K: --check is the cron lane, and it must not write the stamp ------
+#
+# THE fix for the finding that the staleness arm could never fire when its own
+# timer stopped. A second lane that also wrote the stamp would keep it fresh
+# forever and hide exactly the condition it exists to find, so --check reads
+# and never writes.
+before_k=$failures
+healthy_launcher
+seed_stamp 60
+stamp_before=$(cat "$stamp")
+run_probe_check() {
+  : > "$posted"
+  set +e
+  out=$(env RUNTIME_DIR="$runtime" UNIT_NAME="hive-agent-engine" \
+    ALERTMANAGER_URL="http://localhost:9093" STALE_AFTER=900 \
+    bash "$probe" --check 2>&1)
+  status=$?
+  set -e
+}
+run_probe_check
+[ "$status" = 0 ] || fail "[K] --check failed against a fresh stamp" "$out"
+[ "$(cat "$stamp")" = "$stamp_before" ] \
+  || fail "[K] --check advanced the stamp, which would hide a dead timer forever"
+[ -s "$posted" ] && fail "[K] --check alerted about a fresh stamp" "$(cat "$posted")"
+[ $failures -eq "$before_k" ] && echo "ok   [K] --check reads the stamp and never writes it"
+
+# --- case L: --check alerts when the timer has stopped producing successes --
+#
+# The whole reason the cron lane exists. Note the launcher is deliberately
+# HEALTHY here: the thing being reported is that nothing has verified it, not
+# that it is down.
+before_l=$failures
+healthy_launcher
+seed_stamp 1200
+run_probe_check
+alerted HiveAgentEngineProbeStale \
+  || fail "[L] --check did not alert on a stamp older than the threshold" "$out"
+[ "$status" = 0 ] && fail "[L] --check exited 0 on a stale stamp" "$out"
+alerted HiveAgentEngineDown \
+  && fail "[L] --check claimed the launcher was down when it was only unverified" "$(cat "$posted")"
+[ $failures -eq "$before_l" ] && echo "ok   [L] --check reports a stopped timer without claiming the launcher is down"
+
+# --- case M: --check must not probe the launcher at all --------------------
+#
+# It runs from cron, on a schedule that overlaps the systemd timer. If it also
+# probed, a launcher restart would be reported twice from two lanes, and the
+# cron lane would start needing everything the timed lane needs.
+before_m=$failures
+rm -f "$STATE/unit_active" "$STATE/health_ok"
+seed_stamp 60
+run_probe_check
+alerted HiveAgentEngineDown \
+  && fail "[M] --check probed the launcher and reported it down; that is the timed lane's job" "$(cat "$posted")"
+[ "$status" = 0 ] || fail "[M] --check failed because the launcher was down, which it must not even look at" "$out"
+[ $failures -eq "$before_m" ] && echo "ok   [M] --check does not probe the launcher"
+
+# --- case N: an unknown argument is refused ---------------------------------
+#
+# The cron entry and the systemd unit are the only two callers, and a typo in
+# either must fail loudly rather than silently running the wrong mode.
+before_n=$failures
+set +e
+out=$(env RUNTIME_DIR="$runtime" bash "$probe" --chek 2>&1)
+status=$?
+set -e
+[ "$status" = 0 ] && fail "[N] a misspelled mode ran anyway" "$out"
+[ $failures -eq "$before_n" ] && echo "ok   [N] an unknown argument is refused instead of silently running the full probe"
+
+
+# --- case O: the escaper must survive a description it did not author -------
+#
+# post_alert's escaping is the only thing between systemd's error text and a
+# 400 from Alertmanager, and a 400 here is silent: curl -f fails, the journal
+# gets one WARN, and the launcher stays down and unreported. The down path
+# interpolates $SOCKET_PATH, so a runtime directory holding a quote and a
+# backslash is enough to exercise it without inventing a new injection point.
+before_o=$failures
+hostile="$tmp/ru\"n\\time"
+mkdir -p "$hostile/run"
+printf '%s\n' "$(date +%s)" > "$hostile/health.last-success-epoch"
+# The unit must be ACTIVE and the socket absent, so the probe takes the branch
+# whose text actually interpolates $SOCKET_PATH. The not-active branch names
+# only the unit, so running this case through it would exercise nothing and
+# pass no matter what the escaper did.
+touch "$STATE/unit_active"
+: > "$posted"
+set +e
+out=$(env RUNTIME_DIR="$hostile" UNIT_NAME="hive-agent-engine" \
+  ALERTMANAGER_URL="http://localhost:9093" STALE_AFTER=900 \
+  bash "$probe" 2>&1)
+status=$?
+set -e
+# The stub rejects a body that is not valid JSON, so a broken escaper shows up
+# as a delivery failure rather than as a passing test.
+case "$out" in
+  *"alertmanager post failed"*)
+    fail "[O] a path containing a quote and a backslash produced a body alertmanager would reject" "$out" ;;
+esac
+alerted HiveAgentEngineDown \
+  || fail "[O] no alert survived a description containing shell-hostile characters" "$out"
+[ $failures -eq "$before_o" ] && echo "ok   [O] a description carrying quotes and backslashes still produces a valid body"
+
+if [ "$failures" -ne 0 ]; then
+  echo "$failures check(s) failed"
+  exit 1
+fi
+echo "all agent-engine health-probe checks passed"

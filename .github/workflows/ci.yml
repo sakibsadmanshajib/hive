@@ -753,6 +753,17 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-agent-engine-restart-gate.sh
 
+      # Regression guard for the agent-engine launcher health probe (issue
+      # #1510). Every way that probe can be wrong is the same shape, silence
+      # when it should be loud: reporting healthy against a wedged daemon,
+      # advancing its own last-success stamp on a failed run so the staleness
+      # arm goes permanently blind, or aborting on a corrupt stamp and taking
+      # the whole watchdog offline without saying so. None of those would show
+      # up on the box until the day they mattered. Stubs systemctl and curl on
+      # PATH, same trick as the guard above.
+      - if: needs.changes.outputs.run != 'false'
+        run: bash scripts/test-agent-engine-health-probe.sh
+
       # Regression guard for the PreToolUse guards in .claude/hooks/. It
       # feeds each guard both harness payload shapes plus Claude Code's
       # MultiEdit shape, which nests its edit array at `tool_input.edits`

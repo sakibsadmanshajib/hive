@@ -1,0 +1,89 @@
+[Unit]
+# The agent-engine host launcher (issue #780), supervised (issue #1510).
+#
+# This process is the ONLY arm that can run a real agent task on any
+# deployment this repository ships. Control-plane cannot exec Apptainer itself
+# (Alpine base, no glibc loader for the starter binary, no /dev/fuse, no
+# CAP_SYS_ADMIN) and granting it that privilege was refused deliberately,
+# since it is the process holding the Stripe keys, the Supabase service-role
+# key and the platform database DSN. So every Cowork and coding-agent task on
+# the demo box goes through this unit, over a Unix socket bind-mounted into
+# control-plane.
+#
+# Installed and rendered by scripts/install-agent-engine-host.sh, which
+# substitutes the ExecStart placeholder below and writes the result to
+# ~/.config/systemd/user/. Do not edit the installed copy: the installer
+# fingerprints it and will overwrite drift on the next deploy.
+#
+# ── Why this is a real unit file and not `systemd-run --user` ─────────────
+#
+# It used to be a transient unit created by `systemd-run --user --collect
+# --property=Restart=on-failure`. Measured on the box on 2026-08-29, that
+# shape had four holes at once and issue #1510 was the bill for them:
+#
+#   1. FragmentPath=/run/user/1000/systemd/transient/... . That tree is
+#      tmpfs, so a reboot erases the unit definition entirely and nothing
+#      starts the launcher again. Linger is on for this user, so an ENABLED
+#      unit comes back at boot; a transient one has nothing to come back from.
+#   2. CollectMode=inactive-or-failed garbage-collects the unit the moment it
+#      stops or fails, so it does not even sit in a failed state where anyone
+#      could see it. It ceases to exist.
+#   3. Restart=on-failure excludes SIGHUP, SIGINT, SIGTERM and SIGPIPE, and a
+#      clean exit(0). A launcher that exits politely stays down.
+#   4. StartLimitBurst=5 over StartLimitIntervalUSec=10s: a launcher that
+#      crashes on start burns its whole budget in about 25 seconds and is
+#      then both failed and, per 2, collected.
+#
+# Follows deploy/systemd-user/hive-box-backup.service, the existing working
+# user unit on this box, rather than inventing a second pattern.
+
+Description=Hive agent-engine host launcher (Apptainer sandbox launch daemon)
+Documentation=https://github.com/sakibsadmanshajib/hive/issues/1510
+
+# Closes hole 4. A launcher that cannot start now retries forever at
+# RestartSec below instead of giving up after five attempts, because for a
+# process whose entire defect is "nothing brings it back", never giving up is
+# the correct bias. What tells a human about a permanent crash loop is
+# hive-agent-engine-health.timer, not systemd surrendering. Five seconds of
+# retry interval makes the cost of a hopeless loop irrelevant.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@RUN_ENTRY@
+
+# Closes hole 3. Covers a clean exit and a polite SIGTERM as well as a crash,
+# which is what "nothing restarts it" actually required.
+Restart=always
+RestartSec=5
+
+# KillMode is deliberately left at the default, control-group.
+#
+# The sandbox is a foreground `apptainer run` child of this process, so
+# stopping this unit kills the running agent and not merely the launcher's
+# in-memory session registry. That is the behaviour PR #1456 (issue #921)
+# exists to work around, and the workaround is the installer's restart-skip
+# gate, NOT a weaker kill mode: switching to KillMode=process would orphan the
+# sandbox rather than protect it, control-plane would still poll a session the
+# new launcher never heard of, and the task would still die -- only now with a
+# stray apptainer process left holding memory and a cgroup.
+
+# NoNewPrivileges is deliberately NOT set, unlike hive-box-backup.service.
+# Apptainer's rootless launch goes through a setuid helper
+# (/usr/libexec/apptainer/bin/starter-suid), and NoNewPrivileges=true makes
+# every setuid exec in the cgroup fail. Copying that hardening line across
+# from the backup unit would break every agent task while leaving this unit
+# itself perfectly healthy, which is the worst shape of failure available
+# here.
+#
+# UMask is likewise not set. The launcher already creates its socket 0600 and
+# its per-session directories 0700 in code, and pinning a umask here would
+# change the mode of everything the sandbox writes underneath it for no
+# security gain.
+
+[Install]
+# Closes holes 1 and 2, in combination with `loginctl enable-linger sakib`,
+# which is already set on this box. Linger is what runs the user manager with
+# no login session, and default.target is what the user manager pulls in at
+# boot.
+WantedBy=default.target
