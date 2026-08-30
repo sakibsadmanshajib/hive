@@ -2336,7 +2336,7 @@ jobs:
             [ -n "${!v:-}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
-            echo "::error::this job mints a live session and needs:$missing. The two keys are the self-hosted deployment's own, provisioned as DEMO_SUPABASE_ANON_KEY and DEMO_SUPABASE_SERVICE_ROLE_KEY from the box's .env (issue #1059)."
+            echo "::error::this job mints a live session and needs:$missing. The two keys are the self-hosted deployment's own, provisioned as DEMO_SUPABASE_ANON_KEY and DEMO_SUPABASE_SERVICE_ROLE_KEY from the box's .env (issue #1531)."
             exit 1
           fi
 
