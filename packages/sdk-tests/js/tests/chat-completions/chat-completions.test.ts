@@ -9,16 +9,24 @@ const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 // response contract. hive-free fails the first bar (free pool members are
 // seeded tools_supported=false until cross-member parity is probed, #1115),
 // and the edge correctly 400s tools/response_format there (run 32736430913).
-// The default is deepseek-v4-flash (owner decision 2026-08-25): tools-
-// capable and verified healthy on the live box, at a fraction of the cost
-// of deepseek-v4-pro, which as the previous default burned 150 calls /
-// 30.2M credits in one day of CI. Known risk, kept visible rather than
-// buried: that flash router's `-latest` slug returned message.content as a
-// parsed JSON object (run 32665985618), as null, and as string across
-// probes on 2026-08-23. If that instability recurs, this suite fails loudly
-// by design; repoint HIVE_TOOLS_MODEL instead of loosening the assertions.
+// The default is hive-small (owner directive 2026-08-30: no CI pipeline may
+// call a paid completion model). It is upstream-free, pins to the single
+// healthy route route-free-small on
+// openrouter/dots-studio/dots-3-note-preview:free, and that route is seeded
+// tools_supported=true. Verified live against OpenRouter before this default
+// moved, every response reporting cost 0: forced tool_choice returns a real
+// tool_calls array, tool_choice required/none/auto each behave correctly, a
+// multi-turn tool-result round trip completes, and message.content comes back
+// as a string on 6 of 6 runs under both response_format json_object and
+// json_schema. That last property is what the previous default
+// deepseek-v4-flash could not hold: its `-latest` slug returned
+// message.content as a parsed JSON object (run 32665985618), as null, and as
+// string across probes on 2026-08-23, so this move is a fidelity improvement
+// as well as a spend one. If the contract ever destabilises here, this suite
+// fails loudly by design; repoint HIVE_TOOLS_MODEL at another upstream-free
+// tools-capable alias instead of loosening the assertions.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "deepseek-v4-flash";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
 
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

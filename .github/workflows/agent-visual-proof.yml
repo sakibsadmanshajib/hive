@@ -416,7 +416,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_DIR: ${{ github.workspace }}
-          HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
+          # openai/hive-small, not openai/hive-default: this workflow runs a
+          # real agent on every matching pull request, and hive-default is a
+          # paid completion alias (owner directive 2026-08-30). hive-small is
+          # upstream-free and its route is seeded tools_supported=true, which
+          # an agent loop needs; tool calling on that upstream was verified
+          # live at cost 0. The repository variable remains the override.
+          HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-small' }}
           HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
           HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
           HIVE_AGENT_ENGINE_SESSION_API_KEY: ${{ secrets.HIVE_AGENT_ENGINE_SESSION_API_KEY }}

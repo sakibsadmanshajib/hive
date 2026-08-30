@@ -511,16 +511,25 @@ jobs:
           #
           # The ledger check sends one real, billed completion per run, on the
           # alias named by HIVE_VERIFY_MODEL (scripts/post-deploy-verify.py,
-          # default hive-default). Left unset it would land on the same free
-          # tier the demo serves chat from and compete with real users for its
-          # daily cap, so the box names a paid alias here and the gate uses
-          # that instead of assuming anything about the routing table.
+          # default hive-free).
+          #
+          # This used to fall back to hive-default, a paid alias, on the
+          # reasoning that a free alias would compete with real users for a
+          # shared daily cap. That reasoning described the world before
+          # migration 20260824_02_free_pool_router.sql: hive-free is now a
+          # load-balanced pool of four Hive-owned free provider keys that fails
+          # over between them, not the single shared free tier chat is served
+          # from, and one completion per deploy is not a meaningful share of
+          # it. The fallback also silently contradicted the script's own
+          # default, so running the gate by hand and running it here billed
+          # different aliases. Owner directive 2026-08-30: no CI pipeline may
+          # call a paid completion model.
           model=$(read_env HIVE_VERIFY_MODEL)
           source="box .env"
           if [ -z "$model" ]; then
             # Same default as the script's own, so absence here behaves
             # identically to running the script by hand.
-            model=hive-default
+            model=hive-free
             source="workflow default"
           fi
           export HIVE_VERIFY_MODEL="$model"
