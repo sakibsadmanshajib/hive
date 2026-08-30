@@ -51,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -71,6 +72,25 @@ PATCH = "apply_ydoc_task_cancel_1508_patch.py"
 VICTIM_CHAT_ID = "e85bb8ac-32f1-4bcb-a5af-2c56060ce571"
 NOTE_ID = "3788a416-e696-434d-baa5-c152a2b2ea87"
 OWNER_SID = "sid-owner"
+STRANGER_SID = "sid-stranger"
+
+# Two more shapes the chat task keyspace actually holds. `main.py` registers a
+# completion with `create_task(..., id=chat_id)` (line 1638), and chat_id is
+# `local:<socket_id>` for a temporary chat and `channel:<channel_id>` for a
+# channel message; both are branched on in main.py and utils/middleware.py. A
+# suite that attacks only with bare UUIDs cannot tell the shipped
+# `startswith('note:')` guard from one keyed on a colon, which would leave every
+# temporary chat and every channel completion cancellable.
+VICTIM_LOCAL_ID = "local:sid-victim-socket"
+VICTIM_CHANNEL_ID = "channel:5f0b7e3a-1111-2222-3333-444455556666"
+
+
+def SESSION_POOL_FOR(recorder: "Recorder") -> dict[str, dict[str, str]]:
+    """Every sid a scenario may use, and no others. See emit()."""
+    return {
+        OWNER_SID: {"id": recorder.note_owner_id, "role": "user"},
+        STRANGER_SID: {"id": "stranger-2", "role": "user"},
+    }
 
 failures: list[str] = []
 
@@ -130,6 +150,13 @@ class Recorder:
         self.cancelled: list[str] = []
         self.registered: list[str] = []
         self.saved: list[str] = []
+        # The real handler wraps its whole body in `except Exception as e:
+        # log.error(...)`. With log.error a no-op, ANY early exception (a stub
+        # shape mismatch, an upstream refactor, a missing payload key) produces
+        # exactly the observable state a working guard produces: cancelled == []
+        # and registered == []. Recording the error calls is what separates
+        # "the guard blocked it" from "the handler crashed before reaching it".
+        self.errors: list[str] = []
 
     async def stop_item_tasks(self, redis, item_id):
         self.cancelled.append(item_id)
@@ -144,7 +171,9 @@ class Recorder:
         return ("task-id", None)
 
 
-def compile_handler(source: str, recorder: Recorder, membership: list[str]):
+def compile_handler(
+    source: str, recorder: Recorder, membership: list[str]
+) -> Callable[..., Awaitable[None]]:
     """The real handler, lifted out of the patched module and made callable.
 
     Only the one `AsyncFunctionDef` is compiled, so socket/main.py's module-level
@@ -191,7 +220,11 @@ def compile_handler(source: str, recorder: Recorder, membership: list[str]):
         def warning(*a, **k):
             return None
 
-        error = info = debug = warning
+        @staticmethod
+        def error(*a, **k):
+            recorder.errors.append(" ".join(str(x) for x in a))
+
+        info = debug = warning
 
     def normalize_document_id(document_id):
         return "note:" + document_id[5:] if document_id.startswith("note_") else document_id
@@ -202,8 +235,7 @@ def compile_handler(source: str, recorder: Recorder, membership: list[str]):
     namespace = {
         "normalize_document_id": normalize_document_id,
         "get_session_ids_from_room": lambda room: list(membership),
-        "SESSION_POOL": {OWNER_SID: {"id": recorder.note_owner_id, "role": "user"},
-                         "sid-stranger": {"id": "stranger-2", "role": "user"}},
+        "SESSION_POOL": SESSION_POOL_FOR(recorder),
         "Notes": Notes,
         "AccessGrants": AccessGrants,
         "stop_item_tasks": recorder.stop_item_tasks,
@@ -225,6 +257,12 @@ def emit(source: str, *, sid: str, document_id: str, note_owner_id: str = "owner
          with_data: bool = True) -> Recorder:
     """One ydoc:document:update frame. The caller is always already in the room."""
     recorder = Recorder(note_owner_id)
+    if sid not in SESSION_POOL_FOR(recorder):
+        # `user = SESSION_POOL.get(sid); if not user: return` in the real
+        # handler is a silent, unlogged early return, and it produces the same
+        # empty cancelled/registered a working guard produces. A scenario that
+        # reached it would read as a passing security assertion.
+        raise SystemExit(f"FAIL: scenario sid {sid!r} is not in the session pool")
     handler = compile_handler(source, recorder, membership=[sid])
     payload = {"document_id": document_id, "update": [1, 2, 3]}
     if with_data:
@@ -237,8 +275,11 @@ def emit(source: str, *, sid: str, document_id: str, note_owner_id: str = "owner
 
 
 def run_leg(source: str, *, expect_leak: bool) -> None:
+    seen: list[Recorder] = []
+
     # 1. A stranger names a victim's CHAT id. The whole issue.
-    r = emit(source, sid="sid-stranger", document_id=VICTIM_CHAT_ID)
+    r = emit(source, sid=STRANGER_SID, document_id=VICTIM_CHAT_ID)
+    seen.append(r)
     if expect_leak:
         check(
             r.cancelled == [VICTIM_CHAT_ID],
@@ -265,15 +306,32 @@ def run_leg(source: str, *, expect_leak: bool) -> None:
     # 2. The same id in its underscore form, which normalize_document_id only
     #    rewrites for 'note_'. A chat uuid has no prefix to rewrite, so this is
     #    the same attack and must behave identically.
-    r = emit(source, sid="sid-stranger", document_id=VICTIM_CHAT_ID.replace("-", "_"))
+    r = emit(source, sid=STRANGER_SID, document_id=VICTIM_CHAT_ID.replace("-", "_"))
+    seen.append(r)
     check(
         (len(r.cancelled) == 1) == expect_leak,
         "an underscore-mangled chat id behaves the same as the plain one "
         f"(observed {len(r.cancelled)} cancellation(s))",
     )
 
+    # 2b. The other two shapes a chat id takes, both carrying a colon. These are
+    #     what separates the shipped note-prefix guard from a colon-keyed one.
+    for label, victim_id in (
+        ("a temporary chat", VICTIM_LOCAL_ID),
+        ("a channel message", VICTIM_CHANNEL_ID),
+    ):
+        r = emit(source, sid=STRANGER_SID, document_id=victim_id)
+        seen.append(r)
+        check(
+            (r.cancelled == [victim_id]) == expect_leak
+            and (r.registered == [victim_id]) == expect_leak,
+            f"{label} id {victim_id!r} reaches the task registry only pre-fix "
+            f"(cancelled={r.cancelled}, registered={r.registered})",
+        )
+
     # 3. The note owner. The debounce must survive the fix in both directions.
     r = emit(source, sid=OWNER_SID, document_id=f"note:{NOTE_ID}")
+    seen.append(r)
     check(
         r.cancelled == [f"note:{NOTE_ID}"],
         "the note owner's update still cancels the pending save for their own "
@@ -287,11 +345,23 @@ def run_leg(source: str, *, expect_leak: bool) -> None:
     # 4. A stranger naming someone else's NOTE. Refused by the ownership check
     #    that already existed, in both legs; recorded so a future change to that
     #    check cannot pass unnoticed.
-    r = emit(source, sid="sid-stranger", document_id=f"note:{NOTE_ID}")
+    r = emit(source, sid=STRANGER_SID, document_id=f"note:{NOTE_ID}")
+    seen.append(r)
     check(
         r.cancelled == [] and r.registered == [],
         "a stranger's update on someone else's note touches the task registry "
         f"not at all (cancelled={r.cancelled}, registered={r.registered})",
+    )
+
+    # 5. Nothing above reached the handler's own `except Exception` arm. Without
+    #    this, an empty cancelled/registered caused by an early crash is
+    #    indistinguishable from one caused by the guard, and the expect_leak
+    #    legs would read as clean passes.
+    logged = [e for r in seen for e in r.errors]
+    check(
+        logged == [],
+        "no scenario in this leg was swallowed by the handler's own except arm "
+        f"(log.error calls: {logged})",
     )
 
 

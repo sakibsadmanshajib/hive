@@ -552,7 +552,7 @@ RUN B=/app/backend/open_webui; test "$(grep -rc '# hive (#1056)' $B/routers/know
     && test "$(grep -c '# hive (#1191)' $B/routers/knowledge.py)" -eq 1 \
     && test "$(grep -c '# hive (#1474)' $B/routers/chats.py)" -eq 3 \
     && test "$(grep -c '# hive (#1508)' $B/socket/main.py)" -eq 2 \
-    && test "$(grep -c '^        await stop_item_tasks(REDIS, document_id)$' $B/socket/main.py)" -eq 0 \
+    && test "$(grep -c '^            await stop_item_tasks(REDIS, document_id)$' $B/socket/main.py)" -eq 0 \
     && test "$(grep -c '^    await stop_item_tasks(request.app.state.redis, id)$' $B/routers/chats.py)" -eq 0
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
