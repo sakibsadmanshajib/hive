@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -448,6 +449,98 @@ func TestExecuteStreaming_ClientClosedRightAfterDone_BurnStillAbsorbed(t *testin
 
 	if ctx.Err() == nil {
 		t.Fatal("sanity check failed: the client never actually disconnected, so this proves nothing")
+	}
+	assertHoldReleasedNotCharged(t, rec, "zero_content")
+}
+
+// cancelOnUpstreamDoneReader cancels the request context the instant the
+// relay's own read of the upstream's [DONE] sentinel returns, which lands
+// before the relay loop's break statement even runs -- and so, well before
+// the post-loop completeness check a few lines below it (stream.go's own
+// "9c"). This is the read-side mirror of cancelOnDoneRecorder above, which
+// hooks the OUTBOUND write of [DONE] to the caller instead: here the cancel
+// fires on the INBOUND read of the upstream's [DONE], which is the earlier of
+// the two events on every stream that completes at all.
+type cancelOnUpstreamDoneReader struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (r *cancelOnUpstreamDoneReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && strings.Contains(string(p[:n]), "[DONE]") {
+		r.once.Do(r.cancel)
+	}
+	return n, err
+}
+
+// dispatchCancelingOnUpstreamDone wraps a real dispatchFunc so the response
+// body it returns cancels ctx the moment the upstream's own [DONE] sentinel
+// is read off the wire, instead of only when this gateway's own [DONE] later
+// reaches the client. See cancelOnUpstreamDoneReader.
+func dispatchCancelingOnUpstreamDone(dispatch dispatchFunc, cancel context.CancelFunc) dispatchFunc {
+	return func(ctx context.Context, litellmModel string, body []byte) (*http.Response, error) {
+		resp, err := dispatch(ctx, litellmModel, body)
+		if err != nil {
+			return resp, err
+		}
+		resp.Body = &cancelOnUpstreamDoneReader{ReadCloser: resp.Body, cancel: cancel}
+		return resp, nil
+	}
+}
+
+// The [DONE]-branch setter's own regression guard (stream.go's
+// `accumulator.StreamCompleted = true` inside `if line == "data: [DONE]"`).
+// Deleting only that line leaves the rest of this file green, because every
+// other fixture here still has a live ctx when the post-loop completeness
+// check runs a few lines later and sets the same field itself. The two
+// setters diverge in exactly one population, and it is the one #1326 exists
+// for: a caller whose context is already cancelled by the time the read loop
+// exits an empty stream.
+//
+// TestExecuteStreaming_ClientClosedRightAfterDone_BurnStillAbsorbed above
+// cancels on the OUTBOUND write of [DONE] to the caller, which happens after
+// the post-loop check already ran and set StreamCompleted itself -- it does
+// not pin the [DONE]-branch setter. This test cancels on the INBOUND read of
+// the upstream's own [DONE] instead, before the relay loop's break, so ctx is
+// already cancelled by the time the post-loop check runs, its own
+// ctx.Err()==nil guard fails, and the [DONE]-branch setter is the only one
+// that ran.
+//
+// Goes red if stream.go's [DONE]-branch StreamCompleted=true is deleted: with
+// it gone, StreamCompleted stays false, isZeroContentStream returns false,
+// and the burn bills in full instead of being absorbed.
+func TestExecuteStreaming_UpstreamDoneReadBeforeClientCancel_BurnStillAbsorbed(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	upstream := emptyLengthSSEServer()
+	defer upstream.Close()
+
+	routingSrv := newRoutingMock(upstream.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, upstream.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dispatch := dispatchCancelingOnUpstreamDone(orch.litellm.ChatCompletion, cancel)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = orch.executeStreaming(ctx, w, req, EndpointChatCompletions, []byte(`{}`), "gpt-4o", "gpt-4o",
+			NeedFlags{NeedChatCompletions: true, NeedStreaming: true}, 10000, false, nil, dispatch)
+	}()
+	waitDone(t, done)
+
+	if ctx.Err() == nil {
+		t.Fatal("sanity check failed: the upstream's [DONE] was never read, so this proves nothing")
 	}
 	assertHoldReleasedNotCharged(t, rec, "zero_content")
 }
