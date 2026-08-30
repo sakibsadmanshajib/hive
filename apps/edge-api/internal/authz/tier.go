@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -39,15 +40,49 @@ type TierResolver struct {
 	fallback Tier
 }
 
-// NewTierResolverFromEnv constructs a resolver whose default limits come from
-// HIVE_TIER_LIMITS_<TIER>_RPM / _TPM env vars. Missing vars use the v1.1
-// master-plan §Tier Model placeholder defaults documented in PLAN.md.
-func NewTierResolverFromEnv() *TierResolver {
-	defaults := map[Tier]TierLimits{
-		TierGuest:      {RPM: envInt("HIVE_TIER_LIMITS_GUEST_RPM", 10), TPM: envInt("HIVE_TIER_LIMITS_GUEST_TPM", 2000)},
-		TierUnverified: {RPM: envInt("HIVE_TIER_LIMITS_UNVERIFIED_RPM", 30), TPM: envInt("HIVE_TIER_LIMITS_UNVERIFIED_TPM", 4000)},
-		TierVerified:   {RPM: envInt("HIVE_TIER_LIMITS_VERIFIED_RPM", 120), TPM: envInt("HIVE_TIER_LIMITS_VERIFIED_TPM", 8000)},
-		TierCredited:   {RPM: envInt("HIVE_TIER_LIMITS_CREDITED_RPM", 600), TPM: envInt("HIVE_TIER_LIMITS_CREDITED_TPM", 20000)},
+// NewTierResolverFromEnv constructs a resolver whose limits come from
+// HIVE_TIER_LIMITS_<TIER>_RPM / _TPM env vars, and REFUSES rather than falls
+// back when one of them is set to something it cannot use.
+//
+// A missing var means NO LIMIT. Owner directive 2026-08-30: Hive imposes no
+// default rate limit anywhere, and a rate limit exists only where someone
+// explicitly configured one.
+//
+// THIS LAYER IS CURRENTLY UNWIRED, and that has to be said here because the
+// first version of this comment claimed the opposite. Nothing outside tests
+// calls this constructor, and nothing outside tests calls Limiter.CheckWithTier
+// either; the only limiter call on the live path is authorizer.go's
+// Limiter.Check, which uses the account and key policies carried on the auth
+// snapshot. So the placeholder pairs removed here (guest 10/2000, unverified
+// 30/4000, verified 120/8000, credited 600/20000) were never enforced on any
+// request. Removing them is directionally right and inert. The default that
+// genuinely was live is defaultRatePolicy in control-plane's apikeys
+// repository, at 60 requests and 120000 tokens per minute.
+//
+// Why an error return rather than a log line. These variables are read exactly
+// once at construction and never on the request path, so there is no
+// availability argument for limping on. Zero now means unlimited, so silently
+// falling back on an unparseable value would delete the limit an operator was
+// trying to set, and a boot log nothing alerts on is a weak guard against that.
+// Refusing hands the decision to whoever wires this layer up, which is the only
+// place with the context to choose between failing the boot and degrading.
+func NewTierResolverFromEnv() (*TierResolver, error) {
+	defaults := map[Tier]TierLimits{}
+	for tier, prefix := range map[Tier]string{
+		TierGuest:      "HIVE_TIER_LIMITS_GUEST",
+		TierUnverified: "HIVE_TIER_LIMITS_UNVERIFIED",
+		TierVerified:   "HIVE_TIER_LIMITS_VERIFIED",
+		TierCredited:   "HIVE_TIER_LIMITS_CREDITED",
+	} {
+		rpm, err := envInt(prefix + "_RPM")
+		if err != nil {
+			return nil, err
+		}
+		tpm, err := envInt(prefix + "_TPM")
+		if err != nil {
+			return nil, err
+		}
+		defaults[tier] = TierLimits{RPM: rpm, TPM: tpm}
 	}
 
 	fallback := TierUnverified
@@ -56,7 +91,7 @@ func NewTierResolverFromEnv() *TierResolver {
 			fallback = t
 		}
 	}
-	return &TierResolver{defaults: defaults, fallback: fallback}
+	return &TierResolver{defaults: defaults, fallback: fallback}, nil
 }
 
 // NewTierResolverWithDefaults is a constructor convenient for tests — bypasses env.
@@ -134,14 +169,30 @@ func parseTier(raw string) (Tier, bool) {
 	return "", false
 }
 
-func envInt(name string, def int) int {
+// envInt reads a non-negative integer from the environment. Unset, or set to
+// whitespace only, means 0, which means no limit at this layer.
+//
+// A value that IS set and cannot be used is an ERROR, never a fallback. Zeroing
+// the tier defaults reversed the failure direction: HIVE_TIER_LIMITS_GUEST_RPM=ten
+// or a negative value used to fall back to a placeholder LIMIT, so a
+// misconfiguration still limited something. Falling back now would mean
+// unlimited, which silently deletes the limit an operator was trying to set.
+// Unlimited by accident is the dangerous direction, so this refuses.
+//
+// The rejected value reported is the TRIMMED one that was actually parsed, not
+// the raw environment value, so the message names what failed rather than a
+// string that differs from it by whitespace.
+func envInt(name string) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return def
+		return 0, nil
 	}
 	v, err := strconv.Atoi(raw)
-	if err != nil || v < 0 {
-		return def
+	if err != nil {
+		return 0, fmt.Errorf("authz: %s = %q is not an integer; refusing rather than treating the limit as unset, which would mean unlimited", name, raw)
 	}
-	return v
+	if v < 0 {
+		return 0, fmt.Errorf("authz: %s = %d is negative; refusing rather than treating the limit as unset, which would mean unlimited", name, v)
+	}
+	return v, nil
 }

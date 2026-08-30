@@ -7,7 +7,10 @@ import (
 
 func TestTierResolverFallbackFromEnvDefault(t *testing.T) {
 	t.Setenv("HIVE_TIER_DEFAULT", "guest")
-	r := NewTierResolverFromEnv()
+	r, err := NewTierResolverFromEnv()
+	if err != nil {
+		t.Fatalf("NewTierResolverFromEnv: %v", err)
+	}
 	if got := r.Resolve(context.Background()); got != TierGuest {
 		t.Fatalf("expected guest fallback, got %s", got)
 	}
@@ -15,7 +18,10 @@ func TestTierResolverFallbackFromEnvDefault(t *testing.T) {
 
 func TestTierResolverJWTClaimWins(t *testing.T) {
 	t.Setenv("HIVE_TIER_DEFAULT", "guest")
-	r := NewTierResolverFromEnv()
+	r, err := NewTierResolverFromEnv()
+	if err != nil {
+		t.Fatalf("NewTierResolverFromEnv: %v", err)
+	}
 	ctx := WithTierClaim(context.Background(), TierVerified)
 	if got := r.Resolve(ctx); got != TierVerified {
 		t.Fatalf("expected verified from JWT claim, got %s", got)
@@ -24,7 +30,10 @@ func TestTierResolverJWTClaimWins(t *testing.T) {
 
 func TestTierResolverInvalidClaimFallsBack(t *testing.T) {
 	t.Setenv("HIVE_TIER_DEFAULT", "credited")
-	r := NewTierResolverFromEnv()
+	r, err := NewTierResolverFromEnv()
+	if err != nil {
+		t.Fatalf("NewTierResolverFromEnv: %v", err)
+	}
 	ctx := context.WithValue(context.Background(), tierClaimKey{}, Tier("platinum"))
 	if got := r.Resolve(ctx); got != TierCredited {
 		t.Fatalf("expected credited fallback on invalid claim, got %s", got)
@@ -34,7 +43,10 @@ func TestTierResolverInvalidClaimFallsBack(t *testing.T) {
 func TestTierResolverEnvDrivenLimits(t *testing.T) {
 	t.Setenv("HIVE_TIER_LIMITS_VERIFIED_RPM", "999")
 	t.Setenv("HIVE_TIER_LIMITS_VERIFIED_TPM", "12345")
-	r := NewTierResolverFromEnv()
+	r, err := NewTierResolverFromEnv()
+	if err != nil {
+		t.Fatalf("NewTierResolverFromEnv: %v", err)
+	}
 	limits := r.Limits(TierVerified)
 	if limits.RPM != 999 || limits.TPM != 12345 {
 		t.Fatalf("expected env-driven verified limits, got %#v", limits)
