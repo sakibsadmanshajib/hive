@@ -876,6 +876,17 @@ else
     || fail "[U] the cron entry does not run the staleness-only mode" "$(cat "$STATE/crontab")"
   grep -qF "$runtime/bin/agent-engine-health-probe.sh" "$STATE/crontab" \
     || fail "[U] the cron entry does not point at the installed probe copy" "$(cat "$STATE/crontab")"
+  # cron runs the command through /bin/sh with almost no environment, so a
+  # probe invoked from here falls back to its own compiled-in defaults unless
+  # the install pins them. On a box using a non-default RUNTIME_DIR that means
+  # reading a stamp path that does not exist, which the probe correctly treats
+  # as a first-ever run and therefore never alerts about: a watchdog running
+  # every fifteen minutes forever, reporting nothing. This suite always uses a
+  # non-default RUNTIME_DIR, so it can see that.
+  grep -qF "RUNTIME_DIR=$runtime " "$STATE/crontab" \
+    || fail "[U] the cron entry does not pin RUNTIME_DIR, so it would watch the wrong stamp path in silence" "$(cat "$STATE/crontab")"
+  grep -qF "UNIT_NAME=hive-agent-engine " "$STATE/crontab" \
+    || fail "[U] the cron entry does not pin UNIT_NAME" "$(cat "$STATE/crontab")"
 fi
 [ $failures -eq "$before_u" ] && echo "ok   [U] a cron staleness watchdog observes the systemd timer"
 

@@ -411,7 +411,17 @@ systemctl --user restart "$HEALTH_NAME.timer"
 #
 # Every fifteen minutes against a fifteen minute threshold, so a timer that
 # dies is reported within half an hour at worst.
-CRON_LINE="*/15 * * * * $PROBE_PATH --check >/dev/null 2>&1"
+# RUNTIME_DIR and UNIT_NAME are passed EXPLICITLY, not left to the probe's own
+# defaults. cron runs the command through /bin/sh with almost no environment,
+# so a probe started from here would otherwise fall back to
+# /home/sakib/agent-runtime regardless of where this install actually put
+# things. On any box using a non-default RUNTIME_DIR that means reading a stamp
+# path that does not exist, which the probe correctly treats as a first-ever
+# run and therefore never alerts about: the watchdog would run every fifteen
+# minutes, forever, reporting nothing. A silent watchdog is the exact defect
+# this file exists to remove, so the two values it depends on are pinned at the
+# call rather than inherited.
+CRON_LINE="*/15 * * * * RUNTIME_DIR=$RUNTIME_DIR UNIT_NAME=$UNIT_NAME $PROBE_PATH --check >/dev/null 2>&1"
 CRON_TAG="# hive-agent-engine health staleness watchdog (issue #1510)"
 if ! command -v crontab >/dev/null 2>&1; then
   # Not fatal. The systemd timer is the primary lane and it is installed and
