@@ -44,6 +44,12 @@ type Usage struct {
 	// deleted so the regression guard can feed a real total-exceeds-components
 	// shape through settlement and prove the total is ignored.
 	TotalTokens int64
+	// ReasoningTokens is usage.completion_tokens_details.reasoning_tokens. It
+	// is decoded to DIAGNOSE which convention an upstream is using, never to
+	// price anything: settlement charges prompt plus completion in every
+	// convention, so beginning to price this field would widen the billed set,
+	// which D-055 forbids. See explainsReportedTotal.
+	ReasoningTokens int64
 }
 
 // CreditPolicy settles one succeeded line at its alias's own price. An error

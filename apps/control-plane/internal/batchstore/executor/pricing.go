@@ -290,6 +290,49 @@ func derefCredits(v *int64) int64 {
 	return *v
 }
 
+// Reasoning-token conventions, and why the charge is the same under all of them.
+//
+// Two upstream conventions exist for where reasoning tokens are counted, and
+// they cannot be told apart by model family, only by the numbers:
+//
+//   - INSIDE completion. prompt + completion == total, and completion_tokens
+//     already contains reasoning_tokens. This is OpenAI's o-series convention,
+//     and the upstream bills us for those tokens as output.
+//   - ALONGSIDE completion. prompt + completion + reasoning == total, and
+//     completion_tokens excludes reasoning_tokens. This is Google's thoughts
+//     convention, measured live on this pool at prompt 4, completion 1,
+//     reasoning 26, total 31.
+//
+// Settlement charges prompt plus completion in BOTH cases, deliberately:
+//
+//   - Inside: the reasoning is already part of completion_tokens and the
+//     upstream charged us for it as output, so charging it is cost recovery
+//     rather than an overcharge. Subtracting it would be a pricing decision,
+//     not a defect fix.
+//   - Alongside: the reasoning is outside completion_tokens and stays unbilled.
+//     Beginning to bill it would widen the set of billed token classes, which
+//     D-055 forbids outright. Erring toward the customer is the safe direction
+//     and it is the direction issue #1473 exists to restore.
+//
+// What is never charged, in any convention, is total_tokens. Under "alongside"
+// the total contains 26 tokens the customer never received, and charging it is
+// the measured 6.2x overcharge this issue was filed for.
+//
+// explainsReportedTotal reports whether the reported components account for the
+// reported total under either convention. False means a third shape nobody has
+// characterised, on a money path. The charge does not change (it is still
+// prompt plus completion, still never the total); the settlement is labelled
+// and logged so an unrecognised shape is visible rather than silent.
+func explainsReportedTotal(usage *Usage) bool {
+	if usage == nil || usage.TotalTokens <= 0 {
+		// No total reported means there is no identity to satisfy, not a
+		// violated one.
+		return true
+	}
+	components := usage.PromptTokens + usage.CompletionTokens
+	return components == usage.TotalTokens || components+usage.ReasoningTokens == usage.TotalTokens
+}
+
 // priceLine is the whole settlement decision for one succeeded batch line.
 // An error means the line cannot be priced at all and must be refused rather
 // than charged; every other outcome returns a LinePrice that is never zero.
@@ -336,10 +379,17 @@ func priceLine(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []b
 		// hatch from it because the total is the very figure #1473 removes.
 		return LinePrice{}, fmt.Errorf("%w: fixed-price alias reported no billable token components", errLineNotPriceable)
 	}
+	reason := "catalog_price"
+	if !explainsReportedTotal(usage) {
+		// The charge is unchanged, and is still the components rather than the
+		// total. Only the label changes, so a shape neither convention explains
+		// shows up in a log instead of settling silently.
+		reason = "catalog_price_unexplained_total"
+	}
 	return LinePrice{
 		Credits:   creditsForTokens(usage.PromptTokens, usage.CompletionTokens, pricing),
 		Confirmed: true,
-		Reason:    "catalog_price",
+		Reason:    reason,
 	}, nil
 }
 

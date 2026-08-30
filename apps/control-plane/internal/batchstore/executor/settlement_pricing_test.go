@@ -42,25 +42,61 @@ func body(t *testing.T, generationID string, cost string, promptTokens, completi
 }
 
 // TestDefaultCreditPolicy_NeverBillsOnTokenTotal is the regression guard for
-// the second defect folded into issue #1473.
+// the second defect folded into issue #1473, across every reasoning-token
+// convention an upstream is known to use.
 //
 // Both rates are deliberately one credit per token, identical to the flat
 // formula settlement used to apply, so the only thing this test can measure is
-// the QUANTITY billed. prompt 8 + completion 5 = 13 is what the customer
-// received. total_tokens 31 is what a thinking-capable route reports, because
-// Google counts thought tokens in the total and not in the candidates (#1472),
-// and gemini-flash-latest is a thinking-capable member of the free pool that
-// hive-auto can route to.
+// the QUANTITY billed. The charge is prompt plus completion in every row, and
+// total_tokens is never the charge in any of them.
+//
+// The conventions cannot be told apart by model family, only by the numbers,
+// which is why the code detects them from the identity rather than from a name.
 func TestDefaultCreditPolicy_NeverBillsOnTokenTotal(t *testing.T) {
-	got, err := DefaultCreditPolicy{}.Credits(testFixedPricing(),
-		&Usage{PromptTokens: 8, CompletionTokens: 5, TotalTokens: 31}, nil)
-	if err != nil {
-		t.Fatalf("priced line refused: %v", err)
-	}
-	want := LinePrice{Credits: 13, Confirmed: true, Reason: "catalog_price"}
-	if got != want {
-		t.Fatalf("settled %+v, want %+v: billing on total_tokens (31) charges for the "+
-			"26 thought tokens the customer never received", got, want)
+	for _, tc := range []struct {
+		name                                             string
+		prompt, completion, reasoning, total, wantCharge int64
+		wantReason                                       string
+	}{
+		// Measured live on this pool: Google counts thoughts in the total and
+		// outside the candidates, so completion_tokens EXCLUDES the 26
+		// reasoning tokens. 4 + 1 + 26 = 31. The customer received 5 tokens and
+		// the old formula charged 31, the 6.2x overcharge this issue names.
+		{"reasoning alongside completion", 4, 1, 26, 31, 5, "catalog_price"},
+		// OpenAI's o-series convention: completion_tokens already CONTAINS the
+		// reasoning tokens, and the upstream billed us for them as output.
+		// 4 + 27 = 31. Charging 31 here is cost recovery rather than an
+		// overcharge, and it happens to equal the total, which is fine: the
+		// charge is still derived from the components, never read off the total.
+		{"reasoning inside completion", 4, 27, 26, 31, 31, "catalog_price"},
+		// No reasoning at all, components explain the total exactly.
+		{"no reasoning reported", 8, 5, 0, 13, 13, "catalog_price"},
+		// Neither identity holds: 8 + 5 = 13 and 8 + 5 + 0 = 13, neither of
+		// which is 31. A third shape nobody has characterised. The charge is
+		// STILL the components and still never the total; only the label
+		// changes, so the unrecognised shape reaches a log instead of settling
+		// silently.
+		{"neither identity holds", 8, 5, 0, 31, 13, "catalog_price_unexplained_total"},
+		// An upstream that reports no total at all has no identity to violate,
+		// so it must not be labelled as violating one.
+		{"no total reported", 8, 5, 0, 0, 13, "catalog_price"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DefaultCreditPolicy{}.Credits(testFixedPricing(), &Usage{
+				PromptTokens:     tc.prompt,
+				CompletionTokens: tc.completion,
+				ReasoningTokens:  tc.reasoning,
+				TotalTokens:      tc.total,
+			}, nil)
+			if err != nil {
+				t.Fatalf("priced line refused: %v", err)
+			}
+			want := LinePrice{Credits: tc.wantCharge, Confirmed: true, Reason: tc.wantReason}
+			if got != want {
+				t.Fatalf("settled %+v, want %+v: the charge must be prompt plus completion, "+
+					"never the reported total of %d", got, want, tc.total)
+			}
+		})
 	}
 }
 

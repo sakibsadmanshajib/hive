@@ -136,14 +136,24 @@ func decodeUsage(body []byte) *executor.Usage {
 			PromptTokens     int64 `json:"prompt_tokens"`
 			CompletionTokens int64 `json:"completion_tokens"`
 			TotalTokens      int64 `json:"total_tokens"`
+			// CompletionTokensDetails.ReasoningTokens is decoded so settlement
+			// can tell which reasoning-token convention the upstream used. It
+			// is never priced; see executor.Usage.ReasoningTokens.
+			CompletionTokensDetails *struct {
+				ReasoningTokens int64 `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil || probe.Usage == nil {
 		return nil
 	}
-	return &executor.Usage{
+	usage := &executor.Usage{
 		PromptTokens:     probe.Usage.PromptTokens,
 		CompletionTokens: probe.Usage.CompletionTokens,
 		TotalTokens:      probe.Usage.TotalTokens,
 	}
+	if probe.Usage.CompletionTokensDetails != nil {
+		usage.ReasoningTokens = probe.Usage.CompletionTokensDetails.ReasoningTokens
+	}
+	return usage
 }
