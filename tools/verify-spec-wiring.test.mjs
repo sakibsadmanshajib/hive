@@ -16,7 +16,11 @@
 // Run: node tools/verify-spec-wiring.test.mjs
 
 import assert from "node:assert/strict";
-import { survivesOrdinaryPullRequest, conditionOf } from "./verify-spec-wiring.mjs";
+import {
+  survivesOrdinaryPullRequest,
+  conditionOf,
+  commandInsideContainer,
+} from "./verify-spec-wiring.mjs";
 
 // --- Case 1: no condition at all always survives (an unconditional step). ---
 assert.equal(survivesOrdinaryPullRequest(undefined), true, "no condition must survive");
@@ -148,6 +152,64 @@ assert.equal(
   ),
   false,
   "a fork-only job's condition must not survive (this function does not know the != form of the fork check)",
+);
+
+// --- Case 10: a Playwright run inside a container is still a run. ---
+//
+// deploy-demo-box.yml's agent-workspace-coverage job wraps its probe in
+// `docker run` so it sits inside the stack's compose network, which is the
+// only place that deployment's admin API answers (issue #1531). Before
+// commandInsideContainer, that command parsed as no invocation at all and
+// tests/e2e/_probe/agent-workspace-flows.spec.ts measured as dark, which is
+// the opposite of the truth about a suite that runs on every dispatch.
+//
+// The first case is that step's command verbatim after line continuations are
+// joined, GitHub expressions and `$(...)` included, because those tokenize
+// into pieces with spaces in them and are exactly what a naive option parser
+// trips over.
+assert.equal(
+  commandInsideContainer(
+    'docker run --rm --network "$HIVE_STACK_NETWORK" --user "$(id -u):$(id -g)" --shm-size=1g ' +
+      '-e HOME=/tmp -v "${{ github.workspace }}:/repo" -w /repo/apps/web-console -e CI ' +
+      "-e HIVE_CHAT_BASE_URL -e SUPABASE_URL -e SUPABASE_ADMIN_URL " +
+      '"mcr.microsoft.com/playwright:v${{ steps.pw.outputs.version }}-noble" ' +
+      "npm run e2e:agent-workspace",
+  ),
+  "npm run e2e:agent-workspace",
+  "a containerised npm script must be read as the command the container runs",
+);
+
+// A container running something this guard does not read is not a Playwright
+// invocation and must not be reported as one. This is the sibling
+// provisioning step in the same job.
+assert.equal(
+  commandInsideContainer("docker run --rm --network hive_default python:3.12-alpine python3 scripts/seed-demo-owner.py"),
+  null,
+  "a container running a python script must not be mistaken for a Playwright run",
+);
+
+// An ordinary command is untouched, so nothing about the existing parsing
+// changes for the steps that do not use a container.
+assert.equal(
+  commandInsideContainer("npm run e2e:agent-workspace"),
+  null,
+  "a bare command is not a container command",
+);
+
+// --entrypoint replaces what the container runs, so the tokens after the
+// image no longer say what happens. Refused by name rather than skipped with
+// the other options, which cannot change which specs are collected.
+assert.deepEqual(
+  commandInsideContainer(
+    "docker run --rm --entrypoint bash image:tag -c npx playwright test --project=agent-workspace",
+  ),
+  { unmodelled: "--entrypoint" },
+  "--entrypoint must be refused, not skipped",
+);
+assert.deepEqual(
+  commandInsideContainer("docker run --rm --entrypoint=bash image:tag -c npm run e2e:agent-workspace"),
+  { unmodelled: "--entrypoint" },
+  "the --entrypoint=value form must be refused too",
 );
 
 console.log("verify-spec-wiring.test: PASS");

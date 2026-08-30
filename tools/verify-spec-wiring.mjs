@@ -178,6 +178,10 @@ const NEUTRAL_FLAGS = new Set([
   "--pass-with-no-tests",
 ]);
 
+// The command heads this guard knows how to read. Used to find where a
+// container's options end and its command begins; see commandInsideContainer.
+const COMMAND_HEADS = new Set(["npm", "npx", "playwright", "@playwright/test"]);
+
 const PR_EVENTS = ["pull_request", "pull_request_target"];
 // GitHub's defaults when `on.pull_request.types` is omitted, plus the one a
 // draft marked ready for review fires. A `pull_request` trigger listing none
@@ -384,6 +388,45 @@ function tokenize(text) {
     .map((token) => token.replace(/^["']|["']$/g, ""));
 }
 
+/**
+ * The command a `docker run` starts, or null when the command is not one, or
+ * does not start anything this guard can read.
+ *
+ * A containerised run is still a run. deploy-demo-box.yml's
+ * agent-workspace-coverage job runs its probe inside a container attached to
+ * the stack's compose network, because the deployment's admin API is refused
+ * at the public origin and reachable only from in there (issue #1531). Without
+ * this, that invocation parses as nothing, its spec measures as dark, and the
+ * guard reports the exact opposite of the truth about a suite that does run.
+ *
+ * The container's own options are skipped rather than modelled, which is a
+ * deliberately weaker claim than the one selectionOf makes about Playwright's
+ * flags: a bind mount, a network, an environment variable or a user cannot
+ * change which spec files Playwright collects. One option can, by replacing
+ * the command outright, so `--entrypoint` is refused instead of skipped.
+ *
+ * Skipping stops at the first token that heads a command this guard reads, so
+ * an option VALUE equal to one of those words (`-e npm`, say) would start the
+ * scan early. That misparse cannot pass silently: the remainder would then
+ * contain the image name as a bare path argument, which selectionOf refuses
+ * by name.
+ *
+ * @param {string} command
+ * @returns {string | { unmodelled: string } | null}
+ */
+export function commandInsideContainer(command) {
+  const match = /^docker\s+run\s+(.*)$/.exec(command.trim());
+  if (!match) return null;
+  const tokens = tokenize(match[1]);
+  const start = tokens.findIndex((token) => COMMAND_HEADS.has(token));
+  if (start === -1) return null;
+  const options = tokens.slice(0, start);
+  if (options.some((token) => token === "--entrypoint" || token.startsWith("--entrypoint="))) {
+    return { unmodelled: "--entrypoint" };
+  }
+  return tokens.slice(start).join(" ");
+}
+
 // The argv of every Playwright run a single shell command starts. An npm
 // script is expanded into the argv it really runs, with any `-- <args>` the
 // workflow appended kept, because dropping them would measure a narrowed run
@@ -555,7 +598,19 @@ for (const file of workflowFiles()) {
     // A direct `npx playwright test` is still read from anywhere, and fails
     // below on its working directory rather than being quietly ignored.
     const visibleScripts = step.workingDirectory === WEB_CONSOLE ? scripts : {};
-    for (const command of shellCommands(step.run)) {
+    for (const rawCommand of shellCommands(step.run)) {
+      // A container's command is read as though the step ran it directly. The
+      // step's own working-directory still has to be the web console, checked
+      // below, which is where the npm scripts it may name resolve from.
+      const contained = commandInsideContainer(rawCommand);
+      if (contained !== null && typeof contained === "object") {
+        fail(
+          `${step.where}: \`${rawCommand}\` runs a container with \`${contained.unmodelled}\`, ` +
+            "which replaces the command it runs, so this guard cannot say which specs it reaches.",
+        );
+        continue;
+      }
+      const command = typeof contained === "string" ? contained : rawCommand;
       for (const invocation of playwrightInvocations(command, visibleScripts)) {
         if (step.workingDirectory !== WEB_CONSOLE) {
           fail(
