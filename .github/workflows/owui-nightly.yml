@@ -25,6 +25,13 @@ jobs:
       OWUI_URL: http://localhost:3003
       OWUI_E2E_MAX_USD_PER_RUN: '1'
       OWUI_E2E_MODE: 'true'
+      # Canonical run-scoped identity, same shape ci.yml and
+      # agent-visual-proof.yml already use. The "Seed OWUI e2e test user" step
+      # below derives OWUI_E2E_RUN_KEY from this rather than computing its own
+      # copy of github.run_id-run_attempt, so the two names always carry the
+      # same value and a future guard keyed on E2E_RUN_KEY recognises this
+      # workflow's seeded identity as run-scoped (issue #1476).
+      E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
       LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
       LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
@@ -127,8 +134,10 @@ jobs:
           # labelled pull request, whose concurrency group is keyed on the ref
           # and so does not join the scheduled run's. A run-scoped identity has
           # no prior password to preserve, so this run still gets a usable one
-          # and no other run is disturbed. Same shape as E2E_RUN_KEY in ci.yml.
-          OWUI_E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+          # and no other run is disturbed. Derived from the job-level
+          # E2E_RUN_KEY (issue #1476) rather than computed here a second time,
+          # so both names always carry the same value.
+          OWUI_E2E_RUN_KEY: ${{ env.E2E_RUN_KEY }}
         run: |
           set -euo pipefail
           # Both guards below exist to produce a readable failure, so neither
