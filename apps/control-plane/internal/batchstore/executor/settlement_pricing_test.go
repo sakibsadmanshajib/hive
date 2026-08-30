@@ -3,6 +3,8 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +230,13 @@ func TestDefaultCreditPolicy_UpstreamActualFailsClosedToTheHold(t *testing.T) {
 		{"negative cost", body(t, "gen-1", "-0.5", 8, 5), "upstream_cost_negative"},
 		{"unparseable cost", []byte(`{"id":"gen-1","usage":{"cost":"not-a-number","prompt_tokens":8,"completion_tokens":5}}`), "upstream_cost_unparseable"},
 		{"cost literal past the length cap", body(t, "gen-1", oversizedLiteral, 8, 5), "upstream_cost_unparseable"},
+		// Scientific notation is valid JSON and fits the byte cap, so the cap
+		// alone does not bound the parse work it was written to bound. 56 nines
+		// with e999999 is 63 bytes and expands to a roughly 3.3 million bit
+		// integer. Rejected on shape instead: a USD cost has no legitimate
+		// reason to carry an exponent.
+		{"exponent literal inside the byte cap", body(t, "gen-1", strings.Repeat("9", 56)+"e999999", 8, 5), "upstream_cost_unparseable"},
+		{"ordinary exponent literal", body(t, "gen-1", "1e5", 8, 5), "upstream_cost_unparseable"},
 		// 100 USD x 1.4 = 140,000,000,000 credits, past the 10 USD per-line
 		// ceiling. Refused rather than clamped, so whatever produced an absurd
 		// figure stays visible instead of being quietly capped.
@@ -365,5 +374,105 @@ func TestDispatcher_SettlesAtTheAliasPriceEndToEnd(t *testing.T) {
 	// to strip.
 	if strings.Contains(string(res.Output.Response.Body), "cost") {
 		t.Fatalf("provider-reported cost reached the customer's batch output: %s", res.Output.Response.Body)
+	}
+}
+
+// TestDefaultCreditPolicy_RefusesRatherThanClampsAnImplausibleCharge is the
+// guard for the review finding that outranked every other one on this PR.
+//
+// creditsForTokens used to CLAMP to maxChargeableCredits when the computed
+// charge did not fit an int64. That settles a failed computation as a real
+// charge, and the clamped line is byte-for-byte indistinguishable from a
+// genuine ten dollar line: same amount, same confirmed flag, same
+// catalog_price reason. Nobody could ever find those lines afterwards to audit
+// or refund them, which is what makes an unauditable wrong charge worse than a
+// loud one.
+//
+// Both pricing paths now refuse on the same condition, matching
+// upstream_cost.go, which is the only other place this ceiling exists and
+// which has always refused rather than substituted a number.
+//
+// The 1,000,000 rate is not invented for this test: it is testFixedPricing,
+// the fixture the rest of this file already prices with, which is exactly why
+// a path the suite never covered was reachable by the suite's own numbers.
+func TestDefaultCreditPolicy_RefusesRatherThanClampsAnImplausibleCharge(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		inRate                   int64
+		promptTokens, compTokens int64
+	}{
+		// MaxInt64 tokens x 1e9 credits per million is 9.2e21 credits, past
+		// what an int64 can hold at all.
+		{"charge overflows int64", 1_000_000_000, math.MaxInt64, 0},
+		// 1e9 tokens x 1e9 credits per million is 1e12 credits, 1000 USD. It
+		// fits an int64 comfortably, so no overflow is involved: this is
+		// purely the per-line ceiling, and without it the charge settles
+		// confirmed with no flag of any kind.
+		{"charge exceeds the per-line ceiling", 1_000_000_000, 1_000_000_000, 0},
+		// The suite's own fixture rate, reached from the completion side.
+		{"the suite's own fixture rate reaches it", 1_000_000, 0, math.MaxInt64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DefaultCreditPolicy{}.Credits(catalog.FixedPricing(tc.inRate, tc.inRate),
+				&Usage{PromptTokens: tc.promptTokens, CompletionTokens: tc.compTokens}, nil)
+			if err == nil {
+				t.Fatalf("settled %+v, want a refusal: a charge that cannot be computed honestly "+
+					"must never be replaced by the ceiling, which is indistinguishable from a real charge at it", got)
+			}
+			// Asserted EMPTY rather than merely under the ceiling: the whole
+			// defect was handing back a plausible-looking settlement, so a
+			// refusal must carry no chargeable figure at all.
+			if got != (LinePrice{}) {
+				t.Fatalf("refused line carried a settlement %+v, want the zero value", got)
+			}
+		})
+	}
+}
+
+// TestRoundHalfUp_RefusesNegative pins the behaviour its doc comment claims.
+// QuoRem truncates toward zero, so the half-up bump rounds a negative AWAY
+// from zero, meaning the documented behaviour was simply false for negatives.
+// Both callers guarantee non-negative input today; this refuses anyway,
+// because "currently dead" is how the missing ceiling above reached review.
+func TestRoundHalfUp_RefusesNegative(t *testing.T) {
+	if _, ok := roundHalfUp(big.NewRat(-3, 2)); ok {
+		t.Fatalf("roundHalfUp accepted a negative rational, which it cannot round as documented")
+	}
+	if got, ok := roundHalfUp(big.NewRat(3, 2)); !ok || got != 2 {
+		t.Fatalf("roundHalfUp(3/2) = %d, %v; want 2, true", got, ok)
+	}
+}
+
+// TestExplainsReportedTotal_HandlesHostileCounts covers the log-label helper.
+// Every field it reads is upstream controlled. It has no charge impact, which
+// is why it stays a label, but it must not read a violated identity as
+// satisfied through int64 wraparound, and a negative total is nonsense rather
+// than an absent one.
+func TestExplainsReportedTotal_HandlesHostileCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage *Usage
+		want  bool
+	}{
+		{"nil usage has no identity to violate", nil, true},
+		{"absent total has no identity to violate", &Usage{PromptTokens: 8, CompletionTokens: 5}, true},
+		{"negative total is nonsense, not absence", &Usage{PromptTokens: 8, CompletionTokens: 5, TotalTokens: -1}, false},
+		// The row that actually separates the implementations. Plain int64
+		// addition of MaxInt64 and 1 wraps to exactly MinInt64, which then
+		// compares EQUAL to this reported total, so the old arithmetic would
+		// call a nonsense shape explained. big.Int does not wrap, and the
+		// negative-total check refuses it first. A row whose verdict is the
+		// same under both implementations proves nothing, which is why this
+		// one is chosen over a merely large pair.
+		{"components wrap to exactly the reported total",
+			&Usage{PromptTokens: math.MaxInt64, CompletionTokens: 1, TotalTokens: math.MinInt64}, false},
+		{"alongside convention", &Usage{PromptTokens: 4, CompletionTokens: 1, ReasoningTokens: 26, TotalTokens: 31}, true},
+		{"inside convention", &Usage{PromptTokens: 4, CompletionTokens: 27, ReasoningTokens: 26, TotalTokens: 31}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := explainsReportedTotal(tc.usage); got != tc.want {
+				t.Fatalf("explainsReportedTotal = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

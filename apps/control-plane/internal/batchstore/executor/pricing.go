@@ -82,6 +82,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
@@ -124,6 +125,10 @@ var (
 	errUpstreamCostNegative    = errors.New("executor: upstream cost is negative")
 	errUpstreamCostZero        = errors.New("executor: upstream cost is zero while tokens were consumed")
 	errUpstreamCostImplausible = errors.New("executor: upstream cost is implausibly large")
+	// errChargeImplausible is the fixed-price path's equivalent: a computed
+	// charge that overflows or exceeds the per-line ceiling. Both paths refuse
+	// rather than substitute a number.
+	errChargeImplausible = errors.New("executor: computed charge is implausibly large")
 
 	// errLineNotPriceable is the refusal: there is no defensible figure to
 	// charge for this line at all. The caller turns it into a failed line
@@ -193,6 +198,24 @@ func parseUpstreamCost(raw []byte) (upstreamCharge, error) {
 		return charge, fmt.Errorf("%w: cost literal is %d bytes, limit %d",
 			errUpstreamCostUnparseable, len(literal), maxCostLiteralBytes)
 	}
+	// The byte cap alone does not bound the WORK it was written to bound, which
+	// makes its stated purpose and its actual effect differ. Measured in the
+	// toolchain container over 200 iterations: 56 nines followed by e999999 is
+	// 63 bytes, inside the cap, and expands to a roughly 3.3 million bit
+	// integer costing 65 to 130 milliseconds and 2 to 3 megabytes per parse.
+	// The only reason that is bounded at all is that Go's math/big caps the
+	// exponent at 999999, which is an accident of the standard library rather
+	// than a decision of ours, and it should not be the thing standing between
+	// this parser and unbounded cost.
+	//
+	// So the shape is rejected outright rather than merely capped. A USD cost
+	// literal has no legitimate reason to carry scientific notation, and
+	// big.Rat additionally accepts an "a/b" fraction syntax that JSON numbers
+	// never produce, which is a second way a short literal expands enormously.
+	if strings.ContainsAny(literal, "eE/") {
+		return charge, fmt.Errorf("%w: cost literal %q uses exponent or fraction syntax",
+			errUpstreamCostUnparseable, literal)
+	}
 	cost, ok := new(big.Rat).SetString(literal)
 	if !ok {
 		return charge, fmt.Errorf("%w: %q", errUpstreamCostUnparseable, literal)
@@ -254,7 +277,7 @@ func creditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 // Negative counts are clamped away rather than allowed to subtract from the
 // charge: token counts come from a provider response, so they are external
 // input on a money path.
-func creditsForTokens(promptTokens, completionTokens int64, pricing catalog.CatalogPricing) int64 {
+func creditsForTokens(promptTokens, completionTokens int64, pricing catalog.CatalogPricing) (int64, error) {
 	promptTokens = max(promptTokens, 0)
 	completionTokens = max(completionTokens, 0)
 	// Rates are clamped too, not just quantities. A negative price column is a
@@ -269,22 +292,48 @@ func creditsForTokens(promptTokens, completionTokens int64, pricing catalog.Cata
 
 	credits, ok := roundHalfUp(new(big.Rat).SetFrac(numerator, big.NewInt(creditsPerMillion)))
 	if !ok {
-		// Unreachable for any real catalog rate and any real token count, and
-		// the caller's ceiling check catches it if it ever is not.
-		return maxChargeableCredits
+		return 0, fmt.Errorf("%w: does not fit in int64", errChargeImplausible)
+	}
+	// Both pricing paths take the SAME per-line ceiling and both REFUSE past
+	// it. Clamping to the ceiling instead would settle a failed computation as
+	// a charge, and a clamped line would be byte-for-byte indistinguishable
+	// from a genuine ten dollar line: same amount, same confirmed flag, same
+	// catalog_price reason. Nobody could find those lines afterwards to audit
+	// or refund them, which makes an unauditable wrong charge worse than a
+	// loud one. It is also the only place in this repository where hitting a
+	// ceiling would produce a charge: upstream_cost.go refuses on the same
+	// condition, and pricing.go's magnitude guard alarms without altering the
+	// charge. Neither substitutes a number.
+	//
+	// Clamping a negative token COUNT to zero above is a different thing and
+	// not a precedent for this: that normalises an impossible input into a
+	// valid domain before pricing, where this would replace a computed output
+	// to hide that pricing failed.
+	if credits > maxChargeableCredits {
+		return 0, fmt.Errorf("%w: %d credits exceeds the %d per-line ceiling",
+			errChargeImplausible, credits, maxChargeableCredits)
 	}
 	if promptTokens+completionTokens > 0 && credits < 1 {
 		credits = 1
 	}
-	return credits
+	return credits, nil
 }
 
-// roundHalfUp resolves an exact rational to whole credits, rounding a
-// remainder of at least half the denominator upward. ok is false when the
-// result does not fit in an int64: big.Int.Int64 is UNDEFINED in that case and
+// roundHalfUp resolves an exact NON-NEGATIVE rational to whole credits,
+// rounding a remainder of at least half the denominator upward. ok is false
+// for a negative input, and when the result does not fit in an int64: big.Int.Int64 is UNDEFINED in that case and
 // returns the low 64 bits with the sign reinterpreted, so an oversized charge
 // would wrap to a negative and then hit a floor rather than being refused.
 func roundHalfUp(value *big.Rat) (int64, bool) {
+	// Negative input is refused rather than documented away. QuoRem truncates
+	// toward zero, so the half-up bump below would round a negative AWAY from
+	// zero and the stated behaviour would simply be false for it. Both callers
+	// guarantee a non-negative value today, and "currently dead" is exactly how
+	// the missing ceiling above got here, so this refuses instead of trusting
+	// that to hold.
+	if value.Sign() < 0 {
+		return 0, false
+	}
 	quotient, remainder := new(big.Int).QuoRem(value.Num(), value.Denom(), new(big.Int))
 	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(value.Denom()) >= 0 {
 		quotient.Add(quotient, big.NewInt(1))
@@ -340,13 +389,26 @@ func derefCredits(v *int64) int64 {
 // prompt plus completion, still never the total); the settlement is labelled
 // and logged so an unrecognised shape is visible rather than silent.
 func explainsReportedTotal(usage *Usage) bool {
-	if usage == nil || usage.TotalTokens <= 0 {
+	if usage == nil || usage.TotalTokens == 0 {
 		// No total reported means there is no identity to satisfy, not a
 		// violated one.
 		return true
 	}
-	components := usage.PromptTokens + usage.CompletionTokens
-	return components == usage.TotalTokens || components+usage.ReasoningTokens == usage.TotalTokens
+	if usage.TotalTokens < 0 {
+		// A negative total is nonsense rather than an absent one, and folding
+		// it into the same bucket would label an impossible shape as
+		// explained. It has no charge impact, this is a log label only.
+		return false
+	}
+	// big.Int rather than int64 addition: every field here is upstream
+	// controlled, and near-MaxInt64 counts would otherwise wrap and make a
+	// violated identity read as satisfied.
+	components := new(big.Int).Add(big.NewInt(usage.PromptTokens), big.NewInt(usage.CompletionTokens))
+	total := big.NewInt(usage.TotalTokens)
+	if components.Cmp(total) == 0 {
+		return true
+	}
+	return new(big.Int).Add(components, big.NewInt(usage.ReasoningTokens)).Cmp(total) == 0
 }
 
 // priceLine is the whole settlement decision for one succeeded batch line.
@@ -400,6 +462,12 @@ func priceLine(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []b
 		// hatch from it because the total is the very figure #1473 removes.
 		return LinePrice{}, fmt.Errorf("%w: fixed-price alias reported no billable token components", errLineNotPriceable)
 	}
+	credits, err := creditsForTokens(usage.PromptTokens, usage.CompletionTokens, pricing)
+	if err != nil {
+		// Refused, not clamped, and not charged a substitute. Same decision
+		// creditsForUpstreamCost makes on the same condition.
+		return LinePrice{}, fmt.Errorf("%w: %v", errLineNotPriceable, err)
+	}
 	reason := "catalog_price"
 	if !explainsReportedTotal(usage) {
 		// The charge is unchanged, and is still the components rather than the
@@ -407,11 +475,7 @@ func priceLine(pricing catalog.CatalogPricing, usage *Usage, rawUpstreamBody []b
 		// shows up in a log instead of settling silently.
 		reason = "catalog_price_unexplained_total"
 	}
-	return LinePrice{
-		Credits:   creditsForTokens(usage.PromptTokens, usage.CompletionTokens, pricing),
-		Confirmed: true,
-		Reason:    reason,
-	}, nil
+	return LinePrice{Credits: credits, Confirmed: true, Reason: reason}, nil
 }
 
 // costFailureReason maps a cost-read failure to a distinct log token. Kept

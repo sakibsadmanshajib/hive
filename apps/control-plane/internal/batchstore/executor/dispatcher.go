@@ -160,9 +160,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 				price, priceErr := d.credits.Credits(line.Pricing, usage, body)
 				if priceErr != nil {
 					// No defensible figure to charge exists for this line, so
-					// it is neither charged nor delivered. Unreachable for any
-					// alias routing will select, since SelectRoute already
-					// refuses an unpriced alias before a batch runs.
+					// it is neither charged nor delivered. Reached by an
+					// unpriceable ALIAS SHAPE, which routing.SelectRoute
+					// already refuses with ErrAliasNotPriced before a batch
+					// runs, and ALSO by two runtime conditions SelectRoute
+					// cannot see: a fixed-price alias whose response reported
+					// no billable token components, and a computed charge that
+					// overflows or exceeds the per-line ceiling. Neither of
+					// those is guarded by the catalog check. See priceLine.
 					log.Printf("executor: refusing to settle batch line alias=%s custom_id=%s: %v",
 						line.Alias, line.CustomID, priceErr)
 					return d.errResult(line.CustomID, "settlement_unavailable",
