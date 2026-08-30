@@ -134,8 +134,14 @@ func TestStubService_InitiateCheckout_validation_invalid_credits(t *testing.T) {
 	_, err = svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, -1000, "", "", "idem-2")
 	assert.Error(t, err)
 
-	// Not a whole number of one-cent steps (CreditIncrement).
-	_, err = svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, 15_000_000+1_000, "", "", "idem-3")
+	// Not a whole number of one-cent steps (CreditIncrement). Above the
+	// purchase floor, so granularity is the only thing that can reject it.
+	_, err = svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.MinPurchaseCredits+1_000, "", "", "idem-3")
+	assert.Error(t, err)
+
+	// Below the purchase floor (issue #1450): a whole cent step, so only the
+	// floor can reject it.
+	_, err = svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.MinPurchaseCredits-payments.CreditIncrement, "", "", "idem-4")
 	assert.Error(t, err)
 }
 
@@ -143,7 +149,7 @@ func TestStubService_InitiateCheckout_validation_empty_idempotency_key(t *testin
 	ledger := &fakeLedger{}
 	svc := newStub(ledger, "BD")
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.CreditIncrement, "", "", "")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.MinPurchaseCredits, "", "", "")
 	assert.Error(t, err)
 	assert.Len(t, ledger.calls, 0)
 }
@@ -159,9 +165,9 @@ func TestStubService_InitiateCheckout_idempotency_deduplication(t *testing.T) {
 	accountID := uuid.New()
 	idem := "stable-idem-key"
 
-	_, err := svc.InitiateCheckout(context.Background(), accountID, payments.RailStripe, payments.CreditIncrement, "", "", idem)
+	_, err := svc.InitiateCheckout(context.Background(), accountID, payments.RailStripe, payments.MinPurchaseCredits, "", "", idem)
 	require.NoError(t, err)
-	_, err = svc.InitiateCheckout(context.Background(), accountID, payments.RailStripe, payments.CreditIncrement, "", "", idem)
+	_, err = svc.InitiateCheckout(context.Background(), accountID, payments.RailStripe, payments.MinPurchaseCredits, "", "", idem)
 	require.NoError(t, err)
 
 	require.Len(t, ledger.calls, 2)
@@ -181,7 +187,7 @@ func TestStubService_InitiateCheckout_nonBD_rejects_bkash_and_sslcommerz(t *test
 			ledger := &fakeLedger{}
 			svc := newStub(ledger, "US")
 
-			_, err := svc.InitiateCheckout(context.Background(), uuid.New(), rail, payments.CreditIncrement, "", "", "idem-nonbd")
+			_, err := svc.InitiateCheckout(context.Background(), uuid.New(), rail, payments.MinPurchaseCredits, "", "", "idem-nonbd")
 			require.Error(t, err)
 			assert.Len(t, ledger.calls, 0, "ledger must not be credited for a disallowed rail")
 		})
@@ -192,7 +198,7 @@ func TestStubService_InitiateCheckout_nonBD_allows_stripe(t *testing.T) {
 	ledger := &fakeLedger{}
 	svc := newStub(ledger, "US")
 
-	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.CreditIncrement, "", "", "idem-us-stripe")
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), payments.RailStripe, payments.MinPurchaseCredits, "", "", "idem-us-stripe")
 	require.NoError(t, err)
 	require.NotNil(t, intent)
 	assert.Len(t, ledger.calls, 1)
@@ -205,7 +211,7 @@ func TestStubService_InitiateCheckout_BD_allows_all_rails(t *testing.T) {
 			ledger := &fakeLedger{}
 			svc := newStub(ledger, "BD")
 
-			_, err := svc.InitiateCheckout(context.Background(), uuid.New(), rail, payments.CreditIncrement, "", "", "idem-bd")
+			_, err := svc.InitiateCheckout(context.Background(), uuid.New(), rail, payments.MinPurchaseCredits, "", "", "idem-bd")
 			require.NoError(t, err)
 			assert.Len(t, ledger.calls, 1)
 		})

@@ -321,7 +321,7 @@ func TestInitiateCheckoutPassesBothOriginsToTheRail(t *testing.T) {
 	svc := NewService(repo, led, prof, fx, map[Rail]PaymentRail{RailStripe: rail})
 
 	if _, err := svc.InitiateCheckout(
-		context.Background(), uuid.New(), RailStripe, CreditIncrement,
+		context.Background(), uuid.New(), RailStripe, MinPurchaseCredits,
 		"https://cp.example.com", "https://console.example.com", "idem-1",
 	); err != nil {
 		t.Fatalf("InitiateCheckout: %v", err)
@@ -340,12 +340,20 @@ func TestInitiateCheckoutRefusesAnUnusableReturnBaseURL(t *testing.T) {
 	rail := &capturingRail{rail: RailStripe}
 	svc := NewService(repo, led, prof, fx, map[Rail]PaymentRail{RailStripe: rail})
 
+	// A valid purchase amount, so the return origin is the only thing that can
+	// refuse this. CreditIncrement is below MinPurchaseCredits since issue
+	// #1450, and ValidatePurchaseAmount runs first inside InitiateCheckout, so
+	// passing it here would have kept this test green with the return URL guard
+	// deleted outright.
 	_, err := svc.InitiateCheckout(
-		context.Background(), uuid.New(), RailStripe, CreditIncrement,
+		context.Background(), uuid.New(), RailStripe, MinPurchaseCredits,
 		"https://cp.example.com", "", "idem-1",
 	)
 	if err == nil {
 		t.Fatal("expected checkout to be refused when no console return origin is configured")
+	}
+	if !errors.Is(err, ErrReturnURLNotConfigured) {
+		t.Fatalf("expected the return origin to be the refusal, got %v", err)
 	}
 	if rail.lastInput.PaymentIntentID != uuid.Nil {
 		t.Error("the rail must not be called when the return origin is unusable")

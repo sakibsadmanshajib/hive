@@ -174,12 +174,16 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": "rail is required"})
 		return
 	}
-	if req.Credits <= 0 {
-		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": "credits must be positive"})
-		return
-	}
-	if req.Credits%CreditIncrement != 0 {
-		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("credits must be a multiple of %d, got %d", CreditIncrement, req.Credits)})
+	// One call, not a hand-rolled copy of some of its rules. This used to
+	// re-implement the positive and whole-cent checks here and omit the
+	// ceiling, and when issue #1450 added a floor to ValidatePurchaseAmount the
+	// two sets silently diverged: the handler's copy went on enforcing two of
+	// four rules. That is the same advertised-versus-enforced defect this change
+	// exists to remove, one layer up. The service revalidates regardless, so
+	// this is an early exit for a clearly bad request, not a second authority.
+	if err := ValidatePurchaseAmount(req.Credits, req.Rail); err != nil {
+		status, msg := classifyInitiateError(err)
+		writePaymentJSON(w, status, map[string]string{"error": msg})
 		return
 	}
 	if req.IdempotencyKey == "" {
@@ -207,7 +211,10 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 		// `payments: invalid effective rate "<value>"` and similar internal
 		// strings on the customer wire. We now categorize errors and return
 		// opaque, BDT-only, non-FX-bearing messages; details go to the log.
-		log.Printf("payments: InitiateCheckout error (account=%s, rail=%s): %v", accountID, req.Rail, err)
+		// %q on the rail: it is caller-supplied and unconstrained, so an
+		// unquoted newline in it forges a line in the log this error-sanitizing
+		// design treats as the trustworthy half of the split (CWE-117).
+		log.Printf("payments: InitiateCheckout error (account=%s, rail=%q): %v", accountID, req.Rail, err)
 		status, errMsg := classifyInitiateError(err)
 		writePaymentJSON(w, status, map[string]string{"error": errMsg})
 		return
@@ -469,9 +476,27 @@ func classifyInitiateError(err error) (int, string) {
 		// keep the variable names in the log, not on the customer wire.
 		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
 	}
+	if errors.Is(err, ErrBelowMinimumPurchase) {
+		// Customer fault, and the one number they need is the floor. Matched on
+		// a sentinel rather than on message text, because the substring switch
+		// below is fed errors that interpolate the caller's own rail string
+		// (issue #1450).
+		return http.StatusBadRequest, fmt.Sprintf("credits must be at least %d", MinPurchaseCredits)
+	}
 	// Validation errors carry the customer-provided value only (credit
+	if errors.Is(err, ErrRailNotAvailable) {
+		return http.StatusBadRequest, "selected payment rail is not available for this account"
+	}
 	// count). The substrings below are safe — they do not echo FX rates,
 	// USD amounts, or any internal accounting detail.
+	//
+	// They are matched on text, which is why the two branches above are not.
+	// The rail-availability error interpolated the caller's raw rail string and
+	// the account's country code, so a value containing another branch's phrase
+	// could steer which canned 400 the payer received. Nothing leaked and
+	// nothing was bypassed, since every arm returns a fixed string at 400, but
+	// the remaining arms are now the only caller-influenced text left here and
+	// each one's error is constructed from package constants alone.
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "credits must be positive"):
@@ -480,8 +505,6 @@ func classifyInitiateError(err error) (int, string) {
 		return http.StatusBadRequest, fmt.Sprintf("credits must be a multiple of %d", CreditIncrement)
 	case strings.Contains(msg, "credits must be at most"):
 		return http.StatusBadRequest, "credits exceed the maximum for the selected payment method"
-	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):
-		return http.StatusBadRequest, "selected payment rail is not available for this account"
 	}
 	// Default: opaque message. Any internal "payments: invalid effective
 	// rate ..." or similar string MUST NOT reach this point as wire bytes.

@@ -101,6 +101,34 @@ func TestClassifyInitiateError_SafeCategoriesPreserved(t *testing.T) {
 			wantMsg:  fmt.Sprintf("credits must be a multiple of %d", CreditIncrement),
 		},
 		{
+			// Issue #1450. Matched on the sentinel, so this case also proves the
+			// branch does not depend on the message text that the rail error
+			// interpolates a caller-supplied value into.
+			name:     "credits_below_minimum",
+			err:      fmt.Errorf("%w: credits must be at least %d, got %d", ErrBelowMinimumPurchase, MinPurchaseCredits, CreditIncrement),
+			wantCode: 400,
+			wantMsg:  fmt.Sprintf("credits must be at least %d", MinPurchaseCredits),
+		},
+		{
+			// The rail branch is matched on its sentinel, so it classifies
+			// correctly even when the caller-supplied rail and country strings
+			// it interpolates are crafted to read like another branch.
+			name:     "rail_not_available",
+			err:      fmt.Errorf("%w: rail %q not available for country %q", ErrRailNotAvailable, "bkash", "US"),
+			wantCode: 400,
+			wantMsg:  "selected payment rail is not available for this account",
+		},
+		{
+			// The same error carrying a rail and a country crafted to contain
+			// two other branches' phrases. Identity decides, so it still lands
+			// on the rail message. Matched on text, the ceiling branch below
+			// would have won, because it is tested first.
+			name:     "crafted_rail_and_country_cannot_borrow_another_branch",
+			err:      fmt.Errorf("%w: rail %q not available for country %q", ErrRailNotAvailable, "credits must be at most 1", "credits must be at least 1"),
+			wantCode: 400,
+			wantMsg:  "selected payment rail is not available for this account",
+		},
+		{
 			name:     "credits_above_rail_maximum",
 			err:      errors.New(fmt.Sprintf("payments: credits must be at most %d for the selected payment method, got %d", MaxPurchaseCreditsStripe, 9_007_199_254_741_000)),
 			wantCode: 400,

@@ -41,8 +41,16 @@ func TestCreditUnitConstantsMovedTogether(t *testing.T) {
 	if CreditIncrement != CreditsPerUSD/100 {
 		t.Fatalf("CreditIncrement = %d, want one cent (%d)", CreditIncrement, CreditsPerUSD/100)
 	}
-	if MinPurchaseCredits != CreditIncrement {
-		t.Fatalf("MinPurchaseCredits = %d, want one cent step %d", MinPurchaseCredits, CreditIncrement)
+	// What MinPurchaseCredits must CLEAR is deliberately not asserted here any
+	// more. It used to be pinned to one cent step, which is a bare number
+	// standing in for a property nobody had checked: the floor exists to clear
+	// the chat authorization hold, and pinned to one cent it was one tenth of
+	// one hold (issue #1450). That relationship is with constants in another
+	// module, so it is asserted in purchase_floor_test.go where they can be
+	// read. What this file still owes the constant, and asserts below, is that
+	// it speaks the current unit in whole cent steps.
+	if MinPurchaseCredits%CreditIncrement != 0 {
+		t.Fatalf("MinPurchaseCredits = %d, want a whole one-cent step of %d", MinPurchaseCredits, CreditIncrement)
 	}
 	if MaxPurchaseCreditsStripe != 100*CreditsPerUSD {
 		t.Fatalf("MaxPurchaseCreditsStripe = %d, want %d (100 USD)", MaxPurchaseCreditsStripe, 100*CreditsPerUSD)
@@ -57,12 +65,19 @@ func TestValidatePurchaseAmountSpeaksWholeCents(t *testing.T) {
 		credits int64
 		ok      bool
 	}{
-		{"one cent", CreditIncrement, true},
+		// Granularity is the property under test, so every case sits above
+		// the purchase floor except where noted: a case below the floor
+		// would be refused for a reason this test is not about, and would
+		// go on reading green while granularity checking rotted away.
+		{"one cent step above the floor", MinPurchaseCredits + CreditIncrement, true},
 		{"one dollar", CreditsPerUSD, true},
 		{"stripe max", MaxPurchaseCreditsStripe, true},
-		{"half a cent", CreditIncrement / 2, false},
-		{"pre-rescale one-cent step", 1_000, false},
-		{"pre-rescale one dollar", oldCreditsPerUSD, false},
+		{"half a cent above the floor", MinPurchaseCredits + CreditIncrement/2, false},
+		// Both pre-rescale figures are lifted above the floor for the same
+		// reason as the two cases above: at their bare values they now fail the
+		// floor, and would go on passing with the granularity check removed.
+		{"pre-rescale one-cent step, above the floor", MinPurchaseCredits + 1_000, false},
+		{"pre-rescale one dollar, above the floor", MinPurchaseCredits + oldCreditsPerUSD, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidatePurchaseAmount(tc.credits, RailStripe)
@@ -76,20 +91,13 @@ func TestValidatePurchaseAmountSpeaksWholeCents(t *testing.T) {
 	}
 }
 
-// TestPredefinedTiersAreCentSteps keeps the suggested purchase buttons on
-// whole cent multiples of the current unit ($0.01 through $1.00, as they were
-// pre-rescale).
-func TestPredefinedTiersAreCentSteps(t *testing.T) {
-	want := []int64{1, 5, 10, 50, 100} // in cents
-	if len(PredefinedTiers) != len(want) {
-		t.Fatalf("tier count = %d, want %d", len(PredefinedTiers), len(want))
-	}
-	for i, tier := range PredefinedTiers {
-		if tier%CreditIncrement != 0 || tier/CreditIncrement != want[i] {
-			t.Errorf("tier[%d] = %d, want %d cents = %d credits", i, tier, want[i], want[i]*CreditIncrement)
-		}
-	}
-}
+// The tier assertions that used to sit here are gone rather than updated.
+// They pinned {1, 5, 10, 50, 100} cents, which matched the constants exactly
+// and so proved only that nobody had retyped them, which is how issue #1450
+// shipped two tiers that could not buy one chat message. Every property a tier
+// must now hold, including the whole-cent unit this file cares about, is
+// asserted against the purchase floor in purchase_floor_test.go, and a second
+// copy here would be a strict subset that cannot go red on its own.
 
 // --- The data migration -----------------------------------------------------
 
