@@ -1,0 +1,53 @@
+# Hive-committed SearXNG configuration for chat web search (issue #298).
+#
+# Mounted read-only into the searxng service at /etc/searxng/settings.yml
+# (deploy/docker/docker-compose.yml, searxng service). `use_default_settings:
+# true` means every key SearXNG ships in its own upstream
+# searx/settings.yml still applies; everything below is an explicit
+# override, not a full re-specification. Read before editing:
+# https://docs.searxng.org/admin/settings/settings.html
+#
+# secret_key stays the harmless upstream placeholder on purpose. It is not
+# actually read from this file at runtime: searx/settings_defaults.py binds
+# server.secret_key to the SEARXNG_SECRET environment variable
+# (SettingsValue(str, environ_name='SEARXNG_SECRET')), and that env override
+# always wins over whatever is written here. The real value comes from
+# .env / the demo box's own environment (SEARXNG_SECRET), per the repo's
+# no-hardcoded-secrets rule. Do not remove this placeholder: the upstream
+# container entrypoint only auto-generates a random one on first boot when
+# no settings.yml exists yet at all, and this file is bind-mounted in
+# already populated, so that auto-generation path never runs here.
+use_default_settings:
+  engines:
+    # Explicit allow-list (issue #298 acceptance criteria 2 and 3): query
+    # exactly these four, all zero-cost, no API key. Google is wanted
+    # specifically; whether it actually returns results from this
+    # deployment's egress IP (residential vs datacentre CAPTCHA-walling) is
+    # verified live and recorded on the issue, not assumed from this file.
+    keep_only:
+      - google
+      - duckduckgo
+      - brave
+      - bing
+
+server:
+  secret_key: "ultrasecretkey"
+
+search:
+  # vendor/open-webui/backend/open_webui/retrieval/web/searxng.py always
+  # requests format=json regardless of what the caller configures. SearXNG
+  # ships with json disabled by default (only html) and 403s that request
+  # unless json is explicitly allowed here.
+  formats:
+    - html
+    - json
+
+engines:
+  # google and bing ship `disabled: true` upstream (public instances get
+  # CAPTCHA-walled fast); duckduckgo and brave ship already enabled. Un-hide
+  # the two disabled ones so the keep_only allow-list above actually queries
+  # all four engines instead of silently running only two of them.
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
