@@ -2,6 +2,7 @@ package inference
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -252,6 +253,54 @@ func isZeroContent(shape DeliveryShape, content string) bool {
 	return shape.SawFinish && !shape.SawNonLengthFinish
 }
 
+// ApplyZeroContentGuard runs the guard over a settlement that has already been
+// priced, whichever pricing arm priced it (issue #1538).
+//
+// WHY IT IS A STEP RATHER THAN A BRANCH OF ONE SETTLEMENT FUNCTION. Session
+// chat and settleChat both fork on the alias's pricing mode before settling: a
+// catalog-priced alias goes to ChatSettlementCredits, and an alias with no
+// catalog price goes to UpstreamActualSettlement, whose Delivered is true on
+// any successful cost read. The guard added for #1526 lived inside the first
+// of those, so a reasoning burn on hive-auto, the only upstream_actual alias in
+// the live catalog, was still charged the cost the upstream reported for tokens
+// the customer never saw. This is the shape settleStream has always had: the
+// guard applied last, to whatever outcome the pricing branch reached, rather
+// than woven into either arm.
+//
+// It does NOT belong inside UpstreamActualSettlement. That function answers a
+// different question, what this generation cost, and it answers it for the
+// API-key streaming path too, which already applies its own guard afterwards.
+// Putting a delivery test inside a cost reader would give that path two guards
+// and this one a cost reader that silently declines charges.
+//
+// A COST THAT COULD NOT BE READ IS STILL RELEASED. UpstreamActualSettlement is
+// fail-closed: an absent, unparseable or confident-zero cost settles at the
+// full hold rather than at nothing (D-034). That rule is about not giving work
+// away when the PRICE is unknown; this guard is about not charging for work the
+// customer never received, which is known either way. So a burn releases
+// whatever the cost read did, and absorbed_credits then carries the hold, which
+// is exactly what settleStream records on the same combination.
+//
+// credits and delivered come back unchanged when the guard does not fire.
+// zeroContent is the caller's release reason, so a burn is distinguishable in
+// the ledger from a provider that died or a customer who hung up.
+func ApplyZeroContentGuard(aliasID string, shape DeliveryShape, content string,
+	credits int64, delivered bool, promptTokens, completionTokens int64) (int64, bool, bool) {
+	if !delivered || !isZeroContent(shape, content) {
+		return credits, delivered, false
+	}
+	// Counted here, from the figure the pricing arm already computed: this is
+	// the only point at which the burn's price exists at all, since every
+	// caller discards it the moment delivered comes back false.
+	chatZeroContentAbsorbedCredits.WithLabelValues(shape.Surface).Add(float64(credits))
+	log.Printf("inference: chat_zero_content surface=%s alias=%s absorbed_credits=%d upstream_prompt_tokens=%d upstream_completion_tokens=%d: the turn returned no assistant-visible text, releasing the hold instead of charging (#1526, #1538)",
+		shape.Surface, aliasID, credits, promptTokens, completionTokens)
+	// Zero rather than the priced figure. No caller charges on a false
+	// delivered, and this way one that forgot to check could only ever serve
+	// the burn free, which is the direction this guard already decided on.
+	return 0, false, true
+}
+
 // Surface label values for chatZeroContentAbsorbedCredits. Every one of them is
 // created at registration, so a dashboard can tell "no burns on this surface"
 // apart from "this surface never reached the guard at all".
@@ -271,10 +320,14 @@ const (
 //
 //	increase(hive_chat_zero_content_absorbed_credits_total[1d])
 //
-// WHAT THE FIGURE IS. The credits the request would have been charged: the
-// resolved alias's catalog price applied to the tokens the upstream reported
-// burning, computed in int64 credits and converted to float64 only here, at the
-// Prometheus boundary. Nothing reads the value back into a charge.
+// WHAT THE FIGURE IS. The credits the request would have been charged, taken
+// from whichever pricing arm priced it: for a catalog-priced alias, the
+// alias's own price applied to the tokens the upstream reported burning; for a
+// variable-price alias (#1538), the upstream's OWN reported cost times the
+// margin, or the hold when that cost could not be read, since that is what
+// UpstreamActualSettlement would have charged. Computed in int64 credits and
+// converted to float64 only here, at the Prometheus boundary. Nothing reads the
+// value back into a charge.
 //
 // WHY IT KEYS ON THE GUARD'S OWN VERDICT. The counter has to be able to fire on
 // every path it claims to cover, and the way that goes wrong is keying it on a
@@ -294,7 +347,7 @@ const (
 // released from release_failed because it performs the release itself.
 var chatZeroContentAbsorbedCredits = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "hive_chat_zero_content_absorbed_credits_total",
-	Help: "Credits Hive absorbed on session chat and RAG chat turns that returned no assistant-visible text at all and were therefore not billed (issue #1526), by surface. Sum it over a window to get what the absorption cost, with no join and no price lookup. All three surface series exist from process start, so zero reads as zero and an absent series means the recording path itself is broken. A rising total is a routing signal: the pool is sending work to members that burn the caller's ceiling on hidden reasoning. It counts credits declined at settlement; a hold whose release then failed is an ERROR log from the release call, not a series here.",
+	Help: "Credits Hive absorbed on session chat and RAG chat turns that returned no assistant-visible text at all and were therefore not billed (issues #1526 and #1538), by surface, on both catalog-priced and variable-price aliases. Sum it over a window to get what the absorption cost, with no join and no price lookup. All three surface series exist from process start, so zero reads as zero and an absent series means the recording path itself is broken. A rising total is a routing signal: the pool is sending work to members that burn the caller's ceiling on hidden reasoning. It counts credits declined at settlement; a hold whose release then failed is an ERROR log from the release call, not a series here.",
 }, []string{"surface"})
 
 // Outcome label values for streamZeroContentAbsorbedCredits. Both series are

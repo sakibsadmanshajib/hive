@@ -271,11 +271,14 @@ func CreditsForTokens(route SelectRouteResult, freshInputTokens, cacheReadTokens
 // /v1/rag/chat) never pass through that function, so a model that spent the
 // caller's whole ceiling on hidden reasoning and returned nothing readable went
 // on settling at full catalog price on the surface the product demo runs on.
-// The guard lives at this one function rather than in each caller: three copies
-// of one money rule is how they drift, and a fourth caller would arrive
-// unguarded. See isZeroContent for what "no visible content" means, what it
-// deliberately excludes, and what "completed" means for a response that never
-// streamed.
+// This function applies the guard to every turn it prices, so no caller of it
+// can forget to; the two callers that ALSO have a variable-price arm run the
+// same guard over that arm's outcome after their pricing branch (#1538), which
+// is the shape settleStream has always had. One predicate and one counter
+// either way, in ApplyZeroContentGuard: copies of a money rule are how two
+// arms of one surface start disagreeing. See isZeroContent for what "no visible
+// content" means, what it deliberately excludes, and what "completed" means for
+// a response that never streamed.
 func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens int64,
 	requestBody []byte, content string, shape DeliveryShape) (credits int64, confirmed bool, delivered bool, zeroContent bool) {
 	// The completion ceiling is read from the same request bytes, so a content
@@ -286,19 +289,13 @@ func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTok
 	credits, confirmed, delivered = settlementCredits(route, hasUsage, freshInputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
 		promptText(EndpointChatCompletions, requestBody), content,
 		requestedCompletionCeiling(EndpointChatCompletions, requestBody))
-	if !delivered || !isZeroContent(shape, content) {
-		return credits, confirmed, delivered, false
-	}
-	// Counted before the return, from the figure this call has already priced:
-	// this is the only point at which the burn's price exists at all, since
-	// every caller discards it the moment delivered comes back false.
-	chatZeroContentAbsorbedCredits.WithLabelValues(shape.Surface).Add(float64(credits))
-	log.Printf("inference: chat_zero_content surface=%s alias=%s absorbed_credits=%d upstream_prompt_tokens=%d upstream_completion_tokens=%d: the turn returned no assistant-visible text, releasing the hold instead of charging (#1526)",
-		shape.Surface, route.AliasID, credits, freshInputTokens+cacheReadTokens+cacheWriteTokens, outputTokens)
-	// Zero rather than the priced figure. No caller charges on a false
-	// delivered, and this way one that forgot to check could only ever serve
-	// the burn free, which is the direction this guard already decided on.
-	return 0, confirmed, false, true
+	// The guard itself lives in ApplyZeroContentGuard, which the same two
+	// callers also run over the OTHER arm of their pricing branch (#1538). One
+	// body, so the catalog-priced and variable-price arms of one surface cannot
+	// disagree about what a burn is or about what gets counted when one fires.
+	credits, delivered, zeroContent = ApplyZeroContentGuard(route.AliasID, shape, content, credits, delivered,
+		freshInputTokens+cacheReadTokens+cacheWriteTokens, outputTokens)
+	return credits, confirmed, delivered, zeroContent
 }
 
 // Request bounds for a variable-price alias.

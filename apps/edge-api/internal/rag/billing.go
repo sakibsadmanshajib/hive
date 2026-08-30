@@ -145,9 +145,12 @@ type settlement struct {
 // charge and the caller releases the hold instead.
 // shape carries the delivery evidence the zero-content guard decides on, built
 // by whichever half of this handler is settling: the streaming relay's own
-// accumulator, or the choices of a fully decoded response body. It is only
-// consulted on the fixed-price branch, because that is the branch that reaches
-// ChatSettlementCredits.
+// accumulator, or the choices of a fully decoded response body. It is consulted
+// on BOTH branches (#1538): the fixed-price one reaches the guard inside
+// ChatSettlementCredits, and the variable-price one is run through the same
+// guard below, after the branch, because UpstreamActualSettlement reports a
+// delivered turn on any successful cost read and cannot tell a blank answer
+// from a real one.
 func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope,
 	alias, content string, requestBody []byte, shape inference.DeliveryShape) settlement {
 
@@ -159,20 +162,48 @@ func settleChat(route inference.SelectRouteResult, held int64, env usageEnvelope
 		cache = inference.NormalizeCacheUsage(env.Usage, alias, route.Provider)
 	}
 
+	var priced settlement
 	if route.Pricing.IsUpstreamActual() {
 		settled := inference.UpstreamActualSettlement(env.rawDocument, held, hasUsage, inTokens, outTokens, content)
-		return settlement{
+		priced = settlement{
 			Credits: settled.Credits, Confirmed: settled.Confirmed, Delivered: settled.Delivered,
 			GenerationID: settled.GenerationID, Reason: settled.Reason,
 		}
+	} else {
+		credits, confirmed, delivered, zeroContent := inference.ChatSettlementCredits(route, hasUsage,
+			cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outTokens,
+			requestBody, content, shape)
+		priced = settlement{
+			Credits: credits, Confirmed: confirmed, Delivered: delivered,
+			Reason: "catalog_price", ZeroContent: zeroContent,
+		}
 	}
-	credits, confirmed, delivered, zeroContent := inference.ChatSettlementCredits(route, hasUsage,
-		cache.FreshInputTokens, cache.CacheReadTokens, cache.CacheWriteTokens, outTokens,
-		requestBody, content, shape)
-	return settlement{
-		Credits: credits, Confirmed: confirmed, Delivered: delivered,
-		Reason: "catalog_price", ZeroContent: zeroContent,
+	if !priced.ZeroContent {
+		// Zero-content guard over the OTHER arm of the branch above (#1538).
+		// ChatSettlementCredits already applied it to a catalog-priced turn, so
+		// this reaches the variable-price arm, where UpstreamActualSettlement
+		// reports Delivered on any successful cost read and a reasoning burn on
+		// hive-auto was therefore charged the cost the upstream reported for
+		// tokens the customer never saw. Applied last, to whatever the branch
+		// settled at, exactly as settleStream does on the API-key path.
+		//
+		// Skipped when the guard already fired, and the reason is exactly one
+		// thing: a second pass returns ZeroContent FALSE, because the first
+		// firing set Delivered false and the guard early-returns on that. Both
+		// callers read their release reason from that flag, so an unconditional
+		// call downgrades every catalog-priced burn to "upstream_error" and
+		// loses the ledger signal this whole change exists to produce.
+		// Measured, not assumed: removing this skip and the identical one in
+		// chat/dispatch.go turns four existing tests red, two of them stating
+		// the mechanism outright as release reason = "upstream_error", want
+		// "zero_content".
+		//
+		// It is NOT protection against double counting. The same early return
+		// means a second pass can never reach the absorbed-credits counter.
+		priced.Credits, priced.Delivered, priced.ZeroContent = inference.ApplyZeroContentGuard(
+			route.AliasID, shape, content, priced.Credits, priced.Delivered, inTokens, outTokens)
 	}
+	return priced
 }
 
 // syncDeliveryShape is the non-streaming half's delivery evidence (issue
@@ -212,14 +243,23 @@ func syncDeliveryShape(upstream upstreamChatResponse) inference.DeliveryShape {
 // The fixed-price path is not logged: its charge is reproducible from the
 // catalog row and the token counts already on the settlement, so there is
 // nothing here that the ledger row does not already carry.
+//
+// An absorbed zero-content burn IS logged, even though it is not delivered and
+// charges nothing (#1538). A rise in absorbed credits is a routing signal, and
+// a routing signal nobody can attribute to a pool member is not actionable: the
+// generation id on this line is the only thing that recovers which member
+// produced the burn, since the alias fans out to several. credits reads zero,
+// which is what the customer was charged; what Hive absorbed is on
+// hive_chat_zero_content_absorbed_credits_total and on the guard's own line.
 func logSettlement(requestID uuid.UUID, alias string, held int64, s settlement) {
-	if !s.Delivered || s.Reason == "catalog_price" {
+	if s.Reason == "catalog_price" || (!s.Delivered && !s.ZeroContent) {
 		return
 	}
 	slog.Info("rag chat: variable-price settlement",
 		"request_id", requestID, "alias", alias, "reason", s.Reason,
 		"credits", s.Credits, "confirmed", s.Confirmed,
-		"generation_id", s.GenerationID, "held_credits", held)
+		"generation_id", s.GenerationID, "held_credits", held,
+		"absorbed_zero_content", s.ZeroContent)
 }
 
 // meteredTokens is what the settlement row records alongside the charge: the
