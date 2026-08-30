@@ -225,6 +225,25 @@ describe('Settings > Data Controls wiring (issue #866)', () => {
 	});
 
 	/*
+	 * `DELETE /api/v1/chats/` answers 401 to an ordinary user without the
+	 * `chat.delete` permission, so the control is offered on the same terms
+	 * Import and Export in this panel already use. Archive All has no such
+	 * backend gate and deliberately grows no frontend one.
+	 */
+	it('offers Delete All only where the backend would accept it', () => {
+		const source = dataControls();
+
+		expect(source).toContain(
+			"{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete ?? true)}"
+		);
+		const archiveRow = source.slice(
+			source.lastIndexOf("$i18n.t('Archive All Chats')") - 400,
+			source.lastIndexOf("$i18n.t('Archive All Chats')")
+		);
+		expect(archiveRow).not.toContain('permissions?.chat');
+	});
+
+	/*
 	 * Delete All used to leave the pinned list alone. `getPinnedChatList` is a
 	 * separate fetch feeding a separate sidebar section, so every pinned
 	 * conversation stayed on screen, named and clickable, after its row had

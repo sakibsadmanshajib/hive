@@ -278,20 +278,27 @@
 				</div>
 			</div>
 
-			<div>
-				<div class="py-0.5 flex w-full justify-between">
-					<div class="self-center text-xs">{$i18n.t('Delete All Chats')}</div>
-					<button
-						class="p-1 px-3 text-xs flex rounded-sm transition"
-						on:click={() => {
-							showDeleteConfirmDialog = true;
-						}}
-						type="button"
-					>
-						<span class="self-center">{$i18n.t('Delete All')}</span>
-					</button>
+			<!-- Gated the way Import and Export above are, and for the same reason
+			     (#866). DELETE /api/v1/chats/ answers 401 to an ordinary user
+			     without the `chat.delete` permission, so offering the control to
+			     one is offering a button that cannot work. The `?? true` keeps
+			     upstream's own default, which is on. -->
+			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete ?? true)}
+				<div>
+					<div class="py-0.5 flex w-full justify-between">
+						<div class="self-center text-xs">{$i18n.t('Delete All Chats')}</div>
+						<button
+							class="p-1 px-3 text-xs flex rounded-sm transition"
+							on:click={() => {
+								showDeleteConfirmDialog = true;
+							}}
+							type="button"
+						>
+							<span class="self-center">{$i18n.t('Delete All')}</span>
+						</button>
+					</div>
 				</div>
-			</div>
+			{/if}
 		</div>
 
 		<div>

@@ -369,6 +369,12 @@ def main() -> int:
     print("\nno admin arm, so ENABLE_ADMIN_CHAT_ACCESS cannot widen either write")
     for handler in (DELETE_HANDLER, ARCHIVE_HANDLER):
         func = find_function(tree, handler)
+        # Absence is already a recorded failure from the signature loop above.
+        # Walking None here instead would abort the run with a traceback, which
+        # is a worse report of the same fact and would take the legs below with
+        # it (CodeRabbit, this PR).
+        if func is None:
+            continue
         admin_tests = [
             node for node in ast.walk(func) if isinstance(node, ast.If) and is_admin_role_test(node.test)
         ]
