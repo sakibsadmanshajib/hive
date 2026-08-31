@@ -32,6 +32,11 @@ use_default_settings:
     # that changed this list. Do not re-add the removed engines without a
     # fresh measurement: they are not flaky, they are reliably blocked from
     # this egress IP.
+    #
+    # Only bing covers general web queries. Wikipedia and stackoverflow are
+    # narrow by design (title-shaped lookups and IT/Q&A respectively) and do
+    # not provide general-search redundancy: if bing itself gets blocked from
+    # this egress IP, general web search has no fallback engine left.
     keep_only:
       - bing
       - wikipedia

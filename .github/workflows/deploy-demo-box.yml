@@ -1488,6 +1488,70 @@ jobs:
                 % (len(want), route_receiver))
           PY
 
+      - name: Apply the bind-mounted SearXNG config
+        # Same defect as the Caddy and Prometheus configs above: searxng's
+        # settings.yml is a single-file bind mount
+        # (../searxng/settings.yml:/etc/searxng/settings.yml:ro in
+        # docker-compose.yml), so a content-only edit to the file changes
+        # neither the service's image reference nor its image ID, and the
+        # `up -d --build` step earlier in this job finds no reason to
+        # recreate it. `git pull` replaces the file via rename, which
+        # allocates a new inode, and a single-file bind mount stays pinned to
+        # the old inode for the life of the container, so the running
+        # process keeps serving the old engine allow-list indefinitely even
+        # though `git log` and this deploy's own success status say
+        # otherwise. Flagged in review on the PR that fixed issue #1576
+        # (which is itself a settings.yml content-only change): without this
+        # step, that fix deploys green and changes nothing running, the same
+        # shape as #1575 and #869.
+        #
+        # No reload branch, unlike Caddy and Prometheus: SearXNG ships no
+        # documented in-place reload signal analogous to `caddy reload` or
+        # Prometheus's SIGHUP, so recreate-on-mismatch is the only correct
+        # arm here. Recreating searxng is cheap: its only volume
+        # (searxng-data, the query cache) is named, not bind-mounted, so it
+        # survives the recreate untouched.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose $HIVE_COMPOSE_FLAGS)
+          # `set -e` is suspended inside an `if` condition, so a transient
+          # failure of the exec pipeline lands in the else branch and forces
+          # the recreate path, which still applies the config, rather than
+          # risking a false "already current" claim.
+          if "${COMPOSE[@]}" exec -T searxng cat /etc/searxng/settings.yml </dev/null \
+               | cmp -s - ../searxng/settings.yml; then
+            echo "searxng: mounted copy already matches ../searxng/settings.yml"
+          else
+            echo "searxng: mounted copy differs from ../searxng/settings.yml, so the" \
+                 "bind mount is pinned to a replaced inode; recreating to re-bind it"
+            "${COMPOSE[@]}" up -d --force-recreate --no-deps searxng
+          fi
+
+      - name: Verify the SearXNG engine allow-list is actually live
+        # A zero exit from the step above is not proof of anything: a
+        # container that was already current before this deploy exits the
+        # same way as one that just got recreated. So assert the outcome
+        # from the running process itself rather than trusting the apply
+        # step's exit code, same principle as the Prometheus and Caddy
+        # verify steps above. SearXNG's own /config endpoint is
+        # unauthenticated JSON (no API key, no admin session) and lists every
+        # engine with its `enabled` flag, independent of the search.formats
+        # setting that gates /search's json output -- verified locally
+        # against the pinned image before this was written.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          config=$(curl -fsS http://127.0.0.1:8888/config)
+          enabled=$(echo "$config" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(sorted(e['name'] for e in d['engines'] if e.get('enabled'))))")
+          want=$'bing\nstackoverflow\nwikipedia'
+          if [ "$enabled" != "$want" ]; then
+            echo "::error::searxng is serving an unexpected engine allow-list. Expected exactly bing, stackoverflow, wikipedia; got: $(echo "$enabled" | tr '\n' ',')" >&2
+            exit 1
+          fi
+          echo "searxng is serving the repository engine allow-list: $(echo "$enabled" | tr '\n' ',')"
+
       - name: Verify the chat-origin Caddy config is actually live
         # A zero exit from validate and reload is not proof that the intended
         # routing is live: a reload of a stale mounted copy exits 0 having

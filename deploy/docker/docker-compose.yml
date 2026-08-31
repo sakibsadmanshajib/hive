@@ -741,25 +741,25 @@ services:
   #
   # Configuration is the committed deploy/searxng/settings.yml, bind-mounted
   # read-only rather than baked into a custom image, per issue #298
-  # acceptance criterion 2. It explicitly allow-lists four zero-cost,
-  # no-API-key engines (google, duckduckgo, brave, bing) via
-  # use_default_settings.engines.keep_only and enables the `json` output
-  # format the OWUI SearXNG adapter (vendor/open-webui/backend/open_webui/
-  # retrieval/web/searxng.py) always requests. See that file's own comments
-  # for the secret_key / SEARXNG_SECRET interaction.
+  # acceptance criterion 2. It explicitly allow-lists three engines (bing,
+  # wikipedia, stackoverflow) via use_default_settings.engines.keep_only and
+  # enables the `json` output format the OWUI SearXNG adapter
+  # (vendor/open-webui/backend/open_webui/retrieval/web/searxng.py) always
+  # requests. See that file's own comments for the secret_key /
+  # SEARXNG_SECRET interaction.
   #
-  # Verified live (2026-08-30, from the builder sandbox's own egress, not the
-  # demo box's residential one): a cold instance answers one query across
-  # google, brave and bing together, but google, duckduckgo and brave all
-  # trip CAPTCHA/rate-limit suspensions within the next request or two from
-  # that IP, leaving bing as the only engine that keeps answering under
-  # sustained querying. SearXNG's own per-engine suspension (search:
-  # suspended_times in the upstream default settings) means a suspended
-  # engine is dropped from that query's results rather than the whole search
-  # failing, so result counts stayed at 9-10 per query throughout rather than
-  # dropping to zero. Confirming whether google survives from the demo box's
-  # actual (residential) egress is a required post-deploy follow-up, tracked
-  # on issue #298, not assumed here.
+  # Issue #298's original four-engine allow-list (google, duckduckgo, brave,
+  # bing) degraded to bing-only under real usage: measured live from this box
+  # across two rounds an hour apart (issue #1576), google, duckduckgo, brave,
+  # startpage, qwant, mojeek, yahoo and wikidata each failed every query
+  # (CAPTCHA, rate-limit, or a hard engine-init error), so those four were
+  # dropped and wikipedia/stackoverflow added as the two engines that also
+  # answered cleanly in the same measurement. Only bing covers general web
+  # queries; wikipedia and stackoverflow are narrow by design and do not
+  # provide general-search redundancy. Do not re-add the removed engines
+  # without a fresh measurement: they are not flaky, they are reliably
+  # blocked from this egress IP. Full per-engine, per-query table on issue
+  # #1576 and the PR that changed this list.
   searxng:
     image: searxng/searxng:2026.8.29-d226b78bc@sha256:b36af7984b87191b595bc5301418ed6432c047668a4547ab531a7439b816fac3
     profiles:
@@ -1347,10 +1347,12 @@ services:
       #
       # Issue #298: the engine is the self-hosted searxng service above, not
       # the DuckDuckGo scraper (backend/open_webui/retrieval/web/
-      # duckduckgo.py) this used to point at. SearXNG aggregates multiple
-      # zero-API-key engines (google, duckduckgo, brave, bing -- configured
-      # in ../searxng/settings.yml) and score-ranks the combined results
-      # itself, instead of handing back one engine's unranked snippet list.
+      # duckduckgo.py) this used to point at. SearXNG aggregates the
+      # zero-API-key engines configured in ../searxng/settings.yml (bing,
+      # wikipedia, stackoverflow as of issue #1576, down from the original
+      # four-engine allow-list -- see that file's own comments for why) and
+      # score-ranks the combined results itself, instead of handing back one
+      # engine's unranked snippet list.
       #
       # Both bypass flags now default to false (fetch full result pages,
       # then chunk/embed/retrieve them) rather than true (snippet-only, no
