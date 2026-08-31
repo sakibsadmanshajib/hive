@@ -121,3 +121,47 @@ func supportedVoiceNames() string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// speechResponseFormats is the audio container the hive-tts route can actually
+// produce. Groq's Orpheus endpoint answers "response_format must be one of
+// [wav]" to anything else, and LiteLLM relays that refusal as a 500, so the
+// caller saw a sanitized gateway failure and the real sentence stayed in the
+// LiteLLM log (#1381).
+//
+// ponytail: one static roster for the one TTS route this gateway has, matching
+// how orpheusVoices above handles the same question for voices. If a second
+// TTS route with a different container is ever added, this moves onto the
+// route record next to the voice roster, both at once rather than one now.
+var speechResponseFormats = []string{"wav"}
+
+// defaultSpeechResponseFormat is what the handler asks the upstream for when
+// the caller says nothing. It cannot be left to the upstream: the OpenAI SDK
+// omits response_format, the OpenAI default is mp3, and the route refuses mp3.
+func defaultSpeechResponseFormat() string {
+	return speechResponseFormats[0]
+}
+
+// resolveSpeechResponseFormat maps what the caller asked for onto what the
+// route can produce. An empty request resolves to the route default; anything
+// the route cannot produce is refused rather than silently rewritten, because
+// a caller who explicitly asked for mp3 and received wav would have been given
+// bytes it cannot decode with no indication why.
+func resolveSpeechResponseFormat(requested string) (string, bool) {
+	format := strings.ToLower(strings.TrimSpace(requested))
+	if format == "" {
+		return defaultSpeechResponseFormat(), true
+	}
+	for _, supported := range speechResponseFormats {
+		if format == supported {
+			return supported, true
+		}
+	}
+	return "", false
+}
+
+// supportedSpeechFormatNames is the comma-separated roster the refusal message
+// names, built from speechResponseFormats so the message cannot drift from
+// what resolveSpeechResponseFormat accepts.
+func supportedSpeechFormatNames() string {
+	return strings.Join(speechResponseFormats, ", ")
+}

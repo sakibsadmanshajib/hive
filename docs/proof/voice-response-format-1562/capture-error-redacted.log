@@ -1,0 +1,3 @@
+URL: http://localhost:24503/
+POST /api/v1/audio/speech -> 500 {"detail":"External: 500, message='Internal Server Error', url='[redacted]'"}
+<audio> elements on the page: 1

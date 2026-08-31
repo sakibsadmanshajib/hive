@@ -12,10 +12,11 @@ const STT_MODEL = process.env.HIVE_STT_MODEL ?? "hive-stt";
 
 // A hand-built one second, 16 kHz, mono, silent WAV. It exists so the
 // transcription endpoint can be exercised WITHOUT first calling speech
-// synthesis. That coupling is not hypothetical harm: while the round trip
-// below is an expected failure on issue #1318, it throws on the speech call
-// and never reaches transcription at all, so any defect in the transcription
-// route would sit behind a green marker unnoticed.
+// synthesis. That coupling is not hypothetical harm: through #1318 and #1381
+// the round trip below threw on the speech call and never reached
+// transcription at all, so for months any defect in the transcription route
+// would have sat behind an expected-failure marker unnoticed. Both are fixed
+// and the markers are gone, and this stays split for the next time.
 function silentWav(seconds: number): Buffer {
   const sampleRate = 16000;
   const dataBytes = sampleRate * seconds * 2;
@@ -39,21 +40,19 @@ function silentWav(seconds: number): Buffer {
 describe("Audio", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  // EXPECTED FAILURE, issue #1381, which is what was underneath #1318.
-  //
-  // The voice half of #1318 is fixed and proven live: this call now gets past
-  // the voice check, and the upstream complains about the next thing instead,
-  // which is that the OpenAI SDK omits response_format, the OpenAI default is
-  // mp3, and the Groq Orpheus route accepts only wav. LiteLLM classifies that
-  // as a BadRequestError and still answers 500, so the caller sees a 500 for a
-  // request-shaped refusal and the 400 relabelling from PR #1371 cannot reach
-  // it.
+  // Issue #1381, which was what was underneath #1318, is fixed: the edge now
+  // resolves response_format against what the route can actually produce, so
+  // the SDK's omission no longer lets the upstream fall back to its own mp3
+  // default and refuse the request. Both halves of the compatibility promise
+  // are live, so both of the expected-failure markers this file used to carry
+  // are gone rather than repointed at a third issue.
   //
   // The voice below stays the OpenAI default rather than one the current
   // upstream happens to accept: the point of this suite is what an unmodified
   // OpenAI SDK can do, and swapping in a provider-specific voice would stop
-  // measuring that.
-  it.fails("audio.speech.create returns non-empty binary audio", async () => {
+  // measuring that. Same for the absent response_format, which is the exact
+  // parameter #1381 was about: adding one here would stop measuring it.
+  it("audio.speech.create returns non-empty binary audio", async () => {
     const response = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
@@ -77,11 +76,11 @@ describe("Audio", () => {
     expect(typeof transcription.text).toBe("string");
   });
 
-  // EXPECTED FAILURE, issue #1381: blocked on the same speech synthesis above,
-  // which this round trip needs before it has anything to transcribe. The
-  // transcription half is exercised independently by the test above it, so a
-  // defect there cannot hide behind this marker.
-  it.fails("audio.transcriptions.create round-trips speech back to text", async () => {
+  // Unblocked by the same fix: this round trip needs the speech call above to
+  // produce something before it has anything to transcribe. The transcription
+  // half is still exercised independently by the test above it, so a defect
+  // there cannot hide behind this one.
+  it("audio.transcriptions.create round-trips speech back to text", async () => {
     const speech = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: "alloy",
@@ -89,9 +88,14 @@ describe("Audio", () => {
     });
     const audioBuffer = Buffer.from(await speech.arrayBuffer());
 
+    // Named and typed for what the bytes are. The gateway asks the TTS route
+    // for the one container it can produce (wav, #1381), so calling this
+    // speech.mp3 would hand the transcription provider a filename and a MIME
+    // type that disagree with its own content, which is a needless way to make
+    // a real round trip fail on something other than what it is measuring.
     const transcription = await client.audio.transcriptions.create({
       model: STT_MODEL,
-      file: await toFile(audioBuffer, "speech.mp3", { type: "audio/mpeg" }),
+      file: await toFile(audioBuffer, "speech.wav", { type: "audio/wav" }),
     });
 
     expect(typeof transcription.text).toBe("string");

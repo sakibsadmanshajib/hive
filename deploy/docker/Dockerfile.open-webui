@@ -269,6 +269,22 @@ RUN python3 /tmp/apply_web_loader_bounds_patch.py \
     && grep -q 'hive: stream with a hard byte cap' /app/backend/open_webui/retrieval/web/utils.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/web/utils.py').read_text())"
 
+# #1562: the audio router stringified the aiohttp exception into the HTTP
+# detail it returns to the browser, and aiohttp bakes the request URL into that
+# string, so every failed read-aloud published `http://edge-api:8080/v1/audio/
+# speech` to the signed-in user. Captured in a browser before the fix:
+# docs/proof/voice-response-format-1562/read-aloud-before-fix.png.
+#
+# The grep is the drift guard. If a digest bump moves the spliced literals the
+# patch's own asserts fail first, but if anyone ever makes the patch a silent
+# no-op this line still fails the build rather than shipping the leak back.
+COPY deploy/docker/owui-patches/apply_audio_error_leak_patch.py /tmp/apply_audio_error_leak_patch.py
+RUN python3 /tmp/apply_audio_error_leak_patch.py \
+    && grep -q '_hive_safe_detail' /app/backend/open_webui/routers/audio.py \
+    && ! grep -q "External: {e}" /app/backend/open_webui/routers/audio.py \
+    && ! grep -q "External: {exc}" /app/backend/open_webui/routers/audio.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/audio.py').read_text())"
+
 # #772: remove the stock Open WebUI surfaces that have no Hive counterpart --
 # Workspace > Models (a second, instance-wide model registry that duplicates
 # the Hive catalog), Workspace > Prompts, Workspace > Tools, the Playground,

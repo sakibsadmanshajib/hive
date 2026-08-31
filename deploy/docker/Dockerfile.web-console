@@ -39,6 +39,12 @@ COPY .env.example /app/.env.example
 COPY deploy/ /app/deploy/
 COPY docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json /app/docs/proof/chat-interaction-coverage-2026-08-10/coverage.run.json
 COPY supabase/migrations/ /app/supabase/migrations/
+# The chat front end's browser sources, read by browser-origin-hosts.test.ts,
+# which scans every file a browser downloads for a compose-internal origin
+# (#1562). It has to be the tree rather than a listed file or two: a guard that
+# covers only the files that existed when it was written stops covering the one
+# added afterwards, silently, which is the failure the guard exists to catch.
+COPY vendor/open-webui/src/ /app/vendor/open-webui/src/
 
 # The console's /console/docs page and its /api/openapi.yaml route read the
 # generated OpenAPI contract and its support matrix straight out of this

@@ -285,6 +285,25 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the response format on the same terms and for the same reason
+	// (#1381). The OpenAI SDK omits response_format and the OpenAI default is
+	// mp3, which this route refuses, so the absent case is answered with the
+	// format the route can produce rather than left to the upstream's own
+	// default. An explicit format the route cannot produce is a caller mistake
+	// and is refused as one, before any money is reserved.
+	requestedFormat := ""
+	if speechReq.ResponseFormat != nil {
+		requestedFormat = *speechReq.ResponseFormat
+	}
+	upstreamFormat, formatOK := resolveSpeechResponseFormat(requestedFormat)
+	if !formatOK {
+		code := "invalid_value"
+		apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error",
+			fmt.Sprintf("Unsupported response_format. Supported formats are: %s.", supportedSpeechFormatNames()),
+			&code, "response_format")
+		return
+	}
+
 	// Select route based on model alias and TTS capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:   speechReq.Model,
@@ -340,6 +359,11 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	// and whitespace, and a body that disagrees with the value the guard above
 	// accepted is the kind of drift this rewrite exists to prevent.
 	bodyMap["voice"] = upstreamVoice
+	// Written unconditionally for the same reason as the voice above: the
+	// resolver has already normalized case and whitespace and supplied the
+	// default for an absent value, so the body that goes out states the format
+	// explicitly whatever the caller sent or omitted.
+	bodyMap["response_format"] = upstreamFormat
 	rewrittenBody, err := json.Marshal(bodyMap)
 	if err != nil {
 		h.releaseHold(auth.AccountID, reservationID, "request_error", "/v1/audio/speech")
