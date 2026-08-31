@@ -1400,6 +1400,22 @@ services:
       # the license clause + <=50-user carve-out this demo relies on).
       WEBUI_NAME: "Hive"
       WEBUI_URL: ${HIVE_CHAT_URL:-http://localhost:3003}
+      # Signs session/auth tokens. Issue #1602: left unset, start.sh
+      # (vendor/open-webui/backend/start.sh) auto-generates one into
+      # .webui_secret_key under the container's WORKDIR, which is inside the
+      # image filesystem and outside every mounted volume, so a fresh value
+      # is generated on every container recreate and every signed-in user is
+      # logged out. Setting WEBUI_SECRET_KEY here bypasses that file-based
+      # generation entirely (start.sh only falls back to the file when the
+      # env var is empty), the same fix SEARXNG_SECRET below applies to
+      # SearXNG's server.secret_key. Generate a real value per deployment
+      # with `openssl rand -hex 32`; the literal fallback here is a dev
+      # convenience only, same pattern as SEARXNG_SECRET and
+      # CONTROL_PLANE_INTERNAL_TOKEN -- it is NOT what reaches the demo box.
+      # deploy-demo-box.yml sets this from the WEBUI_SECRET_KEY repository
+      # secret, which overrides this default the same way it overrides
+      # SEARXNG_SECRET.
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-hive-local-webui-secret}
       # Kills the "A new version (vX.Y.Z) is now available" in-app nag banner.
       ENABLE_VERSION_UPDATE_CHECK: "false"
       DEFAULT_LOCALE: "en"

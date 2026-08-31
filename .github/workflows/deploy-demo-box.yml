@@ -239,6 +239,13 @@ env:
   # `openssl rand -hex 32` and stored as the SEARXNG_SECRET repository
   # secret, wins here instead.
   SEARXNG_SECRET: ${{ secrets.SEARXNG_SECRET }}
+  # Issue #1602: same reasoning as SEARXNG_SECRET above. Open WebUI's compose
+  # fallback (WEBUI_SECRET_KEY:-hive-local-webui-secret) is a dev convenience
+  # only, and it is a value committed in the repo, so it must never be what
+  # signs session tokens on the box: a real value, generated once with
+  # `openssl rand -hex 32` and stored as the WEBUI_SECRET_KEY repository
+  # secret, wins here instead.
+  WEBUI_SECRET_KEY: ${{ secrets.WEBUI_SECRET_KEY }}
 
 jobs:
   # ------------------------------------------------------------------
