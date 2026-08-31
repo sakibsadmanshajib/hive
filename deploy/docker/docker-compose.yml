@@ -1592,6 +1592,41 @@ services:
       VOICE_MODE_PROMPT_TEMPLATE:
       TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE:
       CONTEXT_COMPACTION_PROMPT_TEMPLATE:
+      # The eleventh prompt key, and the only one that is Hive's rather than
+      # upstream's (issue #1596). Open WebUI has no global system prompt: its
+      # only inputs are a models-table row's `params.system` and the per-user
+      # Settings > General field, and neither is reachable for a Hive model,
+      # whose listing is synthesized by owui-patches/hive_model_picker.py from
+      # the control-plane catalog. So the chat surface shipped no identity, no
+      # capability statement, no citation rule and no refusal guidance, and the
+      # customer was talking to whatever default the routed upstream provider
+      # applies.
+      #
+      # Reconciled into the `hive.chat.system_prompt` row by
+      # owui-patches/hive_rag_env_config.py and consumed by
+      # owui-patches/apply_chat_system_prompt_patch.py, which prepends it to
+      # the request's system message. Null form for the same reason as the ten
+      # above, and unset for the same reason: what every user of a surface is
+      # told is a product decision, and this file is shared with the enterprise
+      # profile and local dev. The demo deployment sets it in
+      # .github/workflows/deploy-demo-box.yml, which is the versioned place for
+      # one.
+      HIVE_CHAT_SYSTEM_PROMPT:
+      # Where the retrieval and web-result wrapper (`rag.template`) lands: a
+      # system message when true, concatenated into the USER turn when false
+      # (issue #1596, narrowing #1571).
+      #
+      # Upstream defaults this False (backend/open_webui/env.py), and it is a
+      # plain os.getenv rather than persisted config, so compose is sufficient
+      # and no reconcile entry exists for it. Defaulted true here, for every
+      # profile, because that template carries Hive's untrusted-data framing:
+      # the rules telling the model never to follow instructions found inside
+      # retrieved page text have to outrank that text, and in the user turn
+      # they sit at exactly the same authority as the injection they are meant
+      # to refuse. The retrieved block is still fenced inside the template
+      # either way. An operator who wants upstream's position back sets this
+      # false explicitly.
+      RAG_SYSTEM_CONTEXT: ${RAG_SYSTEM_CONTEXT:-true}
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
       # first-boot-wins reason as the RAG keys above.

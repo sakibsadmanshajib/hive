@@ -317,6 +317,28 @@ RAG_CONFIG_ENV = {
     # other image-baked ENV belongs on this map.
     "rag.tiktoken_encoding_name": "TIKTOKEN_ENCODING_NAME",
     "audio.stt.whisper_model": "WHISPER_MODEL",
+    # The eleventh prompt key, and the only Hive-owned one: no upstream key,
+    # no upstream variable, no DEFAULT_CONFIG entry (issue #1596).
+    #
+    # The chat surface had no system prompt at all. Open WebUI's only two
+    # inputs are `params.system` on a row of its own `models` table and the
+    # per-user Settings > General field, and neither is reachable for a Hive
+    # model: the listing is synthesized by hive_model_picker.py from the
+    # control-plane catalog, which has no system-prompt column and leaves no
+    # durable Open WebUI row to carry one. So no identity, no capability
+    # statement, no citation rule and no refusal guidance shipped, and the
+    # customer was talking to whatever default the routed upstream applies.
+    #
+    # The row is consumed by apply_chat_system_prompt_patch.py, which prepends
+    # it to the request's system message inside process_chat_payload. It rides
+    # this reconcile rather than being read straight from os.environ in that
+    # patch for one reason worth the row: the boot line this module logs is
+    # what proves the configured value reached the deployment, which is the
+    # evidence standard the #1596 spec sets for every prompt it moves.
+    #
+    # It is in TEMPLATE_KEYS below for the same reason the other ten are, so
+    # the persisted value is byte for byte what the environment wrote.
+    "hive.chat.system_prompt": "HIVE_CHAT_SYSTEM_PROMPT",
 }
 
 # Same idea, boolean-valued.
@@ -521,6 +543,8 @@ TEMPLATE_KEYS = frozenset(
         "task.voice.prompt_template",
         "task.tools.prompt_template",
         "chat.context_compaction.prompt_template",
+        # Hive-owned, not upstream. See its entry in RAG_CONFIG_ENV.
+        "hive.chat.system_prompt",
     }
 )
 

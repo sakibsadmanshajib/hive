@@ -15,7 +15,10 @@ it, boots it twice against ONE volume so the first-boot-wins trap is reproduced
 rather than assumed, points its model endpoint at a capture server standing in
 for the gateway, and reads the request body Open WebUI actually sent.
 
-Four assertions, in order:
+Seven assertions, in order. The first four are the ten reconciled templates; the
+last three are the chat surface's own system prompt (issue #1596), which is a
+different question and needs a real chat turn rather than a task call, because
+the splice that applies it lives in `process_chat_payload`.
 
 1. The trap is real. The first boot, with no variable set, persists a
    `task.title.prompt_template` row. That row is what makes a later compose
@@ -29,6 +32,14 @@ Four assertions, in order:
    upstream's default is not. This is the assertion that fails if the value
    stops reaching a model for any reason at all, including reasons that have
    nothing to do with the allowlist.
+5. The #1596 control, and the strongest shape a control can take: with nothing
+   configured, a real chat turn reaches the model with NO system message at all.
+   There is no upstream default here to be mistaken for the configured value.
+6. With `HIVE_CHAT_SYSTEM_PROMPT` set, that same turn carries it as the system
+   message the model receives.
+7. Precedence, on a live turn: a request that also carries a Settings > General
+   system message gets Hive's block FIRST and the user's text after it, so a
+   user adds to the identity and capability statement and cannot delete it.
 
 Both boots use one volume and one image and differ only by that variable, so
 the printed before-and-after bodies are a controlled comparison rather than two
@@ -80,6 +91,23 @@ PROOF_TEMPLATE = (
 # source, so an upstream rewording fails here loudly instead of quietly making
 # the control assertion unfalsifiable.
 UPSTREAM_DEFAULT_FRAGMENT = "Generate a concise, 3-5 word title"
+
+# The chat surface's own system prompt (issue #1596), which is a different
+# question from the ten templates above and needs a real chat turn rather than a
+# task call to answer. Before that change the surface sent no system message at
+# all, so the control assertion here is an ABSENCE, which is the strongest shape
+# available: there is no upstream default to be mistaken for the configured
+# value.
+PROOF_CHAT_PROMPT = (
+    "You are HIVEPROOF-CHAT-{run}, the deployment system prompt.\n"
+    "Answer in one word.\n"
+)
+
+# Stands in for a user who filled in Settings > General, which upstream sends as
+# a system message at position 0 of the request. Hive's block must end up in
+# FRONT of it: a user must be able to add to the identity and capability
+# statement and not to delete it.
+PROOF_USER_SYSTEM = "USERPROOF-SETTINGS-SYSTEM-PROMPT"
 
 # A second volume, used only by the seeding pair below, so it cannot disturb
 # the delivery run's own volume.
@@ -183,8 +211,14 @@ class CaptureServer:
 
 
 def build_image() -> None:
-    """Apply the reconcile patch to the pinned image exactly as
-    Dockerfile.open-webui does (its own COPY plus RUN, lines around 228)."""
+    """Apply the patches to the pinned image exactly as Dockerfile.open-webui
+    does (its own COPY plus RUN pairs), and nothing else.
+
+    Two of them: the reconcile that writes the persisted rows, and the chat
+    system prompt splice that reads one of those rows on the chat path. Both,
+    because the #1596 question is whether a configured value reaches a MODEL,
+    and for the chat prompt the reconcile alone would only prove a database
+    row."""
     base = pinned_image()
     log(f"building the proof image from {base}")
     dockerfile = (
@@ -193,6 +227,10 @@ def build_image() -> None:
         "COPY apply_rag_env_config_patch.py /tmp/apply_rag_env_config_patch.py\n"
         "RUN python3 /tmp/apply_rag_env_config_patch.py \\\n"
         "    && grep -q 'hive_rag_env_config' /app/backend/open_webui/config.py\n"
+        "COPY apply_chat_system_prompt_patch.py /tmp/apply_chat_system_prompt_patch.py\n"
+        "RUN python3 /tmp/apply_chat_system_prompt_patch.py \\\n"
+        "    && grep -q 'hive.chat.system_prompt' "
+        "/app/backend/open_webui/utils/middleware.py\n"
     )
     proc = subprocess.run(
         ["docker", "build", "-t", IMAGE_TAG, "-f", "-", str(PATCHES)],
@@ -335,6 +373,59 @@ def title_request(capture: CaptureServer, port: int, token: str) -> dict:
     return capture.bodies[-1]
 
 
+def chat_request(capture: CaptureServer, port: int, token: str, system: str | None = None) -> dict:
+    """Send a real chat turn through the chat surface and return the body the
+    model actually received.
+
+    /api/chat/completions, not a task endpoint, because the chat system prompt
+    is spliced in `process_chat_payload` and only the chat path runs that.
+    `stream` is false so the capture server's plain JSON reply is accepted.
+
+    `system`, when given, rides at position 0 exactly as the chat front end
+    sends the Settings > General field (src/lib/components/chat/Chat.svelte),
+    which is what makes the precedence assertion a live one rather than a unit
+    test of a helper."""
+    models = api(port, "/api/models", token=token)
+    ids = [m.get("id") for m in models.get("data", [])]
+    if "proof-model" not in ids:
+        raise RuntimeError(f"the capture server's model never reached Open WebUI; it listed {ids}")
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": "what is a bee"})
+
+    before = len(capture.bodies)
+    api(
+        port,
+        "/api/chat/completions",
+        {"model": "proof-model", "messages": messages, "stream": False},
+        token=token,
+    )
+    deadline = time.time() + 30
+    while time.time() < deadline and len(capture.bodies) == before:
+        time.sleep(0.5)
+    if len(capture.bodies) == before:
+        raise RuntimeError("Open WebUI sent no chat request to the model at all")
+    return capture.bodies[-1]
+
+
+def outbound_system(body: dict) -> str:
+    """The system message the model received, or "" when it received none.
+
+    The empty string is the state the #1596 audit found and is a real answer
+    here, not a parse failure."""
+    for message in body.get("messages", []):
+        if message.get("role") == "system":
+            content = message.get("content")
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", "")) for part in content if isinstance(part, dict)
+                )
+            return str(content or "")
+    return ""
+
+
 def outbound_text(body: dict) -> str:
     return "\n".join(str(m.get("content", "")) for m in body.get("messages", []))
 
@@ -355,6 +446,7 @@ def main() -> int:
 
     run_id = secrets.token_hex(4)
     proof_template = PROOF_TEMPLATE.format(run=run_id)
+    proof_chat_prompt = PROOF_CHAT_PROMPT.format(run=run_id)
     capture = CaptureServer()
     try:
         run("docker", "volume", "rm", "-f", VOLUME, check=False)
@@ -436,6 +528,18 @@ def main() -> int:
 
         before_body = title_request(capture, port, token)
         before_sent = outbound_text(before_body)
+
+        # The #1596 control, and the finding it reproduces: with nothing
+        # configured, a real chat turn reaches the model with NO system message
+        # at all. Not a weak one, not upstream's: none. That is what the audit
+        # claimed and what the rest of this half is measured against.
+        before_chat = chat_request(capture, port, token)
+        before_chat_system = outbound_system(before_chat)
+        assert before_chat_system == "", (
+            "the unconfigured deployment sent a system message after all, so the "
+            f"#1596 control is not what this proof assumes:\n{before_chat_system[:2000]}"
+        )
+        log("  a chat turn reached the model with NO system message (the defect)")
         stop()
         assert UPSTREAM_DEFAULT_FRAGMENT in before_sent, (
             "the unconfigured deployment did not send upstream's own default "
@@ -451,7 +555,13 @@ def main() -> int:
         #    to win over the row boot 1 seeded, and the new text has to be what
         #    the model receives.
         log("boot 2 of 2: template configured, over the row boot 1 seeded")
-        port = start(capture, {"TITLE_GENERATION_PROMPT_TEMPLATE": proof_template})
+        port = start(
+            capture,
+            {
+                "TITLE_GENERATION_PROMPT_TEMPLATE": proof_template,
+                "HIVE_CHAT_SYSTEM_PROMPT": proof_chat_prompt,
+            },
+        )
         after = persisted("task.title.prompt_template")
         assert after["value"] == proof_template, (
             "the environment did not win over the persisted row: "
@@ -461,6 +571,36 @@ def main() -> int:
 
         after_body = title_request(capture, port, token)
         after_sent = outbound_text(after_body)
+
+        # The #1596 assertion. Same volume, same image, one variable added, and
+        # a real chat turn: the configured prompt has to be the system message
+        # the model receives.
+        after_chat_row = persisted("hive.chat.system_prompt")
+        assert after_chat_row["value"] == proof_chat_prompt, (
+            "the environment did not reach the hive.chat.system_prompt row: "
+            f"{after_chat_row}"
+        )
+        after_chat = chat_request(capture, port, token)
+        after_chat_system = outbound_system(after_chat)
+        assert f"HIVEPROOF-CHAT-{run_id}" in after_chat_system, (
+            "the configured chat system prompt did not reach the model. Open "
+            f"WebUI sent this system message:\n{after_chat_system[:2000]}"
+        )
+        log("  a chat turn CARRIED the configured system prompt to the model")
+
+        # Precedence, on a live turn rather than in a helper: a user filling in
+        # Settings > General adds to Hive's block and cannot delete it.
+        both = chat_request(capture, port, token, system=PROOF_USER_SYSTEM)
+        both_system = outbound_system(both)
+        assert f"HIVEPROOF-CHAT-{run_id}" in both_system, both_system
+        assert PROOF_USER_SYSTEM in both_system, both_system
+        assert both_system.index(f"HIVEPROOF-CHAT-{run_id}") < both_system.index(
+            PROOF_USER_SYSTEM
+        ), (
+            "the user's own system text came FIRST, so a user can bury or "
+            f"contradict the identity and capability statement:\n{both_system[:2000]}"
+        )
+        log("  Hive's block stayed in front of the user's own system text")
         stop()
         assert f"HIVEPROOF-TITLE-{run_id}" in after_sent, (
             "the configured template did not reach the model. Open WebUI sent:\n"
@@ -479,7 +619,17 @@ def main() -> int:
         print("--- what the model received AFTER, boot 2, one variable set ---")
         print(json.dumps(after_body, indent=2))
         print()
+        print("--- chat turn BEFORE, boot 1: the system message the model got ---")
+        print(json.dumps(before_chat_system))
+        print()
+        print("--- chat turn AFTER, boot 2: the system message the model got ---")
+        print(json.dumps(after_chat_system, indent=2))
+        print()
+        print("--- chat turn AFTER, with a user Settings > General prompt too ---")
+        print(json.dumps(both_system, indent=2))
+        print()
         print("ok: a configured Open WebUI prompt template reaches the model")
+        print("ok: the Hive chat system prompt reaches the model, ahead of the user's")
         return 0
     finally:
         stop()
