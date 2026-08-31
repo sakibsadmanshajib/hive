@@ -159,18 +159,49 @@ The provider is not named, the routing is described accurately, the capability
 answer is scoped to what was actually supplied for the turn, and no invented
 surface is offered.
 
+## 4. The Cowork suffix survives its own transport
+
+Not a sandbox launch, and not claimed as one. What is proved here is the one
+link in that chain with a real chance of mangling a multi-line value: the
+installer writes it through `printf %q`, Bash's own shell-safe quoting, which
+renders a multi-line string as `$'line1\nline2'`, and the unit entry point reads
+it back with `set -a; . "$ENV_FILE"`. That is Bash ANSI-C quoting, which systemd
+`EnvironmentFile=` would NOT understand; the entry point sources the file in
+Bash instead, so it does.
+
+Run against the exact text this pull request puts in the workflow, read out of
+the workflow rather than retyped:
+
+```
+chars before: 1533
+chars after:  1533
+ROUND TRIP OK, byte for byte
+first line after: <HIVE>
+last line after:  </HIVE>
+```
+
+So a multi-line prompt containing angle brackets, asterisks and slashes reaches
+the launcher process environment unchanged. From there
+`apps/agent-engine/cmd/agent-engine/serve.go` reads it into engine
+`Config.SystemMessageSuffix`, and two pre-existing Go tests already prove that
+field reaches `agent_context.system_message_suffix` on the launch payload
+(`TestSandboxEngine_Launch_SendsConfiguredSystemMessageSuffix`,
+`TestStartConversation_SystemMessageSuffixReachesTheWire`).
+
+Also re-run green, because both parse this workflow and the installer:
+`scripts/test-agent-engine-restart-gate.sh` and
+`scripts/test-agent-engine-health-probe.sh`.
+
 ## What this does NOT prove
 
 Stated so nobody reads more into it than is here.
 
-* The Cowork suffix half of this pull request has no live capture. It needs an
-  Apptainer host to launch a sandbox, which the WSL2 development box is not, so
-  it is covered by the chain assertion in
-  `scripts/test_owui_chat_system_prompt.py` (workflow env, then the installer's
-  own env-file write, then `serve.go`'s read) plus the pre-existing Go tests
-  that already prove `Config.SystemMessageSuffix` reaches
-  `agent_context.system_message_suffix` on the wire. First live Cowork turn
-  after deploy is the remaining evidence.
+* The Cowork suffix half has no live SANDBOX capture. Launching one needs an
+  Apptainer host and the WSL2 development box is not one. Section 4 proves the
+  transport and the Go tests prove the wire, so what is unproved is narrower
+  than "the suffix works": it is that the sandboxed agent, having received the
+  suffix, then presents itself as Hive Cowork. First live Cowork turn after
+  deploy is that evidence.
 * The RAG half's untrusted framing is proved to be the row and the position
   (`RAG_SYSTEM_CONTEXT=true`, so the wrapper lands in a system message), not to
   be effective against any particular injection. It narrows issue #1571's
