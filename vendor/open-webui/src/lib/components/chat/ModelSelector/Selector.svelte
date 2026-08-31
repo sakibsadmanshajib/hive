@@ -37,6 +37,7 @@
 	import ChatBubbleOval from '$lib/components/icons/ChatBubbleOval.svelte';
 
 	import ModelItem from './ModelItem.svelte';
+	import { sortModelItems } from '$lib/hive/model-sort';
 
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -219,7 +220,8 @@
 		updateFuse();
 	}
 
-	$: filteredItems = (
+	$: filteredItems = sortModelItems(
+		(
 		searchValue
 			? fuse
 					.search(searchValue)
@@ -266,7 +268,9 @@
 							return item.model?.direct;
 						}
 					})
-	).filter((item) => includeHidden || !(item.model?.info?.meta?.hidden ?? false));
+		).filter((item) => includeHidden || !(item.model?.info?.meta?.hidden ?? false)),
+		$settings?.pinnedModels ?? []
+	);
 
 	$: if (
 		selectedTag !== undefined ||
@@ -517,6 +521,10 @@
 
 	const ITEM_HEIGHT = 42;
 	const OVERSCAN = 10;
+	// Keep in sync with the `max-h-64` class on the list container below: this
+	// is the same 256px, kept as a number here because the overflow check and
+	// the virtual-scroll window both need to do arithmetic with it.
+	const LIST_VIEWPORT_HEIGHT = 256;
 
 	let listScrollTop = 0;
 	let listContainer;
@@ -524,8 +532,13 @@
 	$: visibleStart = Math.max(0, Math.floor(listScrollTop / ITEM_HEIGHT) - OVERSCAN);
 	$: visibleEnd = Math.min(
 		filteredItems.length,
-		Math.ceil((listScrollTop + 256) / ITEM_HEIGHT) + OVERSCAN
+		Math.ceil((listScrollTop + LIST_VIEWPORT_HEIGHT) / ITEM_HEIGHT) + OVERSCAN
 	);
+	// Issue #1601: the list silently clipped to four visible rows out of nine
+	// with no cue that more existed below the fold. This drives a persistent
+	// count/continuation footer instead of raising the cap, which would just
+	// move the same defect to the next tenant with more models.
+	$: hasOverflow = filteredItems.length * ITEM_HEIGHT > LIST_VIEWPORT_HEIGHT;
 </script>
 
 <ConfirmDialog
@@ -798,6 +811,18 @@
 								{/each}
 								<div style="height: {(filteredItems.length - visibleEnd) * ITEM_HEIGHT}px;" />
 							</div>
+							{#if hasOverflow}
+								<!--
+									Issue #1601: the list clips at LIST_VIEWPORT_HEIGHT with no
+									cue that content continues below it. This footer sits outside
+									the scrollable container so it stays visible regardless of
+									scroll position, and only renders when there is in fact more
+									to scroll to.
+								-->
+								<div class="px-3 pt-1.5 pb-0.5 text-xs text-gray-400 dark:text-gray-500 select-none">
+									{$i18n.t('{{count}} models, scroll for more', { count: filteredItems.length })}
+								</div>
+							{/if}
 						{/if}
 
 						{#if !selectionOnly && !(searchValue.trim() in $MODEL_DOWNLOAD_POOL) && searchValue && ollamaVersion && $user?.role === 'admin'}
