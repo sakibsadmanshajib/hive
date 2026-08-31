@@ -2475,13 +2475,13 @@
 			if (files.length > 0) {
 				toast.error(
 					$i18n.t(
-						'Attachments are not supported in Cowork mode yet. Remove the file, or switch to Chat mode to send it.'
+						'Attachments are not supported in Work mode yet. Remove the file, or switch to Chat mode to send it.'
 					)
 				);
 				return;
 			}
 			if (userPrompt.trim() === '') {
-				toast.error($i18n.t('Please enter instructions for Cowork'));
+				toast.error($i18n.t('Please enter instructions for Work'));
 				return;
 			}
 		}

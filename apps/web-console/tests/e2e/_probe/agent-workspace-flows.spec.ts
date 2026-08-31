@@ -327,7 +327,7 @@ test.describe("authenticated composer (Cowork mode)", () => {
     // pass today and would silently loosen the guarantee below what the cited
     // source actually promises.
     await expect(
-      page.getByText(/enter instructions for cowork/i),
+      page.getByText(/enter instructions for work/i),
       "a whitespace-only Cowork submission must be refused client side with a visible message",
     ).toBeVisible();
     expect(created, "no request should reach the agent task collection for a refused submission").toBe(

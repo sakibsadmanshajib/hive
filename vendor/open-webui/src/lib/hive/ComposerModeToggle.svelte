@@ -22,7 +22,7 @@
 
 	const LABELS: Record<ComposerMode, string> = {
 		chat: 'Chat',
-		cowork: 'Cowork'
+		cowork: 'Work'
 	};
 
 	const select = (mode: ComposerMode) => {

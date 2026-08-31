@@ -659,6 +659,6 @@ describe('the run turn follows the detail endpoint, not the task list', () => {
 		// and the clean refusal when files are attached in Cowork mode.
 		expect(chat).toContain('if ($chatId !== _chatId) {');
 		expect(chat).toContain('for (const pending of pendingTurns)');
-		expect(chat).toContain('Attachments are not supported in Cowork mode yet');
+		expect(chat).toContain('Attachments are not supported in Work mode yet');
 	});
 });

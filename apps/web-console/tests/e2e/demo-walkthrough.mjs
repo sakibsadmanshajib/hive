@@ -525,7 +525,7 @@ async function main() {
         await waitVisible(page.locator("#chat-input"), 40000);
         const newChat = page.getByRole("link", { name: "New Chat" }).first();
         if (await waitVisible(newChat, 5000)) await newChat.click().catch(() => {});
-        const coworkToggle = page.getByRole("radio", { name: "Cowork", exact: true }).first();
+        const coworkToggle = page.getByRole("radio", { name: "Work", exact: true }).first();
         const gated = !(await waitVisible(coworkToggle, 10000));
         if (gated) {
           entry.screenshots.push(await shot(page, `10-cowork-${label}-gated`));

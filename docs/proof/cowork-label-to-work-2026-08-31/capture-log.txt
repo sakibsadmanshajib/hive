@@ -1,0 +1,76 @@
+# Visual proof: PR #1594, rename the Cowork composer label to Work
+
+Captured 2026-08-31 against a LOCAL stack, this PR's own build (branch
+fix/cowork-label-to-work, commit 55a0c56de1fd9f095867a5bbb2b1df3641e71565).
+chat-hive.scubed.co is unreachable from this box (local network blackholes
+the scubed.co zone at TLS), so this used a local Docker stack instead.
+
+STACK UNDER TEST
+================
+
+  browser        Chromium (Playwright driver), 1440x900 viewport
+  open-webui      hive-open-webui:v0.10.2-branded, built from this branch's
+                 vendor/open-webui source (Dockerfile.open-webui), the exact
+                 image the local/chat compose profile ships, http://localhost:3003
+                 (through caddy-owui)
+  control-plane  hive-control-plane:ci, healthy, http://localhost:18081 (host
+                 port remapped only to dodge a port collision with a sibling
+                 worktree's stack; container-to-container traffic unaffected)
+  edge-api       hive-edge-api:ci, healthy, http://localhost:3003 proxies to it
+  database       throwaway Postgres (pgvector/pgvector:pg17), container
+                 hive-capture-db, with all 123 files in supabase/migrations
+                 applied through scripts/apply-migrations.sh
+  auth backend   throwaway GoTrue + PostgREST behind one nginx gateway, stood
+                 up with scripts/ci-supabase-stack.sh --jwks-tls-ca (the same
+                 script CI's throwaway-auth jobs use), so edge-api's mandatory
+                 SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL boot gate is satisfied
+                 by a real HTTPS JWKS endpoint, not a stub
+
+IDENTITY
+========
+
+Native Open WebUI sign-in is deliberately Caddy-blocked on this deployment's
+Caddyfile.owui (POST /api/v1/auths/signup and /auths/signin both answer 404 by
+design, SSO-only posture), and the throwaway GoTrue stood up above is not
+registered as this stack's OAuth provider (that would need extra GoTrue OAuth-
+server configuration out of scope for a label-only PR). Signing in through
+either path was not attempted.
+
+Instead this used the same audited mechanism scripts/owui-mint-admin-token.py
+documents for exactly this situation (issue #556): a short-lived (5 minute)
+Open WebUI session token, minted inside the open-webui container from its own
+WEBUI_SECRET_KEY, for an account inserted directly into that container's own
+sqlite database (id 450cd9c8-0450-4a30-86dc-33adea9d2e53, role admin, email
+work-label-capture@hive-local-capture.invalid). This is Open WebUI's own
+internal auth database, entirely separate from the throwaway Supabase/GoTrue
+stack above; no password was set anywhere, no shared or pre-existing account
+was touched, and the throwaway database this account lives in was destroyed
+immediately after capture. The token was injected via Playwright's
+context.addInitScript (localStorage.token), never placed in a URL, so no
+capture below carries a credential in its query string and none needed
+redaction.
+
+CAPTURE
+=======
+
+URL: http://localhost:3003/
+DOM probe: page.locator('[data-hive-mode]').allTextContents()
+  -> ["Chat","Work"]
+
+* 11-composer-work-toggle.png - chat home, Chat mode selected. The composer
+  segmented control reads "Chat | Work" (was "Chat | Cowork" before this PR).
+  The internal data-hive-mode values are unchanged ("chat" / "cowork"), per
+  the brief's prohibition on renaming wire-level identifiers.
+* 12-work-mode-selected.png - the Work segment clicked. The pack row welds in
+  below the composer exactly as it did as "Cowork" mode (Knowledge work |
+  Coding, "Runs in a sandbox. Progress appears in this conversation."),
+  confirming the mode-toggle rename did not touch ComposerCoworkRow.svelte,
+  the .hv-cowork-* CSS classes, or the sandboxed-run behavior itself, only
+  the visible label.
+
+Both toast strings changed by this PR (Chat.svelte's attachment-refusal and
+blank-instructions refusals) are unit-tested in
+vendor/open-webui/src/lib/hive/coworkMode.test.ts and
+apps/web-console/tests/e2e/_probe/agent-workspace-flows.spec.ts (see the PR
+body's test list); they were not separately screenshotted since they are
+transient toast text, not a persistent surface.
