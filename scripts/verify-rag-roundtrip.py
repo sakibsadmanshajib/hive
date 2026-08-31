@@ -41,9 +41,9 @@ apps/edge-api/internal/rag/chat_handler.go). Unit tests cover the code path in
 isolation; stream_leak_check and error_path_check below are the live proof
 that the fix actually holds against a real upstream, since none of the four
 leaks PR #1222 found were on a happy path and this route had never been
-exercised live before (blocked by ENABLE_RAG defaulting to false for every
-tenant that has no explicit tenant_settings row -- opt-in by design, see
-supabase/migrations/20260824_01_cowork_gate_default_enabled.sql's header).
+exercised live before (it was blocked by ENABLE_RAG defaulting to false for
+every tenant with no explicit tenant_settings row; that default is now true,
+see supabase/migrations/20260831_02_rag_gate_default_enabled.sql).
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY
 Optional env: EDGE_API_URL (default http://localhost:8080),
