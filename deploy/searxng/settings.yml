@@ -19,16 +19,28 @@
 # already populated, so that auto-generation path never runs here.
 use_default_settings:
   engines:
-    # Explicit allow-list (issue #298 acceptance criteria 2 and 3): query
-    # exactly these four, all zero-cost, no API key. Google is wanted
-    # specifically; whether it actually returns results from this
-    # deployment's egress IP (residential vs datacentre CAPTCHA-walling) is
-    # verified live and recorded on the issue, not assumed from this file.
+    # Issue #298's original four-engine allow-list (google, duckduckgo,
+    # brave, bing) degraded to Bing-only under real usage: measured live
+    # from this box across two rounds an hour apart (issue #1576), google,
+    # duckduckgo, brave, startpage, qwant, mojeek, yahoo, and wikidata each
+    # failed every query (CAPTCHA, rate-limit, a silently-undetected CAPTCHA
+    # page for mojeek, a persistent httpx.RemoteProtocolError for yahoo, and
+    # an engine-init HTTP 403 for wikidata). Only three engines answered
+    # cleanly with zero errors in both rounds: bing (general web, 6/6),
+    # wikipedia (infobox lookups on title-shaped queries), and stackoverflow
+    # (IT/Q&A queries). Full per-engine, per-query table on the issue and PR
+    # that changed this list. Do not re-add the removed engines without a
+    # fresh measurement: they are not flaky, they are reliably blocked from
+    # this egress IP.
+    #
+    # Only bing covers general web queries. Wikipedia and stackoverflow are
+    # narrow by design (title-shaped lookups and IT/Q&A respectively) and do
+    # not provide general-search redundancy: if bing itself gets blocked from
+    # this egress IP, general web search has no fallback engine left.
     keep_only:
-      - google
-      - duckduckgo
-      - brave
       - bing
+      - wikipedia
+      - stackoverflow
 
 server:
   secret_key: "ultrasecretkey"
@@ -43,11 +55,8 @@ search:
     - json
 
 engines:
-  # google and bing ship `disabled: true` upstream (public instances get
-  # CAPTCHA-walled fast); duckduckgo and brave ship already enabled. Un-hide
-  # the two disabled ones so the keep_only allow-list above actually queries
-  # all four engines instead of silently running only two of them.
-  - name: google
-    disabled: false
+  # bing ships `disabled: true` upstream (public instances get CAPTCHA-walled
+  # fast); wikipedia and stackoverflow (engine: stackexchange, api_site:
+  # stackoverflow) already ship enabled, so they need no override here.
   - name: bing
     disabled: false
