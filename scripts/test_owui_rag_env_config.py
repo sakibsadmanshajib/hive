@@ -15,10 +15,13 @@ path so the environment wins for exactly these keys. This file exercises it
 directly: no framework, no network, no Open WebUI import.
 Run: python3 scripts/test_owui_rag_env_config.py
 """
+import ast
 import asyncio
 import importlib.util
+import logging
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 MODULE_PATH = (
@@ -33,6 +36,30 @@ hive_rag_env_config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hive_rag_env_config)
 
 ALIAS = "hive-embedding-default"
+
+PATCH_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "deploy"
+    / "docker"
+    / "owui-patches"
+    / "apply_rag_env_config_patch.py"
+)
+GATEWAY_URL = "http://edge-api:8080/v1"
+SEARX_URL = "http://searxng:8080/search"
+
+
+class _ErrorCapture(logging.Handler):
+    """Collects the module logger's messages, so a non-fatal refusal can be
+    asserted to have actually been reported rather than swallowed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
 STALE = "text-embedding-3-small"
 
 
@@ -150,14 +177,32 @@ def test_key_without_a_base_url_is_allowed() -> None:
 
 def test_only_the_gateway_rag_keys_are_touched() -> None:
     """Nothing else an admin configured through Open WebUI is overwritten:
-    this reconcile is deliberately not `ENABLE_PERSISTENT_CONFIG=false`."""
-    config = FakeConfig({"ui.enable_signup": False, "rag.top_k": 5})
+    this reconcile is deliberately not `ENABLE_PERSISTENT_CONFIG=false`.
+
+    Issue #1575 moved `RAG_TOP_K`/`ENABLE_SIGNUP` from "unrelated, must stay
+    untouched" to "reconciled, on purpose" (both are read live from the
+    Config store: retrieval's `get_retrieval_config()` for the former, the
+    signup gate in routers/auths.py for the latter), so this now proves the
+    negative with `OAUTH_CLIENT_ID` instead: it backs a persisted config key
+    too, but `utils/oauth.py` reads it as a frozen module constant, never via
+    `Config.get`, so it stays environment-only by design (see
+    ENVIRONMENT_ONLY_ENV_VARS). RAG_TOP_K and ENABLE_SIGNUP get their own
+    assertions in the same test, since their presence here is the whole
+    point of the change."""
+    config = FakeConfig({"oauth.client_id": "persisted-client-id", "rag.top_k": 5})
     applied = reconcile(
-        config, {"RAG_EMBEDDING_MODEL": ALIAS, "RAG_TOP_K": "42", "ENABLE_SIGNUP": "true"}
+        config,
+        {
+            "RAG_EMBEDDING_MODEL": ALIAS,
+            "RAG_TOP_K": "42",
+            "ENABLE_SIGNUP": "true",
+            "OAUTH_CLIENT_ID": "env-client-id",
+        },
     )
-    assert set(applied) == {"rag.embedding_model"}, applied
-    assert config.stored["ui.enable_signup"] is False
-    assert config.stored["rag.top_k"] == 5
+    assert set(applied) == {"rag.embedding_model", "rag.top_k", "ui.enable_signup"}, applied
+    assert config.stored["oauth.client_id"] == "persisted-client-id"
+    assert applied["rag.top_k"] == 42 and isinstance(applied["rag.top_k"], int)
+    assert applied["ui.enable_signup"] is True
 
 
 def test_values_are_stripped() -> None:
@@ -1237,6 +1282,654 @@ def test_env_example_documents_every_prompt_template() -> None:
     )
     for variable in PROMPT_TEMPLATE_KEYS.values():
         assert variable in env_example, f".env.example does not document {variable}"
+
+
+###############################################################################
+# Issue #1575: the audit that found WEB_LOADER_TIMEOUT silently inert also
+# found thirteen more instances of the same bug, plus a guard against the
+# next one. Everything below this line is that.
+###############################################################################
+
+VENDOR_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "vendor"
+    / "open-webui"
+    / "backend"
+    / "open_webui"
+    / "config.py"
+)
+
+
+def test_web_loader_timeout_reaches_the_persisted_key() -> None:
+    """The named bug. PR #1570's WEB_LOADER_TIMEOUT=12 (a MEDIUM
+    resource-exhaustion bound on the web-search page loader) reached the
+    container environment and nowhere else, because web.loader.timeout was
+    missing from RAG_CONFIG_ENV: `if WEB_LOADER_TIMEOUT:` in
+    retrieval/web/utils.py read an empty persisted row forever."""
+    config = FakeConfig({})
+    applied = reconcile(config, {"WEB_LOADER_TIMEOUT": "12"})
+    assert applied == {"web.loader.timeout": "12"}, applied
+
+
+def test_searxng_query_url_reaches_the_persisted_key() -> None:
+    """Found live on the deployed box while this fix was in flight: web
+    search returned "An error occurred while searching the web" and the
+    container log read "No SEARXNG_QUERY_URL found in environment
+    variables", despite the container's own environment carrying it
+    correctly. That message is misleading: routers/retrieval.py's searxng
+    branch checks `config.SEARXNG_QUERY_URL` (the live, per-request Config
+    store value from get_retrieval_config()), not os.environ."""
+    config = FakeConfig({"web.search.searxng_query_url": ""})
+    applied = reconcile(config, {"SEARXNG_QUERY_URL": "http://searxng:8080/search"})
+    assert applied["web.search.searxng_query_url"] == "http://searxng:8080/search", applied
+
+
+def test_rag_top_k_and_web_search_result_count_are_coerced_to_int() -> None:
+    """Both flow into a `k=` argument a vector-store or search call passes
+    straight through, and upstream stores them as ints (`int(os.getenv(...))`
+    in config.py), so a persisted string would risk a TypeError deep in a
+    request path rather than the value simply being ignored."""
+    config = FakeConfig({})
+    applied = reconcile(
+        config, {"RAG_TOP_K": "8", "WEB_SEARCH_RESULT_COUNT": "5"}
+    )
+    assert applied["rag.top_k"] == 8 and isinstance(applied["rag.top_k"], int)
+    assert applied["web.search.result_count"] == 5
+    assert isinstance(applied["web.search.result_count"], int)
+
+
+def test_a_non_numeric_int_key_is_refused_rather_than_crashing_downstream() -> None:
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"RAG_TOP_K": "five"})
+    except RuntimeError as exc:
+        assert "RAG_TOP_K" in str(exc), exc
+    else:
+        raise AssertionError("expected a refusal for a non-numeric RAG_TOP_K")
+    assert config.upsert_calls == 0
+
+
+def test_a_negative_int_key_is_refused_too() -> None:
+    """PR #1582 review nit: int() accepts a negative value with no error, but
+    a negative result count would still misbehave request-side rather than
+    at boot, the exact gap this coercion exists to close."""
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"WEB_SEARCH_RESULT_COUNT": "-1"})
+    except RuntimeError as exc:
+        assert "WEB_SEARCH_RESULT_COUNT" in str(exc), exc
+    else:
+        raise AssertionError("expected a refusal for a negative WEB_SEARCH_RESULT_COUNT")
+    assert config.upsert_calls == 0
+
+
+def test_openai_connection_is_pointed_at_the_gateway() -> None:
+    """The connection chat completions actually authenticate with
+    (routers/openai.py.get_openai_connection reads openai.api_base_urls/
+    openai.api_keys fresh from the Config store on every request). Persisted
+    as single-element lists: upstream supports several named connections,
+    Hive only ever wires the one at docker-compose.yml's
+    OPENAI_API_BASE_URL/OPENAI_API_KEY."""
+    config = FakeConfig({})
+    applied = reconcile(
+        config,
+        {
+            "OPENAI_API_BASE_URL": "http://edge-api:8080/v1",
+            "OPENAI_API_KEY": "hk_example",
+        },
+    )
+    assert applied["openai.api_base_urls"] == ["http://edge-api:8080/v1"], applied
+    assert applied["openai.api_keys"] == ["hk_example"], applied
+
+
+def test_openai_connection_url_without_a_key_is_refused() -> None:
+    """The same posture as the RAG/audio destinations above: a rotated key
+    must not leave a base URL pointed at a destination with no credential."""
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"OPENAI_API_BASE_URL": "http://edge-api:8080/v1"})
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected a refusal for a base URL with no key")
+    assert "OPENAI_API_BASE_URL" in message and "OPENAI_API_KEY" in message, message
+
+
+def test_openai_api_keys_value_is_never_logged() -> None:
+    """openai.api_keys carries OWUI_SHIM_KEY, a real registered Hive API key,
+    the same secrecy posture as rag.openai.api_key above."""
+    summary = hive_rag_env_config.log_summary(
+        {"openai.api_keys": ["hk_example"], "openai.api_base_urls": ["http://edge-api:8080/v1"]}
+    )
+    assert "hk_example" not in summary, summary
+    assert "openai.api_keys" in summary, summary
+
+
+def test_openai_and_ollama_enable_and_the_remaining_1575_booleans() -> None:
+    config = FakeConfig({})
+    applied = reconcile(
+        config,
+        {
+            "ENABLE_OPENAI_API": "true",
+            "ENABLE_OLLAMA_API": "false",
+            "ENABLE_COMMUNITY_SHARING": "false",
+            "ENABLE_EVALUATION_ARENA_MODELS": "false",
+        },
+    )
+    assert applied["openai.enable"] is True
+    assert applied["ollama.enable"] is False
+    assert applied["ui.enable_community_sharing"] is False
+    assert applied["evaluation.arena.enable"] is False
+
+
+def test_webui_url_and_default_locale_and_default_user_role_are_reconciled() -> None:
+    """ui.default_user_role is the security-relevant one of the three:
+    docker-compose.yml sets DEFAULT_USER_ROLE=pending deliberately so an
+    unaffiliated login lands on the activation-pending screen rather than
+    being granted app access (routers/auths.py reads
+    Config.get('ui.default_user_role') on every new-account creation, both
+    the password and the OAuth signup paths). A stale persisted "user" would
+    silently reopen that door."""
+    config = FakeConfig({})
+    applied = reconcile(
+        config,
+        {"WEBUI_URL": "http://localhost:3003", "DEFAULT_LOCALE": "en", "DEFAULT_USER_ROLE": "pending"},
+    )
+    assert applied["webui.url"] == "http://localhost:3003"
+    assert applied["ui.default_locale"] == "en"
+    assert applied["ui.default_user_role"] == "pending"
+
+
+def test_ui_enable_signup_is_reconciled() -> None:
+    """This deployment is SSO-only; the signup gate
+    (routers/auths.py: `if not await Config.get('ui.enable_signup') or not
+    await Config.get('ui.enable_login_form')`) reads this live, exactly like
+    the login-form half of the same gate #722 already fixed."""
+    config = FakeConfig({"ui.enable_signup": True})
+    applied = reconcile(config, {"ENABLE_SIGNUP": "false"})
+    assert applied["ui.enable_signup"] is False
+    assert config.stored["ui.enable_signup"] is False
+
+
+def _persisted_config_env_vars(source: str) -> dict:
+    return hive_rag_env_config._persisted_config_env_vars(source)
+
+
+def test_persisted_config_env_vars_detects_a_single_line_assignment() -> None:
+    source = (
+        "WEB_LOADER_TIMEOUT = os.getenv('WEB_LOADER_TIMEOUT', '')\n"
+        "DEFAULT_CONFIG = {\n"
+        "    'web.loader.timeout': WEB_LOADER_TIMEOUT,\n"
+        "}\n"
+    )
+    mapping = _persisted_config_env_vars(source)
+    assert mapping.get("WEB_LOADER_TIMEOUT") == ["web.loader.timeout"], mapping
+
+
+def test_persisted_config_env_vars_detects_a_multiline_list_comprehension() -> None:
+    """The exact shape that broke a naive per-line regex during the #1575
+    audit: OAUTH_ALLOWED_ROLES/OAUTH_ADMIN_ROLES in the real pinned source
+    are built with a multi-line list comprehension, not a plain assignment."""
+    source = (
+        "OAUTH_ADMIN_ROLES = [\n"
+        "    role.strip()\n"
+        "    for role in os.getenv('OAUTH_ADMIN_ROLES', 'admin').split(',')\n"
+        "    if role\n"
+        "]\n"
+        "DEFAULT_CONFIG = {\n"
+        "    'oauth.admin_roles': OAUTH_ADMIN_ROLES,\n"
+        "}\n"
+    )
+    mapping = _persisted_config_env_vars(source)
+    assert mapping.get("OAUTH_ADMIN_ROLES") == ["oauth.admin_roles"], mapping
+
+
+def test_guard_would_have_caught_the_web_loader_timeout_bug() -> None:
+    """Acceptance criterion 4's own proof: revert web.loader.timeout out of
+    RAG_CONFIG_ENV (simulating this exact module before the #1575 fix) and
+    confirm the guard, run against the real pinned vendor config.py source,
+    actually raises rather than merely being expected to."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    original = hive_rag_env_config.RAG_CONFIG_ENV
+    hive_rag_env_config.RAG_CONFIG_ENV = {
+        key: value for key, value in original.items() if key != "web.loader.timeout"
+    }
+    try:
+        try:
+            hive_rag_env_config.guard_unreconciled_env_vars(
+                {"WEB_LOADER_TIMEOUT": "12"}, config_source
+            )
+        except RuntimeError as exc:
+            assert "WEB_LOADER_TIMEOUT" in str(exc), exc
+        else:
+            raise AssertionError("expected the guard to raise")
+    finally:
+        hive_rag_env_config.RAG_CONFIG_ENV = original
+
+
+def test_guard_ignores_a_persisted_var_this_deployment_never_sets() -> None:
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    original = hive_rag_env_config.RAG_CONFIG_ENV
+    hive_rag_env_config.RAG_CONFIG_ENV = {
+        key: value for key, value in original.items() if key != "web.loader.timeout"
+    }
+    try:
+        hive_rag_env_config.guard_unreconciled_env_vars({}, config_source)
+    finally:
+        hive_rag_env_config.RAG_CONFIG_ENV = original
+
+
+def test_guard_does_not_flag_the_truly_environment_only_oauth_cluster() -> None:
+    """Corrected post-review (PR #1582): only these five are read as frozen
+    module constants (Authlib client registration, config.py:2600-2632) with
+    no live Config.get/Config.get_many read anywhere in the pinned backend.
+    The other eight members of the original 13-entry claim are covered by
+    test_oauth_role_and_signup_cluster_is_reconciled_not_allowlisted below,
+    since they are reconciled now, not allowlisted."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    hive_rag_env_config.guard_unreconciled_env_vars(
+        {
+            "OAUTH_CLIENT_ID": "test-client",
+            "OAUTH_CLIENT_SECRET": "test-secret",
+            "OAUTH_PROVIDER_NAME": "hive-sso",
+            "OAUTH_SCOPES": "openid email profile",
+            "OAUTH_CODE_CHALLENGE_METHOD": "S256",
+        },
+        config_source,
+    )
+
+
+def test_oauth_role_and_signup_cluster_is_reconciled_not_allowlisted() -> None:
+    """The CRITICAL security-review finding on this PR. All eight of these
+    are read live via utils/oauth.py's get_oauth_runtime_config()
+    (Config.get_many against a dict-derived key list, the exact call shape a
+    literal `Config.get('oauth.` grep cannot see), from handle_login,
+    handle_callback and get_user_role, the last of which decides whether an
+    SSO login is promoted to admin. docker-compose.yml sets seven of these
+    eight today, so this was a live exposure, not only future drift."""
+    config = FakeConfig({})
+    applied = reconcile(
+        config,
+        {
+            "ENABLE_OAUTH_SIGNUP": "true",
+            "ENABLE_OAUTH_ROLE_MANAGEMENT": "true",
+            "ENABLE_OAUTH_GROUP_MANAGEMENT": "true",
+            "OAUTH_ROLES_CLAIM": "owui_role",
+            "OAUTH_GROUPS_CLAIM": "tenants",
+            "OAUTH_ALLOWED_ROLES": "ADMIN,MEMBER,VIEWER",
+            "OAUTH_ADMIN_ROLES": "ADMIN",
+            "OPENID_PROVIDER_URL": "https://sso.example/.well-known/openid-configuration",
+        },
+    )
+    assert applied["oauth.enable_signup"] is True
+    assert applied["oauth.enable_role_mapping"] is True
+    assert applied["oauth.enable_group_mapping"] is True
+    assert applied["oauth.roles_claim"] == "owui_role"
+    assert applied["oauth.group_claim"] == "tenants"
+    # Case-preserving: role identifiers are matched verbatim against an IdP
+    # claim (OAuthManager.get_user_role), so "ADMIN" must not become "admin".
+    assert applied["oauth.allowed_roles"] == ["ADMIN", "MEMBER", "VIEWER"], applied
+    assert applied["oauth.admin_roles"] == ["ADMIN"], applied
+    assert applied["oauth.provider_url"] == (
+        "https://sso.example/.well-known/openid-configuration"
+    )
+
+
+def test_an_empty_oauth_role_list_is_refused_rather_than_disabling_role_matching() -> None:
+    """The same "looks configured, does nothing" trap LIST_KEYS already
+    refuses for file extensions, applied to the role/admin allow lists."""
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"OAUTH_ALLOWED_ROLES": " , ,"})
+    except RuntimeError as exc:
+        assert "OAUTH_ALLOWED_ROLES" in str(exc), exc
+    else:
+        raise AssertionError("expected a refusal for an all-separators role list")
+    assert config.upsert_calls == 0
+
+
+def test_the_five_correctly_environment_only_oauth_keys_are_untouched() -> None:
+    """The negative half of the CRITICAL finding: these five must stay
+    exactly as ENVIRONMENT_ONLY_ENV_VARS says, reconcile() writes nothing for
+    them even when set, since Authlib's client registration reads the
+    frozen os.environ constant, never the persisted row."""
+    config = FakeConfig({"oauth.client_id": "persisted-client-id"})
+    applied = reconcile(
+        config,
+        {
+            "OAUTH_CLIENT_ID": "env-client-id",
+            "OAUTH_CLIENT_SECRET": "env-secret",
+            "OAUTH_PROVIDER_NAME": "hive-sso",
+            "OAUTH_SCOPES": "openid email profile",
+            "OAUTH_CODE_CHALLENGE_METHOD": "S256",
+        },
+    )
+    assert applied == {}, applied
+    assert config.stored["oauth.client_id"] == "persisted-client-id"
+
+
+def test_guard_covers_every_env_var_docker_compose_actually_sets() -> None:
+    """The strongest version of this guard's own self-check: every env var
+    name docker-compose.yml's open-webui service block sets, fed to the
+    guard against the real pinned vendor source, must raise nothing. This is
+    what would have caught both #1575 instances (WEB_LOADER_TIMEOUT and
+    SEARXNG_QUERY_URL) before either shipped, and it goes red automatically
+    if a future compose edit adds a new persisted-config-backed variable
+    without a matching reconcile entry."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    compose = _compose_text()
+    block = _compose_service_block(compose, "open-webui")
+    variable_names = sorted(set(re.findall(r"^\s{6}([A-Z][A-Z0-9_]*):", block, re.MULTILINE)))
+    assert "WEB_LOADER_TIMEOUT" in variable_names
+    assert "SEARXNG_QUERY_URL" in variable_names
+    # The CRITICAL finding's own vars: this run is what proves compose sets
+    # them today, and that the guard raises nothing now that they are
+    # reconciled instead of allowlisted.
+    for oauth_var in (
+        "ENABLE_OAUTH_SIGNUP",
+        "ENABLE_OAUTH_ROLE_MANAGEMENT",
+        "ENABLE_OAUTH_GROUP_MANAGEMENT",
+        "OAUTH_ROLES_CLAIM",
+        "OAUTH_ALLOWED_ROLES",
+        "OAUTH_ADMIN_ROLES",
+        "OAUTH_GROUPS_CLAIM",
+    ):
+        assert oauth_var in variable_names, (
+            f"{oauth_var} is no longer set by docker-compose.yml's open-webui "
+            f"service; the CRITICAL finding this test guards no longer "
+            f"applies live, update the comment on ENVIRONMENT_ONLY_ENV_VARS"
+        )
+    # Every variable is set to a harmless placeholder; only its presence
+    # (not its value) matters to the guard.
+    environ = {name: "placeholder-value" for name in variable_names}
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    hive_rag_env_config.guard_unreconciled_env_vars(environ, config_source)
+
+
+def test_tiktoken_and_whisper_model_are_reconciled_not_environment_only() -> None:
+    """2026-08-30 outage: PR #1582 added the guard below with these two
+    variables still missing from RAG_CONFIG_ENV. Both are baked into the
+    pinned image's own Dockerfile (`ENV TIKTOKEN_ENCODING_NAME="cl100k_base"`,
+    `ENV WHISPER_MODEL="base"`), not set by docker-compose.yml at all, so
+    every container this image starts has them in os.environ regardless of
+    compose -- which is exactly what the guard saw on the live box. See
+    RAG_CONFIG_ENV's own comment for why each is read live (Config.get_many
+    via RETRIEVAL_CONFIG_KEYS / STT_CONFIG_KEYS) rather than frozen."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    assert "TIKTOKEN_ENCODING_NAME" in hive_rag_env_config.RAG_CONFIG_ENV.values()
+    assert "WHISPER_MODEL" in hive_rag_env_config.RAG_CONFIG_ENV.values()
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    # Must not raise: both are reconciled now, so setting them is unremarkable.
+    hive_rag_env_config.guard_unreconciled_env_vars(
+        {"TIKTOKEN_ENCODING_NAME": "cl100k_base", "WHISPER_MODEL": "base"},
+        config_source,
+    )
+
+
+def test_guard_would_have_caught_the_2026_08_30_outage() -> None:
+    """Reproduces the exact pre-fix state (issue #1575's original PR #1582
+    shipped without these two) and proves the guard, run against the real
+    pinned vendor source, raises on both rather than merely being expected
+    to. This is the regression guard for the incident itself, distinct from
+    the pre-existing WEB_LOADER_TIMEOUT one above."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    original = hive_rag_env_config.RAG_CONFIG_ENV
+    hive_rag_env_config.RAG_CONFIG_ENV = {
+        key: value
+        for key, value in original.items()
+        if key not in ("rag.tiktoken_encoding_name", "audio.stt.whisper_model")
+    }
+    try:
+        try:
+            hive_rag_env_config.guard_unreconciled_env_vars(
+                {"TIKTOKEN_ENCODING_NAME": "cl100k_base", "WHISPER_MODEL": "base"},
+                config_source,
+            )
+        except RuntimeError as exc:
+            assert "TIKTOKEN_ENCODING_NAME" in str(exc), exc
+            assert "WHISPER_MODEL" in str(exc), exc
+        else:
+            raise AssertionError("expected the guard to raise")
+    finally:
+        hive_rag_env_config.RAG_CONFIG_ENV = original
+
+
+def test_guard_ci_default_still_raises_when_detection_is_removed() -> None:
+    """The CI-facing half of the fatal/non-fatal split: with no `fatal`
+    argument (the default), a gap is still a raise, i.e. still a red build.
+    Deleting the guard's own detection call (comment out the `if not gaps`
+    early return, or stop calling this test) is what would turn this green
+    for the wrong reason; the assertion below is on the exception itself, not
+    merely on the test completing, so a no-op detection fails this loudly."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    original = hive_rag_env_config.RAG_CONFIG_ENV
+    hive_rag_env_config.RAG_CONFIG_ENV = {
+        key: value for key, value in original.items() if key != "web.loader.timeout"
+    }
+    try:
+        raised = False
+        try:
+            hive_rag_env_config.guard_unreconciled_env_vars(
+                {"WEB_LOADER_TIMEOUT": "12"}, config_source
+            )
+        except RuntimeError:
+            raised = True
+        assert raised, "CI must fail hard on an unreconciled variable"
+    finally:
+        hive_rag_env_config.RAG_CONFIG_ENV = original
+
+
+def test_guard_boot_mode_reports_without_raising() -> None:
+    """The boot-facing half of the fatal/non-fatal split (2026-08-30
+    postmortem): the same gap that must fail CI must NOT raise at boot, only
+    log at ERROR and let the caller continue. Verified two ways: the call
+    itself must not raise, and a real logging record naming the variable must
+    have been emitted -- a silently-swallowed finding would be as dangerous
+    as the outage this exists to prevent."""
+    if not VENDOR_CONFIG_PATH.exists():
+        return
+    config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
+    original = hive_rag_env_config.RAG_CONFIG_ENV
+    hive_rag_env_config.RAG_CONFIG_ENV = {
+        key: value for key, value in original.items() if key != "web.loader.timeout"
+    }
+
+    class _CaptureHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[str] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record.getMessage())
+
+    capture = _CaptureHandler()
+    hive_rag_env_config._logger.addHandler(capture)
+    hive_rag_env_config._logger.setLevel(logging.ERROR)
+    try:
+        hive_rag_env_config.guard_unreconciled_env_vars(
+            {"WEB_LOADER_TIMEOUT": "12"}, config_source, fatal=False
+        )
+    finally:
+        hive_rag_env_config._logger.removeHandler(capture)
+        hive_rag_env_config.RAG_CONFIG_ENV = original
+
+    assert any("WEB_LOADER_TIMEOUT" in message for message in capture.records), (
+        f"boot mode must log the finding at ERROR, got: {capture.records}"
+    )
+
+
+def _boot_splice_ast() -> ast.Module:
+    """Parse the fragment apply_rag_env_config_patch.py splices into Open
+    WebUI's own config.py, rather than substring-matching it, so reformatting
+    the call does not produce a false green and deleting a keyword does
+    produce a red."""
+    patch_source = PATCH_PATH.read_text(encoding="utf-8")
+    insert = next(
+        node.value.value
+        for node in ast.parse(patch_source).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "INSERT"
+    )
+    return ast.parse(textwrap.dedent(insert))
+
+
+def _boot_splice_call(tree: ast.Module, name: str) -> ast.Call:
+    return next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == name
+    )
+
+
+def test_boot_call_site_passes_fatal_false() -> None:
+    """The 2026-08-30 outage was one keyword argument's absence. The
+    function-level tests above prove a non-fatal mode exists; only this one
+    proves the boot path uses it, for both calls on the splice (PR #1588
+    review). Verified red before green by deleting fatal=False from each call
+    in turn."""
+    tree = _boot_splice_ast()
+    for name in ("guard_unreconciled_env_vars", "reconcile"):
+        call = _boot_splice_call(tree, name)
+        assert any(
+            keyword.arg == "fatal" and keyword.value.value is False
+            for keyword in call.keywords
+        ), (
+            f"the boot call site must pass fatal=False to {name}; see the "
+            f"2026-08-30 postmortem"
+        )
+
+
+def test_boot_call_site_wraps_the_config_source_audit() -> None:
+    """inspect.getsource is evaluated as an ARGUMENT to the guard, so its
+    OSError (source file unavailable) and TypeError (module not locatable)
+    escape before the function is entered and fatal=False never sees them.
+    The call has to sit inside a try/except for the guard's promise to hold
+    (PR #1588 review)."""
+    tree = _boot_splice_ast()
+    guarded = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if (
+                    isinstance(inner, ast.Call)
+                    and getattr(inner.func, "id", None)
+                    == "guard_unreconciled_env_vars"
+                ):
+                    guarded = True
+    assert guarded, (
+        "the guard call must sit inside a try/except: getsource() raises "
+        "before fatal=False can be consulted"
+    )
+
+
+def test_every_refusal_in_the_reconcile_path_honours_fatal() -> None:
+    """The guard was made non-fatal at boot while overrides, called one line
+    later on the same splice, still had eight raises that aborted startup (PR
+    #1588 review). They route through _refuse now. This goes red if a new
+    refusal is added as a bare raise in any of the three functions the boot
+    path reaches, which is how the eight got there in the first place."""
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    reached = ("derived_upload_cap", "openai_connection_override", "overrides")
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in reached:
+            continue
+        raises = [inner for inner in ast.walk(node) if isinstance(inner, ast.Raise)]
+        assert not raises, (
+            f"{node.name} still raises; a refusal on the boot path must go "
+            f"through _refuse(message, fatal) so fatal=False degrades to a "
+            f"log instead of a crash loop"
+        )
+        assert any(
+            isinstance(inner, ast.Call)
+            and getattr(inner.func, "id", None) == "_refuse"
+            for inner in ast.walk(node)
+        ), f"{node.name} no longer refuses anything, which is suspicious"
+
+
+def test_boot_mode_skips_a_bad_value_and_reconciles_the_rest() -> None:
+    """A malformed value must cost its own key and nothing else. Before this,
+    one bad RAG_TOP_K aborted the whole boot, which also meant the
+    SEARXNG_QUERY_URL reconcile that fixes web search never ran."""
+    environ = dict(
+        RAG_TOP_K="not a number",
+        RAG_EMBEDDING_MODEL=ALIAS,
+        SEARXNG_QUERY_URL=SEARX_URL,
+    )
+    capture = _ErrorCapture()
+    hive_rag_env_config._logger.addHandler(capture)
+    hive_rag_env_config._logger.setLevel(logging.ERROR)
+    try:
+        applied = hive_rag_env_config.overrides(environ, fatal=False)
+    finally:
+        hive_rag_env_config._logger.removeHandler(capture)
+    assert "rag.top_k" not in applied, (
+        f"a refused value must leave its own persisted row alone, got {applied}"
+    )
+    assert applied["rag.embedding_model"] == ALIAS
+    assert applied["web.search.searxng_query_url"] == SEARX_URL
+    assert any("RAG_TOP_K" in message for message in capture.messages), (
+        f"boot mode must log the refusal at ERROR, got: {capture.messages}"
+    )
+
+
+def test_boot_mode_never_persists_a_half_paired_destination() -> None:
+    """The one refusal where skipping has to do more than continue: a base URL
+    without its credential must be dropped from the write rather than
+    persisted alone, or the embedder would be repointed while Open WebUI kept
+    sending the key issued for the previous destination."""
+    capture = _ErrorCapture()
+    hive_rag_env_config._logger.addHandler(capture)
+    hive_rag_env_config._logger.setLevel(logging.ERROR)
+    try:
+        applied = hive_rag_env_config.overrides(
+            dict(RAG_OPENAI_API_BASE_URL=GATEWAY_URL), fatal=False
+        )
+    finally:
+        hive_rag_env_config._logger.removeHandler(capture)
+    assert any("RAG_OPENAI_API_KEY" in m for m in capture.messages), (
+        f"boot mode must log the refusal at ERROR, got: {capture.messages}"
+    )
+    assert "rag.openai_api_base_url" not in applied, (
+        f"a destination without its credential must not be persisted, got "
+        f"{applied}"
+    )
+
+
+def test_ci_default_still_refuses_every_boot_path_value() -> None:
+    """The other half of the split: making boot non-fatal must not have made
+    CI permissive. One case per refusal, at the fatal=True default."""
+    cases = (
+        dict(RAG_FILE_MAX_SIZE="100"),
+        dict(RAG_MAX_UPLOAD_BYTES="twenty five"),
+        dict(RAG_MAX_UPLOAD_BYTES="1024"),
+        dict(OPENAI_API_BASE_URL=GATEWAY_URL),
+        dict(RAG_ALLOWED_FILE_EXTENSIONS=" . , "),
+        dict(OAUTH_ALLOWED_ROLES=" , "),
+        dict(RAG_TOP_K="-5"),
+        dict(RAG_OPENAI_API_BASE_URL=GATEWAY_URL),
+    )
+    for environ in cases:
+        raised = False
+        try:
+            hive_rag_env_config.overrides(dict(environ))
+        except RuntimeError:
+            raised = True
+        assert raised, f"CI must still refuse {environ}"
 
 
 def main() -> None:

@@ -14,6 +14,43 @@ shifted breaks the build loudly rather than silently reverting to the broken
 behaviour. Checking that the anchor string exists is not enough on its own, so
 this also asserts that the names the inserted code closes over (Config, os,
 log) are still in that module's namespace.
+
+Issue #1575 added a second call ahead of reconcile: guard_unreconciled_env_vars
+reads this exact process's own config.py source and reports before anything is
+reconciled if the deployment sets a variable that backs a persisted config key
+neither reconcile() nor ENVIRONMENT_ONLY_ENV_VARS accounts for. See
+hive_rag_env_config.py for the full audit that motivated it.
+
+Called here with fatal=False (2026-08-30 postmortem, PR #1587 is the incident
+revert). The guard correctly found two unreconciled variables on the live demo
+box, and the guard's own default of raising turned that correct finding into
+FastAPI startup aborting, which crash-looped the container and took chat down
+with a 502. A boot-time abort converts a config-hygiene gap into an outage,
+and an outage is a worse failure than the drift it prevents. fatal=False keeps
+the finding loud (ERROR-level log naming every gap, still on every boot) but
+lets the service start; scripts/test_owui_rag_env_config.py keeps the default
+fatal=True path so the same gap still fails CI, which is the right blast
+radius for this class of bug.
+
+reconcile is called with fatal=False for the same reason, and the guard call
+is additionally wrapped: three things could abort this boot, and all three are
+now covered.
+
+1. The guard's own finding. fatal=False, above.
+2. The argument evaluated before the guard is entered.
+   inspect.getsource raises OSError when the module's source file is
+   unavailable and TypeError for a module it cannot locate, neither of which
+   fatal=False can intercept because the function has not been called yet, so
+   the call itself is wrapped and a failed audit is logged and skipped.
+3. reconcile's own value validation. Eight checks inside
+   hive_rag_env_config.overrides refuse a malformed or unpaired value, and
+   before this change every one of them aborted FastAPI startup one line after
+   the guard was made safe. At fatal=False each instead logs at ERROR and
+   leaves that single persisted row untouched, which is this module's existing
+   contract for a variable that is not set, so a bad value degrades to "that
+   one key keeps its old value, loudly" rather than to a crash loop. CI still
+   calls overrides at its fatal=True default, so every one of those checks
+   still fails a build.
 """
 
 import ast
@@ -27,9 +64,46 @@ INSERT = """    # hive #722: seed_defaults above only fills keys that are ABSENT
     # container whose database was seeded by an older compose keeps sending
     # that generation's embedding model forever and no compose change can
     # reach it. Let the environment win for the RAG-through-Hive keys only.
-    from open_webui.utils.hive_rag_env_config import log_summary, reconcile
+    import inspect as _hive_inspect
 
-    _hive_rag_applied = await reconcile(Config, os.environ)
+    from open_webui import config as _hive_owui_config
+    from open_webui.utils.hive_rag_env_config import (
+        guard_unreconciled_env_vars,
+        log_summary,
+        reconcile,
+    )
+
+    # hive #1575 / 2026-08-30 postmortem: report loudly, before reconciling
+    # anything, if this deployment sets an environment variable that backs a
+    # persisted config key neither reconciled below nor acknowledged as
+    # environment-only. fatal=False: a boot must never abort over this (see
+    # this file's module docstring), only CI does. Reads this exact process's
+    # own already-imported config module, so a future upstream digest bump is
+    # covered automatically rather than needing a hand-kept list to stay
+    # current.
+    #
+    # Wrapped in try/except because getsource() is evaluated as an ARGUMENT,
+    # so it runs BEFORE the guard is entered: it raises OSError when the
+    # source file is unavailable and TypeError for a module it cannot locate,
+    # and either one would abort startup without fatal=False ever being
+    # consulted. The whole point of this call is that config hygiene cannot
+    # take a live service down, so the audit is allowed to be skipped and
+    # never allowed to be fatal.
+    try:
+        guard_unreconciled_env_vars(
+            os.environ, _hive_inspect.getsource(_hive_owui_config), fatal=False
+        )
+    except Exception:
+        log.exception(
+            'hive #1575 guard: skipped, could not audit this container config'
+        )
+
+    # fatal=False here too: reconcile's own value validation (the upload
+    # ceiling, the OpenAI connection pairing, the list and integer coercions)
+    # raises by default, and at boot a refused value must degrade to leaving
+    # that one persisted row alone, not to a crash loop. CI calls the same
+    # code at the fatal=True default.
+    _hive_rag_applied = await reconcile(Config, os.environ, fatal=False)
     if _hive_rag_applied:
         log.info(
             'hive: reconciled Open WebUI config from env: %s',
