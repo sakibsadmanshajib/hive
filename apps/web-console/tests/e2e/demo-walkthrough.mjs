@@ -46,9 +46,16 @@ const API = process.env.HIVE_EDGE_API_URL ?? "https://api-hive.scubed.co";
 // This walkthrough's whole point is to reproduce what a customer sees, and a
 // customer never has hive-free/hive-free-tools in their picker either
 // (supabase/migrations/20260831_01_restrict_free_pool_aliases_visibility.sql),
-// so step 12 calls the same public, customer-selectable default alias
-// instead of requesting a free-pool exception for these fixture identities.
-const DEMO_CHAT_MODEL = process.env.HIVE_DEMO_CHAT_MODEL ?? "hive-default";
+// so step 12 calls hive-small instead of requesting a free-pool exception for
+// these fixture identities. hive-small is both public (a real tenant can
+// select it) and upstream-free (it routes to the same zero-cost Groq model
+// as hive-fast/hive-free), which TestNoCISurfaceCallsAPaidCompletionModel
+// (apps/control-plane/internal/routing/ci_paid_model_guard_integration_test.go)
+// requires of every completion-model literal bound to a CI/test surface.
+// hive-default was tried first and rejected by that guard: it is
+// customer-facing but pricing_mode 'fixed' (a real paid alias), so CI would
+// be paying real inference cost every run.
+const DEMO_CHAT_MODEL = process.env.HIVE_DEMO_CHAT_MODEL ?? "hive-small";
 
 const QA_EMAIL = process.env.HIVE_QA_TESTER_EMAIL ?? "";
 const QA_PASSWORD = process.env.HIVE_QA_TESTER_PASSWORD ?? "";
