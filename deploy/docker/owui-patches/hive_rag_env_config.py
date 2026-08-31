@@ -31,25 +31,6 @@ below carries the leaves the environment owns, and `reconcile` reads the tree,
 merges them in and writes the tree back. See that table for why
 `workspace.skills` is one of them.
 
-Issue #1575: a security bound (`WEB_LOADER_TIMEOUT`, PR #1570) merged into
-the container environment and nowhere else, because `web.loader.timeout` was
-never in this map. That audit walked every environment variable this
-container sets against Open WebUI's own `DEFAULT_CONFIG` (not against
-memory), found thirteen more silently-inert instances (`web.loader.timeout`
-itself, `webui.url`, `ui.default_locale`, the security-relevant
-`ui.default_user_role` and `ui.enable_signup`, `rag.top_k` and
-`web.search.result_count`, `web.search.searxng_query_url`, `openai.enable`,
-`ollama.enable`, `ui.enable_community_sharing`, `evaluation.arena.enable`,
-and the paired `openai.api_base_urls`/`openai.api_keys` connection that is
-what chat completions actually authenticate with), and fixed every one of
-them below. It also found a cluster that only *looks* like the same bug:
-every `oauth.*` key `utils/oauth.py` actually authenticates with is imported
-as a frozen module-level constant from `open_webui.config`, not read via
-`Config.get`, so those re-read the environment fresh on every container
-start regardless of what the database has seeded. `ENVIRONMENT_ONLY_ENV_VARS`
-near the bottom of this file records that finding, so the boot guard does
-not go on to reflag them forever.
-
 The embedding model itself is never hardcoded here. It comes from
 `RAG_EMBEDDING_MODEL` (compose derives it from `OWUI_RAG_EMBEDDING_ALIAS`), so
 the admin-selected alias and its dimension stay the single source of truth
@@ -66,7 +47,6 @@ those surfaces visible.
 """
 
 import copy
-import re
 
 # Open WebUI persisted config key -> the environment variable that owns it.
 # Key names are Open WebUI's own (open_webui.config.DEFAULT_CONFIG); the
@@ -183,63 +163,6 @@ RAG_CONFIG_ENV = {
     "task.voice.prompt_template": "VOICE_MODE_PROMPT_TEMPLATE",
     "task.tools.prompt_template": "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE",
     "chat.context_compaction.prompt_template": "CONTEXT_COMPACTION_PROMPT_TEMPLATE",
-    # Issue #1575 audit. Same trap, found by walking every environment
-    # variable this container sets against Open WebUI's own DEFAULT_CONFIG
-    # instead of trusting memory. `routers/openai.py.get_openai_connection`
-    # and `routers/retrieval.py`'s per-request `get_retrieval_config()` both
-    # read these straight from the Config store on every call, so a database
-    # that seeded any of them before this deployment's compose value existed
-    # keeps answering with the stale one forever, exactly like #722.
-    #
-    # WEB_LOADER_TIMEOUT is the one that motivated the audit: PR #1570's
-    # 12-second bound on the web-search page loader (issue #298 MEDIUM
-    # review) was landing in the container environment and nowhere else,
-    # confirmed on the demo box (deploy run 33341365483): `web.loader.timeout`
-    # was `""`, 23 days stale, and `if WEB_LOADER_TIMEOUT:` in
-    # retrieval/web/utils.py treats that as "no bound at all".
-    "web.loader.timeout": "WEB_LOADER_TIMEOUT",
-    "web.search.searxng_query_url": "SEARXNG_QUERY_URL",
-    "webui.url": "WEBUI_URL",
-    # ui.default_locale is cosmetic; ui.default_user_role is not. It is the
-    # role a brand-new account gets, on both the password and the OAuth
-    # signup paths (routers/auths.py), and docker-compose.yml sets it to
-    # "pending" deliberately so an unaffiliated login lands on the
-    # activation-pending screen rather than being granted app access. A
-    # stale persisted "user" here would silently reopen that door.
-    "ui.default_locale": "DEFAULT_LOCALE",
-    "ui.default_user_role": "DEFAULT_USER_ROLE",
-    # Both are read fresh on every request (routers/retrieval.py's
-    # get_retrieval_config(), and the web-search call site for the result
-    # count), and both are integers upstream (int(os.getenv(...))), so
-    # neither BOOLEAN_KEYS nor LIST_KEYS coercion applies -- see INT_KEYS
-    # below for the numeric coercion these two need instead.
-    "rag.top_k": "RAG_TOP_K",
-    "web.search.result_count": "WEB_SEARCH_RESULT_COUNT",
-    # Corrected post-review (PR #1582): these five were first placed on
-    # ENVIRONMENT_ONLY_ENV_VARS below on the false premise that utils/oauth.py
-    # reads every oauth.* value as a frozen module constant. Two of them,
-    # `oauth.group_claim`/`oauth.roles_claim`, are read live instead, through
-    # `get_oauth_runtime_config()` (utils/oauth.py:180, backed by
-    # `OAUTH_RUNTIME_CONFIG` at :121), which `handle_login`, `handle_callback`
-    # and `get_user_role` all call on every SSO login. `oauth.provider_url`
-    # is not on that path but has its own separate live read, a fallback in
-    # `/signout` when the session's own registered OIDC metadata lookup comes
-    # back empty (routers/auths.py:926). Reconciled here rather than left
-    # exception-noted, since fixing it is no more code than documenting it.
-    "oauth.group_claim": "OAUTH_GROUPS_CLAIM",
-    "oauth.roles_claim": "OAUTH_ROLES_CLAIM",
-    "oauth.provider_url": "OPENID_PROVIDER_URL",
-    # Persisted as a list of role/group identifiers, upstream's own comma
-    # split (`OAUTH_ALLOWED_ROLES = [role.strip() for role in os.getenv(...)
-    # .split(OAUTH_ROLES_SEPARATOR)]`, config.py:2495), consumed by
-    # `OAuthManager.get_user_role` (utils/oauth.py:1421-1470) as the allow
-    # list and admin list an incoming SSO role claim is matched against.
-    # Coerced via COMMA_LIST_KEYS below, a separate rule from LIST_KEYS
-    # above (file extensions): role and group identifiers are case-sensitive
-    # ("ADMIN" must not become "admin") and carry no leading dot to strip,
-    # so LIST_KEYS' lowercasing would silently break every role match.
-    "oauth.allowed_roles": "OAUTH_ALLOWED_ROLES",
-    "oauth.admin_roles": "OAUTH_ADMIN_ROLES",
 }
 
 # Same idea, boolean-valued.
@@ -295,48 +218,6 @@ FEATURE_CONFIG_ENV = {
     "web.search.bypass_embedding_and_retrieval": (
         "BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL"
     ),
-    # Issue #1575 audit, continued (booleans this time).
-    #
-    # ui.enable_signup gates self-registration in routers/auths.py (`if not
-    # await Config.get('ui.enable_signup') or not await
-    # Config.get('ui.enable_login_form')`). This deployment is SSO-only and
-    # docker-compose.yml sets ENABLE_SIGNUP=false for that reason; a stale
-    # persisted true here would silently reopen self-registration next to
-    # the "Continue with Hive" button, the same posture ui.enable_login_form
-    # above already closed for the login-form half of that page.
-    "ui.enable_signup": "ENABLE_SIGNUP",
-    # openai.enable, and the paired openai.api_base_urls/openai.api_keys
-    # reconciled by openai_connection_override below, are the connection
-    # Open WebUI's own chat completion path calls on every turn
-    # (routers/openai.py.get_openai_connection, which reads Config.get_many
-    # fresh per request): this is the wiring that points chat at the Hive
-    # gateway (http://edge-api:8080/v1, OWUI_SHIM_KEY) at all, and it is
-    # exactly as exposed to #722 as the RAG embedder keys above.
-    # ollama.enable gates the parallel Ollama router family the same way
-    # (routers/ollama.py, a dozen `if not await Config.get('ollama.enable')`
-    # guards); compose sets it false to keep that surface unreachable.
-    "openai.enable": "ENABLE_OPENAI_API",
-    "ollama.enable": "ENABLE_OLLAMA_API",
-    "ui.enable_community_sharing": "ENABLE_COMMUNITY_SHARING",
-    "evaluation.arena.enable": "ENABLE_EVALUATION_ARENA_MODELS",
-    # Corrected post-review (PR #1582), CRITICAL: originally placed on
-    # ENVIRONMENT_ONLY_ENV_VARS below, on the same false premise as the three
-    # string keys documented next to it in RAG_CONFIG_ENV. All three are read
-    # live via `get_oauth_runtime_config()` (utils/oauth.py:180), and
-    # `oauth.enable_role_mapping` gates the role-escalation block in
-    # `OAuthManager.get_user_role` (utils/oauth.py:1418) that promotes an
-    # incoming SSO login to `admin` when its role claim matches
-    # `oauth.admin_roles`. docker-compose.yml sets all three today
-    # (ENABLE_OAUTH_SIGNUP=true, ENABLE_OAUTH_ROLE_MANAGEMENT=true,
-    # ENABLE_OAUTH_GROUP_MANAGEMENT=true), so this was a live exposure, not
-    # only a future-drift risk: a `owui-data` volume seeded before or
-    # differently from these compose values would have silently ignored any
-    # later correction to the SSO admin-role mapping, in the highest-severity
-    # area this whole issue is about (see also issue #1511, a prior live
-    # admin-bypass in this same claim-mapping area).
-    "oauth.enable_signup": "ENABLE_OAUTH_SIGNUP",
-    "oauth.enable_role_mapping": "ENABLE_OAUTH_ROLE_MANAGEMENT",
-    "oauth.enable_group_mapping": "ENABLE_OAUTH_GROUP_MANAGEMENT",
 }
 
 # The user permission tree, which is ONE persisted row and therefore cannot
@@ -394,19 +275,6 @@ BOOLEAN_KEYS = frozenset({"ui.enable_login_form"})
 # lowercased and stripped the dot from.
 LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 
-# Keys Open WebUI stores as a JSON integer, coerced the same way upstream's
-# own parse does (`int(os.getenv(...))`). A raw string here is not merely
-# cosmetic: both flow into a `k=` argument the retrieval/search call sites
-# pass straight to a vector-store query (issue #1575 audit), so leaving them
-# as strings risks a TypeError deep in a request path rather than a config
-# value simply being ignored.
-INT_KEYS = frozenset({"rag.top_k", "web.search.result_count"})
-
-# Keys Open WebUI stores as a JSON list, comma-split like LIST_KEYS but
-# case-preserving and with no dot to strip: role/group identifiers, not file
-# extensions. See the oauth.allowed_roles/oauth.admin_roles entries above.
-COMMA_LIST_KEYS = frozenset({"oauth.allowed_roles", "oauth.admin_roles"})
-
 # Keys whose value is a prompt, and therefore the only ones here that are
 # persisted exactly as the environment wrote them.
 #
@@ -453,15 +321,7 @@ TEMPLATE_KEYS = frozenset(
 # bare "404, message='Not Found'" for it, having discarded the response body
 # that names the model.
 SECRET_KEYS = frozenset(
-    {
-        "rag.openai.api_key",
-        "audio.stt.openai.api_key",
-        "audio.tts.openai.api_key",
-        # OWUI_SHIM_KEY, a real registered Hive API key. Unlike the three
-        # above this one is a list (openai_connection_override), so
-        # `rendered` below only needs to withhold its value, not reshape it.
-        "openai.api_keys",
-    }
+    {"rag.openai.api_key", "audio.stt.openai.api_key", "audio.tts.openai.api_key"}
 )
 
 # Destination keys that must never be written without their credential, and the
@@ -585,51 +445,6 @@ def derived_upload_cap(environ) -> dict:
     return {"rag.file.max_size": megabytes}
 
 
-# Issue #1575 audit: the singular Hive names for Open WebUI's own "OpenAI"
-# connection, the one that actually carries chat completions to the Hive
-# gateway (docker-compose.yml: OPENAI_API_BASE_URL=http://edge-api:8080/v1,
-# OPENAI_API_KEY=$OWUI_SHIM_KEY).
-OPENAI_CONNECTION_URL_ENV = "OPENAI_API_BASE_URL"
-OPENAI_CONNECTION_KEY_ENV = "OPENAI_API_KEY"
-
-
-def openai_connection_override(environ) -> dict:
-    """Reconcile Hive's one OpenAI-compatible connection, paired like
-    PAIRED_DESTINATIONS reconciles rag/audio, never the base URL alone.
-
-    Open WebUI stores this connection as parallel lists
-    (`openai.api_base_urls`, `openai.api_keys`), one slot per connection an
-    administrator can configure, because upstream supports several at once.
-    Hive only ever wires one, under the singular names
-    OPENAI_API_BASE_URL/OPENAI_API_KEY (also the names upstream's own
-    OPENAI_API_BASE_URLS/OPENAI_API_KEYS fall back to when unset), so this
-    persists that one connection as a single-element list rather than riding
-    the plain string mapping RAG_CONFIG_ENV uses for everything else.
-
-    Found by the #1575 audit: `routers/openai.py.get_openai_connection`
-    reads `openai.api_base_urls`/`openai.api_keys` fresh from the Config
-    store on every completion request, so once a deployment's database has
-    seeded these two rows, an OWUI_SHIM_KEY rotation in compose never
-    reaches the running chat surface and every completion keeps
-    authenticating with the previous, possibly already-revoked, key.
-    """
-    url = (environ.get(OPENAI_CONNECTION_URL_ENV) or "").strip()
-    key = (environ.get(OPENAI_CONNECTION_KEY_ENV) or "").strip()
-    if not url:
-        return {}
-    if not key:
-        raise RuntimeError(
-            f"{OPENAI_CONNECTION_URL_ENV} is set to {url!r} but "
-            f"{OPENAI_CONNECTION_KEY_ENV} is empty or unset. Refusing to "
-            f"point Open WebUI's OpenAI connection (the Hive gateway "
-            f"itself) at that destination with no credential, the same "
-            f"posture PAIRED_DESTINATIONS enforces below. Set "
-            f"{OPENAI_CONNECTION_KEY_ENV} (the Hive OWUI_SHIM_KEY) together "
-            f"with {OPENAI_CONNECTION_URL_ENV}."
-        )
-    return {"openai.api_base_urls": [url], "openai.api_keys": [key]}
-
-
 def overrides(environ) -> dict:
     """Return the persisted-config overrides the environment explicitly sets.
 
@@ -647,11 +462,9 @@ def overrides(environ) -> dict:
     The reverse pairing is fine and is how a rotated shim key reaches Open
     WebUI: a new credential for the destination already persisted.
     """
-    # First, so a superseded or malformed ceiling, or an OpenAI connection
-    # missing its credential, fails the boot before anything else is
-    # reconciled.
+    # First, so a superseded or malformed ceiling fails the boot before
+    # anything else is reconciled.
     applied = derived_upload_cap(environ)
-    applied.update(openai_connection_override(environ))
     for key, variable in RAG_CONFIG_ENV.items():
         raw = environ.get(variable) or ""
         value = raw.strip()
@@ -688,39 +501,6 @@ def overrides(environ) -> dict:
                     f"made deliberately, not something an empty value does."
                 )
             applied[key] = items
-        elif key in COMMA_LIST_KEYS:
-            # Case-preserving, no dot stripped: see COMMA_LIST_KEYS. Matches
-            # upstream's own parse of OAUTH_ALLOWED_ROLES/OAUTH_ADMIN_ROLES
-            # (config.py:2495-2502: `[role.strip() for role in
-            # os.getenv(...).split(OAUTH_ROLES_SEPARATOR) if role]`).
-            roles = [item.strip() for item in value.split(",") if item.strip()]
-            if not roles:
-                raise RuntimeError(
-                    f"{variable} is set to {value!r}, which parses to no "
-                    f"roles at all. An empty {key.rsplit('.', 1)[-1]} list "
-                    f"disables SSO role matching entirely while the "
-                    f"deployment still looks configured. Name the roles, or "
-                    f"unset {variable} to leave the persisted value alone."
-                )
-            applied[key] = roles
-        elif key in INT_KEYS:
-            # Negative rejected outright, not merely non-numeric. Both
-            # INT_KEYS entries are semantically counts (a vector-store/
-            # search result count), and upstream's own `int(os.getenv(...))`
-            # has no lower bound either, so a negative value would not raise
-            # here but would still reach a request-time query as `k=-5`, the
-            # exact "surfaces later instead of at boot" failure this
-            # coercion exists to close (PR #1582 review).
-            if not (value.isascii() and value.isdigit()):
-                raise RuntimeError(
-                    f"{variable} must be a whole, non-negative number, got "
-                    f"{value!r}. {key} is passed straight into a "
-                    f"vector-store or web-search result count, and a value "
-                    f"int() rejects, or a negative one a query would not "
-                    f"expect, would surface as an unhandled error on every "
-                    f"request that reads it instead of at boot."
-                )
-            applied[key] = int(value)
         else:
             applied[key] = value
 
@@ -810,170 +590,6 @@ def merge_permissions(current: dict, overrides_by_path: dict) -> dict:
             node = node[key]
         node[path[-1]] = value
     return merged
-
-
-# CORRECTED post-review (PR #1582 security review, escalated to CRITICAL).
-# The original 13-entry version of this allowlist rested on one claim
-# ("utils/oauth.py imports every oauth.* name directly from open_webui.config
-# as a frozen module constant, never via Config.get"), checked by grepping
-# for the literal string `Config.get('oauth.`. That grep has a blind spot:
-# `utils/oauth.py` also reads a whole cluster of oauth.* keys through
-# `get_oauth_runtime_config()` (line 180), which calls
-# `Config.get_many(*keys)` against a dynamically built key list
-# (`OAUTH_RUNTIME_CONFIG`, line 121), a call shape no literal-string grep for
-# `Config.get(` matches. Eight of the original thirteen entries are read that
-# way and were misclassified; five are not and stay here.
-#
-# Re-audited by grepping the pinned image for each entry's PERSISTED KEY
-# STRING (e.g. `'oauth.client_id'`), across the whole backend, not just
-# oauth.py or auths.py, since that string is what any consumer has to
-# reference regardless of whether it calls `Config.get`, `Config.get_many`
-# with a literal list, or `Config.get_many` with a dict-derived one. Per
-# entry:
-#
-# - OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_CODE_CHALLENGE_METHOD,
-#   OAUTH_PROVIDER_NAME, OAUTH_SCOPES: their persisted keys
-#   (`oauth.client_id`, `oauth.client_secret`, `oauth.code_challenge_method`,
-#   `oauth.provider_name`, `oauth.scopes`) appear in exactly three places in
-#   the whole pinned backend: `config.py`'s DEFAULT_CONFIG (the seed-default
-#   assignment itself), the historical `3ff2c63645b8_reshape_config_to_per_
-#   key_rows` migration, and `routers/auths.py`'s `OAUTH_CONFIG_KEYS` dict,
-#   which backs only the `/admin/config/oauth` GET/POST pair (admin-panel
-#   display and edit, and this fork's admin panel is removed from the
-#   frontend bundle). No `Config.get`/`Config.get_many` call anywhere in the
-#   backend resolves any of these five outside that admin pair, confirmed by
-#   grepping every `Config.get_many(` call site in the pinned image (17 of
-#   them) and checking each one's key list by hand. `utils/oauth.py` uses the
-#   frozen module constants for the actual Authlib client registration
-#   (config.py:2600-2632), which re-reads os.environ fresh on every container
-#   start regardless of the database.
-#
-# The remaining eight were moved into RAG_CONFIG_ENV/FEATURE_CONFIG_ENV
-# above instead of staying here: `oauth.enable_signup`,
-# `oauth.enable_role_mapping`, `oauth.enable_group_mapping`,
-# `oauth.roles_claim`, `oauth.group_claim`, `oauth.allowed_roles`,
-# `oauth.admin_roles` are read live via `get_oauth_runtime_config()` from
-# `handle_login`/`handle_callback`/`get_user_role`/`update_user_groups`
-# (utils/oauth.py:1671, 1691, 1403, 1490), and `oauth.provider_url` has a
-# separate, lower-traffic live read as a `/signout` fallback
-# (routers/auths.py:926). All eight were live-diverged risks the moment this
-# module shipped, not only future-drift risk: docker-compose.yml sets seven
-# of the eight today (ENABLE_OAUTH_SIGNUP, ENABLE_OAUTH_ROLE_MANAGEMENT,
-# ENABLE_OAUTH_GROUP_MANAGEMENT, OAUTH_ROLES_CLAIM, OAUTH_ALLOWED_ROLES,
-# OAUTH_ADMIN_ROLES, OAUTH_GROUPS_CLAIM).
-#
-# `oauth.auto_redirect` is a ninth member of this cluster that was never on
-# this list at all: it is genuinely read live (see its own entry in
-# FEATURE_CONFIG_ENV above), which is exactly why it needed reconciling from
-# the start.
-ENVIRONMENT_ONLY_ENV_VARS = frozenset(
-    {
-        "OAUTH_CLIENT_ID",
-        "OAUTH_CLIENT_SECRET",
-        "OAUTH_CODE_CHALLENGE_METHOD",
-        "OAUTH_PROVIDER_NAME",
-        "OAUTH_SCOPES",
-    }
-)
-
-_ASSIGNMENT_RE = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=")
-_ENV_READ_RE = re.compile(r"os\.(?:getenv|environ\.get)\(\s*['\"]([A-Z0-9_]+)['\"]")
-_DEFAULT_CONFIG_ENTRY_RE = re.compile(r"'([a-z0-9_.]+)':\s*([A-Z][A-Za-z0-9_]*)\s*,")
-
-
-def _persisted_config_env_vars(source: str) -> dict:
-    """Map env-var-name -> the DEFAULT_CONFIG dotted keys it backs.
-
-    A heuristic block scan, not a real Python parser (ponytail: see the
-    ceiling below), built for the #1575 audit and reused here so the guard
-    stays right whenever the pinned image changes rather than needing a
-    hand-kept list. A block-level scan rather than a per-line regex, because
-    several DEFAULT_CONFIG values are built with a multi-line list
-    comprehension (OAUTH_ALLOWED_ROLES, OAUTH_ADMIN_ROLES) and a per-line
-    match misses both entirely.
-
-    Ceiling: a block that calls os.getenv more than once with different
-    variable names attributes all of its DEFAULT_CONFIG keys to whichever
-    call the regex finds first, and a constant built with no direct
-    os.getenv/os.environ.get call in its own assignment (fully derived from
-    another constant, e.g. RAG_OPENAI_API_BASE_URL falling back to
-    OPENAI_API_BASE_URL when unset) is missed entirely. Both are
-    read-fresh-every-boot false negatives, not false positives: this can
-    under-report a gap, never invent one that is not backed by a variable
-    this deployment actually sets, so it fails closed toward "stays silent"
-    rather than toward "blocks a good boot".
-    """
-    lines = source.splitlines()
-    block_starts = [i for i, line in enumerate(lines) if _ASSIGNMENT_RE.match(line)]
-    const_to_env: dict = {}
-    for idx, start in enumerate(block_starts):
-        end = block_starts[idx + 1] if idx + 1 < len(block_starts) else len(lines)
-        name_match = _ASSIGNMENT_RE.match(lines[start])
-        env_match = _ENV_READ_RE.search("\n".join(lines[start:end]))
-        if name_match and env_match:
-            const_to_env.setdefault(name_match.group(1), env_match.group(1))
-
-    default_config_start = source.find("DEFAULT_CONFIG = {")
-    if default_config_start == -1:
-        return {}
-    depth = 0
-    default_config_end = default_config_start
-    for i, ch in enumerate(source[default_config_start:]):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                default_config_end = default_config_start + i + 1
-                break
-    block = source[default_config_start:default_config_end]
-
-    env_to_keys: dict = {}
-    for key, const in _DEFAULT_CONFIG_ENTRY_RE.findall(block):
-        env = const_to_env.get(const)
-        if env:
-            env_to_keys.setdefault(env, []).append(key)
-    return env_to_keys
-
-
-def guard_unreconciled_env_vars(environ, config_source: str) -> None:
-    """Raise loudly if the deploy environment sets a variable that backs an
-    Open WebUI persisted config key and this module neither reconciles it
-    nor lists it on ENVIRONMENT_ONLY_ENV_VARS with a stated reason.
-
-    Issue #1575 acceptance criterion 4. The WEB_LOADER_TIMEOUT bug it was
-    filed for was silent by construction: the container environment was
-    correct, `docker compose config` was correct, and only reading the
-    effective config store on the box showed the disagreement. This turns
-    the *next* instance of that same class into a boot failure instead of
-    something someone has to notice by hand on a live deployment.
-    """
-    reconciled = (
-        set(RAG_CONFIG_ENV.values())
-        | set(FEATURE_CONFIG_ENV.values())
-        | set(PERMISSION_ENV.values())
-        | {UPLOAD_CEILING_ENV, OPENAI_CONNECTION_URL_ENV, OPENAI_CONNECTION_KEY_ENV}
-    )
-    env_to_keys = _persisted_config_env_vars(config_source)
-    gaps = {
-        var: keys
-        for var, keys in env_to_keys.items()
-        if (environ.get(var) or "").strip()
-        and var not in reconciled
-        and var not in ENVIRONMENT_ONLY_ENV_VARS
-    }
-    if gaps:
-        details = "; ".join(f"{var} -> {keys}" for var, keys in sorted(gaps.items()))
-        raise RuntimeError(
-            f"issue #1575 guard: this deployment sets {len(gaps)} "
-            f"environment variable(s) that back an Open WebUI persisted "
-            f"config key and this module does not reconcile: {details}. "
-            f"Either add it to RAG_CONFIG_ENV/FEATURE_CONFIG_ENV/"
-            f"PERMISSION_ENV so the environment keeps winning after a first "
-            f"boot, or add it to ENVIRONMENT_ONLY_ENV_VARS with a comment "
-            f"proving the consuming code never reads it from the Config "
-            f"store (see the #1575 audit for the worked examples)."
-        )
 
 
 async def reconcile(config, environ) -> dict:
