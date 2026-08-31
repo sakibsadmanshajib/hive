@@ -12,21 +12,23 @@ const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-free";
 // The default is hive-small (owner directive 2026-08-30: no CI pipeline may
 // call a paid completion model). It is upstream-free, pins to the single
 // healthy route route-free-small on
-// openrouter/dots-studio/dots-3-note-preview:free, and that route is seeded
-// tools_supported=true. Verified live against OpenRouter before this default
-// moved, every response reporting cost 0: forced tool_choice returns a real
-// tool_calls array, tool_choice required/none/auto each behave correctly, a
-// multi-turn tool-result round trip completes, and message.content comes back
-// as a string on 6 of 6 runs under both response_format json_object and
-// json_schema. That last property is what the previous default
-// deepseek-v4-flash could not hold: its `-latest` slug returned
-// message.content as a parsed JSON object (run 32665985618), as null, and as
-// string across probes on 2026-08-23, so this move is a fidelity improvement
-// as well as a spend one. If the contract ever destabilises here, this suite
-// fails loudly by design; repoint HIVE_TOOLS_MODEL at another upstream-free
-// tools-capable alias instead of loosening the assertions.
+// two Groq key slots on qwen/qwen3.8-27b under one LiteLLM group, both seeded
+// tools_supported=true and both live-probed at cost 0 before this default
+// moved: forced tool_choice returns a real tool_calls array, tool_choice
+// required/none/auto each behave correctly, a multi-turn tool-result round trip
+// completes, and message.content comes back as a string under both
+// response_format json_object and json_schema.
+//
+// That last property is what the earlier default deepseek-v4-flash could not
+// hold: its `-latest` slug returned message.content as a parsed JSON object
+// (run 32665985618), as null, and as string across probes on 2026-08-23. The
+// pool avoids that class of instability by construction, since every member it
+// still carries was measured against the same strict-schema shape and the ones
+// that could not be were removed. If the contract ever destabilises here, this
+// suite fails loudly by design; repoint HIVE_TOOLS_MODEL at another
+// upstream-free tools-capable alias instead of loosening the assertions.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-free";
 
 describe("Chat Completions", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });

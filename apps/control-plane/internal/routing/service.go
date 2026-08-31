@@ -102,15 +102,42 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		return SelectionResult{}, err
 	}
 
-	// When RequireToolCapable is set, first narrow candidates to tool-capable
-	// routes only. This operates at individual route granularity so that a
-	// provider with mixed-capability routes does not pass a non-capable route.
-	// If the alias has zero capable routes we return ErrNoCapableRoute so the
-	// caller can surface a specific 400 rather than a generic routing failure.
+	// When RequireToolCapable is set, narrow candidates to routes whose whole
+	// GATEWAY GROUP is tool-capable. If nothing survives we return
+	// ErrNoCapableRoute so the caller can surface a specific 400 rather than a
+	// generic routing failure.
+	//
+	// Group, not route, and that is the whole point. This filter used to admit
+	// any candidate row carrying tools_supported, on the reading that route
+	// granularity was the safe granularity. It is not, because a route is not
+	// what gets dispatched: routes sharing a litellm_model_name are emitted as
+	// several deployments under one model_name and LiteLLM load-balances across
+	// them, so edge-api cannot choose which member answers. The reserve block
+	// below already says exactly this, and answers it by taking the MAX
+	// reasoning reserve across the group. ANY was the same question answered in
+	// the unsafe direction: one capable member admitted the whole group, and an
+	// incapable sibling could then answer a request the gate had already
+	// approved, failing mid-request with a provider error instead of the
+	// gateway's own clean refusal.
+	//
+	// Disabled members are excluded from the veto: the config sync does not
+	// emit them, so they cannot receive a dispatch and cannot make a live group
+	// incapable. That mirrors the health filter a few lines below, which is the
+	// only other place this distinction matters.
 	if input.RequireToolCapable {
+		incapableGroups := make(map[string]bool)
+		for _, c := range candidates {
+			if strings.EqualFold(c.HealthState, "disabled") {
+				continue
+			}
+			if !c.SupportsTools {
+				incapableGroups[c.LiteLLMModelName] = true
+			}
+		}
+
 		capable := make([]RouteCandidate, 0, len(candidates))
 		for _, c := range candidates {
-			if c.SupportsTools {
+			if c.SupportsTools && !incapableGroups[c.LiteLLMModelName] {
 				capable = append(capable, c)
 			}
 		}

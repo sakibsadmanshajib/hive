@@ -110,6 +110,11 @@ type SelectRouteResult struct {
 	// upstream by it, so hidden reasoning spends the reserve instead of
 	// starving visible content out of the caller's own budget. Zero means the
 	// caller's max_tokens goes through untouched.
+	//
+	// Per GROUP, not per alias. They coincide today because every alias resolves
+	// to one litellm_model_name, hive-free included (issue #1563: one endpoint by
+	// owner decision), but the figure is a property of the group, so an alias
+	// carrying two would return a different value per selection.
 	ReasoningReserveTokens int `json:"reasoning_reserve_tokens"`
 }
 

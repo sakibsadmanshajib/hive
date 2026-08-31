@@ -3,13 +3,15 @@ import OpenAI from "openai";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
-// chat-completions.test.ts already covers response_format: json_object on
-// this same pinned alias; see its header comment for why hive-free cannot
-// stand in here (seeded tools_supported=false, correctly 400s), and for the
-// live evidence that hive-small's upstream returns message.content as a
-// string under both response_format modes.
+// chat-completions.test.ts already covers response_format: json_object on this
+// same alias; see its header comment for the live evidence behind that default.
+//
+// This spec is the one that failed with "400 Model 'hive-free' does not support
+// parameter: response_format", a refusal the gateway produced itself from a
+// tools_supported flag that had been seeded false without ever being probed.
+// The flag is now measured rather than assumed, so this runs on hive-free.
 const TOOL_CAPABLE_MODEL =
-  process.env.HIVE_TOOLS_MODEL ?? "hive-small";
+  process.env.HIVE_TOOLS_MODEL ?? "hive-free";
 
 describe("Chat Completions response_format: json_schema", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
