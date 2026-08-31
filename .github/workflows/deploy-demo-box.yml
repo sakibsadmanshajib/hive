@@ -1539,18 +1539,69 @@ jobs:
         # engine with its `enabled` flag, independent of the search.formats
         # setting that gates /search's json output -- verified locally
         # against the pinned image before this was written.
+        #
+        # 127.0.0.1:8888 is the compose service's own published port
+        # ("127.0.0.1:8888:8080" on the searxng service), so this cannot be
+        # answered by some unrelated searxng container that happens to be
+        # running on the box: an orphan holds no port unless it was started
+        # with one, and if it had, the compose service could not have bound
+        # 8888 at all.
+        #
+        # The probe is a bounded retry loop rather than a single curl because
+        # neither recreate path waits for health. The step above recreates on
+        # mismatch and `up -d` returns as soon as the container is running, and
+        # `up -d --build` back in "Rebuild + recreate changed services" does
+        # the same on an image bump, in which case the step above finds the
+        # mounted copy already current and recreates nothing. Deploy run
+        # 33376226113 failed on the first of those: searxng started at
+        # 09:20:47.335 and the single curl ran at 09:20:47.586, 251ms later,
+        # and got `curl: (56) Recv failure: Connection reset by peer` from a
+        # container whose uwsgi was not listening yet. The engine allow-list
+        # had applied correctly; only the probe was early.
+        #
+        # Retries cover the unreachable and unparseable cases only. A parsed
+        # allow-list fails the deploy on the first look, with no retry: /config
+        # is served by the application after settings.yml is loaded, so once it
+        # answers at all the list is final, and the port is unbound while a
+        # container is being replaced, so there is no window in which a stale
+        # container answers a parseable body. That keeps a genuine drift loud
+        # and immediate instead of buying it 60 seconds of doubt.
+        #
+        # The two retry counters exist only so the final error annotation names
+        # which failure mode dominated. The GitHub job summary shows the
+        # annotation and not the surrounding log, and "never answered" alone
+        # sends the next reader to expand the raw log before they can tell a
+        # container that never came up from one that came up serving something
+        # that is not engine JSON. Those have different causes and different
+        # fixes, so the counts belong in the annotation itself.
         working-directory: /home/sakib/hive/deploy/docker
         run: |
-          set -euo pipefail
-          config=$(curl -fsS http://127.0.0.1:8888/config)
-          enabled=$(echo "$config" \
-            | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(sorted(e['name'] for e in d['engines'] if e.get('enabled'))))")
+          set -uo pipefail
           want=$'bing\nstackoverflow\nwikipedia'
-          if [ "$enabled" != "$want" ]; then
-            echo "::error::searxng is serving an unexpected engine allow-list. Expected exactly bing, stackoverflow, wikipedia; got: $(echo "$enabled" | tr '\n' ',')" >&2
-            exit 1
-          fi
-          echo "searxng is serving the repository engine allow-list: $(echo "$enabled" | tr '\n' ',')"
+          unreachable=0
+          unparseable=0
+          for i in $(seq 1 12); do
+            if config=$(curl -fsS --max-time 10 http://127.0.0.1:8888/config); then
+              if enabled=$(printf '%s' "$config" \
+                | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(sorted(e['name'] for e in d['engines'] if e.get('enabled'))))"); then
+                if [ "$enabled" != "$want" ]; then
+                  echo "::error::searxng is serving an unexpected engine allow-list. Expected exactly bing, stackoverflow, wikipedia; got: $(echo "$enabled" | tr '\n' ',')" >&2
+                  exit 1
+                fi
+                echo "searxng is serving the repository engine allow-list: $(echo "$enabled" | tr '\n' ',')"
+                exit 0
+              fi
+              unparseable=$((unparseable + 1))
+              echo "attempt $i: /config answered but the body is not parseable engine JSON, retry in 5s"
+            else
+              unreachable=$((unreachable + 1))
+              echo "attempt $i: /config on 127.0.0.1:8888 is not answering yet, retry in 5s"
+            fi
+            sleep 5
+          done
+          echo "::error::searxng's /config on 127.0.0.1:8888 never answered with parseable engine JSON, so the live engine allow-list could not be verified. Of 12 attempts, $unreachable could not reach the endpoint and $unparseable answered with a body that would not parse as engine JSON. Container state:" >&2
+          docker compose $HIVE_COMPOSE_FLAGS ps searxng || true
+          exit 1
 
       - name: Verify the chat-origin Caddy config is actually live
         # A zero exit from validate and reload is not proof that the intended
