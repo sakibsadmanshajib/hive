@@ -28,12 +28,16 @@ inert.
 Position inside `process_chat_payload` is load bearing twice over, and both
 halves are asserted below rather than left to a comment.
 
-BEFORE `metadata['system_prompt']` is captured. That snapshot is what the
-native tool-call loop restores verbatim (`original_system_content =
-metadata.get('system_prompt')`, then `replace_system_message_content`) once a
-tool call produces citations. A splice after the snapshot would put the prompt
-on the first request of a turn and silently drop it from every request after the
-first tool call, which is the shape of defect that reads as working.
+BEFORE the snapshot block re-reads `form_data['messages']`. That block builds
+`system_content` from the message list and assigns it to
+`metadata['system_prompt']`, and the native tool-call loop restores that
+snapshot verbatim (`original_system_content = metadata.get('system_prompt')`,
+then `replace_system_message_content`) once a tool call produces citations. The
+re-read is the load-bearing line rather than the assignment: a splice between
+the two would satisfy "above the snapshot" and still write a prompt the
+snapshot never sees. Either way the prompt would ride the first request of a
+turn and silently vanish from every request after the first tool call, which is
+the shape of defect that reads as working.
 
 AFTER the Chat Controls / User Settings branch, using
 `add_or_update_system_message`'s default `append=False`, which PREPENDS
@@ -76,6 +80,15 @@ ANCHOR = (
     "    # Save the pre-RAG message state so the native tool call loop can\n"
 )
 
+# The line the snapshot is actually built from, and the real ordering
+# constraint. `metadata['system_prompt']` is assigned from `system_content`,
+# and `system_content` is derived from `form_data['messages']` HERE. Splicing
+# above this read is what puts the prompt inside the snapshot; splicing between
+# this read and the assignment below would satisfy "above the snapshot" and
+# still be dropped after the first tool call, so this is the assertion that
+# carries the guarantee and the one below it is the weaker corollary.
+SNAPSHOT_READ = "    system_message = get_system_message(form_data['messages'])\n"
+
 SNAPSHOT = "    metadata['system_prompt'] = system_content or None\n"
 
 RESTORE = "original_system_content = metadata.get('system_prompt')"
@@ -100,13 +113,18 @@ INSERT = f"""    {MARKER}: the deployment's own system prompt, in front of every
     # absent row, and the boot line the reconcile logs still shows what was
     # written. An absent or blank row means "not configured" and leaves the
     # payload untouched for the same reason.
+    #
+    # strip() decides only WHETHER the row is set, and the unstripped value is
+    # what reaches the model (review on PR #1608). The reconcile persists these
+    # byte for byte on purpose, so stripping at delivery would make the prompt
+    # the model receives differ from the prompt the deployment configured, and
+    # upstream's own read of every other prompt row has the same shape:
+    # rag_template() tests the stripped value and passes the original.
     _hive_chat_prompt_row = await Config.get({CONFIG_KEY!r})
     _hive_chat_system_prompt = (
-        _hive_chat_prompt_row.strip()
-        if isinstance(_hive_chat_prompt_row, str)
-        else ''
+        _hive_chat_prompt_row if isinstance(_hive_chat_prompt_row, str) else ''
     )
-    if _hive_chat_system_prompt:
+    if _hive_chat_system_prompt.strip():
         # Default append=False, which PREPENDS. Hive's block first, the user's
         # own system text after it.
         form_data['messages'] = add_or_update_system_message(
@@ -147,6 +165,18 @@ assert ANCHOR in body, (
 assert SNAPSHOT in body, (
     "the metadata['system_prompt'] assignment is not inside "
     "process_chat_payload's own body -- upstream open-webui source shifted"
+)
+assert body.count(SNAPSHOT_READ) == 1, (
+    "process_chat_payload no longer builds the snapshot by re-reading "
+    "form_data['messages'], so splicing above the anchor no longer guarantees "
+    "the prompt is inside metadata['system_prompt'] -- re-read the snapshot "
+    "block before relaxing anything here"
+)
+assert body.index(ANCHOR) < body.index(SNAPSHOT_READ) < body.index(SNAPSHOT), (
+    "the anchor no longer precedes the re-read of form_data['messages'] that "
+    "the snapshot is built from. This is the assertion that carries the "
+    "guarantee: inserting here would write a prompt the snapshot never sees, "
+    "and the tool-call loop would restore over it after the first citation"
 )
 assert body.index(ANCHOR) < body.index(SNAPSHOT), (
     "the anchor no longer precedes the metadata['system_prompt'] snapshot, so "

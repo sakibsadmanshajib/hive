@@ -1237,9 +1237,11 @@ def test_an_always_present_rag_template_would_break_upstreams_own_default() -> N
 # own text carries no untrusted-data framing at all. Issue #1571 is the report
 # that an unauthenticated third party can get their own page text into this
 # template by publishing a page the web loader then fetches, so the framing is
-# a security posture and not a style preference. Paired with
-# RAG_SYSTEM_CONTEXT=true in docker-compose.yml, which is what puts the framing
-# above the retrieved text rather than beside it.
+# a security posture and not a style preference. Its POSITION is deliberately
+# left at upstream's default: docker-compose.yml holds RAG_SYSTEM_CONTEXT false,
+# because upstream renders these rules and the retrieved text into one string
+# and promoting one would promote the other. The trusted framing reaches system
+# authority through HIVE_CHAT_SYSTEM_PROMPT instead.
 DELIBERATELY_SET_FOR_THE_DEMO_BOX = {"RAG_TEMPLATE"}
 
 

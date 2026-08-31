@@ -28,7 +28,7 @@ retyped, so what booted is what this pull request ships.
 
 With `HIVE_CHAT_SYSTEM_PROMPT` set:
 
-```
+```console
 $ docker logs hive-1596-visual-proof | grep 'hive: reconciled'
 hive: reconciled Open WebUI config from env: hive.chat.system_prompt=<1735 chars>,
 rag.embedding_model=sentence-transformers/all-MiniLM-L6-v2
@@ -36,7 +36,7 @@ rag.embedding_model=sentence-transformers/all-MiniLM-L6-v2
 
 The same image, same command, variable unset, which is the control:
 
-```
+```console
 $ docker logs hive-1596-visual-before | grep 'hive: reconciled'
 hive: reconciled Open WebUI config from env:
 rag.embedding_model=sentence-transformers/all-MiniLM-L6-v2
@@ -57,7 +57,7 @@ request body Open WebUI actually sent.
 Boot 1, nothing configured. The system message the model received on a real
 `/api/chat/completions` turn:
 
-```
+```text
 ""
 ```
 
@@ -66,7 +66,7 @@ rather than quoted.
 
 Boot 2, same volume, same image, one variable added:
 
-```
+```text
 "You are HIVEPROOF-CHAT-7cf048e5, the deployment system prompt.\nAnswer in one word."
 ```
 
@@ -75,7 +75,7 @@ test, so the transcript above corresponds to the code this branch ships rather
 than to an earlier revision of it. Second run, exit 0, different run id and the
 same three results:
 
-```
+```text
 boot 1, nothing configured:  ""
 boot 2, configured:          "You are HIVEPROOF-CHAT-517f035f, the deployment system prompt.\nAnswer in one word."
 boot 2, plus a user prompt:  "You are HIVEPROOF-CHAT-517f035f, ...\nUSERPROOF-SETTINGS-SYSTEM-PROMPT"
@@ -85,7 +85,7 @@ Boot 2 again, this time with a system message at position 0 of the request,
 which is exactly how the chat front end sends the Settings > General field
 (`vendor/open-webui/src/lib/components/chat/Chat.svelte`):
 
-```
+```text
 "You are HIVEPROOF-CHAT-7cf048e5, the deployment system prompt.\nAnswer in one word.
 USERPROOF-SETTINGS-SYSTEM-PROMPT"
 ```
@@ -117,7 +117,7 @@ neither carries a credential in the query string.
 
 Question, identical in both:
 
-```
+```text
 Which model am I talking to, and can you browse the web for me right now?
 ```
 
@@ -125,7 +125,7 @@ Which model am I talking to, and can you browse the web for me right now?
 
 Screenshot: `proof-1596-chat-no-system-prompt-control.png`.
 
-```
+```text
 I'm MiniMax-M3, developed by MiniMax, so that's the model you're talking to right now.
 
 As for browsing the web: I don't have a web browsing tool available in this
@@ -155,7 +155,7 @@ Two defects in one answer, neither of them hypothetical:
 
 Screenshot: `proof-1596-chat-system-prompt-live.png`.
 
-```
+```text
 You're talking to Hive, which routes each turn to one of several underlying
 models, the specific one for this conversation is shown in the model picker on
 your end.
@@ -183,7 +183,7 @@ Bash instead, so it does.
 Run against the exact text this pull request puts in the workflow, read out of
 the workflow rather than retyped:
 
-```
+```text
 chars before: 1533
 chars after:  1533
 ROUND TRIP OK, byte for byte
@@ -213,10 +213,14 @@ Stated so nobody reads more into it than is here.
   than "the suffix works": it is that the sandboxed agent, having received the
   suffix, then presents itself as Hive Cowork. First live Cowork turn after
   deploy is that evidence.
-* The RAG half's untrusted framing is proved to be the row and the position
-  (`RAG_SYSTEM_CONTEXT=true`, so the wrapper lands in a system message), not to
-  be effective against any particular injection. It narrows issue #1571's
-  framing gap and closes nothing.
+* The RAG half's untrusted framing is proved to be the row, not to be effective
+  against any particular injection. It narrows issue #1571's framing gap and
+  closes nothing. The wrapper's POSITION is deliberately unchanged from
+  upstream's default (`RAG_SYSTEM_CONTEXT=false`, so it prepends to the last
+  user message) after the security review on PR #1608: upstream renders the
+  framing rules and the retrieved bytes into one string, so promoting one
+  promotes the other. The trusted framing reaches system authority through
+  `HIVE_CHAT_SYSTEM_PROMPT`, which section 2 captures on a real turn.
 * Nothing here is a capture against the deployed demo box. These are local
   containers running this branch's image. The deployed capture follows the
   merge.

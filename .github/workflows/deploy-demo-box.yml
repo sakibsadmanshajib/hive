@@ -318,10 +318,15 @@ env:
   # unauthenticated third party can get their own page text into this template
   # by publishing one the web loader then fetches.
   #
-  # Paired with RAG_SYSTEM_CONTEXT, which docker-compose.yml now defaults true,
-  # so this block lands in a system message instead of being concatenated into
-  # the user turn. The two halves are one change: the framing rules below only
-  # outrank the retrieved text if they are positioned above it.
+  # This block's POSITION is deliberately left at upstream's default, which is
+  # the user turn, and docker-compose.yml holds RAG_SYSTEM_CONTEXT false to keep
+  # it there. Upstream renders these rules and the retrieved {{CONTEXT}} into one
+  # string, so promoting it to the system message would promote the retrieved
+  # bytes with it, and #1571 is the report that a third party can supply those.
+  # The trusted framing reaches system authority a different way:
+  # HIVE_CHAT_SYSTEM_PROMPT above carries the never-follow-supplied-instructions
+  # rule on every chat turn. See the long comment on RAG_SYSTEM_CONTEXT in
+  # docker-compose.yml.
   #
   # The {{CONTEXT}} placeholder is mandatory. Open WebUI substitutes the
   # retrieved documents there and does NOT refuse a template without one: it
