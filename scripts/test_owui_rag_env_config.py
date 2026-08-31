@@ -15,11 +15,13 @@ path so the environment wins for exactly these keys. This file exercises it
 directly: no framework, no network, no Open WebUI import.
 Run: python3 scripts/test_owui_rag_env_config.py
 """
+import ast
 import asyncio
 import importlib.util
 import logging
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 MODULE_PATH = (
@@ -34,6 +36,30 @@ hive_rag_env_config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hive_rag_env_config)
 
 ALIAS = "hive-embedding-default"
+
+PATCH_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "deploy"
+    / "docker"
+    / "owui-patches"
+    / "apply_rag_env_config_patch.py"
+)
+GATEWAY_URL = "http://edge-api:8080/v1"
+SEARX_URL = "http://searxng:8080/search"
+
+
+class _ErrorCapture(logging.Handler):
+    """Collects the module logger's messages, so a non-fatal refusal can be
+    asserted to have actually been reported rather than swallowed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
 STALE = "text-embedding-3-small"
 
 
@@ -1742,6 +1768,168 @@ def test_guard_boot_mode_reports_without_raising() -> None:
     assert any("WEB_LOADER_TIMEOUT" in message for message in capture.records), (
         f"boot mode must log the finding at ERROR, got: {capture.records}"
     )
+
+
+def _boot_splice_ast() -> ast.Module:
+    """Parse the fragment apply_rag_env_config_patch.py splices into Open
+    WebUI's own config.py, rather than substring-matching it, so reformatting
+    the call does not produce a false green and deleting a keyword does
+    produce a red."""
+    patch_source = PATCH_PATH.read_text(encoding="utf-8")
+    insert = next(
+        node.value.value
+        for node in ast.parse(patch_source).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "INSERT"
+    )
+    return ast.parse(textwrap.dedent(insert))
+
+
+def _boot_splice_call(tree: ast.Module, name: str) -> ast.Call:
+    return next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == name
+    )
+
+
+def test_boot_call_site_passes_fatal_false() -> None:
+    """The 2026-08-30 outage was one keyword argument's absence. The
+    function-level tests above prove a non-fatal mode exists; only this one
+    proves the boot path uses it, for both calls on the splice (PR #1588
+    review). Verified red before green by deleting fatal=False from each call
+    in turn."""
+    tree = _boot_splice_ast()
+    for name in ("guard_unreconciled_env_vars", "reconcile"):
+        call = _boot_splice_call(tree, name)
+        assert any(
+            keyword.arg == "fatal" and keyword.value.value is False
+            for keyword in call.keywords
+        ), (
+            f"the boot call site must pass fatal=False to {name}; see the "
+            f"2026-08-30 postmortem"
+        )
+
+
+def test_boot_call_site_wraps_the_config_source_audit() -> None:
+    """inspect.getsource is evaluated as an ARGUMENT to the guard, so its
+    OSError (source file unavailable) and TypeError (module not locatable)
+    escape before the function is entered and fatal=False never sees them.
+    The call has to sit inside a try/except for the guard's promise to hold
+    (PR #1588 review)."""
+    tree = _boot_splice_ast()
+    guarded = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if (
+                    isinstance(inner, ast.Call)
+                    and getattr(inner.func, "id", None)
+                    == "guard_unreconciled_env_vars"
+                ):
+                    guarded = True
+    assert guarded, (
+        "the guard call must sit inside a try/except: getsource() raises "
+        "before fatal=False can be consulted"
+    )
+
+
+def test_every_refusal_in_the_reconcile_path_honours_fatal() -> None:
+    """The guard was made non-fatal at boot while overrides, called one line
+    later on the same splice, still had eight raises that aborted startup (PR
+    #1588 review). They route through _refuse now. This goes red if a new
+    refusal is added as a bare raise in any of the three functions the boot
+    path reaches, which is how the eight got there in the first place."""
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    reached = ("derived_upload_cap", "openai_connection_override", "overrides")
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in reached:
+            continue
+        raises = [inner for inner in ast.walk(node) if isinstance(inner, ast.Raise)]
+        assert not raises, (
+            f"{node.name} still raises; a refusal on the boot path must go "
+            f"through _refuse(message, fatal) so fatal=False degrades to a "
+            f"log instead of a crash loop"
+        )
+        assert any(
+            isinstance(inner, ast.Call)
+            and getattr(inner.func, "id", None) == "_refuse"
+            for inner in ast.walk(node)
+        ), f"{node.name} no longer refuses anything, which is suspicious"
+
+
+def test_boot_mode_skips_a_bad_value_and_reconciles_the_rest() -> None:
+    """A malformed value must cost its own key and nothing else. Before this,
+    one bad RAG_TOP_K aborted the whole boot, which also meant the
+    SEARXNG_QUERY_URL reconcile that fixes web search never ran."""
+    environ = dict(
+        RAG_TOP_K="not a number",
+        RAG_EMBEDDING_MODEL=ALIAS,
+        SEARXNG_QUERY_URL=SEARX_URL,
+    )
+    capture = _ErrorCapture()
+    hive_rag_env_config._logger.addHandler(capture)
+    hive_rag_env_config._logger.setLevel(logging.ERROR)
+    try:
+        applied = hive_rag_env_config.overrides(environ, fatal=False)
+    finally:
+        hive_rag_env_config._logger.removeHandler(capture)
+    assert "rag.top_k" not in applied, (
+        f"a refused value must leave its own persisted row alone, got {applied}"
+    )
+    assert applied["rag.embedding_model"] == ALIAS
+    assert applied["web.search.searxng_query_url"] == SEARX_URL
+    assert any("RAG_TOP_K" in message for message in capture.messages), (
+        f"boot mode must log the refusal at ERROR, got: {capture.messages}"
+    )
+
+
+def test_boot_mode_never_persists_a_half_paired_destination() -> None:
+    """The one refusal where skipping has to do more than continue: a base URL
+    without its credential must be dropped from the write rather than
+    persisted alone, or the embedder would be repointed while Open WebUI kept
+    sending the key issued for the previous destination."""
+    capture = _ErrorCapture()
+    hive_rag_env_config._logger.addHandler(capture)
+    hive_rag_env_config._logger.setLevel(logging.ERROR)
+    try:
+        applied = hive_rag_env_config.overrides(
+            dict(RAG_OPENAI_API_BASE_URL=GATEWAY_URL), fatal=False
+        )
+    finally:
+        hive_rag_env_config._logger.removeHandler(capture)
+    assert any("RAG_OPENAI_API_KEY" in m for m in capture.messages), (
+        f"boot mode must log the refusal at ERROR, got: {capture.messages}"
+    )
+    assert "rag.openai_api_base_url" not in applied, (
+        f"a destination without its credential must not be persisted, got "
+        f"{applied}"
+    )
+
+
+def test_ci_default_still_refuses_every_boot_path_value() -> None:
+    """The other half of the split: making boot non-fatal must not have made
+    CI permissive. One case per refusal, at the fatal=True default."""
+    cases = (
+        dict(RAG_FILE_MAX_SIZE="100"),
+        dict(RAG_MAX_UPLOAD_BYTES="twenty five"),
+        dict(RAG_MAX_UPLOAD_BYTES="1024"),
+        dict(OPENAI_API_BASE_URL=GATEWAY_URL),
+        dict(RAG_ALLOWED_FILE_EXTENSIONS=" . , "),
+        dict(OAUTH_ALLOWED_ROLES=" , "),
+        dict(RAG_TOP_K="-5"),
+        dict(RAG_OPENAI_API_BASE_URL=GATEWAY_URL),
+    )
+    for environ in cases:
+        raised = False
+        try:
+            hive_rag_env_config.overrides(dict(environ))
+        except RuntimeError:
+            raised = True
+        assert raised, f"CI must still refuse {environ}"
 
 
 def main() -> None:

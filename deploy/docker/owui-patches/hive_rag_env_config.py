@@ -31,9 +31,13 @@ below carries the leaves the environment owns, and `reconcile` reads the tree,
 merges them in and writes the tree back. See that table for why
 `workspace.skills` is one of them.
 
-Issue #1575: a security bound (`WEB_LOADER_TIMEOUT`, PR #1570) merged into
-the container environment and nowhere else, because `web.loader.timeout` was
-never in this map. That audit walked every environment variable this
+Issue #1575: `WEB_LOADER_TIMEOUT` (PR #1570) merged into the container
+environment and nowhere else, because `web.loader.timeout` was never in this
+map. Read that key's own entry below before citing this as a bound that went
+missing: the loader enforces it off a frozen module constant, so the 12-second
+bound has been in force since it merged and what the stale row cost was the
+Admin UI's honesty, not the timeout. The audit that finding triggered walked
+every environment variable this
 container sets against Open WebUI's own `DEFAULT_CONFIG` (not against
 memory), found thirteen more silently-inert instances (`web.loader.timeout`
 itself, `webui.url`, `ui.default_locale`, the security-relevant
@@ -194,12 +198,27 @@ RAG_CONFIG_ENV = {
     # that seeded any of them before this deployment's compose value existed
     # keeps answering with the stale one forever, exactly like #722.
     #
-    # WEB_LOADER_TIMEOUT is the one that motivated the audit: PR #1570's
-    # 12-second bound on the web-search page loader (issue #298 MEDIUM
-    # review) was landing in the container environment and nowhere else,
-    # confirmed on the demo box (deploy run 33341365483): `web.loader.timeout`
-    # was `""`, 23 days stale, and `if WEB_LOADER_TIMEOUT:` in
-    # retrieval/web/utils.py treats that as "no bound at all".
+    # WEB_LOADER_TIMEOUT is the one that motivated the audit, and what
+    # reconciling it buys is narrower than issue #1575 claimed. The stale row
+    # is real: confirmed on the demo box (deploy run 33341365483),
+    # `web.loader.timeout` held `""`, 23 days old. The enforcement path does
+    # not read that row, though. retrieval/web/utils.py:48 imports
+    # WEB_LOADER_TIMEOUT straight from open_webui.config, where it is a plain
+    # os.getenv rather than a PersistentConfig, and both enforcement sites
+    # (utils.py:861 SafeWebBaseLoader, utils.py:899 microsoft_web_iq) read
+    # that frozen module constant. PR #1570's 12-second bound has therefore
+    # been in force since it merged, on the container environment alone.
+    #
+    # What the stale row does reach is the per-request RetrievalConfig
+    # routers/retrieval.py builds, which is what the admin API displays
+    # (:741, :1437) and writes (:1290). So reconciling this stops the Admin UI
+    # from reporting a value that disagrees with what is enforced. Do not let
+    # anything come to depend on the row FOR enforcement, and do not drop
+    # WEB_LOADER_TIMEOUT from the container environment on the grounds that
+    # the row is now correct: either one silently unbounds the loader.
+    # Deliberately absent from INT_KEYS too, since upstream types the field
+    # `str | None` and wraps both reads in try/except ValueError, so a string
+    # is the right shape here.
     "web.loader.timeout": "WEB_LOADER_TIMEOUT",
     "web.search.searxng_query_url": "SEARXNG_QUERY_URL",
     "webui.url": "WEBUI_URL",
@@ -281,9 +300,21 @@ RAG_CONFIG_ENV = {
     # is why only the model name is reconciled and the other two are left
     # alone.
     #
-    # Reconciling this keeps both pinned at the image's own baked defaults on
-    # every boot, which is today's actual behaviour; it changes nothing about
-    # what a deployment that sets neither variable experiences.
+    # Consequence, stated plainly, because "a deployment that sets neither"
+    # is not a case that exists for this image: both rows are now rewritten
+    # from the image's build-time ENV on every boot, so the Admin UI fields
+    # behind them (Admin > Audio for the STT model, Admin > Documents for the
+    # encoding) stop being durable. That is the deliberate bargain of this
+    # module for a key a deployment chose to set in compose, and it is a
+    # weaker bargain for a value that is a build-time pre-caching artifact
+    # nobody chose deployment-wise. Accepted here because the blast radius
+    # today is nil: the reconciled value equals the DEFAULT_CONFIG seed in
+    # both cases (`cl100k_base`, `base`), `audio.stt.whisper_model` is only
+    # consulted when the STT engine is local faster-whisper and compose pins
+    # AUDIO_STT_ENGINE to "openai", and `rag.tiktoken_encoding_name` is only
+    # consulted on the token-splitter path, which compose does not select.
+    # That trade, not "does a deployment set it", is the test for whether some
+    # other image-baked ENV belongs on this map.
     "rag.tiktoken_encoding_name": "TIKTOKEN_ENCODING_NAME",
     "audio.stt.whisper_model": "WHISPER_MODEL",
 }
@@ -544,7 +575,31 @@ SUPERSEDED_UPLOAD_CAP_ENV = "RAG_FILE_MAX_SIZE"
 BYTES_PER_MEGABYTE = 1024 * 1024
 
 
-def derived_upload_cap(environ) -> dict:
+def _refuse(message: str, fatal: bool) -> None:
+    """Refuse a value: raise in CI, log and skip at boot.
+
+    The 2026-08-30 outage was `guard_unreconciled_env_vars` aborting FastAPI
+    startup over a config-hygiene finding. `overrides` had eight raises of the
+    same shape one line further down the same boot splice, so making only the
+    guard non-fatal would have left seven other ways for one bad environment
+    variable to crash-loop chat (PR #1588 review).
+
+    At `fatal=True`, which is the default and what CI uses, the message is a
+    RuntimeError and a red build. At `fatal=False`, which the boot splice uses,
+    it is an ERROR log and the caller skips that one key, so the persisted row
+    keeps the value the previous boot left in it. Skipping is the safe
+    degradation in every case here, and deliberately so: it is the exact
+    contract this module already has for a variable that is not set at all, and
+    for the two allowlist keys it is strictly safer than the alternative, since
+    writing the empty list the caller parsed would turn the check off while the
+    deployment still looked configured.
+    """
+    if fatal:
+        raise RuntimeError(message)
+    _logger.error(message)
+
+
+def derived_upload_cap(environ, fatal: bool = True) -> dict:
     """Derive `rag.file.max_size` from the one settable upload ceiling.
 
     Open WebUI wants whole megabytes; edge-api and the markitdown sidecar want
@@ -585,7 +640,7 @@ def derived_upload_cap(environ) -> dict:
     """
     superseded = (environ.get(SUPERSEDED_UPLOAD_CAP_ENV) or "").strip()
     if superseded:
-        raise RuntimeError(
+        _refuse(
             f"{SUPERSEDED_UPLOAD_CAP_ENV} is set to {superseded!r}, and it is no "
             f"longer read. The chat attachment cap is derived from "
             f"{UPLOAD_CEILING_ENV}, the same ceiling edge-api and the markitdown "
@@ -594,8 +649,10 @@ def derived_upload_cap(environ) -> dict:
             f"{SUPERSEDED_UPLOAD_CAP_ENV} and set {UPLOAD_CEILING_ENV} in bytes "
             f"instead. Refusing to start rather than quietly ignoring it, "
             f"because being quietly ignored is exactly what this variable did "
-            f"for the three deploys before this one."
+            f"for the three deploys before this one.",
+            fatal,
         )
+        return {}
 
     raw = (environ.get(UPLOAD_CEILING_ENV) or "").strip()
     if not raw:
@@ -612,22 +669,26 @@ def derived_upload_cap(environ) -> dict:
     # digits, "٣" for instance, parse fine and would silently configure a
     # ceiling nobody can grep for.
     if not (raw.isascii() and raw.isdigit()):
-        raise RuntimeError(
+        _refuse(
             f"{UPLOAD_CEILING_ENV} must be a whole number of BYTES, got "
             f"{raw!r}. A value that cannot be parsed would leave the deployment "
             f"looking capped while enforcing nothing, which is the silent no-op "
-            f"this module exists to end. 26214400 is 25 MB."
+            f"this module exists to end. 26214400 is 25 MB.",
+            fatal,
         )
+        return {}
 
     megabytes = int(raw) // BYTES_PER_MEGABYTE
     if megabytes < 1:
-        raise RuntimeError(
+        _refuse(
             f"{UPLOAD_CEILING_ENV}={raw!r} is less than one megabyte, which "
             f"floors to a chat cap of 0. Open WebUI reads 0 as no server-side "
             f"cap at all while the browser reads it as refusing every file of "
             f"non-zero length, so the composer would reject everything while "
-            f"the API accepted anything. Set at least {BYTES_PER_MEGABYTE}."
+            f"the API accepted anything. Set at least {BYTES_PER_MEGABYTE}.",
+            fatal,
         )
+        return {}
     return {"rag.file.max_size": megabytes}
 
 
@@ -639,7 +700,7 @@ OPENAI_CONNECTION_URL_ENV = "OPENAI_API_BASE_URL"
 OPENAI_CONNECTION_KEY_ENV = "OPENAI_API_KEY"
 
 
-def openai_connection_override(environ) -> dict:
+def openai_connection_override(environ, fatal: bool = True) -> dict:
     """Reconcile Hive's one OpenAI-compatible connection, paired like
     PAIRED_DESTINATIONS reconciles rag/audio, never the base URL alone.
 
@@ -664,19 +725,21 @@ def openai_connection_override(environ) -> dict:
     if not url:
         return {}
     if not key:
-        raise RuntimeError(
+        _refuse(
             f"{OPENAI_CONNECTION_URL_ENV} is set to {url!r} but "
             f"{OPENAI_CONNECTION_KEY_ENV} is empty or unset. Refusing to "
             f"point Open WebUI's OpenAI connection (the Hive gateway "
             f"itself) at that destination with no credential, the same "
             f"posture PAIRED_DESTINATIONS enforces below. Set "
             f"{OPENAI_CONNECTION_KEY_ENV} (the Hive OWUI_SHIM_KEY) together "
-            f"with {OPENAI_CONNECTION_URL_ENV}."
+            f"with {OPENAI_CONNECTION_URL_ENV}.",
+            fatal,
         )
+        return {}
     return {"openai.api_base_urls": [url], "openai.api_keys": [key]}
 
 
-def overrides(environ) -> dict:
+def overrides(environ, fatal: bool = True) -> dict:
     """Return the persisted-config overrides the environment explicitly sets.
 
     A missing or blank variable yields no entry, so an unset variable never
@@ -696,8 +759,8 @@ def overrides(environ) -> dict:
     # First, so a superseded or malformed ceiling, or an OpenAI connection
     # missing its credential, fails the boot before anything else is
     # reconciled.
-    applied = derived_upload_cap(environ)
-    applied.update(openai_connection_override(environ))
+    applied = derived_upload_cap(environ, fatal)
+    applied.update(openai_connection_override(environ, fatal))
     for key, variable in RAG_CONFIG_ENV.items():
         raw = environ.get(variable) or ""
         value = raw.strip()
@@ -725,14 +788,16 @@ def overrides(environ) -> dict:
             # allowed_file_extensions`, so persisting it would turn the check
             # off while the deployment's own configuration says it is on.
             if not items:
-                raise RuntimeError(
+                _refuse(
                     f"{variable} is set to {value!r}, which parses to no "
                     f"extensions at all. An empty allowlist turns the type "
                     f"check off entirely while the deployment still looks "
                     f"configured. Name the extensions to allow. Removing the "
                     f"allowlist altogether is a change to the compose default, "
-                    f"made deliberately, not something an empty value does."
+                    f"made deliberately, not something an empty value does.",
+                    fatal,
                 )
+                continue
             applied[key] = items
         elif key in COMMA_LIST_KEYS:
             # Case-preserving, no dot stripped: see COMMA_LIST_KEYS. Matches
@@ -741,13 +806,15 @@ def overrides(environ) -> dict:
             # os.getenv(...).split(OAUTH_ROLES_SEPARATOR) if role]`).
             roles = [item.strip() for item in value.split(",") if item.strip()]
             if not roles:
-                raise RuntimeError(
+                _refuse(
                     f"{variable} is set to {value!r}, which parses to no "
                     f"roles at all. An empty {key.rsplit('.', 1)[-1]} list "
                     f"disables SSO role matching entirely while the "
                     f"deployment still looks configured. Name the roles, or "
-                    f"unset {variable} to leave the persisted value alone."
+                    f"unset {variable} to leave the persisted value alone.",
+                    fatal,
                 )
+                continue
             applied[key] = roles
         elif key in INT_KEYS:
             # Negative rejected outright, not merely non-numeric. Both
@@ -758,14 +825,16 @@ def overrides(environ) -> dict:
             # exact "surfaces later instead of at boot" failure this
             # coercion exists to close (PR #1582 review).
             if not (value.isascii() and value.isdigit()):
-                raise RuntimeError(
+                _refuse(
                     f"{variable} must be a whole, non-negative number, got "
                     f"{value!r}. {key} is passed straight into a "
                     f"vector-store or web-search result count, and a value "
                     f"int() rejects, or a negative one a query would not "
                     f"expect, would surface as an unhandled error on every "
-                    f"request that reads it instead of at boot."
+                    f"request that reads it instead of at boot.",
+                    fatal,
                 )
+                continue
             applied[key] = int(value)
         else:
             applied[key] = value
@@ -782,13 +851,18 @@ def overrides(environ) -> dict:
         if url_key in applied and credential_key not in applied:
             url_variable = RAG_CONFIG_ENV[url_key]
             credential_variable = RAG_CONFIG_ENV[credential_key]
-            raise RuntimeError(
+            _refuse(
                 f"{url_variable} is set to {applied[url_key]!r} but "
                 f"{credential_variable} is empty or unset. Refusing to point "
                 f"{consumer} at that destination while it keeps sending the API "
                 f"key persisted for the previous one. Set {credential_variable} "
-                f"(the Hive OWUI_SHIM_KEY) together with {url_variable}."
+                f"(the Hive OWUI_SHIM_KEY) together with {url_variable}.",
+                fatal,
             )
+            # Non-fatal path: drop the destination instead of persisting it
+            # half-paired, so the stored URL and credential stay the
+            # consistent pair the previous boot left behind.
+            applied.pop(url_key, None)
 
     return applied
 
@@ -1010,6 +1084,15 @@ def guard_unreconciled_env_vars(
     "noticed and fixable" rather than "down." See
     `deploy/docker/owui-patches/apply_rag_env_config_patch.py` for the boot
     call site.
+
+    The same postmortem applies to `overrides`, which `reconcile` calls on the
+    very next line of that same boot splice and which carried eight raises of
+    this exact shape (PR #1588 review). They route through `_refuse` now, so
+    at `fatal=False` a refused value logs at ERROR and leaves its own persisted
+    row alone rather than aborting startup. Nothing on this splice aborts a
+    boot over configuration any more. A `Config.upsert` database error still
+    can, which is an infrastructure failure rather than a hygiene finding, and
+    is not this module's to swallow.
     """
     reconciled = (
         set(RAG_CONFIG_ENV.values())
@@ -1050,9 +1133,13 @@ def guard_unreconciled_env_vars(
     _logger.error(message)
 
 
-async def reconcile(config, environ) -> dict:
-    """Overwrite the persisted keys the environment names. Returns them."""
-    applied = overrides(environ)
+async def reconcile(config, environ, fatal: bool = True) -> dict:
+    """Overwrite the persisted keys the environment names. Returns them.
+
+    `fatal` is forwarded to `overrides`, so the boot splice can refuse a bad
+    value without aborting startup. See `_refuse`.
+    """
+    applied = overrides(environ, fatal)
     if applied:
         await config.upsert(applied)
 
