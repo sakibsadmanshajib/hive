@@ -72,6 +72,7 @@ ENV_EXAMPLE = REPO / ".env.example"
 
 CONFIG_KEY = "hive.chat.system_prompt"
 ENV_VAR = "HIVE_CHAT_SYSTEM_PROMPT"
+SPLICED_ROW_NAME = "_hive_chat_prompt_row"
 SPLICED_NAME = "_hive_chat_system_prompt"
 SNAPSHOT_TARGET = "system_prompt"
 
@@ -156,26 +157,39 @@ def spliced_statements(source: str) -> tuple[int, list, str]:
     from a different tree.
     """
     body = chat_payload_body(source)
-    for index, statement in enumerate(body):
-        if (
+
+    def assigns(statement, name: str) -> bool:
+        return (
             isinstance(statement, ast.Assign)
             and len(statement.targets) == 1
             and isinstance(statement.targets[0], ast.Name)
-            and statement.targets[0].id == SPLICED_NAME
-        ):
-            after = body[index + 1]
-            assert isinstance(after, ast.If), (
-                "the statement after the prompt read is no longer the `if` that "
-                f"applies it, it is {type(after).__name__}"
+            and statement.targets[0].id == name
+        )
+
+    for index, statement in enumerate(body):
+        if not assigns(statement, SPLICED_ROW_NAME):
+            continue
+        block = [statement]
+        for follower in body[index + 1 :]:
+            block.append(follower)
+            if isinstance(follower, ast.If):
+                break
+            assert isinstance(follower, ast.Assign), (
+                "an unexpected statement type sits between the prompt read and "
+                f"the `if` that applies it: {type(follower).__name__}"
             )
-            segments = [
-                ast.get_source_segment(source, statement),
-                ast.get_source_segment(source, after),
-            ]
-            return index, [statement, after], "\n".join(segments)
+        assert isinstance(block[-1], ast.If), (
+            "the spliced block no longer ends in the `if` that applies the "
+            "prompt"
+        )
+        assert any(assigns(s, SPLICED_NAME) for s in block), (
+            f"the spliced block no longer assigns {SPLICED_NAME}"
+        )
+        segments = [ast.get_source_segment(source, s) for s in block]
+        return index, block, "\n".join(segments)
     raise AssertionError(
-        f"no `{SPLICED_NAME} = ...` assignment inside process_chat_payload; the "
-        "patch did not reach the chat path"
+        f"no `{SPLICED_ROW_NAME} = ...` assignment inside process_chat_payload; "
+        "the patch did not reach the chat path"
     )
 
 
@@ -253,7 +267,7 @@ def test_the_patch_lands_inside_the_chat_path() -> None:
     chat completion from the surface passes through. A splice into a task
     handler or into module scope would be a prompt on the wrong requests."""
     _, statements, source = spliced_statements(patched_middleware())
-    assert len(statements) == 2, statements
+    assert len(statements) >= 2, statements
     assert CONFIG_KEY in source, source
 
 
@@ -322,11 +336,19 @@ def test_an_unset_or_blank_row_leaves_the_payload_untouched() -> None:
         assert messages == [{"role": "user", "content": "hi"}], (value, messages)
 
 
-def test_a_row_of_the_wrong_type_does_not_break_every_chat_request() -> None:
-    """This runs on the chat hot path, and the row is writable by anything with
-    the database. A dict or an int there must not raise a 500 on every turn."""
-    messages = run_splice(FakeConfig({"oops": True}), [{"role": "user", "content": "hi"}])
-    assert messages[0]["role"] == "system", messages
+def test_a_row_of_the_wrong_type_is_ignored_rather_than_sent() -> None:
+    """This runs on the chat hot path, and the row is writable by anything
+    holding the database, so a value of the wrong type has two bad outcomes to
+    choose between and a third correct one.
+
+    Calling .strip() on it raises on EVERY chat request. Coercing it with str()
+    sends its Python repr to the model as the deployment's system prompt, which
+    nothing anywhere would surface. Ignoring it degrades to exactly the
+    documented contract for an absent row, and the reconcile's boot line still
+    shows what was written, so the operator has a way to see it."""
+    for value in ({"oops": True}, 42, ["a", "b"], True):
+        messages = run_splice(FakeConfig(value), [{"role": "user", "content": "hi"}])
+        assert messages == [{"role": "user", "content": "hi"}], (value, messages)
 
 
 def test_the_patch_refuses_to_apply_twice() -> None:

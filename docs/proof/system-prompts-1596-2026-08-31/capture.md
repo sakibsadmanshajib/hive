@@ -70,6 +70,17 @@ Boot 2, same volume, same image, one variable added:
 "You are HIVEPROOF-CHAT-7cf048e5, the deployment system prompt.\nAnswer in one word."
 ```
 
+Re-run in full after a later commit narrowed the row read to an `isinstance`
+test, so the transcript above corresponds to the code this branch ships rather
+than to an earlier revision of it. Second run, exit 0, different run id and the
+same three results:
+
+```
+boot 1, nothing configured:  ""
+boot 2, configured:          "You are HIVEPROOF-CHAT-517f035f, the deployment system prompt.\nAnswer in one word."
+boot 2, plus a user prompt:  "You are HIVEPROOF-CHAT-517f035f, ...\nUSERPROOF-SETTINGS-SYSTEM-PROMPT"
+```
+
 Boot 2 again, this time with a system message at position 0 of the request,
 which is exactly how the chat front end sends the Settings > General field
 (`vendor/open-webui/src/lib/components/chat/Chat.svelte`):

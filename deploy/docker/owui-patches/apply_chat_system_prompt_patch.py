@@ -90,10 +90,22 @@ INSERT = f"""    {MARKER}: the deployment's own system prompt, in front of every
     # that both survives the native tool-call restore and stays in front of
     # the user's own system text.
     #
-    # str() before strip() because a hand-written row of the wrong type would
-    # otherwise raise on every chat request in the deployment. An absent or
-    # blank row means "not configured" and leaves the payload untouched.
-    _hive_chat_system_prompt = str(await Config.get({CONFIG_KEY!r}) or '').strip()
+    # The isinstance test is not defensive noise. This runs on the chat hot
+    # path and the row is writable by anything holding the database, so a
+    # value of the wrong type has two bad outcomes to choose between: calling
+    # .strip() on it raises on EVERY chat request, and coercing it with str()
+    # sends its Python repr to the model as the deployment's system prompt,
+    # which nothing would ever surface. Ignoring it is the third option and
+    # the right one: it degrades to exactly the documented contract for an
+    # absent row, and the boot line the reconcile logs still shows what was
+    # written. An absent or blank row means "not configured" and leaves the
+    # payload untouched for the same reason.
+    _hive_chat_prompt_row = await Config.get({CONFIG_KEY!r})
+    _hive_chat_system_prompt = (
+        _hive_chat_prompt_row.strip()
+        if isinstance(_hive_chat_prompt_row, str)
+        else ''
+    )
     if _hive_chat_system_prompt:
         # Default append=False, which PREPENDS. Hive's block first, the user's
         # own system text after it.
