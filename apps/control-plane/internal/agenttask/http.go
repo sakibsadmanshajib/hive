@@ -113,6 +113,13 @@ func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 type createRequest struct {
 	Pack         string `json:"pack"`
 	Instructions string `json:"instructions"`
+	// ProjectID is the project the run consults, already authorized by edge-api
+	// (apps/edge-api/internal/agenttask.Handler.handleCreate) against the
+	// submitting user's ownership. This is a service-to-service surface guarded
+	// by RequireInternalToken, so accepting it here widens no trust boundary,
+	// but it also means this handler is NOT the place the check lives: it is
+	// upstream, before a hold is taken and before this call is made.
+	ProjectID string `json:"project_id"`
 	// BearerJWT is forwarded by edge-api's task-create handler from the
 	// original request's own Authorization header. This is a
 	// service-to-service surface guarded by RequireInternalToken, not a
@@ -130,7 +137,19 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID,
 		writeJSON(w, http.StatusBadRequest, errBody("invalid JSON body"))
 		return
 	}
-	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, req.BearerJWT)
+	// An unparseable project_id is a 400 rather than a silent Nil. Silently
+	// dropping it would launch a run that consults nothing while the caller
+	// believes a project is attached, which is worse than refusing.
+	projectID := uuid.Nil
+	if raw := strings.TrimSpace(req.ProjectID); raw != "" {
+		parsed, perr := uuid.Parse(raw)
+		if perr != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid project_id"))
+			return
+		}
+		projectID = parsed
+	}
+	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, projectID, req.BearerJWT)
 	if err != nil {
 		writeTaskError(w, err)
 		return

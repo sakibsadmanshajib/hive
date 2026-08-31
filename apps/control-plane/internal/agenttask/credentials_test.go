@@ -143,7 +143,7 @@ func TestCreateTask_LaunchesWithACredentialMintedOnItsOwnTenantsAccount(t *testi
 			svc := agenttask.NewService(newFakeRepository(), engine, agenttask.WithTaskCredentials(creds))
 			tenantID, userID := uuid.New(), uuid.New()
 
-			created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "do the thing", "")
+			created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "do the thing", uuid.Nil, "")
 			if err != nil {
 				t.Fatalf("CreateTask: %v", err)
 			}
@@ -179,7 +179,7 @@ func TestCreateTask_NeverPersistsTheTaskCredential(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{sessionRef: "session-1"}, agenttask.WithTaskCredentials(creds))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestCancel_RevokesTheTaskCredential(t *testing.T) {
 		agenttask.WithTaskCredentials(creds))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

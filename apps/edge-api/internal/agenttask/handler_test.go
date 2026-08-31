@@ -25,6 +25,12 @@ type fakeClient struct {
 	// lastBearerJWT records what handleCreate passed through, so a test can
 	// assert on it without a real control-plane.
 	lastBearerJWT string
+
+	// createCalled and lastProjectID are what the project authorization tests
+	// assert on: a refusal must never reach control-plane at all, so "did we
+	// get here" is itself the assertion.
+	createCalled  bool
+	lastProjectID uuid.UUID
 	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
 	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
@@ -33,7 +39,9 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{tasks: make(map[uuid.UUID]Task)}
 }
 
-func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions, bearerJWT string) (Task, error) {
+func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
+	f.createCalled = true
+	f.lastProjectID = projectID
 	f.lastBearerJWT = bearerJWT
 	if f.createErr != nil {
 		return Task{}, f.createErr
@@ -43,7 +51,6 @@ func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instruction
 	f.tasks[id] = t
 	return t, nil
 }
-
 func (f *fakeClient) List(context.Context, uuid.UUID, uuid.UUID) ([]Task, error) {
 	out := make([]Task, 0, len(f.tasks))
 	for _, t := range f.tasks {

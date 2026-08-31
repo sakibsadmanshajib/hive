@@ -52,12 +52,21 @@ func NewClient(controlPlaneURL string) *Client {
 // carried no recognizable Supabase JWT (e.g. API-key auth): control-plane
 // and the engine both treat that as "skip publishing", never as a reason to
 // fail the create.
-func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions, bearerJWT string) (Task, error) {
-	body, err := json.Marshal(struct {
+
+// projectID is the project this run consults, already authorized by
+// handler.go's handleCreate. uuid.Nil means no project, and travels as an
+// omitted field so control-plane's decoder sees the same body it always did.
+func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
+	payload := struct {
 		Pack         string `json:"pack"`
 		Instructions string `json:"instructions"`
+		ProjectID    string `json:"project_id,omitempty"`
 		BearerJWT    string `json:"bearer_jwt"`
-	}{Pack: pack, Instructions: instructions, BearerJWT: bearerJWT})
+	}{Pack: pack, Instructions: instructions, BearerJWT: bearerJWT}
+	if projectID != uuid.Nil {
+		payload.ProjectID = projectID.String()
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return Task{}, fmt.Errorf("agenttask.client: marshal: %w", err)
 	}

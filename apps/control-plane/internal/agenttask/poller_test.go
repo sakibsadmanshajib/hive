@@ -75,7 +75,7 @@ func (f *fakeStatusChecker) Cancelled() []string {
 }
 
 func newActiveTask(repo *fakeRepository, status agenttask.Status, sessionRef string) agenttask.Task {
-	t, _ := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
+	t, _ := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "", uuid.Nil)
 	t, _ = repo.Transition(context.Background(), t.TenantID, t.UserID, t.ID, status, sessionRef, "", "")
 	return t
 }

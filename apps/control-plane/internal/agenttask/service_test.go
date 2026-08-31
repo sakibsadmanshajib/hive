@@ -42,7 +42,7 @@ func newFakeRepository() *fakeRepository {
 		eventsByID: make(map[uuid.UUID][]agenttask.TaskEvent), tasks: make(map[uuid.UUID]agenttask.Task)}
 }
 
-func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string) (agenttask.Task, error) {
+func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID) (agenttask.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t := agenttask.Task{
@@ -235,7 +235,7 @@ func (s *slotEngine) cancelCount() int {
 // launch outcome has to read the settled row rather than the create return.
 func createSettled(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.UUID, pack agenttask.Pack) agenttask.Task {
 	t.Helper()
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -260,7 +260,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 	}
 	done := make(chan result, 1)
 	go func() {
-		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 		done <- result{task: task, err: err}
 	}()
 
@@ -278,7 +278,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 
 func TestService_CreateTask_InvalidPack(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
-	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", "")
+	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", uuid.Nil, "")
 	if !errors.Is(err, agenttask.ErrInvalidPack) {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
 	}
@@ -335,7 +335,7 @@ func TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), engine, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", "test-user-jwt")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", uuid.Nil, "test-user-jwt")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, ownerID, otherID := uuid.New(), uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}
@@ -405,10 +405,10 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userA, userB := uuid.New(), uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
 		t.Fatalf("seed userA task: %v", err)
 	}
-	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, "", ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
 		t.Fatalf("seed userB task: %v", err)
 	}
 
@@ -631,7 +631,7 @@ func TestService_LaunchSucceedsButTransitionFails_TaskFailsVisibly(t *testing.T)
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -694,7 +694,7 @@ func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -722,7 +722,7 @@ func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	svc.WaitIdle() // a panic escaping the recover takes the whole test binary down
@@ -738,7 +738,7 @@ func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), panickingEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

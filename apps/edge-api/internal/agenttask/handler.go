@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,13 +14,14 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling"
 )
 
 // TaskClient is the minimal interface the handler needs from Client.
 // Exported so tests can inject a fake without a real control-plane.
 type TaskClient interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions, bearerJWT string) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
@@ -34,6 +36,12 @@ type Handler struct {
 	client     TaskClient
 	accounting *inference.AccountingClient
 	billing    sessionbilling.Resolver
+
+	// projects authorizes an attached project id. Nil when the deployment has
+	// no database wired, in which case any project id on a create is refused
+	// rather than passed through unchecked: a surface that cannot verify
+	// ownership must not act on a client's claim of it.
+	projects ProjectAuthorizer
 }
 
 // NewHandler constructs a Handler.
@@ -59,6 +67,15 @@ const agentTaskLabel = "agent-task"
 func (h *Handler) WithBilling(accounting *inference.AccountingClient, billing sessionbilling.Resolver) *Handler {
 	h.accounting = accounting
 	h.billing = billing
+	return h
+}
+
+// WithProjectAuthorizer wires project ownership verification onto an existing
+// Handler and returns it for chaining, the same shape WithBilling uses. Without
+// it, a create carrying a project_id is refused: this surface accepts a client
+// supplied project id, and the one thing it must never do is trust it.
+func (h *Handler) WithProjectAuthorizer(p ProjectAuthorizer) *Handler {
+	h.projects = p
 	return h
 }
 
@@ -118,6 +135,18 @@ func (h *Handler) routeTaskByID(w http.ResponseWriter, r *http.Request) {
 type createTaskRequest struct {
 	Pack         string `json:"pack"`
 	Instructions string `json:"instructions"`
+	// ProjectID optionally attaches a project to this run (issue #1595,
+	// advancing issue #1312). Client supplied, so it is authorized before
+	// control-plane is called at all; see handleCreate.
+	ProjectID string `json:"project_id,omitempty"`
+}
+
+// ProjectAuthorizer answers whether the submitting user may attach the project
+// they named. One method, declared here at the point of use rather than
+// exported as an abstraction from the package that implements it;
+// apps/edge-api/internal/rag.ProjectAuthorizer satisfies it.
+type ProjectAuthorizer interface {
+	AuthorizeProject(ctx context.Context, tenantID, userID, projectID uuid.UUID) error
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +164,37 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Pack) == "" {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "pack required")
 		return
+	}
+
+	// Project authorization, deliberately ahead of the solvency gate below
+	// (issue #1595 acceptance criterion 6). project_id arrives from the client
+	// and public.rag_documents is tenant scoped rather than user scoped, so
+	// without this check one member of a tenant could launch a run over
+	// another member's private project: row level security keys on the tenant
+	// and both members present the same tenant. Ordering it first also means an
+	// unauthorized id never takes a credit hold and never reaches
+	// control-plane.
+	projectID := uuid.Nil
+	if raw := strings.TrimSpace(req.ProjectID); raw != "" {
+		parsed, perr := uuid.Parse(raw)
+		if perr != nil {
+			apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid project_id")
+			return
+		}
+		if h.projects == nil {
+			// Fail closed. A deployment with no authorizer cannot tell whose
+			// project this is, and passing it through unchecked is the whole
+			// defect. The operator gets the reason; the customer gets the same
+			// refusal any unowned project id gets.
+			log.Printf("agenttask: refusing a task carrying project_id=%s: no project authorizer is wired on this deployment", parsed)
+			apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "project not found")
+			return
+		}
+		if aerr := h.projects.AuthorizeProject(r.Context(), user.TenantID, user.ID, parsed); aerr != nil {
+			writeProjectRefusal(w, aerr)
+			return
+		}
+		projectID = parsed
 	}
 
 	// Solvency gate (#669). Submitting a task launches a sandbox that then runs
@@ -162,7 +222,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions, bearerJWT(r))
+	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions, projectID, bearerJWT(r))
 	if err != nil {
 		writeTaskError(w, err)
 		return
@@ -347,4 +407,19 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// writeProjectRefusal renders a project authorization failure. A project the
+// caller does not own is a 404 naming nothing: a 403 would confirm the project
+// exists, which is exactly what lets a caller enumerate project ids. Anything
+// else is an infrastructure failure and must NOT be flattened into the same
+// 404, because a database blip would then silently look like "that project is
+// not yours" and quietly discard a legitimate task.
+func writeProjectRefusal(w http.ResponseWriter, err error) {
+	if errors.Is(err, rag.ErrProjectForbidden) {
+		apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "project not found")
+		return
+	}
+	log.Printf("agenttask: project authorization failed: %v", err)
+	apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "agent task request failed")
 }

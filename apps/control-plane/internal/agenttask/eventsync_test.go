@@ -30,7 +30,7 @@ type fakeRepoForSync struct {
 	appends    [][]TaskEvent
 }
 
-func (r *fakeRepoForSync) Create(context.Context, uuid.UUID, uuid.UUID, Pack, string) (Task, error) {
+func (r *fakeRepoForSync) Create(context.Context, uuid.UUID, uuid.UUID, Pack, string, uuid.UUID) (Task, error) {
 	panic("not used")
 }
 func (r *fakeRepoForSync) Get(_ context.Context, _, _ uuid.UUID, id uuid.UUID) (Task, error) {

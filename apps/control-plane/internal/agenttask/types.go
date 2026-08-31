@@ -61,6 +61,14 @@ type Task struct {
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
 
+	// ProjectID is the project this run was submitted with (issue #1595), or
+	// uuid.Nil for none. Written by Repository.Create and NOT read back by any
+	// SELECT in this package, so a Task loaded from the database has it Nil.
+	// Ownership of the project was verified in edge-api before this package was
+	// reached; nothing here re-derives it, and nothing here retrieves the
+	// project's passages yet (spec task 9).
+	ProjectID uuid.UUID
+
 	// BearerJWT is the task's own user's bearer JWT, set by
 	// Service.CreateTask on the in-memory Task it hands to Engine.Launch and
 	// never touched by Repository: it is not a column on public.agent_tasks

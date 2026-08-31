@@ -29,10 +29,14 @@ type fakeStore struct {
 
 	mismatch    bool  // EmbeddingMismatch return value
 	mismatchErr error // EmbeddingMismatch injected error
-}
 
-func newFakeStore() *fakeStore {
-	return &fakeStore{docs: make(map[uuid.UUID]DocRow)}
+	// Projects (issue #1595). searchCalled and lastProjectID are what the
+	// authorization tests assert on: a refusal must never reach the store at
+	// all, so "did we get here" is itself the assertion.
+	projects      map[uuid.UUID]ProjectRow
+	searchCalled  bool
+	lastProjectID uuid.UUID
+	attached      []uuid.UUID
 }
 
 func (f *fakeStore) InsertDocument(_ context.Context, tenantID uuid.UUID, name, mimeType string, sizeBytes int64) (uuid.UUID, error) {
@@ -73,7 +77,9 @@ func (f *fakeStore) DeleteDocument(_ context.Context, _, docID uuid.UUID) (bool,
 	return true, nil
 }
 
-func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, topK int) ([]ChunkRow, error) {
+func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, topK int, projectID uuid.UUID) ([]ChunkRow, error) {
+	f.searchCalled = true
+	f.lastProjectID = projectID
 	f.lastTopK = topK
 	if topK > len(f.chunks) {
 		topK = len(f.chunks)
@@ -83,6 +89,13 @@ func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, to
 
 func (f *fakeStore) EmbeddingMismatch(_ context.Context, _ uuid.UUID, _ string, _ int) (bool, error) {
 	return f.mismatch, f.mismatchErr
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{
+		docs:     make(map[uuid.UUID]DocRow),
+		projects: make(map[uuid.UUID]ProjectRow),
+	}
 }
 
 type fakeEmbedder struct{ fail bool }

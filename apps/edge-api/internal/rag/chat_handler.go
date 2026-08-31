@@ -161,7 +161,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chunks, err := h.store.SearchChunks(r.Context(), user.TenantID, vec, topK)
+	chunks, err := h.store.SearchChunks(r.Context(), user.TenantID, vec, topK, uuid.Nil)
 	if err != nil {
 		log.Printf("rag: chat search chunks: %v", err)
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "search failed")
@@ -171,10 +171,11 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	citations := make([]ChunkResult, len(chunks))
 	for i, c := range chunks {
 		citations[i] = ChunkResult{
-			ChunkID:    c.ID.String(),
-			DocumentID: c.DocumentID.String(),
-			Content:    c.Content,
-			Score:      c.Score,
+			ChunkID:      c.ID.String(),
+			DocumentID:   c.DocumentID.String(),
+			DocumentName: c.DocumentName,
+			Content:      c.Content,
+			Score:        c.Score,
 		}
 		// RAG_CHUNK_RETRIEVED: one event per chunk (Law 25 / PHIPA requirement),
 		// same event used by POST /v1/rag/search — retrieval is retrieval

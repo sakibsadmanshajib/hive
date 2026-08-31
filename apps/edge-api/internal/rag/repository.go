@@ -29,8 +29,12 @@ type DocRow struct {
 type ChunkRow struct {
 	ID         uuid.UUID
 	DocumentID uuid.UUID
-	Content    string
-	Score      float32
+	// DocumentName is the source document's name, joined from
+	// public.rag_documents so a citation can name its source without a second
+	// query per chunk (issue #1595).
+	DocumentName string
+	Content      string
+	Score        float32
 }
 
 // Repo handles rag DB operations in the edge-api.
@@ -195,60 +199,6 @@ func (r *Repo) EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model 
 	return mismatch, nil
 }
 
-// SearchChunks performs cosine vector similarity search scoped to the tenant.
-// queryVec must be EmbeddingDimension floats. Results are ordered most similar first.
-func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error) {
-	if topK <= 0 {
-		topK = 5
-	}
-
-	vec, err := encodeVector(queryVec)
-	if err != nil {
-		return nil, fmt.Errorf("rag.repo: encode vector: %w", err)
-	}
-
-	var results []ChunkRow
-	err = r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		// Explicit tenant_id filter is defense-in-depth alongside RLS:
-		// protects against SECURITY DEFINER / superuser-bypass scenarios.
-		rows, err := tx.Query(ctx, searchChunksQuery(r.pgType), vec, topK, tenantID)
-		if err != nil {
-			return fmt.Errorf("rag.repo: search: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var c ChunkRow
-			if err := rows.Scan(&c.ID, &c.DocumentID, &c.Content, &c.Score); err != nil {
-				return fmt.Errorf("rag.repo: scan: %w", err)
-			}
-			results = append(results, c)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-// searchChunksQuery builds the tenant-scoped cosine-search SQL with the
-// query-vector cast matched to the active embedding column type. The cast
-// suffix comes from embedmodel.Cast (an enum-constrained "::vector"/"::halfvec",
-// never user input), so interpolating it is injection-safe; the query vector
-// and all values remain bound parameters. Pure and side-effect free so the
-// cast selection is unit-testable without a live database.
-func searchChunksQuery(pgType string) string {
-	cast := embedmodel.Cast(pgType)
-	return fmt.Sprintf(`
-			SELECT id, document_id, content,
-			       (embedding <=> $1%[1]s)::float4 AS score
-			FROM public.rag_chunks
-			WHERE tenant_id = $3
-			ORDER BY embedding <=> $1%[1]s
-			LIMIT $2`, cast)
-}
-
 // encodeVector serialises []float32 to pgvector text format '[v1,v2,...]'.
 // Returns an error if any value is NaN or Inf — pgvector rejects those and
 // inserting them would silently corrupt ANN results.
@@ -269,4 +219,89 @@ func encodeVector(v []float32) (string, error) {
 	}
 	sb.WriteByte(']')
 	return sb.String(), nil
+}
+
+// SearchChunks performs cosine vector similarity search scoped to the tenant,
+// and optionally narrowed to one project. queryVec must be EmbeddingDimension
+// floats. Results are ordered most similar first.
+//
+// projectID is uuid.Nil for "the tenant's whole corpus", which is what every
+// caller did before Projects existed (issue #1595). A non-Nil value narrows the
+// search to documents attached to that project, and it MUST already have been
+// authorized by the caller: this method filters, it does not decide who is
+// allowed to filter by what. Handler.authorizeProject is the decision, and it
+// runs before this call rather than inside it, so a second caller cannot reach
+// the filter without also reaching the check.
+func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int, projectID uuid.UUID) ([]ChunkRow, error) {
+	if topK <= 0 {
+		topK = 5
+	}
+
+	vec, err := encodeVector(queryVec)
+	if err != nil {
+		return nil, fmt.Errorf("rag.repo: encode vector: %w", err)
+	}
+
+	// An absent project scope travels as a SQL NULL so one statement serves
+	// both shapes rather than two near-identical queries drifting apart.
+	var project any
+	if projectID != uuid.Nil {
+		project = projectID
+	}
+
+	var results []ChunkRow
+	err = r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// Explicit tenant_id filter is defense-in-depth alongside RLS:
+		// protects against SECURITY DEFINER / superuser-bypass scenarios.
+		rows, err := tx.Query(ctx, searchChunksQuery(r.pgType), vec, topK, tenantID, project)
+		if err != nil {
+			return fmt.Errorf("rag.repo: search: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var c ChunkRow
+			serr := rows.Scan(&c.ID, &c.DocumentID, &c.DocumentName, &c.Content, &c.Score)
+			if serr != nil {
+				return fmt.Errorf("rag.repo: scan: %w", serr)
+			}
+			results = append(results, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// searchChunksQuery builds the tenant-scoped cosine-search SQL with the
+// query-vector cast matched to the active embedding column type. The cast
+// suffix comes from embedmodel.Cast (an enum-constrained "::vector"/"::halfvec",
+// never user input), so interpolating it is injection-safe; the query vector,
+// the tenant and the project scope all remain bound parameters. Pure and
+// side-effect free so the cast selection is unit-testable without a live
+// database.
+//
+// $4 is the optional project scope: NULL means the whole tenant corpus, so one
+// statement serves both shapes.
+//
+// ponytail: the project filter is applied after the HNSW ordering, so a
+// project-scoped search over a large tenant corpus can return fewer than topK
+// passages even when the project holds more. That is pgvector's ordinary
+// post-filter behaviour and it is fine at the corpus sizes this ships for. The
+// upgrade, if a tenant ever outgrows it, is a partial index per project or an
+// iterative scan, not a second query path.
+func searchChunksQuery(pgType string) string {
+	cast := embedmodel.Cast(pgType)
+	return fmt.Sprintf(`
+				SELECT c.id, c.document_id, d.name, c.content,
+				       (c.embedding <=> $1%[1]s)::float4 AS score
+				FROM public.rag_chunks c
+				JOIN public.rag_documents d
+				  ON d.id = c.document_id AND d.tenant_id = c.tenant_id
+				WHERE c.tenant_id = $3
+				  AND ($4::uuid IS NULL OR d.project_id = $4::uuid)
+				ORDER BY c.embedding <=> $1%[1]s
+				LIMIT $2`, cast)
 }
