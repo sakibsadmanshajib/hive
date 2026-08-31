@@ -308,7 +308,13 @@ func TestEveryAliasHasACostBasis(t *testing.T) {
 func TestHiveFreeResolvesInASeededDatabase(t *testing.T) {
 	pool := connectCatalogDB(t)
 
-	// The alias itself must exist and be publicly selectable.
+	// The alias itself must exist and be resolvable. visibility is
+	// 'restricted', not 'public', as of 20260831_01_restrict_free_pool_
+	// aliases_visibility.sql: hive-free is locked out of the tenant picker
+	// (rate-limited pool, issue #1566), but CI's own throwaway tenant
+	// (scripts/ci-seed-api-key.sh) carries an explicit visibility grant, so
+	// the data this test actually guards -- that the alias resolves to
+	// active pool members for the live-integration suites -- is unaffected.
 	var visibility, lifecycle string
 	err := pool.QueryRow(context.Background(), `
 		SELECT visibility, lifecycle
@@ -318,8 +324,8 @@ func TestHiveFreeResolvesInASeededDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hive-free missing from the seeded catalog: %v", err)
 	}
-	if visibility != "public" || lifecycle != "stable" {
-		t.Errorf("hive-free visibility=%q lifecycle=%q, want public/stable", visibility, lifecycle)
+	if visibility != "restricted" || lifecycle != "stable" {
+		t.Errorf("hive-free visibility=%q lifecycle=%q, want restricted/stable", visibility, lifecycle)
 	}
 
 	// Active members under SyncService's own filter, which is stricter than
