@@ -1,0 +1,60 @@
+authenticated, role admin; the bearer is deliberately not written to this log
+composer textarea focused, light
+  probe composer textarea outline-color = oklch(0.55 0.16 42)
+  probe composer textarea outline-width = 2px
+  probe composer textarea outline-style = solid
+  probe composer textarea outline-offset = 2px
+  probe composer textarea border-radius = 0px
+  probe composer textarea focus-visible outline-color = oklch(0.55 0.16 42)
+  probe composer textarea focus-visible outline-width = 2px
+  probe composer textarea focus-visible outline-offset = 2px
+  captured 20-composer-focused-light.png
+  captured 21-composer-closeup-light.png
+composer textarea focused, dark
+  probe composer textarea outline-color = oklch(0.678 0.164 43)
+  probe composer textarea outline-width = 2px
+  probe composer textarea outline-style = solid
+  probe composer textarea outline-offset = 2px
+  probe composer textarea border-radius = 0px
+  probe composer textarea focus-visible outline-color = oklch(0.678 0.164 43)
+  probe composer textarea focus-visible outline-width = 2px
+  probe composer textarea focus-visible outline-offset = 2px
+  captured 20-composer-focused-dark.png
+  captured 21-composer-closeup-dark.png
+settings modal, light
+  modal shell border-radius = 24px
+  modal shell box-shadow = none
+  probe dialog background-color = oklab(0.195 -0.000174497 0.00499695 / 0.3)
+  probe checkbox: input[type='checkbox'] absent
+  no checkbox inside the settings modal
+  captured 22-settings-modal-light.png
+settings modal, dark
+  modal shell border-radius = 24px
+  modal shell box-shadow = none
+  probe dialog background-color = oklab(0.195 -0.000174497 0.00499695 / 0.6)
+  probe checkbox: input[type='checkbox'] absent
+  no checkbox inside the settings modal
+  captured 22-settings-modal-dark.png
+authenticated, role admin; the bearer is deliberately not written to this log
+projects dialog, light
+  floating panel border-radius = 12px
+  floating panel box-shadow = rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.19 0.006 260 / 0.18) 0px 16px 40px -12px, oklch(0.19 0.006 260 / 0.08) 0px 4px 12px -6px
+  captured 23-projects-dialog-light.png
+projects dialog, dark
+  floating panel border-radius = 12px
+  floating panel box-shadow = rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.19 0.006 260 / 0.18) 0px 16px 40px -12px, oklch(0.19 0.006 260 / 0.08) 0px 4px 12px -6px
+  captured 23-projects-dialog-dark.png
+checkbox hunt /calendar: 0 found
+checkbox hunt /notes: 0 found
+checkbox hunt /knowledge: 0 found
+checkbox hunt /projects: 0 found
+checkbox page, light
+  unchecked border=oklch(0.503 0.022 80) background=oklch(0.968 0.011 85) radius=4px
+  checked   border=oklch(0.678 0.164 43) background=oklch(0.678 0.164 43)
+  focused   outline=oklch(0.55 0.16 42) 2px
+  captured 26-checkbox-light.png
+checkbox page, dark
+  unchecked border=oklch(0.663 0.03 84) background=oklch(0.288 0.005 107) radius=4px
+  checked   border=oklch(0.678 0.164 43) background=oklch(0.678 0.164 43)
+  focused   outline=oklch(0.678 0.164 43) 2px
+  captured 26-checkbox-dark.png

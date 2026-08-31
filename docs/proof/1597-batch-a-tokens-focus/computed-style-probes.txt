@@ -1,0 +1,80 @@
+sign in surface, light
+    url http://localhost:3399/auth
+    probe page background-color = rgb(255, 255, 255)
+    probe page font-family = "Hanken Grotesk", "Noto Sans Bengali", ui-sans-serif, system-ui, sans-serif
+    probe email input border-radius = 0px
+    probe email input transition-duration = 0s
+    probe email input transition-timing-function = ease
+    probe email input focused outline-color = oklch(0.55 0.16 42)
+    probe email input focused outline-width = 2px
+    probe email input focused outline-style = solid
+    probe email input focused outline-offset = 2px
+    captured 01-signin-focused-light.png
+sign in surface, dark
+    url http://localhost:3399/auth
+    probe page background-color = rgb(23, 23, 23)
+    probe page font-family = "Hanken Grotesk", "Noto Sans Bengali", ui-sans-serif, system-ui, sans-serif
+    probe email input border-radius = 0px
+    probe email input transition-duration = 0s
+    probe email input transition-timing-function = ease
+    probe email input focused outline-color = oklch(0.678 0.164 43)
+    probe email input focused outline-width = 2px
+    probe email input focused outline-style = solid
+    probe email input focused outline-offset = 2px
+    captured 01-signin-focused-dark.png
+signing in the local throwaway account
+    authenticated, role admin; the bearer is deliberately not written to this log
+chat surface, light
+    console.error: Failed to load resource: the server responded with a status of 404 (Not Found)
+    url http://localhost:3399/
+    probe canvas background-color = rgb(255, 255, 255)
+    probe canvas color = rgb(0, 0, 0)
+    probe mode track background-color = oklch(0.895 0.024 86)
+    probe mode track box-shadow = oklch(0.76 0.032 85) 0px 0px 0px 1px inset
+    probe mode selected background-color = oklch(0.968 0.011 85)
+    probe mode selected box-shadow = oklch(0.55 0.16 42) 0px 0px 0px 1px inset
+    probe mode selected color = oklch(0.288 0.005 107)
+    probe nav row active: element .hv-nav-row-active absent
+    probe composer textarea border-radius = 0px
+    probe composer textarea transition-duration = 0s
+    captured 02-chat-home-light.png
+    probe mode segment focused outline-color = oklch(0.55 0.16 42)
+    probe mode segment focused outline-width = 2px
+    probe mode segment focused outline-offset = 2px
+    captured 03-mode-control-focused-light.png
+chat surface, dark
+    console.error: Failed to load resource: the server responded with a status of 404 (Not Found)
+    url http://localhost:3399/
+    probe canvas background-color = rgb(23, 23, 23)
+    probe canvas color = rgb(238, 238, 238)
+    probe mode track background-color = oklch(0.195 0.005 92)
+    probe mode track box-shadow = oklch(0.46 0.01 100) 0px 0px 0px 1px inset
+    probe mode selected background-color = oklch(0.288 0.005 107)
+    probe mode selected box-shadow = oklch(0.678 0.164 43) 0px 0px 0px 1px inset
+    probe mode selected color = oklch(0.95 0.014 85)
+    probe nav row active: element .hv-nav-row-active absent
+    probe composer textarea border-radius = 0px
+    probe composer textarea transition-duration = 0s
+    captured 02-chat-home-dark.png
+    probe mode segment focused outline-color = oklch(0.678 0.164 43)
+    probe mode segment focused outline-width = 2px
+    probe mode segment focused outline-offset = 2px
+    captured 03-mode-control-focused-dark.png
+current destination, light
+    url http://localhost:3399/artifacts
+    probe nav row active background-color = oklch(0.92 0.021 86)
+    probe nav row active color = oklch(0.288 0.005 107)
+    probe nav bar --hv-accent-strong = oklch(.55 .16 42)
+    probe nav bar --hv-focus-ring = oklch(.55 .16 42)
+    probe destination bar width = 3px, background = oklch(0.55 0.16 42)
+    captured 04-destination-and-focus-light.png
+    captured 05-sidebar-closeup-light.png
+current destination, dark
+    url http://localhost:3399/artifacts
+    probe nav row active background-color = oklch(0.346 0.01 107)
+    probe nav row active color = oklch(0.95 0.014 85)
+    probe nav bar --hv-accent-strong = oklch(.678 .164 43)
+    probe nav bar --hv-focus-ring = oklch(.678 .164 43)
+    probe destination bar width = 3px, background = oklch(0.678 0.164 43)
+    captured 04-destination-and-focus-dark.png
+    captured 05-sidebar-closeup-dark.png

@@ -31,6 +31,21 @@ mkdir -p "$WORK/lib/hive"
 # the inline signed-out fast-exit script by reading src/app.html out of the
 # mirrored tree, so the template must travel with the sources it pins.
 cp "$ROOT/vendor/open-webui/src/app.html" "$WORK"/app.html
+
+# The two stylesheets design-system-bridge.test.ts pins, mirrored where the
+# real tree puts them relative to lib/hive, so the paths in that test resolve
+# identically in both lanes.
+#
+# tailwind.css is straightforward: it sits beside app.html in src/, which is
+# what $WORK is. The token stylesheet cannot be mirrored the same way, because
+# it lives in packages/hive-tokens at the repository root, five levels above
+# lib/hive, and this scratch tree is rooted at src/, so there is nowhere above
+# it to put one. The test walks upwards looking for the real file, which is how
+# the in-place run inside Dockerfile.open-webui finds it, and falls back to this
+# copy beside src/. It is named hive-tokens.css rather than tokens.css so the
+# fallback can never be mistaken for the genuine article in a real checkout.
+cp "$ROOT/vendor/open-webui/src/tailwind.css" "$WORK"/tailwind.css
+cp "$ROOT/packages/hive-tokens/tokens.css" "$WORK"/hive-tokens.css
 # The whole Hive directory, recursively, rather than a glob per extension. A
 # glob covers only what sits at the top of it today and would silently stop
 # covering a component the day someone put one in a subdirectory, which is the

@@ -43,6 +43,188 @@
 }
 
 /*
+ * The rest of the design system, bridged.
+ *
+ * Only the `--color-*` family above was ever mapped into `@theme`, so five of
+ * the six token families in packages/hive-tokens/tokens.css were reachable
+ * from hand written CSS and from nothing else. In practice that meant
+ * lib/hive/hive.css and nothing else, while roughly 250 components in this
+ * surface ran Tailwind's own type, radius, elevation and motion defaults. The
+ * design system existed as a document and as one stylesheet rather than as
+ * the thing on the screen.
+ *
+ * Every namespace below was read out of the installed tailwindcss 4.2.1's own
+ * theme.css rather than assumed, because the names moved between v3 and v4:
+ * `--text-*` with a paired `--text-*--line-height`, `--radius-*`,
+ * `--shadow-*`, `--ease-*`, `--font-*`, and the two `--default-transition-*`
+ * keys that every bare `transition` utility resolves through.
+ *
+ * Two families are deliberately absent. Spacing needs no bridge: Tailwind v4
+ * derives its whole spacing scale from `--spacing: 0.25rem`, so `p-4` is
+ * already 16px and already on the token file's 4px rhythm. What is off rhythm
+ * is arbitrary values such as `p-[7px]`, and no theme mapping can reach those.
+ * Weight needs none either: the token ladder is 400/500/600/700/800, which is
+ * exactly Tailwind's normal through extrabold.
+ */
+@theme {
+	/*
+	 * Families. The document default already comes from hive.css, which sets
+	 * `html` to the grotesque, but the `font-mono` and `font-serif` utility
+	 * classes still resolved to Tailwind's system stacks, so 41 `font-mono`
+	 * sites were not in Geist Mono and no `font-serif` site was in Source
+	 * Serif 4.
+	 */
+	--font-sans: var(--hv-font-sans);
+	--font-serif: var(--hv-font-serif);
+	--font-mono: var(--hv-font-mono);
+
+	/*
+	 * Type, pinned then snapped.
+	 *
+	 * Tailwind's four low steps already land on values the scale contains:
+	 * 12px, 14px, 16px and 18px are the token file's `xs`, `base`, `lg` and
+	 * `xl`. Those are pinned to the token rather than moved. Renaming them to
+	 * the scale's own labels, so that `text-sm` became the scale's 13px,
+	 * would have shrunk 1129 sites at once and taken the dominant body size
+	 * off the 14px the token file argues for by name.
+	 *
+	 * What is genuinely off scale is `text-xl` and everything above it, which
+	 * is snapped onto the four large values the scale does have (22, 28, 36
+	 * and 44px) across 58 sites. Two steps the scale has and Tailwind does
+	 * not are added: the 11px floor and the 15px middle, so the 24 arbitrary
+	 * sub scale sizes in this surface have somewhere to be migrated to.
+	 *
+	 * The font sizes are pinned. The LEADING is not, and that is the half with
+	 * real breadth, so it is stated here rather than left to be discovered.
+	 * Tailwind's `--text-sm--line-height` is `calc(1.25 / 0.875)`, a unitless
+	 * 1.42857 that resolves to 20px at 14px; this maps it to
+	 * `--hv-leading-base`, an absolute 22px, across all 1129 `text-sm` sites.
+	 * `text-lg` moves the other way, 28px to 26px on 90 sites. `text-xs` and
+	 * `text-base` land on the same value either way.
+	 *
+	 * The unit change matters more than the two pixels. A unitless line height
+	 * inherits as a ratio and is recomputed against each descendant's own font
+	 * size; an absolute length inherits as a fixed 22px, so a descendant that
+	 * sets a larger size and no leading of its own is now cramped rather than
+	 * proportional. Markdown rendered inside a `text-sm` container is exactly
+	 * that shape. Verifying it against a seeded transcript is issue #1615.
+	 */
+	--text-2xs: var(--hv-text-2xs); /* 11px, the scale's floor, new */
+	--text-2xs--line-height: var(--hv-leading-2xs);
+	--text-xs: var(--hv-text-xs); /* 12px, unchanged */
+	--text-xs--line-height: var(--hv-leading-xs);
+	--text-sm: var(--hv-text-base); /* 14px, unchanged */
+	--text-sm--line-height: var(--hv-leading-base);
+	/* 15px, new. Not inert before: Tailwind had no `md` step, so the class was
+	 * dropped at build time, and `chat/Controls/Controls.svelte` already
+	 * carries `text-md`. That one element therefore goes from inheriting its
+	 * parent's size to 15px. It is a panel heading, so 15px is what it wanted;
+	 * flagged rather than silent. */
+	--text-md: var(--hv-text-md);
+	--text-md--line-height: var(--hv-leading-md);
+	--text-base: var(--hv-text-lg); /* 16px, unchanged */
+	--text-base--line-height: var(--hv-leading-lg);
+	--text-lg: var(--hv-text-xl); /* 18px, unchanged */
+	--text-lg--line-height: var(--hv-leading-xl);
+	--text-xl: var(--hv-text-2xl); /* 20px to 22px */
+	--text-xl--line-height: var(--hv-leading-2xl);
+	--text-2xl: var(--hv-display-sm); /* 24px to 28px */
+	--text-2xl--line-height: var(--hv-leading-display-sm);
+	--text-3xl: var(--hv-display-md); /* 30px to 36px */
+	--text-3xl--line-height: var(--hv-leading-display-md);
+	--text-4xl: var(--hv-display-md); /* 36px, unchanged */
+	--text-4xl--line-height: var(--hv-leading-display-md);
+	--text-5xl: var(--hv-display-lg); /* 48px to 44px */
+	--text-5xl--line-height: var(--hv-leading-display-lg);
+
+	/*
+	 * Radius, snapped onto the five the system draws.
+	 *
+	 * Nine distinct radii were in use here: 2, 4, 4, 6, 8, 12, 16 and 24px
+	 * plus the pill. The token file's own comment says "nothing is drawn
+	 * between 12px and 24px, which is what stops the interface sliding into a
+	 * field of uniformly soft rectangles", and there were 92 uses of the 16px
+	 * step it forbids by name.
+	 *
+	 * The snap is deliberately conservative in the middle of the scale, where
+	 * the volume is: `rounded-lg` (395 sites), `rounded-xl` (373) and
+	 * `rounded-3xl` (33) already sit on system values and do not move at all.
+	 * 155 sites shift in total: `rounded-xs` 2px to 4px on 2, `rounded-md` 6px
+	 * to 8px on 59, `rounded-2xl` 16px to 12px on 92, and `rounded-4xl` 32px to
+	 * 24px on 2.
+	 *
+	 * That last one is the largest shift in this block at 8px, and both of its
+	 * sites are modal shells: `common/Modal.svelte`, where it is the default
+	 * `className` and therefore every modal in the application, and
+	 * `common/ConfirmDialog.svelte`. It is called out here rather than buried
+	 * in the total because an earlier revision of this comment claimed a 4px
+	 * ceiling and arrived at 153 by leaving this step out.
+	 *
+	 * `rounded-full` is a static utility rather than a theme key, so the pill
+	 * is untouched.
+	 *
+	 * Consequence of collapsing eight steps onto four, stated because it is
+	 * intent rather than accident: adjacent steps become identical, so a
+	 * component that drew a concentric inner and outer corner from two
+	 * neighbouring steps now draws them the same.
+	 */
+	--radius-xs: var(--hv-radius-xs); /* 2px to 4px */
+	--radius-sm: var(--hv-radius-xs); /* 4px, unchanged */
+	--radius-md: var(--hv-radius-sm); /* 6px to 8px */
+	--radius-lg: var(--hv-radius-sm); /* 8px, unchanged */
+	--radius-xl: var(--hv-radius-md); /* 12px, unchanged */
+	--radius-2xl: var(--hv-radius-md); /* 16px to 12px, the forbidden step */
+	--radius-3xl: var(--hv-radius-lg); /* 24px, unchanged */
+	--radius-4xl: var(--hv-radius-lg); /* 32px to 24px */
+
+	/*
+	 * Elevation. Tailwind's own shadows are a cool grey drop shadow, which is
+	 * the one hue family this warm palette does not contain, and `shadow-lg`
+	 * was on 58 sites including the composer.
+	 *
+	 * These are literal values rather than `var(--hv-shadow-N)` references,
+	 * which is a deliberate exception to how the rest of this block is
+	 * written, and the reason is mechanical rather than stylistic. The dark
+	 * blocks in tokens.css set `--hv-shadow-1` through `-3` to `none`, and
+	 * `none` is only legal in a `box-shadow` as the sole value. Tailwind
+	 * composes `box-shadow` as a comma list of five custom properties, so a
+	 * resolved `none` in one slot invalidates the whole declaration and takes
+	 * every `ring-*` utility on the same element down with it. Copying the
+	 * light values keeps the declaration valid in both themes at no visual
+	 * cost, because a 6 to 18 percent warm shadow on a near black ground is
+	 * imperceptible anyway, which is the same observation that made the dark
+	 * blocks say `none` in the first place.
+	 */
+	--shadow-2xs: 0 1px 0 0 oklch(0.19 0.006 260 / 0.05);
+	--shadow-xs: 0 1px 0 0 oklch(0.19 0.006 260 / 0.05);
+	--shadow-sm: 0 1px 2px -1px oklch(0.19 0.006 260 / 0.08), 0 1px 0 0 oklch(0.19 0.006 260 / 0.04);
+	--shadow-md: 0 1px 2px -1px oklch(0.19 0.006 260 / 0.08), 0 1px 0 0 oklch(0.19 0.006 260 / 0.04);
+	--shadow-lg: 0 6px 16px -6px oklch(0.19 0.006 260 / 0.12),
+		0 2px 6px -3px oklch(0.19 0.006 260 / 0.06);
+	--shadow-xl: 0 16px 40px -12px oklch(0.19 0.006 260 / 0.18),
+		0 4px 12px -6px oklch(0.19 0.006 260 / 0.08);
+	--shadow-2xl: 0 16px 40px -12px oklch(0.19 0.006 260 / 0.18),
+		0 4px 12px -6px oklch(0.19 0.006 260 / 0.08);
+
+	/*
+	 * Motion. These two keys are what every bare `transition` utility
+	 * resolves through, and there are 250 of them in the chat surface alone,
+	 * all of them running Tailwind's 150ms and `cubic-bezier(0.4, 0, 0.2, 1)`
+	 * while the token scale governed only the handful of rules inside
+	 * hive.css. Two declarations move all 250 onto the system's fast step and
+	 * its own easing.
+	 *
+	 * There is no `--ease-in` mapping on purpose: the token file has no
+	 * ease-in token, on the stated grounds that an entering element which
+	 * starts slowly reads as lag.
+	 */
+	--default-transition-duration: var(--hv-duration-fast);
+	--default-transition-timing-function: var(--hv-ease-out);
+	--ease-out: var(--hv-ease-out);
+	--ease-in-out: var(--hv-ease-in-out);
+}
+
+/*
   The default border color has changed to `currentColor` in Tailwind CSS v4,
   so we've added these compatibility styles to make sure everything still
   looks the same as it did with Tailwind CSS v3.
@@ -77,20 +259,61 @@
 		@apply cursor-pointer;
 	}
 
+	/*
+	 * The composer's placeholder is the first sentence a new user reads on
+	 * this product, and it was routed to `--color-gray-400`, which measures
+	 * 1.96:1 on the white surface and 1.86:1 on the cream canvas against a
+	 * 4.5:1 requirement, so it failed WCAG 1.4.3 by more than a factor of
+	 * two. `--hv-ink-muted` is the muted role the token file actually
+	 * defines, and measures 5.41:1 on the light surface and 5.13:1 on the light
+	 * canvas.
+	 *
+	 * Dark goes the other way, and that is a trade rather than an improvement.
+	 * The replaced declaration carried no dark variant, so dark placeholders
+	 * were also `--color-gray-400`, which measures 6.61:1 on the dark surface;
+	 * `--hv-ink-muted` in dark is 4.61:1. That is two points off a pair which
+	 * already passed. Accepted, because routing both themes through the one
+	 * muted role is what makes the token mean anything and 4.61 still clears
+	 * 1.4.3, but it is a regression on the dark half and calling it a repair
+	 * would be false.
+	 */
 	input::placeholder,
 	textarea::placeholder {
-		color: theme(--color-gray-400);
+		color: var(--hv-ink-muted);
 	}
 
+	/*
+	 * Checkboxes on the palette. These were stock Tailwind blue, filling
+	 * `bg-blue-600` when checked behind a `focus:ring-blue-500`, and blue is
+	 * absent from this palette by design: the token file says coral "is the
+	 * only hue that is ever a fill". The blue ring also bypassed
+	 * `--hv-focus-ring` entirely, and both it and the `focus:outline-none`
+	 * beside it are dropped here, because the one `:focus-visible` rule in
+	 * hive.css now draws the indicator for every focusable element.
+	 *
+	 * The boundary is `--hv-ink-muted` rather than a border token. An
+	 * unchecked checkbox's boundary is the only thing identifying the
+	 * control, so WCAG 1.4.11 wants 3:1 for it, and no border token in this
+	 * ramp reaches that: `--hv-border` measures 1.41:1 on the surface and
+	 * `--hv-border-strong` 1.96:1. That ceiling is a systemic finding of its
+	 * own and is not addressed here. `--hv-ink-muted` measures 5.41:1 in
+	 * light and 4.61:1 in dark.
+	 *
+	 * Both themes come from the tokens, so the `dark:` variants the blue
+	 * version needed are gone rather than merely repointed.
+	 */
 	input[type='checkbox'] {
-		@apply appearance-none size-3.5 align-middle bg-white border border-gray-300 rounded transition cursor-pointer focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800 dark:border-gray-600 self-center;
+		@apply appearance-none size-3.5 align-middle rounded transition cursor-pointer self-center;
 		/* Center the custom mark */
 		display: inline-block;
 		position: relative;
+		background-color: var(--hv-surface);
+		border: 1px solid var(--hv-ink-muted);
 	}
 
 	input[type='checkbox']:checked {
-		@apply bg-blue-600 border-blue-600;
+		background-color: var(--hv-accent);
+		border-color: var(--hv-accent);
 	}
 
 	input[type='checkbox']:after {
@@ -106,7 +329,22 @@
 		left: 0;
 		pointer-events: none;
 		/* SVG checkmark as background image */
-		background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M4 8l3 3l5-5"/></svg>')
+		/*
+		 * Charcoal, not white. A data URI cannot read a custom property, so
+		 * this is `--hv-on-accent` written out.
+		 *
+		 * The reason is the palette rule and the margin, not a failure:
+		 * `tokens.css` records white on coral at 3.08:1, which does clear the
+		 * 3:1 WCAG 1.4.11 asks of a graphical object, so the white mark was
+		 * not non compliant. What the token file does say is that charcoal on
+		 * coral measures 4.60:1 and is "the only accessible pairing", and that
+		 * any instinct to put white on the primary is "a regression with a
+		 * number attached". 4.60 also gives this mark a text grade margin,
+		 * which is the right bar for a glyph read as a symbol rather than as
+		 * decoration. An earlier revision of this comment cited 2.82:1, which
+		 * is coral against `--hv-surface`, a different pair entirely.
+		 */
+		background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 16 16" fill="none" stroke="%232b2b28" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M4 8l3 3l5-5"/></svg>')
 			center/80% no-repeat;
 	}
 
