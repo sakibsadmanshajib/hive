@@ -207,12 +207,23 @@ var freePoolKnownMembers = map[string]string{
 	"route-free-pool-groq-2": "groq-2",
 }
 
-// freePoolRetiredMember is the member that leaves so the rest can make an
-// honest claim. It is the OpenRouter one, now on the Free Models Router, which
-// picks a different model per request: of the 20 zero-priced models only 10
-// support response_format at all, and five identical strict-schema probes
-// conformed once. It is disabled rather than given a flag it cannot honour.
-const freePoolRetiredMember = "route-free-pool-free"
+// freePoolRetiredMembers are the members that leave so the rest can make an
+// honest claim, each with the reason it went, because a route sitting at
+// disabled with no recorded reason is the next person's mystery.
+//
+// Both were removed on ONE standard, which is the point: a capability is
+// claimed when it has been measured and not otherwise. One failed the
+// measurement and one could not be measured at all, and neither difference
+// matters to a caller whose request lands on it.
+var freePoolRetiredMembers = map[string]string{
+	"route-free-pool-free": "openrouter/openrouter/free picks a different model per request: " +
+		"of the 20 zero-priced models only 10 support response_format at all, and five " +
+		"identical strict-schema probes conformed once",
+	"route-free-pool-gemini": "documented capable by Google but never measured against the " +
+		"strict-schema shape used on the Groq slots, and unmeasurable here since GEMINI_API_KEY " +
+		"exists only as a repository secret; issue #1566 separately records it capped at 20 " +
+		"requests a day with 435 rate-limit failures in 48 hours",
+}
 
 // freePoolMinimumActiveMembers is the floor below which the pool has stopped
 // being a load-balanced pool. Two, so one exhausted key still has somewhere to
@@ -302,15 +313,18 @@ func TestFreePoolIsUniformlyToolCapable(t *testing.T) {
 		t.Errorf("alias %s resolves to groups %v, want exactly one, %q. Hive Free and a Hive Free tools variant cannot be two endpoints", freePoolAliasID, groups, freePoolGroupName)
 	}
 
-	// The retired member must actually be out. Left active it rejoins the
-	// group at dispatch time, and the group's claim becomes false again for
-	// whatever fraction of requests it answers.
-	retired, ok := state.routes[freePoolRetiredMember]
-	if !ok {
-		t.Fatalf("no provider_routes row for %s at all; this guard is reading the wrong rows", freePoolRetiredMember)
-	}
-	if !strings.EqualFold(retired["health_state"], "disabled") {
-		t.Errorf("%s health_state = %q, want disabled. It serves openrouter/openrouter/free, which picks among the zero-priced catalog per request; of the 20 zero-priced models only 10 list response_format, and five identical strict-schema probes conformed once. An active member that cannot honour the group's claim makes the claim false", freePoolRetiredMember, retired["health_state"])
+	// The retired members must actually be out. Left active, either rejoins the
+	// group at dispatch time and the group's claim becomes false again for
+	// whatever share of requests it answers.
+	for routeID, why := range freePoolRetiredMembers {
+		retired, ok := state.routes[routeID]
+		if !ok {
+			t.Errorf("no provider_routes row for %s at all; this guard is reading the wrong rows", routeID)
+			continue
+		}
+		if !strings.EqualFold(retired["health_state"], "disabled") {
+			t.Errorf("%s health_state = %q, want disabled: %s. An active member whose capability was never measured, or was measured and failed, makes the whole group's claim false", routeID, retired["health_state"], why)
+		}
 	}
 }
 

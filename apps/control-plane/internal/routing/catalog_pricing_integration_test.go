@@ -81,16 +81,25 @@ var pendingMultiRouteAliases = map[string]string{
 // under one gateway name at one catalog price. A member added or removed
 // without updating the expected count fails here loudly.
 //
-// Three since 20260830_03_free_pool_capability_truth.sql, down from four. The
-// OpenRouter member was disabled rather than kept: #1554 repointed it at the
-// Free Models Router, which picks among the zero-priced catalog per request,
-// and of the 20 zero-priced models only 10 support response_format at all.
-// Because dispatch addresses the GROUP and not the route, a group can only
-// declare what its weakest member supports, so keeping that member would have
-// held the whole pool's tools_supported at false. Owner decision (#1563):
-// hive-free is ONE endpoint, so the pool is made uniform instead of split.
+// Two since 20260830_03_free_pool_capability_truth.sql, down from four, and the
+// count is the whole point rather than an incidental. Dispatch addresses the
+// GROUP and not the route, so a group can only declare what its weakest member
+// supports, and owner decision #1563 makes hive-free ONE endpoint. That leaves
+// one way to declare tools_supported honestly: every member must have been
+// measured to support it.
+//
+// Two members failed that bar for different reasons and left on the same
+// standard. The OpenRouter member was repointed by #1554 at the Free Models
+// Router, which picks among the zero-priced catalog per request, and of the 20
+// zero-priced models only 10 support response_format at all. The Gemini member
+// is documented capable by Google but was never measured against the same
+// strict-schema shape, and cannot be from this repository, since its key exists
+// only as a CI secret; issue #1566 separately records it capped at 20 requests
+// a day with 435 rate-limit failures in 48 hours.
+//
+// The remaining two are Groq key slots on qwen/qwen3.8-27b, both live-probed.
 var expectedMultiRouteAliases = map[string]int{
-	"hive-free": 3,
+	"hive-free": 2,
 }
 
 // TestSeededAliasHasExactlyOneEnabledRoute enforces the owner's rule: one

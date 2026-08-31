@@ -60,17 +60,41 @@
 --       is a property of the model, and the slots differ in quota only.
 --
 --   gemini-flash-latest through Google's OpenAI-compatible endpoint
---                                                DOCUMENTED, NOT LIVE PROBED
---       Stated plainly rather than smoothed over: GEMINI_API_KEY exists only as
---       a repository secret, so no probe was possible from the machine this was
---       written on. Google's own OpenAI-compatibility page
+--                                                UNVERIFIABLE. THEREFORE NOT
+--                                                CLAIMED.
+--       Google's own OpenAI-compatibility page
 --       (https://ai.google.dev/gemini-api/docs/openai) documents Function
 --       calling and Structured output against exactly this member's base URL,
---       https://generativelanguage.googleapis.com/v1beta/openai, with
---       response_format examples for both the Python and JavaScript clients.
---       gemini-flash-latest is Google's documented alias for the newest flash
---       release and the whole flash line carries both. This is the one member
---       resting on documentation; the live probe is CI, which holds the key.
+--       https://generativelanguage.googleapis.com/v1beta/openai. That is a
+--       documented claim, not a measurement, and it was never checked against
+--       the strict-schema shape this file uses as its bar.
+--
+--       An earlier revision kept the member on that documentation. Review
+--       caught the contradiction and was right: this file rejects the
+--       OpenRouter member on MEASURED failure of a capability, and cannot then
+--       accept another member on an UNMEASURED claim of the same capability.
+--       The standard has to be one standard, and it matters here more than it
+--       usually would, because LiteLLM balances across the group: an
+--       over-claimed member makes the whole alias's claim false for whatever
+--       share of requests it answers, and the failure gets blamed on the alias
+--       rather than on the member.
+--
+--       It could not be measured. GEMINI_API_KEY exists only as a repository
+--       secret and no credential for it exists on any machine this work was
+--       done from, so the probe run against both Groq slots simply cannot be
+--       run against this one.
+--
+--       Independently, issue #1566 records what this member does in
+--       production: Google's free tier caps it at 20 requests per day, and it
+--       produced 435 rate-limit failures in 48 hours. So it is not merely
+--       unverified, it is measurably unable to serve most of what reaches it.
+--       A member nobody can verify because it has no usable quota is a member
+--       that cannot answer requests either, and the two facts point the same
+--       way.
+--
+--       So the claim is not made and the member is disabled, on exactly the
+--       reasoning that removed the OpenRouter one. Restoring it needs the same
+--       thing the OpenRouter member would need: a probe that passes.
 --
 --   openrouter, on openrouter/openrouter/free    FAILS. MEASURED, NOT INFERRED.
 --       PR #1554 repointed this member to the Free Models Router, which selects
@@ -104,9 +128,10 @@
 --       to every request.
 --
 -- THE RESOLUTION
---   The OpenRouter member leaves hive-free. The pool becomes three members that
---   all serve tools and structured output, under one litellm_model_name, and
---   tools_supported = true becomes a claim that holds whichever member answers.
+--   The OpenRouter and Gemini members leave hive-free. The pool becomes the two
+--   Groq key slots, both live-probed, under one litellm_model_name, and
+--   tools_supported = true becomes a claim that holds whichever member answers
+--   because every member that can answer was measured.
 --
 --   The alternative was to keep four members and pin the OpenRouter one to a
 --   capable model. It was tried first, on the reasoning that four members is
@@ -114,12 +139,26 @@
 --   above: there is no free OpenRouter model that honours a strict schema
 --   reliably enough to sit behind a capability flag.
 --
---   What is lost, stated: one member of failover and one vendor. Two of the
---   three remaining members are Groq key slots sharing one organization's daily
---   allowance, so the pool's real diversity is Groq plus Google. What is gained
---   is that hive-free's declared capabilities are true of every request rather
---   than four times in five, and the alias stays a single endpoint at a single
---   price, which is the owner's requirement.
+--   What is lost, stated plainly because it is the real cost of this change:
+--   vendor diversity. The pool is now two key slots on one Groq organization,
+--   so a Groq outage takes hive-free down where previously another vendor might
+--   have answered. That is a genuine reduction and it is not being minimised.
+--
+--   It is still the right trade, for two reasons. The diversity being given up
+--   was already largely notional: the Gemini member serves 20 requests a day
+--   before it starts refusing (issue #1566), and the OpenRouter member answers
+--   a strict schema once in five attempts. Failover onto a member that cannot
+--   serve the request is not failover. And the alternative is worse in kind
+--   rather than degree: a capability the catalog declares and the pool cannot
+--   honour is a wrong answer nothing can distinguish from a right one, which is
+--   the exact defect this file exists to correct.
+--
+--   What is gained is that hive-free's declared capabilities are true of every
+--   request, on measured evidence for every member, and the alias stays a
+--   single endpoint at a single price, which is the owner's requirement.
+--
+--   Pool membership beyond this is the coordinator's call and is deliberately
+--   untouched here. Both departures are one column each and reversible.
 --
 --   The route row is DISABLED, not deleted, so #1554's repoint and its
 --   reasoning-reserve correction stay in history and the member can be restored
@@ -174,6 +213,20 @@ UPDATE public.provider_routes
  WHERE route_id = 'route-free-pool-free'
    AND health_state <> 'disabled';
 
+-- The Gemini member leaves on the same standard, not a softer one. Its tool and
+-- structured-output support is documented by Google but was never measured
+-- against the strict-schema shape used on the Groq slots, and it cannot be:
+-- GEMINI_API_KEY exists only as a repository secret. Issue #1566 independently
+-- records it capped at 20 requests a day with 435 rate-limit failures in 48
+-- hours, so it is also unable to serve most of what reaches it. Disabling it
+-- partly addresses that issue; the rest of the capacity question is not decided
+-- here.
+
+UPDATE public.provider_routes
+   SET health_state = 'disabled'
+ WHERE route_id = 'route-free-pool-gemini'
+   AND health_state <> 'disabled';
+
 -- The pinned first choice cannot be a disabled route.
 
 UPDATE public.alias_route_policies
@@ -206,14 +259,10 @@ UPDATE public.provider_routes
 
 -- ─── 3. The capability correction, one guarded statement per member ─────────
 --
--- Exactly the three members that remain. route-free-pool-free is deliberately
--- absent: it is leaving the pool, and setting a flag it cannot honour on the
--- way out would be the same defect this file exists to fix.
-
-UPDATE public.provider_capabilities
-   SET tools_supported = true
- WHERE route_id = 'route-free-pool-gemini'
-   AND tools_supported IS DISTINCT FROM true;
+-- Exactly the two members that remain, both live-probed. route-free-pool-free
+-- and route-free-pool-gemini are deliberately absent: they are leaving the pool,
+-- and setting a flag on the way out that one cannot honour and the other was
+-- never measured for would be the same defect this file exists to fix.
 
 UPDATE public.provider_capabilities
    SET tools_supported = true

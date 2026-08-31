@@ -1265,24 +1265,24 @@ jobs:
       # on whichever single provider happens to serve the demo today.
       HIVE_TEST_MODEL: ${{ vars.CI_LIVE_INTEGRATION_MODEL || 'hive-free' }}
       # Capability-specific tests (tools, response_format) in the JS
-      # chat-completions suite cannot run on hive-free: its pool members are
-      # seeded tools_supported=false until cross-member parity is probed
-      # (#1115), so the edge correctly 400s those parameters there (run
-      # 32736430913).
+      # chat-completions suite. hive-free serves these as of
+      # supabase/migrations/20260830_03_free_pool_capability_truth.sql.
       #
-      # hive-small is the tools default (owner directive 2026-08-30: no CI
-      # pipeline may call a paid completion model, free aliases only for
-      # anything LLM). It is upstream-free, pinned to the single healthy route
-      # route-free-small on openrouter/dots-studio/dots-3-note-preview:free,
-      # and that route is seeded tools_supported=true. The capability was
-      # verified live against OpenRouter before this default moved, every
-      # response reporting cost 0: forced tool_choice returns a real
-      # tool_calls array, tool_choice required/none/auto each behave, a
-      # multi-turn tool-result round trip completes, and message.content is a
-      # string on 6 of 6 runs under both response_format json_object and
-      # json_schema. That last property is what the previous default
-      # deepseek-v4-flash could not hold (run 32665985618), so this is a
-      # fidelity improvement as well as a spend one.
+      # It could not before, and the reason was a placeholder rather than a
+      # finding: all four pool members were seeded tools_supported=false because
+      # cross-member parity had never been probed (#1115), and that column gates
+      # response_format as well as tools, so the edge answered its own 400 here
+      # (run 32736430913). The members were then measured. The pool is now the
+      # two Groq key slots on qwen/qwen3.8-27b, both live-probed for forced tool
+      # calls and for strict json_schema, under one LiteLLM group. The members
+      # that could not be measured to that bar were removed rather than claimed
+      # for, which is what makes the flag true whichever member answers.
+      #
+      # hive-free is upstream-free, so this also satisfies the owner directive
+      # of 2026-08-30 that no CI pipeline may call a paid completion model. It
+      # replaces hive-small, which satisfied that directive too but is a paid
+      # alias's neighbour rather than the free pool D-047 names for automated
+      # consumption.
       #
       # Enforced by TestNoCISurfaceCallsAPaidCompletionModel
       # (apps/control-plane/internal/routing/ci_paid_model_guard_integration_test.go),

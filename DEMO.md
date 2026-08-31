@@ -15,15 +15,16 @@ The demo box deploys continuously from main. Anything merged is live minutes lat
 
 ## The free pool (hive-free)
 
-`hive-free` is the free tier serving alias. One alias pinned to a route group of four provider routes that share a single LiteLLM deployment name, so LiteLLM's router balances load across them:
+`hive-free` is the free tier serving alias. One alias pinned to a route group whose provider routes share a single LiteLLM deployment name, so LiteLLM's router balances load across them. Membership is deliberately small: because the router picks the member per request, the alias can only advertise a capability every member has, so a member is carried only once it has been measured against that bar.
 
 | Member | Upstream | Provider key env var |
 |---|---|---|
-| route-free-pool-gemini | gemini-flash-latest via Google's OpenAI-compatible endpoint | `GEMINI_API_KEY` |
 | route-free-pool-groq | Groq qwen3.8-27b | `GROQ_API_KEY` |
 | route-free-pool-groq-2 | Groq qwen3.8-27b | `GROQ_API_KEY_2` |
 
-Automatic failover: an exhausted or failing key is cooled down by the router (3 failures, 30 second cooldown) and traffic moves to the surviving members, so one dead key never takes the alias down. Every upstream costs nothing; the alias is priced as a service at 0.001 USD input and 0.004 USD output per million tokens.
+Automatic failover: an exhausted or failing key is cooled down by the router (3 failures, 30 second cooldown) and traffic moves to the surviving members, so one exhausted key does not take the alias down. Every upstream costs nothing; the alias is priced as a service at 0.001 USD input and 0.004 USD output per million tokens.
+
+Two members, both on one Groq organization, so the failover this buys is across keys rather than across vendors. That is a deliberate trade and worth stating rather than glossing: two other members were carried until 2026-08-30 and both were removed for the same reason, that the capability the alias advertises could not be shown to hold for them. An OpenRouter member pointed at a per-request free-model router that answered a strict JSON schema once in five attempts, and a Gemini member that Google documents as capable but which could not be measured here and which its free tier caps at 20 requests a day. Restoring either needs a probe that passes, not a document that claims.
 
 Every member is a named model rather than a router, which is what lets the alias declare its capabilities truthfully: LiteLLM balances across the group and nothing can predict which member answers, so a capability is only claimable when every member has it. Which member answers is billing inert: `hive-free` is a fixed-price alias and routing resolves the price from the alias, never from the selected route.
 
