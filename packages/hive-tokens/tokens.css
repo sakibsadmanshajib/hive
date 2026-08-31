@@ -84,6 +84,22 @@
 	 * flavoured label. Coral itself is never text and never a border. */
 	--hv-accent-ink: oklch(0.47 0.13 40);
 
+	/*
+	 * The state indicator coral. Coral itself is a ground and measures only
+	 * 2.67:1 on cream, so in the light theme it cannot carry a focus ring, a
+	 * selected segment ring or a current destination bar: WCAG 2.2 success
+	 * criteria 1.4.11 and 2.4.11 both want 3:1 for a non text indicator, and
+	 * every one of those three shipped below it.
+	 *
+	 * Taken down to 0.55 lightness the same hue measures 4.50:1 on the
+	 * canvas, 4.74:1 on the raised surface and 3.80:1 on the sunken one, so
+	 * every plane a ring can land on clears the bar with room left over.
+	 * Dark needs no reduction, because plain coral is already 5.34:1 on the
+	 * dark page, so both dark blocks below take this token back to the
+	 * accent verbatim.
+	 */
+	--hv-accent-strong: oklch(0.55 0.16 42);
+
 	/* ---------------------------------------------------------------- *
 	 * State. Separated by form, never by hue: coral is always a ground
 	 * and maroon is always ink, so the two can never present in the same
@@ -105,7 +121,15 @@
 	/* ---------------------------------------------------------------- *
 	 * Utility
 	 * ---------------------------------------------------------------- */
-	--hv-focus-ring: oklch(0.678 0.164 43);
+	/*
+	 * Derived rather than declared, which is the structural half of the fix
+	 * for issue #1521. This token was a literal coral on bare `:root` with no
+	 * value in either dark block, so it was correct at 5.34:1 in dark and
+	 * quietly failed at 2.67:1 in light against a 3:1 requirement. Pointing
+	 * it at the state indicator coral means the two can never drift and each
+	 * dark block has one token to override rather than two.
+	 */
+	--hv-focus-ring: var(--hv-accent-strong);
 	--hv-scrim: oklch(0.288 0.005 107 / 0.45);
 	--hv-selection: var(--hv-accent-soft);
 	--hv-container-max: 1180px;
@@ -283,6 +307,8 @@
 		--hv-ink-muted: oklch(0.663 0.03 84);
 		--hv-ink-disabled: oklch(0.5 0.02 82);
 
+		/* Plain coral, 5.34:1 on the dark page, so `--hv-focus-ring` follows. */
+		--hv-accent-strong: oklch(0.678 0.164 43);
 		--hv-accent-hover: oklch(0.73 0.15 43);
 		--hv-accent-soft: oklch(0.32 0.055 43);
 		--hv-accent-line: oklch(0.45 0.09 43);
@@ -328,6 +354,8 @@
 	--hv-ink-muted: oklch(0.663 0.03 84);
 	--hv-ink-disabled: oklch(0.5 0.02 82);
 
+	/* Plain coral, 5.34:1 on the dark page, so `--hv-focus-ring` follows. */
+	--hv-accent-strong: oklch(0.678 0.164 43);
 	--hv-accent-hover: oklch(0.73 0.15 43);
 	--hv-accent-soft: oklch(0.32 0.055 43);
 	--hv-accent-line: oklch(0.45 0.09 43);

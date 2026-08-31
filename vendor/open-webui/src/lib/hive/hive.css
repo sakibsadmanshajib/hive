@@ -133,6 +133,61 @@ samp,
 }
 
 /* ------------------------------------------------------------------ *
+ * Focus, for everything
+ *
+ * There were 131 uses of `outline-none` or `outline-hidden` in the chat
+ * surface, and 576 across this source tree in 140 files, against four ring
+ * replacements in total. Most focusable elements in the product therefore
+ * showed no focus indicator at all, in either theme, which is a blanket
+ * WCAG 2.2 success criterion 2.4.7 failure and a larger problem than any
+ * single component defect.
+ *
+ * One rule answers all 576, and two properties of the cascade are what let
+ * it. Tailwind emits its utilities inside `@layer utilities` while this
+ * stylesheet is unlayered, and an unlayered declaration beats a layered one
+ * whatever their specificities, so `outline-none` cannot win here. And
+ * `:is()` takes the specificity of its most specific argument, which below
+ * is an attribute selector, so the rule lands at (0,2,0).
+ *
+ * (0,2,0) is deliberately a tie with the component focus rules further down
+ * this file, and this rule is deliberately above them, so a component that
+ * wants its own treatment still wins on source order. `.hv-chip` and
+ * `.hv-notfound-action` draw a two ring box shadow instead, so that the
+ * indicator stays visible on the coral itself, and they keep it.
+ *
+ * `[tabindex='0']` rather than the broader `[tabindex]:not([tabindex='-1'])`:
+ * the broader form is (0,3,0) and would outrank those component rules rather
+ * than tie with them. Nothing in this tree uses a positive tabindex, so the
+ * narrower form loses no coverage.
+ *
+ * The ring itself is `--hv-focus-ring`, which now has a light value that
+ * clears 3:1. Before this change it was coral in both themes: correct at
+ * 5.34:1 on charcoal and 2.67:1 on cream, which failed.
+ * ------------------------------------------------------------------ */
+
+:is(
+		a,
+		button,
+		input,
+		textarea,
+		select,
+		summary,
+		[role='button'],
+		[role='radio'],
+		[role='checkbox'],
+		[role='switch'],
+		[role='option'],
+		[role='tab'],
+		[role='menuitem'],
+		[role='combobox'],
+		[role='textbox'],
+		[tabindex='0']
+	):focus-visible {
+	outline: 2px solid var(--hv-focus-ring);
+	outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ *
  * The document register
  *
  * Three places carry the serif: the chat greeting, a destination's page
@@ -464,14 +519,29 @@ samp,
 	transition-duration: 100ms;
 }
 
+/*
+ * The bar is the compliant indicator, and it is now the only thing on this
+ * row that is. The row's own `--hv-surface-raised` ground measures 1.09:1 on
+ * the light canvas, and no neutral in this ramp can do better: reaching 3:1
+ * against a 0.95 lightness canvas needs roughly 0.62 lightness, which is a
+ * mid grey the brand does not contain. So the fill stays a supporting cue and
+ * the bar carries WCAG 1.4.11 on its own.
+ *
+ * `--hv-accent-strong` rather than `--hv-accent`, which measured 2.67:1 on
+ * the canvas and so was the weakest signal on the row rather than the load
+ * bearing one this comment block claims above. The replacement measures
+ * 4.50:1 on the canvas and 3.80:1 against the row's own ground in light, and
+ * 5.34:1 on the dark page. Three pixels rather than two because a hairline at
+ * 3:1 is still a hairline.
+ */
 .hv-nav-row-active::before {
 	content: '';
 	position: absolute;
 	inset-inline-start: 0;
 	inset-block: 6px;
-	width: 2px;
+	width: 3px;
 	border-radius: var(--hv-radius-pill);
-	background-color: var(--hv-accent);
+	background-color: var(--hv-accent-strong);
 }
 
 /*
@@ -480,6 +550,11 @@ samp,
  * 2.2 success criterion 2.4.11.
  */
 .hv-nav-row:focus-visible {
+	/* The blanket `:focus-visible` rule at the top of this file ties with this
+	 * one on specificity and loses on source order, but it sets `outline`
+	 * rather than `box-shadow`, so without this reset the row would draw both
+	 * and read as three concentric rings. */
+	outline: none;
 	box-shadow:
 		0 0 0 2px var(--hv-canvas),
 		0 0 0 4px var(--hv-focus-ring);
@@ -646,6 +721,13 @@ samp,
  * Tokens only, so both themes follow without a second declaration.
  * ------------------------------------------------------------------ */
 
+/*
+ * The track. This declared no background at all, so there was nothing for the
+ * selected segment to sit in and the control read as two words rather than as
+ * one component. `--hv-surface-sunken` is a step down from the composer's
+ * ground in light (1.18:1 on the canvas) and from the dark page in dark, so
+ * the trough goes the same direction in both themes.
+ */
 .hv-mode {
 	display: inline-flex;
 	align-items: center;
@@ -654,6 +736,8 @@ samp,
 	margin-inline-start: var(--hv-space-1);
 	padding: 2px;
 	border-radius: var(--hv-radius-pill);
+	background-color: var(--hv-surface-sunken);
+	box-shadow: inset 0 0 0 1px var(--hv-border-strong);
 }
 
 .hv-mode-segment {
@@ -678,9 +762,30 @@ samp,
 	color: var(--hv-ink);
 }
 
+/*
+ * The selected segment. Its fill was `--hv-surface-raised`, which measures
+ * 1.15:1 against the composer's own ground and 1.09:1 against the canvas, so
+ * the only working signal was the label's ink moving from muted to full. That
+ * is a text colour change, not a component state indicator, and a sighted
+ * mouse user got nothing.
+ *
+ * Two changes. The fill is now the raised cream `--hv-surface`, which is a
+ * step up from the sunken track rather than a step down from the page, so the
+ * thumb reads as raised the way the reference draws it. And the ring is
+ * `--hv-accent-strong`, which is the indicator that actually carries WCAG
+ * 1.4.11: it measures 4.74:1 against the thumb and 3.80:1 against the track
+ * in light, 4.60:1 and 5.92:1 in dark.
+ *
+ * An inset box shadow rather than a border, so selecting a segment does not
+ * move the other one by a pixel. No drop shadow is composed alongside it on
+ * purpose: `--hv-shadow-2` resolves to `none` in dark, and `none` is illegal
+ * anywhere but alone in a `box-shadow` list, which would invalidate the whole
+ * declaration and take the ring with it.
+ */
 .hv-mode-segment-on {
-	background-color: var(--hv-surface-raised);
+	background-color: var(--hv-surface);
 	color: var(--hv-ink);
+	box-shadow: inset 0 0 0 1px var(--hv-accent-strong);
 }
 
 /*
@@ -721,7 +826,10 @@ samp,
  */
 .hv-cowork-packs {
 	margin-inline-start: 0;
-	padding: 0;
+	/* `padding: 0` was here to sit flush with the row. It is dropped now that
+	 * `.hv-mode` has a ground, because at zero padding the thumb fills the
+	 * track edge to edge and the trough this control just gained would be
+	 * invisible on the one place that reuses it. */
 }
 
 .hv-cowork-note {
