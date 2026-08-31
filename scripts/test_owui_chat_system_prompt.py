@@ -311,10 +311,11 @@ def run_splice_through_snapshot(config: FakeConfig, messages: list) -> tuple[lis
     the native tool-call loop restores actually contain Hive's prompt.
 
     `resolve_system_prompt` is the one name stubbed, because it lives in
-    utils/payload.py and resolves `params.system` off a models-table row, which
-    no Hive model has (the listing is synthesized by hive_model_picker.py). It
-    is stubbed to return a value in one case below to prove the splice is not
-    accidentally depending on it being empty.
+    utils/payload.py rather than utils/misc.py and it resolves `params.system`
+    off a models-table row, which no Hive model has: the listing is synthesized
+    by hive_model_picker.py from the control-plane catalog. The stub is the
+    identity function, so `params.system` absent means it contributes nothing,
+    which is the live shape on this deployment.
     """
     source = patched_middleware()
     body = chat_payload_body(source)
