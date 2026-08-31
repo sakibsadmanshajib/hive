@@ -14,6 +14,23 @@ shifted breaks the build loudly rather than silently reverting to the broken
 behaviour. Checking that the anchor string exists is not enough on its own, so
 this also asserts that the names the inserted code closes over (Config, os,
 log) are still in that module's namespace.
+
+Issue #1575 added a second call ahead of reconcile: guard_unreconciled_env_vars
+reads this exact process's own config.py source and reports before anything is
+reconciled if the deployment sets a variable that backs a persisted config key
+neither reconcile() nor ENVIRONMENT_ONLY_ENV_VARS accounts for. See
+hive_rag_env_config.py for the full audit that motivated it.
+
+Called here with fatal=False (2026-08-30 postmortem, PR #1587 is the incident
+revert). The guard correctly found two unreconciled variables on the live demo
+box, and the guard's own default of raising turned that correct finding into
+FastAPI startup aborting, which crash-looped the container and took chat down
+with a 502. A boot-time abort converts a config-hygiene gap into an outage,
+and an outage is a worse failure than the drift it prevents. fatal=False keeps
+the finding loud (ERROR-level log naming every gap, still on every boot) but
+lets the service start; scripts/test_owui_rag_env_config.py keeps the default
+fatal=True path so the same gap still fails CI, which is the right blast
+radius for this class of bug.
 """
 
 import ast
@@ -27,7 +44,29 @@ INSERT = """    # hive #722: seed_defaults above only fills keys that are ABSENT
     # container whose database was seeded by an older compose keeps sending
     # that generation's embedding model forever and no compose change can
     # reach it. Let the environment win for the RAG-through-Hive keys only.
-    from open_webui.utils.hive_rag_env_config import log_summary, reconcile
+    import inspect as _hive_inspect
+
+    from open_webui import config as _hive_owui_config
+    from open_webui.utils.hive_rag_env_config import (
+        guard_unreconciled_env_vars,
+        log_summary,
+        reconcile,
+    )
+
+    # hive #1575 / 2026-08-30 postmortem: report loudly, before reconciling
+    # anything, if this deployment sets an environment variable that backs a
+    # persisted config key neither reconciled below nor acknowledged as
+    # environment-only. fatal=False: a boot must never abort over this (see
+    # this file's module docstring), only CI does. Reads this exact process's
+    # own already-imported config module, so a future upstream digest bump is
+    # covered automatically rather than needing a hand-kept list to stay
+    # current.
+    # fatal=False: see this file's module docstring for why boot must
+    # never abort over this, only CI (scripts/test_owui_rag_env_config.py
+    # calls the same function at its fatal=True default).
+    guard_unreconciled_env_vars(
+        os.environ, _hive_inspect.getsource(_hive_owui_config), fatal=False
+    )
 
     _hive_rag_applied = await reconcile(Config, os.environ)
     if _hive_rag_applied:
