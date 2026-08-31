@@ -239,3 +239,71 @@ func TestTenantVisibilityIntegration(t *testing.T) {
 
 	t.Logf("TestTenantVisibilityIntegration: all steps passed (tenantA=%v, tenantB=%v)", tenantA, tenantB)
 }
+
+// TestFreePoolAliasesAreRestrictedFromTenants extends the mechanism proven
+// above (TestTenantVisibilityIntegration) to the two real catalog rows this
+// migration touches, by name, rather than duplicating the eight-step flow: it
+// runs against whatever visibility class hive-free and hive-free-tools
+// actually carry in public.model_aliases today, so it is RED against a
+// database that predates
+// 20260831_01_restrict_free_pool_aliases_visibility.sql (both rows are still
+// 'public', so a fresh tenant with no grant row is entitled, and the
+// assertions below fail) and GREEN once that migration has run.
+//
+// Both the listing path (svc.ListModelsForTenant, what the picker reads) and
+// the invocation path (svc.IsAliasVisibleToTenant, the exact call
+// routing.Service.SelectRoute makes before dispatching a completion) are
+// checked, because AliasVisibleToTenant is the one predicate both resolve
+// through and a regression could in principle diverge only one of them.
+func TestFreePoolAliasesAreRestrictedFromTenants(t *testing.T) {
+	pool := connectCatalogTestDB(t)
+	repo := NewPgxRepository(pool)
+	svc := NewService(repo)
+	ctx := context.Background()
+
+	tenant := uuid.MustParse("c0000000-0000-0000-0000-000000000001")
+	ownsTenant := seedTenant(t, pool, tenant)
+	t.Cleanup(func() {
+		deleteVisibilityRow(t, pool, tenant, "hive-free")
+		deleteVisibilityRow(t, pool, tenant, "hive-free-tools")
+		if ownsTenant {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM public.tenants WHERE id = $1", tenant); err != nil {
+				t.Errorf("cleanup: delete tenant: %v", err)
+			}
+		}
+	})
+
+	for _, aliasID := range []string{"hive-free", "hive-free-tools"} {
+		var visibility string
+		err := pool.QueryRow(ctx,
+			"SELECT visibility FROM public.model_aliases WHERE alias_id = $1", aliasID,
+		).Scan(&visibility)
+		if err != nil {
+			t.Fatalf("%s: not seeded in this database (expected from its own migration): %v", aliasID, err)
+		}
+		if visibility != "restricted" {
+			t.Errorf("%s: visibility = %q, want %q (20260831_01_restrict_free_pool_aliases_visibility.sql not applied?)", aliasID, visibility, "restricted")
+		}
+
+		entitled, err := svc.IsAliasVisibleToTenant(ctx, tenant, aliasID)
+		if err != nil {
+			t.Fatalf("%s: IsAliasVisibleToTenant: %v", aliasID, err)
+		}
+		if entitled {
+			t.Errorf("%s: IsAliasVisibleToTenant = true for a tenant with no visibility grant, want false (this is the exact call routing.Service.SelectRoute makes before dispatch)", aliasID)
+		}
+	}
+
+	list, err := svc.ListModelsForTenant(ctx, tenant)
+	if err != nil {
+		t.Fatalf("ListModelsForTenant: %v", err)
+	}
+	if aliasPresent(list, "hive-free") {
+		t.Errorf("hive-free must be absent from the picker listing for a tenant with no grant")
+	}
+	if aliasPresent(list, "hive-free-tools") {
+		t.Errorf("hive-free-tools must be absent from the picker listing for a tenant with no grant")
+	}
+
+	t.Logf("TestFreePoolAliasesAreRestrictedFromTenants: hive-free and hive-free-tools both locked for tenant=%v with no grant", tenant)
+}

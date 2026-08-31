@@ -32,6 +32,14 @@
 #                           fails closed on a zero balance, so a key with no
 #                           credit authenticates and then refuses every
 #                           completion.
+#   tenant_model_visibility explicit visible=true rows for hive-free and
+#                           hive-free-tools, both visibility='restricted' as
+#                           of 20260831_01_restrict_free_pool_aliases_
+#                           visibility.sql. Without them routing.Service.
+#                           SelectRoute 403s ErrModelNotEntitled on every
+#                           call this job's SDK suites make against the
+#                           default HIVE_TEST_MODEL/HIVE_TOOLS_MODEL
+#                           (hive-free, ci.yml).
 #
 # Connection settings come from libpq environment variables the caller exports.
 
@@ -114,6 +122,24 @@ SELECT k.account_id, 'grant', :'grant_credits'::bigint,
        jsonb_build_object('source', 'scripts/ci-seed-api-key.sh')
 FROM k;
 
+-- hive-free and hive-free-tools are visibility='restricted' as of
+-- 20260831_01_restrict_free_pool_aliases_visibility.sql: routing.Service.
+-- SelectRoute fails every tenant-scoped call closed unless the tenant carries
+-- an explicit tenant_model_visibility(visible=true) row (catalog.
+-- AliasVisibleToTenant). Live integration's default HIVE_TEST_MODEL and
+-- HIVE_TOOLS_MODEL are both hive-free (ci.yml), and this script's tenant is
+-- freshly minted every run, so nothing else in the repo can grant it ahead of
+-- time. This is the one place that creates the tenant, so it is the one
+-- place that grants it. A separate statement, not a CTE folded into the chain
+-- above: a data-modifying CTE only executes if the top-level statement
+-- references it, and nothing downstream needed to read `t`.
+INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
+SELECT t.id, a.alias_id, true
+FROM public.tenants t
+CROSS JOIN (VALUES ('hive-free'), ('hive-free-tools')) AS a(alias_id)
+WHERE t.slug = :'slug'
+ON CONFLICT (tenant_id, alias_id) DO UPDATE SET visible = true, updated_at = now();
+
 COMMIT;
 SQL
 
@@ -143,6 +169,11 @@ assert "the account has a positive credit balance" t \
   "SELECT coalesce(sum(l.credits_delta), 0) > 0 FROM public.credit_ledger_entries l
      JOIN public.api_keys k ON k.account_id = l.account_id
     WHERE k.token_hash = '$token_hash'"
+assert "the tenant is granted both restricted free-pool aliases" 2 \
+  "SELECT count(*) FROM public.tenant_model_visibility v
+     JOIN public.tenants t ON t.id = v.tenant_id
+    WHERE t.slug = '$slug' AND v.alias_id IN ('hive-free', 'hive-free-tools')
+      AND v.visible = true"
 
 echo "seeded tenant, account, api key, policy and credit grant" >&2
 echo "HIVE_API_KEY=$raw_secret"
