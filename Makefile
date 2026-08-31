@@ -60,6 +60,7 @@ test-scripts:
 	python3 scripts/test_owui_oauth_client_auth.py
 	python3 scripts/test_owui_agent_proxy.py
 	python3 scripts/test_owui_oauth_callback_landing.py
+	python3 scripts/test_owui_chat_error_detail.py
 
 # Node, not python, and it downloads a pinned vitest (plus its coverage
 # provider), so it is deliberately not folded into test-scripts, which is pure
