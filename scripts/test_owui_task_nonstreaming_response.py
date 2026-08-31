@@ -39,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 PATCH = PATCHES / "apply_task_nonstreaming_response_1600_patch.py"
 DIGEST = PATCHES / "pinned-openai-digest.json"
+DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
 VENDOR = REPO_ROOT / "vendor/open-webui/backend/open_webui"
 
 # Deliberately unalike: a conversational question, and the query a task model
@@ -209,6 +210,18 @@ def check_pinned_digests(checks):
     pinned-openai-digest.json.
     """
     pinned = json.loads(DIGEST.read_text())
+
+    # CodeRabbit, PR #1614: pinned["image"] was read and never used, so a
+    # digest bump in the Dockerfile could leave these hashes describing a
+    # backend the container no longer runs while this check stayed green.
+    backend_from = [
+        line[len("FROM "):].strip()
+        for line in DOCKERFILE.read_text().splitlines()
+        if line.startswith("FROM ghcr.io/open-webui/open-webui:")
+    ]
+    checks["the pinned digest names the image the Dockerfile builds on"] = (
+        len(backend_from) == 1 and backend_from[0] == pinned["image"]
+    )
     for image_path, expected in pinned["files"].items():
         relative = image_path.split("/app/backend/open_webui/", 1)[1]
         local = VENDOR / relative
