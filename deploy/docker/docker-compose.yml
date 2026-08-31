@@ -1645,6 +1645,15 @@ services:
       # UNTRUSTED DATA, fences it between explicit markers, and refuses id-less
       # citations. Position is what is held; content is not.
       #
+      # There is a real cost to holding it, named rather than hidden: upstream
+      # added this flag for KV prefix caching, because a system-message position
+      # is fixed and a user-turn position shifts as the conversation grows, so
+      # false means a multi-turn retrieval chat can reprocess the context each
+      # turn (vendor/open-webui/CHANGELOG.md, upstream #20317). That is latency
+      # and provider spend traded for keeping third-party bytes out of the
+      # system role, and the trade is deliberate. Revisit it if the caching cost
+      # is ever measured to matter here, which it has not been.
+      #
       # An operator can still flip it, which is why the passthrough exists at
       # all rather than being left absent: upstream reads
       # `os.getenv('RAG_SYSTEM_CONTEXT', 'False').lower() == 'true'` in env.py,
