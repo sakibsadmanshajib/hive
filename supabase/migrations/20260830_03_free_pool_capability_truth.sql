@@ -173,7 +173,15 @@
 --   roughly 165 messages across the whole organization, shared by CI, the
 --   nightly lanes and the demo, and it is a hard cliff that has already taken a
 --   required check red for a reason no commit caused. That matters more now
---   that the pool is three members rather than four.
+--   that the pool is two members rather than four.
+--
+--   One caveat on that headroom, because it is easy to read as a doubling and
+--   is not: Groq's daily token allowance is per ORGANIZATION, not per key.
+--   GROQ_API_KEY and GROQ_API_KEY_2 are two key slots, and whether they sit on
+--   one organization or two is the open question in issue #1413. If one, the
+--   pool's real ceiling is 2M tokens a day shared, not 4M, and the second slot
+--   buys per-minute headroom and failover rather than more daily tokens. This
+--   file does not assume the favourable reading anywhere.
 --
 --   The model id is qwen/qwen3.8-27b, not the bare qwen3.8-27b, confirmed
 --   against GET https://api.groq.com/openai/v1/models on 2026-08-30: present,
@@ -206,7 +214,7 @@ SET LOCAL lock_timeout = '5s';
 -- health_state 'disabled' is the same retirement 20260824_02 used for
 -- route-free-auto and route-free-default. SelectRoute filters it out and
 -- litellmconfig.SyncService drops its deployment, so the group LiteLLM
--- load-balances becomes exactly the three members below.
+-- load-balances becomes exactly the two Groq key slots.
 
 UPDATE public.provider_routes
    SET health_state = 'disabled'
