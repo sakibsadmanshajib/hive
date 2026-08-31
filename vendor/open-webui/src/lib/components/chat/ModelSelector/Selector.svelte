@@ -819,10 +819,7 @@
 									scroll position, and only renders when there is in fact more
 									to scroll to.
 								-->
-								<div
-									class="px-3 pt-1.5 pb-0.5 text-xs text-gray-400 dark:text-gray-500 select-none"
-									aria-hidden="true"
-								>
+								<div class="px-3 pt-1.5 pb-0.5 text-xs text-gray-400 dark:text-gray-500 select-none">
 									{$i18n.t('{{count}} models, scroll for more', { count: filteredItems.length })}
 								</div>
 							{/if}
