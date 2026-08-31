@@ -1322,6 +1322,20 @@ def test_a_non_numeric_int_key_is_refused_rather_than_crashing_downstream() -> N
     assert config.upsert_calls == 0
 
 
+def test_a_negative_int_key_is_refused_too() -> None:
+    """PR #1582 review nit: int() accepts a negative value with no error, but
+    a negative result count would still misbehave request-side rather than
+    at boot, the exact gap this coercion exists to close."""
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"WEB_SEARCH_RESULT_COUNT": "-1"})
+    except RuntimeError as exc:
+        assert "WEB_SEARCH_RESULT_COUNT" in str(exc), exc
+    else:
+        raise AssertionError("expected a refusal for a negative WEB_SEARCH_RESULT_COUNT")
+    assert config.upsert_calls == 0
+
+
 def test_openai_connection_is_pointed_at_the_gateway() -> None:
     """The connection chat completions actually authenticate with
     (routers/openai.py.get_openai_connection reads openai.api_base_urls/

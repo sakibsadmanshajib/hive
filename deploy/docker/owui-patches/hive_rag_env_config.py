@@ -704,18 +704,21 @@ def overrides(environ) -> dict:
                 )
             applied[key] = roles
         elif key in INT_KEYS:
-            # isascii() alongside a leading-minus-tolerant isdigit(), for the
-            # same reason UPLOAD_CEILING_ENV's check below does it: a value
-            # that reaches int() and fails there escapes as an unhandled
-            # traceback instead of this RuntimeError.
-            digits = value[1:] if value.startswith("-") else value
-            if not (value.isascii() and digits.isdigit()):
+            # Negative rejected outright, not merely non-numeric. Both
+            # INT_KEYS entries are semantically counts (a vector-store/
+            # search result count), and upstream's own `int(os.getenv(...))`
+            # has no lower bound either, so a negative value would not raise
+            # here but would still reach a request-time query as `k=-5`, the
+            # exact "surfaces later instead of at boot" failure this
+            # coercion exists to close (PR #1582 review).
+            if not (value.isascii() and value.isdigit()):
                 raise RuntimeError(
-                    f"{variable} must be a whole number, got {value!r}. "
-                    f"{key} is passed straight into a vector-store or "
-                    f"web-search result count, and a value int() rejects "
-                    f"would surface as an unhandled 500 on every request "
-                    f"that reads it instead of at boot."
+                    f"{variable} must be a whole, non-negative number, got "
+                    f"{value!r}. {key} is passed straight into a "
+                    f"vector-store or web-search result count, and a value "
+                    f"int() rejects, or a negative one a query would not "
+                    f"expect, would surface as an unhandled error on every "
+                    f"request that reads it instead of at boot."
                 )
             applied[key] = int(value)
         else:
