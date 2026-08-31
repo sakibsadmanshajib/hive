@@ -619,6 +619,27 @@ services:
       supabase-init:
         condition: service_completed_successfully
 
+  # PR review on #1602 (issue #1602): the base docker-compose.yml default for
+  # WEBUI_SECRET_KEY (${WEBUI_SECRET_KEY:-hive-local-webui-secret}) is a dev
+  # convenience only, a value anyone can read on GitHub, and it signs real
+  # auth tokens (open_webui/utils/auth.py SESSION_SECRET). Fine for plain
+  # `--profile local`, where nothing about that value is a secret to begin
+  # with. Not fine here: this file is merged into every enterprise/self-hosted
+  # deployment (per the file header above) and into the demo box's own
+  # HIVE_COMPOSE_FLAGS, which always includes it regardless of --profile. A
+  # required var fails the `docker compose up` outright with a clear message
+  # instead of silently starting the box signing production sessions with a
+  # public literal, which is what happened before: WEBUI_SECRET_KEY was never
+  # set at all and every container recreate regenerated a throwaway key
+  # in-image. deploy-demo-box.yml's own scripted path already exports a real
+  # WEBUI_SECRET_KEY (the repository secret) before this runs, so it never
+  # hits this check; a manual `docker compose $HIVE_COMPOSE_FLAGS up` run by
+  # hand over SSH, without exporting that secret first, now fails loudly
+  # instead of degrading silently.
+  open-webui:
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set to a real secret (openssl rand -hex 32) for any deployment that merges docker-compose.enterprise.yml -- see .env.example}
+
 volumes:
   # Postgres WAL and data files. Persists the full schema, all migrations, and
   # all tenant data across container recreates.
