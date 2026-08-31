@@ -1758,6 +1758,35 @@ services:
       # crash-looped this container and returned 502 on chat-hive.scubed.co.
       PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL_LIBPQ:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
+      # Issue #1609: the two knobs that decide the SHAPE of a document's
+      # embedding traffic, both of which upstream defaults to the shape that
+      # took web search down. RAG_EMBEDDING_BATCH_SIZE defaults to 1, so Open
+      # WebUI sends one HTTP request per chunk, and
+      # RAG_EMBEDDING_CONCURRENT_REQUESTS defaults to 0, which
+      # get_embedding_function reads as "build no semaphore" and so fires
+      # every one of those requests at once through asyncio.gather
+      # (retrieval/utils.py).
+      #
+      # Five fetched pages chunk to tens of chunks at the upstream CHUNK_SIZE
+      # of 1000 characters, so one web search opened tens of simultaneous
+      # POSTs to edge-api /v1/embeddings, edge-api refused part of the burst
+      # with 429, save_docs_to_vector_db raised, and the answer arrived with
+      # no sources at all while the model denied having web access.
+      # Reproduced live three times on 2026-08-31.
+      #
+      # 100 chunks per request keeps a request body near 100 KB, well inside
+      # edge-api's 10 MiB cap (apps/edge-api/internal/errors/codes.go,
+      # MaxRequestBodyBytes), and holds a five page search to one or two
+      # requests. The concurrency bound is what stops a LARGER document
+      # recreating the burst: a 10,000 chunk upload becomes 100 requests with
+      # at most 4 in flight, not 10,000 at once.
+      #
+      # Both are persisted config, so compose alone cannot move them on a
+      # volume that has already booted;
+      # owui-patches/hive_rag_env_config.py reconciles both keys from these
+      # variables on every start, and refuses a zero rather than obeying it.
+      RAG_EMBEDDING_BATCH_SIZE: ${RAG_EMBEDDING_BATCH_SIZE:-100}
+      RAG_EMBEDDING_CONCURRENT_REQUESTS: ${RAG_EMBEDDING_CONCURRENT_REQUESTS:-4}
       # Off by default because this deployment configures no reranking model,
       # and Open WebUI's hybrid path is not merely "vector plus BM25" without
       # one. retrieval/utils.py builds a RerankCompressor for every hybrid

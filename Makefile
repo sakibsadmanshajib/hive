@@ -26,6 +26,7 @@ test-scripts:
 	python3 scripts/test_install_owui_jwt_forward.py
 	python3 scripts/test_owui_rag_env_config.py
 	python3 scripts/test_owui_chat_system_prompt.py
+	python3 scripts/test_owui_embedding_burst.py
 	python3 scripts/test_owui_ui_surfaces.py
 	python3 scripts/test_owui_display_name.py
 	python3 scripts/test_owui_tenant_role.py
