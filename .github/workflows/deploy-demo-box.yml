@@ -239,6 +239,13 @@ env:
   # `openssl rand -hex 32` and stored as the SEARXNG_SECRET repository
   # secret, wins here instead.
   SEARXNG_SECRET: ${{ secrets.SEARXNG_SECRET }}
+  # Issue #1602: same reasoning as SEARXNG_SECRET above. Open WebUI's compose
+  # fallback (WEBUI_SECRET_KEY:-hive-local-webui-secret) is a dev convenience
+  # only, and it is a value committed in the repo, so it must never be what
+  # signs session tokens on the box: a real value, generated once with
+  # `openssl rand -hex 32` and stored as the WEBUI_SECRET_KEY repository
+  # secret, wins here instead.
+  WEBUI_SECRET_KEY: ${{ secrets.WEBUI_SECRET_KEY }}
 
 jobs:
   # ------------------------------------------------------------------
@@ -2298,6 +2305,53 @@ jobs:
           fi
 
           python3 /home/sakib/hive/scripts/check-oauth-scopes.py --discovery "$url"
+
+      - name: Verify WEBUI_SECRET_KEY reached the container and is not the public fallback
+        # Issue #1602 PR review: two residual findings, both closed by one
+        # cheap in-container check against the real deploy path, rather than
+        # the OPENID_PROVIDER_URL probe's pattern of a fixed expected value
+        # (there is no such fixed value to check against here, the whole
+        # point is the secret is not public) or a hash stored across separate
+        # workflow runs (which would only prove the value did not change, and
+        # would report a stable-but-public literal as a clean pass).
+        #
+        # Instead this compares the container's effective WEBUI_SECRET_KEY,
+        # by hash only, never the raw value, against two things in the same
+        # run: the WEBUI_SECRET_KEY this job exported from the repository
+        # secret (proves the real secret actually reached the container
+        # through this deploy, not just that docker-compose.yml is spelled
+        # correctly), and the public literal committed in docker-compose.yml
+        # as the dev-only fallback (proves this specific deploy is not
+        # silently signing sessions with a value anyone can read on GitHub,
+        # which would happen if the repository secret were ever emptied or
+        # deleted).
+        env:
+          WEBUI_SECRET_KEY: ${{ secrets.WEBUI_SECRET_KEY }}
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          if ! actual=$(docker compose $HIVE_COMPOSE_FLAGS exec -T open-webui \
+               printenv WEBUI_SECRET_KEY </dev/null | tr -d '\r') || [ -z "$actual" ]; then
+            echo "::error::open-webui has no WEBUI_SECRET_KEY, or the container is not running. Every signed-in session dies on the next recreate (issue #1602)." >&2
+            exit 1
+          fi
+
+          actual_hash=$(printf '%s' "$actual" | sha256sum | cut -d' ' -f1)
+          public_hash=$(printf '%s' "hive-local-webui-secret" | sha256sum | cut -d' ' -f1)
+          if [ "$actual_hash" = "$public_hash" ]; then
+            echo "::error::open-webui's effective WEBUI_SECRET_KEY is the public dev-only literal committed in docker-compose.yml. It is signing real session tokens with a value anyone can read on GitHub. Set the WEBUI_SECRET_KEY repository secret (issue #1602)." >&2
+            exit 1
+          fi
+
+          if [ -z "${WEBUI_SECRET_KEY:-}" ]; then
+            echo "::error::the WEBUI_SECRET_KEY repository secret is unset, so this job exported nothing for the check above to compare against. It exists per issue #1602; if this fires, it was deleted." >&2
+            exit 1
+          fi
+          expected_hash=$(printf '%s' "$WEBUI_SECRET_KEY" | sha256sum | cut -d' ' -f1)
+          if [ "$actual_hash" != "$expected_hash" ]; then
+            echo "::error::open-webui's effective WEBUI_SECRET_KEY does not match the WEBUI_SECRET_KEY repository secret this job exported. Something between the workflow env block and the running container is not passing the real value through." >&2
+            exit 1
+          fi
 
       - name: Prune build cache older than 24h
         # Measured on the demo box 2026-07-29: `docker system df` showed
