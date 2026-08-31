@@ -413,6 +413,31 @@ def test_compose_passes_the_variable_through_in_the_null_form() -> None:
     )
 
 
+def test_the_two_new_variables_do_not_trip_the_1575_guard() -> None:
+    """PR #1588 added a guard that reports, on every boot, any environment
+    variable this deployment sets which backs an Open WebUI PERSISTED config
+    key and that this module neither reconciles nor lists as environment-only.
+
+    This change adds two new variables to the container, so the interaction is
+    asserted rather than assumed. `HIVE_CHAT_SYSTEM_PROMPT` is reconciled, so it
+    is accounted for by construction. `RAG_SYSTEM_CONTEXT` is deliberately NOT
+    reconciled, because it is a plain os.getenv in env.py rather than persisted
+    config, and the guard reads config.py, so it should not appear at all. If a
+    future upstream digest moves it into DEFAULT_CONFIG this test goes red, which
+    is exactly when it would need a reconcile entry.
+
+    fatal=True here, which is the CI posture: a gap is a red build. The boot call
+    site uses fatal=False so a hygiene finding can never take chat down again."""
+    hive_rag_env_config.guard_unreconciled_env_vars(
+        {
+            ENV_VAR: "You are Hive.",
+            "RAG_SYSTEM_CONTEXT": "true",
+        },
+        VENDORED_CONFIG.read_text(encoding="utf-8"),
+        fatal=True,
+    )
+
+
 def test_env_example_documents_the_two_new_levers() -> None:
     """There is no admin UI for any of this on this deployment, so .env.example
     is where an operator has to find the lever."""
