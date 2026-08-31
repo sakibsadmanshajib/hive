@@ -1626,6 +1626,16 @@ services:
       # to refuse. The retrieved block is still fenced inside the template
       # either way. An operator who wants upstream's position back sets this
       # false explicitly.
+      #
+      # This one deliberately uses the `${VAR:-default}` form the eleven prompt
+      # keys above must NOT use, and the difference is the point rather than an
+      # inconsistency. That form always DEFINES the variable in the container,
+      # which for a prompt key would defeat upstream's own os.getenv fallback
+      # and seed a blank row on a fresh volume. Here defining it is exactly
+      # what is wanted: upstream reads
+      # `os.getenv('RAG_SYSTEM_CONTEXT', 'False').lower() == 'true'`, so the
+      # null form would leave it absent and the posture would silently revert
+      # to upstream's False.
       RAG_SYSTEM_CONTEXT: ${RAG_SYSTEM_CONTEXT:-true}
       # Chat dictation. These four are persistent config as well, reconciled by
       # the same owui-patches/hive_rag_env_config.py for the same
