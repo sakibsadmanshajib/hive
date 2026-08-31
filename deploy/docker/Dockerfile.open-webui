@@ -600,6 +600,21 @@ RUN python3 /tmp/apply_task_upstream_auth_patch.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/chat.py').read_text())" \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_upstream_auth.py').read_text())"
 
+# issue #1569: chat_web_search_handler and two sibling call sites in
+# middleware.py read an upstream error with error_body.get('detail', ...).
+# Hive's edge-api never sends a top-level detail key, it emits the OpenAI
+# envelope nested under an outer error key, so the lookup always missed and
+# the hardcoded default is what every failure showed, whatever the real
+# cause was. It cost real time on #1567, where the same generic string hid a
+# 401 from an auth-filter gap. One shared helper now backs all three sites;
+# two other readers in this file already handled both message and detail
+# correctly and are left untouched. Same fail-loud posture as the patches
+# above. Behaviour is covered by scripts/test_owui_chat_error_detail.py.
+COPY deploy/docker/owui-patches/apply_chat_error_detail_1569_patch.py /tmp/apply_chat_error_detail_1569_patch.py
+RUN python3 /tmp/apply_chat_error_detail_1569_patch.py \
+    && test "$(grep -c '# hive (#1569)' /app/backend/open_webui/utils/middleware.py)" -eq 4 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
+
 # Security review, MEDIUM (PR #1525): upstream's own default for this flag,
 # read in config.py as os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True'), is
 # permissive. A malformed value already fails closed (anything that is not
