@@ -215,6 +215,31 @@ RAG_CONFIG_ENV = {
     # below for the numeric coercion these two need instead.
     "rag.top_k": "RAG_TOP_K",
     "web.search.result_count": "WEB_SEARCH_RESULT_COUNT",
+    # Corrected post-review (PR #1582): these five were first placed on
+    # ENVIRONMENT_ONLY_ENV_VARS below on the false premise that utils/oauth.py
+    # reads every oauth.* value as a frozen module constant. Two of them,
+    # `oauth.group_claim`/`oauth.roles_claim`, are read live instead, through
+    # `get_oauth_runtime_config()` (utils/oauth.py:180, backed by
+    # `OAUTH_RUNTIME_CONFIG` at :121), which `handle_login`, `handle_callback`
+    # and `get_user_role` all call on every SSO login. `oauth.provider_url`
+    # is not on that path but has its own separate live read, a fallback in
+    # `/signout` when the session's own registered OIDC metadata lookup comes
+    # back empty (routers/auths.py:926). Reconciled here rather than left
+    # exception-noted, since fixing it is no more code than documenting it.
+    "oauth.group_claim": "OAUTH_GROUPS_CLAIM",
+    "oauth.roles_claim": "OAUTH_ROLES_CLAIM",
+    "oauth.provider_url": "OPENID_PROVIDER_URL",
+    # Persisted as a list of role/group identifiers, upstream's own comma
+    # split (`OAUTH_ALLOWED_ROLES = [role.strip() for role in os.getenv(...)
+    # .split(OAUTH_ROLES_SEPARATOR)]`, config.py:2495), consumed by
+    # `OAuthManager.get_user_role` (utils/oauth.py:1421-1470) as the allow
+    # list and admin list an incoming SSO role claim is matched against.
+    # Coerced via COMMA_LIST_KEYS below, a separate rule from LIST_KEYS
+    # above (file extensions): role and group identifiers are case-sensitive
+    # ("ADMIN" must not become "admin") and carry no leading dot to strip,
+    # so LIST_KEYS' lowercasing would silently break every role match.
+    "oauth.allowed_roles": "OAUTH_ALLOWED_ROLES",
+    "oauth.admin_roles": "OAUTH_ADMIN_ROLES",
 }
 
 # Same idea, boolean-valued.
@@ -294,6 +319,24 @@ FEATURE_CONFIG_ENV = {
     "ollama.enable": "ENABLE_OLLAMA_API",
     "ui.enable_community_sharing": "ENABLE_COMMUNITY_SHARING",
     "evaluation.arena.enable": "ENABLE_EVALUATION_ARENA_MODELS",
+    # Corrected post-review (PR #1582), CRITICAL: originally placed on
+    # ENVIRONMENT_ONLY_ENV_VARS below, on the same false premise as the three
+    # string keys documented next to it in RAG_CONFIG_ENV. All three are read
+    # live via `get_oauth_runtime_config()` (utils/oauth.py:180), and
+    # `oauth.enable_role_mapping` gates the role-escalation block in
+    # `OAuthManager.get_user_role` (utils/oauth.py:1418) that promotes an
+    # incoming SSO login to `admin` when its role claim matches
+    # `oauth.admin_roles`. docker-compose.yml sets all three today
+    # (ENABLE_OAUTH_SIGNUP=true, ENABLE_OAUTH_ROLE_MANAGEMENT=true,
+    # ENABLE_OAUTH_GROUP_MANAGEMENT=true), so this was a live exposure, not
+    # only a future-drift risk: a `owui-data` volume seeded before or
+    # differently from these compose values would have silently ignored any
+    # later correction to the SSO admin-role mapping, in the highest-severity
+    # area this whole issue is about (see also issue #1511, a prior live
+    # admin-bypass in this same claim-mapping area).
+    "oauth.enable_signup": "ENABLE_OAUTH_SIGNUP",
+    "oauth.enable_role_mapping": "ENABLE_OAUTH_ROLE_MANAGEMENT",
+    "oauth.enable_group_mapping": "ENABLE_OAUTH_GROUP_MANAGEMENT",
 }
 
 # The user permission tree, which is ONE persisted row and therefore cannot
@@ -358,6 +401,11 @@ LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 # as strings risks a TypeError deep in a request path rather than a config
 # value simply being ignored.
 INT_KEYS = frozenset({"rag.top_k", "web.search.result_count"})
+
+# Keys Open WebUI stores as a JSON list, comma-split like LIST_KEYS but
+# case-preserving and with no dot to strip: role/group identifiers, not file
+# extensions. See the oauth.allowed_roles/oauth.admin_roles entries above.
+COMMA_LIST_KEYS = frozenset({"oauth.allowed_roles", "oauth.admin_roles"})
 
 # Keys whose value is a prompt, and therefore the only ones here that are
 # persisted exactly as the environment wrote them.
@@ -640,6 +688,21 @@ def overrides(environ) -> dict:
                     f"made deliberately, not something an empty value does."
                 )
             applied[key] = items
+        elif key in COMMA_LIST_KEYS:
+            # Case-preserving, no dot stripped: see COMMA_LIST_KEYS. Matches
+            # upstream's own parse of OAUTH_ALLOWED_ROLES/OAUTH_ADMIN_ROLES
+            # (config.py:2495-2502: `[role.strip() for role in
+            # os.getenv(...).split(OAUTH_ROLES_SEPARATOR) if role]`).
+            roles = [item.strip() for item in value.split(",") if item.strip()]
+            if not roles:
+                raise RuntimeError(
+                    f"{variable} is set to {value!r}, which parses to no "
+                    f"roles at all. An empty {key.rsplit('.', 1)[-1]} list "
+                    f"disables SSO role matching entirely while the "
+                    f"deployment still looks configured. Name the roles, or "
+                    f"unset {variable} to leave the persisted value alone."
+                )
+            applied[key] = roles
         elif key in INT_KEYS:
             # isascii() alongside a leading-minus-tolerant isdigit(), for the
             # same reason UPLOAD_CEILING_ENV's check below does it: a value
@@ -746,38 +809,67 @@ def merge_permissions(current: dict, overrides_by_path: dict) -> dict:
     return merged
 
 
-# Env vars the #1575 audit confirmed DO back a DEFAULT_CONFIG key (so
-# guard_unreconciled_env_vars below would otherwise flag them) but are safe
-# to leave environment-only. utils/oauth.py imports every one of these
-# directly from open_webui.config as a frozen module-level constant
-# (`from open_webui.config import OAUTH_CLIENT_ID, OAUTH_ADMIN_ROLES, ...`),
-# never via `Config.get`, so the actual OAuth login flow re-reads os.environ
-# fresh on every container start regardless of what the database has
-# persisted. The persisted `oauth.*` row DEFAULT_CONFIG also seeds is a
-# display-only mirror for the `/admin/config/oauth` endpoint, which this
-# fork's proxy never exposes (the admin panel is deleted from the frontend
-# bundle). Confirmed by grepping every `Config.get('oauth.` call site in the
-# pinned image: routers/auths.py's admin routes are the only ones, and none
-# of them run on the path a user's login actually takes.
+# CORRECTED post-review (PR #1582 security review, escalated to CRITICAL).
+# The original 13-entry version of this allowlist rested on one claim
+# ("utils/oauth.py imports every oauth.* name directly from open_webui.config
+# as a frozen module constant, never via Config.get"), checked by grepping
+# for the literal string `Config.get('oauth.`. That grep has a blind spot:
+# `utils/oauth.py` also reads a whole cluster of oauth.* keys through
+# `get_oauth_runtime_config()` (line 180), which calls
+# `Config.get_many(*keys)` against a dynamically built key list
+# (`OAUTH_RUNTIME_CONFIG`, line 121), a call shape no literal-string grep for
+# `Config.get(` matches. Eight of the original thirteen entries are read that
+# way and were misclassified; five are not and stay here.
 #
-# `oauth.auto_redirect` is the one member of this cluster that is NOT here:
-# it is genuinely read live (see its own entry in FEATURE_CONFIG_ENV above),
-# which is exactly why it needed reconciling while its neighbours do not.
+# Re-audited by grepping the pinned image for each entry's PERSISTED KEY
+# STRING (e.g. `'oauth.client_id'`), across the whole backend, not just
+# oauth.py or auths.py, since that string is what any consumer has to
+# reference regardless of whether it calls `Config.get`, `Config.get_many`
+# with a literal list, or `Config.get_many` with a dict-derived one. Per
+# entry:
+#
+# - OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_CODE_CHALLENGE_METHOD,
+#   OAUTH_PROVIDER_NAME, OAUTH_SCOPES: their persisted keys
+#   (`oauth.client_id`, `oauth.client_secret`, `oauth.code_challenge_method`,
+#   `oauth.provider_name`, `oauth.scopes`) appear in exactly three places in
+#   the whole pinned backend: `config.py`'s DEFAULT_CONFIG (the seed-default
+#   assignment itself), the historical `3ff2c63645b8_reshape_config_to_per_
+#   key_rows` migration, and `routers/auths.py`'s `OAUTH_CONFIG_KEYS` dict,
+#   which backs only the `/admin/config/oauth` GET/POST pair (admin-panel
+#   display and edit, and this fork's admin panel is removed from the
+#   frontend bundle). No `Config.get`/`Config.get_many` call anywhere in the
+#   backend resolves any of these five outside that admin pair, confirmed by
+#   grepping every `Config.get_many(` call site in the pinned image (17 of
+#   them) and checking each one's key list by hand. `utils/oauth.py` uses the
+#   frozen module constants for the actual Authlib client registration
+#   (config.py:2600-2632), which re-reads os.environ fresh on every container
+#   start regardless of the database.
+#
+# The remaining eight were moved into RAG_CONFIG_ENV/FEATURE_CONFIG_ENV
+# above instead of staying here: `oauth.enable_signup`,
+# `oauth.enable_role_mapping`, `oauth.enable_group_mapping`,
+# `oauth.roles_claim`, `oauth.group_claim`, `oauth.allowed_roles`,
+# `oauth.admin_roles` are read live via `get_oauth_runtime_config()` from
+# `handle_login`/`handle_callback`/`get_user_role`/`update_user_groups`
+# (utils/oauth.py:1671, 1691, 1403, 1490), and `oauth.provider_url` has a
+# separate, lower-traffic live read as a `/signout` fallback
+# (routers/auths.py:926). All eight were live-diverged risks the moment this
+# module shipped, not only future-drift risk: docker-compose.yml sets seven
+# of the eight today (ENABLE_OAUTH_SIGNUP, ENABLE_OAUTH_ROLE_MANAGEMENT,
+# ENABLE_OAUTH_GROUP_MANAGEMENT, OAUTH_ROLES_CLAIM, OAUTH_ALLOWED_ROLES,
+# OAUTH_ADMIN_ROLES, OAUTH_GROUPS_CLAIM).
+#
+# `oauth.auto_redirect` is a ninth member of this cluster that was never on
+# this list at all: it is genuinely read live (see its own entry in
+# FEATURE_CONFIG_ENV above), which is exactly why it needed reconciling from
+# the start.
 ENVIRONMENT_ONLY_ENV_VARS = frozenset(
     {
-        "ENABLE_OAUTH_SIGNUP",
-        "ENABLE_OAUTH_GROUP_MANAGEMENT",
-        "ENABLE_OAUTH_ROLE_MANAGEMENT",
         "OAUTH_CLIENT_ID",
         "OAUTH_CLIENT_SECRET",
         "OAUTH_CODE_CHALLENGE_METHOD",
-        "OAUTH_GROUPS_CLAIM",
         "OAUTH_PROVIDER_NAME",
-        "OAUTH_ROLES_CLAIM",
         "OAUTH_SCOPES",
-        "OPENID_PROVIDER_URL",
-        "OAUTH_ALLOWED_ROLES",
-        "OAUTH_ADMIN_ROLES",
     }
 )
 

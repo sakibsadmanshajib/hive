@@ -1482,10 +1482,13 @@ def test_guard_ignores_a_persisted_var_this_deployment_never_sets() -> None:
         hive_rag_env_config.RAG_CONFIG_ENV = original
 
 
-def test_guard_does_not_flag_the_environment_only_oauth_cluster() -> None:
-    """utils/oauth.py imports every one of these directly from
-    open_webui.config as a frozen module constant, never via Config.get, so
-    they are correctly on ENVIRONMENT_ONLY_ENV_VARS rather than reconciled."""
+def test_guard_does_not_flag_the_truly_environment_only_oauth_cluster() -> None:
+    """Corrected post-review (PR #1582): only these five are read as frozen
+    module constants (Authlib client registration, config.py:2600-2632) with
+    no live Config.get/Config.get_many read anywhere in the pinned backend.
+    The other eight members of the original 13-entry claim are covered by
+    test_oauth_role_and_signup_cluster_is_reconciled_not_allowlisted below,
+    since they are reconciled now, not allowlisted."""
     if not VENDOR_CONFIG_PATH.exists():
         return
     config_source = VENDOR_CONFIG_PATH.read_text(encoding="utf-8")
@@ -1494,19 +1497,80 @@ def test_guard_does_not_flag_the_environment_only_oauth_cluster() -> None:
             "OAUTH_CLIENT_ID": "test-client",
             "OAUTH_CLIENT_SECRET": "test-secret",
             "OAUTH_PROVIDER_NAME": "hive-sso",
-            "OPENID_PROVIDER_URL": "https://sso.example/.well-known/openid-configuration",
             "OAUTH_SCOPES": "openid email profile",
             "OAUTH_CODE_CHALLENGE_METHOD": "S256",
-            "OAUTH_GROUPS_CLAIM": "tenants",
-            "ENABLE_OAUTH_SIGNUP": "true",
-            "ENABLE_OAUTH_GROUP_MANAGEMENT": "true",
-            "ENABLE_OAUTH_ROLE_MANAGEMENT": "true",
-            "OAUTH_ROLES_CLAIM": "roles",
-            "OAUTH_ALLOWED_ROLES": "user,admin",
-            "OAUTH_ADMIN_ROLES": "admin",
         },
         config_source,
     )
+
+
+def test_oauth_role_and_signup_cluster_is_reconciled_not_allowlisted() -> None:
+    """The CRITICAL security-review finding on this PR. All eight of these
+    are read live via utils/oauth.py's get_oauth_runtime_config()
+    (Config.get_many against a dict-derived key list, the exact call shape a
+    literal `Config.get('oauth.` grep cannot see), from handle_login,
+    handle_callback and get_user_role, the last of which decides whether an
+    SSO login is promoted to admin. docker-compose.yml sets seven of these
+    eight today, so this was a live exposure, not only future drift."""
+    config = FakeConfig({})
+    applied = reconcile(
+        config,
+        {
+            "ENABLE_OAUTH_SIGNUP": "true",
+            "ENABLE_OAUTH_ROLE_MANAGEMENT": "true",
+            "ENABLE_OAUTH_GROUP_MANAGEMENT": "true",
+            "OAUTH_ROLES_CLAIM": "owui_role",
+            "OAUTH_GROUPS_CLAIM": "tenants",
+            "OAUTH_ALLOWED_ROLES": "ADMIN,MEMBER,VIEWER",
+            "OAUTH_ADMIN_ROLES": "ADMIN",
+            "OPENID_PROVIDER_URL": "https://sso.example/.well-known/openid-configuration",
+        },
+    )
+    assert applied["oauth.enable_signup"] is True
+    assert applied["oauth.enable_role_mapping"] is True
+    assert applied["oauth.enable_group_mapping"] is True
+    assert applied["oauth.roles_claim"] == "owui_role"
+    assert applied["oauth.group_claim"] == "tenants"
+    # Case-preserving: role identifiers are matched verbatim against an IdP
+    # claim (OAuthManager.get_user_role), so "ADMIN" must not become "admin".
+    assert applied["oauth.allowed_roles"] == ["ADMIN", "MEMBER", "VIEWER"], applied
+    assert applied["oauth.admin_roles"] == ["ADMIN"], applied
+    assert applied["oauth.provider_url"] == (
+        "https://sso.example/.well-known/openid-configuration"
+    )
+
+
+def test_an_empty_oauth_role_list_is_refused_rather_than_disabling_role_matching() -> None:
+    """The same "looks configured, does nothing" trap LIST_KEYS already
+    refuses for file extensions, applied to the role/admin allow lists."""
+    config = FakeConfig({})
+    try:
+        reconcile(config, {"OAUTH_ALLOWED_ROLES": " , ,"})
+    except RuntimeError as exc:
+        assert "OAUTH_ALLOWED_ROLES" in str(exc), exc
+    else:
+        raise AssertionError("expected a refusal for an all-separators role list")
+    assert config.upsert_calls == 0
+
+
+def test_the_five_correctly_environment_only_oauth_keys_are_untouched() -> None:
+    """The negative half of the CRITICAL finding: these five must stay
+    exactly as ENVIRONMENT_ONLY_ENV_VARS says, reconcile() writes nothing for
+    them even when set, since Authlib's client registration reads the
+    frozen os.environ constant, never the persisted row."""
+    config = FakeConfig({"oauth.client_id": "persisted-client-id"})
+    applied = reconcile(
+        config,
+        {
+            "OAUTH_CLIENT_ID": "env-client-id",
+            "OAUTH_CLIENT_SECRET": "env-secret",
+            "OAUTH_PROVIDER_NAME": "hive-sso",
+            "OAUTH_SCOPES": "openid email profile",
+            "OAUTH_CODE_CHALLENGE_METHOD": "S256",
+        },
+    )
+    assert applied == {}, applied
+    assert config.stored["oauth.client_id"] == "persisted-client-id"
 
 
 def test_guard_covers_every_env_var_docker_compose_actually_sets() -> None:
@@ -1524,6 +1588,23 @@ def test_guard_covers_every_env_var_docker_compose_actually_sets() -> None:
     variable_names = sorted(set(re.findall(r"^\s{6}([A-Z][A-Z0-9_]*):", block, re.MULTILINE)))
     assert "WEB_LOADER_TIMEOUT" in variable_names
     assert "SEARXNG_QUERY_URL" in variable_names
+    # The CRITICAL finding's own vars: this run is what proves compose sets
+    # them today, and that the guard raises nothing now that they are
+    # reconciled instead of allowlisted.
+    for oauth_var in (
+        "ENABLE_OAUTH_SIGNUP",
+        "ENABLE_OAUTH_ROLE_MANAGEMENT",
+        "ENABLE_OAUTH_GROUP_MANAGEMENT",
+        "OAUTH_ROLES_CLAIM",
+        "OAUTH_ALLOWED_ROLES",
+        "OAUTH_ADMIN_ROLES",
+        "OAUTH_GROUPS_CLAIM",
+    ):
+        assert oauth_var in variable_names, (
+            f"{oauth_var} is no longer set by docker-compose.yml's open-webui "
+            f"service; the CRITICAL finding this test guards no longer "
+            f"applies live, update the comment on ENVIRONMENT_ONLY_ENV_VARS"
+        )
     # Every variable is set to a harmless placeholder; only its presence
     # (not its value) matters to the guard.
     environ = {name: "placeholder-value" for name in variable_names}
