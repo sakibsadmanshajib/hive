@@ -7,7 +7,7 @@ reason out of an upstream JSONResponse with:
 
 Hive's edge-api `writeAuthError` emits the OpenAI envelope
 ({"error": {"code", "message", "type"}}), which carries no top-level 'detail'
-key at all, so the lookup always misses and the hardcoded default is what the
+key at all, so the lookup always missed and the hardcoded default is what the
 user and the logs see on every failure, whatever the real cause was. It cost
 real time on #1567: the toast read "Query generation failed" for what was
 actually a 401 from an auth-filter gap, and the upstream message that said so
@@ -21,20 +21,35 @@ Two sibling call sites in the same file have the same family of bug:
     also misses the 'message' key and falls back to dumping the raw error
     dict into chat content instead of a readable reason.
 
+Adversarial review on the PR found two more readers, in this file's image
+generation error handlers (pristine lines 1641 and 1739, both identical:
+`e.detail.get('message', str(e.detail))` with no unwrap of an outer 'error'
+key). Dormant today: every `raise HTTPException` in routers/images.py passes
+a string detail, so the `isinstance(..., dict)` branch never runs. Routed
+through the shared helper anyway, since it already accepts both shapes and
+makes them correct for free rather than leaving a landmine for the day that
+router starts raising a dict detail.
+
 Two more readers in this vendored tree already handle both 'message' and
 'detail' correctly (main.py's process_chat, events.py's
 publish_model_provider_request_failed) and are left untouched: rewriting code
 that already works only adds risk for no gain.
 
-One shared helper fixes all three broken sites, rather than three separate
-inline fixes, so a future fourth reader has something to call instead of
-inventing its own `.get('detail', ...)` again. It accepts either the raw
-top-level body ({"error": {...}}) or an already-unwrapped inner error object,
-so every call site hands it whatever shape it already has.
+One shared helper fixes every broken site, rather than five separate inline
+fixes, so a future reader has something to call instead of inventing its own
+`.get('detail', ...)` again. It accepts either the raw top-level body
+({"error": {...}}) or an already-unwrapped inner error object, so every call
+site hands it whatever shape it already has. It also unwraps one more level
+when the extracted value is itself a dict, a FastAPI body whose own detail
+key holds another dict, so the result stays text and never a Python repr.
 
-Provider-blind sanitisation is unaffected: the message this surfaces is
-whatever Hive's own error envelope already carries, sanitised by control-plane
-and edge-api before emission. Nothing upstream-raw is newly exposed.
+Site 3's own no-message fallback is a static string, not a dict repr, and
+site 3 logs the RAW error object before it is overwritten, so an operator
+still sees the full object in `docker compose logs` while the customer-facing
+content never does. Provider-blind sanitisation is unaffected either way: the
+message this surfaces is whatever Hive's own error envelope already carries,
+sanitised by control-plane and edge-api before emission. Nothing upstream-raw
+is newly exposed.
 
 Applied here rather than in vendor/open-webui because the chat image builds
 only the FRONTEND from the vendored tree and takes the backend from the pinned
@@ -80,6 +95,10 @@ HELPER = (
     "    error = payload.get('error', payload) if isinstance(payload, dict) else payload\n"
     "    if isinstance(error, dict):\n"
     "        message = error.get('message') or error.get('detail')\n"
+    "        if isinstance(message, dict):\n"
+    "            # a FastAPI body's own detail key can hold another dict.\n"
+    "            # one more unwrap keeps this text, not a Python repr.\n"
+    "            message = message.get('message') or message.get('detail')\n"
     "        if message:\n"
     "            return str(message)\n"
     "    elif isinstance(error, str) and error:\n"
@@ -110,42 +129,64 @@ REPLACEMENTS = [
         "            raise Exception(detail)\n",
         1,
     ),
-    (
-        "                        error_body = json.loads(res.body)\n"
-        "                        detail = error_body.get('detail', 'Image prompt generation failed')\n"
-        "                    except Exception:\n"
-        "                        detail = 'Image prompt generation failed'\n"
-        "                    raise Exception(detail)\n",
-        "                        error_body = json.loads(res.body)\n"
-        "                        " + MARKER + ": same fix as the web-search\n"
-        "                        # handler above.\n"
-        "                        detail = _hive_extract_upstream_error_message(\n"
-        "                            error_body, 'Image prompt generation failed'\n"
-        "                        )\n"
-        "                    except Exception:\n"
-        "                        detail = 'Image prompt generation failed'\n"
-        "                    raise Exception(detail)\n",
-        1,
-    ),
-    (
-        "                if isinstance(error, dict):\n"
-        "                    error = error.get('detail', error)\n"
-        "                else:\n"
-        "                    error = str(error)\n",
-        "                if isinstance(error, dict):\n"
-        "                    " + MARKER + ": same as above, and the old\n"
-        "                    # fallback dumped the raw error dict into chat\n"
-        "                    # content instead of a readable reason.\n"
-        "                    error = _hive_extract_upstream_error_message(\n"
-        "                        error, 'Provider returned an error: ' + str(error)\n"
-        "                    )\n"
-        "                else:\n"
-        "                    error = str(error)\n",
-        1,
-    ),
 ]
 
-EXPECTED_MARKERS = 4  # helper docstring + 3 call sites
+REPLACEMENTS.append((
+    "                        error_body = json.loads(res.body)\n"
+    "                        detail = error_body.get('detail', 'Image prompt generation failed')\n"
+    "                    except Exception:\n"
+    "                        detail = 'Image prompt generation failed'\n"
+    "                    raise Exception(detail)\n",
+    "                        error_body = json.loads(res.body)\n"
+    "                        " + MARKER + ": same fix as the web-search\n"
+    "                        # handler above.\n"
+    "                        detail = _hive_extract_upstream_error_message(\n"
+    "                            error_body, 'Image prompt generation failed'\n"
+    "                        )\n"
+    "                    except Exception:\n"
+    "                        detail = 'Image prompt generation failed'\n"
+    "                    raise Exception(detail)\n",
+    1,
+))
+
+REPLACEMENTS.append((
+    "                if isinstance(error, dict):\n"
+    "                    error = error.get('detail', error)\n"
+    "                else:\n"
+    "                    error = str(error)\n"
+    "\n"
+    "                log.error('Provider returned error (non-streaming): %s', error)\n",
+    "                if isinstance(error, dict):\n"
+    "                    " + MARKER + ": raw dict logged below for an\n"
+    "                    # operator; only the extracted text, never a\n"
+    "                    # dict repr, reaches the user.\n"
+    "                    log.error('Provider returned error (non-streaming): %s', error)\n"
+    "                    error = _hive_extract_upstream_error_message(\n"
+    "                        error, 'Provider returned an error with no message'\n"
+    "                    )\n"
+    "                else:\n"
+    "                    error = str(error)\n"
+    "                    log.error('Provider returned error (non-streaming): %s', error)\n",
+    1,
+))
+
+REPLACEMENTS.append((
+    "                if e.detail and isinstance(e.detail, dict):\n"
+    "                    error_message = e.detail.get('message', str(e.detail))\n"
+    "                else:\n"
+    "                    error_message = str(e.detail)\n",
+    "                " + MARKER + ": e.detail.get('message', str(e.detail))\n"
+    "                # missed Hive's error-wrapped shape. Dormant today,\n"
+    "                # every raise in this router passes a string detail,\n"
+    "                # correct for free via the shared helper if that\n"
+    "                # ever changes.\n"
+    "                error_message = _hive_extract_upstream_error_message(\n"
+    "                    e.detail, str(e.detail)\n"
+    "                )\n",
+    2,
+))
+
+EXPECTED_MARKERS = 6  # helper docstring + 3 call sites + 2 dormant readers
 
 
 def main():

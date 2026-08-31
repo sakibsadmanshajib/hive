@@ -8,7 +8,9 @@ top-level detail key, only an OpenAI-shaped envelope nested under an outer
 error key carrying code, message and type. The lookup always missed, so
 every failure surfaced as the same hardcoded string regardless of the real
 cause. Cost real investigation time on issue #1567 (a 401 auth-filter gap
-read as a generic query-generation failure).
+read as a generic query-generation failure). Adversarial review on the PR
+found two more, dormant readers of the same family in this file's image
+generation error handlers; those are covered here too.
 
 RED and GREEN are both proved here, not asserted from memory: the old bare
 lookup, run against a realistic Hive error body, is shown discarding the
@@ -73,7 +75,14 @@ def load_helper(patched_source: str):
 
 
 def old_buggy_lookup(error_body, default):
-    """The exact pre-fix line, for the RED half of this check."""
+    """The exact pre-fix line, for the RED half of this check.
+
+    This one check cannot fail on its own: it is a reimplementation of
+    the deleted line, dict.get returning its default when the key is
+    absent, not a guard on the shipped code. It documents the defect;
+    the structural checks below (bare-detail text gone, call-site count,
+    the shared helper actually being defined) are the real red signal.
+    """
     return error_body.get("detail", default)
 
 
@@ -122,14 +131,47 @@ def main() -> int:
             "error = error.get('detail', error)" not in patched
         )
 
-        # def plus 3 call sites, all routed through the one shared helper.
-        checks["3 call sites now call the shared helper"] = (
-            patched.count("_hive_extract_upstream_error_message(") == 4
+        # def plus 5 call sites (3 named by the issue, 2 dormant readers
+        # found on review), all routed through the one shared helper.
+        checks["5 call sites now call the shared helper"] = (
+            patched.count("_hive_extract_upstream_error_message(") == 6
+        )
+        checks["dormant image-generation readers no longer read bare detail"] = (
+            "error_message = e.detail.get('message', str(e.detail))"
+            not in patched
+        )
+        # Low finding fixed: the old default eagerly built a Python repr
+        # of the raw dict into customer-facing content. Now static, and
+        # the raw dict is logged (for an operator) before it is
+        # overwritten, not after.
+        checks["site 3 default is static, not a dict repr"] = (
+            "'Provider returned an error with no message'" in patched
+            and "'Provider returned an error: ' + str(error)" not in patched
+        )
+        checks["site 3 logs the raw error before overwriting it"] = (
+            "log.error('Provider returned error (non-streaming): %s', error)\n"
+            "                    error = _hive_extract_upstream_error_message("
+            in patched
         )
 
         helper = load_helper(patched)
         checks["patch defines the shared helper"] = helper is not None
         if helper is None:
+            # Record every dependent check as an explicit failure rather
+            # than letting it vanish from the report. Relying on "patch
+            # defines the shared helper" alone to carry the red signal
+            # for the whole GREEN half is fragile: if that one check were
+            # ever renamed or dropped, these would disappear silently
+            # instead of failing loudly.
+            for name in (
+                "GREEN: nested OpenAI-shaped message extracted",
+                "GREEN: already-unwrapped error object also extracted",
+                "FastAPI detail shape still extracted",
+                "fallback default returned when nothing usable exists",
+                "fallback default returned for a non-dict payload",
+                "nested dict-valued detail is unwrapped to text",
+            ):
+                checks[name] = False
             return _report(checks)
 
         # GREEN: the real message survives, through the actual shipped code.
@@ -156,6 +198,13 @@ def main() -> int:
         )
         checks["fallback default returned for a non-dict payload"] = (
             helper(None, "Query generation failed") == "Query generation failed"
+        )
+        # Low finding fixed: a dict-valued message (a FastAPI body whose
+        # own detail key holds another dict) is unwrapped once more
+        # instead of coming back as a Python repr.
+        checks["nested dict-valued detail is unwrapped to text"] = (
+            helper(dict(detail=dict(message="nested x")), "fallback")
+            == "nested x"
         )
 
     return _report(checks)
