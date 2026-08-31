@@ -1228,11 +1228,36 @@ def test_an_always_present_rag_template_would_break_upstreams_own_default() -> N
     )
 
 
+# The prompts this deployment has DELIBERATELY chosen wording for, each with
+# the decision that chose it. Adding a name here is the deliberate act; the
+# test below then stops treating its presence in the deploy workflow as an
+# accident, and goes on refusing every other one.
+#
+# `rag.template`: issue #1596, and the reason it is first is that upstream's
+# own text carries no untrusted-data framing at all. Issue #1571 is the report
+# that an unauthenticated third party can get their own page text into this
+# template by publishing a page the web loader then fetches, so the framing is
+# a security posture and not a style preference. Its POSITION is deliberately
+# left at upstream's default: docker-compose.yml holds RAG_SYSTEM_CONTEXT false,
+# because upstream renders these rules and the retrieved text into one string
+# and promoting one would promote the other. The trusted framing reaches system
+# authority through HIVE_CHAT_SYSTEM_PROMPT instead.
+DELIBERATELY_SET_FOR_THE_DEMO_BOX = {"RAG_TEMPLATE"}
+
+
 def test_no_prompt_template_default_is_baked_into_the_repo() -> None:
     """The inverse of the test above, and the one that fails if someone later
     helpfully seeds a Hive prompt into compose or into the deploy workflow's
     env. Changing what every user of a surface is told is a product decision,
-    not a side effect of adding a knob."""
+    not a side effect of adding a knob.
+
+    Narrowed rather than deleted when the first such decision was actually made
+    (issue #1596). Compose stays absolute: that file is shared with the
+    enterprise profile and local dev, so no prompt belongs in it at any time.
+    The workflow half now allows exactly the names in
+    DELIBERATELY_SET_FOR_THE_DEMO_BOX above, so choosing a prompt is an edit to
+    that set with a reason next to it, and every other one of the ten still
+    fails here."""
     compose = _compose_text()
     workflow = (
         Path(__file__).resolve().parents[1]
@@ -1240,10 +1265,25 @@ def test_no_prompt_template_default_is_baked_into_the_repo() -> None:
         / "workflows"
         / "deploy-demo-box.yml"
     ).read_text(encoding="utf-8")
+    assert DELIBERATELY_SET_FOR_THE_DEMO_BOX <= set(PROMPT_TEMPLATE_KEYS.values()), (
+        "DELIBERATELY_SET_FOR_THE_DEMO_BOX names something that is not one of "
+        "the ten prompt variables, so this test would be exempting nothing"
+    )
     for variable in PROMPT_TEMPLATE_KEYS.values():
         assert not re.search(
             rf"^\s*{variable}:\s*['\"]", compose, re.MULTILINE
         ), f"{variable} carries a literal default in docker-compose.yml"
+        if variable in DELIBERATELY_SET_FOR_THE_DEMO_BOX:
+            # The exemption is not a free pass: the value still has to be
+            # there, as a block scalar, or the deployment is running upstream's
+            # text while this file claims a decision was made.
+            assert re.search(
+                rf"^  {variable}: \|$", workflow, re.MULTILINE
+            ), (
+                f"{variable} is listed as deliberately set for the demo box but "
+                f"the workflow does not set it as a block scalar"
+            )
+            continue
         assert (
             variable not in workflow
         ), f"{variable} is set for the demo box; that is a product decision, not a knob"

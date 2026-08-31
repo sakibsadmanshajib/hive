@@ -253,6 +253,25 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
     && grep -q 'hive: reconciled Open WebUI config from env' /app/backend/open_webui/config.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/config.py').read_text())"
 
+# issue #1596: the chat surface had no system prompt at all. Open WebUI's only
+# two inputs are a models-table row's `params.system` and the per-user
+# Settings > General field, and neither is reachable for a Hive model, whose
+# listing is synthesized by hive_model_picker.py from the control-plane
+# catalog. So no identity, no capability statement, no citation rule and no
+# refusal guidance shipped, and the customer talked to whatever default the
+# routed upstream provider applies. This consumes the `hive.chat.system_prompt`
+# row the reconcile directly above writes from HIVE_CHAT_SYSTEM_PROMPT, and
+# prepends it to the request's system message. Runs immediately after that
+# reconcile so the writer and its only reader stay adjacent; no other patch in
+# this file writes utils/middleware.py. Same fail-loud posture as the patches
+# above, and the patch's own assertions pin the position that makes the prompt
+# survive the native tool-call restore.
+COPY deploy/docker/owui-patches/apply_chat_system_prompt_patch.py /tmp/apply_chat_system_prompt_patch.py
+RUN python3 /tmp/apply_chat_system_prompt_patch.py \
+    && test "$(grep -c '# hive (#1596)' /app/backend/open_webui/utils/middleware.py)" -eq 1 \
+    && grep -q "await Config.get('hive.chat.system_prompt')" /app/backend/open_webui/utils/middleware.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
+
 COPY deploy/docker/owui-patches/apply_web_search_ratelimit_patch.py /tmp/apply_web_search_ratelimit_patch.py
 RUN python3 /tmp/apply_web_search_ratelimit_patch.py \
     && grep -q 'a rate limit is an error, not an empty result set' /app/backend/open_webui/retrieval/web/duckduckgo.py \
