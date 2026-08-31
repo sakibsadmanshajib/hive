@@ -69,8 +69,8 @@ graphical object.
 | Pair | Need | Before | After |
 |---|---|---|---|
 | Focus ring on the light canvas | 3.00 | 2.67 | 4.50 |
-| Focus ring on the light raised surface | 3.00 | 2.82 | 4.11 |
-| Focus ring on the light sunken surface | 3.00 | 2.60 | 3.80 |
+| Focus ring on the light raised surface | 3.00 | 2.44 | 4.11 |
+| Focus ring on the light sunken surface | 3.00 | 2.26 | 3.80 |
 | Focus ring on the dark canvas | 3.00 | 5.34 | 5.34, unchanged |
 | Focus ring on the dark surface | 3.00 | 4.60 | 4.60, unchanged |
 | Current destination bar on the light canvas | 3.00 | 2.67 | 4.50 |
@@ -81,9 +81,37 @@ graphical object.
 | Selected mode segment, dark, against thumb and track | 3.00 | 1.19 | 4.60 and 5.92 |
 | Placeholder ink on the light surface | 4.50 | 1.96 | 5.41 |
 | Placeholder ink on the light canvas | 4.50 | 1.86 | 5.13 |
-| Placeholder ink on the dark surface | 4.50 | 3.11 | 4.61 |
-| Checkbox mark on the coral fill | 3.00 | 2.82 (white) | 4.60 (charcoal) |
+| Placeholder ink on the dark surface | 4.50 | 6.61 | 4.61, a regression |
+| Checkbox mark on the coral fill | 3.00 | 3.08 (white, passing) | 4.60 (charcoal) |
 | Unchecked checkbox boundary on the surface | 3.00 | 1.41 | 5.41 |
+
+Four of those rows were wrong in the first revision of this log and are
+corrected above. They are called out rather than quietly fixed, because a merge
+decision was going to rest on them.
+
+The two focus ring rows for the raised and sunken surfaces read 2.82 and 2.60.
+Both were coral measured against `--hv-surface`, not against the plane named in
+the row, so the row paired an old figure on one ground with a new figure on
+another. The correct before values are 2.44 and 2.26. Both still fail 3:1
+before and pass after, so no conclusion moves.
+
+The dark placeholder row read "before 3.11", which presented a reduction as a
+repair. The declaration being replaced carried no dark variant, so dark
+placeholders were `--color-gray-400` at 6.61:1 on the dark surface, and
+`--hv-ink-muted` in dark is 4.61:1. Dark placeholders therefore lose two points
+on a pair that already passed. That is accepted rather than fixed: routing both
+themes through the one muted role is what makes the token mean anything, and
+4.61 still clears 1.4.3. The light half, 1.86 to 5.13 on the canvas, is the
+actual win on that line.
+
+The checkbox row read "before 2.82", which is coral against `--hv-surface`
+again. The replaced mark was literally `stroke="white"`, and pure white on
+coral is 3.08:1, which clears the 3:1 WCAG 1.4.11 asks of a graphical object.
+So the white mark was not a compliance failure and the justification given for
+changing it was wrong. The change still stands on two other grounds: the token
+file names charcoal as "the only accessible pairing" and calls white on the
+primary "a regression with a number attached", and 4.60 gives a mark that is
+read as a symbol a text grade margin rather than a two hundredths one.
 
 Two honest notes on that table.
 
@@ -216,13 +244,85 @@ what the audit describes. Nothing regressed: the panel heads, search fields,
 cards, empty states and pill buttons all still read correctly, and the 4px
 radius shifts are not visible as damage anywhere in frame.
 
-What was **not** covered, stated plainly rather than implied:
+## Second capture pass, after adversarial review
+
+The review returned NOT SAFE TO MERGE on one ground: `rounded-4xl` goes 32px to
+24px, which is the largest radius shift in the diff at twice the 4px ceiling the
+first revision of this log claimed, both of its sites are modal shells, and one
+of them is `common/Modal.svelte`'s default `className`, so it is every modal in
+the application. It was also absent from the site count, which summed to exactly
+153 without it. The count is 155 and the ceiling claim is corrected.
+
+Four frames were taken to close that and the other two surfaces the first pass
+missed. Same standalone container, same browser, both themes.
+
+| File | What it settles |
+|---|---|
+| `22-settings-modal-<theme>` | `Modal.svelte`'s own shell, so the `rounded-4xl` shift on every modal in the product |
+| `23-projects-dialog-<theme>` | A `rounded-2xl` plus `shadow-xl` floating panel, so the 16px to 12px shift and the elevation repoint on one element |
+| `20-composer-focused-<theme>`, `21-composer-closeup-<theme>` | The composer textarea with focus, which carries `outline-hidden` and is the most used control on the product |
+| `26-checkbox-<theme>` | The base layer checkbox rules, unchecked, checked and focused |
+
+Probes from those runs, `getComputedStyle` on the live DOM:
+
+```
+light  #chat-input:focus-visible  outline = 2px solid oklch(0.55 0.16 42), offset 2px
+dark   #chat-input:focus-visible  outline = 2px solid oklch(0.678 0.164 43), offset 2px
+
+light  .rounded-4xl (Settings modal shell)  border-radius = 24px
+dark   .rounded-4xl (Settings modal shell)  border-radius = 24px
+
+light  .shadow-xl (Projects dialog)  border-radius = 12px
+light  .shadow-xl (Projects dialog)  box-shadow =
+         rgba(0,0,0,0) 0 0 0 0, rgba(0,0,0,0) 0 0 0 0, rgba(0,0,0,0) 0 0 0 0,
+         rgba(0,0,0,0) 0 0 0 0,
+         oklch(0.19 0.006 260 / 0.18) 0 16px 40px -12px,
+         oklch(0.19 0.006 260 / 0.08) 0 4px 12px -6px
+
+light  checkbox unchecked  border = oklch(0.503 0.022 80)  background = oklch(0.968 0.011 85)  radius = 4px
+light  checkbox checked    border = oklch(0.678 0.164 43)  background = oklch(0.678 0.164 43)
+light  checkbox focused    outline = oklch(0.55 0.16 42) 2px
+dark   checkbox unchecked  border = oklch(0.663 0.03 84)   background = oklch(0.288 0.005 107)
+dark   checkbox checked    background = oklch(0.678 0.164 43)
+dark   checkbox focused    outline = oklch(0.678 0.164 43) 2px
+```
+
+That Projects `box-shadow` line is worth reading rather than skimming. The four
+leading `rgba(0,0,0,0) 0 0 0 0` entries are Tailwind's inset shadow, inset ring,
+ring offset and ring slots resolving to their empty values, with the two warm
+literals last. The five slot comma list is intact and valid, which is the thing
+a `var(--hv-shadow-N)` reference would have broken in dark by resolving one slot
+to `none`. The elevation decision is therefore verified at runtime rather than
+argued from the compiled text alone.
+
+One honesty note on the checkbox frame. The review expected the Settings modal
+to contain a checkbox and it does not: the probe found none there, and none on
+`/calendar`, `/notes`, `/knowledge` or `/projects` either. The reachable
+checkboxes in this tree all sit behind data this container has none of, a
+knowledge base, a sidebar folder's delete dialog, or a markdown task list in a
+transcript. So `26-checkbox-<theme>` is the compiled stylesheet from the built
+image applied to bare `input[type=checkbox]` elements on the token grounds, in
+the same browser, and it is labelled that way rather than presented as an
+application screen. What it proves is exact for a `@layer base` rule on a native
+element, which has no component context to get wrong, and it is weaker than an
+application frame for anything else.
+
+What is **still** not covered after the second pass, stated plainly rather than
+implied:
 
 - No live transcript, no streaming state and no code block, because no model is
-  configured without `control-plane`. `rounded-2xl` at 12px inside a message
-  bubble is therefore unverified visually.
-- No settings modal, no model selector dropdown and no other popover, so the
-  elevation remap on `shadow-lg` is verified on the composer only.
+  configured without `control-plane`. Two things ride on that. `rounded-2xl` at
+  12px inside a message bubble is unverified, although the same step is now
+  verified at 12px on the Projects dialog. And the `text-sm` leading change from
+  a unitless 1.42857 to an absolute 22px is unverified against markdown rendered
+  inside a `text-sm` container, which is the shape where an inherited absolute
+  length behaves differently from an inherited ratio. That is issue #1615, filed
+  rather than argued away.
+- No model selector dropdown and no menu popover. The elevation repoint is now
+  verified on two floating surfaces, the composer and the Projects dialog, but
+  not on those.
+- The checkbox frame is the compiled stylesheet on bare elements, not an
+  application screen, for the reason given above.
 - No 375px mobile capture.
 - There is no visual regression harness in this repo, so none of this is
   automated and none of it will catch the next drift. The audit's own closing
