@@ -1,0 +1,14 @@
+{
+  "image": "ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4",
+  "files": {
+    "/app/backend/open_webui/routers/openai.py": {
+      "sha256": "20e692d9bc4124eafd1eef3129eac2ce7667d4dd08c8b6fcf9465a116a1ed9eb",
+      "bytes": 62400
+    },
+    "/app/backend/open_webui/utils/middleware.py": {
+      "sha256": "95908450e33b2c03aced12d21d485840009d93aae9e247ce1e38fda7fa597195",
+      "bytes": 236581
+    }
+  },
+  "note": "Digests of the two files issue #1600 reasons about, as the PINNED BACKEND IMAGE ships them, taken from the image itself. apply_task_nonstreaming_response_1600_patch.py splices routers/openai.py, and the consumer it repairs (chat_web_search_handler) lives in utils/middleware.py, but PR CI never builds Dockerfile.open-webui, so scripts/test_owui_task_nonstreaming_response.py runs the patch and the consumer against the VENDORED copies instead. That is evidence about the running container only while each pair is identical, and nothing else in the repository asserts that: vendor/open-webui exists to build the frontend and is bumped independently of the digest. The test compares both vendored files against these hashes, so a digest bump or a hive edit to either vendored copy fails a pull request instead of first surfacing as a failed deploy image build. Same device as pinned-chat-digest.json, which does this for utils/chat.py. Regenerate on any digest bump: docker run --rm --entrypoint /bin/cat <the digest pinned in Dockerfile.open-webui> /app/backend/open_webui/routers/openai.py | sha256sum"
+}
