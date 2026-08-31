@@ -1566,10 +1566,20 @@ jobs:
         # container is being replaced, so there is no window in which a stale
         # container answers a parseable body. That keeps a genuine drift loud
         # and immediate instead of buying it 60 seconds of doubt.
+        #
+        # The two retry counters exist only so the final error annotation names
+        # which failure mode dominated. The GitHub job summary shows the
+        # annotation and not the surrounding log, and "never answered" alone
+        # sends the next reader to expand the raw log before they can tell a
+        # container that never came up from one that came up serving something
+        # that is not engine JSON. Those have different causes and different
+        # fixes, so the counts belong in the annotation itself.
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -uo pipefail
           want=$'bing\nstackoverflow\nwikipedia'
+          unreachable=0
+          unparseable=0
           for i in $(seq 1 12); do
             if config=$(curl -fsS --max-time 10 http://127.0.0.1:8888/config); then
               if enabled=$(printf '%s' "$config" \
@@ -1581,13 +1591,15 @@ jobs:
                 echo "searxng is serving the repository engine allow-list: $(echo "$enabled" | tr '\n' ',')"
                 exit 0
               fi
+              unparseable=$((unparseable + 1))
               echo "attempt $i: /config answered but the body is not parseable engine JSON, retry in 5s"
             else
+              unreachable=$((unreachable + 1))
               echo "attempt $i: /config on 127.0.0.1:8888 is not answering yet, retry in 5s"
             fi
             sleep 5
           done
-          echo "::error::searxng's /config on 127.0.0.1:8888 never answered with parseable engine JSON, so the live engine allow-list could not be verified. Container state:" >&2
+          echo "::error::searxng's /config on 127.0.0.1:8888 never answered with parseable engine JSON, so the live engine allow-list could not be verified. Of 12 attempts, $unreachable could not reach the endpoint and $unparseable answered with a body that would not parse as engine JSON. Container state:" >&2
           docker compose $HIVE_COMPOSE_FLAGS ps searxng || true
           exit 1
 
