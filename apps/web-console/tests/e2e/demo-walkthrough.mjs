@@ -40,6 +40,15 @@ import { mdTableCell } from "./support/md-table.mjs";
 const CHAT = process.env.HIVE_CHAT_BASE_URL ?? "https://chat-hive.scubed.co";
 const CONSOLE = process.env.PLAYWRIGHT_BASE_URL ?? "https://console-hive.scubed.co";
 const API = process.env.HIVE_EDGE_API_URL ?? "https://api-hive.scubed.co";
+// Step 12 mints its own key through the console UI for the QA-tester/
+// owner-signup identity rather than reusing the ci-seeded key, and neither
+// identity carries a tenant_model_visibility grant on the free-pool aliases.
+// This walkthrough's whole point is to reproduce what a customer sees, and a
+// customer never has hive-free/hive-free-tools in their picker either
+// (supabase/migrations/20260831_01_restrict_free_pool_aliases_visibility.sql),
+// so step 12 calls the same public, customer-selectable default alias
+// instead of requesting a free-pool exception for these fixture identities.
+const DEMO_CHAT_MODEL = process.env.HIVE_DEMO_CHAT_MODEL ?? "hive-default";
 
 const QA_EMAIL = process.env.HIVE_QA_TESTER_EMAIL ?? "";
 const QA_PASSWORD = process.env.HIVE_QA_TESTER_PASSWORD ?? "";
@@ -653,12 +662,12 @@ async function main() {
       [
         "chat.completions",
         `${API}/v1/chat/completions`,
-        { model: "hive-free", messages: [{ role: "user", content: "Say OK." }], max_tokens: 10 },
+        { model: DEMO_CHAT_MODEL, messages: [{ role: "user", content: "Say OK." }], max_tokens: 10 },
       ],
       [
         "messages",
         `${API}/v1/messages`,
-        { model: "hive-free", max_tokens: 10, messages: [{ role: "user", content: "Say OK." }] },
+        { model: DEMO_CHAT_MODEL, max_tokens: 10, messages: [{ role: "user", content: "Say OK." }] },
       ],
     ]) {
       try {
