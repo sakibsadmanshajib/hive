@@ -1,0 +1,7 @@
+{
+  "image": "ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4",
+  "source": "/app/backend/open_webui/utils/chat.py",
+  "sha256": "01821cfbdfaa407f116cf2d00002246e59b3ef7c662e0a84913e3f4a2371b503",
+  "bytes": 13618,
+  "note": "Digest of utils/chat.py as the PINNED BACKEND IMAGE ships it, taken from the image itself. apply_task_upstream_auth_patch.py (issue #1567) splices that file, but PR CI never builds Dockerfile.open-webui, so scripts/test_owui_task_upstream_auth.py runs the patch against the VENDORED copy instead. That is evidence about the running container only while the two files are identical, and nothing else in the repository asserts that they are: vendor/open-webui exists to build the frontend and is bumped independently of the digest. The test compares the vendored file against this hash, so a digest bump or a hive edit to the vendored copy fails a pull request instead of first surfacing as a failed deploy image build. Regenerate on any digest bump: docker run --rm --entrypoint /bin/cat <the digest pinned in Dockerfile.open-webui> /app/backend/open_webui/utils/chat.py | sha256sum"
+}

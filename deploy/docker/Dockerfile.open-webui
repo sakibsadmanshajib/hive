@@ -557,6 +557,33 @@ RUN python3 /tmp/apply_ydoc_task_cancel_1508_patch.py
 COPY deploy/docker/owui-patches/apply_main_admin_flag_1511_patch.py /tmp/apply_main_admin_flag_1511_patch.py
 RUN python3 /tmp/apply_main_admin_flag_1511_patch.py
 
+# issue #1567: every /api/task/* background completion reached edge-api under
+# the static shim key with no per-user credential, and OWUIUnwrap rejected all
+# of them 401 because /v1/chat/completions requires one unconditionally. Title
+# generation, tag generation, follow-up suggestions, autocomplete, image prompt
+# generation, web-search query generation and RETRIEVAL query generation were
+# all dead, for every model, and every one of them fell back silently.
+#
+# The credential injection lives in a native Functions Filter
+# (deploy/docker/pipelines/hive_jwt_forward.py), and Open WebUI runs that chain
+# only from process_chat_payload, the main chat path. routers/tasks.py runs the
+# legacy process_pipeline_inlet_filter instead and then calls
+# utils/chat.py::generate_chat_completion directly, so the Filter never sees
+# those requests.
+#
+# This attaches the same credential at that dispatch seam, which is the single
+# point all eight task handlers plus tool function calling, context compaction
+# and the memory subsystem pass through. It is not a relaxation of the check
+# that rejected them: requiresPerUserAuth is untouched, the shim key gains
+# nothing, and edge-api has no change. Same fail-loud posture as the patches
+# above. Behaviour is covered by scripts/test_owui_task_upstream_auth.py.
+COPY deploy/docker/owui-patches/hive_upstream_auth.py /app/backend/open_webui/utils/hive_upstream_auth.py
+COPY deploy/docker/owui-patches/apply_task_upstream_auth_patch.py /tmp/apply_task_upstream_auth_patch.py
+RUN python3 /tmp/apply_task_upstream_auth_patch.py \
+    && test "$(grep -c '# hive (#1567)' /app/backend/open_webui/utils/chat.py)" -eq 2 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/chat.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_upstream_auth.py').read_text())"
+
 # Security review, MEDIUM (PR #1525): upstream's own default for this flag,
 # read in config.py as os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True'), is
 # permissive. A malformed value already fails closed (anything that is not
