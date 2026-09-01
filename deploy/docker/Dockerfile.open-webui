@@ -80,7 +80,7 @@ RUN npm run build && test -f build/index.html
 # qualifies under the <=50-user carve-out; owner has authorized full removal
 # regardless. Re-evaluate before any rollout that could exceed 50 users/30
 # days -- get written permission or an enterprise license first.
-FROM ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4
+FROM ghcr.io/open-webui/open-webui:v0.11.3@sha256:751b617714b91e4cfd0186a509c72480c858e012976103b09a30dad053c36175
 
 # The stock product surfaces Hive does not ship, turned off in the image
 # itself rather than only in docker-compose.yml.
