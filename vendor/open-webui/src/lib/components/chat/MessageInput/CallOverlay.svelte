@@ -310,8 +310,14 @@
 		// That was unreachable while the loop never exited, which is exactly the
 		// bug below; it is reachable now, and a browser caps how many contexts
 		// one document may hold, so trading a microphone that never stops for a
-		// microphone that stops six times and then never again is no trade.
+		// microphone that stops a handful of times and then never again is no
+		// trade.
+		// The source node is disconnected before the context closes, which the
+		// close alone would cover, but saying it makes the ownership obvious:
+		// the context is per cycle, the stream behind the source is not, and
+		// nothing here may stop that stream.
 		const releaseAnalyser = () => {
+			audioStreamSource.disconnect();
 			audioContext.close().catch(() => {});
 		};
 
