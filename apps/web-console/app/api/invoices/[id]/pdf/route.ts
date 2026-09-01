@@ -7,7 +7,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getInvoicePdfUrl } from "@/lib/control-plane/client";
+import { ControlPlaneError, getInvoicePdfUrl } from "@/lib/control-plane/client";
 
 async function requireUser(): Promise<Response | null> {
   const cookieStore = await cookies();
@@ -20,6 +20,17 @@ async function requireUser(): Promise<Response | null> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return null;
+}
+
+// Customer-facing text, chosen by status class alone. The upstream message is
+// never forwarded: it is written by the control plane for operators and can
+// name internal detail, which the provider-blind rule keeps off a customer
+// response (CLAUDE.md, Conventions).
+function pdfErrorMessage(status: number): string {
+  if (status === 404) return "Invoice not found";
+  if (status === 403) return "You do not have access to this invoice.";
+  if (status === 400) return "That invoice reference is not valid.";
+  return "Could not resolve the invoice PDF. Please try again.";
 }
 
 export async function GET(
@@ -36,8 +47,24 @@ export async function GET(
     }
     return NextResponse.redirect(url, 302);
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Failed to resolve invoice PDF";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // The catch used to answer 500 for every failure, including the 404 the
+    // control plane correctly returns for an unknown invoice id, and it put
+    // the upstream error text in the body (issue #1649). Status class
+    // forwarded, upstream text logged and dropped.
+    console.error("invoice pdf proxy: could not resolve the signed URL", err);
+    if (err instanceof ControlPlaneError) {
+      const status =
+        err.status === 400 || err.status === 403 || err.status === 404
+          ? err.status
+          : 502;
+      return NextResponse.json(
+        { error: pdfErrorMessage(err.status) },
+        { status },
+      );
+    }
+    return NextResponse.json(
+      { error: pdfErrorMessage(500) },
+      { status: 500 },
+    );
   }
 }

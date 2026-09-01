@@ -1,9 +1,9 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
-import { chatModelUrl } from "@/lib/chat-link";
+import { chatModelUrl, isChatCapable } from "@/lib/chat-link";
 
 import {
   getAccountProfile,
@@ -12,6 +12,7 @@ import {
   getViewer,
   type UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import { ConsoleNotFound } from "@/components/app-shell/console-not-found";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { ModelDetail } from "@/components/catalog/model-detail";
 import { PageHeader } from "@/components/ui/page-header";
@@ -50,7 +51,23 @@ export default async function ModelDetailPage(
 
   const model = models.find((row) => row.id === id);
   if (!model) {
-    notFound();
+    // Rendered in place rather than raised through notFound(), which paints
+    // nothing on first load in Next 16.3.x. Full reasoning, and why the
+    // role-gated pages must keep notFound() instead, in the component (issue
+    // #1652).
+    return (
+      <ConsoleNotFound
+        viewer={viewer}
+        ownerName={profile.owner_name || null}
+        active="/console/catalog"
+        section="Model catalog"
+        eyebrow="Build"
+        title="Model not found"
+        description="No model on this workspace matches that address. It may have been renamed or retired, or it may not be enabled for this workspace."
+        backHref="/console/catalog"
+        backLabel="Back to catalog"
+      />
+    );
   }
 
   // Usage is a separate call and a separate failure: an analytics outage must
@@ -92,16 +109,21 @@ export default async function ModelDetailPage(
         description={model.summary || undefined}
         actions={
           <>
-            <a
-              href={chatModelUrl(model.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Opens Hive Chat with this model preselected"
-              className={cn(buttonVariants({ variant: "accent", size: "sm" }))}
-            >
-              Try in chat
-              <ArrowUpRight size={14} aria-hidden="true" />
-            </a>
+            {/* Same capability gate as the catalog table: an embedding, STT or
+                TTS alias cannot serve a chat completion, so it gets no link
+                into chat (issue #1647). */}
+            {isChatCapable(model.capability_badges) ? (
+              <a
+                href={chatModelUrl(model.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Opens Hive Chat with this model preselected"
+                className={cn(buttonVariants({ variant: "accent", size: "sm" }))}
+              >
+                Try in chat
+                <ArrowUpRight size={14} aria-hidden="true" />
+              </a>
+            ) : null}
             <Link
               href="/console/catalog"
               className={cn(

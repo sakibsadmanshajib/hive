@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { stripBidiControls } from "@/lib/text/bidi";
 import {
   isCheckoutReturnState,
   type CheckoutReturnState,
@@ -271,9 +272,15 @@ function parseJsonValue(text: string): JsonValue | null {
   }
 }
 
+// Every string the control plane returns reaches the console through this one
+// reader, so it is where Unicode bidi control characters are neutralised:
+// nicknames, member names, workspace display names and the rest (issue #1653).
+// At the decode boundary rather than per render site, because the rows already
+// stored carrying one cannot be fixed by input validation, and a guard added
+// component by component is one component away from being missed.
 function readStringField(source: JsonObject, key: string): string | null {
   const value = source[key];
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" ? stripBidiControls(value) : null;
 }
 
 function readBooleanField(source: JsonObject, key: string): boolean | null {
@@ -3251,17 +3258,26 @@ export async function getWorkspaceInvoice(
 export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(
-    `${baseUrl}/api/v1/invoices/${invoiceId}/pdf`,
+    `${baseUrl}/api/v1/invoices/${encodeURIComponent(invoiceId)}/pdf`,
     { headers, redirect: "manual", cache: "no-store" },
   );
   if (response.status === 302 || response.status === 301) {
     const location = response.headers.get("Location");
     return location ?? null;
   }
+  // An id that matches no invoice is a null, not a throw. The control plane
+  // answers 404 for it correctly (invoices/service.go returns
+  // ErrInvoiceNotFound, http.go maps it), and this function used to turn that
+  // into a generic Error, which the proxy route caught and reported as a 500
+  // (issue #1649). Null is what the route already had a 404 branch for.
+  if (response.status === 404) {
+    return null;
+  }
   if (!response.ok) {
-    throw new Error(
-      await readResponseError(response, "Failed to resolve invoice PDF URL"),
-    );
+    // ControlPlaneError, so the route can forward the upstream status class
+    // instead of collapsing every refusal to 500. The message it carries is
+    // for the server log, never for the customer.
+    await throwControlPlaneError(response, "Failed to resolve invoice PDF URL");
   }
   // Some edge proxies follow redirects despite `redirect: manual` — fall back
   // to body parse in that case.

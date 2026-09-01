@@ -67,9 +67,16 @@ describe("statusBadge", () => {
       tone: "warning",
     });
     expect(statusBadge("hidden")).toEqual({
-      label: "Hidden",
+      label: "Deprecated",
       tone: "neutral",
     });
+  });
+
+  it("never renders the internal lifecycle word to a customer", () => {
+    // "hidden" is this catalog deprecation marker (hive-fast carries it and
+    // still answers requests), not a state a customer has any use for, and it
+    // was rendering verbatim on /console/catalog (issue #1647).
+    expect(statusBadge("hidden").label).not.toMatch(/hidden/i);
   });
 
   it("still maps the legacy 'active' fallback emitted by the client parser", () => {

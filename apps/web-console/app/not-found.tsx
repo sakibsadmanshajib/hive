@@ -25,6 +25,23 @@ import { buttonVariants } from "@/components/ui/button";
  * visitor is bounced to sign-in by app/console/layout.tsx exactly as before).
  * No "did you mean" list, no route suggestions, no echo of the path that
  * missed.
+ *
+ * What this page cannot do, measured on Next 16.3.2 and again on 16.3.4
+ * (issue #1652): reach the initial HTML for a notFound() raised part-way
+ * through a render. The App Router answers those with an
+ * <html id="__next_error__"> document whose body is a single empty hidden div,
+ * leaving the 404 to be painted by the client from the Flight payload, so the
+ * first paint is blank and stays blank with JavaScript off. An unmatched URL is
+ * resolved before rendering starts and does get this page in the initial HTML,
+ * which is why the two paths looked so different. A segment-scoped
+ * app/console/not-found.tsx and an app/global-not-found.tsx were both built and
+ * measured against this app; neither changes it.
+ *
+ * So the two data-miss pages that used to call notFound() (the catalog detail
+ * page, the API key limits page) render components/app-shell/console-not-found
+ * in place instead, server-side, with no blank paint. The three role-gated
+ * pages still call notFound() and still land here: the 404 status is the access
+ * control on those, and a 200 would confirm the surface exists.
  */
 export default function NotFound() {
   return (
