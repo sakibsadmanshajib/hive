@@ -290,7 +290,7 @@ func (c *MTDSpendCounter) SyncWorkspace(ctx context.Context, workspaceID uuid.UU
 	pipe.Set(ctx, mtdCreditsRedisKey(workspaceID, period), ledgerCredits.Int64(), mtdCounterTTL)
 	pipe.Set(ctx, MTDSpendRedisKey(workspaceID, period), subunits.String(), mtdCounterTTL)
 	if hardCap != nil {
-		pipe.Set(ctx, hardCapRedisKey(workspaceID), hardCap.String(), hardCapRedisNoExpiry)
+		pipe.Set(ctx, hardCapRedisKey(workspaceID), hardCap.String(), hardCapRedisTTL)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return c.fail(fmt.Errorf("budgets: sync workspace: %w", err))
@@ -388,7 +388,7 @@ func (c *MTDSpendCounter) republishHardCap(ctx context.Context, workspaceID uuid
 		}
 		return
 	}
-	if err := c.redis.Set(ctx, hardCapRedisKey(workspaceID), budget.HardCap.String(), hardCapRedisNoExpiry).Err(); err != nil {
+	if err := c.redis.Set(ctx, hardCapRedisKey(workspaceID), budget.HardCap.String(), hardCapRedisTTL).Err(); err != nil {
 		c.logger.WarnContext(ctx, "budget mtd counter: hard cap republish failed",
 			"workspace_id", workspaceID, "error", err)
 	}

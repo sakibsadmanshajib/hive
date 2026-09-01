@@ -192,28 +192,39 @@ func hardCapRedisKey(workspaceID uuid.UUID) string {
 	return budgetkeys.HardCap(workspaceID.String())
 }
 
-// hardCapRedisNoExpiry is the TTL the published cap carries: none.
+// hardCapRedisTTL is how long a published cap survives without being restated.
 //
-// It used to be thirty seconds, under a comment claiming the edge-api gate
-// would read through on a miss so a lost publish healed quickly. The gate does
-// no such thing and never did: a missing key reads as "no budget configured"
-// and the gate becomes pass-through. So a cap stopped being enforced thirty
-// seconds after the customer typed it, which is the second half of why the hard
-// cap never blocked anything (issue #1651). Redis follows the row on upsert and
-// delete.
+// The history matters, because a TTL here is what caused half of issue #1651 and
+// is now what fixes a different half. It used to be thirty seconds, under a
+// comment claiming the edge-api gate would read through on a miss. The gate does
+// no such thing: a missing key reads as "no budget configured" and the gate
+// becomes pass-through, so a cap stopped being enforced thirty seconds after the
+// customer typed it and NOTHING ever wrote it again.
 //
-// WHAT PUTS IT BACK, and this is the common path rather than the rare one. The
-// redis service declares no volume in deploy/docker/docker-compose.yml, so every
-// stack recreate starts with an empty keyspace, and a push to main auto-deploys.
-// After every deploy, every workspace's cap key is gone. Two things republish
-// it: the settlement counter, when it rebuilds a workspace's period keys, and
-// the spend-alert pass, which walks every workspace with a budget once a minute
-// and restates the cap whether or not that workspace has settled anything. The
-// second is what covers a workspace whose next requests all fail, which settles
-// nothing and would otherwise never trigger the first. So the exposure after a
-// deploy, and after a cap saved while Redis was unreachable, is bounded by the
-// pass interval rather than by a customer happening to re-save their budget.
-const hardCapRedisNoExpiry time.Duration = 0
+// What makes a TTL correct now is that something does write it again. The
+// spend-alert pass walks every workspace with a budget every sixty seconds and
+// restates its cap, so a live cap is refreshed 1,440 times before this expires,
+// and an expiry can only be reached by a key nothing is refreshing. That is
+// exactly the key that should not exist:
+//
+//   - The publish on upsert and the removal on delete are unordered, so a
+//     delayed publish can land after a removal.
+//   - A DeleteBudget whose row delete succeeds and whose Redis DEL fails leaves
+//     the key behind, and the pass cannot clear it because the pass lists
+//     budgets that exist. Without an expiry a customer stays blocked by a cap
+//     they removed until the next deploy empties Redis, which is not a repair.
+//
+// So the TTL is the orphan collector, and the pass is what keeps every real cap
+// alive well inside it. The two are one mechanism: if the pass is ever removed
+// or its interval approaches this value, this TTL must go with it, or caps start
+// silently expiring again. The 1,440x margin is the safety factor on that
+// coupling, and it means the pass has to fail continuously for a day before any
+// cap lapses.
+//
+// A durable tombstone or outbox on the delete path is the complete answer, and
+// it is a bigger artefact than the window it closes: with this TTL an orphan
+// lives at most a day rather than forever.
+const hardCapRedisTTL = 24 * time.Hour
 
 // GetBudget returns the workspace budget or (nil, nil) when none is set.
 func (s *Service) GetBudget(ctx context.Context, workspaceID uuid.UUID) (*Budget, error) {
@@ -260,7 +271,7 @@ func (s *Service) SetBudget(ctx context.Context, in SetBudgetInput) (*Budget, er
 	// workspace's period keys, the gate sees no cap and stays pass-through.
 	if s.workspaceCtx.redis != nil {
 		key := hardCapRedisKey(in.WorkspaceID)
-		if rerr := s.workspaceCtx.redis.Set(ctx, key, b.HardCap.String(), hardCapRedisNoExpiry).Err(); rerr != nil {
+		if rerr := s.workspaceCtx.redis.Set(ctx, key, b.HardCap.String(), hardCapRedisTTL).Err(); rerr != nil {
 			s.logger.WarnContext(ctx, "budget hard_cap redis broadcast failed",
 				"workspace_id", in.WorkspaceID, "error", rerr)
 		}

@@ -249,12 +249,19 @@ func TestRecordSettledSpend_ReportsRedisFailure(t *testing.T) {
 	}
 }
 
-// TestSetBudget_PublishesTheHardCapWithoutExpiry is the second half of why the
-// gate never blocked. The cap was published with a thirty second TTL under a
-// comment claiming the gate would read through on a miss; the gate does no such
-// thing, it treats a missing cap as "no budget configured". So a saved cap
-// stopped being enforced thirty seconds after the customer typed it.
-func TestSetBudget_PublishesTheHardCapWithoutExpiry(t *testing.T) {
+// TestSetBudget_PublishesTheHardCapWellBeyondTheSyncInterval is the second half
+// of why the gate never blocked. The cap was published with a thirty second TTL
+// under a comment claiming the gate would read through on a miss; the gate does
+// no such thing, it treats a missing cap as "no budget configured", and nothing
+// rewrote the key. So a saved cap stopped being enforced thirty seconds after
+// the customer typed it.
+//
+// A TTL is correct now only because the spend-alert pass restates every live cap
+// every sixty seconds, which makes the expiry reachable only by a key nothing is
+// refreshing: an orphan left by a delete whose Redis DEL failed. The margin
+// between the two is the whole safety argument, so this asserts the margin and
+// not merely that some TTL is set.
+func TestSetBudget_PublishesTheHardCapWellBeyondTheSyncInterval(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -274,8 +281,16 @@ func TestSetBudget_PublishesTheHardCapWithoutExpiry(t *testing.T) {
 	if got := mustGet(t, client, counterHardCapKey); got != "500000" {
 		t.Fatalf("published cap %q, want 500000", got)
 	}
-	if ttl := mr.TTL(counterHardCapKey); ttl != 0 {
-		t.Fatalf("published cap expires in %s; a cap that evaporates stops being enforced", ttl)
+	// The pass runs every 60 seconds. Anything close to that turns a couple of
+	// missed passes into a cap that silently stops being enforced, which is the
+	// defect this issue is about.
+	const syncInterval = 60 * time.Second
+	ttl := mr.TTL(counterHardCapKey)
+	if ttl < 100*syncInterval {
+		t.Fatalf("published cap expires in %s, less than 100 sync intervals; a cap that evaporates stops being enforced", ttl)
+	}
+	if ttl == 0 {
+		t.Fatal("published cap never expires; an orphan left by a failed delete would block a customer forever")
 	}
 
 	if err := svc.DeleteBudget(context.Background(), ws); err != nil {
@@ -394,6 +409,12 @@ func TestSyncWorkspace_RestatesBothKeysAndTheCap(t *testing.T) {
 	}
 	if got := mustGet(t, client, counterHardCapKey); got != "500000" {
 		t.Fatalf("cap republished as %q, want 500000", got)
+	}
+	// Refreshing the expiry is the point of republishing it: the TTL is what
+	// collects a cap orphaned by a failed delete, and the pass is what keeps
+	// every live cap well inside it.
+	if ttl := client.TTL(ctx, counterHardCapKey).Val(); ttl <= time.Hour {
+		t.Fatalf("republished cap carries %s of life; the pass must refresh it far ahead of its expiry", ttl)
 	}
 
 	// The accumulator has to move too, or the next settlement increments the

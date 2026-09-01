@@ -642,8 +642,9 @@ services:
       # resolved rate and its source are logged. Anything that is not a plain
       # positive decimal with at most six fractional digits makes invoice
       # generation and the spend-alert pass refuse rather than bill at a rate
-      # nobody chose, and stops control-plane at boot rather than leaving spend
-      # caps unenforced on a rate nobody chose.
+      # nobody chose, and leaves the budget spend counter unwired: the process
+      # still serves, no workspace hard cap is enforced while it runs, and
+      # hive_budget_mtd_counter_wired reads 0.
       HIVE_USD_BDT_RATE: ${HIVE_USD_BDT_RATE:-}
       # RAG ingestion (#232). Without EMBEDDING_BASE_URL the ingest route is not
       # registered and uploaded documents stay "pending" forever. Must match the
