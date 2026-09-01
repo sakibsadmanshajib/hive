@@ -1,4 +1,4 @@
-[2369.129s] GET  /v1/models
-[2381.300s] POST /v1/audio/transcriptions  bytes=64318
-[2381.973s] POST /v1/chat/completions  stream=True
-[2382.427s] POST /v1/audio/speech  bytes=75
+[17697.962s] GET  /v1/models
+[17710.524s] POST /v1/audio/transcriptions  bytes=64318
+[17711.195s] POST /v1/chat/completions  stream=True
+[17711.637s] POST /v1/audio/speech  bytes=75

@@ -2,7 +2,8 @@
 
 Captured on 2026-09-01 against the forked chat front end running in Docker,
 twice: once from an image built at `origin/main`, once from an image built with
-this pull request's commit. Same harness, same synthetic room, same account
+this pull request's head commit, rebuilt and recaptured after the review
+findings landed. Same harness, same synthetic room, same account
 flow, two builds. The screenshots are attached to the pull request through
 `scripts/post-pr-visual-proof.sh`; the logs are here because
 `npm run lint:proof-tokens` scans this directory and nothing else.
@@ -11,12 +12,12 @@ flow, two builds. The screenshots are attached to the pull request through
 
 | | Before, `origin/main` | After, this branch |
 | --- | --- | --- |
-| Recorder started | +0.31s, on room noise, before anyone spoke | +1.20s, when speech actually began |
-| Recorder stopped | never, still running at +37.6s when the capture ended | +5.19s, two seconds after speech ended |
+| Recorder started | +0.31s, on room noise, before anyone spoke | +1.18s, when speech actually began |
+| Recorder stopped | never, still running at +37.6s when the capture ended | +5.16s, two seconds after speech ended |
 | Overlay state | `Listening...` for the whole 37.6s | `Listening...` then `Thinking...` then `Tap to interrupt` then back to `Listening...` |
 | Transcription requests | none, the recorder never released any audio | exactly one |
 | Chat completions | none | exactly one, and the transcript reached the model |
-| Further triggers over the next 34s of room noise | n/a, still holding the first one | none |
+| Further triggers over the next 33s of room noise | n/a, still holding the first one | none |
 
 `capture-before.log` and `capture-after.log` are the runs. `stub-requests-before.log`
 and `stub-requests-after.log` are what the upstream stub received, which is the
