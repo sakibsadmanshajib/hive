@@ -104,6 +104,17 @@
 	let chatListLoading = false;
 	let allChatsLoaded = false;
 
+	// What one page of GET /api/v1/chats/ actually returns: `limit = 60` in
+	// backend/open_webui/routers/chats.py's get_session_user_chat_list, the only
+	// handler this list calls. A short page therefore means the last page, which
+	// is what spares an account with fewer than sixty conversations the empty
+	// page 2 request it used to fire the moment the list rendered (issue #1625).
+	//
+	// ponytail: a plain number rather than a value read from the API, because
+	// the failure mode of drift is one wasted request, not a wrong list; the
+	// end is still detected by the empty page that follows.
+	const CHAT_LIST_PAGE_SIZE = 60;
+
 	let showCreateFolderModal = false;
 
 	let pinnedModels = [];
@@ -354,8 +365,9 @@
 			})(),
 			(async () => {
 				console.log('Init chat list');
-				const _chats = await getChatList(localStorage.token, $currentChatPage);
+				const _chats = await getChatList(localStorage.token, 1);
 				await chats.set(_chats);
+				allChatsLoaded = _chats.length < CHAT_LIST_PAGE_SIZE;
 			})()
 		]);
 
@@ -372,8 +384,10 @@
 
 		newChatList = await getChatList(localStorage.token, $currentChatPage);
 
-		// once the bottom of the list has been reached (no results) there is no need to continue querying
-		allChatsLoaded = newChatList.length === 0;
+		// Once the bottom of the list has been reached there is no need to keep
+		// querying. A SHORT page ends it, not only an empty one: the empty-page
+		// test made the last request of every session a guaranteed miss.
+		allChatsLoaded = newChatList.length < CHAT_LIST_PAGE_SIZE;
 		const existingIds = new Set(($chats ?? []).map((c) => c.id));
 		const uniqueNewChats = newChatList.filter((c) => !existingIds.has(c.id));
 		await chats.set([...($chats ? $chats : []), ...uniqueNewChats]);

@@ -721,7 +721,7 @@
 				} else if (type === 'chat:title') {
 					chatTitle.set(data);
 					currentChatPage.set(1);
-					await chats.set(await getChatList(localStorage.token, $currentChatPage));
+					await chats.set(await getChatList(localStorage.token, 1));
 				} else if (type === 'chat:tags') {
 					chat = await getChatById(localStorage.token, $chatId);
 					allTags.set(await getAllTags(localStorage.token));
@@ -1788,7 +1788,7 @@
 		// Just refresh the sidebar chat list.
 		if ($chatId == _chatId && !$temporaryChatEnabled) {
 			currentChatPage.set(1);
-			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+			await chats.set(await getChatList(localStorage.token, 1));
 		}
 	};
 
@@ -1840,7 +1840,7 @@
 				});
 
 				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await chats.set(await getChatList(localStorage.token, 1));
 			}
 		}
 	};
@@ -2414,7 +2414,8 @@
 			if (!$temporaryChatEnabled) {
 				chat = await updateChatById(localStorage.token, _chatId, { title }).catch(() => chat);
 				chatTitle.set(title);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				currentChatPage.set(1);
+				await chats.set(await getChatList(localStorage.token, 1));
 			}
 		}
 
@@ -3004,7 +3005,7 @@
 					if (!$temporaryChatEnabled) {
 						window.history.replaceState(history.state, '', `/c/${res.chat_id}`);
 						currentChatPage.set(1);
-						await chats.set(await getChatList(localStorage.token, $currentChatPage));
+						await chats.set(await getChatList(localStorage.token, 1));
 
 						// Persist chat-level params (system prompt, advanced
 						// params) that the backend doesn't receive in the
@@ -3283,8 +3284,8 @@
 
 			await tick();
 
-			await chats.set(await getChatList(localStorage.token, $currentChatPage));
 			currentChatPage.set(1);
+			await chats.set(await getChatList(localStorage.token, 1));
 
 			selectedFolder.set(null);
 		} else {
@@ -3364,7 +3365,7 @@
 
 			if (res) {
 				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await chats.set(await getChatList(localStorage.token, 1));
 				await pinnedChats.set(await getPinnedChatList(localStorage.token));
 
 				toast.success($i18n.t('Chat moved successfully'));
@@ -3380,7 +3381,7 @@
 			currentChatPage.set(1);
 			initNewChat();
 			await goto('/');
-			chats.set(await getChatList(localStorage.token, $currentChatPage));
+			chats.set(await getChatList(localStorage.token, 1));
 			pinnedChats.set(await getPinnedChatList(localStorage.token));
 			toast.success($i18n.t('Chat archived.'));
 		} catch (error) {
@@ -3417,7 +3418,7 @@
 				currentChatPage.set(1);
 				initNewChat();
 				await goto('/');
-				chats.set(await getChatList(localStorage.token, $currentChatPage));
+				chats.set(await getChatList(localStorage.token, 1));
 				pinnedChats.set(await getPinnedChatList(localStorage.token));
 				allTags.set(await getAllTags(localStorage.token));
 				toast.success($i18n.t('Chat deleted.'));
@@ -3573,7 +3574,8 @@
 								if (savedChat) {
 									temporaryChatEnabled.set(false);
 									chatId.set(savedChat.id);
-									chats.set(await getChatList(localStorage.token, $currentChatPage));
+									currentChatPage.set(1);
+									chats.set(await getChatList(localStorage.token, 1));
 
 									await goto(`/c/${savedChat.id}`);
 									toast.success($i18n.t('Conversation saved successfully'));

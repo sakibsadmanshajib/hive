@@ -74,7 +74,7 @@
 
 	const refreshSidebar = async () => {
 		currentChatPage.set(1);
-		await chats.set(await getChatList(localStorage.token, $currentChatPage));
+		await chats.set(await getChatList(localStorage.token, 1));
 		await pinnedChats.set(await getPinnedChatList(localStorage.token));
 	};
 

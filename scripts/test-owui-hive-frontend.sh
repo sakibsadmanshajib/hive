@@ -70,6 +70,11 @@ for rel in \
 	channel/MessageInput.svelte \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
+	chat/Messages.svelte \
+	chat/ModelSelector.svelte \
+	layout/Sidebar.svelte \
+	layout/SearchModal.svelte \
+	layout/Sidebar/ChatItem.svelte \
 	chat/Settings/Interface.svelte \
 	common/RichTextInput.svelte \
 	workspace/Skills.svelte \

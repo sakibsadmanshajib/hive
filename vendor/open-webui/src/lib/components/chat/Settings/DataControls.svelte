@@ -118,7 +118,7 @@
 	 */
 	const refreshChatLists = async () => {
 		currentChatPage.set(1);
-		chats.set(await getChatList(localStorage.token, $currentChatPage));
+		chats.set(await getChatList(localStorage.token, 1));
 		pinnedChats.set(await getPinnedChatList(localStorage.token));
 		scrollPaginationEnabled.set(true);
 	};

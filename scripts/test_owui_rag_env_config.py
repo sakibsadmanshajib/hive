@@ -1480,6 +1480,42 @@ def test_webui_url_and_default_locale_and_default_user_role_are_reconciled() -> 
     assert applied["ui.default_user_role"] == "pending"
 
 
+def test_default_models_is_reconciled() -> None:
+    """Issue #1626. `ui.default_models` is in upstream's DEFAULT_CONFIG, so a
+    box that has booted once already has a row for it and no compose edit could
+    reach that row. Unset, it publishes an empty default_models on /api/config
+    and the chat front end opens every new conversation on whatever the model
+    list happens to sort first, which is a Deepseek alias, not the alias this
+    product leads with."""
+    config = FakeConfig({"ui.default_models": ""})
+    applied = reconcile(config, {"DEFAULT_MODELS": "hive-default"})
+    assert applied["ui.default_models"] == "hive-default", applied
+    assert config.stored["ui.default_models"] == "hive-default", config.stored
+
+
+def test_unset_default_models_leaves_the_persisted_value_alone() -> None:
+    """A deployment that lets its administrators pick the default through Open
+    WebUI's own settings keeps their choice; this reconcile is per-key, not
+    ENABLE_PERSISTENT_CONFIG=false."""
+    for environ in ({}, {"DEFAULT_MODELS": "  "}):
+        config = FakeConfig({"ui.default_models": "some-local-model"})
+        applied = reconcile(config, environ)
+        assert "ui.default_models" not in applied, applied
+        assert config.stored["ui.default_models"] == "some-local-model", config.stored
+
+
+def test_compose_opens_new_conversations_on_the_hive_default_alias() -> None:
+    """The reconcile only helps if compose names a value. Asserted against the
+    file because an unset variable is not an error anywhere: it silently
+    restores the alphabetical-first fallback this fixes."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        'DEFAULT_MODELS: "hive-default"' in compose
+    ), "docker-compose.yml must name the alias new chats open on (issue #1626)"
+
+
 def test_ui_enable_signup_is_reconciled() -> None:
     """This deployment is SSO-only; the signup gate
     (routers/auths.py: `if not await Config.get('ui.enable_signup') or not
