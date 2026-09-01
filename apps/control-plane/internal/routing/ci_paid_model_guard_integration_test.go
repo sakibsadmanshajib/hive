@@ -279,6 +279,10 @@ var allowedUpstreamModelIDs = map[string]string{
 		"asserting how a LiteLLM health payload is parsed. Compared, never dispatched.",
 	"openai/gemini-flash-latest": "Same: a self-test fixture in scripts/report-free-pool-health.py, compared " +
 		"rather than dispatched.",
+	"groq/qwen/qwen3.8-27b": "Same again, added by issue #1566's quota-window fixtures. It is also the model " +
+		"both live route-free-pool members were repointed at by " +
+		"supabase/migrations/20260830_03_free_pool_capability_truth.sql, so it is free on Groq's free plan " +
+		"rather than merely undispatched, and the fixture names the member the next daily cliff will hit.",
 }
 
 // ---------------------------------------------------------------------------
