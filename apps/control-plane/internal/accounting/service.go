@@ -354,32 +354,6 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		}); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: charge usage: %w", err)
 		}
-
-		// The charge has committed, so it counts against the workspace's hard
-		// cap. This is the only place a spend counter can be wired without
-		// missing an endpoint: every settlement, sync or streaming, arrives
-		// here. It records actualCredits, what the ledger captured, not the
-		// caller's estimate, which the clamp above may have cut.
-		//
-		// FAILING OPEN, deliberately, and loudly. Returning this error would
-		// abort a finalization whose charge has already posted, stranding the
-		// hold and leaving the reservation unsettled: exactly the credit leak
-		// of issue #616, caused by a Redis blip. So a counter failure costs a
-		// cap that goes briefly unenforced (recovered from the ledger by the
-		// next settlement after Redis returns, since the counter reseeds a
-		// missing key rather than restarting it at zero), while failing closed
-		// would cost the money path itself. The ERROR line is the signal that
-		// this happened; a silent skip here would make an unenforced cap
-		// invisible, which is the defect class issue #1651 is about.
-		if s.spendCounter != nil {
-			if err := s.spendCounter.RecordSettledSpend(ctx, reservation.AccountID, actualCredits, time.Now().UTC()); err != nil {
-				slog.ErrorContext(ctx, "budget mtd counter write failed; hard cap is unenforced for this workspace until it succeeds",
-					"workspace_id", reservation.AccountID,
-					"reservation_id", reservation.ID,
-					"credits", actualCredits,
-					"error", err)
-			}
-		}
 	}
 
 	// The ledger releases the WHOLE outstanding hold, including the part the
@@ -430,6 +404,40 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, unusedCredits, input.TerminalUsageConfirmed, nextStatus, reason)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: finalize reservation: %w", err)
+	}
+
+	// The charge counts against the workspace's hard cap now that the row has
+	// left the open state. This is the only place a spend counter can be wired
+	// without missing an endpoint, since every settlement (sync, streaming,
+	// images, audio, session chat, batch) arrives here, and it records
+	// actualCredits, what the ledger captured, not the caller's estimate, which
+	// the clamp above may have cut.
+	//
+	// AFTER the row transition, not right after the charge. A finalization that
+	// charged and then failed on the release or on this row leaves the
+	// reservation open, and its caller retries (sessionbilling does so
+	// explicitly). The retry deduplicates the charge on its idempotency key but
+	// would reach a counter call placed earlier a second time, counting one
+	// charge twice against the customer's cap. Placed here, the status guard at
+	// the top of this function short-circuits the retry before it arrives.
+	//
+	// FAILING OPEN, deliberately, and loudly. Returning this error would abort a
+	// finalization whose charge has already posted, stranding the hold: exactly
+	// the credit leak of issue #616, caused by a Redis blip. So a counter
+	// failure costs a cap that goes briefly unenforced, recovered from the
+	// ledger by the next settlement after Redis returns, since the counter
+	// reseeds a missing key rather than restarting it at zero. Failing closed
+	// would cost the money path itself. The ERROR line is the signal; a silent
+	// skip would make an unenforced cap invisible, which is the defect class
+	// issue #1651 is about.
+	if actualCredits > 0 && s.spendCounter != nil {
+		if err := s.spendCounter.RecordSettledSpend(ctx, reservation.AccountID, actualCredits, time.Now().UTC()); err != nil {
+			slog.ErrorContext(ctx, "budget mtd counter write failed; hard cap is unenforced for this workspace until it succeeds",
+				"workspace_id", reservation.AccountID,
+				"reservation_id", reservation.ID,
+				"credits", actualCredits,
+				"error", err)
+		}
 	}
 
 	if !input.TerminalUsageConfirmed {

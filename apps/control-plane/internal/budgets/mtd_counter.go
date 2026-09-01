@@ -145,7 +145,7 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 		// first settlement after this code was deployed into a month already
 		// part spent. In the last two the accumulator would otherwise restart
 		// the customer's cap at zero, silently, for the rest of the month.
-		total = c.reseedFromLedger(ctx, workspaceID, period, creditsKey, total)
+		total = c.rebuildPeriodKeys(ctx, workspaceID, period, creditsKey, total)
 	}
 
 	subunits, err := payments.CreditsToBDTSubunits(big.NewInt(total), c.rate.Rate)
@@ -155,29 +155,39 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 	// SET rather than INCRBY: this key is a rendering of the accumulator, not
 	// an accumulator itself.
 	//
-	// ponytail: two concurrent settlements can convert their own totals and
-	// land their SETs out of order, leaving the lower of the two until the next
-	// settlement overwrites it. The window is one settlement wide and always
-	// errs low (the gate lets a request through rather than refusing one that
-	// should pass), and the next charge corrects it. A Lua script that wrote
-	// only when the new value is greater would close it, at the cost of
-	// shipping and versioning a script for a one-request skew.
+	// An unconditional SET would be a lost update if two settlements for one
+	// workspace could interleave, since the later increment could be rendered
+	// first and then overwritten by the earlier one. They cannot: the only
+	// caller is accounting.finalizeLocked, which runs inside a per-account lock
+	// that is a Postgres advisory lock in production, so settlements for one
+	// account are serialized across every control-plane instance for the whole
+	// sequence including this write (issue #106). If a settlement path is ever
+	// added outside that lock, this needs a compare-and-set.
 	if err := c.redis.Set(ctx, MTDSpendRedisKey(workspaceID, period), subunits.String(), mtdCounterTTL).Err(); err != nil {
 		return fmt.Errorf("budgets: write mtd spend: %w", err)
 	}
 	return nil
 }
 
-// reseedFromLedger replaces a just-created accumulator with the month's real
-// total from the ledger, and republishes the workspace's hard cap while it has
-// the row in hand. Returns the total to convert: the ledger's when it could be
-// read, the caller's own increment otherwise.
+// rebuildPeriodKeys runs when the accumulator key was just created: a new
+// month, an eviction, a Redis restart, or the first settlement after this code
+// was deployed into a month already part spent. It restates both of the
+// workspace's Redis values from the database, which is the authority, and
+// returns the credit total to convert.
 //
 // Best effort by design. Every failure here leaves the accumulator holding this
 // settlement's credits, which is what it would have held without this function
-// at all, so a reseed that cannot run degrades to the un-healed behaviour
+// at all, so a rebuild that cannot run degrades to the un-healed behaviour
 // rather than losing the charge.
-func (c *MTDSpendCounter) reseedFromLedger(ctx context.Context, workspaceID uuid.UUID, period time.Time, creditsKey string, fallback int64) int64 {
+func (c *MTDSpendCounter) rebuildPeriodKeys(ctx context.Context, workspaceID uuid.UUID, period time.Time, creditsKey string, fallback int64) int64 {
+	total := c.reseedTotal(ctx, workspaceID, period, creditsKey, fallback)
+	c.republishHardCap(ctx, workspaceID)
+	return total
+}
+
+// reseedTotal replaces the just-created accumulator with the month's real total
+// from the ledger, so an eviction does not restart a customer's cap at zero.
+func (c *MTDSpendCounter) reseedTotal(ctx context.Context, workspaceID uuid.UUID, period time.Time, creditsKey string, fallback int64) int64 {
 	ledgerTotal, err := c.repo.MonthToDateSpendCredits(ctx, workspaceID, period)
 	if err != nil {
 		c.logger.WarnContext(ctx, "budget mtd counter: ledger reseed failed, counting from this charge only",
@@ -185,8 +195,10 @@ func (c *MTDSpendCounter) reseedFromLedger(ctx context.Context, workspaceID uuid
 		return fallback
 	}
 	if !ledgerTotal.IsInt64() {
-		// Unreachable short of a corrupt ledger: int64 credits is nine billion
-		// USD of monthly spend. Refuse to narrow it rather than wrap.
+		// Unreachable short of a corrupt ledger, since the column this sums is
+		// a bigint that the repository already scans into an int64 before it
+		// reaches here, and int64 credits is nine billion USD of monthly spend.
+		// Refuse to narrow it rather than wrap.
 		c.logger.ErrorContext(ctx, "budget mtd counter: ledger month-to-date does not fit int64",
 			"workspace_id", workspaceID, "credits", ledgerTotal.String())
 		return fallback
@@ -202,26 +214,42 @@ func (c *MTDSpendCounter) reseedFromLedger(ctx context.Context, workspaceID uuid
 	if err := c.redis.Set(ctx, creditsKey, total, mtdCounterTTL).Err(); err != nil {
 		c.logger.WarnContext(ctx, "budget mtd counter: could not store reseeded total",
 			"workspace_id", workspaceID, "error", err)
-		return total
 	}
+	return total
+}
 
-	// Republish the cap. It is written on every budget upsert, but a Redis
-	// restart drops it and nothing else ever puts it back, so without this an
-	// existing customer's cap would stop being enforced until they happened to
-	// re-save it. This is the moment we know the workspace has spent something
-	// and that its Redis state was just rebuilt.
+// republishHardCap restates the cap from the budget row, or clears it when
+// there is no row.
+//
+// Publishing again matters because the cap is otherwise written only on upsert,
+// and a Redis restart drops it with nothing to put it back, so an existing
+// customer's cap would stop being enforced until they happened to re-save it.
+//
+// Clearing matters for the opposite reason: the publish on upsert and the
+// removal on delete are unordered against each other, so a delayed publish can
+// land after a removal, and the key now carries no expiry, so nothing else
+// would ever clear it and the customer would be refused under a cap they had
+// taken off. This makes the row authoritative in both directions, once per
+// period rather than immediately. The residual window between the two is real,
+// and a revision stamped on each publish would be the complete answer if it
+// ever bites; that is a schema column and a publish protocol for a race that
+// needs two budget mutations on one workspace inside a round trip.
+func (c *MTDSpendCounter) republishHardCap(ctx context.Context, workspaceID uuid.UUID) {
 	budget, err := c.repo.GetBudget(ctx, workspaceID)
 	if err != nil {
-		c.logger.WarnContext(ctx, "budget mtd counter: could not republish hard cap",
+		c.logger.WarnContext(ctx, "budget mtd counter: could not read the budget row to republish its cap",
 			"workspace_id", workspaceID, "error", err)
-		return total
+		return
 	}
 	if budget == nil || budget.HardCap == nil {
-		return total
+		if err := c.redis.Del(ctx, hardCapRedisKey(workspaceID)).Err(); err != nil {
+			c.logger.WarnContext(ctx, "budget mtd counter: could not clear a cap with no budget row",
+				"workspace_id", workspaceID, "error", err)
+		}
+		return
 	}
 	if err := c.redis.Set(ctx, hardCapRedisKey(workspaceID), budget.HardCap.String(), hardCapRedisNoExpiry).Err(); err != nil {
 		c.logger.WarnContext(ctx, "budget mtd counter: hard cap republish failed",
 			"workspace_id", workspaceID, "error", err)
 	}
-	return total
 }

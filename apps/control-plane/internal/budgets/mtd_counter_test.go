@@ -280,3 +280,30 @@ func TestSetBudget_PublishesTheHardCapWithoutExpiry(t *testing.T) {
 		t.Fatalf("cap survived DeleteBudget: %v", err)
 	}
 }
+
+// TestRecordSettledSpend_ClearsACapWithNoBudgetRow is the repair for the race
+// the adversarial review on PR #1677 raised. The publish on upsert and the
+// removal on delete are unordered against each other, and now that the key
+// carries no expiry, a publish landing after a removal would leave a customer
+// refused under a cap they had taken off, with nothing to ever clear it. The
+// row is authoritative, so the period rebuild drops a cap the database does not
+// have.
+func TestRecordSettledSpend_ClearsACapWithNoBudgetRow(t *testing.T) {
+	repo := newFakeWorkspaceRepo()
+	counter, client := newCounter(t, repo)
+	ws := uuid.MustParse(counterWorkspaceID)
+
+	ctx := context.Background()
+	// A cap left behind by a publish that outlived its row.
+	if err := client.Set(ctx, counterHardCapKey, "50000", 0).Err(); err != nil {
+		t.Fatalf("seed stale cap: %v", err)
+	}
+
+	if err := counter.RecordSettledSpend(ctx, ws, spendCredits(100).Int64(), counterAt); err != nil {
+		t.Fatalf("RecordSettledSpend: %v", err)
+	}
+
+	if _, err := client.Get(ctx, counterHardCapKey).Result(); !errors.Is(err, goredis.Nil) {
+		t.Fatalf("a cap with no budget row survived the period rebuild: %v", err)
+	}
+}

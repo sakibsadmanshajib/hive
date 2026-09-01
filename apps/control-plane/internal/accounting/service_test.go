@@ -240,6 +240,11 @@ type repoStub struct {
 	// has to see the hold land here, or its fixture silently starts from an
 	// unreserved balance.
 	ledger holdPoster
+
+	// Optional one-shot failure for FinalizeReservation, so a test can make a
+	// settlement fail after its charge has posted and then retry it, which is
+	// the shape sessionbilling produces on a transient error.
+	finalizeErrOnce error
 }
 
 type holdPoster interface {
@@ -344,6 +349,11 @@ func (r *repoStub) ExpandReservation(ctx context.Context, accountID, reservation
 func (r *repoStub) FinalizeReservation(_ context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.finalizeErrOnce != nil {
+		err := r.finalizeErrOnce
+		r.finalizeErrOnce = nil
+		return Reservation{}, err
+	}
 	reservation, err := r.getLocked(accountID, reservationID)
 	if err != nil {
 		return Reservation{}, err

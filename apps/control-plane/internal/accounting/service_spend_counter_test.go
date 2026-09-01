@@ -137,3 +137,54 @@ func TestFinalizeReservationWithoutACounterStillSettles(t *testing.T) {
 		t.Fatalf("expected the charge to post with no counter wired, got %#v", ledgerSvc.chargeCalls)
 	}
 }
+
+// TestFinalizeReservationRetryRecordsSpendOnce is the regression guard for the
+// double-count the first version of this change carried, found by the adversarial
+// review on PR #1677. A settlement that charges and then fails on the row write
+// leaves the reservation open, and its caller retries: sessionbilling does so
+// explicitly, calling FinalizeReservation a second time on a transient error.
+// The retry deduplicates the charge on its idempotency key, so counting the
+// spend right after the charge would have put one charge on the customer's cap
+// twice and refused them early. The counter call sits after the row transition,
+// where the already-settled guard short-circuits the retry.
+func TestFinalizeReservationRetryRecordsSpendOnce(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	counter := &spendCounterStub{}
+	svc := NewService(repo, ledgerSvc, &usageStub{}).WithSpendCounter(counter)
+
+	accountID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		ReservationKey:   "req_retry:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  100,
+	}
+	repo.finalizeErrOnce = errors.New("transient write failure")
+
+	input := FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          70,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+	}
+
+	if _, err := svc.FinalizeReservation(context.Background(), input); err == nil {
+		t.Fatal("expected the first finalization to fail on the row write")
+	}
+	if _, err := svc.FinalizeReservation(context.Background(), input); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+
+	if len(counter.calls) != 1 {
+		t.Fatalf("expected one spend record across the retry, got %#v", counter.calls)
+	}
+	if counter.calls[0].credits != 70 {
+		t.Fatalf("counter recorded %d credits, want 70", counter.calls[0].credits)
+	}
+}
