@@ -1,0 +1,210 @@
+// Package webtools implements the two Hive-owned web tools the chat surface
+// advertises to models: web_search, which takes a query string and returns
+// ranked citable hits, and web_fetch, which takes a URL and returns usable
+// content parts.
+//
+// The boundary between them is the whole point. web_search never fetches a
+// page, embeds anything or calls a model; web_fetch never runs a search. That
+// split is what turns one user action from five page fetches plus roughly two
+// hundred embedding calls (the shape that produced issue #1609) into one HTTP
+// call the model can act on, deciding for itself whether any URL is worth the
+// cost of fetching.
+//
+// The invariant that gives the package its reason to exist is in this file: a
+// success envelope has exactly one constructor per tool, and both refuse to
+// build one over an empty slice. "Dropped every source but reported success"
+// is not a representable state here, so it cannot be reached by forgetting a
+// branch. A backend that answered with nothing is the distinct StatusEmpty
+// value, and a backend that failed is an error envelope naming the class.
+//
+// Design: spec-2026-09-01-web-search-and-web-fetch-tools.md, slice S1.
+package webtools
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+)
+
+// Envelope status values. StatusOK and StatusEmpty are both outcomes of a
+// call that reached its backend, and they are deliberately different values:
+// "the backend answered with nothing" and "we lost every candidate" must
+// never render the same way, which is exactly the collapse #1609 shipped.
+const (
+	StatusOK    = "ok"
+	StatusEmpty = "empty"
+	StatusError = "error"
+)
+
+// Tool names, as advertised to the model and as registered by the Open WebUI
+// shim. These are upstream's own builtin names, kept so the fork's citation
+// extraction (utils/middleware.py get_citation_source_from_tool_result) keeps
+// working unchanged.
+const (
+	ToolWebSearch = "web_search"
+	ToolWebFetch  = "web_fetch"
+)
+
+// Error codes. One per failure class, spelled once here so the two tools and
+// the shim that renders them cannot drift. The pipeline stages that emit the
+// fetch-side codes below arrive with slice S2; the vocabulary is fixed here
+// because the envelope shape is this file's job.
+const (
+	CodeInvalidRequest         = "invalid_request"
+	CodeBudgetExhausted        = "budget_exhausted"
+	CodeNotImplemented         = "not_implemented"
+	CodeSearchUnavailable      = "search_unavailable"
+	CodeURLRejected            = "url_rejected"
+	CodeFetchTimeout           = "fetch_timeout"
+	CodeFetchTooLarge          = "fetch_too_large"
+	CodeFetchStatus            = "fetch_status"
+	CodeFetchBlockedRedirect   = "fetch_blocked_redirect"
+	CodeUnsupportedContentType = "unsupported_content_type"
+	CodeExtractFailed          = "extract_failed"
+	CodeExtractEmpty           = "extract_empty"
+	CodeEmbedUnavailable       = "embed_unavailable"
+	CodeReduceEmpty            = "reduce_empty"
+	CodeFetchFailed            = "fetch_failed"
+)
+
+// ErrEmptyResult is what both success constructors return when handed nothing
+// to report. Callers turn it into StatusEmpty or into an error envelope; what
+// they cannot do is turn it into a success.
+var ErrEmptyResult = errors.New("webtools: refusing to build a success envelope over zero items")
+
+// Hit is one ranked, citable search result. Every field except Rank comes
+// from the search backend; Rank is assigned positionally by NewSearchResult
+// so it always describes the order the model is actually shown.
+type Hit struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet"`
+	Rank    int    `json:"rank"`
+}
+
+// SearchResult is the web_search success envelope. Dropped counts candidate
+// results the backend returned that could not be carried (missing field,
+// inadmissible URL), so a partial loss reads as a partial loss rather than
+// being rounded to success or to failure.
+type SearchResult struct {
+	Status  string `json:"status"`
+	Query   string `json:"query"`
+	Results []Hit  `json:"results"`
+	Dropped int    `json:"dropped"`
+}
+
+// NewSearchResult is the only constructor of a web_search success envelope.
+// It refuses an empty slice, and it refuses any hit missing a title, an
+// absolute http(s) URL or a snippet, so acceptance criterion A1 is enforced
+// where no caller can forget it rather than at each call site.
+func NewSearchResult(query string, hits []Hit, dropped int) (SearchResult, error) {
+	if len(hits) == 0 {
+		return SearchResult{}, ErrEmptyResult
+	}
+	ranked := make([]Hit, len(hits))
+	for i, h := range hits {
+		if strings.TrimSpace(h.Title) == "" {
+			return SearchResult{}, fmt.Errorf("webtools: hit %d has no title", i)
+		}
+		if strings.TrimSpace(h.Snippet) == "" {
+			return SearchResult{}, fmt.Errorf("webtools: hit %d has no snippet", i)
+		}
+		parsed, err := url.Parse(h.URL)
+		if err != nil || !parsed.IsAbs() || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return SearchResult{}, fmt.Errorf("webtools: hit %d has no absolute http(s) URL", i)
+		}
+		h.Rank = i + 1
+		ranked[i] = h
+	}
+	return SearchResult{Status: StatusOK, Query: query, Results: ranked, Dropped: dropped}, nil
+}
+
+// EmptySearchResult is the envelope for a backend that answered with zero
+// usable results. It is a success in the sense that nothing failed, and it is
+// not StatusOK, so the shim can render "no results" differently from "here
+// are your results" without inspecting the length of a list.
+func EmptySearchResult(query string, dropped int) SearchResult {
+	return SearchResult{Status: StatusEmpty, Query: query, Results: []Hit{}, Dropped: dropped}
+}
+
+// Part is one extracted span of a fetched page, carrying the character
+// offsets it occupied in the extracted document so the model can say where in
+// the page a quote came from.
+type Part struct {
+	Text  string `json:"text"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+// FetchMeta is everything a fetch envelope reports about the page itself,
+// separated from the parts so NewFetchResult keeps one obvious argument for
+// the thing the invariant is about.
+type FetchMeta struct {
+	URL        string
+	FinalURL   string
+	Title      string
+	Truncated  bool
+	TotalChars int
+	Dropped    int
+}
+
+// FetchResult is the web_fetch success envelope.
+type FetchResult struct {
+	Status         string `json:"status"`
+	URL            string `json:"url"`
+	FinalURL       string `json:"final_url"`
+	Title          string `json:"title"`
+	Parts          []Part `json:"parts"`
+	Truncated      bool   `json:"truncated"`
+	TotalChars     int    `json:"total_chars"`
+	RetrievedChars int    `json:"retrieved_chars"`
+	Dropped        int    `json:"dropped"`
+}
+
+// NewFetchResult is the only constructor of a web_fetch success envelope, and
+// it refuses an empty slice for the same reason NewSearchResult does
+// (criterion B1). A page that produced no parts is an extract_empty or
+// reduce_empty error, never a success with nothing in it.
+func NewFetchResult(meta FetchMeta, parts []Part) (FetchResult, error) {
+	if len(parts) == 0 {
+		return FetchResult{}, ErrEmptyResult
+	}
+	retrieved := 0
+	for _, p := range parts {
+		retrieved += len(p.Text)
+	}
+	final := meta.FinalURL
+	if final == "" {
+		final = meta.URL
+	}
+	return FetchResult{
+		Status:         StatusOK,
+		URL:            meta.URL,
+		FinalURL:       final,
+		Title:          meta.Title,
+		Parts:          parts,
+		Truncated:      meta.Truncated,
+		TotalChars:     meta.TotalChars,
+		RetrievedChars: retrieved,
+		Dropped:        meta.Dropped,
+	}, nil
+}
+
+// ErrorEnvelope is what either tool returns when it cannot return content. It
+// carries a machine-readable class and a fixed human message; it never
+// carries a results or parts field, so it cannot be read as an empty success.
+type ErrorEnvelope struct {
+	Status  string `json:"status"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Dropped int    `json:"dropped"`
+}
+
+// NewError builds an error envelope. Messages passed here are fixed strings
+// chosen by the handler, never a wrapped internal error: criterion B11 says
+// no message either tool emits may name an internal service or a resolved
+// address, and the cheapest way to hold that is to never interpolate one.
+func NewError(code, message string, dropped int) ErrorEnvelope {
+	return ErrorEnvelope{Status: StatusError, Code: code, Message: message, Dropped: dropped}
+}

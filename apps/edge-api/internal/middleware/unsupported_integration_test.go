@@ -104,6 +104,12 @@ func TestUnsupportedEndpointMiddleware_AgentSubsystemRoutesReachHandlers(t *test
 		// mux.Handle call in main() and, like agent schedules above, shipped
 		// with no matrix entry.
 		{http.MethodGet, "/v1/audio/voices"},
+		// Web tools (JWT selector, no gate) — internal/webtools/handler.go.
+		// The two tools the chat surface advertises to models. Listed here at
+		// the same time they were registered, so this family never joins the
+		// list above of route families that shipped and 404-ed.
+		{http.MethodPost, "/v1/tools/web_search"},
+		{http.MethodPost, "/v1/tools/web_fetch"},
 	}
 
 	for _, tc := range cases {

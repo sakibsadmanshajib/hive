@@ -1205,6 +1205,20 @@
       "status": "supported_now",
       "phase": null,
       "notes": "Hive proprietary (Anthropic Messages compatibility): local token-count estimate for a Messages request. No dispatch, no billing."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tools/web_search",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1581 slice 1): run one live web search for a query string and return ranked, citable results. Never fetches a page, never embeds, never calls a model. JWT-session surface only, not advertised to API-key callers."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tools/web_fetch",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1581 slice 1): fetch one agent-supplied http(s) URL and return its readable content parts. URL admission and the safe dialer are live; the extraction and reduction pipeline behind them lands separately, and until it does this route answers an explicit 501 not_implemented. JWT-session surface only."
     }
   ]
 }

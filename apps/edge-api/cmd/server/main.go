@@ -41,6 +41,7 @@ import (
 	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/webtools"
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
@@ -515,6 +516,24 @@ func main() {
 		registerAgentScheduleRoutes(mux, featureGate, agentSchedMux)
 	}
 
+	// Web tools (issue #1581 slice 1, issues #1620/#1621/#1561): the two
+	// Hive-owned tools the chat surface advertises to models, web_search and
+	// web_fetch. Both routes are registered here; the fetch pipeline behind
+	// the second lands in its own change and until then that route answers an
+	// explicit 501 rather than anything mistakable for an empty page.
+	//
+	// JWT-session authenticated by the same selector every other Hive
+	// proprietary route uses. Deliberately not advertised on the API-key
+	// surface: that would change every existing customer's payload and their
+	// bill, and it is a separate product decision.
+	{
+		webToolsMux := http.NewServeMux()
+		webtools.NewHandler(webtools.Deps{
+			Search: webtools.NewSearXNG(resolveSearXNGQueryURL()),
+		}).Register(webToolsMux)
+		registerWebToolRoutes(mux, webToolsMux)
+	}
+
 	// API routes
 	mux.Handle("/v1/models", modelsHandler(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
@@ -853,6 +872,27 @@ func registerMediaFileBatchRoutes(mux httpMux, imagesHandler, audioHandler, file
 // every auth gate.
 func registerAudioVoicesRoute(mux httpMux) {
 	mux.Handle("/v1/audio/voices", audio.VoicesHandler())
+}
+
+// registerWebToolRoutes attaches the two web tool endpoints. Named rather
+// than inlined for the same reason the gated families in gated_routes.go are:
+// route_matrix_guard_test.go drives the real registration function, so a
+// route that ships with no support-matrix entry turns that test red instead
+// of only failing at boot on the deployed box.
+func registerWebToolRoutes(mux httpMux, webToolsHandler http.Handler) {
+	mux.Handle("/v1/tools/"+webtools.ToolWebSearch, webToolsHandler)
+	mux.Handle("/v1/tools/"+webtools.ToolWebFetch, webToolsHandler)
+}
+
+// resolveSearXNGQueryURL returns the SearXNG /search endpoint web_search
+// queries. The compose default is the in-stack service; SEARXNG_QUERY_URL is
+// the same variable Open WebUI already reads, so a deployment that overrides
+// it for one overrides it for both.
+func resolveSearXNGQueryURL() string {
+	if u := strings.TrimSpace(os.Getenv("SEARXNG_QUERY_URL")); u != "" {
+		return u
+	}
+	return "http://searxng:8080/search"
 }
 
 func jwtAwareChatHandler(jwtHandler, apiKeyHandler http.Handler) http.Handler {
