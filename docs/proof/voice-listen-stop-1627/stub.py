@@ -23,8 +23,8 @@ LOCK = threading.Lock()
 TRANSCRIPT = 'This is the voice mode test for issue sixteen twenty seven.'
 
 
-def log(line: str) -> None:
-    stamped = f'[{time.time() - START:8.3f}s] {line}'
+def log(line: str, at: float | None = None) -> None:
+    stamped = f'[{(time.time() - START) if at is None else at:8.3f}s] {line}'
     with LOCK:
         print(stamped, flush=True)
         with open(LOG_PATH, 'a', encoding='utf-8') as handle:
@@ -77,22 +77,35 @@ class Handler(BaseHTTPRequestHandler):
         self._json({'error': 'not found'}, 404)
 
     def do_POST(self):
+        # Stamped before the body is read, not after: these timestamps are the
+        # evidence for when a request arrived, and reading a megabyte of audio
+        # off the socket first would fold the upload into the arrival time.
+        arrived = time.time() - START
         length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(length) if length else b''
 
         if self.path.endswith('/audio/transcriptions'):
-            log(f'POST /v1/audio/transcriptions  bytes={len(body)}')
+            log(f'POST /v1/audio/transcriptions  bytes={len(body)}', at=arrived)
             self._json({'text': TRANSCRIPT})
             return
 
         if self.path.endswith('/audio/speech'):
-            log(f'POST /v1/audio/speech  bytes={len(body)}')
+            log(f'POST /v1/audio/speech  bytes={len(body)}', at=arrived)
             self._send(200, silent_wav(), 'audio/wav')
             return
 
         if self.path.endswith('/chat/completions'):
-            streaming = b'"stream": true' in body or b'"stream":true' in body
-            log(f'POST /v1/chat/completions  stream={streaming}')
+            # Parsed rather than grepped: a substring search matches a nested
+            # `stream` on some future request shape and silently sends the
+            # wrong response kind, which would change what the capture proves.
+            try:
+                request = json.loads(body)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                log('POST /v1/chat/completions  invalid json', at=arrived)
+                self._json({'error': 'invalid json'}, 400)
+                return
+            streaming = isinstance(request, dict) and request.get('stream') is True
+            log(f'POST /v1/chat/completions  stream={streaming}', at=arrived)
             if not streaming:
                 self._json(
                     {
@@ -140,7 +153,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
-        log(f'POST {self.path} (unhandled)  bytes={len(body)}')
+        log(f'POST {self.path} (unhandled)  bytes={len(body)}', at=arrived)
         self._json({'error': 'not found'}, 404)
 
 

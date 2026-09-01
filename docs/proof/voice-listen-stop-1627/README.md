@@ -12,12 +12,12 @@ flow, two builds. The screenshots are attached to the pull request through
 
 | | Before, `origin/main` | After, this branch |
 | --- | --- | --- |
-| Recorder started | +0.29s, on room noise, before anyone spoke | +1.13s, when speech actually began |
-| Recorder stopped | never, still running at +37.4s when the capture ended | +5.14s, two seconds after speech ended |
-| Overlay state | `Listening...` for the whole 37.4s | `Listening...` then `Thinking...` then `Tap to interrupt` then back to `Listening...` |
+| Recorder started | +0.29s, on room noise, before anyone spoke | +1.46s, when speech actually began |
+| Recorder stopped | never, still running at +39.2s when the capture ended | +5.51s, two seconds after speech ended |
+| Overlay state | `Listening...` for the whole 39.2s | `Listening...` then `Thinking...` then `Tap to interrupt` then back to `Listening...` |
 | Transcription requests | none, the recorder never released any audio | exactly one |
 | Chat completions | none | exactly one, and the transcript reached the model |
-| Further triggers over the next 33s of room noise | n/a, still holding the first one | none |
+| Further triggers over the next 38s of room noise | n/a, still holding the first one | none |
 
 `capture-before.log` and `capture-after.log` are the runs. `stub-requests-before.log`
 and `stub-requests-after.log` are what the upstream stub received, which is the
