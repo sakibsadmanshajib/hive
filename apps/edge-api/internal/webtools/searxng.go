@@ -55,9 +55,9 @@ const (
 // to U+200F; the bidi overrides U+202A to U+202E; the bidi isolates U+2066 to
 // U+2069; the byte-order mark; the variation selectors U+FE00 to U+FE0F and
 // U+E0100 to U+E01EF, which are category Mn and therefore outside C, and which
-// are the published successor to tag smuggling; and the four characters that
+// are the published successor to tag smuggling; and the five characters that
 // render as blank width while being ordinary letters or symbols, U+115F,
-// U+1160, U+3164 and U+2800.
+// U+1160, U+3164, U+FFA0 and U+2800.
 //
 // KEPT, and this is load bearing rather than an oversight: U+000A and U+0009.
 // Both are Cc and so inside unicode.C, and removing them annihilated every
@@ -91,7 +91,7 @@ func stripInvisible(s string) string {
 			r >= '\ufe00' && r <= '\ufe0f',         // variation selectors
 			r >= '\U000e0100' && r <= '\U000e01ef', // variation selectors supplement
 			r == '\u115f', r == '\u1160',           // Hangul choseong and jungseong fillers
-			r == '\u3164', // Hangul filler
+			r == '\u3164', r == '\uffa0', // Hangul filler and its halfwidth sibling
 			r == '\u2800': // braille pattern blank
 			return -1
 		case unicode.In(r, unicode.C):

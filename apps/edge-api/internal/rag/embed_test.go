@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
 
 // TestReduceEmbedding verifies the MRL truncate-and-renormalize helper:
@@ -211,5 +213,25 @@ func TestEmbedResponseCeilingCoversNativeWidthBatches(t *testing.T) {
 	// to the test that enforces it.
 	if embedResponseCeiling(256) <= 4*1024*1024 {
 		t.Fatal("the ceiling did not grow past the fixed 4 MiB it replaced")
+	}
+}
+
+// The ceiling constant has to move whenever a wider model joins the
+// selectable set, and nothing else makes that happen. This turns a future
+// silent re-arm into a red build: today the registry carries native widths of
+// 1024, 4096 and 4096, so 4096 covers it exactly rather than approximately.
+//
+// Test-only import of the registry, deliberately: the production path resolves
+// its width from configuration and should not gain a dependency on the
+// registry just to size a read buffer.
+func TestEmbedResponseCeilingCoversEveryRegisteredModel(t *testing.T) {
+	if len(embedmodel.Registry) == 0 {
+		t.Fatal("the embedding model registry is empty; this assertion would pass vacuously")
+	}
+	for name, m := range embedmodel.Registry {
+		if m.NativeDim > maxNativeEmbeddingDim {
+			t.Fatalf("%s has a native width of %d, past maxNativeEmbeddingDim %d: widen the constant, or a full batch from this model truncates at the read ceiling and every large page fails",
+				name, m.NativeDim, maxNativeEmbeddingDim)
+		}
 	}
 }

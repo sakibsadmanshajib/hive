@@ -274,7 +274,7 @@ func TestStripInvisibleCoversTheSmugglingChannels(t *testing.T) {
 		{"unicode tag block", "a\U000e0041\U000e0042b", "ab"},
 		{"variation selectors", "a\ufe00\ufe0fb", "ab"},
 		{"variation selectors supplement", "a\U000e0100\U000e01efb", "ab"},
-		{"hangul fillers", "a\u115f\u1160\u3164b", "ab"},
+		{"hangul fillers", "a\u115f\u1160\u3164\uffa0b", "ab"},
 		{"braille blank", "a\u2800b", "ab"},
 		{"zero width and bidi", "a\u200b\u202e\u2066\ufeffb", "ab"},
 		{"soft hyphen", "a\u00adb", "ab"},

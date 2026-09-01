@@ -27,11 +27,24 @@ type stubEmbedder struct {
 	inFlight    int
 	maxInFlight int
 	hold        chan struct{}
+	// entered is closed by the first call, so a test can wait for the permit
+	// to actually be held rather than spinning and hoping it has been. A
+	// bounded spin gives up after a fixed count whether or not the condition
+	// was ever met, which on a single-P scheduler means the waiting goroutine
+	// may not have run at all: the caller then takes the free permit itself
+	// and blocks on hold, and nothing is left to close it. That deadlocks
+	// until the ten minute package timeout and presents as slow CI rather
+	// than as a defect.
+	entered chan struct{}
 }
 
 func (s *stubEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
 	s.mu.Lock()
 	s.batches = append(s.batches, append([]string(nil), texts...))
+	if s.entered != nil {
+		close(s.entered)
+		s.entered = nil
+	}
 	s.inFlight++
 	if s.inFlight > s.maxInFlight {
 		s.maxInFlight = s.inFlight
@@ -178,7 +191,8 @@ func TestReduceEmbedDeadlineIsNotReportedAsAPageTimeout(t *testing.T) {
 	t.Run("waiting for the bound times out", func(t *testing.T) {
 		// One permit, held by a call that never returns, so the second call
 		// can only leave through the ctx.Done arm of the semaphore wait.
-		e := &stubEmbedder{hold: make(chan struct{})}
+		e := &stubEmbedder{hold: make(chan struct{}), entered: make(chan struct{})}
+		entered := e.entered
 		r, err := NewReducer(e, 1)
 		if err != nil {
 			t.Fatalf("NewReducer: %v", err)
@@ -188,11 +202,9 @@ func TestReduceEmbedDeadlineIsNotReportedAsAPageTimeout(t *testing.T) {
 			defer close(blocked)
 			_, _, _, _ = r.Reduce(context.Background(), Doc{Text: syntheticPage(200)}, "credits")
 		}()
-		for i := 0; i < 10000; i++ {
-			if e.calls() > 0 {
-				break
-			}
-		}
+		// Wait for the permit to be held, rather than spinning until a count
+		// runs out and hoping it is.
+		<-entered
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -351,6 +363,25 @@ func TestReduceHonoursThePerCallBudgetIncludingTheFence(t *testing.T) {
 				t.Fatalf("returned %d characters, over the stated %d cap", total, MaxCallChars)
 			}
 		})
+	}
+}
+
+// The fence accounting, asserted on its own before the overlap trim can rescue
+// it. Written because the budget test above turned out not to discriminate:
+// reverting the fence accounting alone leaves the whole package green, since
+// the trim removes more than the fence adds. So the trim has a guard and the
+// accounting did not, which is a durability gap rather than a live defect.
+//
+// takeInOrder is called directly here: no ranking, no stub, no trim in the
+// path, so this fails for exactly one reason.
+func TestTakeInOrderCountsTheFenceAgainstTheBudget(t *testing.T) {
+	picked, _ := takeInOrder(chunkRunes([]rune(syntheticPage(200))))
+	spent := 0
+	for _, p := range picked {
+		spent += p.End - p.Start + fenceOverheadChars
+	}
+	if spent > MaxCallChars {
+		t.Fatalf("selection spent %d against a %d budget once the fence is counted", spent, MaxCallChars)
 	}
 }
 

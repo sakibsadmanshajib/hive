@@ -273,7 +273,7 @@ func TestWebFetchRouteKeepsEachFailureClassDistinct(t *testing.T) {
 // The exfiltration channel is bounded on the fetch route, and only there: a
 // search hit carrying a long tracking query is a legitimate result, so Admit
 // must keep accepting it.
-func TestWebFetchRefusesAnOverlongQueryStringButSearchAdmissionDoesNot(t *testing.T) {
+func TestWebFetchRefusesAnOverlongCarrierButSearchAdmissionDoesNot(t *testing.T) {
 	long := "https://example.com/a?c=" + strings.Repeat("x", MaxFetchQueryChars+1)
 
 	var reached bool
@@ -301,11 +301,51 @@ func TestWebFetchRefusesAnOverlongQueryStringButSearchAdmissionDoesNot(t *testin
 		t.Fatalf("Admit refused a long query string: %v", err)
 	}
 
-	// And a query string inside the cap still fetches.
+	// And a carrier inside the cap still fetches.
 	ok := "https://example.com/a?c=" + strings.Repeat("x", MaxFetchQueryChars-32)
 	rr = post(t, h, "/v1/tools/web_fetch", "turn-2", map[string]any{"url": ok})
 	if rr.Code == http.StatusBadRequest {
-		t.Fatalf("a query string inside the cap was refused: %s", rr.Body)
+		t.Fatalf("a carrier inside the cap was refused: %s", rr.Body)
+	}
+}
+
+// The path is the other carrier, and a cap on the query string alone leaves it
+// open: this URL has an empty RawQuery, so it passes a query-only check and
+// the whole-URL check above it, and carries out what the cap claims to have
+// removed. A stated bound that is not the bound is the class this package has
+// now had three of.
+func TestWebFetchRefusesAnOverlongPathCarrier(t *testing.T) {
+	var reached bool
+	h := newTestHandler(t, Deps{
+		Search: &stubSearcher{},
+		Fetch: FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+			reached = true
+			return FetchResult{}, errors.New("must not run")
+		}),
+	})
+
+	long := "https://attacker.example/" + strings.Repeat("b", MaxFetchQueryChars+1)
+	if strings.Contains(long, "?") {
+		t.Fatal("the fixture must carry its payload in the path, with no query string")
+	}
+	rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": long})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rr.Code, rr.Body)
+	}
+	if decodeEnvelope(t, rr)["code"] != CodeURLRejected {
+		t.Fatalf("code = %v, want %q", decodeEnvelope(t, rr)["code"], CodeURLRejected)
+	}
+	if reached {
+		t.Fatal("the pipeline ran for a refused URL")
+	}
+
+	// The two carriers are capped together, not one each, so splitting a
+	// payload across both does not buy back the budget.
+	half := MaxFetchQueryChars/2 + 8
+	split := "https://attacker.example/" + strings.Repeat("b", half) + "?c=" + strings.Repeat("x", half)
+	rr = post(t, h, "/v1/tools/web_fetch", "turn-2", map[string]any{"url": split})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("a payload split across path and query was admitted: %s", rr.Body)
 	}
 }
 

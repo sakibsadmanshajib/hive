@@ -46,11 +46,11 @@ const (
 	// unit there.
 	MaxQueryChars = 512
 	MaxURLChars   = 2048
-	// MaxFetchQueryChars caps the query-string portion of a fetch URL, which
-	// is the exfiltration channel an injected page would use. Well below
-	// MaxURLChars, and comfortably above what an article URL with tracking
-	// parameters carries. Bytes, since a URL is percent-encoded ASCII on the
-	// wire.
+	// MaxFetchQueryChars caps the path and query of a fetch URL taken
+	// together, which are the two carriers an injected page would use to send
+	// conversation content out. Well below MaxURLChars, and comfortably above
+	// what an article URL with tracking parameters carries. Bytes, since a URL
+	// is percent-encoded ASCII on the wire.
 	MaxFetchQueryChars = 512
 	// MaxFocusChars caps the focus string web_fetch ranks against, in runes.
 	MaxFocusChars = 512
@@ -271,18 +271,31 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The exfiltration channel, narrowed. An injected page can plausibly
-	// instruct the model to fetch an attacker-chosen URL, and a URL carries a
-	// query string, so the channel is real and this slice does not close it.
-	// What it does is bound it: without this the bound was MaxURLChars, 2048
-	// bytes per URL times three fetches a turn, about 6 KB of conversation per
-	// turn and 61 KB a minute per tenant. This cuts the per-URL figure by four.
+	// instruct the model to fetch an attacker-chosen URL, and a URL carries
+	// conversation content out in whatever part of itself the attacker picks,
+	// so the channel is real and this slice does not close it. What it does is
+	// bound it: without this the bound was MaxURLChars, 2048 bytes per URL
+	// times three fetches a turn, about 6 KB of conversation per turn and 61 KB
+	// a minute per tenant. This cuts the per-URL carrier to 512 bytes.
+	//
+	// Path AND query together, not the query alone. A first version capped
+	// only RawQuery, which is the obvious carrier and not the only one:
+	// https://attacker.example/<1900 bytes of base64> has an empty RawQuery,
+	// so it passed that check and the 2048 byte check above it, and the whole
+	// URL still carried what the cap claimed to have removed. A stated bound
+	// that is not the bound is the defect this package has now had three of.
+	//
+	// Still not closure. A payload in a subdomain reaches the attacker's
+	// authoritative nameserver through resolution alone, and no length check
+	// here touches that. Bounding the two carriers a fetch actually returns
+	// through is blast-radius reduction, which is what the spec asks for.
 	//
 	// Deliberately here rather than in Admit. Admit also screens web_search
 	// hits, and a search result with a long tracking query is a legitimate
 	// result rather than an exfiltration attempt; refusing it there would drop
 	// hits for a reason that does not apply to them. The channel is the fetch
 	// tool, so the cap is on the fetch route.
-	if len(admitted.RawQuery) > MaxFetchQueryChars {
+	if len(admitted.Path)+len(admitted.RawQuery) > MaxFetchQueryChars {
 		writeEnvelope(w, http.StatusBadRequest, NewError(CodeURLRejected, msgURLRejected, 0))
 		return
 	}
