@@ -305,6 +305,16 @@
 
 		const timeDomainData = new Uint8Array(analyser.fftSize);
 
+		// startRecording calls this again after every utterance, so before this
+		// fix the overlay opened one AudioContext per cycle and closed none.
+		// That was unreachable while the loop never exited, which is exactly the
+		// bug below; it is reachable now, and a browser caps how many contexts
+		// one document may hold, so trading a microphone that never stops for a
+		// microphone that stops six times and then never again is no trade.
+		const releaseAnalyser = () => {
+			audioContext.close().catch(() => {});
+		};
+
 		// Issue #1627. This loop used to ask `domainData.some((value) => value > 0)`,
 		// which is true as soon as one frequency bin clears the analyser's floor,
 		// so in any real room it held on nearly every frame: the silence timer was
@@ -319,6 +329,7 @@
 		const detectSound = () => {
 			const processFrame = () => {
 				if (!mediaRecorder || !$showCallOverlay) {
+					releaseAnalyser();
 					return;
 				}
 
@@ -331,7 +342,12 @@
 					rmsLevel = 0;
 				}
 
-				const step = stepVoiceActivity(voiceActivity, rmsLevel, Date.now());
+				// performance.now(), not Date.now(): the wall clock can move backwards
+				// on an NTP correction or a resume from sleep, and both the silence
+				// timeout and the hard cap are differences against it, so a backward
+				// jump would hold the microphone open until it caught up. That is
+				// the failure this whole change exists to remove.
+				const step = stepVoiceActivity(voiceActivity, rmsLevel, performance.now());
 				voiceActivity = step.state;
 
 				if (step.action === 'start') {
@@ -350,6 +366,8 @@
 					if (step.action === 'discard') {
 						hasStartedSpeaking = false;
 					}
+
+					releaseAnalyser();
 
 					if (mediaRecorder.state === 'recording') {
 						mediaRecorder.stop();

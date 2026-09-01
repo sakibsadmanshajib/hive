@@ -207,6 +207,22 @@ describe('the call overlay uses it (issue #1627)', () => {
 		expect(overlay).toContain('stepVoiceActivity');
 	});
 
+	it('closes the analyser context it opens', () => {
+		// One AudioContext is created per utterance cycle. Nothing closed it,
+		// which was unreachable while the loop never exited and is reachable now
+		// that it does: a browser caps how many contexts a document may hold, so
+		// leaking one per utterance trades a microphone that never stops for a
+		// microphone that stops a handful of times and then never again.
+		expect(overlay).toContain('audioContext.close()');
+	});
+
+	it('drives the decision from a monotonic clock', () => {
+		// The wall clock can move backwards, and both the silence timeout and
+		// the hard cap are differences against whatever clock is passed in.
+		expect(overlay).toContain('rmsLevel, performance.now()');
+		expect(overlay).not.toContain('rmsLevel, Date.now()');
+	});
+
 	it('no longer treats any audible bin as speech', () => {
 		// The frequency data is what the old any-bin trigger read, and nothing
 		// else in the overlay ever wanted it. Pinning the analyser call rather
