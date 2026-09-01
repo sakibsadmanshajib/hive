@@ -232,6 +232,28 @@ def main() -> None:
     for bad in ("0", "-1", "abc", "12.5", "1e9", "10,000", "0x10"):
         assert exits(seed_demo_owner.credits_to_grant, bad), bad
 
+    # Boundary: credits_delta is a bigint. The largest one is accepted and
+    # anything past it is refused here, with the unit named, rather than
+    # travelling to Postgres to come back as an out-of-range write error after
+    # the rest of the workspace has already been provisioned.
+    assert seed_demo_owner.credits_to_grant("9223372036854775807") == 9223372036854775807
+    assert exits(seed_demo_owner.credits_to_grant, "9223372036854775808")
+
+    # format_usd_from_credits: the confirmation line has to make a fat-fingered
+    # unit visible, because the amount is credits and an operator thinking in
+    # dollars is off by a billion. Integer arithmetic only: no float touches a
+    # money quantity, even a displayed one.
+    assert seed_demo_owner.format_usd_from_credits(0) == "$0.00"
+    assert seed_demo_owner.format_usd_from_credits(10) == "$0.00"
+    assert seed_demo_owner.format_usd_from_credits(1_000_000_000) == "$1.00"
+    assert seed_demo_owner.format_usd_from_credits(10_000_000_000) == "$10.00"
+    assert seed_demo_owner.format_usd_from_credits(1_234_560_000_000) == "$1234.56"
+    # The fat-finger case itself: ten credits reads as nothing, ten dollars'
+    # worth reads as ten dollars.
+    assert seed_demo_owner.format_usd_from_credits(10) != seed_demo_owner.format_usd_from_credits(
+        10_000_000_000
+    )
+
     # grant_idempotency_key: keyed on the account AND the amount, so re-running
     # the seeder with the same amount cannot post a second grant (the unique
     # index on (account_id, entry_type, idempotency_key) swallows the replay),

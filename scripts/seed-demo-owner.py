@@ -238,6 +238,16 @@ def password_to_set(user_exists: bool, env_password: str, new_user_password: str
     return None
 
 
+# Credit unit, owner directive 2026-08-23:
+# supabase/migrations/20260823_40_credit_unit_rescale_billion.sql. Kept here as
+# a display and validation constant only; this script never converts an amount,
+# it grants exactly the credits it was given.
+CREDITS_PER_USD = 1_000_000_000
+
+# public.credit_ledger_entries.credits_delta is a bigint.
+MAX_BIGINT = 2**63 - 1
+
+
 def guard_billing_mapping(rows, tenant_id: str, account_id: str) -> bool:
     """Decide what to do about existing public.tenant_billing_accounts rows.
 
@@ -305,11 +315,37 @@ def credits_to_grant(raw: str | None) -> int | None:
         print(
             f"error: HIVE_DEMO_CREDITS must be a positive integer number of credits, got "
             f"{value!r}. Leave it unset to grant nothing (credit on Hive is owner-discretionary; "
-            "1 USD = 1,000,000,000 credits).",
+            f"1 USD = {CREDITS_PER_USD:,} credits).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if int(value) > MAX_BIGINT:
+        # credits_delta is a bigint. Caught here rather than in Postgres, which
+        # would refuse the write only after the whole workspace had already
+        # been provisioned by the steps above.
+        print(
+            f"error: HIVE_DEMO_CREDITS is {value}, past the largest value the credit ledger can "
+            f"hold ({MAX_BIGINT}). The unit is credits, not dollars: 1 USD = "
+            f"{CREDITS_PER_USD:,} credits.",
             file=sys.stderr,
         )
         sys.exit(1)
     return int(value)
+
+
+def format_usd_from_credits(credits: int) -> str:
+    """The credit amount as dollars, for the confirmation line only.
+
+    The unit an operator passes is credits, and somebody thinking in dollars is
+    off by a billion in either direction, so the run says what it granted in
+    both units and a fat-fingered unit is visible immediately instead of at the
+    next invoice. Integer arithmetic throughout: no float touches a money
+    quantity here, displayed or not. Truncating, never rounding, so this line
+    can never overstate what was granted.
+    """
+    dollars, remainder = divmod(credits, CREDITS_PER_USD)
+    cents = remainder * 100 // CREDITS_PER_USD
+    return f"${dollars}.{cents:02d}"
 
 
 def grant_idempotency_key(account_id: str, credits: int) -> str:
@@ -707,7 +743,7 @@ def main() -> None:
             "credit grant: skipped (HIVE_DEMO_CREDITS unset). The workspace balance stays at "
             "zero, the chat banner shows 'You're out of credits', and the gateway refuses "
             "requests with insufficient_quota until credit is added. Set HIVE_DEMO_CREDITS to a "
-            "positive integer number of credits (1 USD = 1,000,000,000 credits) to fund it.",
+            f"positive integer number of credits (1 USD = {CREDITS_PER_USD:,} credits) to fund it.",
             file=sys.stderr,
         )
     else:
@@ -724,7 +760,10 @@ def main() -> None:
             print(f"error: credit grant failed: {status} {body}", file=sys.stderr)
             sys.exit(1)
         posted = "posted" if body else "already granted by an earlier run"
-        print(f"credit grant: ok ({credits} credits, {posted})", file=sys.stderr)
+        print(
+            f"credit grant: ok ({credits} credits, {format_usd_from_credits(credits)}, {posted})",
+            file=sys.stderr,
+        )
 
     print(f"EMAIL={USER_EMAIL}")
     if password is not None:
