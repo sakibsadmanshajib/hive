@@ -3,13 +3,15 @@
 
 Why this exists (issue #1064). The live-integration job already asserts that
 the gateway SERVES the route-free-pool group, but serving a group only proves
-the group exists, not that its four members answer. Free model ids churn
+the group exists, not that its members answer. Membership is not fixed (it was
+four routes when this was written and is fewer now), so nothing here counts
+them. Free model ids churn
 constantly on every provider in the pool, and a retired one answers 404 --
 which is precisely the error LiteLLM refuses to fail over on
 (litellm/router.py::should_retry_this_error re-raises NotFoundError, and
 RetryPolicy carries no NotFoundErrorRetries knob to lift it). Before this
 script, that surfaced as a generic "hive-free is not available." with nothing
-anywhere naming which of the four models had gone away.
+anywhere naming which of the pool's models had gone away.
 
 Exit codes, and the reasoning behind them:
 
@@ -86,6 +88,22 @@ WINDOW_HINT = re.compile(
 # than trusting a remote service to keep its error messages short.
 WINDOW_SCAN_LIMIT = 8000
 
+# Which side of the window the member landed on, read off the hint WINDOW_HINT
+# already extracted. This is the distinction that decides the remedy (issue
+# #1566): a per-minute burst reopens inside the run and the pool genuinely does
+# route around it, while a spent DAILY allowance does not reopen today and the
+# pool does NOT route around it. LiteLLM's effective cooldown is 5 seconds, so
+# the exhausted member is put straight back into rotation and drawn again for
+# the rest of the day. One member on a 20-requests-per-day cap produced 435
+# rate-limit failures in 48 hours that way while contributing at most 20
+# successes a day.
+#
+# Matched against the hint rather than the raw body so it cannot be fooled by a
+# provider mentioning "per day" in prose: WINDOW_HINT only yields these tokens
+# from a quotaId or an explicit window word. Daily wins when both appear, since
+# it is the one that needs a human to act.
+DAILY_WINDOW = re.compile(r"PerDay|requests per day|tokens per day|\bRPD\b|\bTPD\b", re.I)
+
 
 def _window_hint(error_text: str) -> str:
     """Pull the quota window and retry hint out of the full provider message."""
@@ -121,20 +139,40 @@ def _render(payload: dict, redact) -> list[str]:
         detail = error_text[:ERROR_EXCERPT_CHARS]
 
         if RATE_LIMITED.search(error_text):
-            lines.append(redact(f"  RATE LIMITED MEMBER: {model} -- {detail}"))
             hint = _window_hint(error_text)
+            daily = bool(DAILY_WINDOW.search(hint))
+            label = "DAILY QUOTA EXHAUSTED MEMBER" if daily else "RATE LIMITED MEMBER"
+            lines.append(redact(f"  {label}: {model} -- {detail}"))
             if hint:
                 lines.append(redact(f"    quota window: {hint}"))
-            lines.append(
-                redact(
-                    f"::warning::free pool member '{model}' is RATE LIMITED, not "
-                    "gone. Do NOT replace its row: the model still exists and the "
-                    "member returns when the window resets or the account is "
-                    "funded. Read the quota window above to tell a transient "
-                    "per-minute limit from a spent daily allowance. The pool "
-                    "routes around it meanwhile."
+            if daily:
+                lines.append(
+                    redact(
+                        f"::warning::free pool member '{model}' has spent its "
+                        "DAILY allowance, not a per-minute burst. It does not "
+                        "come back today, and the pool does NOT route around "
+                        "it: the effective LiteLLM cooldown is 5 seconds, so "
+                        "the exhausted member goes straight back into rotation "
+                        "and is drawn again for the rest of the day (issue "
+                        "#1566: one member on a 20-per-day cap produced 435 "
+                        "rate-limit failures in 48 hours this way). Waiting is "
+                        "not the remedy and neither is replacing the model. "
+                        "Take the member OUT of the pool by setting its "
+                        "provider_routes.health_state to 'disabled' in a new "
+                        "migration, or repoint it at a model whose daily "
+                        "allowance the pool can actually use."
+                    )
                 )
-            )
+            else:
+                lines.append(
+                    redact(
+                        f"::warning::free pool member '{model}' is RATE LIMITED, not "
+                        "gone. Do NOT replace its row: the model still exists and the "
+                        "member returns when the window resets or the account is "
+                        "funded. The quota window above says this one reopens inside "
+                        "the day, so the pool routes around it meanwhile."
+                    )
+                )
         else:
             lines.append(redact(f"  DEAD MEMBER: {model} -- {detail}"))
             lines.append(
@@ -230,7 +268,6 @@ def _selfcheck() -> int:
     }
     lines = _render(rate_limited, plain)
     joined = "\n".join(lines)
-    assert "RATE LIMITED" in joined, joined
     assert "RETIRED" not in joined, (
         "a rate-limited member must not be reported as retired: acting on that "
         "advice deletes a member that is not gone"
@@ -240,6 +277,57 @@ def _selfcheck() -> int:
         "transient per-minute limit from a spent daily allowance"
     )
     assert "34s" in joined, "the provider's own retry hint must survive too"
+
+    # Issue #1566. Telling the two windows apart was step one and shipped;
+    # ACTING on the difference is this assertion. A spent DAILY allowance is not
+    # waited out, because the wait runs to the provider's daily reset and the
+    # member is drawn again every few seconds until then: LiteLLM's effective
+    # cooldown is 5 seconds (deploy/litellm/config.yaml records the runtime
+    # confirmation of that number), so the exhausted member goes straight back
+    # into rotation. That is how one member contributing at most 20 successes a
+    # day produced 435 rate-limit failures in 48 hours. The remedy is
+    # membership, and the report has to say so where the reader is standing.
+    assert "DAILY QUOTA EXHAUSTED" in joined, (
+        "a spent daily allowance must be called out separately from a "
+        "per-minute burst, or the reader is told to wait for a window that "
+        "does not reopen today"
+    )
+    assert "health_state" in joined, (
+        "the daily-quota verdict must name the remedy that actually stops the "
+        "traffic, which is taking the member out of the pool"
+    )
+    assert "routes around it" not in joined, (
+        "the pool does NOT route around a daily-exhausted member: it is cooled "
+        "down for 5 seconds and drawn again all day (issue #1566)"
+    )
+
+    # The discriminator has to cut both ways, or it is a rename rather than a
+    # classification. A per-MINUTE window keeps the original verdict, because
+    # that one really does reopen inside the run and the pool really does route
+    # around it meanwhile.
+    minute_limited = {
+        "healthy_count": 1,
+        "unhealthy_count": 1,
+        "unhealthy_endpoints": [
+            {
+                "model": "groq/qwen/qwen3.8-27b",
+                "error": (
+                    "litellm.RateLimitError: RateLimitError: Error code: 429 - "
+                    "{'error': {'message': 'Rate limit reached for model "
+                    "qwen/qwen3.8-27b', 'code': 'rate_limit_exceeded', "
+                    "'quotaId': 'GenerateRequestsPerMinutePerProject-FreeTier'"
+                    "}, 'retryDelay': '7s'}"
+                ),
+            }
+        ],
+    }
+    joined = "\n".join(_render(minute_limited, plain))
+    assert "RATE LIMITED" in joined, joined
+    assert "DAILY QUOTA EXHAUSTED" not in joined, (
+        "a per-minute burst must not be reported as a spent daily allowance: "
+        "acting on that advice removes a member that is back in seconds"
+    )
+    assert "routes around it" in joined, joined
 
     # A retired member keeps the original advice, which is correct for a 404.
     retired = {
