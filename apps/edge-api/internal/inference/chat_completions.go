@@ -187,6 +187,35 @@ var toolParamNames = []string{
 //
 // An input that is not a JSON object cannot carry a tool block either, so "" is
 // the honest answer there.
+// KNOWN BLIND SPOT, recorded rather than closed, because closing it costs more
+// than it buys and the cost lands on every plain chat turn.
+//
+// A body spelling one parameter twice still reads as plain here:
+//
+//	{"tools":[{"type":"function"}],"Tools":null}   this returns ""
+//
+// The typed decoder resolves both spellings onto one field and lets the last
+// one win, so the null overwrites the real array, while a case-sensitive
+// decoder downstream still finds a genuine `tools` array under the exact key.
+//
+// Three reasons it is recorded and not fixed. It is NOT a divergence between
+// the two surfaces, which is the property this function was reworked to
+// restore: firstToolParam answers "" for the same body, so the API-key path
+// behaves identically and the invariant above still holds. It predates this
+// change, by way of issue #118, so nothing here introduced it. And it is
+// self-harming only: with the flag unset the request routes exactly as it does
+// on main, so there is no narrowing, no cross-tenant effect and no billing
+// effect, and the worst outcome is the caller's own turn reaching a route that
+// answers 404 for tool use.
+//
+// The fix would be to fall through to the any-spelling scan below whenever the
+// typed answer is empty. That is a second full decode of EVERY plain chat turn,
+// which is the common path, spent to close a hole that only harms the sender.
+// Pinned instead by fixtures in TestToolParamInBodyAgreesWithFirstToolParam, so
+// the next reader finds a recorded answer rather than a surprise.
+//
+// ponytail: if a real caller ever trips this, the upgrade path is that
+// fall-through, and the parse cost is the thing to measure first.
 func ToolParamInBody(raw []byte) string {
 	var req ChatCompletionRequest
 	if err := json.Unmarshal(raw, &req); err == nil {

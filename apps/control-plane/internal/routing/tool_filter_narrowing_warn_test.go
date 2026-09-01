@@ -122,3 +122,62 @@ func TestSelectRouteDoesNotWarnAboutDisabledRoutes(t *testing.T) {
 		t.Fatalf("a disabled incapable route was counted as a narrowing: %q", buf.String())
 	}
 }
+
+// The case that separates enabledCapable from len(capable), and the only one of
+// these tests that does.
+//
+// capable retains DISABLED rows: they are dropped later, by the health filter,
+// not by this one. So a disabled but capable sibling pads len(capable) and can
+// lift it to enabledCount while an enabled route really is being removed. That
+// is a MISSED warning, which is the direction that matters, since the whole
+// point of the warning is that a silent narrowing on a two-route pool must not
+// be possible.
+//
+// Three routes: one enabled capable and one disabled capable sharing a group,
+// and one enabled incapable in a group of its own. enabledCount is 2, one
+// enabled route is removed, len(capable) is also 2 and hides it.
+func TestSelectRouteWarnsWhenADisabledCapableSiblingPadsTheCount(t *testing.T) {
+	buf := captureWarnings(t)
+
+	candidates := []RouteCandidate{
+		{
+			RouteID:                 "route-pad-enabled-capable",
+			AliasID:                 "pad-alias",
+			Provider:                "provider-a",
+			LiteLLMModelName:        "group-capable",
+			PriceClass:              "standard",
+			HealthState:             "healthy",
+			Priority:                10,
+			SupportsChatCompletions: true,
+			SupportsTools:           true,
+		},
+		{
+			RouteID:                 "route-pad-disabled-capable",
+			AliasID:                 "pad-alias",
+			Provider:                "provider-a",
+			LiteLLMModelName:        "group-capable",
+			PriceClass:              "standard",
+			HealthState:             "disabled",
+			Priority:                20,
+			SupportsChatCompletions: true,
+			SupportsTools:           true,
+		},
+		{
+			RouteID:                 "route-pad-enabled-plain",
+			AliasID:                 "pad-alias",
+			Provider:                "provider-b",
+			LiteLLMModelName:        "group-plain",
+			PriceClass:              "standard",
+			HealthState:             "healthy",
+			Priority:                30,
+			SupportsChatCompletions: true,
+			SupportsTools:           false,
+		},
+	}
+
+	selectWithTools(t, candidates, "pad-alias")
+
+	if !strings.Contains(buf.String(), "tool capability filter narrowed the candidate set") {
+		t.Fatalf("an enabled route was removed and no warning fired, because a disabled capable sibling padded the count. This is the counter that has to be enabled-only. Captured: %q", buf.String())
+	}
+}

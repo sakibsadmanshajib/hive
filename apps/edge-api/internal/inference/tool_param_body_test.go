@@ -36,6 +36,16 @@ func TestToolParamInBodyAgreesWithFirstToolParam(t *testing.T) {
 		`{"model":"m","Response_Format":{"type":"json_object"}}`,
 		`{"model":"m","Parallel_Tool_Calls":true}`,
 		`{"model":"m","tools":[{"type":"function"}],"tools":null}`,
+		// Two SPELLINGS of one parameter. Both readers answer "" here, because
+		// the typed decoder lets the last spelling win and the null overwrites
+		// the array, while a case-sensitive decoder downstream still sees a real
+		// tools array. Pinned deliberately: it is a known blind spot, recorded
+		// on ToolParamInBody with the reasoning for leaving it, and these rows
+		// exist so it is found as a documented answer rather than rediscovered
+		// as a surprise. The rows still carry their weight for the case-folding
+		// defect: they must not start answering differently on the two surfaces.
+		`{"model":"m","tools":[{"type":"function"}],"Tools":null}`,
+		`{"model":"m","tool_choice":"auto","Tool_Choice":null}`,
 	}
 
 	for _, body := range bodies {

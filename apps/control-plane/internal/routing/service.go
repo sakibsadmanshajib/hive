@@ -139,6 +139,13 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		}
 
 		capable := make([]RouteCandidate, 0, len(candidates))
+		// enabledCapable, not len(capable), and the difference is a MISSED
+		// warning rather than a false one. capable retains disabled rows, which
+		// the health filter drops a few lines below, so a disabled but capable
+		// sibling pads len(capable) and can lift it to enabledCount while a
+		// real narrowing is under way. TestSelectRouteWarnsWhenADisabledCapableSiblingPadsTheCount
+		// is that exact shape, and it is the only one of these tests that
+		// separates the two counters.
 		enabledCapable := 0
 		for _, c := range candidates {
 			if c.SupportsTools && !incapableGroups[c.LiteLLMModelName] {
@@ -180,7 +187,7 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 				"alias", aliasID,
 				"enabled", enabledCount,
 				"enabled_capable", enabledCapable,
-				"detail", "an advertised alias should be uniformly tool capable; traffic for this alias is now concentrated on fewer routes")
+				"detail", "traffic for this alias is now concentrated on fewer routes. Expected only for an API-key caller sending tool parameters at an alias the model list does not advertise; on a chat-surface alias, which only carries tools when hive_capabilities.tools is true, this means the catalog changed under a still-advertised alias")
 		}
 		candidates = capable
 	}
