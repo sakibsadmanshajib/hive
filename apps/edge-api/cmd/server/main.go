@@ -1192,6 +1192,16 @@ func resolveLiteLLMMasterKey() string {
 	return k
 }
 
+// budgetGateFailOpenMetric adapts the edge metrics counter to the gate's
+// FailOpenMetric seam. The workspace id is dropped on purpose: it rides in the
+// gate's WARN line instead, since one metric series per workspace would be
+// unbounded cardinality on the hot path.
+type budgetGateFailOpenMetric struct {
+	counter prometheus.Counter
+}
+
+func (m budgetGateFailOpenMetric) Inc(string) { m.counter.Inc() }
+
 // buildBudgetGate constructs the Phase 14 BudgetGate middleware. The gate
 // resolves the workspace by hashing the bearer token through the authz client,
 // then enforces the hard cap from Redis (key written by the control-plane
@@ -1204,17 +1214,9 @@ func resolveLiteLLMMasterKey() string {
 // budgets/mtd_counter.go. Both writers landed with issue #1651; before that the
 // counter had no writer at all and the cap expired thirty seconds after it was
 // saved, so this gate read zero spend against no cap and never blocked
-// anything.
-// budgetGateFailOpenMetric adapts the edge metrics counter to the gate's
-// FailOpenMetric seam. The workspace id is dropped on purpose: it rides in the
-// gate's WARN line instead, since one metric series per workspace would be
-// unbounded cardinality on the hot path.
-type budgetGateFailOpenMetric struct {
-	counter prometheus.Counter
-}
-
-func (m budgetGateFailOpenMetric) Inc(string) { m.counter.Inc() }
-
+// anything. Both keys are also restated once a minute by the control-plane
+// spend-alert pass, which is what puts them back after a deploy starts Redis
+// empty.
 func buildBudgetGate(authzClient *authz.Client, edgeMetrics *proxy.EdgeMetrics) (*limits.BudgetGate, error) {
 	opt, err := redis.ParseURL(resolveRedisURL())
 	if err != nil {

@@ -5,12 +5,14 @@ go 1.26.0
 toolchain go1.26.7
 
 require (
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lestrrat-go/jwx/v2 v2.1.7
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
+	github.com/sakibsadmanshajib/hive/packages/budgetkeys v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/embedmodel v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/sanitize v0.0.0
 	github.com/stretchr/testify v1.12.1
@@ -36,6 +38,7 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
@@ -55,6 +58,8 @@ require (
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
 
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
+
+replace github.com/sakibsadmanshajib/hive/packages/budgetkeys => ../../packages/budgetkeys
 
 replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 

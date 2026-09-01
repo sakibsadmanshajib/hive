@@ -11,6 +11,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	"github.com/sakibsadmanshajib/hive/packages/budgetkeys"
 )
 
 // =============================================================================
@@ -43,10 +44,15 @@ import (
 //   - budget:mtd_spend:{ws}:YYYY-MM is the gate's view, in BDT subunits,
 //     rewritten from the running total after every settlement.
 //
-// Accumulating in subunits instead would round every settlement to zero and the
-// counter would never leave the floor: one request costs a small fraction of a
-// paisa, so round(each) is 0 while round(sum) is not. Converting the running
-// total once per settlement also means no cumulative rounding drift.
+// Accumulating in subunits instead would round on every settlement instead of
+// once. That is wrong in two magnitudes rather than one, so the reason is worth
+// stating precisely. For a charge worth less than half a paisa, round(each) is 0
+// while round(sum) is not, and the counter never leaves the floor no matter how
+// much is spent; a small embedding call at the platform rate is in that range,
+// since one paisa is about 81,216 credits at 123.13 BDT per USD. For charges
+// above that the counter does move, and instead carries up to half a paisa of
+// error per settlement with a consistent sign. Converting the running total once
+// has neither failure.
 //
 // WHICH RATE. The platform rate, the same choice and for the same reason as the
 // spend-alert cron in cron.go: a cap comparison is a threshold on a mid-month
@@ -63,40 +69,80 @@ import (
 // arriving late (a reaper release, a reconciliation) still lands on a live key.
 const mtdCounterTTL = 45 * 24 * time.Hour
 
+// mtdCounterBudget caps how long one settlement may spend maintaining these
+// counters, including the two database reads on the rebuild path.
+//
+// It exists because of where this runs, not because Redis is expected to be
+// slow: inside the per-account advisory lock held by accounting.finalizeLocked,
+// on a connection from the same pool the rest of the product shares. Overrunning
+// it is a fail-open, which is the posture this whole path already takes, so the
+// only cost of the bound being hit is a cap left briefly unenforced and an ERROR
+// line saying so. Generous by two orders of magnitude for the happy path, where
+// every operation here is a single indexed round trip.
+const mtdCounterBudget = 500 * time.Millisecond
+
 // MTDSpendRedisKey returns the key the edge-api budget gate reads for the
 // workspace's month-to-date spend, in BDT subunits.
 //
-// Kept in sync BY HAND with limits.MTDSpendRedisKeyPattern in edge-api: neither
-// module can import the other, since both live under an internal/ tree rooted
-// at their own app. Both sides pin this literal in their tests
-// (TestGateKeysMatchTheControlPlaneWriter there, the counter tests here), which
-// is the only mechanical link between them.
+// The shape lives in packages/budgetkeys, which the gate imports too, so the
+// writer and the reader share one definition instead of two literals that agree
+// by convention. Neither app can import the other's internal tree, which is the
+// structural reason issue #1651 was possible.
 func MTDSpendRedisKey(workspaceID uuid.UUID, period time.Time) string {
-	return fmt.Sprintf("budget:mtd_spend:{%s}:%s", workspaceID.String(), period.UTC().Format("2006-01"))
+	return budgetkeys.MTDSpend(workspaceID.String(), period)
 }
 
 // mtdCreditsRedisKey returns the accumulator key. Control-plane internal: the
 // gate never reads it, because the gate has no rate with which to convert it.
 func mtdCreditsRedisKey(workspaceID uuid.UUID, period time.Time) string {
-	return fmt.Sprintf("budget:mtd_credits:{%s}:%s", workspaceID.String(), period.UTC().Format("2006-01"))
+	return budgetkeys.MTDCredits(workspaceID.String(), period)
+}
+
+// FailureCounter is the metric seam for writes that did not land. Satisfied by
+// prometheus.Counter without this package importing prometheus.
+//
+// It matters more than a log line here: every failure it counts is a charge
+// missing from a customer's hard cap, and the edge-api counter cannot see any of
+// them, because it only observes the reader failing open.
+type FailureCounter interface {
+	Inc()
 }
 
 // MTDSpendCounter records settled spend against the Redis counters above.
 type MTDSpendCounter struct {
-	redis  *goredis.Client
-	repo   WorkspaceBudgetRepository
-	rate   payments.USDBDTRate
-	logger *slog.Logger
+	redis    *goredis.Client
+	repo     WorkspaceBudgetRepository
+	rate     payments.USDBDTRate
+	logger   *slog.Logger
+	failures FailureCounter
 }
 
 // NewMTDSpendCounter builds the counter. The rate is resolved once by the
 // caller (see main.go) rather than per settlement, so a malformed operator
-// override is a boot failure instead of a per-request one.
+// override is caught at boot instead of on every request.
 func NewMTDSpendCounter(client *goredis.Client, repo WorkspaceBudgetRepository, rate payments.USDBDTRate, logger *slog.Logger) *MTDSpendCounter {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &MTDSpendCounter{redis: client, repo: repo, rate: rate, logger: logger}
+}
+
+// WithFailureCounter installs the metric bumped on every write that did not
+// land. Returns the counter for chaining.
+func (c *MTDSpendCounter) WithFailureCounter(failures FailureCounter) *MTDSpendCounter {
+	if c != nil && failures != nil {
+		c.failures = failures
+	}
+	return c
+}
+
+// fail records a write failure on the metric and returns the error unchanged,
+// so no return path can count one and skip the other.
+func (c *MTDSpendCounter) fail(err error) error {
+	if c.failures != nil {
+		c.failures.Inc()
+	}
+	return err
 }
 
 // RecordSettledSpend adds a settled charge to the workspace's month-to-date
@@ -110,9 +156,10 @@ func NewMTDSpendCounter(client *goredis.Client, repo WorkspaceBudgetRepository, 
 // aborted finalization would strand the hold and leave the reservation
 // unsettled, turning a Redis blip into the credit leak of issue #616. So the
 // cost of a failed write is a cap that goes briefly unenforced, not a broken
-// money path, and the reseed below heals it from the ledger on the next
-// settlement after Redis returns. The ledger is the authority here; Redis is a
-// cache in front of it that happens to be readable from the edge.
+// money path. The ledger is the authority here; Redis is a cache in front of it
+// that happens to be readable from the edge, and the spend-alert pass restates
+// both keys from that ledger every minute, so a failure here is corrected on a
+// schedule rather than only when a key happens to be missing.
 func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uuid.UUID, credits int64, at time.Time) error {
 	if c == nil || c.redis == nil {
 		return nil
@@ -123,6 +170,30 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 		// worth two round trips.
 		return nil
 	}
+
+	// Bounded, because the fail-open posture above only covers a Redis that
+	// ERRORS. A Redis that accepts connections and stops answering does not
+	// error for tens of seconds: platform/redis.NewClient sets no timeouts, so
+	// this inherits the go-redis defaults of a 5 second dial and a 3 second read
+	// with 3 retries. Every one of those seconds would be spent holding the
+	// per-account Postgres advisory lock this runs inside, plus its pool
+	// connection, on a deployment where one pool has already turned into a chat
+	// outage. The bound turns a stall into the error the caller already logs and
+	// swallows, so nothing downstream behaves differently.
+	ctx, cancel := context.WithTimeout(ctx, mtdCounterBudget)
+	defer cancel()
+
+	// The period is a UTC calendar month, matching the invoice period, the alert
+	// pass and the gate, so a Dhaka customer's cap resets at 06:00 local on the
+	// first rather than at midnight. Product fact, not a divergence.
+	//
+	// Note also that this anchors on the application clock while the reseed
+	// filters on Postgres created_at. For a settlement within a second of a
+	// month boundary the two can disagree about which month owns the charge, so
+	// it could be counted in one month's key and summed into the other's window
+	// by a later reseed. One settlement at one instant per month, bounded by
+	// that charge, and worth revisiting only if this stops being the sole route
+	// into the counter.
 	period := startOfMonthUTC(at.UTC())
 	creditsKey := mtdCreditsRedisKey(workspaceID, period)
 
@@ -134,7 +205,7 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 	incr := pipe.IncrBy(ctx, creditsKey, credits)
 	pipe.Expire(ctx, creditsKey, mtdCounterTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("budgets: increment mtd credits: %w", err)
+		return c.fail(fmt.Errorf("budgets: increment mtd credits: %w", err))
 	}
 	total := incr.Val()
 
@@ -150,7 +221,7 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 
 	subunits, err := payments.CreditsToBDTSubunits(big.NewInt(total), c.rate.Rate)
 	if err != nil {
-		return fmt.Errorf("budgets: convert mtd credits: %w", err)
+		return c.fail(fmt.Errorf("budgets: convert mtd credits: %w", err))
 	}
 	// SET rather than INCRBY: this key is a rendering of the accumulator, not
 	// an accumulator itself.
@@ -164,7 +235,65 @@ func (c *MTDSpendCounter) RecordSettledSpend(ctx context.Context, workspaceID uu
 	// sequence including this write (issue #106). If a settlement path is ever
 	// added outside that lock, this needs a compare-and-set.
 	if err := c.redis.Set(ctx, MTDSpendRedisKey(workspaceID, period), subunits.String(), mtdCounterTTL).Err(); err != nil {
-		return fmt.Errorf("budgets: write mtd spend: %w", err)
+		return c.fail(fmt.Errorf("budgets: write mtd spend: %w", err))
+	}
+	return nil
+}
+
+// SyncWorkspace restates a workspace's two period keys and its cap from figures
+// the caller has already read out of the database. It is what the spend-alert
+// pass calls, once a minute, for every workspace that has a budget.
+//
+// The settlement path alone is not enough to keep Redis true, and the two gaps
+// it leaves are both ordinary rather than exotic:
+//
+//   - A write that fails while the accumulator key still exists loses that
+//     charge for the rest of the month. The rebuild does not fire, because the
+//     rebuild fires on a MISSING key, and a transient failure does not remove
+//     one. The same hole swallows a charge when the process dies or the request
+//     context is cancelled between the row transition and the counter write.
+//   - Redis in this deployment has no volume, so every deploy starts with an
+//     empty keyspace and every workspace's cap is gone. The settlement path
+//     republishes it only when that workspace next settles a positive charge,
+//     which a workspace whose next requests all fail never does.
+//
+// Both are closed by restating the values on a schedule, and the schedule
+// already exists: the alert pass walks ListWorkspacesWithBudget every minute
+// and already reads each workspace's month-to-date credits for its own
+// comparison. This is three SETs inside a loop that is already running.
+//
+// Convergence, not authority: a settlement landing between the caller's read
+// and this write can be overwritten, leaving the counter one charge low until
+// the next pass reads a ledger that includes it. Bounded by the pass interval,
+// self-correcting, and low rather than high, which is the fail-open direction
+// this path takes everywhere else.
+func (c *MTDSpendCounter) SyncWorkspace(ctx context.Context, workspaceID uuid.UUID, ledgerCredits, hardCap *big.Int, at time.Time) error {
+	if c == nil || c.redis == nil {
+		return nil
+	}
+	if ledgerCredits == nil || !ledgerCredits.IsInt64() || ledgerCredits.Sign() < 0 {
+		return c.fail(fmt.Errorf("budgets: sync workspace: unusable ledger total %v", ledgerCredits))
+	}
+	ctx, cancel := context.WithTimeout(ctx, mtdCounterBudget)
+	defer cancel()
+
+	period := startOfMonthUTC(at.UTC())
+	subunits, err := payments.CreditsToBDTSubunits(ledgerCredits, c.rate.Rate)
+	if err != nil {
+		return c.fail(fmt.Errorf("budgets: sync workspace: convert: %w", err))
+	}
+
+	// The accumulator first, then its rendering. Restating the rendering alone
+	// would be undone by the next settlement, which increments the accumulator
+	// and re-renders from it.
+	pipe := c.redis.TxPipeline()
+	pipe.Set(ctx, mtdCreditsRedisKey(workspaceID, period), ledgerCredits.Int64(), mtdCounterTTL)
+	pipe.Set(ctx, MTDSpendRedisKey(workspaceID, period), subunits.String(), mtdCounterTTL)
+	if hardCap != nil {
+		pipe.Set(ctx, hardCapRedisKey(workspaceID), hardCap.String(), hardCapRedisNoExpiry)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return c.fail(fmt.Errorf("budgets: sync workspace: %w", err))
 	}
 	return nil
 }
@@ -234,6 +363,17 @@ func (c *MTDSpendCounter) reseedTotal(ctx context.Context, workspaceID uuid.UUID
 // and a revision stamped on each publish would be the complete answer if it
 // ever bites; that is a schema column and a publish protocol for a race that
 // needs two budget mutations on one workspace inside a round trip.
+//
+// The clear is only safe while GetBudget reads the primary. A (nil, nil) answer
+// is taken as authority to remove a live cap, and once the accumulator key
+// exists no further rebuild runs for that workspace this period, so a stale read
+// from a replica would take a spend control off with nothing to put it back
+// until the alert pass or a re-save. Note the asymmetry with reseedTotal above,
+// which keeps the larger figure when the ledger looks behind precisely because
+// under-counting stops enforcement: this function takes the opposite risk on a
+// read of the same freshness, and that is only acceptable because every read in
+// this process goes through the one primary pool. A read replica added later
+// must not quietly include this query.
 func (c *MTDSpendCounter) republishHardCap(ctx context.Context, workspaceID uuid.UUID) {
 	budget, err := c.repo.GetBudget(ctx, workspaceID)
 	if err != nil {

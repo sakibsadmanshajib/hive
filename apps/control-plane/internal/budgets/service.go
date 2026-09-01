@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/sakibsadmanshajib/hive/packages/budgetkeys"
 )
 
 // =============================================================================
@@ -187,7 +189,7 @@ func (e *ValidationError) Error() string {
 // cap keeps the old one until the SET lands. That is bounded by a round trip,
 // not by a clock.
 func hardCapRedisKey(workspaceID uuid.UUID) string {
-	return fmt.Sprintf("budget:hard_cap:{%s}", workspaceID.String())
+	return budgetkeys.HardCap(workspaceID.String())
 }
 
 // hardCapRedisNoExpiry is the TTL the published cap carries: none.
@@ -198,13 +200,19 @@ func hardCapRedisKey(workspaceID uuid.UUID) string {
 // and the gate becomes pass-through. So a cap stopped being enforced thirty
 // seconds after the customer typed it, which is the second half of why the hard
 // cap never blocked anything (issue #1651). Redis follows the row on upsert and
-// delete, and the settlement counter republishes the cap the first time it
-// rebuilds a workspace's period keys, which is what heals a Redis restart.
+// delete.
 //
-// ponytail: a cap saved while Redis is unreachable stays unpublished until that
-// republish. Closing that fully wants either a publisher pass over
-// ListWorkspacesWithBudget or a read-through in the gate, both of which are
-// more machinery than a lost publish is worth today.
+// WHAT PUTS IT BACK, and this is the common path rather than the rare one. The
+// redis service declares no volume in deploy/docker/docker-compose.yml, so every
+// stack recreate starts with an empty keyspace, and a push to main auto-deploys.
+// After every deploy, every workspace's cap key is gone. Two things republish
+// it: the settlement counter, when it rebuilds a workspace's period keys, and
+// the spend-alert pass, which walks every workspace with a budget once a minute
+// and restates the cap whether or not that workspace has settled anything. The
+// second is what covers a workspace whose next requests all fail, which settles
+// nothing and would otherwise never trigger the first. So the exposure after a
+// deploy, and after a cap saved while Redis was unreachable, is bounded by the
+// pass interval rather than by a customer happening to re-save their budget.
 const hardCapRedisNoExpiry time.Duration = 0
 
 // GetBudget returns the workspace budget or (nil, nil) when none is set.

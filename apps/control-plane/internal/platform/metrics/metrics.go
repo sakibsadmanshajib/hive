@@ -25,6 +25,23 @@ type Registry struct {
 	// healthcheck reads: an alert can fire without taking the process out of
 	// service and leaving inference and billing without a control-plane.
 	SignupProvisioningSweepFailures prometheus.Gauge
+
+	// BudgetMTDCounterWriteFailures counts settlements whose spend could not be
+	// recorded against the workspace month-to-date counter the edge-api budget
+	// gate reads. Each one is a charge missing from a customer's hard cap until
+	// the spend-alert pass restates it from the ledger.
+	//
+	// The edge side has its own counter for the reader failing open. This is the
+	// writer half, and without it a completely dead writer and a healthy one both
+	// report zero everywhere, which is the ambiguity issue #1651 was made of.
+	BudgetMTDCounterWriteFailures prometheus.Counter
+
+	// BudgetMTDCounterWired is 1 when this process can write that counter and 0
+	// when it cannot, which happens when Redis was unreachable at boot or the
+	// conversion rate was unusable. At 0 no workspace hard cap is enforced for
+	// the life of the process, and no failure counter anywhere will move, because
+	// nothing is attempted. Alert on this, not only on the failure counters.
+	BudgetMTDCounterWired prometheus.Gauge
 }
 
 // NewRegistry creates and registers all Prometheus metrics.
@@ -71,6 +88,14 @@ func NewRegistry() (*Registry, *prometheus.Registry) {
 			Name: "hive_signup_provisioning_sweep_failures",
 			Help: "Consecutive failed signup provisioning sweeps, 0 when the last sweep completed",
 		}),
+		BudgetMTDCounterWriteFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "hive_budget_mtd_counter_write_failures_total",
+			Help: "Settled charges that could not be recorded against the workspace month-to-date spend counter",
+		}),
+		BudgetMTDCounterWired: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "hive_budget_mtd_counter_wired",
+			Help: "1 when this control-plane can write the budget month-to-date counter, 0 when workspace hard caps are unenforced",
+		}),
 	}
 	reg.MustRegister(
 		r.HTTPRequestsTotal,
@@ -82,6 +107,8 @@ func NewRegistry() (*Registry, *prometheus.Registry) {
 		r.RateLimitHitsTotal,
 		r.AuthFailuresTotal,
 		r.SignupProvisioningSweepFailures,
+		r.BudgetMTDCounterWriteFailures,
+		r.BudgetMTDCounterWired,
 	)
 	return r, reg
 }

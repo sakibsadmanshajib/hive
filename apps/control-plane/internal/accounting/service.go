@@ -423,13 +423,29 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	//
 	// FAILING OPEN, deliberately, and loudly. Returning this error would abort a
 	// finalization whose charge has already posted, stranding the hold: exactly
-	// the credit leak of issue #616, caused by a Redis blip. So a counter
-	// failure costs a cap that goes briefly unenforced, recovered from the
-	// ledger by the next settlement after Redis returns, since the counter
-	// reseeds a missing key rather than restarting it at zero. Failing closed
-	// would cost the money path itself. The ERROR line is the signal; a silent
-	// skip would make an unenforced cap invisible, which is the defect class
-	// issue #1651 is about.
+	// the credit leak of issue #616, caused by a Redis blip. Failing closed
+	// would cost the money path itself, so a counter failure costs a cap that
+	// goes briefly unenforced instead.
+	//
+	// WHAT RECOVERS IT, precisely, because the counter's own rebuild does not.
+	// That rebuild fires when the accumulator key is MISSING, so it covers a
+	// wipe and not a blip: an ordinary failed write leaves the key alive holding
+	// the month's running total, and the next settlement increments the survivor
+	// with nothing noticing the gap. The same hole swallows this charge if the
+	// process dies or ctx is cancelled between the row transition above and this
+	// call, which an edge-api client timeout produces directly, since the write
+	// rides the inbound request context.
+	//
+	// The spend-alert pass is what actually closes both. It walks every
+	// workspace with a budget once a minute and restates the counter and the cap
+	// from the ledger (budgets.MTDSpendCounter.SyncWorkspace), so the gate's view
+	// converges on a schedule rather than only when a key happens to be absent.
+	// Worst case for a charge dropped here is under-enforcement for the rest of
+	// that minute.
+	//
+	// The ERROR line and hive_budget_mtd_counter_write_failures_total are the
+	// signal in the meantime; a silent skip would make an unenforced cap
+	// invisible, which is the defect class issue #1651 is about.
 	if actualCredits > 0 && s.spendCounter != nil {
 		if err := s.spendCounter.RecordSettledSpend(ctx, reservation.AccountID, actualCredits, time.Now().UTC()); err != nil {
 			slog.ErrorContext(ctx, "budget mtd counter write failed; hard cap is unenforced for this workspace until it succeeds",

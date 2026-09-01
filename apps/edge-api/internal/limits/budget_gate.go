@@ -54,6 +54,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/sakibsadmanshajib/hive/packages/budgetkeys"
 )
 
 // =============================================================================
@@ -97,17 +99,20 @@ func (r *redisCacheReader) Get(ctx context.Context, key string) (string, bool, e
 const BDTSubunitsCurrency = "BDT"
 
 // HardCapRedisKeyPattern returns the Redis key the control-plane writes and
-// the gate reads. Kept in sync with the control-plane's
-// `budgets.hardCapRedisKey` — see budgets/service.go.
+// the gate reads.
+//
+// The shape lives in packages/budgetkeys, imported by both sides, rather than
+// being spelled out here and again in control-plane. Two copies agreeing by
+// convention is what let issue #1651 exist.
 func HardCapRedisKeyPattern(workspaceID string) string {
-	return fmt.Sprintf("budget:hard_cap:{%s}", workspaceID)
+	return budgetkeys.HardCap(workspaceID)
 }
 
 // MTDSpendRedisKeyPattern returns the Redis key holding the workspace's
 // month-to-date spend (BDT subunits, integer string). Period-suffixed so a
 // new month starts at zero without explicit reset.
 func MTDSpendRedisKeyPattern(workspaceID string, period time.Time) string {
-	return fmt.Sprintf("budget:mtd_spend:{%s}:%s", workspaceID, period.Format("2006-01"))
+	return budgetkeys.MTDSpend(workspaceID, period)
 }
 
 // SoftCapCrossedMetric reports the Prometheus counter name the gate increments

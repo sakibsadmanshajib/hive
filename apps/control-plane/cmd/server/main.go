@@ -347,6 +347,14 @@ func main() {
 	var routingHandler *routing.Handler
 	var usageHandler *usage.Handler
 	var redisClient *goredis.Client
+
+	// Prometheus registry. Built here, before any service wiring, so a service
+	// that has to report whether it came up at all can take its metric at
+	// construction: the budget spend counter reports exactly that, and a metric
+	// created after the wiring it describes cannot. The router and the telemetry
+	// listener below share this one registry.
+	metricsRegistry, promRegistry := metrics.NewRegistry()
+
 	// Hoisted so the payments wiring block below can reference them.
 	var accountsSvc *accounts.Service
 	var accountingSvc *accounting.Service
@@ -514,6 +522,7 @@ func main() {
 		// construction, before the reservation reaper starts reading it from
 		// another goroutine.
 		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
+		spendCounter := buildSpendCounter(redisClient, workspaceBudgetsRepo, metricsRegistry)
 
 		accountingRepo := accounting.NewPgxRepository(pool)
 		// Postgres advisory locker serializes the credit-reservation critical
@@ -521,8 +530,10 @@ func main() {
 		// credit double-spend (issue #106). Single-instance in-process locking
 		// is the NewService default; this upgrades it to be cross-process safe.
 		accountingSvc = accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc).
-			WithAccountLocker(accounting.NewPgxAccountLocker(pool)).
-			WithSpendCounter(buildSpendCounter(redisClient, workspaceBudgetsRepo))
+			WithAccountLocker(accounting.NewPgxAccountLocker(pool))
+		if spendCounter != nil {
+			accountingSvc = accountingSvc.WithSpendCounter(spendCounter)
+		}
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		// Issue #616 — stranded-hold reaper. A finalize that fails loses its
@@ -562,7 +573,13 @@ func main() {
 		budgetsHandler = budgets.NewHandler(budgetsSvc, accountsSvc)
 
 		// Phase 14 — spend-alert cron runner (50/80/100% thresholds, one-shot per period).
-		alertEvaluator := budgets.NewCronEvaluator(workspaceBudgetsRepo, alertNotifier, slog.Default())
+		// The pass also restates what the edge-api budget gate reads, which is
+		// what puts every cap back after a deploy starts Redis empty (the redis
+		// service declares no volume) and what corrects a settlement whose
+		// counter write failed while its key was still alive. Nil counter, no
+		// sync: the alerts still run.
+		alertEvaluator := budgets.NewCronEvaluator(workspaceBudgetsRepo, alertNotifier, slog.Default()).
+			WithGateStateSync(spendCounter)
 		alertRunner := spendalerts.NewRunner(alertEvaluator, spendalerts.Config{
 			Interval: 60 * time.Second,
 			Logger:   slog.Default(),
@@ -1054,9 +1071,6 @@ func main() {
 		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 	}
 
-	// Build Prometheus metrics registry before the router so the instrumentation
-	// middleware and the telemetry listener share one registry.
-	metricsRegistry, promRegistry := metrics.NewRegistry()
 	// A failing sweep is reported on the telemetry listener, not on the
 	// readiness endpoint. Provisioning can be broken while API-key
 	// resolution, routing, accounting and payment webhooks still work, so
@@ -1676,27 +1690,44 @@ func main() {
 }
 
 // buildSpendCounter wires the month-to-date spend counter the edge-api budget
-// gate reads (issue #1651). Returns a nil SpendCounter, not a typed nil, when
-// there is no Redis to write to, so settlement skips it cleanly.
+// gate reads (issue #1651). Returns nil when it cannot be wired, and settlement
+// and the alert pass both skip it cleanly.
 //
-// The conversion rate is resolved once, here, rather than per settlement: the
-// only way it can fail is a malformed HIVE_USD_BDT_RATE, which an operator set
-// by hand, and which also breaks invoice generation and the spend-alert cron
-// (both fail closed on it since #1657). A typo in a money-path configuration
-// value should stop the process at boot where it is unmissable, not surface as
-// a per-request error nobody reads. Unset is the common case and never fails:
-// payments.PlatformUSDBDTRate falls back to the documented default.
-func buildSpendCounter(redisClient *goredis.Client, repo budgets.WorkspaceBudgetRepository) accounting.SpendCounter {
+// Both failures degrade rather than kill the process, and they set the wired
+// gauge to 0 so the degradation is visible. This is a deliberate revision: the
+// first version of this function called log.Fatalf on an unusable rate, which
+// put a hand-typed repository variable in front of the whole control-plane on a
+// repository that auto-deploys on merge, so a typo would have taken chat,
+// billing, key management and the console down together. An unenforced cap is
+// worse than an enforced one and much better than an outage, and it is the same
+// state the no-Redis arm already accepts. What makes that trade honest is that
+// neither arm is silent: an ERROR names the consequence and
+// hive_budget_mtd_counter_wired reads 0 for the life of the process. Alert on
+// the gauge, since with nothing wired no failure counter can ever move.
+//
+// The rate is resolved once here rather than per settlement, so a malformed
+// HIVE_USD_BDT_RATE is caught at boot rather than on every request. Unset is the
+// common case and cannot fail: payments.PlatformUSDBDTRate falls back to the
+// documented default.
+func buildSpendCounter(redisClient *goredis.Client, repo budgets.WorkspaceBudgetRepository, m *metrics.Registry) *budgets.MTDSpendCounter {
+	m.BudgetMTDCounterWired.Set(0)
+
 	if redisClient == nil {
-		log.Println("WARNING: no Redis; workspace budget hard caps will not be enforced (no month-to-date counter)")
+		slog.Error("no Redis: workspace budget hard caps will not be enforced for the life of this process, and no spend will be counted against them",
+			"metric", "hive_budget_mtd_counter_wired")
 		return nil
 	}
 	rate, err := payments.PlatformUSDBDTRate()
 	if err != nil {
-		log.Fatalf("budget spend counter: %v", err)
+		slog.Error("budget spend counter not wired: workspace hard caps will not be enforced for the life of this process",
+			"error", err, "variable", payments.USDBDTRateEnvVar, "metric", "hive_budget_mtd_counter_wired")
+		return nil
 	}
+
 	log.Printf("budget spend counter ready (usd to bdt rate=%s source=%s)", rate.Display, rate.Source)
-	return budgets.NewMTDSpendCounter(redisClient, repo, rate, slog.Default())
+	m.BudgetMTDCounterWired.Set(1)
+	return budgets.NewMTDSpendCounter(redisClient, repo, rate, slog.Default()).
+		WithFailureCounter(m.BudgetMTDCounterWriteFailures)
 }
 
 func resolveLiteLLMBaseURL() string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"net"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 )
 
 // =============================================================================
@@ -101,9 +103,12 @@ func TestRecordSettledSpend_WritesTheSubunitCounterTheEdgeGateReads(t *testing.T
 }
 
 // TestRecordSettledSpend_ConvertsTheRunningTotalNotEachCharge pins the reason
-// the accumulator is kept in credits. A single request costs a small fraction
-// of a paisa, so converting each charge on its own rounds every one of them to
-// zero and the counter never leaves the floor no matter how much is spent.
+// the accumulator is kept in credits: converting per charge rounds repeatedly.
+// The case below is its worst form, charges worth less than half a paisa each,
+// where every conversion floors to zero and the counter never leaves the floor
+// no matter how much is spent. Larger charges do move it and instead accumulate
+// up to half a paisa of error per settlement with a consistent sign, which this
+// test does not measure and the comment on the file does describe.
 func TestRecordSettledSpend_ConvertsTheRunningTotalNotEachCharge(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	counter, client := newCounter(t, repo)
@@ -305,5 +310,116 @@ func TestRecordSettledSpend_ClearsACapWithNoBudgetRow(t *testing.T) {
 
 	if _, err := client.Get(ctx, counterHardCapKey).Result(); !errors.Is(err, goredis.Nil) {
 		t.Fatalf("a cap with no budget row survived the period rebuild: %v", err)
+	}
+}
+
+// TestRecordSettledSpend_IsBoundedWhenRedisHangs is the regression guard for the
+// gap between "Redis errors" and "Redis stops answering". The fail-open posture
+// handles the first: a refused connection fails immediately and the caller logs
+// and continues. The second does not fail for tens of seconds, because
+// platform/redis.NewClient sets no timeouts and go-redis then defaults to a 3
+// second read with retries, and every one of those seconds would be spent
+// holding the per-account advisory lock this runs inside.
+//
+// The server below accepts the connection and never answers, which is exactly
+// that case. Remove the bound in RecordSettledSpend and this test stops
+// finishing inside its own threshold.
+func TestRecordSettledSpend_IsBoundedWhenRedisHangs(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			// Hold it open, answer nothing, close only when the test ends.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	// Built the way production builds it, because the bound depends on how the
+	// client is configured and not only on the deadline the counter sets: a
+	// go-redis client without ContextTimeoutEnabled ignores the context for
+	// command reads entirely. Constructing a bare client here would have tested
+	// a client this product does not use.
+	client := platformredis.NewClient(listener.Addr().String())
+	t.Cleanup(func() { _ = client.Close() })
+	rate, err := payments.PlatformUSDBDTRate()
+	if err != nil {
+		t.Fatalf("resolve rate: %v", err)
+	}
+	counter := budgets.NewMTDSpendCounter(client, newFakeWorkspaceRepo(), rate, nil)
+
+	start := time.Now()
+	err = counter.RecordSettledSpend(context.Background(), uuid.MustParse(counterWorkspaceID), spendCredits(100).Int64(), counterAt)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a Redis that never answers was reported as a recorded spend")
+	}
+	// Two seconds is well inside the go-redis defaults an unbounded call would
+	// wait (a 3 second read, retried), and far outside the 500ms bound.
+	if elapsed > 2*time.Second {
+		t.Fatalf("settlement waited %s on a hung Redis while holding the account lock", elapsed)
+	}
+}
+
+// TestSyncWorkspace_RestatesBothKeysAndTheCap covers what the settlement path
+// cannot: a counter write that failed while its key was alive is not a missing
+// key, so no rebuild fires and that charge is gone from the cap for the rest of
+// the month. The spend-alert pass calls this once a minute for every workspace
+// with a budget, so the gate's view converges on the ledger on a schedule.
+func TestSyncWorkspace_RestatesBothKeysAndTheCap(t *testing.T) {
+	repo := newFakeWorkspaceRepo()
+	counter, client := newCounter(t, repo)
+	ws := uuid.MustParse(counterWorkspaceID)
+	ctx := context.Background()
+
+	// The counter is behind: it holds one hundred taka where the ledger says
+	// three thousand, which is what a dropped write leaves.
+	if err := counter.RecordSettledSpend(ctx, ws, spendCredits(10_000).Int64(), counterAt); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+
+	if err := counter.SyncWorkspace(ctx, ws, spendCredits(300_000), big.NewInt(500_000), counterAt); err != nil {
+		t.Fatalf("SyncWorkspace: %v", err)
+	}
+
+	if got := mustGet(t, client, counterMTDKey); got != "300000" {
+		t.Fatalf("gate counter holds %q, want the ledger's 300000 paisa", got)
+	}
+	if got := mustGet(t, client, counterHardCapKey); got != "500000" {
+		t.Fatalf("cap republished as %q, want 500000", got)
+	}
+
+	// The accumulator has to move too, or the next settlement increments the
+	// stale figure and undoes the correction on its own re-render.
+	if err := counter.RecordSettledSpend(ctx, ws, spendCredits(100).Int64(), counterAt); err != nil {
+		t.Fatalf("settle after sync: %v", err)
+	}
+	if got := mustGet(t, client, counterMTDKey); got != "300100" {
+		t.Fatalf("counter holds %q after a charge on top of the synced total, want 300100", got)
+	}
+}
+
+// TestSyncWorkspace_RefusesAnUnusableTotal keeps a corrupt ledger read from
+// silently zeroing a customer's counted spend.
+func TestSyncWorkspace_RefusesAnUnusableTotal(t *testing.T) {
+	counter, client := newCounter(t, newFakeWorkspaceRepo())
+	ws := uuid.MustParse(counterWorkspaceID)
+	ctx := context.Background()
+
+	tooBig := new(big.Int).Lsh(big.NewInt(1), 70)
+	for _, total := range []*big.Int{nil, big.NewInt(-1), tooBig} {
+		if err := counter.SyncWorkspace(ctx, ws, total, big.NewInt(500_000), counterAt); err == nil {
+			t.Fatalf("SyncWorkspace accepted %v", total)
+		}
+	}
+	if _, err := client.Get(ctx, counterMTDKey).Result(); !errors.Is(err, goredis.Nil) {
+		t.Fatal("a refused sync wrote the counter anyway")
 	}
 }
