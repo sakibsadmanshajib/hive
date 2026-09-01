@@ -26,6 +26,7 @@ Run: python3 scripts/test_owui_task_nonstreaming_response.py
 
 import ast
 import asyncio
+import builtins
 import hashlib
 import json
 import os
@@ -63,8 +64,54 @@ def sse_body(query):
     frames.append(dict(id="chatcmpl-hive", choices=[dict(index=0, delta=dict(content=payload[:half]))]))
     frames.append(dict(id="chatcmpl-hive", choices=[dict(index=0, delta=dict(content=payload[half:]))]))
     frames.append(dict(id="chatcmpl-hive", choices=[dict(index=0, delta=dict(), finish_reason="stop")], usage=dict(prompt_tokens=11, completion_tokens=7, total_tokens=18)))
+    return sse_frames(frames)
+
+
+def sse_frames(frames):
     out = "".join("data: " + json.dumps(f) + "\n\n" for f in frames)
     return (out + "data: [DONE]\n\n").encode("utf-8")
+
+
+def tool_call_sse_body():
+    """A native tool call, fragmented the way a delta stream actually sends one.
+
+    The arguments arrive in two pieces keyed by the same index, so a collapse
+    that ignored tool calls, or that took only the last fragment, produces
+    something that is not a valid OpenAI completion.
+    """
+    arguments = json.dumps(dict(query=GENERATED_QUERY))
+    half = len(arguments) // 2
+    return sse_frames(
+        [
+            dict(id="chatcmpl-tool", choices=[dict(index=0, delta=dict(role="assistant", tool_calls=[dict(index=0, id="call_1", type="function", function=dict(name="search_web", arguments=arguments[:half]))]))]),
+            dict(id="chatcmpl-tool", choices=[dict(index=0, delta=dict(tool_calls=[dict(index=0, function=dict(arguments=arguments[half:]))]))]),
+            dict(id="chatcmpl-tool", choices=[dict(index=0, delta=dict(), finish_reason="tool_calls")]),
+        ]
+    )
+
+
+def error_frame_sse_body():
+    """An SSE relay that fails after the headers are already on the wire.
+
+    The response opened with HTTP 200, so the `r.status >= 400` check above the
+    guard never sees this. Returning the partial text as a finished answer is
+    the silent data loss the guard has to refuse.
+    """
+    return sse_frames(
+        [
+            dict(id="chatcmpl-hive", choices=[dict(index=0, delta=dict(content="partial "))]),
+            dict(error=dict(message="upstream exploded", type="server_error")),
+        ]
+    )
+
+
+def unfinished_sse_body():
+    """Content, and no frame ever supplies a finish_reason."""
+    return sse_frames(
+        [
+            dict(id="chatcmpl-hive", choices=[dict(index=0, delta=dict(content="partial answer"))]),
+        ]
+    )
 
 
 class FakeUpstreamResponse:
@@ -123,6 +170,72 @@ def extract(source, name):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return node
     return None
+
+
+def module_bound_names(tree):
+    """Names bound at MODULE scope, without descending into any function body.
+
+    A name assigned inside some unrelated function is not readable from the
+    splice point, so counting it here would be exactly the false green this
+    check exists to prevent.
+    """
+    names = set()
+    pending = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+            continue
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                names.add(child.id)
+            else:
+                pending.append(child)
+    return names
+
+
+def function_bound_names(node):
+    """Parameters plus everything the function body binds."""
+    names = set()
+    args = node.args
+    for arg in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
+        names.add(arg.arg)
+    if args.vararg:
+        names.add(args.vararg.arg)
+    if args.kwarg:
+        names.add(args.kwarg.arg)
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+            names.add(child.id)
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(child.name)
+        elif isinstance(child, ast.ExceptHandler) and child.name:
+            names.add(child.name)
+        elif isinstance(child, (ast.Import, ast.ImportFrom)):
+            for alias in child.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+    return names
+
+
+def unresolved_reads(node, bound):
+    """Names the node READS that nothing in `bound` or builtins supplies.
+
+    The structural checks below match the guard as a string and parse the
+    result, and neither can resolve a name: an upstream bump that renamed
+    `form_data`, `requested_model`, `json` or `log` would leave the marker
+    count at 2, keep ast.parse happy, and surface only when the container
+    serves a request. This turns that into a red check.
+    """
+    reads = {
+        child.id
+        for child in ast.walk(node)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+    }
+    return reads - bound - set(dir(builtins))
 
 
 def load(node, namespace):
@@ -284,10 +397,28 @@ def main():
                 "GREEN: the generated query, not the raw message, reaches the search call",
                 "the collapse reads the upstream body exactly once",
                 "usage from the terminal frame survives the collapse",
-                "an unparseable body warns instead of raising",
+                "an unparseable body raises rather than fabricating a completion",
             ):
                 checks[name] = False
             return report(checks)
+
+        # Name resolution, which neither the string match nor ast.parse can do.
+        module_names = module_bound_names(ast.parse(patched))
+        route = extract(patched, "generate_chat_completion")
+        guard_node = None
+        if route is not None:
+            for child in ast.walk(route):
+                if isinstance(child, ast.If) and "_hive_collapse_sse_completion" in ast.dump(child):
+                    guard_node = child
+                    break
+        checks["the guard is inside the chat-completions route"] = guard_node is not None
+        checks["every name the guard reads resolves at the splice point"] = (
+            guard_node is not None
+            and unresolved_reads(guard_node, function_bound_names(route) | module_names) == set()
+        )
+        checks["every name the collapse helper reads resolves at module scope"] = (
+            unresolved_reads(node, function_bound_names(node) | module_names) == set()
+        )
 
         recording_log = RecordingLog()
         namespace = dict(json=json, log=recording_log, _HIVE_SSE_COLLAPSE_WARNED=False)
@@ -309,17 +440,54 @@ def main():
         checks["the first collapse warns that upstream ignored stream"] = any(
             "text/event-stream" in message for message in recording_log.warnings
         )
-        checks["a second collapse does not repeat the warning"] = (
-            len(recording_log.warnings) == 1
-            and asyncio.run(collapse(FakeUpstreamResponse(sse_body(GENERATED_QUERY)), "hive-auto")) is not None
-            and len(recording_log.warnings) == 1
-            and len(recording_log.debugs) == 1
+        # Three statements, not one `and` chain: short circuiting would skip
+        # the later assertions entirely if the first one ever failed.
+        checks["the first collapse warns exactly once"] = len(recording_log.warnings) == 1
+        second = collapse_or_none(collapse, sse_body(GENERATED_QUERY))
+        checks["a second collapse still returns a completion"] = second is not None
+        checks["a second collapse does not repeat the warning"] = len(recording_log.warnings) == 1
+        checks["a second collapse logs at debug instead"] = len(recording_log.debugs) == 1
+
+        # Native tool calls survive, fragmented arguments and all. Dropping
+        # them produced an empty assistant message wearing
+        # finish_reason: tool_calls, which is not a valid completion.
+        with_tools = collapse_or_none(collapse, tool_call_sse_body())
+        checks["a tool-calling stream keeps its tool calls, arguments rejoined"] = (
+            with_tools is not None
+            and with_tools["choices"][0]["message"].get("tool_calls")
+            == [
+                dict(
+                    id="call_1",
+                    type="function",
+                    function=dict(name="search_web", arguments=json.dumps(dict(query=GENERATED_QUERY))),
+                )
+            ]
+        )
+        checks["a tool-calling stream keeps finish_reason tool_calls"] = (
+            with_tools is not None and with_tools["choices"][0]["finish_reason"] == "tool_calls"
         )
 
-        empty = asyncio.run(collapse(FakeUpstreamResponse(b"not sse at all\n"), "hive-auto"))
-        checks["an unparseable body warns instead of raising"] = (
-            empty["choices"][0]["message"]["content"] == ""
-            and any("found no content" in message for message in recording_log.warnings)
+        # A stream that never finished is not reported as a clean stop.
+        unfinished = collapse_or_none(collapse, unfinished_sse_body())
+        checks["a stream that supplied no finish_reason does not invent one"] = (
+            unfinished is not None and unfinished["choices"][0]["finish_reason"] is None
+        )
+
+        # Nothing usable RAISES. A fabricated empty completion reaches
+        # chat_completion_files_handler as queries == [''] and makes retrieval
+        # embed and search the empty string, which is worse than the
+        # pre-patch TypeError it replaced.
+        checks["an unparseable body raises rather than fabricating a completion"] = (
+            collapse_or_none(collapse, b"not sse at all\n") is None
+        )
+        checks["an empty stream raises rather than fabricating a completion"] = (
+            collapse_or_none(collapse, b"data: [DONE]\n\n") is None
+        )
+        checks["a mid-stream error frame raises rather than returning the partial answer"] = (
+            collapse_or_none(collapse, error_frame_sse_body()) is None
+        )
+        checks["the discarded mid-stream error is named in the log"] = any(
+            "upstream exploded" in message for message in recording_log.warnings
         )
 
         # GREEN, end to end: the real consumer, fed what the patched producer
@@ -331,6 +499,19 @@ def main():
         checks["GREEN: the consumer logs no exception on the fixed shape"] = errors == []
 
     return report(checks)
+
+
+def collapse_or_none(collapse, body):
+    """Run one collapse, reporting a refusal as None rather than a crash.
+
+    Same trade as the tolerant parse below: a raise where a completion was
+    expected has to FAIL one check, not abort the run before the remaining
+    checks report.
+    """
+    try:
+        return asyncio.run(collapse(FakeUpstreamResponse(body), "hive-auto"))
+    except Exception:
+        return None
 
 
 def parses(source):

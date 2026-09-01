@@ -58,9 +58,15 @@ tool calling, memory and RAG query generation, rather than teaching each
 caller to accept two shapes, which is what would hide the next drift.
 
 It is not silent about it: the first collapse in a process logs a WARNING
-naming the upstream that ignored `stream`, later ones log at debug so the
-finding cannot bury the rest of the log, and a body that yields no content at
-all logs a WARNING every time.
+naming the upstream that ignored `stream`, and later ones log at debug so the
+finding cannot bury the rest of the log. A body that yields nothing usable,
+meaning no content and no tool calls, or one carrying an `error` frame emitted
+after the headers were already on the wire, logs a WARNING and then RAISES
+rather than returning an empty but valid looking completion. Every caller of
+this route already has a correct exception path, and a fabricated empty
+completion is the one variant that produces a wrong query: it reaches
+`chat_completion_files_handler` as `queries == ['']`, whose `len(queries) == 0`
+fallback then never fires, and retrieval embeds and searches the empty string.
 
 Applied here rather than in vendor/open-webui because the chat image builds
 only the FRONTEND from the vendored tree and takes the backend from the pinned
@@ -111,20 +117,43 @@ async def _hive_collapse_sse_completion(r, requested_model):
     made this reachable. Collapsing at this boundary keeps the declared shape
     for every non-streaming caller at once.
 
-    The frames are chat-completion shaped. A Responses-API connection
-    (api_type 'responses') would yield no content and log the warning below,
-    which is no worse than the TypeError that path raised before.
+    Content and native tool calls are both accumulated. A delta stream carries
+    tool calls as fragments keyed by index, with `function.arguments` split
+    across frames the same way content is, so they are merged by index and
+    attached to the message; otherwise a tool-calling stream would collapse to
+    an empty assistant message wearing `finish_reason: tool_calls`.
+
+    Two bodies RAISE rather than returning an empty but valid looking
+    completion: one that yields neither content nor tool calls, and one
+    carrying an `error` frame emitted after the headers were already on the
+    wire, which the `r.status >= 400` check above cannot see because an SSE
+    relay that fails mid stream has already answered HTTP 200. Every caller of
+    this route has a correct exception path: `tasks.py` answers
+    `JSONResponse(400)`, which `chat_web_search_handler` turns into the raw
+    user message and `chat_completion_files_handler` turns into the last user
+    message. A fabricated empty completion is the one variant that produces a
+    wrong query, because it reaches `chat_completion_files_handler` as
+    `queries == ['']`, whose `len(queries) == 0` fallback then never fires, and
+    retrieval embeds and searches the empty string. `finish_reason` is left as
+    whatever the stream supplied, `None` included, rather than asserting a
+    clean 'stop' for a stream that never finished.
+
+    A Responses-API connection (api_type 'responses') yields no
+    chat-completion frames and so lands on the same raise, which is no worse
+    than the TypeError that path raised before.
     \"\"\"
     global _HIVE_SSE_COLLAPSE_WARNED
 
     body = (await r.read()).decode('utf-8', errors='replace')
 
     content = ''
+    tool_calls = {}
     usage = None
     finish_reason = None
     frame_id = None
     created = None
     model = None
+    error = None
 
     for line in body.splitlines():
         line = line.strip()
@@ -139,6 +168,9 @@ async def _hive_collapse_sse_completion(r, requested_model):
             continue
         if not isinstance(frame, dict):
             continue
+        if frame.get('error'):
+            error = error or frame['error']
+            continue
         frame_id = frame.get('id') or frame_id
         created = frame.get('created') or created
         model = frame.get('model') or model
@@ -149,18 +181,53 @@ async def _hive_collapse_sse_completion(r, requested_model):
                 continue
             finish_reason = choice.get('finish_reason') or finish_reason
             part = choice.get('delta') or choice.get('message') or {}
-            piece = part.get('content') if isinstance(part, dict) else None
+            if not isinstance(part, dict):
+                continue
+            piece = part.get('content')
             if isinstance(piece, str):
                 content += piece
+            for call in part.get('tool_calls') or []:
+                if not isinstance(call, dict):
+                    continue
+                index = call.get('index')
+                if not isinstance(index, int):
+                    index = len(tool_calls)
+                merged = tool_calls.setdefault(
+                    index,
+                    dict(id='', type='function', function=dict(name='', arguments='')),
+                )
+                if call.get('id'):
+                    merged['id'] = call['id']
+                if call.get('type'):
+                    merged['type'] = call['type']
+                function = call.get('function')
+                if isinstance(function, dict):
+                    if function.get('name'):
+                        merged['function']['name'] = function['name']
+                    fragment = function.get('arguments')
+                    if isinstance(fragment, str):
+                        merged['function']['arguments'] += fragment
 
-    if not content:
+    if error or (not content and not tool_calls):
         log.warning(
-            'hive: collapsed a streaming response for a non-streaming request '
-            'to %s and found no content in %d bytes; the caller falls back',
+            'hive: a non-streaming request to %s was answered with '
+            'text/event-stream that collapsed to nothing usable: %d bytes, '
+            '%d content characters, %d tool calls, error=%r. Raising so the '
+            'caller takes its own fallback path instead of receiving an '
+            'empty completion.',
             requested_model,
             len(body),
+            len(content),
+            len(tool_calls),
+            error,
         )
-    elif not _HIVE_SSE_COLLAPSE_WARNED:
+        raise Exception(
+            'hive (#1600): upstream answered a non-streaming request to '
+            + str(requested_model)
+            + ' with a stream carrying no usable completion'
+        )
+
+    if not _HIVE_SSE_COLLAPSE_WARNED:
         _HIVE_SSE_COLLAPSE_WARNED = True
         log.warning(
             'hive: upstream answered a non-streaming request to %s with '
@@ -176,7 +243,9 @@ async def _hive_collapse_sse_completion(r, requested_model):
         )
 
     message = dict(role='assistant', content=content)
-    only_choice = dict(index=0, message=message, finish_reason=finish_reason or 'stop')
+    if tool_calls:
+        message['tool_calls'] = [tool_calls[index] for index in sorted(tool_calls)]
+    only_choice = dict(index=0, message=message, finish_reason=finish_reason)
     completion = dict(
         id=frame_id or '',
         object='chat.completion',
