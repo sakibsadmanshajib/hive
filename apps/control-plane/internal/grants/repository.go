@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 )
 
 // Repository is the narrow data-access port for the grants service.
@@ -60,7 +62,15 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	if !input.AmountBDTSubunits.IsInt64() {
 		return CreateResult{}, fmt.Errorf("grants: amount overflows int64 bigint storage")
 	}
-	creditsDelta := input.AmountBDTSubunits.Int64()
+	subunits := input.AmountBDTSubunits.Int64()
+
+	// The grant is taka; the ledger is credits. Convert, do not reinterpret
+	// (issue #1659). Resolved before the transaction opens so a misconfigured
+	// rate refuses the grant outright rather than rolling one back.
+	creditsDelta, rate, err := creditsForGrant(input.AmountBDTSubunits)
+	if err != nil {
+		return CreateResult{}, err
+	}
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -138,11 +148,31 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	}
 
 	// Step 2: insert the ledger entry (entry_type='grant', positive credits).
+	//
+	// The conversion inputs are recorded alongside the result so the row
+	// reproduces its own amounts: the taka the admin authorised, the rate, and
+	// where that rate came from. Without them a ledger entry and its grant row
+	// state two numbers in two units with nothing joining them, which is how
+	// issue #1659 stayed invisible.
+	//
+	// credit_unit is the stamp migration 20260823_40_credit_unit_rescale_
+	// billion.sql relies on. Its straggler detector treats any nonzero
+	// credits_delta WITHOUT that key as a pre-rescale row needing a x10000
+	// correction, and this writer has never set it, so every discretionary
+	// grant written since the rescale is a false positive waiting for someone
+	// to follow that runbook. ledger.Repository.PostEntry stamps its own rows
+	// the same way; this path bypasses it deliberately (it needs the grant and
+	// the ledger append in one transaction) and so has to carry the stamp
+	// itself.
 	metadata := map[string]any{
 		"reason_note":         input.ReasonNote,
 		"granted_by_user_id":  input.GrantedByUserID.String(),
 		"granted_to_user_id":  input.GrantedToUserID.String(),
 		"source":              "discretionary_grant",
+		"credit_unit":         ledger.CreditUnitV2,
+		"amount_bdt_subunits": input.AmountBDTSubunits.String(),
+		"usd_bdt_rate":        rate.Display,
+		"usd_bdt_rate_source": rate.Source,
 	}
 	metadataBytes, err := json.Marshal(metadata)
 	if err != nil {
@@ -183,7 +213,7 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 		          granted_to_workspace_id, amount_bdt_subunits, COALESCE(reason_note,''),
 		          ledger_entry_id, currency, created_at
 	`, input.GrantedByUserID, input.GrantedToUserID, input.GrantedToWorkspaceID,
-		creditsDelta, nullableString(input.ReasonNote), ledgerID).Scan(
+		subunits, nullableString(input.ReasonNote), ledgerID).Scan(
 		&grantRow.ID,
 		&grantRow.GrantedByUserID,
 		&grantRow.GrantedToUserID,
