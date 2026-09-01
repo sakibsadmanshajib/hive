@@ -4,10 +4,13 @@ import (
 	"context"
 	"math/big"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // =============================================================================
@@ -15,14 +18,17 @@ import (
 //
 // The ledger stores credits, one billionth of a USD each. An invoice is
 // denominated in taka. Converting between them is an FX step, and the service
-// owns it. These tests pin the platform rate at 100 BDT per USD so every taka
-// figure below is exact and independent of the deployment default.
-//
-// At that rate one paisa is 100,000 credits.
+// owns it. These tests pin the platform rate so every taka figure below is
+// exact and independent of the deployment default.
 // =============================================================================
 
+// fixtureRateBDTPerUSD is the platform rate these tests pin through the
+// environment. Accounts with an FX snapshot use that instead; the tests that
+// care about the snapshot arm set one explicitly.
+const fixtureRateBDTPerUSD int64 = 100
+
 func TestMain(m *testing.M) {
-	if err := os.Setenv("HIVE_USD_BDT_RATE", "100"); err != nil {
+	if err := os.Setenv(payments.USDBDTRateEnvVar, strconv.FormatInt(fixtureRateBDTPerUSD, 10)); err != nil {
 		panic(err)
 	}
 	os.Exit(m.Run())
@@ -30,8 +36,15 @@ func TestMain(m *testing.M) {
 
 // spendCredits returns the credit quantity worth the supplied BDT subunit
 // amount at the pinned rate.
+//
+// Derived from the constants rather than written out as a multiplier, so an
+// error in payments.CreditsPerUSD or payments.SubunitsPerBDT moves the fixture
+// and the code under test in the same direction instead of cancelling out. A
+// fixture that cannot absorb a constant error is the failure this suite exists
+// to prevent.
 func spendCredits(subunits int64) *big.Int {
-	return new(big.Int).Mul(big.NewInt(subunits), big.NewInt(100_000))
+	credits := new(big.Int).Mul(big.NewInt(subunits), big.NewInt(payments.CreditsPerUSD))
+	return credits.Div(credits, big.NewInt(fixtureRateBDTPerUSD*payments.SubunitsPerBDT))
 }
 
 // TestGenerateInvoiceForPeriod_ConvertsCreditsToTaka is the invoice half of
@@ -76,8 +89,11 @@ func TestGenerateInvoiceForPeriod_ConvertsCreditsToTaka(t *testing.T) {
 	if got.TotalBDTSubunits.Cmp(big.NewInt(524_653_338)) == 0 {
 		t.Fatal("invoice total is the raw credit count")
 	}
-	if got.USDBDTRate != "100" {
-		t.Fatalf("recorded rate = %q, want %q", got.USDBDTRate, "100")
+	// Six decimal places, matching numeric(18, 6): the string the service holds
+	// is byte-identical to the one Postgres reads back, so the row reproduces
+	// its own amounts.
+	if got.USDBDTRate != "100.000000" {
+		t.Fatalf("recorded rate = %q, want %q", got.USDBDTRate, "100.000000")
 	}
 }
 

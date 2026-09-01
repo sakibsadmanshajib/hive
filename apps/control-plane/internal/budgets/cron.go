@@ -63,10 +63,21 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 	// whole pass so every workspace in it is measured against the same number,
 	// and refuse the pass outright if the rate is unusable rather than mail
 	// customers thresholds derived from a rate nobody configured (issue #1648).
-	rate, _, err := payments.PlatformUSDBDTRate()
+	//
+	// The platform rate, deliberately, and not each account's own FX snapshot
+	// the way an invoice does. An invoice is a document that has to reconcile
+	// against the receipt for the top-up that funded it; a soft-cap alert is a
+	// threshold heuristic on a cap the customer typed, where the difference
+	// between the platform rate and a purchase rate is the FX fee, a few
+	// percent, far inside the resolution of a "you have used 80 percent"
+	// notification. One rate per pass also keeps every workspace in the same
+	// pass comparable, which per-account snapshots would not.
+	rate, err := payments.PlatformUSDBDTRate()
 	if err != nil {
 		return 0, fmt.Errorf("budgets: usd to bdt rate: %w", err)
 	}
+	c.logger.InfoContext(ctx, "budget alert pass: usd to bdt rate resolved",
+		"rate", rate.Display, "source", rate.Source)
 
 	workspaceIDs, err := c.repo.ListWorkspacesWithBudget(ctx)
 	if err != nil {
@@ -87,7 +98,7 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 	return fired, nil
 }
 
-func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, now, period time.Time, rate *big.Rat) (int, error) {
+func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, now, period time.Time, rate payments.USDBDTRate) (int, error) {
 	budget, err := c.repo.GetBudget(ctx, wsID)
 	if err != nil {
 		return 0, fmt.Errorf("get budget: %w", err)
@@ -115,7 +126,7 @@ func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, n
 
 	// Convert before comparing: the cap the customer typed is in taka and the
 	// ledger total is in credits, one billionth of a USD each.
-	mtd, err := payments.CreditsToBDTSubunits(mtdCredits, rate)
+	mtd, err := payments.CreditsToBDTSubunits(mtdCredits, rate.Rate)
 	if err != nil {
 		return 0, fmt.Errorf("mtd spend conversion: %w", err)
 	}

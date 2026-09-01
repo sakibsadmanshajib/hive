@@ -1146,6 +1146,11 @@ func resolveLiteLLMMasterKey() string {
 // to Redis on every upsert; the gate READS with a brief TTL so missed pushes
 // heal on the next read. The MTD spend counter is INCRed inline by the
 // control-plane settlement path keyed by `budget:mtd_spend:{ws}:YYYY-MM`.
+//
+// That last sentence describes the design, not the code: no writer for that key
+// exists anywhere in this repository, so the gate reads zero spend and never
+// blocks. Tracked in issue #1651, with the unit requirement (subunits, not
+// credits) stated in limits/budget_gate.go's package comment.
 func buildBudgetGate(authzClient *authz.Client) (*limits.BudgetGate, error) {
 	opt, err := redis.ParseURL(resolveRedisURL())
 	if err != nil {

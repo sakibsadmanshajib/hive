@@ -21,6 +21,17 @@
 //     read; meanwhile the per-workspace MTD counter is INCRed inline as
 //     usage settles, so eventual consistency stays bounded.
 //
+// **The MTD counter has no writer (issue #1651).** Nothing in this repository
+// ever INCRs `budget:mtd_spend:{ws}:YYYY-MM`; the only references are this
+// package and its own tests, which seed the key themselves. A missing key reads
+// as zero spend, so the hard cap never blocks while the console advertises
+// "Requests blocked beyond this". The paragraph above describes the intended
+// design, not the running system. Whoever wires the writer must INCR **BDT
+// subunits**, not ledger credits: `budget:hard_cap:{ws}` is written in subunits
+// by control-plane's budgets service, and a counter in credits would trip the
+// gate at roughly one ten-millionth of the intended spend, which is issue #1648
+// pointed the other way and rejects live traffic with a 402.
+//
 // The middleware extracts workspace identity by calling the supplied
 // `WorkspaceFromRequest` resolver — keeps this package decoupled from the
 // edge-api authz module while still letting main.go wire authz.Authorize.

@@ -73,3 +73,21 @@ minted and no account password was set, reset or rotated.
 
 - `shot-before.png`, `shot-after.png`, posted to PR #1657 as permanent release
   assets through `scripts/post-pr-visual-proof.sh`, not committed to git.
+
+## Review round, 2026-09-01: which rate the captured figure is
+
+The independent money review asked why the invoice did not use the rate the
+customer bought its credits at, which `payments.FXService` records in
+`public.fx_snapshots` at checkout. It now does: an invoice resolves the
+account's most recent snapshot first, and the platform rate is the fallback for
+an account that has never transacted through a BDT rail.
+
+The capture above is unchanged and still accurate. It is the FALLBACK arm: the
+seeded account has no FX snapshot, so the figure is the same 524,653,338 credits
+at 123.13 BDT per USD, ৳64.60. What a screenshot can show is that the page
+renders a converted taka figure rather than a credit count read as paisa, and
+that is the same in both arms. The snapshot arm changes only which rate the
+conversion runs at, which is arithmetic rather than rendering, and is covered by
+`TestGenerateInvoice_PrefersTheAccountsPurchaseRate` (a snapshot of 129.586500
+produces ৳129.59 for one USD of credits) and by `TestLatestUSDBDTRate_Live`
+against real Postgres.

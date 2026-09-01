@@ -113,6 +113,16 @@ type Repository interface {
 	// candidates the monthly cron generates an invoice for.
 	ListActiveWorkspaces(ctx context.Context, period Period) ([]uuid.UUID, error)
 
+	// LatestUSDBDTRate returns the effective USD to BDT rate from the most
+	// recent public.fx_snapshots row for the workspace, as the decimal string
+	// stored there, or "" when the account has never taken an FX snapshot.
+	//
+	// This is the rate the account actually bought its credits at: checkout
+	// prices through payments.FXService and records the snapshot, so an invoice
+	// for consuming those credits reconciles against the receipt that funded it.
+	// An account with no snapshot falls back to the platform rate.
+	LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID) (string, error)
+
 	// AggregateByModel sums usage_charge ledger entries within [Start, End)
 	// grouped by metadata->>'model'. Returns per-model CREDIT totals; the
 	// conversion into BDT subunits belongs to the service, which owns the

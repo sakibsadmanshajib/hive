@@ -193,3 +193,55 @@ func TestInsertOrFetch_RecordsRate_Live(t *testing.T) {
 		t.Fatalf("legacy rate = %q, want empty", legacy.USDBDTRate)
 	}
 }
+
+// TestLatestUSDBDTRate_Live proves the snapshot lookup reads the newest row for
+// the right account, and that an account with no snapshot is not an error.
+//
+// The rate an invoice is denominated at comes from here first, so a query that
+// silently returned nothing would send every invoice to the platform fallback
+// and reopen the receipt-versus-invoice disagreement this lookup exists to
+// close. Only real SQL can catch that: the fake repository answers whatever the
+// test sets.
+func TestLatestUSDBDTRate_Live(t *testing.T) {
+	pool := newInvoicesTestPool(t)
+	accountID := seedInvoiceWorkspace(t, pool)
+	other := seedInvoiceWorkspace(t, pool)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+
+	// No snapshot yet: empty string, no error, so the caller falls back.
+	rate, err := repo.LatestUSDBDTRate(ctx, accountID)
+	if err != nil {
+		t.Fatalf("lookup with no snapshot: %v", err)
+	}
+	if rate != "" {
+		t.Fatalf("rate = %q, want empty for an account with no snapshot", rate)
+	}
+
+	seedFXSnapshot(t, pool, accountID, "120.000000", time.Now().UTC().Add(-48*time.Hour))
+	seedFXSnapshot(t, pool, accountID, "129.586500", time.Now().UTC().Add(-1*time.Hour))
+	seedFXSnapshot(t, pool, other, "999.000000", time.Now().UTC())
+
+	rate, err = repo.LatestUSDBDTRate(ctx, accountID)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if rate != "129.586500" {
+		t.Fatalf("rate = %q, want the newest snapshot for this account (129.586500)", rate)
+	}
+}
+
+func seedFXSnapshot(t *testing.T, pool *pgxpool.Pool, accountID uuid.UUID, effective string, at time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO public.fx_snapshots
+		     (account_id, base_currency, quote_currency, mid_rate, fee_rate, effective_rate, source_api, fetched_at, created_at)
+		 VALUES ($1, 'USD', 'BDT', $2, '0.05', $2, 'xe', $3::timestamptz, $3::timestamptz)`,
+		accountID, effective, at.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("seed fx snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.fx_snapshots WHERE account_id = $1`, accountID)
+	})
+}

@@ -177,6 +177,33 @@ func (r *pgxRepository) ListActiveWorkspaces(ctx context.Context, period Period)
 	return out, rows.Err()
 }
 
+// LatestUSDBDTRate reads the effective rate off the account's newest FX
+// snapshot. public.fx_snapshots stores its rates as text and carries an index
+// on (account_id, created_at desc), so this is one index lookup.
+//
+// No rows is not an error: an account that has never paid through a BDT rail (a
+// granted or card-funded workspace) has no rate of its own, and the caller falls
+// back to the platform rate.
+func (r *pgxRepository) LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+	var rate string
+	err := r.pool.QueryRow(ctx, `
+		SELECT effective_rate
+		FROM public.fx_snapshots
+		WHERE account_id = $1
+		  AND base_currency = 'USD'
+		  AND quote_currency = 'BDT'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, workspaceID).Scan(&rate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("invoices: latest fx snapshot: %w", err)
+	}
+	return rate, nil
+}
+
 // AggregateByModel sums usage_charge ledger entries grouped by
 // metadata->>'model' and returns the result in CREDITS, the unit the ledger
 // actually stores.

@@ -143,51 +143,105 @@ func TestCreditsToBDTSubunitsRejectsUnusableRate(t *testing.T) {
 	}
 }
 
-// TestPlatformUSDBDTRate covers rate resolution: the documented default when
-// the environment says nothing, an operator override when it does, and a hard
-// error when the override cannot be parsed. A malformed override must never
-// fall back to the default silently, because that would bill at a rate nobody
-// chose.
+// TestPlatformUSDBDTRate covers fallback rate resolution: the documented
+// default when the environment says nothing, an operator override when it does,
+// and a hard error when the override cannot be parsed. A malformed override
+// must never fall back to the default silently, because that would bill at a
+// rate nobody chose.
 func TestPlatformUSDBDTRate(t *testing.T) {
 	t.Run("default when unset", func(t *testing.T) {
 		t.Setenv(USDBDTRateEnvVar, "")
-		rate, display, err := PlatformUSDBDTRate()
+		got, err := PlatformUSDBDTRate()
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
-		}
-		if display != DefaultUSDBDTRate {
-			t.Fatalf("display rate = %q, want %q", display, DefaultUSDBDTRate)
 		}
 		want, ok := new(big.Rat).SetString(DefaultUSDBDTRate)
 		if !ok {
 			t.Fatalf("default rate %q does not parse", DefaultUSDBDTRate)
 		}
-		if rate.Cmp(want) != 0 {
-			t.Fatalf("rate = %s, want %s", rate.FloatString(6), want.FloatString(6))
+		if got.Rate.Cmp(want) != 0 {
+			t.Fatalf("rate = %s, want %s", got.Rate.FloatString(6), want.FloatString(6))
+		}
+		// The compiled default is nobody's decision, so the source label has to
+		// say which arm produced it; callers log that.
+		if got.Source != RateSourceDefault {
+			t.Fatalf("source = %q, want %q", got.Source, RateSourceDefault)
+		}
+		if got.Display != "123.130000" {
+			t.Fatalf("display = %q, want %q", got.Display, "123.130000")
 		}
 	})
 
 	t.Run("operator override", func(t *testing.T) {
 		t.Setenv(USDBDTRateEnvVar, "110.50")
-		rate, display, err := PlatformUSDBDTRate()
+		got, err := PlatformUSDBDTRate()
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		if display != "110.50" {
-			t.Fatalf("display rate = %q, want %q", display, "110.50")
+		if got.Rate.Cmp(big.NewRat(11050, 100)) != 0 {
+			t.Fatalf("rate = %s, want 110.50", got.Rate.FloatString(6))
 		}
-		if rate.Cmp(big.NewRat(11050, 100)) != 0 {
-			t.Fatalf("rate = %s, want 110.50", rate.FloatString(6))
+		if got.Source != RateSourceEnv {
+			t.Fatalf("source = %q, want %q", got.Source, RateSourceEnv)
 		}
 	})
 
-	for _, bad := range []string{"not-a-rate", "0", "-12", "1e2"} {
+	for _, bad := range []string{"not-a-rate", "0", "-12", "1e2", "123.1234567", "1234567890123"} {
 		t.Run("rejects "+bad, func(t *testing.T) {
 			t.Setenv(USDBDTRateEnvVar, bad)
-			rate, display, err := PlatformUSDBDTRate()
+			got, err := PlatformUSDBDTRate()
 			if err == nil {
-				t.Fatalf("expected an error for %q, got %s (%s)", bad, display, rate.FloatString(6))
+				t.Fatalf("expected an error for %q, got %s from %s", bad, got.Display, got.Source)
 			}
 		})
+	}
+}
+
+// TestParseUSDBDTRateNormalisesToStoredScale is the reproducibility guarantee.
+//
+// public.invoices.usd_bdt_rate is numeric(18, 6). Postgres does not reject a
+// rate with more precision, it rounds it, so a conversion run at 123.1234567
+// would be recorded as 123.123457 and recomputing the amounts from the stored
+// rate would not reproduce them. The parser refuses anything past the stored
+// scale and hands back a Display already at that scale, so the value converted
+// at, the value written, and the value Postgres reads back are one string.
+func TestParseUSDBDTRateNormalisesToStoredScale(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw     string
+		display string
+	}{
+		{raw: "100", display: "100.000000"},
+		{raw: "123.13", display: "123.130000"},
+		{raw: "123.130000", display: "123.130000"},
+		{raw: "129.586500", display: "129.586500"}, // shape of an fx_snapshots effective_rate
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseUSDBDTRate(tc.raw, RateSourceSnapshot)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.raw, err)
+			}
+			if got.Display != tc.display {
+				t.Fatalf("display = %q, want %q", got.Display, tc.display)
+			}
+			if got.Source != RateSourceSnapshot {
+				t.Fatalf("source = %q, want %q", got.Source, RateSourceSnapshot)
+			}
+			again, err := ParseUSDBDTRate(got.Display, RateSourceSnapshot)
+			if err != nil {
+				t.Fatalf("reparse %q: %v", got.Display, err)
+			}
+			if again.Rate.Cmp(got.Rate) != 0 {
+				t.Fatalf("round trip changed the rate: %s then %s",
+					got.Rate.FloatString(9), again.Rate.FloatString(9))
+			}
+		})
+	}
+
+	if _, err := ParseUSDBDTRate("123.1234567", RateSourceSnapshot); err == nil {
+		t.Fatal("expected a rate beyond numeric(18, 6) to be refused")
 	}
 }

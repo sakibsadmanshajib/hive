@@ -19,4 +19,4 @@ ALTER TABLE public.invoices
         CHECK (usd_bdt_rate IS NULL OR usd_bdt_rate > 0);
 
 COMMENT ON COLUMN public.invoices.usd_bdt_rate IS
-    'USD to BDT rate used to convert ledger credits into the taka amounts on this row. NULL means the row predates issue #1648 and its amounts are a raw credit count, not taka.';
+    'USD to BDT rate used to convert ledger credits into the taka amounts on this row, normally the account''s own fx_snapshots effective_rate. NULL means the row PREDATES issue #1648 and its amounts are a raw credit count rather than taka; it does not mean the rate is merely unknown. That reading holds only while invoices.GenerateInvoiceForPeriod is the sole writer of this table, which it is today: anything that later inserts a row by another route must set this column or the discriminator stops being sound.';

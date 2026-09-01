@@ -22,6 +22,11 @@ type fakeRepo struct {
 	byWorkspaceMonth map[string]Invoice // key = ws|YYYY-MM-01
 	aggregateFn     func(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error)
 	activeFn        func(ctx context.Context, p Period) ([]uuid.UUID, error)
+
+	// fxRate is the account's most recent fx_snapshots effective_rate, empty
+	// when it has none; fxErr makes the lookup itself fail.
+	fxRate string
+	fxErr  error
 }
 
 func newFakeRepo() *fakeRepo {
@@ -83,6 +88,10 @@ func (f *fakeRepo) ListActiveWorkspaces(ctx context.Context, p Period) ([]uuid.U
 		return f.activeFn(ctx, p)
 	}
 	return nil, nil
+}
+
+func (f *fakeRepo) LatestUSDBDTRate(_ context.Context, _ uuid.UUID) (string, error) {
+	return f.fxRate, f.fxErr
 }
 
 func (f *fakeRepo) AggregateByModel(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error) {

@@ -106,15 +106,15 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 	// invoice speaks taka. Crossing that boundary is an FX conversion, and it
 	// happens here, once, at a rate recorded on the row. Reading the credit
 	// count as a paisa count is what issue #1648 was.
-	rate, rateDisplay, err := payments.PlatformUSDBDTRate()
+	rate, err := s.resolveRate(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("invoices: usd to bdt rate: %w", err)
+		return nil, err
 	}
 
 	items := make([]InvoiceLineItem, 0, len(credited))
 	total := new(big.Int)
 	for _, c := range credited {
-		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate)
+		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate.Rate)
 		if err != nil {
 			return nil, fmt.Errorf("invoices: convert %s credits: %w", c.ModelID, err)
 		}
@@ -126,6 +126,15 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		// Total is the sum of the rendered lines, not a separately converted
 		// aggregate, so the document always adds up for the customer reading it.
 		total.Add(total, subunits)
+	}
+
+	// The column is a bigint, so a total that does not fit wraps on the way in
+	// and is rejected by its CHECK. Catch it here instead, before the PDF is
+	// rendered and uploaded, so the failure names the amount and leaves no
+	// orphan object in the bucket. Unreachable for any real workspace; cheap
+	// enough that "unreachable" does not have to be trusted.
+	if !total.IsInt64() {
+		return nil, fmt.Errorf("invoices: total %s subunits exceeds bigint storage", total)
 	}
 
 	// Render PDF first (cheap; lets us fail fast before any storage write).
@@ -143,7 +152,7 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		TotalBDTSubunits: total,
 		LineItems:        items,
 		GeneratedAt:      s.now(),
-		USDBDTRate:       rateDisplay,
+		USDBDTRate:       rate.Display,
 	}
 
 	pdfBytes, err := s.pdf.Render(candidate, workspaceName)
@@ -166,6 +175,44 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, fmt.Errorf("invoices: persist: %w", err)
 	}
 	return saved, nil
+}
+
+// resolveRate picks the USD to BDT rate this invoice is denominated at.
+//
+// The account's own most recent FX snapshot wins, because that is the rate it
+// bought its credits at (payments.FXService writes the snapshot at checkout and
+// service.go prices the rails quote from the same number), so the invoice
+// reconciles against the receipt that funded it and an admin override applied
+// there reaches invoices too. The platform rate is the fallback for an account
+// that has never transacted through a BDT rail, and for the case where the
+// snapshot table is unreadable, which must not stop billing.
+//
+// A snapshot whose stored rate does not parse is NOT silently swapped for the
+// fallback: it means the FX table holds something the money path cannot read,
+// and inventing a different number there is how a customer ends up invoiced at
+// a rate nobody chose.
+func (s *Service) resolveRate(ctx context.Context, workspaceID uuid.UUID) (payments.USDBDTRate, error) {
+	snapshot, err := s.repo.LatestUSDBDTRate(ctx, workspaceID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "invoice rate: fx snapshot lookup failed, using platform rate",
+			"workspace_id", workspaceID, "error", err)
+	} else if snapshot != "" {
+		rate, perr := payments.ParseUSDBDTRate(snapshot, payments.RateSourceSnapshot)
+		if perr != nil {
+			return payments.USDBDTRate{}, fmt.Errorf("invoices: usd to bdt rate: %w", perr)
+		}
+		s.logger.InfoContext(ctx, "invoice rate resolved",
+			"workspace_id", workspaceID, "rate", rate.Display, "source", rate.Source)
+		return rate, nil
+	}
+
+	rate, perr := payments.PlatformUSDBDTRate()
+	if perr != nil {
+		return payments.USDBDTRate{}, fmt.Errorf("invoices: usd to bdt rate: %w", perr)
+	}
+	s.logger.InfoContext(ctx, "invoice rate resolved",
+		"workspace_id", workspaceID, "rate", rate.Display, "source", rate.Source)
+	return rate, nil
 }
 
 // Get returns one invoice by id, gated on workspace membership of the caller.

@@ -25,6 +25,18 @@ import (
 // Everything here is math/big. A float64 cannot hold nine significant digits
 // of credits and a rate at the same time without drifting, which is exactly
 // the corruption the repository-wide math/big rule exists to prevent.
+//
+// WHERE THE RATE COMES FROM, and why this file is not a second FX source.
+// FXService in fx.go is the product's FX authority: it fetches the XE mid
+// rate, applies FXFeeRate, and persists the result to public.fx_snapshots,
+// which is the rate a BD customer actually paid at checkout
+// (service.go usdCentsToLocalPaisa). An invoice for consuming those credits
+// has to reconcile against that receipt, so the invoice service asks for the
+// account's most recent snapshot FIRST and only falls back to the platform
+// rate below when the account has never transacted through a BDT rail. The
+// fallback exists because a monthly billing cron cannot depend on an external
+// API being reachable, and because a workspace can consume credits it was
+// granted rather than bought, in which case no snapshot exists at all.
 // =============================================================================
 
 const (
@@ -35,43 +47,91 @@ const (
 	// conversion rate, as a plain decimal string such as "123.13".
 	USDBDTRateEnvVar = "HIVE_USD_BDT_RATE"
 
-	// DefaultUSDBDTRate is the rate used when the environment says nothing.
+	// DefaultUSDBDTRate is the rate used when the account has no FX snapshot
+	// and the environment says nothing.
 	//
 	// 123.13 BDT per USD, the mid-market rate published on 2026-09-01. It is a
-	// platform rate rather than a live quote on purpose: an invoice must be
-	// reproducible from the ledger months later, and a monthly cron that has to
-	// reach an FX API before it can bill is a cron that stops billing the first
-	// time that API is down. Operators who want a different rate set
-	// USDBDTRateEnvVar; the rate actually used is recorded on each invoice row.
+	// last resort, not the product's FX opinion: an account that bought credits
+	// through a BDT rail is invoiced at the rate it bought them at. Review this
+	// constant whenever the market has moved by more than a few percent, and at
+	// minimum once every six months; the rate each invoice actually used is on
+	// the row (public.invoices.usd_bdt_rate), so a stale constant is visible in
+	// the data rather than only in this comment.
 	DefaultUSDBDTRate = "123.13"
+
+	// USDBDTRateScale is the number of fractional digits a rate carries
+	// everywhere it is parsed, stored or compared. It matches the scale of
+	// public.invoices.usd_bdt_rate, numeric(18, 6), so the string this package
+	// hands out is byte-identical to the one Postgres reads back. Without that,
+	// a rate configured with more precision would convert at one number and be
+	// recorded as another, and the row would no longer reproduce its own
+	// amounts.
+	USDBDTRateScale = 6
+
+	// Rate sources, reported so a log line or an audit can say which arm
+	// produced the number rather than leaving the default invisible.
+	RateSourceSnapshot = "fx_snapshot"
+	RateSourceEnv      = "env"
+	RateSourceDefault  = "default"
 )
 
-// plainDecimal matches the only rate shape this package accepts: digits, with
-// an optional fractional part. Exponent notation and signs are refused because
-// in a money configuration value they are far likelier to be a typo than an
-// intent, and a rate is never negative.
-var plainDecimal = regexp.MustCompile(`^\d+(\.\d+)?$`)
+// plainDecimal matches the only rate shape this package accepts: up to twelve
+// integer digits and up to six fractional ones, which is exactly what
+// numeric(18, 6) holds. Exponent notation and signs are refused because in a
+// money configuration value they are far likelier to be a typo than an intent,
+// and a rate is never negative. Bounding the shape here rather than at the
+// database keeps the failure at configuration time instead of at insert time,
+// after a PDF has already been written to storage.
+var plainDecimal = regexp.MustCompile(`^\d{1,12}(\.\d{1,6})?$`)
 
-// PlatformUSDBDTRate resolves the USD to BDT rate as an exact rational plus the
-// decimal string it came from, which callers persist so the arithmetic on a
-// stored invoice stays reproducible.
+// USDBDTRate is a resolved conversion rate plus the provenance of the number.
 //
-// Fail closed: an override that cannot be parsed is an error, never a silent
-// fallback to the default. Falling back would bill at a rate nobody chose and
-// would hide the misconfiguration behind plausible-looking numbers.
-func PlatformUSDBDTRate() (*big.Rat, string, error) {
-	raw := strings.TrimSpace(os.Getenv(USDBDTRateEnvVar))
-	if raw == "" {
-		raw = DefaultUSDBDTRate
-	}
+// Display is the rate at USDBDTRateScale digits, the exact string persisted on
+// an invoice, so the value this package converted at, the value stored, and the
+// value Postgres reads back are one string.
+type USDBDTRate struct {
+	Rate    *big.Rat
+	Display string
+	Source  string
+}
+
+// ParseUSDBDTRate validates and normalises a rate string from any source: the
+// operator environment, an fx_snapshots row, or the constant above.
+//
+// Fail closed: anything that is not a plain positive decimal within the stored
+// scale is an error, never a silent fallback. Falling back would bill at a rate
+// nobody chose and would hide the misconfiguration behind plausible numbers.
+func ParseUSDBDTRate(raw, source string) (USDBDTRate, error) {
+	raw = strings.TrimSpace(raw)
 	if !plainDecimal.MatchString(raw) {
-		return nil, "", fmt.Errorf("payments: %s must be a plain positive decimal, got %q", USDBDTRateEnvVar, raw)
+		return USDBDTRate{}, fmt.Errorf(
+			"payments: usd to bdt rate from %s must be a plain positive decimal with at most %d fractional digits, got %q",
+			source, USDBDTRateScale, raw)
 	}
 	rate, ok := new(big.Rat).SetString(raw)
 	if !ok || rate.Sign() <= 0 {
-		return nil, "", fmt.Errorf("payments: %s must be a positive rate, got %q", USDBDTRateEnvVar, raw)
+		return USDBDTRate{}, fmt.Errorf("payments: usd to bdt rate from %s must be positive, got %q", source, raw)
 	}
-	return rate, raw, nil
+	return USDBDTRate{
+		Rate:    rate,
+		Display: rate.FloatString(USDBDTRateScale),
+		Source:  source,
+	}, nil
+}
+
+// PlatformUSDBDTRate resolves the fallback rate: the operator override in
+// USDBDTRateEnvVar, or DefaultUSDBDTRate when that is unset. Callers that can
+// reach an account's own FX snapshot should prefer it and use this only when
+// there is none; see the file comment.
+//
+// The returned Source distinguishes the two arms so callers can log which one
+// produced the number. Production ships the variable empty, so "default" is the
+// common answer and it should be visible rather than assumed.
+func PlatformUSDBDTRate() (USDBDTRate, error) {
+	if raw := strings.TrimSpace(os.Getenv(USDBDTRateEnvVar)); raw != "" {
+		return ParseUSDBDTRate(raw, RateSourceEnv)
+	}
+	return ParseUSDBDTRate(DefaultUSDBDTRate, RateSourceDefault)
 }
 
 // CreditsToBDTSubunits converts a credit quantity into BDT subunits at the
@@ -101,8 +161,13 @@ func CreditsToBDTSubunits(credits *big.Int, rate *big.Rat) (*big.Int, error) {
 	return ratRoundHalfUp(exact), nil
 }
 
-// ratRoundHalfUp rounds a non-negative rational to the nearest integer, halves
+// ratRoundHalfUp rounds a NON-NEGATIVE rational to the nearest integer, halves
 // going up: floor((2n + d) / 2d).
+//
+// Non-negative only. big.Int.Div floors toward negative infinity, so a negative
+// rational would round half DOWN here. The guard that keeps the input
+// non-negative lives in CreditsToBDTSubunits, not in this function, so any new
+// caller has to bring its own.
 func ratRoundHalfUp(r *big.Rat) *big.Int {
 	num := new(big.Int).Lsh(r.Num(), 1)   // 2n
 	num.Add(num, r.Denom())               // 2n + d
