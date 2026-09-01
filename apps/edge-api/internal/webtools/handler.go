@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -276,8 +277,10 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.fetch.Fetch(r.Context(), admitted.String(), focus)
 	if err != nil {
+		// Logged with the real cause, answered without it.
 		log.Printf("webtools: web_fetch failed: %v", err)
-		writeEnvelope(w, http.StatusBadGateway, NewError(fetchCode(err), msgFetchFailed, 0))
+		code := fetchCode(err)
+		writeEnvelope(w, fetchStatus(code), NewError(code, fetchMessage(code, err), 0))
 		return
 	}
 	// The invariant is enforced here, at the boundary the value crosses to
@@ -300,15 +303,25 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	writeEnvelope(w, http.StatusOK, result)
 }
 
-// fetchCode maps a pipeline error to the envelope class. The pipeline itself
-// is slice S2; what this slice fixes is that the classes never collapse into
-// one, which is criterion B9's whole point.
+// fetchCode maps a pipeline error to the envelope class. Criterion B9's whole
+// point is that these classes never collapse into one: a refused URL, a slow
+// page, a page that answered 404, a PDF this deployment cannot read and a
+// page that rendered nothing are five different facts, and a model told the
+// wrong one answers wrongly.
 func fetchCode(err error) string {
 	switch {
-	case errors.Is(err, ErrURLRejected):
-		return CodeURLRejected
+	// Before ErrURLRejected, deliberately. A blocked redirect wraps BOTH
+	// sentinels, because CheckRedirect re-admits the hop through Admit and
+	// keeps its reason: errors.Is is true for either, and whichever arm is
+	// written first wins. Asked in the other order this returns url_rejected
+	// for a redirect, which tells the model the URL it was given was refused
+	// when the URL it was given was fine and the page tried to move it
+	// somewhere private. That is exactly the collapse criterion B9 forbids,
+	// and it is a live defect until this ordering is here.
 	case errors.Is(err, ErrBlockedRedirect), errors.Is(err, ErrTooManyRedirects):
 		return CodeFetchBlockedRedirect
+	case errors.Is(err, ErrURLRejected):
+		return CodeURLRejected
 	case errors.Is(err, ErrBlockedAddress), errors.Is(err, ErrResolveFailed):
 		return CodeURLRejected
 	case errors.Is(err, ErrDialFailed):
@@ -318,10 +331,84 @@ func fetchCode(err error) string {
 		return CodeFetchFailed
 	case errors.Is(err, context.DeadlineExceeded):
 		return CodeFetchTimeout
-	case errors.Is(err, ErrEmptyResult):
+	case errors.Is(err, ErrTooLarge):
+		return CodeFetchTooLarge
+	case errors.Is(err, ErrFetchStatus):
+		return CodeFetchStatus
+	case errors.Is(err, ErrUnsupportedContentType):
+		return CodeUnsupportedContentType
+	case errors.Is(err, ErrExtractEmpty), errors.Is(err, ErrEmptyResult):
 		return CodeExtractEmpty
+	case errors.Is(err, ErrExtractFailed):
+		return CodeExtractFailed
+	case errors.Is(err, ErrEmbedUnavailable):
+		return CodeEmbedUnavailable
+	case errors.Is(err, ErrReduceEmpty):
+		return CodeReduceEmpty
 	default:
 		return CodeFetchFailed
+	}
+}
+
+// fetchMessage is what the model and the user are told about a failed fetch.
+//
+// One message per class, because spec section 6 is explicit that a timeout
+// and a block are never collapsed into one message: "the page is slow" and
+// "the page tried to send us somewhere private" are different facts. Two
+// classes carry one machine fact each, an HTTP status and a media type, and
+// both are shape-checked at the point they are built. Everything else is a
+// fixed string, which is how criterion B11 is held permanently: an internal
+// error is never interpolated into a message, so it can never leak one.
+func fetchMessage(code string, err error) string {
+	switch code {
+	case CodeURLRejected:
+		return msgURLRejected
+	case CodeFetchTimeout:
+		return "That page took too long to answer, so nothing was read from it."
+	case CodeFetchTooLarge:
+		return "That page is too large to read."
+	case CodeFetchBlockedRedirect:
+		return "That page redirected to an address that cannot be fetched, so it was not followed."
+	case CodeFetchStatus:
+		if status := upstreamStatusOf(err); status != 0 {
+			return fmt.Sprintf("That page answered with HTTP status %d, so it has no content to read.", status)
+		}
+		return "That page answered with an error status, so it has no content to read."
+	case CodeUnsupportedContentType:
+		if mediaType := mediaTypeOf(err); mediaType != "" {
+			return fmt.Sprintf("That link is %s, which this tool cannot read.", mediaType)
+		}
+		return "That link is not a page or a document this tool can read."
+	case CodeExtractFailed:
+		return "That page loaded, but its content could not be read."
+	case CodeExtractEmpty:
+		// Said explicitly, because this is the case most likely to be misread
+		// as the model failing rather than the extraction failing.
+		return "That page loaded successfully but has no readable text."
+	case CodeEmbedUnavailable:
+		return "That page loaded, but its content could not be processed right now."
+	case CodeReduceEmpty:
+		return "That page loaded, but no part of it could be selected as relevant."
+	default:
+		return msgFetchFailed
+	}
+}
+
+// fetchStatus is the HTTP status the envelope is served with. The envelope's
+// own code is what the shim reads; this is for anything in between that reads
+// only the status line.
+func fetchStatus(code string) int {
+	switch code {
+	case CodeURLRejected, CodeFetchBlockedRedirect:
+		return http.StatusBadRequest
+	case CodeFetchTimeout:
+		return http.StatusGatewayTimeout
+	case CodeFetchTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case CodeUnsupportedContentType:
+		return http.StatusUnsupportedMediaType
+	default:
+		return http.StatusBadGateway
 	}
 }
 

@@ -319,6 +319,15 @@ func main() {
 	// rather than pass it through unverified.
 	var ragProjectAuthorizer *edgerag.ProjectAuthorizer
 
+	// The same embedding client the RAG routes use, kept as its concrete type
+	// so the web_fetch pipeline can reach EmbedBatch, which the narrower
+	// Embedder interface does not carry. Declared out here for the same
+	// reason ragProjectAuthorizer is: it is built inside the block below and
+	// consumed by a later one. Nil when no embedding backend is configured,
+	// which makes a large page an explicit embed_unavailable rather than a
+	// silently truncated answer.
+	var ragBatchEmbedder *edgerag.HTTPEmbedder
+
 	// RAG routes (#232): always registered behind FeatureRAG so the gate returns
 	// 403 (not 404) regardless of whether the embedding backend is configured.
 	// When EMBEDDING_BASE_URL is unset the handler itself returns a provider-blind 503.
@@ -394,7 +403,8 @@ func main() {
 		}
 		var ragEmbedder edgerag.Embedder
 		if ragEmbedBaseURL != "" {
-			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedReduceTo, resolveLiteLLMMasterKey())
+			ragBatchEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedReduceTo, resolveLiteLLMMasterKey())
+			ragEmbedder = ragBatchEmbedder
 		}
 		ragAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
 			tenantID, actorID uuid.UUID, userAgent string, after any) {
@@ -545,6 +555,7 @@ func main() {
 		webToolsMux := http.NewServeMux()
 		webtools.NewHandler(webtools.Deps{
 			Search: webtools.NewSearXNG(resolveSearXNGQueryURL()),
+			Fetch:  buildWebFetchPipeline(ragBatchEmbedder),
 		}).Register(webToolsMux)
 		registerWebToolRoutes(mux, webToolsMux)
 	}
@@ -897,6 +908,58 @@ func registerAudioVoicesRoute(mux httpMux) {
 func registerWebToolRoutes(mux httpMux, webToolsHandler http.Handler) {
 	mux.Handle("/v1/tools/"+webtools.ToolWebSearch, webToolsHandler)
 	mux.Handle("/v1/tools/"+webtools.ToolWebFetch, webToolsHandler)
+}
+
+// buildWebFetchPipeline assembles the web_fetch body pipeline over the pieces
+// edge-api already carries: the markitdown sidecar for documents and the RAG
+// embedding client for ranking a large page. Nothing new is stood up and
+// nothing is persisted; a fetched page is not durable knowledge, so the
+// reduction is in memory and per call.
+//
+// A nil return leaves POST /v1/tools/web_fetch answering its explicit
+// not_implemented envelope, which is the behaviour the route already had. It
+// deliberately does not stop the boot: a guard that takes the whole gateway
+// down over one tool is how PR #1582 took chat down on 2026-08-30, and a
+// misconfigured knob here costs one tool rather than the product.
+func buildWebFetchPipeline(embedder *edgerag.HTTPEmbedder) webtools.Fetcher {
+	cfg := webtools.PipelineConfig{
+		Converter:        edgerag.NewMarkitdownClient(resolveMarkitdownURL()),
+		EmbedConcurrency: resolveWebToolsEmbedConcurrency(),
+	}
+	// Guarded rather than assigned unconditionally: a nil *HTTPEmbedder put
+	// into an interface field is a non-nil interface holding nil, which reads
+	// as "an embedder is wired" everywhere downstream and panics on first use.
+	if embedder != nil {
+		cfg.Embedder = embedder
+	}
+	pipeline, err := webtools.NewPipeline(cfg)
+	if err != nil {
+		log.Printf("ERROR: web_fetch pipeline not configured, POST /v1/tools/web_fetch answers not_implemented: %v", err)
+		return nil
+	}
+	return pipeline
+}
+
+// resolveWebToolsEmbedConcurrency reads HIVE_WEBTOOLS_EMBED_CONCURRENCY, the
+// bound on concurrent embedding calls across all in-flight web_fetch calls.
+//
+// Zero and every other non-positive value is refused rather than obeyed. Zero
+// means no bound at all, which is the unbounded embedding burst issue #1609
+// exists to end, and an operator who writes it has asked for the defect
+// rather than for a setting. Refused here means the default is used and the
+// refusal is logged loudly; it does not stop the boot, per buildWebFetchPipeline.
+func resolveWebToolsEmbedConcurrency() int {
+	raw := strings.TrimSpace(os.Getenv("HIVE_WEBTOOLS_EMBED_CONCURRENCY"))
+	if raw == "" {
+		return webtools.DefaultEmbedConcurrency
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		log.Printf("WARNING: HIVE_WEBTOOLS_EMBED_CONCURRENCY=%q is not a positive integer; refusing it and bounding web_fetch embedding at %d instead. Zero means no bound at all, which is the unbounded burst issue #1609 exists to end.",
+			raw, webtools.DefaultEmbedConcurrency)
+		return webtools.DefaultEmbedConcurrency
+	}
+	return n
 }
 
 // resolveSearXNGQueryURL returns the SearXNG /search endpoint web_search

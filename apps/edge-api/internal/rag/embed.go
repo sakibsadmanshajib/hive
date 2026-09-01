@@ -103,16 +103,51 @@ type embedReq struct {
 	Input []string `json:"input"`
 }
 
+// embedVector is one element of an embeddings response. Named rather than
+// anonymous so a test can build one without restating the shape, which is
+// what makes adding a field here a one-line change instead of five.
+type embedVector struct {
+	// Index is the position of the input this vector belongs to. The OpenAI
+	// embeddings contract does not promise response order, and a batch that
+	// came back reordered would rank every chunk against the wrong text, so
+	// the batch path below places by it rather than trusting arrival order.
+	Index     int       `json:"index"`
+	Embedding []float32 `json:"embedding"`
+}
+
 type embedResp struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-	} `json:"data"`
+	Data []embedVector `json:"data"`
 }
 
 // Embed embeds a single text string and returns an EmbeddingDimension-wide vector.
 // Errors are provider-blind: no backend URL, model name, or upstream message.
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}})
+	vectors, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	return vectors[0], nil
+}
+
+// EmbedBatch embeds every text in ONE request and returns the vectors in the
+// order the texts were given.
+//
+// One request, not one per text. The embeddings API takes an input array and
+// always has; sending them one at a time is what produced issue #1609, where
+// a single web search fetched five pages and made roughly two hundred
+// embedding calls, each taking its own credit hold, until accounting refused
+// them and every source was dropped. web_fetch uses this for the whole of a
+// page in one call plus one for the query, which is two calls regardless of
+// page size.
+//
+// Single-input Embed is this function with a slice of one, so both paths
+// share the request shape, the MRL reduction, the dimension check and the
+// provider-blind error contract rather than having two of each.
+func (e *HTTPEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("rag.embed: no inputs")
+	}
+	body, err := json.Marshal(embedReq{Model: e.model, Input: texts})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -138,22 +173,55 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, fmt.Errorf("rag: embedding service unavailable")
 	}
 
+	// The response carries one vector per input, so the ceiling scales with
+	// the batch rather than being a fixed figure a legitimate batch can
+	// exceed. Roughly 20 bytes per dimension of JSON float, plus headroom.
+	// A fixed 4 MiB would have refused a 256-chunk page at 1024 dimensions,
+	// which is exactly what web_fetch sends.
+	maxResponseBytes := int64(len(texts))*int64(EmbeddingDimension)*20 + 4*1024*1024
 	var result embedResp
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("rag: embedding service unavailable")
 	}
 
-	if len(result.Data) == 0 {
-		return nil, fmt.Errorf("rag: embedding service returned no data")
+	if len(result.Data) != len(texts) {
+		// A short answer is a failure, never a partial success: ranking N
+		// chunks against N-1 vectors would silently mis-attribute every one
+		// after the gap.
+		return nil, fmt.Errorf("rag: embedding service returned %d vectors for %d inputs", len(result.Data), len(texts))
 	}
-	vec := result.Data[0].Embedding
-	if e.reduceTo > 0 {
-		// Legitimate MRL slice; a no-op for a backend that already serves the
-		// model at reduceTo width.
-		vec = reduceEmbedding(vec, e.reduceTo)
+
+	// The API does not promise response order, so the index field is used
+	// when it is a complete permutation of the inputs. Some OpenAI-compatible
+	// backends omit it entirely, which arrives as all-zero; that is not a
+	// permutation, and arrival order is used instead, which is what the
+	// single-input path always relied on.
+	byIndex := true
+	seen := make([]bool, len(texts))
+	for _, item := range result.Data {
+		if item.Index < 0 || item.Index >= len(texts) || seen[item.Index] {
+			byIndex = false
+			break
+		}
+		seen[item.Index] = true
 	}
-	if len(vec) != EmbeddingDimension {
-		return nil, fmt.Errorf("rag: unexpected embedding dimension %d", len(vec))
+
+	out := make([][]float32, len(texts))
+	for i, item := range result.Data {
+		position := i
+		if byIndex {
+			position = item.Index
+		}
+		vec := item.Embedding
+		if e.reduceTo > 0 {
+			// Legitimate MRL slice; a no-op for a backend that already serves
+			// the model at reduceTo width.
+			vec = reduceEmbedding(vec, e.reduceTo)
+		}
+		if len(vec) != EmbeddingDimension {
+			return nil, fmt.Errorf("rag: unexpected embedding dimension %d", len(vec))
+		}
+		out[position] = vec
 	}
-	return vec, nil
+	return out, nil
 }

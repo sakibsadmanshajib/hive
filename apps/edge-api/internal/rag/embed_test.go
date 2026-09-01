@@ -69,9 +69,7 @@ func TestHTTPEmbedderNeverRequestsDimensions(t *testing.T) {
 			vec[i] = 0.01
 		}
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -100,9 +98,7 @@ func TestHTTPEmbedderAcceptsBackendAtTargetWidth(t *testing.T) {
 			vec[i] = 0.02
 		}
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -123,9 +119,7 @@ func TestHTTPEmbedderStrictRejectByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vec := make([]float32, 4096)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -144,9 +138,7 @@ func TestHTTPEmbedderSendsAuthHeaderWhenKeySet(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		vec := make([]float32, EmbeddingDimension)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -168,9 +160,7 @@ func TestHTTPEmbedderOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 		sawAuth = r.Header.Get("Authorization") != ""
 		vec := make([]float32, EmbeddingDimension)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()

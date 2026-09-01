@@ -123,6 +123,15 @@ services:
       # below so the edge rejects before the sidecar has to.
       MARKITDOWN_URL: ${MARKITDOWN_URL:-http://markitdown:8700}
       RAG_MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-26214400}
+      # POST /v1/tools/web_fetch: how many embedding calls may be in flight at
+      # once across all concurrent fetches. One fetch is at most two embedding
+      # requests whatever the page size (every chunk in one batched array,
+      # plus one for the query), so this bounds overlap rather than volume.
+      # Must be at least 1; zero means no bound at all, which is the burst
+      # issue #1609 exists to end, and is refused in favour of this default.
+      # The same markitdown sidecar and embedding backend above serve it, so
+      # no new service and no new destination appears here.
+      HIVE_WEBTOOLS_EMBED_CONCURRENCY: ${HIVE_WEBTOOLS_EMBED_CONCURRENCY:-4}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
@@ -1404,6 +1413,21 @@ services:
       # deploy/docker/owui-patches/apply_web_loader_bounds_patch.py for the
       # separate memory-side cap the same review asked for.
       WEB_LOADER_TIMEOUT: ${WEB_LOADER_TIMEOUT:-12}
+      # Issue #1639. Truncates the text the fork's own fetch_url tool puts in
+      # the prompt, in characters, applied after the page has been fetched and
+      # extracted (tools/builtin.py). Passed through with no default so live
+      # behaviour is unchanged: what this line buys is that setting it now
+      # actually reaches the persisted row, which it could not before, because
+      # the key is in upstream's DEFAULT_CONFIG and so was seeded once on the
+      # first boot and thereafter read from Open WebUI's database.
+      # hive_rag_env_config.py reconciles it, and refuses a zero, which
+      # upstream's `max_length > 0` test would read as no cap at all.
+      #
+      # Not a download bound and never was: the binary branch behind it still
+      # reads the whole response into memory (issue #1638). The real byte cap
+      # is edge-api's, in apps/edge-api/internal/webtools, enforced during the
+      # read on both branches, and slice S7 makes that the only fetch path.
+      WEB_FETCH_MAX_CONTENT_LENGTH: ${WEB_FETCH_MAX_CONTENT_LENGTH:-}
       # Hive product branding. LICENSE-DECISION.md: Open WebUI image built from
       # Dockerfile.open-webui, which strips the upstream " (Open WebUI)" suffix
       # that env.py forces onto any custom WEBUI_NAME (see that Dockerfile for
