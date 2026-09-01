@@ -75,8 +75,11 @@ behaviour and not a symptom.
 ## Automated checks run alongside
 
 ```
-make test-owui-frontend        24 test files, 349 tests, all passing
-python3 scripts/test_owui_rag_env_config.py    ok
+make test-owui-frontend                          24 test files, 349 tests, all passing
+make test-scripts                                ok
+python3 scripts/test_owui_rag_env_config.py      ok
+python3 scripts/test_owui_chat_list_page_size.py ok
+npm run lint:proof-tokens                        ok
 ```
 
 The new guards would have failed on `origin/main`, checked directly:

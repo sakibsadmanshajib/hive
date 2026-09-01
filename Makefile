@@ -48,6 +48,7 @@ test-scripts:
 	python3 scripts/test_caddy_one_front_door.py
 	python3 scripts/test_caddy_upstream_retry.py
 	python3 scripts/test_owui_model_picker_filter.py
+	python3 scripts/test_owui_chat_list_page_size.py
 	python3 scripts/generate-enterprise-jwt-keys.py --self-check
 	python3 scripts/register-owui-oauth-client.py --self-check
 	python3 scripts/test_check_oauth_scopes.py

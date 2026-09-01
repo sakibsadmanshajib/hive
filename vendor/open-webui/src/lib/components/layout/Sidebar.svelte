@@ -110,9 +110,15 @@
 	// is what spares an account with fewer than sixty conversations the empty
 	// page 2 request it used to fire the moment the list rendered (issue #1625).
 	//
-	// ponytail: a plain number rather than a value read from the API, because
-	// the failure mode of drift is one wasted request, not a wrong list; the
-	// end is still detected by the empty page that follows.
+	// A plain number rather than a value read from the API, because the API does
+	// not report its page size. Drift is not symmetric and must not be waved
+	// away: if the backend page GROWS, a full page reads as short and the
+	// sidebar stops one scroll early, which the next scroll corrects. If the
+	// backend page SHRINKS below this, every full page reads as short and the
+	// list stops after page 1, which is the blank-nav symptom of this very
+	// issue reached from the other side. `scripts/test_owui_chat_list_page_size.py`
+	// asserts the two agree, so an upstream bump that moves the backend's limit
+	// fails a check rather than truncating somebody's chat list.
 	const CHAT_LIST_PAGE_SIZE = 60;
 
 	let showCreateFolderModal = false;
