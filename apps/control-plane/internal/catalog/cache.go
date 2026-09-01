@@ -42,6 +42,8 @@ func keyPublic() string { return "cat:public" }
 
 func keyTenantList(tid uuid.UUID) string { return "cat:tlist:" + tid.String() }
 
+func keyToolCaps() string { return "cat:toolcaps" }
+
 func keyVisible(tid uuid.UUID, aliasID string) string {
 	return "cat:vis:" + tid.String() + ":" + aliasID
 }
@@ -51,6 +53,21 @@ func keyVisible(tid uuid.UUID, aliasID string) string {
 // marshal as JSON null and unmarshal back to nil, preserving raw semantics.
 func (r *CachedRepository) ListPublicAliases(ctx context.Context) ([]ModelAlias, error) {
 	return rcache.GetJSON(ctx, r.cache, keyPublic(), r.Repository.ListPublicAliases)
+}
+
+// ListRouteToolCapabilities caches the route-to-capability rows behind
+// hive_capabilities.tools. Keyed without a tenant for the same reason
+// ListPublicAliases is: the query takes no tenant input and its rows are
+// identical for every caller. It sits on GET /v1/models, which the chat model
+// picker hits on every page load, so it gets the same 30s read-through the rest
+// of that endpoint already has rather than being the one uncached query on it.
+//
+// Nothing in this package writes provider_capabilities (migrations and the
+// route admin surfaces do), so there is no write-through invalidation point to
+// add. The TTL is the whole staleness bound, and it is the same bound the alias
+// list next to it already accepts.
+func (r *CachedRepository) ListRouteToolCapabilities(ctx context.Context) ([]RouteToolCapability, error) {
+	return rcache.GetJSON(ctx, r.cache, keyToolCaps(), r.Repository.ListRouteToolCapabilities)
 }
 
 // ListAliasesForTenant caches one tenant's entitled alias list under a key

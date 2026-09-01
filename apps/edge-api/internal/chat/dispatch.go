@@ -194,6 +194,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The definition of "tool-carrying" is inference.ToolParamInBody, the same
 	// field list the API-key surface gates on, so the two surfaces cannot come
 	// to different verdicts about the same body.
+	//
+	// ponytail: this is a second shallow pass over the body, on a path that
+	// already decodes and re-encodes it once in rewriteDispatchBody. Cheap next
+	// to the upstream call it precedes. If it ever shows up in a profile, the
+	// upgrade path is to read the tool fields out of the field map
+	// rewriteDispatchBody already builds, rather than to duplicate the field
+	// list here.
 	toolParam := inference.ToolParamInBody(raw)
 
 	route, err := h.deps.Routing.SelectRoute(r.Context(), inference.SelectRouteInput{

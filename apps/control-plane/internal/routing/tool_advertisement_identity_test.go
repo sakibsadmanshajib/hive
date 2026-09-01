@@ -212,6 +212,32 @@ func TestAdvertisingToolsNeverNarrowsTheCandidateSet(t *testing.T) {
 		t.Error("no alias was actually compared, so the equality above proves nothing. Either the catalog advertises tools nowhere, or the fold read no routes")
 	}
 	t.Logf("compared %d advertised alias(es) with and without RequireToolCapable: %v", compared, aliasIDs)
+
+	// Blast radius of the other half of this slice, reported rather than
+	// asserted. Setting RequireToolCapable on the chat path means a body
+	// carrying tools, tool_choice, response_format or functions now gets a
+	// clean 400 on an alias that is not advertised, where before it was
+	// dispatched unchecked and failed upstream (or did not, by luck). These are
+	// the aliases that behaviour change can reach. An empty list means the
+	// change can refuse nothing the catalog can currently serve; a growing one
+	// is worth a second look, because Open WebUI sends response_format for its
+	// title and tag tasks.
+	var chatCapableButNotAdvertised []string
+	for aliasID := range advertised {
+		if advertised[aliasID] {
+			continue
+		}
+		for _, candidate := range aliasCandidates(t, state, aliasID) {
+			if strings.EqualFold(candidate.HealthState, "disabled") || !candidate.SupportsChatCompletions {
+				continue
+			}
+			chatCapableButNotAdvertised = append(chatCapableButNotAdvertised, aliasID)
+			break
+		}
+	}
+	sort.Strings(chatCapableButNotAdvertised)
+	t.Logf("chat-capable aliases NOT advertised, so a tool-shaped body on them now answers 400 instead of being dispatched unchecked: %v", chatCapableButNotAdvertised)
+
 	if !advertised[freePoolAliasID] {
 		t.Errorf("alias %s is not advertised as tool capable. It is the alias the chat surface runs on, so the web tools would be advertised to nobody. Uniformity there is held by TestFreePoolIsUniformlyToolCapable; if that one is red too, fix it first", freePoolAliasID)
 	}
