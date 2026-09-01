@@ -23,7 +23,15 @@ import (
 //
 // and wrote that same integer into both columns. Granting 100,000 subunits,
 // 1,000 taka, about eight USD, posted 100,000 credits, which is 0.0001 USD of
-// inference: short by roughly seven orders of magnitude.
+// inference: short by a factor of 81,215, about five orders of magnitude.
+//
+// THE MULTIPLIER IS NOT TEN MILLION, and it is worth stating because every
+// figure in this file derives from it. It is CreditsPerUSD / SubunitsPerBDT /
+// rate, that is 1e7 / rate: 81,215 at the compiled default of 123.13, and
+// between roughly 67,000 and 125,000 across the plausible rate band. 1e7 is the
+// constant part with the FX divisor dropped, and quoting it inflates the defect,
+// the overflow threshold and the round-to-zero band by two orders of magnitude
+// each. An earlier revision of this comment did exactly that.
 //
 // WHICH DENOMINATION IS RIGHT. Issue #1659 leaves this open, because the code
 // does not answer it: either a grant is taka and has to be converted, or it is
@@ -64,9 +72,14 @@ import (
 // big.Int.Int64(), which returns an undefined value with no error when the
 // quantity does not fit. That silent narrowing is the defect tracked in issue
 // #1547 and this function does not repeat it. The check matters more here than
-// it looks: a subunit amount comfortably inside the credit_grants bigint
-// column becomes a credit quantity about ten million times larger, so the
-// ledger column, not the grants column, is the binding limit.
+// it looks: a subunit amount comfortably inside the credit_grants bigint column
+// becomes a credit quantity 1e7/rate times larger, so the ledger column and not
+// the grants column is the binding limit. Measured against this function, the
+// largest accepted amount is 113,567,379,889,792 subunits at the compiled
+// default and 92,233,720,368,547 at a rate of 100: roughly 1.1e12 taka, about
+// nine billion USD. Ten million taka converts to 8.12e13 credits and passes
+// with three orders of magnitude to spare, so no grant anyone could mean is
+// refused here.
 func creditsForGrant(subunits *big.Int) (int64, payments.USDBDTRate, error) {
 	rate, err := payments.PlatformUSDBDTRate()
 	if err != nil {
@@ -81,10 +94,12 @@ func creditsForGrant(subunits *big.Int) (int64, payments.USDBDTRate, error) {
 	// A positive grant that rounds to nothing must not answer 201 Created.
 	// D-034: never claim an entitlement delivered unless the accounting step
 	// actually succeeded, and a zero-credit row delivers nothing. Unreachable
-	// at any sane rate (one paisa is about eighty thousand credits at 123.13),
-	// which is precisely why it should be a refusal rather than a silent zero:
-	// reaching it means the configured rate is wrong by nine or more orders of
-	// magnitude, and that should stop the grant instead of hiding inside it.
+	// at any sane rate (one paisa is 81,215 credits at 123.13), which is
+	// precisely why it should be a refusal rather than a silent zero: the
+	// smallest possible grant, one paisa, first rounds to zero only at a rate
+	// above 20,000,000 BDT per USD, about 162,000 times the default and so five
+	// orders of magnitude wrong. That should stop the grant instead of hiding
+	// inside it.
 	if credits.Sign() == 0 && subunits.Sign() > 0 {
 		return 0, payments.USDBDTRate{}, fmt.Errorf(
 			"grants: %s subunits at %s BDT per USD rounds to zero credits, refusing to record a grant worth nothing",

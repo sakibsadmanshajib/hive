@@ -213,3 +213,57 @@ func TestCreateWithLedger_RefusesAGrantItCannotDenominate_Live(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateWithLedger_ReplaysACommittedGrantWithoutTheRate_Live pins the
+// ordering that keeps a retry safe.
+//
+// The idempotency key exists so the admin console can retry after a network
+// blip and get the original result rather than a duplicate failure. The
+// conversion therefore has to run AFTER the replay branch: if it ran first, a
+// replay would resolve the rate it does not need, and an operator who broke
+// HIVE_USD_BDT_RATE between the original call and the retry would turn a
+// committed grant's replay into a 500.
+func TestCreateWithLedger_ReplaysACommittedGrantWithoutTheRate_Live(t *testing.T) {
+	t.Setenv(payments.USDBDTRateEnvVar, "100")
+
+	pool := newGrantsTestPool(t)
+	admin, grantee, workspace := seedGrantParties(t, pool)
+	repo := NewPgxRepository(pool)
+
+	in := CreateInput{
+		GrantedByUserID:      admin,
+		GrantedToUserID:      grantee,
+		GrantedToWorkspaceID: workspace,
+		AmountBDTSubunits:    big.NewInt(100_000),
+		ReasonNote:           "issue 1659 replay ordering proof",
+		IdempotencyKey:       "grants-live-replay-" + uuid.NewString(),
+	}
+
+	first, err := repo.CreateWithLedger(context.Background(), in)
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+
+	// The operator breaks the rate between the two calls.
+	t.Setenv(payments.USDBDTRateEnvVar, "not-a-rate")
+
+	replay, err := repo.CreateWithLedger(context.Background(), in)
+	if err != nil {
+		t.Fatalf("replay of a committed grant must not need the rate: %v", err)
+	}
+	if replay.Grant.ID != first.Grant.ID || replay.LedgerEntryID != first.LedgerEntryID {
+		t.Fatalf("replay returned a different grant: %v/%v then %v/%v",
+			first.Grant.ID, first.LedgerEntryID, replay.Grant.ID, replay.LedgerEntryID)
+	}
+
+	// And it wrote nothing the second time.
+	var entries int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM public.credit_ledger_entries WHERE account_id = $1`, workspace,
+	).Scan(&entries); err != nil {
+		t.Fatalf("count ledger entries: %v", err)
+	}
+	if entries != 1 {
+		t.Fatalf("ledger holds %d entries after one grant and one replay, want 1", entries)
+	}
+}

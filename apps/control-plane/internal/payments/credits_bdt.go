@@ -195,9 +195,12 @@ func ratRoundHalfUp(r *big.Rat) *big.Int {
 //
 // The result is a *big.Int and not an int64 on purpose. Credits are a billion
 // to the USD, so a subunit amount well inside the credit_grants bigint column
-// converts to a credit quantity roughly ten million times larger, and whether
-// that still fits the ledger's own bigint is the caller's decision to make
-// explicitly. Narrowing here through big.Int.Int64() would return an undefined
+// converts to a credit quantity CreditsPerUSD / SubunitsPerBDT / rate times
+// larger, that is 1e7/rate, about 81,215 at a rate of 123.13. It is NOT a flat
+// 1e7: that is the constant part with the FX divisor dropped, and a caller that
+// sized its own overflow guard on it would size it two orders of magnitude
+// wrong. Whether the result still fits the ledger's own bigint is the caller's
+// decision to make explicitly. Narrowing here through big.Int.Int64() would return an undefined
 // value with no error on overflow, which is the defect tracked in issue #1547.
 func BDTSubunitsToCredits(subunits *big.Int, rate *big.Rat) (*big.Int, error) {
 	if subunits == nil {

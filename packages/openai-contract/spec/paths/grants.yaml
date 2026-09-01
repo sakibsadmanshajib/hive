@@ -25,6 +25,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreditGrant"
+        "400":
+          description: >-
+            Malformed body, or an amount the ledger cannot hold. The amount is
+            taka (subunits) and is converted to credits before it is posted, so
+            a figure that fits amount_bdt_subunits can still be refused for
+            overflowing the credit ledger (issue #1659).
         "401":
           description: Unauthenticated.
         "403":

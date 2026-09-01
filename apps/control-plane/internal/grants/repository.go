@@ -67,14 +67,6 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	}
 	subunits := input.AmountBDTSubunits.Int64()
 
-	// The grant is taka; the ledger is credits. Convert, do not reinterpret
-	// (issue #1659). Resolved before the transaction opens so a misconfigured
-	// rate refuses the grant outright rather than rolling one back.
-	creditsDelta, rate, err := creditsForGrant(input.AmountBDTSubunits)
-	if err != nil {
-		return CreateResult{}, err
-	}
-
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("grants: begin tx: %w", err)
@@ -148,6 +140,23 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 		// result. Replay is observably indistinguishable from the original.
 		_ = tx.Rollback(ctx)
 		return CreateResult{Grant: existingGrant, LedgerEntryID: existingLedger}, nil
+	}
+
+	// The grant is taka; the ledger is credits. Convert, do not reinterpret
+	// (issue #1659).
+	//
+	// Placed AFTER the replay branch above, deliberately. A replay of an
+	// already-committed grant returns the stored result and writes nothing, so
+	// it must not depend on the rate being resolvable: converting first would
+	// make the admin console's retry-after-a-network-blip answer 500 whenever
+	// HIVE_USD_BDT_RATE had been broken since the original call, turning a safe
+	// replay into a failure. Placing it here costs nothing on the refusal path,
+	// because `defer tx.Rollback(ctx)` unwinds the idempotency key claim too, so
+	// a refused grant still leaves no grant row, no ledger entry and no claimed
+	// key.
+	creditsDelta, rate, err := creditsForGrant(input.AmountBDTSubunits)
+	if err != nil {
+		return CreateResult{}, err
 	}
 
 	// Step 2: insert the ledger entry (entry_type='grant', positive credits).

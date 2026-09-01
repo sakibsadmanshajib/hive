@@ -82,12 +82,17 @@ var (
 	// overflows the credit_grants bigint column, or the credit quantity it
 	// converts to overflows credit_ledger_entries.credits_delta. The second is
 	// the binding one, since a credit is a billionth of a USD and the step
-	// between the two columns is about ten million (issue #1659).
+	// between the two columns is 1e7/rate, about 81,215 at the compiled default
+	// rather than the flat ten million an earlier revision of this comment
+	// claimed (issue #1659). That puts the real limit near 1.1e14 subunits,
+	// roughly 1.1e12 taka: high enough that this refuses only an amount no
+	// grant could mean, which is the point of it being an error rather than a
+	// silent truncation.
 	//
 	// It is a separate sentinel from ErrInvalidAmount because the handler owes
-	// this a 400 and not a 500: the value comes from the request body, and an
-	// admin who typed five extra zeros should be told the amount is too large
-	// rather than shown a generic server failure that reads like an outage.
+	// this a 400 and not a 500: the value comes from the request body, so a
+	// refused amount should be reported as too large rather than as a generic
+	// server failure that reads like an outage.
 	ErrAmountTooLarge = errors.New("grants: amount is too large to grant")
 
 	// ErrInvalidGrantee is returned when grantee user/workspace ids are zero.
