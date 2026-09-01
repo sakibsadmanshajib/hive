@@ -189,8 +189,9 @@ def _render(payload: dict, redact) -> list[str]:
                         f"::warning::free pool member '{model}' is RATE LIMITED, not "
                         "gone. Do NOT replace its row: the model still exists and the "
                         "member returns when the window resets or the account is "
-                        "funded. The quota window above says this one reopens inside "
-                        "the day, so the pool routes around it meanwhile."
+                        "funded. The quota window above is what decides, and this one "
+                        "did not read as a spent daily allowance, so the pool routes "
+                        "around it meanwhile."
                     )
                 )
         else:

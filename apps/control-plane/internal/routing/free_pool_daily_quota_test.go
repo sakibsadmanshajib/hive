@@ -91,6 +91,12 @@ const freePoolDailyCappedProvider = "gemini"
 // Two assertions, because the roster and the provider are two different ways to
 // let the member back in. The first is the exact row; the second is any active
 // pool row on the same provider, which catches a re-add under a new route id.
+// The ceiling, stated so this file is not over-trusted on its own:
+// foldMigrations is an offline approximation of the migration chain and reads
+// only INSERT tuples and single-row `UPDATE ... WHERE route_id = '...'`. A
+// future migration that re-enables this route through a join-form or IN-list
+// UPDATE would be invisible here. free_pool_capability_truth_test.go documents
+// that limit in full and the same limit applies to every assertion below.
 func TestFreePoolExcludesTheDailyCappedMember(t *testing.T) {
 	state := foldMigrations(t)
 
