@@ -325,12 +325,14 @@ func (s *Service) HardCapForWorkspace(ctx context.Context, workspaceID uuid.UUID
 	return new(big.Int).Set(b.HardCap), nil
 }
 
-// MonthToDateSpend returns the workspace's month-to-date BDT-subunit spend.
-func (s *Service) MonthToDateSpend(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error) {
+// MonthToDateSpendCredits returns the workspace's month-to-date spend in
+// credits, the unit the ledger stores. Callers that render or compare taka
+// convert through payments.CreditsToBDTSubunits first (issue #1648).
+func (s *Service) MonthToDateSpendCredits(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error) {
 	if s.workspaceCtx == nil {
 		return nil, fmt.Errorf("budgets: workspace surface not wired")
 	}
-	return s.workspaceCtx.wrepo.MonthToDateSpendBDT(ctx, workspaceID, periodStart)
+	return s.workspaceCtx.wrepo.MonthToDateSpendCredits(ctx, workspaceID, periodStart)
 }
 
 // validThreshold checks whether a threshold percentage is in the allow-list.

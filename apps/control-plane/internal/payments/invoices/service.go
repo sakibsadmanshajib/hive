@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // =============================================================================
@@ -41,13 +43,13 @@ type WorkspaceNamer interface {
 
 // Service orchestrates invoice generation, retrieval, and PDF download.
 type Service struct {
-	repo     Repository
-	storage  storageBackend
-	pdf      PDFRenderer
-	access   AccessChecker
-	naming   WorkspaceNamer
-	logger   *slog.Logger
-	now      func() time.Time
+	repo    Repository
+	storage storageBackend
+	pdf     PDFRenderer
+	access  AccessChecker
+	naming  WorkspaceNamer
+	logger  *slog.Logger
+	now     func() time.Time
 }
 
 // storageBackend mirrors packages/storage.Storage but only the methods we use.
@@ -95,12 +97,35 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, fmt.Errorf("invoices: invalid period (end <= start)")
 	}
 
-	items, total, err := s.repo.AggregateByModel(ctx, workspaceID, period)
+	credited, err := s.repo.AggregateByModel(ctx, workspaceID, period)
 	if err != nil {
 		return nil, fmt.Errorf("invoices: aggregate: %w", err)
 	}
-	if total == nil {
-		total = new(big.Int)
+
+	// The ledger speaks credits (1 USD = payments.CreditsPerUSD of them); an
+	// invoice speaks taka. Crossing that boundary is an FX conversion, and it
+	// happens here, once, at a rate recorded on the row. Reading the credit
+	// count as a paisa count is what issue #1648 was.
+	rate, rateDisplay, err := payments.PlatformUSDBDTRate()
+	if err != nil {
+		return nil, fmt.Errorf("invoices: usd to bdt rate: %w", err)
+	}
+
+	items := make([]InvoiceLineItem, 0, len(credited))
+	total := new(big.Int)
+	for _, c := range credited {
+		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate)
+		if err != nil {
+			return nil, fmt.Errorf("invoices: convert %s credits: %w", c.ModelID, err)
+		}
+		items = append(items, InvoiceLineItem{
+			ModelID:      c.ModelID,
+			RequestCount: c.RequestCount,
+			BDTSubunits:  subunits,
+		})
+		// Total is the sum of the rendered lines, not a separately converted
+		// aggregate, so the document always adds up for the customer reading it.
+		total.Add(total, subunits)
 	}
 
 	// Render PDF first (cheap; lets us fail fast before any storage write).
@@ -118,6 +143,7 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		TotalBDTSubunits: total,
 		LineItems:        items,
 		GeneratedAt:      s.now(),
+		USDBDTRate:       rateDisplay,
 	}
 
 	pdfBytes, err := s.pdf.Render(candidate, workspaceName)

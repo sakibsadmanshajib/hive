@@ -20,7 +20,7 @@ type fakeRepo struct {
 	mu              sync.Mutex
 	byID            map[uuid.UUID]Invoice
 	byWorkspaceMonth map[string]Invoice // key = ws|YYYY-MM-01
-	aggregateFn     func(ctx context.Context, ws uuid.UUID, p Period) ([]InvoiceLineItem, *big.Int, error)
+	aggregateFn     func(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error)
 	activeFn        func(ctx context.Context, p Period) ([]uuid.UUID, error)
 }
 
@@ -85,11 +85,11 @@ func (f *fakeRepo) ListActiveWorkspaces(ctx context.Context, p Period) ([]uuid.U
 	return nil, nil
 }
 
-func (f *fakeRepo) AggregateByModel(ctx context.Context, ws uuid.UUID, p Period) ([]InvoiceLineItem, *big.Int, error) {
+func (f *fakeRepo) AggregateByModel(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error) {
 	if f.aggregateFn != nil {
 		return f.aggregateFn(ctx, ws, p)
 	}
-	return nil, big.NewInt(0), nil
+	return nil, nil
 }
 
 // ---------- access checker ----------
@@ -180,12 +180,12 @@ func TestGenerateInvoiceForPeriod_AggregatesAndPersists(t *testing.T) {
 
 	repo := newFakeRepo()
 	ws := uuid.New()
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		items := []InvoiceLineItem{
-			{ModelID: "gpt-4o-mini", RequestCount: 100, BDTSubunits: big.NewInt(50_00)},
-			{ModelID: "claude-haiku", RequestCount: 50, BDTSubunits: big.NewInt(75_00)},
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		items := []ModelCredits{
+			{ModelID: "gpt-4o-mini", RequestCount: 100, Credits: spendCredits(50_00)},
+			{ModelID: "claude-haiku", RequestCount: 50, Credits: spendCredits(75_00)},
 		}
-		return items, big.NewInt(125_00), nil
+		return items, nil
 	}
 
 	storage := newFakeStorage()
@@ -218,8 +218,8 @@ func TestGenerateInvoiceForPeriod_IsIdempotent(t *testing.T) {
 
 	repo := newFakeRepo()
 	ws := uuid.New()
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		return []InvoiceLineItem{{ModelID: "m1", RequestCount: 1, BDTSubunits: big.NewInt(10_00)}}, big.NewInt(10_00), nil
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return []ModelCredits{{ModelID: "m1", RequestCount: 1, Credits: spendCredits(10_00)}}, nil
 	}
 
 	storage := newFakeStorage()
@@ -254,8 +254,8 @@ func TestGet_CrossWorkspaceReturns404Sentinel(t *testing.T) {
 	svc := NewService(repo, storage, &stubPDF{}, access, &fakeNamer{}, nil)
 
 	period := Period{Start: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		return nil, big.NewInt(0), nil
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return nil, nil
 	}
 	inv, err := svc.GenerateInvoiceForPeriod(context.Background(), other, period)
 	if err != nil {

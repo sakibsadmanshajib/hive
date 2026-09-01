@@ -125,7 +125,7 @@ type WorkspaceBudgetRepository interface {
 	// MTD spend aggregation — sums usage_charge entries credits_delta (negative)
 	// for the workspace within [periodStart, now). Returns absolute *big.Int
 	// (positive value representing total BDT subunits spent).
-	MonthToDateSpendBDT(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error)
+	MonthToDateSpendCredits(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error)
 }
 
 // AlertNotifier dispatches spend alert notifications via configured channels.

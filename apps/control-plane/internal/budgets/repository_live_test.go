@@ -398,7 +398,7 @@ func TestMonthToDateSpend_Live(t *testing.T) {
 	seedCharge(t, pool, wsID, -999, 40*24*time.Hour) // last month, excluded
 	seedCharge(t, pool, wsID, 50, 15*time.Minute)    // corrupted positive delta
 
-	spend, err := repo.MonthToDateSpendBDT(ctx, wsID, periodStart)
+	spend, err := repo.MonthToDateSpendCredits(ctx, wsID, periodStart)
 	if err != nil {
 		t.Fatalf("mtd: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestMonthToDateSpend_Live(t *testing.T) {
 		t.Fatalf("seed boundary charge: %v", err)
 	}
 
-	spend2, err := repo.MonthToDateSpendBDT(ctx, wsID, periodStart)
+	spend2, err := repo.MonthToDateSpendCredits(ctx, wsID, periodStart)
 	if err != nil {
 		t.Fatalf("mtd2: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestMonthToDateSpend_Live(t *testing.T) {
 	// deltas reports zero, never negative.
 	wsOnlyPositive := seedBudgetWorkspace(t, pool)
 	seedCharge(t, pool, wsOnlyPositive, 70, time.Hour)
-	clamped, err := repo.MonthToDateSpendBDT(ctx, wsOnlyPositive, periodStart)
+	clamped, err := repo.MonthToDateSpendCredits(ctx, wsOnlyPositive, periodStart)
 	if err != nil {
 		t.Fatalf("clamped mtd: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestCronEvaluatorBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed alert: %v", err)
 		}
-		repo.mtd[ws] = big.NewInt(500) // exactly at the 50% line
+		repo.mtd[ws] = spendCredits(500) // exactly at the 50% line
 
 		cron := budgets.NewCronEvaluator(repo, notifier, nil)
 		fired, err := cron.EvaluateBudgets(context.Background(), periodNow)
@@ -544,7 +544,7 @@ func TestCronEvaluatorBranches(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("seed healthy alert: %v", err)
 		}
-		repo.mtd[healthy] = big.NewInt(500)
+		repo.mtd[healthy] = spendCredits(500)
 
 		mixed := &mixedHealthRepo{healthy: repo, brokenIDs: map[uuid.UUID]bool{}}
 		broken := uuid.New()
@@ -593,7 +593,7 @@ func (e *erroringWorkspaceRepo) ListWorkspacesWithBudget(context.Context) ([]uui
 func (e *erroringWorkspaceRepo) StampAlertFired(context.Context, uuid.UUID, time.Time, time.Time) error {
 	return e.err
 }
-func (e *erroringWorkspaceRepo) MonthToDateSpendBDT(context.Context, uuid.UUID, time.Time) (*big.Int, error) {
+func (e *erroringWorkspaceRepo) MonthToDateSpendCredits(context.Context, uuid.UUID, time.Time) (*big.Int, error) {
 	return nil, e.err
 }
 
@@ -634,8 +634,8 @@ func (m *mixedHealthRepo) ListWorkspacesWithBudget(context.Context) ([]uuid.UUID
 func (m *mixedHealthRepo) StampAlertFired(ctx context.Context, id uuid.UUID, firedAt, period time.Time) error {
 	return m.healthy.StampAlertFired(ctx, id, firedAt, period)
 }
-func (m *mixedHealthRepo) MonthToDateSpendBDT(ctx context.Context, ws uuid.UUID, p time.Time) (*big.Int, error) {
-	return m.healthy.MonthToDateSpendBDT(ctx, ws, p)
+func (m *mixedHealthRepo) MonthToDateSpendCredits(ctx context.Context, ws uuid.UUID, p time.Time) (*big.Int, error) {
+	return m.healthy.MonthToDateSpendCredits(ctx, ws, p)
 }
 
 // TestCronSupportQueries_Live covers the cron-support queries against real
@@ -763,7 +763,7 @@ func TestServiceWorkspaceWrappers_Live(t *testing.T) {
 		t.Fatalf("unbudgeted workspace returned %s, want nil (pass-through)", capValue.String())
 	}
 
-	spend, err := svc.MonthToDateSpend(ctx, wsID, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	spend, err := svc.MonthToDateSpendCredits(ctx, wsID, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("mtd spend: %v", err)
 	}
@@ -848,8 +848,8 @@ func TestUnwiredWorkspaceSurfaceRefuses(t *testing.T) {
 	if _, err := svc.HardCapForWorkspace(ctx, uuid.New()); err == nil {
 		t.Fatal("unwired HardCapForWorkspace must refuse")
 	}
-	if _, err := svc.MonthToDateSpend(ctx, uuid.New(), time.Now()); err == nil {
-		t.Fatal("unwired MonthToDateSpend must refuse")
+	if _, err := svc.MonthToDateSpendCredits(ctx, uuid.New(), time.Now()); err == nil {
+		t.Fatal("unwired MonthToDateSpendCredits must refuse")
 	}
 }
 
@@ -915,7 +915,7 @@ func TestCronStampFailureRetries(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed alert: %v", err)
 	}
-	base.mtd[ws] = big.NewInt(500)
+	base.mtd[ws] = spendCredits(500)
 
 	stamper.failStamps = true
 	cron := budgets.NewCronEvaluator(stamper, notifier, nil)
