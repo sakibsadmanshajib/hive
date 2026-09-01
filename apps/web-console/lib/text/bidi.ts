@@ -16,6 +16,11 @@
  *   U+202A..U+202E  the two embeddings, the pop, and the two overrides
  *   U+2066..U+2069  the three isolates and the pop
  *
+ * U+200C and U+200D (the zero-width non-joiner and joiner) are deliberately
+ * NOT in this set. Bengali and the other Indic scripts this product serves use
+ * them to select ligature and conjunct forms, so stripping them would corrupt
+ * a legitimate name rather than clean it, and neither one reorders anything.
+ *
  * Removed rather than replaced with a visible marker: these characters carry
  * no meaning of their own, so a name that contained one reads exactly as its
  * letters already read without it. Genuine right-to-left text is untouched,

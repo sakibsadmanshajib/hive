@@ -63,28 +63,49 @@ control plane. No live tenant data and no live credential is involved;
 the session bearer is an unsigned local token the stub accepts.
 
 1. Issue 1652: notFound on a data miss renders inside the console shell
-  GET /console/catalog/does-not-exist-model -> HTTP 200
-  heading: Model not found
-  server HTML carries the heading: true
+  GET /console/catalog/does-not-exist-model status: 200
+  server HTML carries the not-found heading: true
   bare Next error shell present: false
   screenshot: 01-not-found-in-shell.png
 
 2. Issue 1647: Try in chat is gated on the chat capability badge
-  GET /console/catalog -> HTTP 200
-  rows in the fixture catalog: 5 (2 chat, 1 embeddings, 1 stt, 1 tts)
+  GET /console/catalog status: 200
+  fixture rows: 5 (2 chat, 1 embeddings, 1 stt, 1 tts)
   try-in-chat links rendered: 2
   the word Hidden reaches the customer: false
   hive-fast status badge reads Deprecated: true
   screenshot: 02-catalog-gated-links.png
 
 3. Issue 1649: unknown invoice id answers 404, not 500
-  GET /api/invoices/00000000-0000-0000-0000-000000000001/pdf -> HTTP 404
-  body: {"error":"Invoice not found"}
+  GET /api/invoices/00000000-0000-0000-0000-000000000001/pdf status: 404
+  response body: {"error":"Invoice not found"}
   screenshot: 03-invoice-404.png
 
 4. Issue 1653: a stored bidi override renders inert
-  GET /console/logs -> HTTP 200
+  GET /console/logs status: 200
   stored nickname (escaped): prod\u202Egnp.txt
   rendered option text: prodgnp.txt
   rendered text still carries U+202E: false
   screenshot: 04-logs-bidi-inert.png
+
+HOW TO RE-RUN THIS CAPTURE
+
+  PROOF_STUB_PORT=4599 node docs/proof/console-frontend-audit-2026-09-01/proof-stub.mjs &
+
+  cd apps/web-console
+  NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:4599 \
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=proof-anon-key \
+  NEXT_PUBLIC_APP_URL=http://127.0.0.1:3199 \
+  CONTROL_PLANE_BASE_URL=http://127.0.0.1:4599 \
+  npx next build && npx next start -p 3199 &
+
+  PROOF_APP_URL=http://127.0.0.1:3199 PROOF_STUB_URL=http://127.0.0.1:4599 \
+  PROOF_ANON_KEY=proof-anon-key PROOF_OUT_DIR=/tmp/console-audit-shots \
+  PROOF_APP_DIR="$PWD/apps/web-console" \
+  node docs/proof/console-frontend-audit-2026-09-01/proof-shots.mjs
+
+Every line under CAPTURES is an assertion, not a recording: the harness exits
+non-zero and writes no screenshot when one of them is false. Verified by
+pointing PROOF_APP_URL at the stub instead of the console, which failed with
+"claim failed: GET /console/catalog/does-not-exist-model status was 404,
+expected 200".

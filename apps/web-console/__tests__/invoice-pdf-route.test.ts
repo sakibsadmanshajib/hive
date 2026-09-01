@@ -27,7 +27,7 @@ async function callRoute(upstream: Response): Promise<Response> {
   process.env.CONTROL_PLANE_BASE_URL = "http://control-plane.test";
   vi.stubGlobal("fetch", vi.fn(async (): Promise<Response> => upstream));
   vi.resetModules();
-  const { GET } = await import("./route");
+  const { GET } = await import("@/app/api/invoices/[id]/pdf/route");
   return GET(
     new Request(`http://console.test/api/invoices/${INVOICE_ID}/pdf`),
     { params: Promise.resolve({ id: INVOICE_ID }) },

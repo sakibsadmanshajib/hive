@@ -22,6 +22,8 @@ async function requireUser(): Promise<Response | null> {
   return null;
 }
 
+const GENERIC_FAILURE = "Could not resolve the invoice PDF. Please try again.";
+
 // Customer-facing text, chosen by status class alone. The upstream message is
 // never forwarded: it is written by the control plane for operators and can
 // name internal detail, which the provider-blind rule keeps off a customer
@@ -30,7 +32,7 @@ function pdfErrorMessage(status: number): string {
   if (status === 404) return "Invoice not found";
   if (status === 403) return "You do not have access to this invoice.";
   if (status === 400) return "That invoice reference is not valid.";
-  return "Could not resolve the invoice PDF. Please try again.";
+  return GENERIC_FAILURE;
 }
 
 export async function GET(
@@ -63,7 +65,7 @@ export async function GET(
       );
     }
     return NextResponse.json(
-      { error: pdfErrorMessage(500) },
+      { error: GENERIC_FAILURE },
       { status: 500 },
     );
   }

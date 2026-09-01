@@ -5,7 +5,13 @@ import { createServer } from "node:http";
 // fixtures, so the screenshots exercise the real built console against known
 // rows rather than live tenant data.
 
-const PORT = 4599;
+// Environment only, and required, so two worktrees can run this at once without
+// racing for a port. PROOF_STUB_PORT must match the PROOF_STUB_URL the console
+// under test was built with and the capture harness reads.
+const PORT = Number(process.env.PROOF_STUB_PORT);
+if (!Number.isInteger(PORT) || PORT <= 0) {
+  throw new Error("PROOF_STUB_PORT is required and must be a port number");
+}
 const RLO = "\u202E";
 
 const USER = {
