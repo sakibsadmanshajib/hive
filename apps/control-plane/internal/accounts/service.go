@@ -710,6 +710,17 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 // the 'MEMBER' signup inserted, so platform.WorkspaceAdminGate answered 403 to
 // a real co-owner. Any future writer of that column belongs here too.
 //
+// A future DELETER does NOT, and that is the trap (issue #1668). There is no
+// production DELETE against public.account_memberships today, and when member
+// removal ships, calling this helper from it will be a silent no-op:
+// signup.SyncTenantMembershipRole inner joins public.account_memberships on
+// status = 'active', so with the row gone it matches nothing, reports
+// reason = "no_match", and leaves a tenant_users OWNER standing with
+// WorkspaceAdminGate still honouring it. A removal path must demote
+// public.tenant_users explicitly, in the same transaction as the delete, and
+// must move scripts/check-tenant-role-divergence.sh's orphan_owners class from
+// printed to failing at the same time.
+//
 // callSite names the caller in the log line, since the two failure modes need
 // different follow up: a Members page change can be re-issued to retry the
 // sync, while an invitation is consumed and cannot.

@@ -118,6 +118,23 @@ fi
 # is reported. Measured rather than assumed, against the live box on
 # 2026-09-01, which is how orphan_owners below came to be its own class.
 #
+# The eight numbers are NOT a partition of the examined rows: the classes
+# overlap nothing, and together they cover less than everything. Subtracting
+# them from `examined` does not yield a count of healthy rows. An ACTIVE ADMIN
+# row whose ACTIVE membership says 'member', for instance, is in no class at
+# all, correctly: ADMIN has no account_memberships counterpart and
+# SyncTenantMembershipRole's CASE ends in ELSE tu.role.
+#
+# One consequence of failing on zero examined rows, stated so a future
+# deployment path does not inherit it by surprise: a genuinely empty database
+# fails this check, so a first deploy against a freshly created database fails
+# here until something has been provisioned. That is deliberate for the only
+# consumer this has (deploy-demo-box.yml, against a box reporting 68 pairs),
+# because zero of zero and zero of sixty eight printed the same line before,
+# and the error message names exactly what to look at. An Enterprise install
+# path that runs this against an empty database wants a different answer, and
+# should decide that explicitly rather than by copying this step.
+#
 # What each one means, and why it is on the side of the line it is on:
 #
 #   examined            pairs of (tenant_users row, mapped account) considered.
@@ -142,6 +159,29 @@ fi
 #                       scripts/seed-owui-e2e-user.py, which never writes
 #                       account_memberships. Worth watching, not worth
 #                       blocking a deploy on.
+#
+#                       READ THIS BEFORE SHIPPING MEMBER REMOVAL (issue
+#                       #1668). This class is printed rather than failed
+#                       because it cannot express a real revocation TODAY, not
+#                       because of anything the predicate guarantees. A
+#                       revocation can only be a role change, which leaves an
+#                       ACTIVE membership that disagrees and lands in
+#                       stale_grants above, or a membership DELETE, which
+#                       lands here and cannot happen: there is no DELETE FROM
+#                       public.account_memberships in production code, no
+#                       RemoveMember or DeleteMembership repository method,
+#                       and account_memberships.status is constrained to
+#                       'active' or 'invited' (20260328_01), so there is no
+#                       removed state to revoke with. The day a remove member
+#                       path ships, a genuine stale grant silently downgrades
+#                       from failing to printed. The obvious guard is a trap:
+#                       calling syncTenantRole from that path is a SILENT
+#                       NO-OP, because SyncTenantMembershipRole inner joins
+#                       account_memberships on status = 'active' and matches
+#                       nothing once the row is gone, so it reports no_match
+#                       and leaves the OWNER row standing. A removal path must
+#                       demote public.tenant_users EXPLICITLY, and must move
+#                       this class into the failing group in the same change.
 #   stale_denials       FAILS, and only for tenant_users role 'MEMBER'. That
 #                       is the exact class
 #                       20260901_01_tenant_users_role_promote_backfill.sql
