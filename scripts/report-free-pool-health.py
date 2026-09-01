@@ -104,6 +104,26 @@ WINDOW_SCAN_LIMIT = 8000
 # it is the one that needs a human to act.
 DAILY_WINDOW = re.compile(r"PerDay|requests per day|tokens per day|\bRPD\b|\bTPD\b", re.I)
 
+# ... unless a SHORTER window is named too, in which case the shorter one wins.
+#
+# Half of WINDOW_HINT's vocabulary is unstructured: it will pull "requests per
+# day" out of free-form prose, and providers do quote a daily figure while
+# refusing on a per-minute one ("rate limit reached ... on requests per minute
+# (RPM): Limit 30 ... 10000 requests per day"). Classifying that as daily would
+# print the membership remedy, and acting on it removes a member that is back in
+# seconds. The two misreadings are not symmetric: reading a daily exhaustion as
+# a burst leaves the pool exactly where this issue found it, while reading a
+# burst as daily exhaustion destroys capacity, so the tie goes to the shorter
+# window.
+#
+# Only the tokens WINDOW_HINT can actually emit are listed, since the hint is a
+# join of its own matches and never free prose.
+#
+# Deliberately NOT keyed on the retryDelay instead: Google returned
+# 'retryDelay': '34s' on a spent PER-DAY quota, so a short delay is not evidence
+# of a short window. That is a measured counterexample, in the fixture below.
+SHORTER_WINDOW = re.compile(r"PerMinute|PerHour|\bRPM\b|\bTPM\b", re.I)
+
 
 def _window_hint(error_text: str) -> str:
     """Pull the quota window and retry hint out of the full provider message."""
@@ -140,7 +160,7 @@ def _render(payload: dict, redact) -> list[str]:
 
         if RATE_LIMITED.search(error_text):
             hint = _window_hint(error_text)
-            daily = bool(DAILY_WINDOW.search(hint))
+            daily = bool(DAILY_WINDOW.search(hint)) and not SHORTER_WINDOW.search(hint)
             label = "DAILY QUOTA EXHAUSTED MEMBER" if daily else "RATE LIMITED MEMBER"
             lines.append(redact(f"  {label}: {model} -- {detail}"))
             if hint:
@@ -326,6 +346,37 @@ def _selfcheck() -> int:
     assert "DAILY QUOTA EXHAUSTED" not in joined, (
         "a per-minute burst must not be reported as a spent daily allowance: "
         "acting on that advice removes a member that is back in seconds"
+    )
+    assert "routes around it" in joined, joined
+
+    # The same, with the provider quoting a DAILY figure inside a PER-MINUTE
+    # refusal, which is how Groq words its 429. Half of WINDOW_HINT's vocabulary
+    # is unstructured prose, so both windows land in the hint and only the
+    # shorter one is the truth about why this request was refused. Wording taken
+    # from Groq's rate-limit documentation, https://console.groq.com/docs/
+    # rate-limits, which publishes RPM 30 and RPD 1K side by side for this model.
+    minute_limited_quoting_a_daily_figure = {
+        "healthy_count": 1,
+        "unhealthy_count": 1,
+        "unhealthy_endpoints": [
+            {
+                "model": "groq/qwen/qwen3.8-27b",
+                "error": (
+                    "litellm.RateLimitError: RateLimitError: Error code: 429 - "
+                    "{'error': {'message': 'Rate limit reached for model "
+                    "qwen/qwen3.8-27b in organization org_redacted on requests "
+                    "per minute (RPM): Limit 30, Used 30. You are allowed 1000 "
+                    "requests per day on this plan. Please try again in 2s.', "
+                    "'code': 'rate_limit_exceeded'}}"
+                ),
+            }
+        ],
+    }
+    joined = "\n".join(_render(minute_limited_quoting_a_daily_figure, plain))
+    assert "DAILY QUOTA EXHAUSTED" not in joined, (
+        "a per-minute refusal that merely QUOTES the daily allowance must not "
+        "be classified daily: the printed remedy is to take the member out of "
+        "the pool, and here it is back in two seconds"
     )
     assert "routes around it" in joined, joined
 
