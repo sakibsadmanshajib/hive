@@ -218,6 +218,21 @@ var paidCompletionExceptions = []paidCompletionException{
 			"does spend on it. That job is gated on workflow_dispatch, so no ordinary deploy reaches " +
 			"it, and it is the case to weigh when the owner decides.",
 	},
+	{
+		alias:    "hive-default",
+		bindings: []string{"OWUI_DEFAULT_MODEL"},
+		surfaces: []string{".github/workflows/deploy-demo-box.yml"},
+		reason: "Not a CI call. This is the alias a new conversation opens on in the chat front end, " +
+			"and it reaches only the DEPLOYED demo box: docker-compose.yml's DEFAULT_MODELS resolves " +
+			"to the upstream-free hive-free unless this workflow overrides it, so every lane that " +
+			"starts a stack from that file, the nightly chat end-to-end run included, still opens on " +
+			"a free alias. Moving this one changes what a customer's first message costs, which is a " +
+			"product decision about answer quality rather than a pipeline spend, so it is flagged " +
+			"here rather than taken. Worth recording that it is not a regression either: before " +
+			"issue #1626 no default was configured at all and the front end fell through to the " +
+			"first entry of an alphabetically sorted catalogue, deepseek-v4-flash, which is also " +
+			"paid. The CI half of that behaviour is what this change actually improved.",
+	},
 }
 
 // appliesTo reports whether this exception covers a specific binding. Both

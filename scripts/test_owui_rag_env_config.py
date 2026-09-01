@@ -1504,16 +1504,38 @@ def test_unset_default_models_leaves_the_persisted_value_alone() -> None:
         assert config.stored["ui.default_models"] == "some-local-model", config.stored
 
 
-def test_compose_opens_new_conversations_on_the_hive_default_alias() -> None:
+def test_compose_names_a_default_model_and_keeps_ci_on_a_free_one() -> None:
     """The reconcile only helps if compose names a value. Asserted against the
     file because an unset variable is not an error anywhere: it silently
-    restores the alphabetical-first fallback this fixes."""
+    restores the alphabetical-first fallback this fixes.
+
+    The committed default has to be upstream-free. Every lane that starts a
+    stack from this file opens its conversations on whatever it resolves to,
+    so a paid alias here is a pipeline spending real budget on a schedule;
+    TestNoCISurfaceCallsAPaidCompletionModel enforces that separately and this
+    states the same requirement where the value is read."""
     compose = (
         Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
     ).read_text(encoding="utf-8")
     assert (
-        'DEFAULT_MODELS: "hive-default"' in compose
+        "DEFAULT_MODELS: ${OWUI_DEFAULT_MODEL:-hive-free}" in compose
     ), "docker-compose.yml must name the alias new chats open on (issue #1626)"
+
+
+def test_the_deploy_workflow_gives_the_demo_box_the_product_default() -> None:
+    """The other half of that split. The compose default keeps pipelines off
+    the paid catalogue; the deployed box is what #1626 is actually about, and
+    it gets `hive-default` from the deploy workflow's environment, which wins
+    over the box's own .env during interpolation."""
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "deploy-demo-box.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        'OWUI_DEFAULT_MODEL: "hive-default"' in workflow
+    ), "deploy-demo-box.yml must give the demo box its product default (issue #1626)"
 
 
 def test_ui_enable_signup_is_reconciled() -> None:

@@ -1432,11 +1432,26 @@ services:
       # above rely on. Confirm after deploying with
       # `curl -s https://<chat-host>/api/config` and check default_models.
       #
-      # A deployment whose catalogue has no `hive-default` edits this line. It
-      # degrades quietly rather than breaking: the front end filters the
-      # resolved default against the models it was actually served and falls
-      # back to the first available one when the named alias is not among them.
-      DEFAULT_MODELS: "hive-default"
+      # The default here is upstream-free on purpose, and the demo box's paid
+      # alias arrives from deploy-demo-box.yml's OWUI_DEFAULT_MODEL instead.
+      # Every lane that starts a stack from this file, including the nightly
+      # chat end-to-end run, opens its conversations on whatever this resolves
+      # to, so a paid alias committed here would be a pipeline spending real
+      # budget on every scheduled run. That is what
+      # TestNoCISurfaceCallsAPaidCompletionModel enforces, and it caught this
+      # line on the first push of the change.
+      #
+      # Worth stating because it reads like a downgrade and is not: before this
+      # variable existed the front end fell through to the first entry of an
+      # alphabetically sorted catalogue, which is `deepseek-v4-flash`, also
+      # paid. CI was already opening on a paid alias, just without naming one.
+      #
+      # A deployment whose catalogue has neither alias sets OWUI_DEFAULT_MODEL
+      # to one of its own. It degrades quietly rather than breaking: the front
+      # end filters the resolved default against the models it was actually
+      # served and falls back to the first available one when the named alias
+      # is not among them.
+      DEFAULT_MODELS: ${OWUI_DEFAULT_MODEL:-hive-free}
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       # Issue #1063 credits banner: lets the chat backend read the signed-in
       # user's tenant balance from control-plane behind its internal token.

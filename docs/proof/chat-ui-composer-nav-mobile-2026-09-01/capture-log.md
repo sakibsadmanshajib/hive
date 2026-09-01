@@ -68,6 +68,14 @@ open_webui.config:seed_registered_defaults - hive: reconciled Open WebUI config 
 ```
 
 and `/api/config`, read as a signed-in user, then answers `"hive-default"`.
+
+`hive-default` is what the DEPLOYED box receives, from `deploy-demo-box.yml`'s
+`OWUI_DEFAULT_MODEL`. `docker-compose.yml`'s committed default is the
+upstream-free `hive-free`, so no pipeline that starts a stack from that file
+opens its conversations on a paid alias. This capture therefore exercises the
+deployed value, which is the one issue #1626 is about. The split arrived after
+the first push, when `TestNoCISurfaceCallsAPaidCompletionModel` correctly
+flagged a paid completion alias committed to a CI surface.
 Read unauthenticated it still answers nothing at all, because `main.py` only
 includes `default_models` in the payload for a signed-in user; that is upstream
 behaviour and not a symptom.
