@@ -95,7 +95,9 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
       header: "Capabilities",
       cell: (row) =>
         row.capability_badges.length === 0 ? (
-          <span className="text-xs text-[var(--color-ink-3)]">—</span>
+          <span aria-hidden="true" className="text-xs text-[var(--color-ink-3)]">
+            —
+          </span>
         ) : (
           <div className="flex flex-wrap gap-1">
             {row.capability_badges.map((badge) => (
@@ -170,7 +172,9 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
             <ArrowUpRight size={12} aria-hidden="true" />
           </a>
         ) : (
-          <span className="text-xs text-[var(--color-ink-3)]">—</span>
+          <span aria-hidden="true" className="text-xs text-[var(--color-ink-3)]">
+            —
+          </span>
         ),
     },
   ];

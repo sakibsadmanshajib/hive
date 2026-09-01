@@ -272,12 +272,24 @@ function parseJsonValue(text: string): JsonValue | null {
   }
 }
 
-// Every string the control plane returns reaches the console through this one
-// reader, so it is where Unicode bidi control characters are neutralised:
-// nicknames, member names, workspace display names and the rest (issue #1653).
-// At the decode boundary rather than per render site, because the rows already
-// stored carrying one cannot be fixed by input validation, and a guard added
-// component by component is one component away from being missed.
+// Scalar strings from the control plane are read here, and string arrays through
+// readStringArrayField below, which strips the same set. Between the two, every
+// string this client decodes is neutralised of Unicode bidi control characters:
+// nicknames, member names, workspace display names, group names, capability
+// badges (issue #1653). At the decode boundary rather than per render site,
+// because the rows already stored carrying one cannot be fixed by input
+// validation, and a guard added component by component is one component away
+// from being missed.
+//
+// Not covered, and deliberately named rather than implied: a page that reads an
+// upstream body with its own local parser instead of this client. The console
+// has one, app/invitations/accept/page.tsx, which strips at its own reader.
+//
+// One field here is not a label: getInvoicePdfUrl reads the signed storage URL
+// through this reader on its fallback path. A percent-encoded URL cannot
+// contain any codepoint in the strip set, so it is a genuine no-op today, but
+// widening that set to characters a URL can carry would silently break the
+// redirect rather than tidy a name. Read lib/text/bidi.ts before adding one.
 function readStringField(source: JsonObject, key: string): string | null {
   const value = source[key];
   return typeof value === "string" ? stripBidiControls(value) : null;
@@ -323,7 +335,7 @@ function readStringArrayField(source: JsonObject, key: string): string[] {
   const result: string[] = [];
   for (const item of arr) {
     if (typeof item === "string") {
-      result.push(item);
+      result.push(stripBidiControls(item));
     }
   }
   return result;
@@ -1715,15 +1727,11 @@ function decodeApiKey(value: JsonValue): ApiKey | null {
     : { kind: "", label: "" };
 
   const rawAllowlist = readObjectField(value, "allowlist_summary");
-  const rawGroupNames = rawAllowlist ? readArrayField(rawAllowlist, "group_names") : null;
-  const groupNames: string[] = [];
-  if (rawGroupNames) {
-    for (const gn of rawGroupNames) {
-      if (typeof gn === "string") {
-        groupNames.push(gn);
-      }
-    }
-  }
+  // Through readStringArrayField, not a hand-rolled loop, so the bidi strip in
+  // that reader covers group names too (issue #1653 review).
+  const groupNames = rawAllowlist
+    ? readStringArrayField(rawAllowlist, "group_names")
+    : [];
   const allowlistSummary = rawAllowlist
     ? {
         mode: readStringField(rawAllowlist, "mode") ?? "",
@@ -1772,15 +1780,8 @@ function decodeCatalogModel(value: JsonValue): CatalogModel | null {
     return null;
   }
 
-  const rawBadges = readArrayField(value, "capability_badges");
-  const capabilityBadges: string[] = [];
-  if (rawBadges) {
-    for (const badge of rawBadges) {
-      if (typeof badge === "string") {
-        capabilityBadges.push(badge);
-      }
-    }
-  }
+  // Same shared reader as everywhere else, so badges are stripped too.
+  const capabilityBadges = readStringArrayField(value, "capability_badges");
 
   const rawPricing = readObjectField(value, "pricing");
   // No `?? 0` here. A variable-price alias sends null for both, and coercing
@@ -3255,6 +3256,12 @@ export async function getWorkspaceInvoice(
 // getInvoicePdfUrl performs the redirect handshake server-side and returns the
 // signed Supabase Storage URL. The control-plane responds with 302 + Location;
 // fetch's `redirect: "manual"` lets us read the header without auto-following.
+//
+// Null means one thing only: the control plane says this invoice does not
+// exist. Every other unusable answer throws, so the route reports a signer or
+// proxy defect as a gateway failure rather than telling the customer their
+// invoice is missing and sending them to support with the wrong question
+// (issue #1649 review).
 export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(
@@ -3263,7 +3270,13 @@ export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null
   );
   if (response.status === 302 || response.status === 301) {
     const location = response.headers.get("Location");
-    return location ?? null;
+    if (!location) {
+      throw new ControlPlaneError(
+        502,
+        "invoice PDF redirect carried no Location header",
+      );
+    }
+    return location;
   }
   // An id that matches no invoice is a null, not a throw. The control plane
   // answers 404 for it correctly (invoices/service.go returns
@@ -3282,8 +3295,12 @@ export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null
   // Some edge proxies follow redirects despite `redirect: manual` — fall back
   // to body parse in that case.
   const payload = parseJsonValue(await readResponseText(response));
-  if (isJsonObject(payload)) {
-    return readStringField(payload, "url");
+  const url = isJsonObject(payload) ? readStringField(payload, "url") : null;
+  if (!url) {
+    throw new ControlPlaneError(
+      502,
+      "invoice PDF success carried no url field",
+    );
   }
-  return null;
+  return url;
 }

@@ -24,14 +24,27 @@ async function requireUser(): Promise<Response | null> {
 
 const GENERIC_FAILURE = "Could not resolve the invoice PDF. Please try again.";
 
+// The upstream statuses this route forwards rather than reporting as a gateway
+// failure. 401 and 429 are here because neither is a Hive outage and both have
+// an action attached: a rejected bearer means re-authenticate (requireUser()
+// above only proves Supabase still knows the user, not that the control plane
+// accepted the token), and a rate limit means back off. Collapsing either into
+// 502 is the same defect class as #1649 one level down.
+const FORWARDED_STATUSES = new Set([400, 401, 403, 404, 429]);
+
 // Customer-facing text, chosen by status class alone. The upstream message is
 // never forwarded: it is written by the control plane for operators and can
 // name internal detail, which the provider-blind rule keeps off a customer
 // response (CLAUDE.md, Conventions).
+//
+// No terminal full stop on the single-clause strings, since they render as
+// labels beside each other; GENERIC_FAILURE is two sentences and keeps its.
 function pdfErrorMessage(status: number): string {
   if (status === 404) return "Invoice not found";
-  if (status === 403) return "You do not have access to this invoice.";
-  if (status === 400) return "That invoice reference is not valid.";
+  if (status === 403) return "You do not have access to this invoice";
+  if (status === 400) return "That invoice reference is not valid";
+  if (status === 401) return "Your session has expired, sign in again";
+  if (status === 429) return "Too many invoice downloads, try again shortly";
   return GENERIC_FAILURE;
 }
 
@@ -55,10 +68,7 @@ export async function GET(
     // forwarded, upstream text logged and dropped.
     console.error("invoice pdf proxy: could not resolve the signed URL", err);
     if (err instanceof ControlPlaneError) {
-      const status =
-        err.status === 400 || err.status === 403 || err.status === 404
-          ? err.status
-          : 502;
+      const status = FORWARDED_STATUSES.has(err.status) ? err.status : 502;
       return NextResponse.json(
         { error: pdfErrorMessage(err.status) },
         { status },

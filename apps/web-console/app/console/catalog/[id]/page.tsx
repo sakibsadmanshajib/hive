@@ -55,6 +55,15 @@ export default async function ModelDetailPage(
     // nothing on first load in Next 16.3.x. Full reasoning, and why the
     // role-gated pages must keep notFound() instead, in the component (issue
     // #1652).
+    //
+    // Status note, because this changed and the change is invisible in the
+    // diff: this branch answers HTTP 200, where notFound() answered 404. The
+    // status carries nothing on this page (an id invisible to the workspace
+    // and an id that never existed render the same page either way), and the
+    // surfaces where it does carry something, /console/providers,
+    // /console/feature-gates and /console/marketplace, keep notFound() and
+    // keep their 404. Anything keyed on a 404 from /console/catalog/* sees a
+    // 200 from here on. Tracked in issue #1670.
     return (
       <ConsoleNotFound
         viewer={viewer}

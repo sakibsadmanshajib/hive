@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { stripBidiControls } from "@/lib/text/bidi";
 import { appendNextParam } from "@/lib/auth/next-target";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -32,7 +33,14 @@ function readErrorBody(text: string): InvitationFailure {
     const candidate = payload as InvitationErrorBody;
     return {
       code: typeof candidate.code === "string" ? candidate.code : null,
-      message: typeof candidate.error === "string" ? candidate.error : null,
+      // This page parses the upstream body itself rather than through
+      // lib/control-plane/client.ts, so it carries its own bidi strip: the
+      // message is rendered as text and would reorder the copy around it
+      // (issue #1653 review).
+      message:
+        typeof candidate.error === "string"
+          ? stripBidiControls(candidate.error)
+          : null,
     };
   } catch {
     return { code: null, message: null };

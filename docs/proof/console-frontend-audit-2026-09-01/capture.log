@@ -72,8 +72,8 @@ the session bearer is an unsigned local token the stub accepts.
   GET /console/catalog status: 200
   fixture rows: 5 (2 chat, 1 embeddings, 1 stt, 1 tts)
   try-in-chat links rendered: 2
-  the word Hidden reaches the customer: false
-  hive-fast status badge reads Deprecated: true
+  Hidden badges rendered to the customer: 0
+  Deprecated badges rendered (hive-fast): 1
   screenshot: 02-catalog-gated-links.png
 
 3. Issue 1649: unknown invoice id answers 404, not 500
@@ -104,8 +104,29 @@ HOW TO RE-RUN THIS CAPTURE
   PROOF_APP_DIR="$PWD/apps/web-console" \
   node docs/proof/console-frontend-audit-2026-09-01/proof-shots.mjs
 
+
+IS THE HARNESS ITSELF HONEST
+
 Every line under CAPTURES is an assertion, not a recording: the harness exits
-non-zero and writes no screenshot when one of them is false. Verified by
-pointing PROOF_APP_URL at the stub instead of the console, which failed with
-"claim failed: GET /console/catalog/does-not-exist-model status was 404,
-expected 200".
+non-zero and writes no screenshot when one is false. Two of them were checked
+against a build that genuinely fails them, rather than being trusted:
+
+  1. PROOF_APP_URL pointed at the stub rather than the console:
+     exit 1, "claim failed: GET /console/catalog/does-not-exist-model status
+     was 404, expected 200".
+
+  2. The catalog badge map reverted to render "Hidden" (the pre-fix behaviour of
+     issue 1647), rebuilt and served:
+     exit 1, "claim failed: Hidden badges rendered to the customer was 1,
+     expected 0". Screenshot from that run shows the Hidden badge on hive-fast.
+
+That second check is why the two badge claims are counted on elements
+(getByText with exact:true) rather than pattern-matched over the page body. An
+earlier revision of this harness used a word-boundary regex for Hidden against
+page.textContent("body"), which was doubly wrong: the escape made it match a
+literal backslash-b, and even repaired, textContent concatenates table cells
+with no separator ("$0HiddenTry in chat"), so the word boundary never matched
+a badge that was plainly on screen. The /Deprecated/ half of the same pair was
+matching this stub fixture summary text rather than the badge, so it passed for
+the wrong reason. Both were caught in review of PR #1663 and both now fail when
+the product regresses.

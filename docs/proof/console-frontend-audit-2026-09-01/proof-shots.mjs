@@ -157,9 +157,19 @@ await shot("02-catalog-gated-links", "/console/catalog", async (status) => {
   note("  fixture rows: 5 (2 chat, 1 embeddings, 1 stt, 1 tts)");
   const links = await page.getByRole("link", { name: /try in chat/i }).count();
   claim("try-in-chat links rendered", links, 2);
-  const body = await page.textContent("body");
-  claim("the word Hidden reaches the customer", /\\bHidden\\b/.test(body), false);
-  claim("hive-fast status badge reads Deprecated", /Deprecated/.test(body), true);
+  // Asserted on the badge element, not on a regex over the whole body text.
+  // Two reasons, both learned the hard way here: page.textContent("body")
+  // concatenates cells with no separator, so "$0HiddenTry in chat" defeats a
+  // word-boundary pattern even when the badge is on screen; and /Deprecated/
+  // over the body matched this fixture summary text rather than the badge, so
+  // it passed for the wrong reason. getByText with exact:true matches an
+  // element whose own text is exactly that word, which is the badge.
+  const hiddenBadges = await page.getByText("Hidden", { exact: true }).count();
+  claim("Hidden badges rendered to the customer", hiddenBadges, 0);
+  const deprecatedBadges = await page
+    .getByText("Deprecated", { exact: true })
+    .count();
+  claim("Deprecated badges rendered (hive-fast)", deprecatedBadges, 1);
 });
 note("");
 

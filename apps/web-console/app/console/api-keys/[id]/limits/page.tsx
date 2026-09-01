@@ -77,6 +77,15 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       // component. Safe here for the same reason as the catalog detail page:
       // an id that belongs to another account and an id that never existed
       // both read as 404 upstream, so both render this one page.
+      //
+      // Status note, because this changed and the change is invisible in the
+      // diff: this branch answers HTTP 200, where notFound() answered 404.
+      // Both inputs already collapse upstream (a key belonging to another
+      // account and a key that never existed are both a control-plane 404),
+      // so the status carried nothing here. The role-gated surfaces keep
+      // notFound() and keep their 404. Anything keyed on a 404 from
+      // /console/api-keys/*/limits sees a 200 from here on. Tracked in issue
+      // #1670.
       return (
         <ConsoleNotFound
           viewer={viewer}
