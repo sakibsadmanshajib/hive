@@ -12,10 +12,24 @@
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 
-const BASE = process.env.OWUI_URL ?? 'http://proof1627-owui:8080';
+const BASE = process.env.OWUI_URL ?? 'http://localhost:8080';
 const OUT = process.env.OUT_DIR ?? '/out';
 const LABEL = process.env.LABEL ?? 'after';
-const WAV = process.env.WAV ?? '/work/speech.wav';
+
+// The capture signs in, so the password crosses this connection. Plain HTTP is
+// allowed only to loopback, which is where this harness is meant to point: the
+// browser container shares the chat container's network namespace, so the
+// front end is on localhost. Anything else has to be HTTPS.
+const target = new URL(BASE);
+const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(target.hostname);
+if (target.protocol !== 'https:' && !loopback) {
+	throw new Error(`refusing to send credentials in cleartext to ${target.host}`);
+}
+
+const polls = Number(process.env.POLLS ?? 32);
+if (!Number.isInteger(polls) || polls < 1) {
+	throw new Error(`POLLS must be a positive integer, got ${process.env.POLLS}`);
+}
 
 const EMAIL = `voice-proof-${LABEL}@hive.invalid`;
 // Supplied by the caller, with no default. The account is throwaway and the
@@ -170,13 +184,13 @@ const overlayState = async (page) => {
 };
 
 const run = async () => {
+	// No --use-fake-device-for-media-capture here on purpose: it enumerates
+	// zero audio devices in this container, on both the headless shell and the
+	// full chromium channel, which is why the microphone is synthesised in the
+	// page instead. Carrying the flag would imply a mechanism that is not
+	// running.
 	const browser = await chromium.launch({
-		args: [
-			'--use-fake-device-for-media-capture',
-			'--use-fake-ui-for-media-stream',
-			`--use-file-for-fake-audio-capture=${WAV}%noloop`,
-			'--autoplay-policy=no-user-gesture-required'
-		]
+		args: ['--autoplay-policy=no-user-gesture-required']
 	});
 
 	// The account is created through the API rather than by driving the sign
@@ -254,7 +268,6 @@ const run = async () => {
 	// The fake microphone speaks from 1s to 3s, so a working detector stops the
 	// recorder about two seconds after that. The window runs well past it, to
 	// show what the microphone does for the rest of the call.
-	const polls = Number(process.env.POLLS ?? 32);
 	const shotAt = new Set([1, 4, 9, 15, 19, 21, 23, 31, Math.floor(polls / 2), polls - 1]);
 	for (let i = 0; i < polls; i++) {
 		const at = ((Date.now() - opened) / 1000).toFixed(2);

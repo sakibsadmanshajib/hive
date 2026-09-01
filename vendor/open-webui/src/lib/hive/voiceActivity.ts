@@ -21,6 +21,10 @@ export interface VoiceActivityConfig {
 	floorMultiplier: number;
 	/** Weight of the running noise floor estimate, per frame, while idle. */
 	floorSmoothing: number;
+	/** Ceiling on the tracked floor, so the estimate cannot run away. */
+	maxNoiseFloor: number;
+	/** Time spent listening to the room before any utterance may begin. */
+	calibrationMs: number;
 	/** Quiet time after speech that ends an utterance. */
 	silenceMs: number;
 	/** Shorter than this is a door or a keystroke, not a word. */
@@ -29,17 +33,25 @@ export interface VoiceActivityConfig {
 	maxUtteranceMs: number;
 }
 
-// ponytail: these six numbers are the calibration knobs, and a room is not a
+// ponytail: these numbers are the calibration knobs, and a room is not a
 // spreadsheet. minRms is set for a browser capture with automatic gain
 // control on, where speech lands around 0.05 to 0.2 RMS and a quiet room sits
 // under 0.01. Raise minRms if the overlay starts on room noise, lower it if a
-// soft speaker is not heard. Everything else is deliberately fixed: there is
-// no settings surface for any of this, so an override here is the only knob,
-// and a knob nothing writes to would just be a lie in the settings panel.
+// soft speaker is not heard. There is no settings surface for any of this, so
+// an override here is the only knob, and a knob nothing writes to would just
+// be a lie in the settings panel.
 export const DEFAULT_VOICE_ACTIVITY_CONFIG: VoiceActivityConfig = Object.freeze({
 	minRms: 0.015,
 	floorMultiplier: 2.5,
 	floorSmoothing: 0.98,
+	// A room this loud drowns quiet speech anyway, so tracking past it buys
+	// nothing and costs the ability to hear anyone at all.
+	maxNoiseFloor: 0.05,
+	// Half a second of listening before the first utterance may begin. Without
+	// it a call opened into an already-loud room has no quiet frame to learn
+	// from, so the first frame starts an utterance, the hard cap ends it, the
+	// noise is transcribed, and it repeats: the reported flood, rebuilt.
+	calibrationMs: 500,
 	silenceMs: 2000,
 	// Long enough to drop a door or a keystroke, which are tens of
 	// milliseconds of audio, and short enough to keep "yes", "no" and "stop",
@@ -53,6 +65,8 @@ export const DEFAULT_VOICE_ACTIVITY_CONFIG: VoiceActivityConfig = Object.freeze(
 export interface VoiceActivityState {
 	/** Running estimate of the room, updated only while nobody is speaking. */
 	noiseFloor: number;
+	/** When this state first saw a frame, which is when calibration began. */
+	listeningSince: number | null;
 	/** When the current utterance began, or null when idle. */
 	speechStartedAt: number | null;
 	/** When this utterance was last above the threshold. */
@@ -78,6 +92,7 @@ export interface VoiceActivityStep {
 
 export const createVoiceActivityState = (): VoiceActivityState => ({
 	noiseFloor: 0,
+	listeningSince: null,
 	speechStartedAt: null,
 	lastSoundAt: null
 });
@@ -105,29 +120,36 @@ export const stepVoiceActivity = (
 	// allowed to poison the noise floor either.
 	const level = Number.isFinite(rms) && rms > 0 ? rms : 0;
 	const loud = level > speechThreshold(state, config);
+	const listeningSince = state.listeningSince ?? now;
 
 	if (state.speechStartedAt === null || state.lastSoundAt === null) {
-		if (loud) {
+		// Nobody is speaking, so this frame is the room. Every frame counts,
+		// loud ones included: a call that opens into a noisy room only ever
+		// sees loud frames, and refusing to learn from them is what made the
+		// first frame look like speech.
+		const smoothed =
+			state.noiseFloor * config.floorSmoothing + level * (1 - config.floorSmoothing);
+		const idle: VoiceActivityState = {
+			...state,
+			listeningSince,
+			noiseFloor: Math.min(config.maxNoiseFloor, smoothed)
+		};
+
+		// The threshold is only trustworthy once the room has been measured.
+		if (loud && now - listeningSince >= config.calibrationMs) {
 			return {
-				state: { ...state, speechStartedAt: now, lastSoundAt: now },
+				state: { ...state, listeningSince, speechStartedAt: now, lastSoundAt: now },
 				action: 'start'
 			};
 		}
 
-		// Learn the room. Clamped at minRms so the estimate cannot chase its
-		// own threshold upwards until the overlay is deaf to the user.
-		const smoothed =
-			state.noiseFloor * config.floorSmoothing + level * (1 - config.floorSmoothing);
-
-		return {
-			state: { ...state, noiseFloor: Math.min(config.minRms, smoothed) },
-			action: 'idle'
-		};
+		return { state: idle, action: 'idle' };
 	}
 
 	const lastSoundAt = loud ? now : state.lastSoundAt;
 	const idle: VoiceActivityState = {
 		noiseFloor: state.noiseFloor,
+		listeningSince,
 		speechStartedAt: null,
 		lastSoundAt: null
 	};
@@ -143,5 +165,5 @@ export const stepVoiceActivity = (
 		return { state: idle, action: spoken >= config.minUtteranceMs ? 'transcribe' : 'discard' };
 	}
 
-	return { state: { ...state, lastSoundAt }, action: 'listening' };
+	return { state: { ...state, listeningSince, lastSoundAt }, action: 'listening' };
 };

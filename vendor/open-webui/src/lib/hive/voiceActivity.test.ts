@@ -46,6 +46,13 @@ const feed = (
 const frames = (rms: number, count: number, from = 0, stepMs = 16) =>
 	Array.from({ length: count }, (_, i) => ({ rms, at: from + i * stepMs }));
 
+// Nothing may start until the room has been measured, so every utterance test
+// opens with the room. Four frames past the window, so the boundary itself is
+// never what a timing assertion turns on.
+const OPENING_FRAMES = Math.ceil(cfg.calibrationMs / 16) + 4;
+const SPEECH_AT = OPENING_FRAMES * 16;
+const opening = () => frames(ROOM_RMS, OPENING_FRAMES);
+
 describe('speech threshold', () => {
 	it('never drops below the absolute minimum, however quiet the room', () => {
 		const state = { ...createVoiceActivityState(), noiseFloor: 0 };
@@ -73,6 +80,17 @@ describe('idle', () => {
 		expect(state.speechStartedAt).toBeNull();
 	});
 
+	it('never starts in a room that was already loud when the call opened', () => {
+		// Raised by the CodeRabbit review of this change, and real. A room at
+		// 0.02 RMS is over the absolute minimum and under anything anyone would
+		// call speech, and if the overlay opens into it there is no quiet frame
+		// to learn from: the first frame started an utterance, the hard cap
+		// ended it thirty seconds later, the noise was transcribed, and the
+		// whole thing repeated forever. That is the reported flood, rebuilt.
+		const { actions } = feed(frames(0.02, 3750));
+		expect(new Set(actions)).toEqual(new Set(['idle']));
+	});
+
 	it('ignores a non-finite level instead of hearing speech in it', () => {
 		const { state, actions } = feed([
 			{ rms: Number.NaN, at: 0 },
@@ -89,39 +107,51 @@ describe('idle', () => {
 		// chased itself upwards would end up deaf to the user.
 		const noisy = feed(frames(0.014, 2000)).state;
 		expect(noisy.noiseFloor).toBeGreaterThan(cfg.minRms / 2);
-		expect(noisy.noiseFloor).toBeLessThanOrEqual(cfg.minRms);
-		expect(speechThreshold(noisy, cfg)).toBeLessThanOrEqual(cfg.minRms * cfg.floorMultiplier);
+		expect(noisy.noiseFloor).toBeLessThanOrEqual(cfg.maxNoiseFloor);
+		expect(speechThreshold(noisy, cfg)).toBeLessThanOrEqual(
+			cfg.maxNoiseFloor * cfg.floorMultiplier
+		);
 
-		// Same level, two rooms: loud enough to be speech in a quiet one, not
-		// in this one.
-		const quiet = createVoiceActivityState();
-		expect(stepVoiceActivity(quiet, 0.02, 0, cfg).action).toBe('start');
-		expect(stepVoiceActivity(noisy, 0.02, 0, cfg).action).toBe('idle');
+		// Same level, two rooms, both past calibration: loud enough to be
+		// speech in the quiet one, not in this one.
+		const quiet = feed(frames(0, OPENING_FRAMES)).state;
+		expect(stepVoiceActivity(quiet, 0.02, 10000, cfg).action).toBe('start');
+		expect(stepVoiceActivity(noisy, 0.02, 10000, cfg).action).toBe('idle');
+	});
+
+	it('will not start inside the calibration window, speech or not', () => {
+		// Half a second of the room is the price of knowing what the room is.
+		// It is paid once per recorder, and the same speech one frame later is
+		// heard normally.
+		const early = stepVoiceActivity(createVoiceActivityState(), SPEECH_RMS, 0, cfg);
+		expect(early.action).toBe('idle');
+		expect(early.state.listeningSince).toBe(0);
+
+		const late = stepVoiceActivity(early.state, SPEECH_RMS, cfg.calibrationMs, cfg);
+		expect(late.action).toBe('start');
 	});
 });
 
 describe('an utterance', () => {
 	it('starts on the first frame above the threshold', () => {
-		const { state, actions } = feed([
-			...frames(ROOM_RMS, 10),
-			{ rms: SPEECH_RMS, at: 160 }
-		]);
+		const { state, actions } = feed([...opening(), { rms: SPEECH_RMS, at: SPEECH_AT }]);
 		expect(actions.at(-1)).toBe('start');
-		expect(state.speechStartedAt).toBe(160);
-		expect(state.lastSoundAt).toBe(160);
+		expect(state.speechStartedAt).toBe(SPEECH_AT);
+		expect(state.lastSoundAt).toBe(SPEECH_AT);
 	});
 
 	it('keeps listening while speech continues', () => {
-		const { actions } = feed(frames(SPEECH_RMS, 40));
-		expect(actions[0]).toBe('start');
-		expect(new Set(actions.slice(1))).toEqual(new Set(['listening']));
+		const { actions } = feed([...opening(), ...frames(SPEECH_RMS, 40, SPEECH_AT)]);
+		expect(actions[OPENING_FRAMES]).toBe('start');
+		expect(new Set(actions.slice(OPENING_FRAMES + 1))).toEqual(new Set(['listening']));
 	});
 
 	it('transcribes once the configured silence has elapsed', () => {
 		// One second of speech, then silence.
 		const { state, actions } = feed([
-			...frames(SPEECH_RMS, 63),
-			...frames(ROOM_RMS, 200, 1008)
+			...opening(),
+			...frames(SPEECH_RMS, 63, SPEECH_AT),
+			...frames(ROOM_RMS, 200, SPEECH_AT + 1008)
 		]);
 		expect(actions).toContain('transcribe');
 		expect(actions.filter((a) => a === 'transcribe')).toHaveLength(1);
@@ -134,9 +164,13 @@ describe('an utterance', () => {
 
 	it('does not transcribe before the silence has elapsed', () => {
 		const { actions } = feed([
-			...frames(SPEECH_RMS, 63),
-			...frames(ROOM_RMS, 60, 1008)
+			...opening(),
+			...frames(SPEECH_RMS, 63, SPEECH_AT),
+			...frames(ROOM_RMS, 60, SPEECH_AT + 1008)
 		]);
+		// The utterance really did start, so the absence below is the silence
+		// timer not having elapsed rather than nothing having happened.
+		expect(actions).toContain('start');
 		expect(actions).not.toContain('transcribe');
 	});
 
@@ -145,8 +179,9 @@ describe('an utterance', () => {
 		// what floods the transcription endpoint and feeds the model whatever
 		// the recogniser hallucinates out of noise.
 		const { actions } = feed([
-			{ rms: SPEECH_RMS, at: 0 },
-			...frames(ROOM_RMS, 200, 16)
+			...opening(),
+			{ rms: SPEECH_RMS, at: SPEECH_AT },
+			...frames(ROOM_RMS, 200, SPEECH_AT + 16)
 		]);
 		expect(actions).toContain('discard');
 		expect(actions).not.toContain('transcribe');
@@ -160,8 +195,9 @@ describe('an utterance', () => {
 		// picking the number, and a threshold that silently swallows "yes" is
 		// worse than one that occasionally transcribes a cough.
 		const { actions } = feed([
-			...frames(SPEECH_RMS, 19),
-			...frames(ROOM_RMS, 200, 304)
+			...opening(),
+			...frames(SPEECH_RMS, 19, SPEECH_AT),
+			...frames(ROOM_RMS, 200, SPEECH_AT + 304)
 		]);
 		expect(actions).toContain('transcribe');
 		expect(actions).not.toContain('discard');
@@ -171,10 +207,10 @@ describe('an utterance', () => {
 		// The guarantee the issue asks for: the microphone cannot stay open
 		// forever, whatever the room does. Continuous loud noise, no gap.
 		const total = Math.ceil(cfg.maxUtteranceMs / 16) + 10;
-		const { actions } = feed(frames(SPEECH_RMS, total));
+		const { actions } = feed([...opening(), ...frames(SPEECH_RMS, total, SPEECH_AT)]);
 		expect(actions).toContain('transcribe');
 		const stopIndex = actions.indexOf('transcribe');
-		expect(stopIndex * 16).toBeLessThanOrEqual(cfg.maxUtteranceMs + 16);
+		expect((stopIndex - OPENING_FRAMES) * 16).toBeLessThanOrEqual(cfg.maxUtteranceMs + 16);
 		// And the state is reset behind it, so the next frame opens a fresh
 		// utterance rather than tripping the cap again immediately.
 		expect(actions[stopIndex + 1]).toBe('start');
@@ -182,10 +218,11 @@ describe('an utterance', () => {
 
 	it('runs a second utterance after the first', () => {
 		const { actions } = feed([
-			...frames(SPEECH_RMS, 63),
-			...frames(ROOM_RMS, 200, 1008),
-			...frames(SPEECH_RMS, 63, 4300),
-			...frames(ROOM_RMS, 200, 5308)
+			...opening(),
+			...frames(SPEECH_RMS, 63, SPEECH_AT),
+			...frames(ROOM_RMS, 200, SPEECH_AT + 1008),
+			...frames(SPEECH_RMS, 63, SPEECH_AT + 4300),
+			...frames(ROOM_RMS, 200, SPEECH_AT + 5308)
 		]);
 		expect(actions.filter((a) => a === 'transcribe')).toHaveLength(2);
 		expect(actions.filter((a) => a === 'start')).toHaveLength(2);
@@ -202,11 +239,17 @@ describe('the reducer itself', () => {
 	});
 
 	it('honours an overridden config', () => {
-		const impatient: VoiceActivityConfig = { ...cfg, silenceMs: 200, minUtteranceMs: 0 };
+		const impatient: VoiceActivityConfig = {
+			...cfg,
+			calibrationMs: 0,
+			silenceMs: 200,
+			minUtteranceMs: 0
+		};
 		const { actions } = feed(
 			[...frames(SPEECH_RMS, 20), ...frames(ROOM_RMS, 40, 320)],
 			impatient
 		);
+		expect(actions[0]).toBe('start');
 		expect(actions).toContain('transcribe');
 	});
 });
