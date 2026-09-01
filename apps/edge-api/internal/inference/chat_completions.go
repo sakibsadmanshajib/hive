@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -146,6 +147,102 @@ func rawFieldPresent(f json.RawMessage) bool {
 	return len(f) > 0 && string(f) != "null"
 }
 
+// toolParamNames is the ordered list of request fields that make a request
+// tool-calling or structured-output shaped, and therefore require a
+// tool-capable route. Ordered, and in the same order as firstToolParam decides,
+// because the name is reported to the caller and the first match wins.
+//
+// Read by the fallback arm of ToolParamInBody only. The primary arm delegates
+// to firstToolParam itself, so the two surfaces cannot come to different
+// verdicts about the same body by construction rather than by two lists being
+// kept in sync.
+var toolParamNames = []string{
+	"tools",
+	"tool_choice",
+	"response_format",
+	"functions",
+	"function_call",
+	"parallel_tool_calls",
+}
+
+// ToolParamInBody returns the name of the first tool-calling or structured-output
+// parameter present in a raw OpenAI-shaped chat request body, or "" if none are.
+//
+// It DELEGATES to firstToolParam, and that is load bearing rather than tidy.
+// An earlier version decoded into a field map with exact keys, which looked
+// equivalent and was not: encoding/json matches struct field names CASE
+// INSENSITIVELY, so a body spelling `{"Tools": [...]}` populates req.Tools and
+// reads tool-shaped on the API-key surface, while an exact-key map lookup reads
+// it as carrying nothing. The session chat surface would then have dispatched
+// it with no capability check at all, which is the exact hole this function
+// exists to close, reachable by changing one letter.
+//
+// The fallback arm covers the case the map decode was originally chosen for: a
+// body that fails the typed decode for some unrelated reason (a wrongly typed
+// `stream` or `n`, say) must not read as plain and slip the gate. A field map
+// decodes anything that is a JSON object at all, and the key comparison there
+// is case folded to match what the typed decoder would have done. That arm is
+// unreachable from the API-key surface, which rejects such a body outright, so
+// there is no second verdict for it to disagree with.
+//
+// An input that is not a JSON object cannot carry a tool block either, so "" is
+// the honest answer there.
+// KNOWN BLIND SPOT, recorded rather than closed, because closing it costs more
+// than it buys and the cost lands on every plain chat turn.
+//
+// A body spelling one parameter twice still reads as plain here:
+//
+//	{"tools":[{"type":"function"}],"Tools":null}   this returns ""
+//
+// The typed decoder resolves both spellings onto one field and lets the last
+// one win, so the null overwrites the real array, while a case-sensitive
+// decoder downstream still finds a genuine `tools` array under the exact key.
+//
+// Three reasons it is recorded and not fixed. It is NOT a divergence between
+// the two surfaces, which is the property this function was reworked to
+// restore: firstToolParam answers "" for the same body, so the API-key path
+// behaves identically and the invariant above still holds. It predates this
+// change, by way of issue #118, so nothing here introduced it. And it is
+// self-harming only: with the flag unset the request routes exactly as it does
+// on main, so there is no narrowing, no cross-tenant effect and no billing
+// effect, and the worst outcome is the caller's own turn reaching a route that
+// answers 404 for tool use.
+//
+// The fix would be to fall through to the any-spelling scan below whenever the
+// typed answer is empty. That is a second full decode of EVERY plain chat turn,
+// which is the common path, spent to close a hole that only harms the sender.
+// Pinned instead by fixtures in TestToolParamInBodyAgreesWithFirstToolParam, so
+// the next reader finds a recorded answer rather than a surprise.
+//
+// ponytail: if a real caller ever trips this, the upgrade path is that
+// fall-through, and the parse cost is the thing to measure first.
+func ToolParamInBody(raw []byte) string {
+	var req ChatCompletionRequest
+	if err := json.Unmarshal(raw, &req); err == nil {
+		return firstToolParam(&req)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ""
+	}
+	// Presence is collected first and the ordered list walked second, so the
+	// reported name does not depend on map iteration order. A parameter spelled
+	// two ways in one body counts as present, which is the gating direction.
+	present := make(map[string]bool, len(fields))
+	for key, value := range fields {
+		if rawFieldPresent(value) {
+			present[strings.ToLower(key)] = true
+		}
+	}
+	for _, name := range toolParamNames {
+		if present[name] {
+			return name
+		}
+	}
+	return ""
+}
+
 // firstToolParam returns the name of the first tool-calling or structured-output
 // parameter present in the request, or "" if none are present.
 //
@@ -202,7 +299,18 @@ func guardToolCapability(ctx context.Context, o *Orchestrator, w http.ResponseWr
 		errMsg := err.Error()
 		// 422 from the control-plane signals ErrNoCapableRoute: no tool-capable
 		// route exists for this alias. Return a provider-blind 400.
-		if strings.Contains(errMsg, "422") || strings.Contains(errMsg, "no tool-capable") {
+		//
+		// The sentinel is checked first and the substring match is kept behind
+		// it: RoutingClient now wraps ErrNoToolCapableRoute, but o.routing is an
+		// interface here and a test double still fabricates the raw string.
+		//
+		// The match is on the message, never on the status. A bare "422" also
+		// matched ErrRouteNotEligible, which control-plane answers 422 for as
+		// well, so an alias whose routes were all unhealthy or all filtered out
+		// by an allowlist was told its response_format was unsupported: a claim
+		// about the request when the truth was about route availability. It
+		// also matched those three digits anywhere in a route or model id.
+		if errors.Is(err, ErrNoToolCapableRoute) || strings.Contains(errMsg, "no tool-capable") {
 			writeUnsupportedParamError(w, param, model)
 			return true
 		}

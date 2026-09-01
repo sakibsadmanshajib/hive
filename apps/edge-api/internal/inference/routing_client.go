@@ -40,6 +40,18 @@ var ErrModelNotEntitled = errors.New("routing: model not entitled for tenant")
 // close.
 var ErrAccountNotProvisioned = errors.New("routing: account has no tenant")
 
+// ErrNoToolCapableRoute wraps a SelectRoute failure caused by the control-plane
+// returning 422 for routing.ErrNoCapableRoute: the alias resolves, but none of
+// its routes can serve tools, tool_choice, response_format or functions.
+//
+// It exists because 422 is NOT a discriminator on its own: control-plane
+// answers 422 for ErrRouteNotEligible as well, which is a different fact with a
+// different answer (a transient routing failure rather than a permanent
+// capability mismatch). The body is the only channel that separates them, so
+// the substring match happens here, once, and callers read a sentinel instead
+// of matching strings of their own.
+var ErrNoToolCapableRoute = errors.New("routing: no tool-capable route")
+
 // apiKeyTenantCtxKey carries the tenant resolved for an authenticated API-key
 // principal (authz.AuthSnapshot.TenantID) across the single in-process call
 // from Orchestrator.selectRoute to SelectRoute below. Only that helper sets
@@ -277,6 +289,9 @@ func (c *RoutingClient) SelectRoute(ctx context.Context, input SelectRouteInput)
 	}
 	if resp.StatusCode == http.StatusForbidden {
 		return SelectRouteResult{}, fmt.Errorf("%w: alias %s", ErrModelNotEntitled, input.AliasID)
+	}
+	if resp.StatusCode == http.StatusUnprocessableEntity && strings.Contains(string(respBody), "no tool-capable route") {
+		return SelectRouteResult{}, fmt.Errorf("%w: alias %s", ErrNoToolCapableRoute, input.AliasID)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return SelectRouteResult{}, fmt.Errorf("routing: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))

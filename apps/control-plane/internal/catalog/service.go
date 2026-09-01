@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -22,7 +23,28 @@ func (s *Service) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {
 		return CatalogSnapshot{}, err
 	}
 
-	return buildCatalogSnapshot(aliases), nil
+	toolCapable, err := s.toolCapableAliases(ctx)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	return buildCatalogSnapshot(aliases, toolCapable), nil
+}
+
+// toolCapableAliases resolves hive_capabilities.tools for every alias.
+//
+// A failure here fails the whole snapshot rather than degrading to "no alias is
+// tool capable". Degrading would be a silent, plausible-looking answer: the
+// chat surface would quietly stop advertising tools on every model and the
+// product would look like it simply has no web access, with nothing anywhere
+// saying why. A 503 on the model list is loud and names itself.
+func (s *Service) toolCapableAliases(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.repo.ListRouteToolCapabilities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: load route tool capabilities: %w", err)
+	}
+
+	return ToolCapableAliases(rows), nil
 }
 
 // ListModelsForTenant returns the model aliases the given tenant is permitted
@@ -50,7 +72,12 @@ func (s *Service) GetSnapshotForTenant(ctx context.Context, tenantID uuid.UUID) 
 		return CatalogSnapshot{}, err
 	}
 
-	return buildCatalogSnapshot(aliases), nil
+	toolCapable, err := s.toolCapableAliases(ctx)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	return buildCatalogSnapshot(aliases, toolCapable), nil
 }
 
 // IsAliasVisibleToTenant reports whether tenantID may invoke aliasID. It is the
@@ -70,7 +97,7 @@ func (s *Service) IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID
 	return s.repo.IsAliasVisibleToTenant(ctx, tenantID, aliasID)
 }
 
-func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {
+func buildCatalogSnapshot(aliases []ModelAlias, toolCapable map[string]bool) CatalogSnapshot {
 	snapshot := CatalogSnapshot{
 		Models:  make([]PublicModel, 0, len(aliases)),
 		Catalog: make([]PublicCatalogModel, 0, len(aliases)),
@@ -102,6 +129,9 @@ func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {
 			// string the picker would render as a blank subtitle line.
 			Name:        strings.TrimSpace(alias.DisplayName),
 			Description: strings.TrimSpace(alias.Summary),
+			// A missing key reads false, which is the honest answer for an
+			// alias with no routable, tool-capable route behind it.
+			HiveCapabilities: ModelCapabilities{Tools: toolCapable[alias.AliasID]},
 		})
 		snapshot.Catalog = append(snapshot.Catalog, PublicCatalogModel{
 			ID:               alias.AliasID,

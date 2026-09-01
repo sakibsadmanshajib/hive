@@ -29,6 +29,19 @@ type Model struct {
 	OwnedBy     string `json:"owned_by"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+	// HiveCapabilities mirrors control-plane catalog.ModelCapabilities. It is
+	// what the chat surface reads to decide whether to attach a tools block at
+	// all, BEFORE it builds the request, which is what keeps tool advertisement
+	// from changing route selection on every turn (spec decision D-C).
+	//
+	// Not omitempty and not a pointer, matching the control-plane type: a
+	// missing block and a false capability must not be the same observation.
+	HiveCapabilities ModelCapabilities `json:"hive_capabilities"`
+}
+
+// ModelCapabilities is the hive_capabilities block of one model list entry.
+type ModelCapabilities struct {
+	Tools bool `json:"tools"`
 }
 
 // CatalogPricing mirrors control-plane's catalog.CatalogPricing across the

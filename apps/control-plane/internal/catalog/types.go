@@ -89,6 +89,26 @@ type PublicModel struct {
 	OwnedBy     string `json:"owned_by"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+	// HiveCapabilities carries the Hive-owned capability facts a client needs
+	// BEFORE it builds a request, which is the whole point of publishing it on
+	// the model list rather than discovering it from a refusal.
+	//
+	// Deliberately NOT omitempty, and deliberately a value rather than a
+	// pointer. Every entry carries the block, so "the field is absent" and "the
+	// capability is false" can never be the same observation for a reader. An
+	// absent block would be read as "old gateway, assume anything", which is
+	// the failure this endpoint exists to prevent.
+	HiveCapabilities ModelCapabilities `json:"hive_capabilities"`
+}
+
+// ModelCapabilities is the hive_capabilities block on one model list entry.
+//
+// Tools answers one question and only one: may a caller attach a tools block to
+// a request on this alias without changing which routes the request can land
+// on. See ToolCapableAliases in toolcapability.go for the rule and for why the
+// question has to be answered here rather than at dispatch.
+type ModelCapabilities struct {
+	Tools bool `json:"tools"`
 }
 
 // Pricing modes, mirroring public.model_aliases.pricing_mode's CHECK

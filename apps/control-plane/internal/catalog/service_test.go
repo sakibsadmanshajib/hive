@@ -17,6 +17,24 @@ type stubRepository struct {
 	visibilityRows []TenantModelVisibility
 	err            error
 	visibilityErr  error
+	// routeCapabilities backs ListRouteToolCapabilities. Left nil, every alias
+	// reports hive_capabilities.tools = false, which is the correct answer for
+	// a fixture that declares no routes at all.
+	routeCapabilities []RouteToolCapability
+	// routeCapabilitiesErr fails the capability read alone, so a test can prove
+	// the snapshot fails loudly rather than serving tools = false for every
+	// alias.
+	routeCapabilitiesErr error
+}
+
+func (s *stubRepository) ListRouteToolCapabilities(_ context.Context) ([]RouteToolCapability, error) {
+	if s.routeCapabilitiesErr != nil {
+		return nil, s.routeCapabilitiesErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.routeCapabilities, nil
 }
 
 func (s *stubRepository) ListPublicAliases(_ context.Context) ([]ModelAlias, error) {
