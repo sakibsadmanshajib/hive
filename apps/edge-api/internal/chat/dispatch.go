@@ -173,16 +173,54 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// LiteLLM route (e.g. "route-groq-fast"). LiteLLM's model_list only
 	// contains route names; sending the alias straight through 400s
 	// upstream with "Invalid model name passed in model=<alias>" (#269).
+	// RequireToolCapable, set here for the first time on the session chat path.
+	//
+	// It was never set before, and the consequence was the inverse of the fear
+	// that kept it unset: a tool payload from the chat surface was dispatched
+	// with NO capability check at all, which is how one reached a member that
+	// answered 404 "No endpoints found that support tool use" (issue #1561).
+	//
+	// Setting it is only safe because advertisement is decided upstream of the
+	// request. hive_capabilities.tools on GET /v1/models reports true only for
+	// an alias whose every enabled route is tool capable
+	// (catalog.ToolCapableAliases), and the chat surface attaches a tools block
+	// only for such an alias. Filtering an all-capable candidate set is the
+	// identity, so this flag removes no candidate and route selection is
+	// unchanged for every turn, tool-carrying or not. That equality is held
+	// against the real catalog by
+	// TestAdvertisingToolsNeverNarrowsTheCandidateSet in the control-plane
+	// routing package, not asserted here.
+	//
+	// The definition of "tool-carrying" is inference.ToolParamInBody, the same
+	// field list the API-key surface gates on, so the two surfaces cannot come
+	// to different verdicts about the same body.
+	toolParam := inference.ToolParamInBody(raw)
+
 	route, err := h.deps.Routing.SelectRoute(r.Context(), inference.SelectRouteInput{
 		AliasID:             parsed.Model,
 		NeedChatCompletions: true,
 		NeedStreaming:       true,
+		RequireToolCapable:  toolParam != "",
 	})
 	if err != nil {
 		slog.Warn("dispatch route selection failed", "err", err, "alias", parsed.Model)
 		switch {
 		case errors.Is(err, inference.ErrRouteNotFound):
 			apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
+		case errors.Is(err, inference.ErrNoToolCapableRoute):
+			// A tool block reached an alias that cannot serve one. Reported as
+			// what it is rather than folded into the transient 503 below: the
+			// alias resolves and its routes are healthy, the request simply
+			// asked for something they cannot do.
+			//
+			// This should not be reachable from the chat surface, which reads
+			// hive_capabilities.tools before attaching a tools block, so seeing
+			// it means the surface advertised on an alias the catalog says is
+			// incapable. That is worth a specific message: a 503 here would
+			// send the next reader to look for a routing outage that is not
+			// happening.
+			apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest,
+				"this model cannot use tools; retry without "+toolParam)
 		case errors.Is(err, inference.ErrModelNotEntitled):
 			// The tenant is not entitled to this model. This is an
 			// administrative policy verdict, so it must not surface as the

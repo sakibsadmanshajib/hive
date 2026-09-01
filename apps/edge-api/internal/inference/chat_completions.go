@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -146,6 +147,48 @@ func rawFieldPresent(f json.RawMessage) bool {
 	return len(f) > 0 && string(f) != "null"
 }
 
+// toolParamNames is the ordered list of request fields that make a request
+// tool-calling or structured-output shaped, and therefore require a
+// tool-capable route. Ordered, because the name is reported to the caller and
+// the first match wins.
+//
+// One list, two readers: firstToolParam below reads the typed request the
+// API-key path already parsed, and ToolParamInBody reads a raw body for the
+// session chat path, which parses into its own much narrower struct. They must
+// never disagree, because a request that one calls tool-shaped and the other
+// does not is a request dispatched without the capability check the other
+// applied. TestToolParamInBodyAgreesWithFirstToolParam holds that.
+var toolParamNames = []string{
+	"tools",
+	"tool_choice",
+	"response_format",
+	"functions",
+	"function_call",
+	"parallel_tool_calls",
+}
+
+// ToolParamInBody returns the name of the first tool-calling or structured-output
+// parameter present in a raw OpenAI-shaped chat request body, or "" if none are.
+//
+// It decodes into a field map rather than into ChatCompletionRequest on
+// purpose. The session chat surface forwards whatever Open WebUI sends, and a
+// body that fails to decode into the typed struct for some unrelated reason
+// must not be able to make a tool payload look like a plain one: a field map
+// decodes anything that is a JSON object at all. An input that is not a JSON
+// object cannot carry a tool block either, so "" is the honest answer there.
+func ToolParamInBody(raw []byte) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ""
+	}
+	for _, name := range toolParamNames {
+		if rawFieldPresent(fields[name]) {
+			return name
+		}
+	}
+	return ""
+}
+
 // firstToolParam returns the name of the first tool-calling or structured-output
 // parameter present in the request, or "" if none are present.
 //
@@ -202,7 +245,11 @@ func guardToolCapability(ctx context.Context, o *Orchestrator, w http.ResponseWr
 		errMsg := err.Error()
 		// 422 from the control-plane signals ErrNoCapableRoute: no tool-capable
 		// route exists for this alias. Return a provider-blind 400.
-		if strings.Contains(errMsg, "422") || strings.Contains(errMsg, "no tool-capable") {
+		//
+		// The sentinel is checked first and the substring match is kept behind
+		// it: RoutingClient now wraps ErrNoToolCapableRoute, but o.routing is an
+		// interface here and a test double still fabricates the raw string.
+		if errors.Is(err, ErrNoToolCapableRoute) || strings.Contains(errMsg, "422") || strings.Contains(errMsg, "no tool-capable") {
 			writeUnsupportedParamError(w, param, model)
 			return true
 		}

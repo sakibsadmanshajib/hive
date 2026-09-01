@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -615,52 +614,5 @@ func TestCapabilityTruthMigrationIsRerunnable(t *testing.T) {
 func freePoolCandidates(t *testing.T) []RouteCandidate {
 	t.Helper()
 
-	state := foldMigrations(t)
-
-	var routeIDs []string
-	for routeID, route := range state.routes {
-		if route["alias_id"] == freePoolAliasID {
-			routeIDs = append(routeIDs, routeID)
-		}
-	}
-	sort.Strings(routeIDs)
-	if len(routeIDs) == 0 {
-		t.Fatalf("the migration chain leaves no provider_routes row on alias %s at all", freePoolAliasID)
-	}
-
-	candidates := make([]RouteCandidate, 0, len(routeIDs))
-	for _, routeID := range routeIDs {
-		route := state.routes[routeID]
-		caps, ok := state.caps[routeID]
-		if !ok {
-			t.Fatalf("no provider_capabilities row survives the migration chain for %s", routeID)
-		}
-		priority := 10
-		if p, err := strconv.Atoi(strings.TrimSpace(route["priority"])); err == nil {
-			priority = p
-		}
-		candidates = append(candidates, RouteCandidate{
-			RouteID:                 routeID,
-			AliasID:                 route["alias_id"],
-			Provider:                route["provider"],
-			ProviderModel:           route["provider_model"],
-			LiteLLMModelName:        route["litellm_model_name"],
-			PriceClass:              route["price_class"],
-			HealthState:             route["health_state"],
-			Priority:                priority,
-			SupportsResponses:       isTrue(caps["supports_responses"]),
-			SupportsChatCompletions: isTrue(caps["supports_chat_completions"]),
-			SupportsCompletions:     isTrue(caps["supports_completions"]),
-			SupportsEmbeddings:      isTrue(caps["supports_embeddings"]),
-			SupportsStreaming:       isTrue(caps["supports_streaming"]),
-			SupportsReasoning:       isTrue(caps["supports_reasoning"]),
-			SupportsCacheRead:       isTrue(caps["supports_cache_read"]),
-			SupportsCacheWrite:      isTrue(caps["supports_cache_write"]),
-			SupportsImageGeneration: isTrue(caps["supports_image_generation"]),
-			SupportsImageEdit:       isTrue(caps["supports_image_edit"]),
-			SupportsBatch:           isTrue(caps["supports_batch"]),
-			SupportsTools:           isTrue(caps["tools_supported"]),
-		})
-	}
-	return candidates
+	return aliasCandidates(t, foldMigrations(t), freePoolAliasID)
 }

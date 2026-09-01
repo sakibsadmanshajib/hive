@@ -38,6 +38,13 @@ type Repository interface {
 	// too so it can lock down a non-chat-modality alias no matter what
 	// visibility class it was seeded with.
 	ListAllAliases(ctx context.Context) ([]ModelAlias, error)
+	// ListRouteToolCapabilities returns every provider_routes row reduced to
+	// the three columns the tool-advertisement decision reads. The decision
+	// itself is ToolCapableAliases (toolcapability.go), a pure function, so the
+	// rule the model list publishes is the same code a test can hold against
+	// the migration chain offline rather than a SQL aggregate nothing offline
+	// can read.
+	ListRouteToolCapabilities(ctx context.Context) ([]RouteToolCapability, error)
 }
 
 type pgxRepository struct {
@@ -377,7 +384,12 @@ func (r *pgxRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error
 		return CatalogSnapshot{}, err
 	}
 
-	snapshot := buildCatalogSnapshot(aliases)
+	routeCaps, err := r.ListRouteToolCapabilities(ctx)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	snapshot := buildCatalogSnapshot(aliases, ToolCapableAliases(routeCaps))
 	snapshot.Routes = routes
 	snapshot.AliasPolicies = policies
 
@@ -561,4 +573,40 @@ func scanAliasPolicy(scanner aliasScanner) (AliasPolicySnapshot, error) {
 	}
 
 	return policy, nil
+}
+
+// ListRouteToolCapabilities reads every route joined to its capability row.
+//
+// INNER join, matching routing.ListRouteCandidates: a provider_routes row with
+// no provider_capabilities row cannot be selected for any request, so it must
+// not be able to veto an alias it can never serve. Health state comes back raw
+// and is interpreted by ToolCapableAliases, so the "disabled routes do not
+// count" rule lives in one place rather than half here and half in SQL.
+func (r *pgxRepository) ListRouteToolCapabilities(ctx context.Context) ([]RouteToolCapability, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			r.alias_id,
+			r.health_state,
+			c.tools_supported
+		FROM public.provider_routes r
+		JOIN public.provider_capabilities c ON c.route_id = r.route_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list route tool capabilities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RouteToolCapability
+	for rows.Next() {
+		var row RouteToolCapability
+		if err := rows.Scan(&row.AliasID, &row.HealthState, &row.ToolsSupported); err != nil {
+			return nil, fmt.Errorf("catalog: scan route tool capability: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: iterate route tool capabilities: %w", err)
+	}
+
+	return out, nil
 }
