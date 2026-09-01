@@ -1,0 +1,3 @@
+[1799.924s] GET  /v1/models
+[1810.498s] POST /v1/audio/transcriptions  bytes=64318
+[1812.214s] POST /v1/chat/completions  stream=True
