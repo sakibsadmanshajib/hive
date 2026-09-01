@@ -212,6 +212,15 @@ func TestOpenCodeZenAliasIsFixedPriced(t *testing.T) {
 			t.Errorf("alias %s %s = %q, want %q", zenAliasID, column, got, want)
 		}
 	}
+	// This reads the literal INSERT text of this migration file only (see
+	// zenMigrationSQL above): no live DB connection, no build tag. It checks
+	// what 20260830_04's own INSERT declared at the time it was written, not
+	// hive-free-tools' current live visibility. A later migration
+	// (20260831_01_restrict_free_pool_aliases_visibility.sql) flips that
+	// alias's live visibility to restricted; this assertion stays "public"
+	// forever regardless, because it is describing history, not present
+	// state. Correct as a guard on this migration's own text; do not read it
+	// as proof of what the picker or the API accept today.
 	if got := row["visibility"]; got != "public" {
 		t.Errorf("alias %s visibility = %q, want public", zenAliasID, got)
 	}
