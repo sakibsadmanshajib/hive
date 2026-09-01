@@ -46,8 +46,11 @@ type ChatBalance struct {
 
 // GetChatBalance resolves the email's tenant billing account and reads its
 // balance plus today's usage. found=false means no active membership on a
-// billed, non-archived tenant; that is a normal answer, not an error, so the
-// caller can render nothing instead of a failure.
+// billed, non-archived tenant; that is a normal answer, not an error. The
+// route above answers it with a zero balance rather than a 404 (issue #1599);
+// the flag is kept because "unbilled" and "billed but empty" are genuinely
+// different states to a caller that has to act on them, even though the wire
+// answer is deliberately the same for both.
 func (s *Service) GetChatBalance(ctx context.Context, email string) (ChatBalance, bool, error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
@@ -111,7 +114,23 @@ func RegisterChatBalanceRoute(mux *http.ServeMux, svc *Service, gate func(http.H
 			slog.ErrorContext(r.Context(), "chat balance read failed")
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "balance could not be read"})
 		case !found:
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no billed account"})
+			// Issue #1599. A principal with no billed account holds no
+			// credit, and no credit is a zero balance, not a missing
+			// resource. The 404 this used to answer made the frontend render
+			// no banner at all (credits.ts treats every non-200 as "nothing
+			// to show"), so a workspace that could not chat looked identical
+			// to one that simply had nothing to display, and the only surface
+			// that named the problem was edge-api refusing the next message.
+			// Zero renders the "You're out of credits / Top up" state the
+			// banner already carries.
+			//
+			// The body is the zero ChatBalance, byte-identical to a real zero
+			// balance, so this route still cannot be used to probe whether a
+			// given email is billed. The enterprise posture is unaffected:
+			// that one is gated in the Open WebUI shim, which 404s before it
+			// ever reaches this route when the control-plane URL and internal
+			// token are unset.
+			writeJSON(w, http.StatusOK, ChatBalance{})
 		default:
 			writeJSON(w, http.StatusOK, balance)
 		}

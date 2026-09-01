@@ -175,7 +175,87 @@ def main() -> None:
         {EMAIL: "   ", TSLUG: "second-tenant", ASLUG: "second-account"},
     )
 
-    print("ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or + identity guard")
+    # ---- issue #1599: billing mapping and the explicit credit grant ----
+    #
+    # guard_billing_mapping: public.tenant_billing_accounts is 1:1 in both
+    # directions (tenant_id is the primary key, account_id is UNIQUE), so a
+    # single query for either side returns every row that can collide. Returns
+    # True when the wanted pairing already exists (nothing to write), False
+    # when there is nothing at all (write it), and exits on anything else --
+    # repointing either side decides whose credits pay for whose traffic and is
+    # an operator call, never a seeder's.
+    T, A = "tenant-1", "account-1"
+
+    # Nothing mapped: create it.
+    assert seed_demo_owner.guard_billing_mapping([], T, A) is False
+
+    # Exactly our pairing: a prior run of this script wrote it, idempotent.
+    assert seed_demo_owner.guard_billing_mapping(
+        [{"tenant_id": T, "account_id": A}], T, A
+    ) is True
+
+    # The tenant already bills to somebody else's account.
+    assert exits(
+        seed_demo_owner.guard_billing_mapping,
+        [{"tenant_id": T, "account_id": "other-account"}],
+        T,
+        A,
+    )
+
+    # Our account already funds a different tenant.
+    assert exits(
+        seed_demo_owner.guard_billing_mapping,
+        [{"tenant_id": "other-tenant", "account_id": A}],
+        T,
+        A,
+    )
+
+    # Both halves collide, with different partners on each side.
+    assert exits(
+        seed_demo_owner.guard_billing_mapping,
+        [
+            {"tenant_id": T, "account_id": "other-account"},
+            {"tenant_id": "other-tenant", "account_id": A},
+        ],
+        T,
+        A,
+    )
+
+    # credits_to_grant: credit is owner-discretionary. Unset means grant
+    # nothing, so no path here ever funds a workspace implicitly; a value must
+    # be an explicit positive integer of credits, and anything else is refused
+    # loudly rather than rounded, truncated, or silently skipped.
+    for unset in ("", "   ", None):
+        assert seed_demo_owner.credits_to_grant(unset) is None
+    assert seed_demo_owner.credits_to_grant("10000000000") == 10000000000
+    assert seed_demo_owner.credits_to_grant("  10000000000  ") == 10000000000
+    for bad in ("0", "-1", "abc", "12.5", "1e9", "10,000", "0x10"):
+        assert exits(seed_demo_owner.credits_to_grant, bad), bad
+
+    # grant_idempotency_key: keyed on the account AND the amount, so re-running
+    # the seeder with the same amount cannot post a second grant (the unique
+    # index on (account_id, entry_type, idempotency_key) swallows the replay),
+    # while an operator deliberately topping up with a different amount can.
+    assert seed_demo_owner.grant_idempotency_key(A, 5) == seed_demo_owner.grant_idempotency_key(A, 5)
+    assert seed_demo_owner.grant_idempotency_key(A, 5) != seed_demo_owner.grant_idempotency_key(A, 6)
+    assert seed_demo_owner.grant_idempotency_key(A, 5) != seed_demo_owner.grant_idempotency_key("a2", 5)
+
+    # The ledger row itself: append-only, so it is inserted with
+    # ignore-duplicates and never merged, it carries the positive delta as
+    # written, and it states in its own metadata why the credit exists and what
+    # granted it. A grant with no stated reason is not auditable after the fact.
+    row = seed_demo_owner.grant_ledger_row(A, 7)
+    assert row["account_id"] == A
+    assert row["entry_type"] == "grant"
+    assert row["credits_delta"] == 7
+    assert row["idempotency_key"] == seed_demo_owner.grant_idempotency_key(A, 7)
+    assert row["metadata"]["reason"]
+    assert row["metadata"]["source"] == "scripts/seed-demo-owner.py"
+
+    print(
+        "ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or + "
+        "identity guard + billing mapping + explicit credit grant"
+    )
 
 
 if __name__ == "__main__":
