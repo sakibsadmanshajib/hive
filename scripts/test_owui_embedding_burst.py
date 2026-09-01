@@ -279,6 +279,20 @@ def test_the_concurrency_bound_is_what_holds_for_a_larger_document() -> None:
         f"with the bound set to {concurrency}: a larger document still "
         f"recreates the burst issue #1609 is about"
     )
+    # The assertion above only proves the semaphore is obeyed, which stays true
+    # for any bound at all, so on its own it would pass with the compose
+    # default raised to 200 and the original defect back. This one is absolute:
+    # roughly 200 in flight is what took web search down, and the bound is per
+    # document (see the compose comment), so anything above a handful is not a
+    # bound worth having. Deliberately a ceiling rather than an equality check
+    # on 4, so tuning the value stays possible without editing a test, while
+    # tuning it back into a burst does not.
+    assert recorder.max_in_flight <= 10, (
+        f"the shipped concurrency default is {concurrency}, which let "
+        f"{recorder.max_in_flight} requests run at once; issue #1609 was ~200 "
+        f"in flight, and this bound is per document, so a default this high is "
+        f"not a bound"
+    )
     assert len(embeddings) == FIVE_PAGE_CHUNKS * 50
 
 
