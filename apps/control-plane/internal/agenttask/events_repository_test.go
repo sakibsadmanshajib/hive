@@ -23,7 +23,7 @@ func TestEventsRepositoryAppendAndList(t *testing.T) {
 	repo := agenttask.NewPgxRepository(pool)
 	ctx := context.Background()
 
-	task, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding, "goal")
+	task, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding, "goal", uuid.Nil)
 	mustNoErrRepo(t, err)
 
 	events := []agenttask.TaskEvent{
@@ -75,9 +75,9 @@ func TestEventsRepositoryRLS(t *testing.T) {
 	repo := agenttask.NewPgxRepository(pool)
 	ctx := context.Background()
 
-	taskA, err := repo.Create(ctx, tenantA, userA, agenttask.PackCoding, "a")
+	taskA, err := repo.Create(ctx, tenantA, userA, agenttask.PackCoding, "a", uuid.Nil)
 	mustNoErrRepo(t, err)
-	taskB, err := repo.Create(ctx, tenantB, userA, agenttask.PackCoding, "b")
+	taskB, err := repo.Create(ctx, tenantB, userA, agenttask.PackCoding, "b", uuid.Nil)
 	mustNoErrRepo(t, err)
 
 	if err := repo.AppendEvents(ctx, taskA, []agenttask.TaskEvent{

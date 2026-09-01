@@ -62,6 +62,18 @@ const (
 	// ActionRAGChunkRetrieved records a single chunk returned by a retrieval query.
 	// resource_id = chunk_id; after_json = {"score": <float>, "document_id": <uuid>}.
 	ActionRAGChunkRetrieved = "RAG_CHUNK_RETRIEVED"
+	// ActionRAGProjectCreate records a project created over a retrieval corpus
+	// (issue #1595). resource_id = project_id; after_json = {"name": <text>}.
+	ActionRAGProjectCreate = "RAG_PROJECT_CREATE"
+	// ActionRAGProjectUpdate records a project renamed or its instructions
+	// replaced. resource_id = project_id; after_json = {"name": <text>}.
+	ActionRAGProjectUpdate = "RAG_PROJECT_UPDATE"
+	// ActionRAGProjectDelete records a project removed. Its documents survive
+	// with project_id NULL. resource_id = project_id.
+	ActionRAGProjectDelete = "RAG_PROJECT_DELETE"
+	// ActionRAGProjectDocumentAttach records a document attached to a project.
+	// resource_id = document_id; after_json = {"project_id": <uuid>}.
+	ActionRAGProjectDocumentAttach = "RAG_PROJECT_DOCUMENT_ATTACH"
 	// ActionFileAccess records a read or download of a stored file.
 	ActionFileAccess = "FILE_ACCESS"
 )

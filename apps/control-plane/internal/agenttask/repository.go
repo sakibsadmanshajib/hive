@@ -12,7 +12,7 @@ import (
 
 // Repository is the narrow data-access port for public.agent_tasks.
 type Repository interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string, projectID uuid.UUID) (Task, error)
 	Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	// Transition updates status (and the fields that go with it) for a task
@@ -70,14 +70,26 @@ func (r *pgxRepository) withTenantTx(ctx context.Context, tenantID uuid.UUID, fn
 	return tx.Commit(ctx)
 }
 
-func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error) {
+func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string, projectID uuid.UUID) (Task, error) {
 	var t Task
+	// An absent project travels as SQL NULL. Written but never read back here:
+	// project_id is deliberately left off every SELECT in this file, because
+	// ListActive reads public.agent_tasks_list_active(), a SECURITY DEFINER
+	// function with a fixed RETURNS TABLE signature, so widening the shared
+	// scanTask column list would need that function's signature changed in the
+	// same breath. The column records which project a run was submitted with;
+	// the retrieve-before-launch half that consumes it is issue #1595 spec task
+	// 9 and is not in this change.
+	var project any
+	if projectID != uuid.Nil {
+		project = projectID
+	}
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO public.agent_tasks (tenant_id, user_id, pack, instructions)
-			VALUES ($1, $2, $3, NULLIF($4, ''))
+			INSERT INTO public.agent_tasks (tenant_id, user_id, pack, instructions, project_id)
+			VALUES ($1, $2, $3, NULLIF($4, ''), $5)
 			RETURNING id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
-		`, tenantID, userID, string(pack), instructions)
+		`, tenantID, userID, string(pack), instructions, project)
 		var err error
 		t, err = scanTask(row)
 		return err
@@ -85,6 +97,9 @@ func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, 
 	if err != nil {
 		return Task{}, fmt.Errorf("agenttask: create: %w", err)
 	}
+	// Carried on the in-memory Task for the launch path, the same way BearerJWT
+	// is. Repository never reads it back, so a Task loaded later has it Nil.
+	t.ProjectID = projectID
 	return t, nil
 }
 
@@ -249,9 +264,13 @@ func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
 //     batch on every retry while both writers stayed live. The lock is
 //     per-task, transaction-scoped, released at commit, so it serializes only
 //     same-task appends and nothing else waits.
-//   - ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> ''
-//     targets the partial unique index exactly, so a re-pulled event is a
-//     no-op while genuinely new events in the same batch still land.
+//   - ON CONFLICT (task_id, source_event_id), with the index's own predicate
+//     that source_event_id is not the empty string, targets the partial unique
+//     index exactly, so a re-pulled event is a no-op while genuinely new
+//     events in the same batch still land. The predicate is spelled out rather
+//     than quoted because gofmt's doc comment formatter rewrites a pair of
+//     straight single quotes into a typographic quote, which is how this line
+//     acquired one; the SQL below is the literal form.
 func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []TaskEvent) error {
 	if len(events) == 0 {
 		return nil

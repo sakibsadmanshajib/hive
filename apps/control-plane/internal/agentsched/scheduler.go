@@ -32,8 +32,11 @@ import (
 // credits could create a routine and have it launch sandboxes on a cadence
 // forever (issue #1490). What closes that here is the explicit s.solvency
 // check in RunOnce below, not this seam and not anything upstream of it.
+// projectID is uuid.Nil for every scheduled firing: a routine carries no
+// project today (issue #1595 covers the interactive surfaces only), and
+// passing Nil is what "no project attached" means on this call.
 type TaskCreator interface {
-	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions, bearerJWT string) (agenttask.Task, error)
+	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID, bearerJWT string) (agenttask.Task, error)
 }
 
 // scheduledPack is the pack every scheduled run launches as in this first
@@ -153,7 +156,7 @@ func (s *Scheduler) RunOnce(ctx context.Context, now time.Time) (fired int) {
 			continue
 		}
 
-		task, err := s.tasks.CreateTask(ctx, sched.TenantID, sched.UserID, scheduledPack, sched.Instructions, "")
+		task, err := s.tasks.CreateTask(ctx, sched.TenantID, sched.UserID, scheduledPack, sched.Instructions, uuid.Nil, "")
 		if err != nil {
 			// Provider-blind persistence; the real detail stays in the log.
 			s.logger.WarnContext(ctx, "agentsched: scheduled create failed, backing off one cadence",

@@ -310,6 +310,14 @@ func main() {
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
 
+	// ragProjectAuthorizer is assigned inside the RAG block below and consumed
+	// by the agent-task block after it. Declared out here because both surfaces
+	// accept the same client supplied project id and must answer the ownership
+	// question the same way, from one implementation. Nil when no database is
+	// wired, which makes POST /v1/agent/tasks refuse any project id outright
+	// rather than pass it through unverified.
+	var ragProjectAuthorizer *edgerag.ProjectAuthorizer
+
 	// RAG routes (#232): always registered behind FeatureRAG so the gate returns
 	// 403 (not 404) regardless of whether the embedding backend is configured.
 	// When EMBEDDING_BASE_URL is unset the handler itself returns a provider-blind 503.
@@ -469,6 +477,7 @@ func main() {
 			// embedded under a different model/dim than this process is
 			// configured for right now (see EmbeddingMismatch / checkEmbeddingGuard).
 			ragHandler = ragHandler.WithEmbeddingGuard(ragEmbedModel, ragEmbedDim)
+			ragProjectAuthorizer = edgerag.NewProjectAuthorizer(ragRepo)
 		}
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
@@ -491,6 +500,12 @@ func main() {
 		// question of the same account.
 		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient).
 			WithBilling(accountingClient, &metering.PGBillingAccountResolver{Pool: dbPool})
+		// Projects (issue #1595). A create carrying project_id is refused
+		// unless this is wired, because a surface that cannot verify who owns
+		// a project must not act on a client's claim to it.
+		if ragProjectAuthorizer != nil {
+			agentTaskHandler = agentTaskHandler.WithProjectAuthorizer(ragProjectAuthorizer)
+		}
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
 		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)

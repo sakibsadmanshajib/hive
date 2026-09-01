@@ -52,14 +52,27 @@ type DocumentResponse struct {
 type SearchRequest struct {
 	Query string `json:"query"`
 	TopK  int    `json:"top_k"` // defaults to 5 when zero
+	// ProjectID optionally scopes retrieval to one project (issue #1595).
+	// Empty means the tenant's whole corpus, which is the behaviour every
+	// caller had before Projects existed.
+	//
+	// Client supplied, therefore never trusted on its own: handleSearch proves
+	// the caller owns this project before it reaches the store. See
+	// Handler.authorizeProject.
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // ChunkResult is one item in a SearchResponse.
 type ChunkResult struct {
-	ChunkID    string  `json:"chunk_id"`
-	DocumentID string  `json:"document_id"`
-	Content    string  `json:"content"`
-	Score      float32 `json:"score"`
+	ChunkID    string `json:"chunk_id"`
+	DocumentID string `json:"document_id"`
+	// DocumentName is the source document's name, carried alongside the
+	// passage so a client can render a citation without a second round trip
+	// per chunk (issue #1595 acceptance: "a grounded answer with the source
+	// shown"). Read from public.rag_documents in the same query as the chunk.
+	DocumentName string  `json:"document_name"`
+	Content      string  `json:"content"`
+	Score        float32 `json:"score"`
 }
 
 // SearchResponse is the JSON body returned by POST /v1/rag/search.
@@ -128,4 +141,30 @@ type ChatResponse struct {
 	Choices   []ChatChoice  `json:"choices"`
 	Usage     *ChatUsage    `json:"usage,omitempty"`
 	Citations []ChunkResult `json:"citations"`
+}
+
+// ProjectRequest is the JSON body for POST and PATCH /v1/rag/projects.
+//
+// Name and Instructions are pointers on purpose. PATCH has to distinguish
+// "field absent, leave it alone" from "field present and empty, clear it",
+// and a plain string cannot: a rename would silently blank the instructions
+// every time the editor sent only a name.
+type ProjectRequest struct {
+	Name         *string `json:"name"`
+	Instructions *string `json:"instructions"`
+}
+
+// ProjectResponse is the JSON body returned for a single project.
+type ProjectResponse struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Instructions string    `json:"instructions"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AttachDocumentRequest is the JSON body for
+// POST /v1/rag/projects/{id}/documents.
+type AttachDocumentRequest struct {
+	DocumentID string `json:"document_id"`
 }

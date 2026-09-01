@@ -141,6 +141,17 @@ func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 // through BOTH read surfaces (AllEnabled backs the admin console toggle UI,
 // ClientVisibleEnabled backs the featuregate endpoint edge-api gates /v1/agent
 // routes on).
+//
+// The guard has two halves and the negative half is the load-bearing one: the
+// resolver must apply the default each key actually declares, rather than
+// reporting every unset gate as enabled, which would silently open admin and
+// billing gates on every workspace. ENABLE_RAG was that negative control until
+// 20260831_02_rag_gate_default_enabled.sql flipped its declared default to true
+// for issue #1506, so it can no longer prove anything about undeclared keys and
+// is asserted as a positive here instead. ENABLE_VOICE takes over the negative
+// role: it sits in the same client-visible agents category, is read through the
+// same query on the same surface, and still declares default_enabled = false.
+// The guard itself is unchanged, only the key that witnesses it.
 func TestResolver_GateDefaults_UnsetKeyReadsDeclaredDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -155,13 +166,24 @@ func TestResolver_GateDefaults_UnsetKeyReadsDeclaredDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Truef(t, clientVisible[settings.EnableCowork],
 		"ENABLE_COWORK has default_enabled = true and no explicit row, so ClientVisibleEnabled must report it enabled")
-	require.Falsef(t, clientVisible[settings.EnableRAG],
-		"keys without a declared default keep opt-in behavior: ENABLE_RAG unset must stay false")
+	require.Truef(t, clientVisible[settings.EnableRAG],
+		"ENABLE_RAG has default_enabled = true since 20260831_02_rag_gate_default_enabled.sql (issue #1506), so an unset workspace must report it enabled or Projects is unusable on every workspace nobody hand-seeded")
+
+	// The negative half. Assert presence separately from value: a resolver that
+	// dropped the agents category, or the key, would return a nil map entry
+	// that reads false and would otherwise satisfy this assertion vacuously.
+	voice, present := clientVisible[settings.EnableVoice]
+	require.Truef(t, present,
+		"ENABLE_VOICE is in the client-visible agents category and must appear in the map at all, otherwise the false below proves nothing")
+	require.Falsef(t, voice,
+		"keys without a declared default keep opt-in behavior: ENABLE_VOICE unset must stay false, so the resolver is reading each key's declared default rather than reporting every unset gate as enabled")
 
 	all, err := r.AllEnabled(ctx, tid)
 	require.NoError(t, err)
 	require.Truef(t, all[settings.EnableCowork],
 		"AllEnabled must apply the declared default so the admin toggle UI shows the real state")
+	require.Truef(t, all[settings.EnableRAG],
+		"AllEnabled must apply the ENABLE_RAG default too, so the admin toggle UI shows the real state")
 }
 
 // TestResolver_GateDefaults_ExplicitRowOverridesDefault proves the default is

@@ -127,12 +127,12 @@ const engineCancelTimeout = 10 * time.Second
 // bearerJWT is the task's own user's bearer JWT (edge-api's handler is the
 // only caller with it; see Task.BearerJWT's doc comment). Threaded straight
 // through to the launch goroutine and never persisted by s.repo.Create.
-func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions, bearerJWT string) (Task, error) {
+func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
 	if !pack.Valid() {
 		return Task{}, ErrInvalidPack
 	}
 
-	t, err := s.repo.Create(ctx, tenantID, userID, pack, instructions)
+	t, err := s.repo.Create(ctx, tenantID, userID, pack, instructions, projectID)
 	if err != nil {
 		return Task{}, err
 	}

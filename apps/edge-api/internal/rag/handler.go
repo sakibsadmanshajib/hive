@@ -52,11 +52,21 @@ type Store interface {
 	// DeleteDocument deletes the document and reports whether a row was found.
 	// found=false means no row matched (caller should 404); error means infra failure.
 	DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (found bool, err error)
-	SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error)
+	SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int, projectID uuid.UUID) ([]ChunkRow, error)
 	// EmbeddingMismatch reports whether tenantID has embedded documents whose
 	// stored provenance differs from the model/dim passed in. See
 	// WithEmbeddingGuard for how the handler uses this.
 	EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model string, dim int) (bool, error)
+
+	// Projects (issue #1595). GetProject is the ownership oracle every project
+	// scoped path consults before it filters by a client supplied project id;
+	// see Handler.authorizeProject.
+	GetProject(ctx context.Context, tenantID, projectID uuid.UUID) (ProjectRow, error)
+	CreateProject(ctx context.Context, tenantID, ownerUserID uuid.UUID, name, instructions string) (ProjectRow, error)
+	ListProjects(ctx context.Context, tenantID, ownerUserID uuid.UUID) ([]ProjectRow, error)
+	UpdateProject(ctx context.Context, tenantID, ownerUserID, projectID uuid.UUID, name, instructions *string) (ProjectRow, error)
+	DeleteProject(ctx context.Context, tenantID, ownerUserID, projectID uuid.UUID) error
+	AttachDocument(ctx context.Context, tenantID, ownerUserID, projectID, docID uuid.UUID) error
 }
 
 // store aliases Store for backward-compat with existing unexported references.
@@ -161,11 +171,22 @@ func NewHandler(s store, embed Embedder, audit AuditFunc, ingest IngestFunc, ser
 
 // Register mounts all /v1/rag/* routes on mux.
 // Callers wrap with featuregate.Require(FeatureRAG) before mounting.
+//
+// A route added here is not reachable until it also has a supported_now entry
+// in packages/openai-contract/matrix/support-matrix.json and a line in
+// ragEndpoints (route_matrix_test.go). main.go wraps the whole mux in
+// middleware.UnsupportedEndpointMiddleware, which answers 404 for any /v1/ path
+// the matrix does not carry, and the boot-time assertMatrixCoverage guard reads
+// mux patterns only, so a new leaf under the already-covered "/v1/rag/" subtree
+// passes it while 404ing every request. TestRAGRoutesReachHandlersThroughTheMiddlewareChain
+// is what turns that silence into a failing test.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/rag/documents", h.routeDocuments)
 	mux.HandleFunc("/v1/rag/documents/", h.routeDocumentByID)
 	mux.HandleFunc("/v1/rag/search", h.handleSearch)
 	mux.HandleFunc("/v1/rag/chat", h.handleChat)
+	mux.HandleFunc("/v1/rag/projects", h.routeProjects)
+	mux.HandleFunc("/v1/rag/projects/", h.routeProjectByID)
 }
 
 // Shutdown waits for in-flight ingest goroutines to finish. Call on server shutdown.
@@ -686,6 +707,42 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		req.TopK = maxTopK
 	}
 
+	// Project scope (issue #1595): narrow retrieval to one project's documents.
+	projectID := uuid.Nil
+	if raw := strings.TrimSpace(req.ProjectID); raw != "" {
+		parsed, perr := uuid.Parse(raw)
+		if perr != nil {
+			apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid project_id")
+			return
+		}
+		projectID = parsed
+	}
+
+	// Authorization BEFORE any filtering (issue #1595 acceptance criterion 6).
+	//
+	// Ordered ahead of the embedding guard, the audit event and the embed call
+	// on purpose: an unauthorized project id must cost nothing, and it must
+	// leave no RAG_SEARCH or RAG_CHUNK_RETRIEVED trail naming documents the
+	// caller may not read. Filtering by a client supplied project id without
+	// this check would let one member of a tenant name another member's project
+	// and be served its passages: every tenant scoped guard, the SQL predicate
+	// and the policy alike, is satisfied by two members of one tenant.
+	//
+	// What this check does NOT provide, stated because the surface above it
+	// implies otherwise: it does not make a project's contents confidential
+	// from other members of the same tenant. public.rag_documents has no
+	// uploader column, so an unscoped search (project_id absent, which is also
+	// what handleChat sends) still returns the tenant's whole corpus, this
+	// project's passages included. This check refuses a project id, not a
+	// document. Tracked in issue #1643; issue #1595's frontend must not present
+	// a project as private until that is closed.
+	if projectID != uuid.Nil {
+		if _, aerr := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); aerr != nil {
+			writeProjectError(w, aerr)
+			return
+		}
+	}
+
 	if !h.checkEmbeddingGuard(r.Context(), user.TenantID) {
 		apierrors.Write(w, http.StatusServiceUnavailable, apierrors.CodeServiceUnavailable, "embedding model changed, re-embed required")
 		return
@@ -700,7 +757,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chunks, err := h.store.SearchChunks(r.Context(), user.TenantID, vec, req.TopK)
+	chunks, err := h.store.SearchChunks(r.Context(), user.TenantID, vec, req.TopK, projectID)
 	if err != nil {
 		log.Printf("rag: search chunks: %v", err)
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "search failed")
@@ -710,10 +767,11 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	results := make([]ChunkResult, len(chunks))
 	for i, c := range chunks {
 		results[i] = ChunkResult{
-			ChunkID:    c.ID.String(),
-			DocumentID: c.DocumentID.String(),
-			Content:    c.Content,
-			Score:      c.Score,
+			ChunkID:      c.ID.String(),
+			DocumentID:   c.DocumentID.String(),
+			DocumentName: c.DocumentName,
+			Content:      c.Content,
+			Score:        c.Score,
 		}
 		// RAG_CHUNK_RETRIEVED: one event per chunk (Law 25 / PHIPA requirement).
 		h.audit(r.Context(), "RAG_CHUNK_RETRIEVED", "rag_chunk", c.ID.String(), "INFO",

@@ -28,7 +28,7 @@ type fakeTasks struct {
 	}
 }
 
-func (f *fakeTasks) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, bearerJWT string) (agenttask.Task, error) {
+func (f *fakeTasks) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID, bearerJWT string) (agenttask.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++

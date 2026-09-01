@@ -244,7 +244,7 @@ func TestRepo_RLS_SearchChunksCannotReadOtherTenantChunks(t *testing.T) {
 	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 
-	results, err := repo.SearchChunks(ctx, tenantA, vec, 10)
+	results, err := repo.SearchChunks(ctx, tenantA, vec, 10, uuid.Nil)
 	if err != nil {
 		t.Fatalf("SearchChunks: %v", err)
 	}
