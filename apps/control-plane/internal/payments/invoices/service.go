@@ -106,7 +106,7 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 	// invoice speaks taka. Crossing that boundary is an FX conversion, and it
 	// happens here, once, at a rate recorded on the row. Reading the credit
 	// count as a paisa count is what issue #1648 was.
-	rate, err := s.resolveRate(ctx, workspaceID)
+	rate, err := s.resolveRate(ctx, workspaceID, period)
 	if err != nil {
 		return nil, err
 	}
@@ -179,24 +179,28 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 
 // resolveRate picks the USD to BDT rate this invoice is denominated at.
 //
-// The account's own most recent FX snapshot wins, because that is the rate it
-// bought its credits at (payments.FXService writes the snapshot at checkout and
-// service.go prices the rails quote from the same number), so the invoice
-// reconciles against the receipt that funded it and an admin override applied
-// there reaches invoices too. The platform rate is the fallback for an account
-// that has never transacted through a BDT rail, and for the case where the
-// snapshot table is unreadable, which must not stop billing.
+// The account's own most recent FX snapshot taken before the period closed
+// wins, because that is the rate it bought its credits at (payments.FXService
+// writes the snapshot at checkout and service.go prices the rails quote from
+// the same number), so the invoice is denominated at a rate the customer has
+// seen. The platform rate is the fallback for an account that has never
+// transacted through a BDT rail.
 //
-// A snapshot whose stored rate does not parse is NOT silently swapped for the
-// fallback: it means the FX table holds something the money path cannot read,
-// and inventing a different number there is how a customer ends up invoiced at
-// a rate nobody chose.
-func (s *Service) resolveRate(ctx context.Context, workspaceID uuid.UUID) (payments.USDBDTRate, error) {
-	snapshot, err := s.repo.LatestUSDBDTRate(ctx, workspaceID)
+// Every failure here is closed, not open. A stored rate that does not parse and
+// a lookup that errors both stop this invoice rather than quietly substituting
+// the platform rate. The pool answered AggregateByModel successfully a few
+// lines earlier, so an error here is not transient connectivity but something
+// structural (a missing table, a revoked grant, schema drift), and those are
+// exactly the cases where a silently different rate is worst: the row would be
+// materially different from every other invoice that account has received and
+// nothing on it would say so. The cron isolates per-workspace errors, so one
+// broken account does not stop the pass.
+func (s *Service) resolveRate(ctx context.Context, workspaceID uuid.UUID, period Period) (payments.USDBDTRate, error) {
+	snapshot, err := s.repo.LatestUSDBDTRate(ctx, workspaceID, period.End)
 	if err != nil {
-		s.logger.WarnContext(ctx, "invoice rate: fx snapshot lookup failed, using platform rate",
-			"workspace_id", workspaceID, "error", err)
-	} else if snapshot != "" {
+		return payments.USDBDTRate{}, fmt.Errorf("invoices: fx snapshot lookup: %w", err)
+	}
+	if snapshot != "" {
 		rate, perr := payments.ParseUSDBDTRate(snapshot, payments.RateSourceSnapshot)
 		if perr != nil {
 			return payments.USDBDTRate{}, fmt.Errorf("invoices: usd to bdt rate: %w", perr)

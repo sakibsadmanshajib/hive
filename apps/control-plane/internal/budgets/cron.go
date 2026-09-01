@@ -67,11 +67,19 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 	// The platform rate, deliberately, and not each account's own FX snapshot
 	// the way an invoice does. An invoice is a document that has to reconcile
 	// against the receipt for the top-up that funded it; a soft-cap alert is a
-	// threshold heuristic on a cap the customer typed, where the difference
-	// between the platform rate and a purchase rate is the FX fee, a few
-	// percent, far inside the resolution of a "you have used 80 percent"
-	// notification. One rate per pass also keeps every workspace in the same
-	// pass comparable, which per-account snapshots would not.
+	// threshold heuristic on a mid-month running total, and one rate per pass
+	// keeps every workspace in that pass mutually comparable, which per-account
+	// snapshots would not.
+	//
+	// The gap is small but NOT symmetric, and the direction is the part worth
+	// knowing. A snapshot rate is the mid rate times payments.FXFeeRate, so it
+	// is about five percent higher than the platform rate, so the same credits
+	// convert to about five percent FEWER taka here than they will on the
+	// invoice. The alert therefore fires slightly LATER than the invoice's
+	// arithmetic implies, and late is the direction that serves the customer
+	// least on a spend warning. Small enough not to change the design over;
+	// stated so that whoever decides to close the gap knows what closing it
+	// buys.
 	rate, err := payments.PlatformUSDBDTRate()
 	if err != nil {
 		return 0, fmt.Errorf("budgets: usd to bdt rate: %w", err)

@@ -194,14 +194,14 @@ func TestInsertOrFetch_RecordsRate_Live(t *testing.T) {
 	}
 }
 
-// TestLatestUSDBDTRate_Live proves the snapshot lookup reads the newest row for
-// the right account, and that an account with no snapshot is not an error.
+// TestLatestUSDBDTRate_Live proves the snapshot lookup reads the newest
+// qualifying row for the right account, and that the period bound holds.
 //
 // The rate an invoice is denominated at comes from here first, so a query that
-// silently returned nothing would send every invoice to the platform fallback
-// and reopen the receipt-versus-invoice disagreement this lookup exists to
-// close. Only real SQL can catch that: the fake repository answers whatever the
-// test sets.
+// silently returned nothing would send every invoice to the platform fallback,
+// and one without the period bound would let a top-up after the month closed
+// re-denominate it. Only real SQL can catch either: the fake repository answers
+// whatever the test sets.
 func TestLatestUSDBDTRate_Live(t *testing.T) {
 	pool := newInvoicesTestPool(t)
 	accountID := seedInvoiceWorkspace(t, pool)
@@ -209,8 +209,13 @@ func TestLatestUSDBDTRate_Live(t *testing.T) {
 	repo := NewPgxRepository(pool)
 	ctx := context.Background()
 
+	period := Period{
+		Start: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	}
+
 	// No snapshot yet: empty string, no error, so the caller falls back.
-	rate, err := repo.LatestUSDBDTRate(ctx, accountID)
+	rate, err := repo.LatestUSDBDTRate(ctx, accountID, period.End)
 	if err != nil {
 		t.Fatalf("lookup with no snapshot: %v", err)
 	}
@@ -218,16 +223,38 @@ func TestLatestUSDBDTRate_Live(t *testing.T) {
 		t.Fatalf("rate = %q, want empty for an account with no snapshot", rate)
 	}
 
-	seedFXSnapshot(t, pool, accountID, "120.000000", time.Now().UTC().Add(-48*time.Hour))
-	seedFXSnapshot(t, pool, accountID, "129.586500", time.Now().UTC().Add(-1*time.Hour))
-	seedFXSnapshot(t, pool, other, "999.000000", time.Now().UTC())
+	seedFXSnapshot(t, pool, accountID, "120.000000", period.Start.Add(2*24*time.Hour))
+	seedFXSnapshot(t, pool, accountID, "129.586500", period.Start.Add(20*24*time.Hour))
+	seedFXSnapshot(t, pool, other, "999.000000", period.Start.Add(21*24*time.Hour))
 
-	rate, err = repo.LatestUSDBDTRate(ctx, accountID)
+	rate, err = repo.LatestUSDBDTRate(ctx, accountID, period.End)
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
 	if rate != "129.586500" {
 		t.Fatalf("rate = %q, want the newest snapshot for this account (129.586500)", rate)
+	}
+
+	// A top-up after the month closed must not re-denominate it, and a
+	// regeneration months later must produce the same figure the original run
+	// did rather than the rate on the day it was re-run.
+	seedFXSnapshot(t, pool, accountID, "150.000000", period.End.Add(48*time.Hour))
+
+	rate, err = repo.LatestUSDBDTRate(ctx, accountID, period.End)
+	if err != nil {
+		t.Fatalf("lookup after a later snapshot: %v", err)
+	}
+	if rate != "129.586500" {
+		t.Fatalf("rate = %q, want 129.586500: a snapshot taken after the period end re-denominated a closed month", rate)
+	}
+
+	// The same later snapshot is the right answer for the period it falls in.
+	rate, err = repo.LatestUSDBDTRate(ctx, accountID, period.End.AddDate(0, 1, 0))
+	if err != nil {
+		t.Fatalf("lookup for the next period: %v", err)
+	}
+	if rate != "150.000000" {
+		t.Fatalf("rate = %q, want 150.000000 for the period that snapshot falls in", rate)
 	}
 }
 

@@ -177,14 +177,22 @@ func (r *pgxRepository) ListActiveWorkspaces(ctx context.Context, period Period)
 	return out, rows.Err()
 }
 
-// LatestUSDBDTRate reads the effective rate off the account's newest FX
-// snapshot. public.fx_snapshots stores its rates as text and carries an index
-// on (account_id, created_at desc), so this is one index lookup.
+// LatestUSDBDTRate reads the effective rate off the account's newest FX snapshot
+// taken before `before`. public.fx_snapshots carries an index on
+// (account_id, created_at desc), so this is an index scan with a filter on the
+// two currency columns, which the index does not cover; both default to USD and
+// BDT and CreateSnapshot hardcodes them, so it is one row in practice.
+//
+// The `created_at < before` bound is what makes a closed month immutable.
+// Callers pass the invoice period end, so a top-up on the last day of the month
+// cannot re-denominate credits consumed on the second, and regenerating a
+// corrected invoice in October produces the figure the original run did rather
+// than October's rate.
 //
 // No rows is not an error: an account that has never paid through a BDT rail (a
 // granted or card-funded workspace) has no rate of its own, and the caller falls
 // back to the platform rate.
-func (r *pgxRepository) LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+func (r *pgxRepository) LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID, before time.Time) (string, error) {
 	var rate string
 	err := r.pool.QueryRow(ctx, `
 		SELECT effective_rate
@@ -192,9 +200,10 @@ func (r *pgxRepository) LatestUSDBDTRate(ctx context.Context, workspaceID uuid.U
 		WHERE account_id = $1
 		  AND base_currency = 'USD'
 		  AND quote_currency = 'BDT'
+		  AND created_at < $2
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, workspaceID).Scan(&rate)
+	`, workspaceID, before).Scan(&rate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}

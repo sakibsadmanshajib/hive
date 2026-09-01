@@ -94,10 +94,16 @@ func TestGenerateInvoice_FallsBackToPlatformRateWithoutSnapshot(t *testing.T) {
 	}
 }
 
-// TestGenerateInvoice_SurvivesAnFXLookupFailure: the FX table being unreadable
-// is an infrastructure problem, not a reason to stop invoicing. The fallback is
-// used and the row records which rate it was.
-func TestGenerateInvoice_SurvivesAnFXLookupFailure(t *testing.T) {
+// TestGenerateInvoice_RefusesWhenTheSnapshotLookupFails: this fails closed, not
+// open.
+//
+// `AggregateByModel` answered from the same pool a few lines earlier, so an
+// error here is not transient connectivity but something structural, and those
+// are the cases where quietly falling back to the platform rate is worst: the
+// row would be denominated differently from every other invoice that account
+// has received, and `USDBDTRate` records the rate but not the source, so
+// nothing on the row could say why.
+func TestGenerateInvoice_RefusesWhenTheSnapshotLookupFails(t *testing.T) {
 	t.Parallel()
 
 	repo := newFakeRepo()
@@ -106,13 +112,38 @@ func TestGenerateInvoice_SurvivesAnFXLookupFailure(t *testing.T) {
 		return oneUSDOfCredits(), nil
 	}
 
+	storage := newFakeStorage()
+	svc := NewService(repo, storage, &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+	if _, err := svc.GenerateInvoiceForPeriod(context.Background(), uuid.New(), augustPeriod()); err == nil {
+		t.Fatal("expected generation to stop when the fx snapshot lookup fails")
+	}
+	if len(storage.uploads) != 0 {
+		t.Fatalf("wrote %d PDFs despite an unresolvable rate", len(storage.uploads))
+	}
+}
+
+// TestGenerateInvoice_BoundsTheSnapshotLookupToThePeriod proves the period end
+// reaches the query. Without it a top-up on the last day of the month
+// re-denominates credits consumed on the second, and a correction-path
+// regeneration in October prices an August invoice at October's rate. The rule
+// this pins is that a closed month's rate is immutable; the SQL half is pinned
+// by TestLatestUSDBDTRate_Live.
+func TestGenerateInvoice_BoundsTheSnapshotLookupToThePeriod(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeRepo()
+	repo.fxRate = "129.586500"
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return oneUSDOfCredits(), nil
+	}
+
 	svc := NewService(repo, newFakeStorage(), &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
-	got, err := svc.GenerateInvoiceForPeriod(context.Background(), uuid.New(), augustPeriod())
-	if err != nil {
+	period := augustPeriod()
+	if _, err := svc.GenerateInvoiceForPeriod(context.Background(), uuid.New(), period); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	if got.USDBDTRate != "100.000000" {
-		t.Fatalf("recorded rate = %q, want the platform fallback %q", got.USDBDTRate, "100.000000")
+	if !repo.fxBefore.Equal(period.End) {
+		t.Fatalf("snapshot lookup bounded at %s, want the period end %s", repo.fxBefore, period.End)
 	}
 }
 

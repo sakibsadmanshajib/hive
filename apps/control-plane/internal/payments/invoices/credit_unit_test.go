@@ -35,16 +35,20 @@ func TestMain(m *testing.M) {
 }
 
 // spendCredits returns the credit quantity worth the supplied BDT subunit
-// amount at the pinned rate.
+// amount at the pinned rate: 100,000 credits to the paisa, since one paisa is
+// one hundredth of a taka and one taka is one hundredth of a USD at 100 BDT per
+// USD, and a USD is 1,000,000,000 credits.
 //
-// Derived from the constants rather than written out as a multiplier, so an
-// error in payments.CreditsPerUSD or payments.SubunitsPerBDT moves the fixture
-// and the code under test in the same direction instead of cancelling out. A
-// fixture that cannot absorb a constant error is the failure this suite exists
-// to prevent.
+// The literal is DELIBERATE. It states that relationship independently of the
+// constants the code under test uses, which is the only reason an assertion
+// built on it can observe an error in either of them. Deriving it from
+// payments.CreditsPerUSD and payments.SubunitsPerBDT would make this the exact
+// algebraic inverse of payments.CreditsToBDTSubunits, the round trip would be
+// the identity for any value of either constant, and every assertion routing
+// through this helper would go blind. Measured, not argued: with the derived
+// form, a hundredfold error in SubunitsPerBDT left this package entirely green.
 func spendCredits(subunits int64) *big.Int {
-	credits := new(big.Int).Mul(big.NewInt(subunits), big.NewInt(payments.CreditsPerUSD))
-	return credits.Div(credits, big.NewInt(fixtureRateBDTPerUSD*payments.SubunitsPerBDT))
+	return new(big.Int).Mul(big.NewInt(subunits), big.NewInt(100_000))
 }
 
 // TestGenerateInvoiceForPeriod_ConvertsCreditsToTaka is the invoice half of

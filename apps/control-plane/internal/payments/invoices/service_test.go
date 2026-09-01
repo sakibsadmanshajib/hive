@@ -24,9 +24,12 @@ type fakeRepo struct {
 	activeFn        func(ctx context.Context, p Period) ([]uuid.UUID, error)
 
 	// fxRate is the account's most recent fx_snapshots effective_rate, empty
-	// when it has none; fxErr makes the lookup itself fail.
-	fxRate string
-	fxErr  error
+	// when it has none; fxErr makes the lookup itself fail. fxBefore records
+	// the period bound the service asked for, so a test can prove the bound is
+	// actually threaded through rather than dropped.
+	fxRate   string
+	fxErr    error
+	fxBefore time.Time
 }
 
 func newFakeRepo() *fakeRepo {
@@ -90,7 +93,10 @@ func (f *fakeRepo) ListActiveWorkspaces(ctx context.Context, p Period) ([]uuid.U
 	return nil, nil
 }
 
-func (f *fakeRepo) LatestUSDBDTRate(_ context.Context, _ uuid.UUID) (string, error) {
+func (f *fakeRepo) LatestUSDBDTRate(_ context.Context, _ uuid.UUID, before time.Time) (string, error) {
+	f.mu.Lock()
+	f.fxBefore = before
+	f.mu.Unlock()
 	return f.fxRate, f.fxErr
 }
 
