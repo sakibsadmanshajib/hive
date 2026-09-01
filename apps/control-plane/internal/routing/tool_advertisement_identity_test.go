@@ -144,9 +144,17 @@ func TestAdvertisingToolsNeverNarrowsTheCandidateSet(t *testing.T) {
 
 		// The candidate-count half of A6, read straight off the catalog: on an
 		// advertised alias, the set the tool filter keeps and the set it starts
-		// from are the same size. Stated separately from the behavioural check
-		// below because it is what would break first if the advertisement rule
-		// were ever loosened, for instance to at-least-one-capable-group.
+		// from are the same size.
+		//
+		// Attribution, corrected after a reviewer mutated the predicate to
+		// at-least-one-capable-group and found this line stayed green: it does
+		// NOT catch that loosening today, because no alias in the folded chain
+		// has a mixed capability set, so a loosened rule advertises the same ten
+		// aliases and enabled still equals capable for each. What catches the
+		// loosening is TestToolCapableAliases, on two subtests, and
+		// TestTheAdvertisementIdentityCheckCanFail, on its synthetic mixed
+		// fixture. This line is the same statement made against real catalog
+		// data, and it starts biting the day the catalog grows a mixed alias.
 		enabled, capable := 0, 0
 		for _, candidate := range candidates {
 			if strings.EqualFold(candidate.HealthState, "disabled") {

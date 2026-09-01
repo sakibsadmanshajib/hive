@@ -69,6 +69,12 @@ func ToolCapableAliases(rows []RouteToolCapability) map[string]bool {
 	toolCapable := make(map[string]int, len(rows))
 
 	for _, row := range rows {
+		// Trimmed, while SelectRoute and buildCatalogSnapshot key on the
+		// untrimmed alias_id. A padded alias_id would therefore land here under
+		// a key neither of them looks up and read false, which refuses to
+		// advertise rather than advertising wrongly. Noted rather than
+		// reconciled: the column has no padded row and the failure direction is
+		// the safe one.
 		aliasID := strings.TrimSpace(row.AliasID)
 		if aliasID == "" {
 			continue

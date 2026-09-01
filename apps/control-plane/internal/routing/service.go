@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -126,23 +127,60 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	// only other place this distinction matters.
 	if input.RequireToolCapable {
 		incapableGroups := make(map[string]bool)
+		enabledCount := 0
 		for _, c := range candidates {
 			if strings.EqualFold(c.HealthState, "disabled") {
 				continue
 			}
+			enabledCount++
 			if !c.SupportsTools {
 				incapableGroups[c.LiteLLMModelName] = true
 			}
 		}
 
 		capable := make([]RouteCandidate, 0, len(candidates))
+		enabledCapable := 0
 		for _, c := range candidates {
 			if c.SupportsTools && !incapableGroups[c.LiteLLMModelName] {
 				capable = append(capable, c)
+				if !strings.EqualFold(c.HealthState, "disabled") {
+					enabledCapable++
+				}
 			}
 		}
 		if len(capable) == 0 {
 			return SelectionResult{}, fmt.Errorf("%w: alias %s has no tool-capable routes", ErrNoCapableRoute, aliasID)
+		}
+		// A narrowing that is not supposed to be possible, made observable.
+		//
+		// Tool advertisement is decided upstream from catalog.ToolCapableAliases,
+		// which reports true only when every enabled route of the alias is tool
+		// capable, so on an advertised alias this filter is the identity and
+		// this branch never fires. That property is proven against the MIGRATION
+		// CHAIN, at fold time, by TestAdvertisingToolsNeverNarrowsTheCandidateSet.
+		// It is not proven at runtime, and it cannot be: provider_routes and
+		// provider_capabilities are mutated by the DB-managed provider surface
+		// and health_state moves under the health system, while the model list
+		// is served from a 30 second cache that clients then cache for longer.
+		//
+		// So there is a real window where an added or degraded route makes a
+		// still-advertised alias non-uniform, every loaded chat surface goes on
+		// attaching a tools block, and this filter quietly concentrates traffic
+		// on the survivors. On the free pool, two Groq routes since PR #1556,
+		// that is a concentration onto one. Silent traffic concentration is
+		// exactly the regression this whole slice exists to prevent, so it gets
+		// a WARN rather than being invisible.
+		//
+		// ponytail: a log line, not a metric, because nothing meters this
+		// function today. Upgrade path if it ever fires in normal operation:
+		// a counter keyed by alias, so the window can be measured rather than
+		// grepped for.
+		if enabledCapable < enabledCount {
+			slog.Warn("tool capability filter narrowed the candidate set",
+				"alias", aliasID,
+				"enabled", enabledCount,
+				"enabled_capable", enabledCapable,
+				"detail", "an advertised alias should be uniformly tool capable; traffic for this alias is now concentrated on fewer routes")
 		}
 		candidates = capable
 	}

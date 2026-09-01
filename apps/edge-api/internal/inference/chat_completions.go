@@ -149,15 +149,13 @@ func rawFieldPresent(f json.RawMessage) bool {
 
 // toolParamNames is the ordered list of request fields that make a request
 // tool-calling or structured-output shaped, and therefore require a
-// tool-capable route. Ordered, because the name is reported to the caller and
-// the first match wins.
+// tool-capable route. Ordered, and in the same order as firstToolParam decides,
+// because the name is reported to the caller and the first match wins.
 //
-// One list, two readers: firstToolParam below reads the typed request the
-// API-key path already parsed, and ToolParamInBody reads a raw body for the
-// session chat path, which parses into its own much narrower struct. They must
-// never disagree, because a request that one calls tool-shaped and the other
-// does not is a request dispatched without the capability check the other
-// applied. TestToolParamInBodyAgreesWithFirstToolParam holds that.
+// Read by the fallback arm of ToolParamInBody only. The primary arm delegates
+// to firstToolParam itself, so the two surfaces cannot come to different
+// verdicts about the same body by construction rather than by two lists being
+// kept in sync.
 var toolParamNames = []string{
 	"tools",
 	"tool_choice",
@@ -170,19 +168,46 @@ var toolParamNames = []string{
 // ToolParamInBody returns the name of the first tool-calling or structured-output
 // parameter present in a raw OpenAI-shaped chat request body, or "" if none are.
 //
-// It decodes into a field map rather than into ChatCompletionRequest on
-// purpose. The session chat surface forwards whatever Open WebUI sends, and a
-// body that fails to decode into the typed struct for some unrelated reason
-// must not be able to make a tool payload look like a plain one: a field map
-// decodes anything that is a JSON object at all. An input that is not a JSON
-// object cannot carry a tool block either, so "" is the honest answer there.
+// It DELEGATES to firstToolParam, and that is load bearing rather than tidy.
+// An earlier version decoded into a field map with exact keys, which looked
+// equivalent and was not: encoding/json matches struct field names CASE
+// INSENSITIVELY, so a body spelling `{"Tools": [...]}` populates req.Tools and
+// reads tool-shaped on the API-key surface, while an exact-key map lookup reads
+// it as carrying nothing. The session chat surface would then have dispatched
+// it with no capability check at all, which is the exact hole this function
+// exists to close, reachable by changing one letter.
+//
+// The fallback arm covers the case the map decode was originally chosen for: a
+// body that fails the typed decode for some unrelated reason (a wrongly typed
+// `stream` or `n`, say) must not read as plain and slip the gate. A field map
+// decodes anything that is a JSON object at all, and the key comparison there
+// is case folded to match what the typed decoder would have done. That arm is
+// unreachable from the API-key surface, which rejects such a body outright, so
+// there is no second verdict for it to disagree with.
+//
+// An input that is not a JSON object cannot carry a tool block either, so "" is
+// the honest answer there.
 func ToolParamInBody(raw []byte) string {
+	var req ChatCompletionRequest
+	if err := json.Unmarshal(raw, &req); err == nil {
+		return firstToolParam(&req)
+	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return ""
 	}
+	// Presence is collected first and the ordered list walked second, so the
+	// reported name does not depend on map iteration order. A parameter spelled
+	// two ways in one body counts as present, which is the gating direction.
+	present := make(map[string]bool, len(fields))
+	for key, value := range fields {
+		if rawFieldPresent(value) {
+			present[strings.ToLower(key)] = true
+		}
+	}
 	for _, name := range toolParamNames {
-		if rawFieldPresent(fields[name]) {
+		if present[name] {
 			return name
 		}
 	}
@@ -249,7 +274,14 @@ func guardToolCapability(ctx context.Context, o *Orchestrator, w http.ResponseWr
 		// The sentinel is checked first and the substring match is kept behind
 		// it: RoutingClient now wraps ErrNoToolCapableRoute, but o.routing is an
 		// interface here and a test double still fabricates the raw string.
-		if errors.Is(err, ErrNoToolCapableRoute) || strings.Contains(errMsg, "422") || strings.Contains(errMsg, "no tool-capable") {
+		//
+		// The match is on the message, never on the status. A bare "422" also
+		// matched ErrRouteNotEligible, which control-plane answers 422 for as
+		// well, so an alias whose routes were all unhealthy or all filtered out
+		// by an allowlist was told its response_format was unsupported: a claim
+		// about the request when the truth was about route availability. It
+		// also matched those three digits anywhere in a route or model id.
+		if errors.Is(err, ErrNoToolCapableRoute) || strings.Contains(errMsg, "no tool-capable") {
 			writeUnsupportedParamError(w, param, model)
 			return true
 		}

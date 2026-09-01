@@ -368,6 +368,18 @@ func (r *pgxRepository) ListAllAliases(ctx context.Context) ([]ModelAlias, error
 	return aliases, nil
 }
 
+// GetSnapshot is interface surface with NO live caller, and the capability read
+// it now performs is therefore not the cached one.
+//
+// Production reaches the model list through Service.GetSnapshot and
+// Service.GetSnapshotForTenant, which call ListRouteToolCapabilities through
+// the interface and so resolve on CachedRepository. This method calls it on the
+// pgx receiver, which bypasses that cache. Nothing in cmd/server or anywhere
+// else calls Repository.GetSnapshot at all, so it is an extra uncached query on
+// a dead path rather than a live cache miss. It is kept in step with
+// buildCatalogSnapshot instead of being fed a nil map, because a snapshot that
+// silently reported every alias as tools=false would be a wrong answer waiting
+// for the day this method acquires a caller.
 func (r *pgxRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {
 	aliases, err := r.ListPublicAliases(ctx)
 	if err != nil {
