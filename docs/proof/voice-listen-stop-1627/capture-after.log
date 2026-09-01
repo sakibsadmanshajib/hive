@@ -1,0 +1,25 @@
+[   1.848s] signed the existing local proof account in through the API
+[   2.182s] build under test: after
+[   2.182s] front end: http://localhost:8080
+[  10.818s] signed in, url=http://localhost:8080/
+[  11.180s] voice mode button visible, opening the overlay
+[  12.745s] t+0.28s  overlay=Listening...  liveMicTracks=1  -> after-01-t0.28s.png
+[  13.908s] t+1.30s  overlay=Listening...  liveMicTracks=1  -> after-04-t1.30s.png
+[  15.786s] t+3.06s  overlay=Listening...  liveMicTracks=1  -> after-09-t3.06s.png
+[  18.397s] t+5.58s  overlay=Thinking...  liveMicTracks=1  -> after-15-t5.58s.png
+[  20.350s] t+7.43s  overlay=Tap to interrupt  liveMicTracks=1  -> after-19-t7.43s.png
+[  21.459s] t+8.74s  overlay=Tap to interrupt  liveMicTracks=1  -> after-21-t8.74s.png
+[  22.388s] t+9.73s  overlay=Listening...  liveMicTracks=1  -> after-23-t9.73s.png
+[  25.048s] t+12.43s  overlay=Listening...  liveMicTracks=1  -> after-31-t12.43s.png
+[  36.466s] t+23.91s  overlay=Listening...  liveMicTracks=1  -> after-70-t23.91s.png
+[  56.264s] t+43.69s  overlay=Listening...  liveMicTracks=1  -> after-139-t43.69s.png
+[  56.567s] recorder timeline, relative to the first getUserMedia:
+[  56.568s]    +0.00s  getUserMedia(audio)
+[  56.568s]    +0.14s  fake microphone: noise floor throughout, speech from +1.0s to +3.0s
+[  56.568s]    +0.30s  getUserMedia(audio)
+[  56.568s]    +0.38s  fake microphone: noise floor throughout, speech from +1.0s to +3.0s
+[  56.568s]    +1.46s  MediaRecorder.start
+[  56.568s]    +5.51s  MediaRecorder.stop (state=recording)
+[  56.568s] recorder starts=1 stops=1
+[  56.568s] overlay states seen: Listening... | Thinking... | Tap to interrupt
+[  57.109s] done

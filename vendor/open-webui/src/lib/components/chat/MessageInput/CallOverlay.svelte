@@ -13,6 +13,7 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import VideoInputMenu from './CallOverlay/VideoInputMenu.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
+	import { createVoiceActivityState, stepVoiceActivity } from '$lib/hive/voiceActivity';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	const i18n = getContext('i18n');
@@ -151,7 +152,6 @@
 		camera = false;
 	};
 
-	const MIN_DECIBELS = -55;
 	const VISUALIZER_BUFFER_LENGTH = 300;
 
 	const transcribeHandler = async (audioBlob) => {
@@ -301,72 +301,97 @@
 		const audioStreamSource = audioContext.createMediaStreamSource(stream);
 
 		const analyser = audioContext.createAnalyser();
-		analyser.minDecibels = MIN_DECIBELS;
 		audioStreamSource.connect(analyser);
 
-		const bufferLength = analyser.frequencyBinCount;
-
-		const domainData = new Uint8Array(bufferLength);
 		const timeDomainData = new Uint8Array(analyser.fftSize);
 
-		let lastSoundTime = Date.now();
-		hasStartedSpeaking = false;
+		// startRecording calls this again after every utterance, so before this
+		// fix the overlay opened one AudioContext per cycle and closed none.
+		// That was unreachable while the loop never exited, which is exactly the
+		// bug below; it is reachable now, and a browser caps how many contexts
+		// one document may hold, so trading a microphone that never stops for a
+		// microphone that stops a handful of times and then never again is no
+		// trade.
+		// The source node is disconnected before the context closes, which the
+		// close alone would cover, but saying it makes the ownership obvious:
+		// the context is per cycle, the stream behind the source is not, and
+		// nothing here may stop that stream.
+		const releaseAnalyser = () => {
+			audioStreamSource.disconnect();
+			audioContext.close().catch(() => {});
+		};
 
-		console.log('🔊 Sound detection started', lastSoundTime, hasStartedSpeaking);
+		// Issue #1627. This loop used to ask `domainData.some((value) => value > 0)`,
+		// which is true as soon as one frequency bin clears the analyser's floor,
+		// so in any real room it held on nearly every frame: the silence timer was
+		// reset forever, mediaRecorder.stop() was never reached, and the microphone
+		// stayed open for as long as the overlay did. The decision now lives in
+		// lib/hive/voiceActivity.ts, is driven by the same RMS the visualiser
+		// already shows, and is bounded by a hard cap on utterance length.
+		let voiceActivity = createVoiceActivityState();
+
+		// This loop belongs to the recorder that was live when it started, and
+		// to no other. toggleMute stops the recorder directly, which recycles it
+		// through stopRecordingCallback and starts a second loop; a guard that
+		// only asked whether SOME recorder existed left the first one running
+		// against a stale analyser, so two loops drove one recorder with two
+		// sets of state and two AudioContexts.
+		const recorder = mediaRecorder;
+
+		hasStartedSpeaking = false;
 
 		const detectSound = () => {
 			const processFrame = () => {
-				if (!mediaRecorder || !$showCallOverlay) {
+				if (mediaRecorder !== recorder || !$showCallOverlay) {
+					releaseAnalyser();
 					return;
 				}
 
-				if (muted || (assistantSpeaking && !($settings?.voiceInterruption ?? false))) {
-					// Suppress mic input when muted or when assistant is speaking without interruption enabled
-					analyser.maxDecibels = 0;
-					analyser.minDecibels = -1;
-				} else {
-					analyser.minDecibels = MIN_DECIBELS;
-					analyser.maxDecibels = -30;
-				}
-
 				analyser.getByteTimeDomainData(timeDomainData);
-				analyser.getByteFrequencyData(domainData);
-
-				// Calculate RMS level from time domain data
 				rmsLevel = calculateRMS(timeDomainData);
 
 				if (muted || (assistantSpeaking && !($settings?.voiceInterruption ?? false))) {
+					// The microphone is still live, but nothing it hears counts:
+					// muted, or the assistant is talking and interruption is off.
 					rmsLevel = 0;
 				}
 
-				// Check if initial speech/noise has started
-				const hasSound = domainData.some((value) => value > 0);
-				if (hasSound) {
-					// BIG RED TEXT
-					console.log('%c%s', 'color: red; font-size: 20px;', '🔊 Sound detected');
-					if (mediaRecorder && mediaRecorder.state !== 'recording') {
-						mediaRecorder.start();
+				// performance.now(), not Date.now(): the wall clock can move backwards
+				// on an NTP correction or a resume from sleep, and both the silence
+				// timeout and the hard cap are differences against it, so a backward
+				// jump would hold the microphone open until it caught up. That is
+				// the failure this whole change exists to remove.
+				const step = stepVoiceActivity(voiceActivity, rmsLevel, performance.now());
+				voiceActivity = step.state;
+
+				if (step.action === 'start') {
+					if (recorder.state !== 'recording') {
+						recorder.start();
+					}
+					hasStartedSpeaking = true;
+					stopAllAudio();
+				} else if (step.action === 'transcribe' || step.action === 'discard') {
+					// 'discard' is a door or a keystroke rather than a sentence.
+					// Clearing hasStartedSpeaking first drops the captured chunk in
+					// ondataavailable, so nothing is uploaded and nothing is sent to
+					// the model: that flood is the other half of what this issue
+					// reported.
+					confirmed = step.action === 'transcribe';
+					if (step.action === 'discard') {
+						hasStartedSpeaking = false;
 					}
 
-					if (!hasStartedSpeaking) {
-						hasStartedSpeaking = true;
-						stopAllAudio();
+					releaseAnalyser();
+
+					if (recorder.state === 'recording') {
+						recorder.stop();
+					} else {
+						// Nothing to stop, so no onstop is coming. Recycle the loop by
+						// hand rather than leaving a live microphone with no frame
+						// callback watching it.
+						stopRecordingCallback();
 					}
-
-					lastSoundTime = Date.now();
-				}
-
-				// Start silence detection only after initial speech/noise has been detected
-				if (hasStartedSpeaking) {
-					if (Date.now() - lastSoundTime > 2000) {
-						confirmed = true;
-
-						if (mediaRecorder) {
-							console.log('%c%s', 'color: red; font-size: 20px;', '🔇 Silence detected');
-							mediaRecorder.stop();
-							return;
-						}
-					}
+					return;
 				}
 
 				window.requestAnimationFrame(processFrame);
