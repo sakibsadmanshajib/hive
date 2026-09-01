@@ -362,122 +362,14 @@ def test_rewrite_env_file_never_writes_stdout() -> None:
     print("ok: rewrite_env_file never writes to stdout")
 
 
-# --- tenant billing mapping (issue #717) ----------------------------------
-
-REST = "https://project.supabase.co/rest/v1"
-HEADERS = {"Authorization": "Bearer service-role", "Content-Type": "application/json"}
-TENANT = "11111111-1111-1111-1111-111111111111"
-ACCOUNT = "22222222-2222-2222-2222-222222222222"
-OTHER = "33333333-3333-3333-3333-333333333333"
-
-
-def run_billing_mapping(tenant_rows, account_rows):
-    """Drive provision_billing_mapping against canned PostgREST answers.
-    Returns the recorded requests so a test can assert what was written."""
-    calls = []
-
-    def fake_urlopen(req, timeout=None):
-        calls.append(req)
-        if req.get_method() == "GET" and "tenant_id=eq." in req.full_url:
-            return FakeResponse(200, tenant_rows)
-        if req.get_method() == "GET" and "account_id=eq." in req.full_url:
-            return FakeResponse(200, account_rows)
-        if req.get_method() == "POST":
-            return FakeResponse(201, [])
-        raise AssertionError(f"unexpected call: {req.get_method()} {req.full_url}")
-
-    original = patch_urlopen(fake_urlopen)
-    try:
-        seed_owui_e2e_user.provision_billing_mapping(REST, HEADERS, TENANT, ACCOUNT)
-    finally:
-        restore_urlopen(original)
-    return calls
-
-
-def test_billing_mapping_is_written_when_absent() -> None:
-    """The #717 regression: without this row edge-api resolves no tenant for the
-    minted key and 403s account_not_provisioned on model listing, RAG embeddings
-    and TTS, so the seeded environment can never serve a model picker."""
-    calls = run_billing_mapping(tenant_rows=[], account_rows=[])
-    posts = [c for c in calls if c.get_method() == "POST"]
-    assert len(posts) == 1, [c.full_url for c in calls]
-    assert posts[0].full_url == REST + "/tenant_billing_accounts"
-    assert json.loads(posts[0].data) == {"tenant_id": TENANT, "account_id": ACCOUNT}
-    print("ok: provision_billing_mapping maps the shim account to the tenant")
-
-
-def test_billing_mapping_is_idempotent() -> None:
-    calls = run_billing_mapping(tenant_rows=[{"account_id": ACCOUNT}], account_rows=[])
-    assert [c.get_method() for c in calls] == ["GET"], [c.full_url for c in calls]
-    print("ok: provision_billing_mapping is a no-op when the pairing already exists")
-
-
-def test_billing_mapping_never_repoints_a_tenant() -> None:
-    """Moving a mapping moves whose credits pay for the traffic, so a collision
-    exits before anything is minted instead of guessing."""
-    try:
-        run_billing_mapping(tenant_rows=[{"account_id": OTHER}], account_rows=[])
-    except SystemExit as e:
-        assert e.code == 1
-    else:
-        raise AssertionError("expected a non-zero exit, not a silent repoint")
-    print("ok: provision_billing_mapping refuses to move a tenant to another account")
-
-
-def test_billing_mapping_never_repoints_an_account() -> None:
-    try:
-        run_billing_mapping(tenant_rows=[], account_rows=[{"tenant_id": OTHER}])
-    except SystemExit as e:
-        assert e.code == 1
-    else:
-        raise AssertionError("expected a non-zero exit, not a silent repoint")
-    print("ok: provision_billing_mapping refuses to move an account to another tenant")
-
-
-def run_billing_mapping_with_racing_insert(winner_account):
-    """Both lookups read empty, then the POST loses a uniqueness race to a
-    concurrent run. `winner_account` is what the row says afterwards."""
-    calls = []
-    posted = []
-
-    def fake_urlopen(req, timeout=None):
-        calls.append(req)
-        if req.get_method() == "POST":
-            posted.append(req)
-            raise urllib.error.HTTPError(
-                req.full_url, 409, "Conflict", {},
-                io.BytesIO(json.dumps({"code": "23505"}).encode()),
-            )
-        if "tenant_id=eq." in req.full_url:
-            # Empty until this run tries to insert, then the winner's row.
-            return FakeResponse(200, [{"account_id": winner_account}] if posted else [])
-        return FakeResponse(200, [])
-
-    original = patch_urlopen(fake_urlopen)
-    try:
-        seed_owui_e2e_user.provision_billing_mapping(REST, HEADERS, TENANT, ACCOUNT)
-    finally:
-        restore_urlopen(original)
-    return calls
-
-
-def test_billing_mapping_accepts_a_lost_race_on_the_same_pairing() -> None:
-    """Two overlapping runs both pass the lookups and both insert. The loser's
-    409 names a row that already says what it wanted, so failing on it would be
-    a failure with nothing for anybody to act on."""
-    calls = run_billing_mapping_with_racing_insert(winner_account=ACCOUNT)
-    assert [c.get_method() for c in calls] == ["GET", "GET", "POST", "GET"], [c.full_url for c in calls]
-    print("ok: provision_billing_mapping accepts a lost insert race on the same pairing")
-
-
-def test_billing_mapping_still_fails_when_the_race_winner_is_another_account() -> None:
-    try:
-        run_billing_mapping_with_racing_insert(winner_account=OTHER)
-    except SystemExit as e:
-        assert e.code == 1
-    else:
-        raise AssertionError("expected a non-zero exit when the winning row names another account")
-    print("ok: provision_billing_mapping still fails when the race winner is another account")
+# --- tenant billing mapping (issue #717, then #1599) -----------------------
+#
+# The six tests that lived here moved to scripts/test_shared_billing_mapping.py
+# along with the implementation. Both seeders write public.tenant_billing_accounts
+# and the two copies of that rule had already drifted once: this script learned
+# to write the row in #717, seed-demo-owner.py had not, and #1599 is the same
+# defect reported again. One implementation, one self-check, and that file also
+# asserts that neither seeder has grown a private copy again.
 
 
 def test_tenant_slug_defaults_to_ci_and_is_overridable() -> None:
@@ -646,12 +538,6 @@ def main() -> None:
     test_rewrite_env_file_reports_a_missing_file()
     test_rewrite_env_file_never_writes_stdout()
     test_account_slug_defaults_to_ci_and_is_overridable()
-    test_billing_mapping_is_written_when_absent()
-    test_billing_mapping_is_idempotent()
-    test_billing_mapping_never_repoints_a_tenant()
-    test_billing_mapping_never_repoints_an_account()
-    test_billing_mapping_accepts_a_lost_race_on_the_same_pairing()
-    test_billing_mapping_still_fails_when_the_race_winner_is_another_account()
     test_tenant_slug_defaults_to_ci_and_is_overridable()
     test_password_is_never_rotated_on_an_existing_account()
     test_run_key_namespaces_the_fixture_addresses()

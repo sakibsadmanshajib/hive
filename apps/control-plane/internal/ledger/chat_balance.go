@@ -130,6 +130,22 @@ func RegisterChatBalanceRoute(mux *http.ServeMux, svc *Service, gate func(http.H
 			// that one is gated in the Open WebUI shim, which 404s before it
 			// ever reaches this route when the control-plane URL and internal
 			// token are unset.
+			//
+			// Accepted consequence, deliberately, not an oversight. found is
+			// false for more than a seeded demo tenant: signup's
+			// EnsureTenantBillingAccount records a live 28 to 60 second window
+			// between the membership row and the mapping, and it declines
+			// permanently for a tenant whose active members do not converge on
+			// one account. Those principals now see "You're out of credits"
+			// with a Top up link that will not help them, where before they
+			// saw nothing at all. That is the better of the two wrong answers:
+			// an empty wallet is at least a state the user can recognise and
+			// escalate, silence is not, the window is seconds on the common
+			// path, and the permanent case is an operator repair either way.
+			// The alternative, telling the two apart on the wire, is exactly
+			// the "is this email billed" oracle the identical body closes, so
+			// any future split belongs on a deployment-level signal in the
+			// shim, never in this response.
 			writeJSON(w, http.StatusOK, ChatBalance{})
 		default:
 			writeJSON(w, http.StatusOK, balance)

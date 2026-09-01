@@ -175,51 +175,14 @@ def main() -> None:
         {EMAIL: "   ", TSLUG: "second-tenant", ASLUG: "second-account"},
     )
 
-    # ---- issue #1599: billing mapping and the explicit credit grant ----
+    # ---- issue #1599: the explicit credit grant ----
     #
-    # guard_billing_mapping: public.tenant_billing_accounts is 1:1 in both
-    # directions (tenant_id is the primary key, account_id is UNIQUE), so a
-    # single query for either side returns every row that can collide. Returns
-    # True when the wanted pairing already exists (nothing to write), False
-    # when there is nothing at all (write it), and exits on anything else --
-    # repointing either side decides whose credits pay for whose traffic and is
-    # an operator call, never a seeder's.
-    T, A = "tenant-1", "account-1"
-
-    # Nothing mapped: create it.
-    assert seed_demo_owner.guard_billing_mapping([], T, A) is False
-
-    # Exactly our pairing: a prior run of this script wrote it, idempotent.
-    assert seed_demo_owner.guard_billing_mapping(
-        [{"tenant_id": T, "account_id": A}], T, A
-    ) is True
-
-    # The tenant already bills to somebody else's account.
-    assert exits(
-        seed_demo_owner.guard_billing_mapping,
-        [{"tenant_id": T, "account_id": "other-account"}],
-        T,
-        A,
-    )
-
-    # Our account already funds a different tenant.
-    assert exits(
-        seed_demo_owner.guard_billing_mapping,
-        [{"tenant_id": "other-tenant", "account_id": A}],
-        T,
-        A,
-    )
-
-    # Both halves collide, with different partners on each side.
-    assert exits(
-        seed_demo_owner.guard_billing_mapping,
-        [
-            {"tenant_id": T, "account_id": "other-account"},
-            {"tenant_id": "other-tenant", "account_id": A},
-        ],
-        T,
-        A,
-    )
+    # The billing mapping itself now lives in scripts/shared_billing_mapping.py
+    # and is exercised by scripts/test_shared_billing_mapping.py, because both
+    # seeders write that row and two copies of the rule deciding whose credits
+    # pay for whose traffic is the drift that produced this issue in the first
+    # place.
+    A = "account-1"
 
     # credits_to_grant: credit is owner-discretionary. Unset means grant
     # nothing, so no path here ever funds a workspace implicitly; a value must
@@ -254,13 +217,23 @@ def main() -> None:
         10_000_000_000
     )
 
-    # grant_idempotency_key: keyed on the account AND the amount, so re-running
-    # the seeder with the same amount cannot post a second grant (the unique
-    # index on (account_id, entry_type, idempotency_key) swallows the replay),
-    # while an operator deliberately topping up with a different amount can.
-    assert seed_demo_owner.grant_idempotency_key(A, 5) == seed_demo_owner.grant_idempotency_key(A, 5)
-    assert seed_demo_owner.grant_idempotency_key(A, 5) != seed_demo_owner.grant_idempotency_key(A, 6)
-    assert seed_demo_owner.grant_idempotency_key(A, 5) != seed_demo_owner.grant_idempotency_key("a2", 5)
+    # grant_idempotency_key: keyed on the ACCOUNT ALONE, deliberately not on the
+    # amount. The seeder places at most one grant per account, ever, so the
+    # unique index on (account_id, entry_type, idempotency_key) refuses a second
+    # one whatever amount it carries. Keying on the amount as well would let a
+    # re-run with a corrected number leave the SUM of both on an account, which
+    # is unbounded money on a script that every workflow and doc calls
+    # idempotent, and nothing in the run would say the first grant was still
+    # there.
+    assert seed_demo_owner.grant_idempotency_key(A) == seed_demo_owner.grant_idempotency_key(A)
+    assert seed_demo_owner.grant_idempotency_key(A) != seed_demo_owner.grant_idempotency_key("a2")
+
+    # The amount must not reach the key at all: that is the property making a
+    # second, differently-sized grant collide rather than stack.
+    assert (
+        seed_demo_owner.grant_ledger_row(A, 5)["idempotency_key"]
+        == seed_demo_owner.grant_ledger_row(A, 6)["idempotency_key"]
+    )
 
     # The ledger row itself: append-only, so it is inserted with
     # ignore-duplicates and never merged, it carries the positive delta as
@@ -270,7 +243,7 @@ def main() -> None:
     assert row["account_id"] == A
     assert row["entry_type"] == "grant"
     assert row["credits_delta"] == 7
-    assert row["idempotency_key"] == seed_demo_owner.grant_idempotency_key(A, 7)
+    assert row["idempotency_key"] == seed_demo_owner.grant_idempotency_key(A)
     assert row["metadata"]["reason"]
     assert row["metadata"]["source"] == "scripts/seed-demo-owner.py"
 

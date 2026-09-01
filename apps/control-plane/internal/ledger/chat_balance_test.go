@@ -135,8 +135,15 @@ func TestChatBalanceHandler(t *testing.T) {
 			if !ok {
 				t.Fatalf("missing %s in %s", key, rec.Body.String())
 			}
-			if value.(float64) != 0 {
-				t.Fatalf("%s = %v, want 0", key, value)
+			// Checked, not asserted bare: a string or a null here would panic
+			// the test instead of naming the key, which is the one thing this
+			// loop exists to report.
+			number, ok := value.(float64)
+			if !ok {
+				t.Fatalf("%s is %T, want a number: %s", key, value, rec.Body.String())
+			}
+			if number != 0 {
+				t.Fatalf("%s = %v, want 0", key, number)
 			}
 		}
 		if strings.Contains(strings.ToLower(rec.Body.String()), "stranger") {
@@ -148,15 +155,25 @@ func TestChatBalanceHandler(t *testing.T) {
 	// zero balance: anything that distinguishes the two turns this route into
 	// an oracle for whether an email is billed at all.
 	t.Run("unbilled and genuinely-zero answers are indistinguishable", func(t *testing.T) {
+		// Its own fixture and its own mux: writing the funded-but-empty account
+		// into the shared repo above would leave a mutation behind for every
+		// subtest added after this one.
+		zeroRepo := newStubRepo()
 		zeroAccount := uuid.New()
-		repo.emailAccounts["broke@test.local"] = zeroAccount
-		repo.entries[zeroAccount] = []LedgerEntry{
+		zeroRepo.emailAccounts["broke@test.local"] = zeroAccount
+		zeroRepo.entries[zeroAccount] = []LedgerEntry{
 			{EntryType: EntryTypeGrant, CreditsDelta: 1000},
 			{EntryType: EntryTypeUsageCharge, CreditsDelta: -1000},
 		}
+		zeroMux := http.NewServeMux()
+		RegisterChatBalanceRoute(zeroMux, NewService(zeroRepo), func(h http.Handler) http.Handler { return h })
 
 		unbilled := do(http.MethodPost, `{"email":"stranger@test.local"}`)
-		zero := do(http.MethodPost, `{"email":"broke@test.local"}`)
+
+		req := httptest.NewRequest(http.MethodPost, ChatBalanceRoute,
+			strings.NewReader(`{"email":"broke@test.local"}`))
+		zero := httptest.NewRecorder()
+		zeroMux.ServeHTTP(zero, req)
 		if unbilled.Code != zero.Code || unbilled.Body.String() != zero.Body.String() {
 			t.Fatalf("unbilled %d %s differs from zero %d %s",
 				unbilled.Code, unbilled.Body.String(), zero.Code, zero.Body.String())
