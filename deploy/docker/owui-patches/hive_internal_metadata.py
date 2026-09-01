@@ -27,8 +27,34 @@ leave `routers/openai.py` with a body: `generate_chat_completion`,
 `embeddings`, `responses`, `speech` and the default-disabled `proxy`
 passthrough. All five go through this module, and
 `apply_internal_metadata_boundary_1578_patch.py` asserts that count at image
-build time, so a sixth added upstream fails the build rather than becoming a
-quiet hole.
+build time, by walking the AST for calls that hand a body to the HTTP session
+rather than by grepping for argument spellings, so a sixth added upstream fails
+the build rather than becoming a quiet hole.
+
+TWO SEAMS THAT ARE NOT CONNECTIONS
+----------------------------------
+Found by review, and both in `utils/chat.py` rather than in the router, so
+neither the count above nor a destination comparison can reach them. Both are
+patched to use `without_internal_metadata` below, which drops the carrier
+unconditionally because there is nothing to compare against:
+
+  * `generate_direct_chat_completion` pops the upstream `metadata` key, leaves
+    `__metadata`, and emits the whole payload to the caller's own browser over
+    socket.io. A server-resolved token in page JavaScript is a downgrade
+    whatever the connection settings say. Nothing reached a vendor through it:
+    `ENABLE_DIRECT_CONNECTIONS` defaults to False and this fork's frontend
+    throws before forwarding. That is two accidents standing between a bearer
+    and a third party, which is not a boundary;
+  * `generate_chat_completion`'s DEBUG log interpolated the whole payload, and
+    on the main chat path it runs after the Filter has written the bearer into
+    the carrier, so raising `GLOBAL_LOG_LEVEL` to diagnose something unrelated
+    wrote a live credential into the container log. A credential in a shipped
+    log is an egress with a different exit.
+
+The Ollama arm was checked rather than assumed and is clean:
+`convert_payload_openai_to_ollama` rebuilds the payload from a fixed key
+whitelist, so the carrier is dropped there already. The pipe and function arm
+stays in process.
 
 WHAT IS STRIPPED
 ----------------
@@ -94,6 +120,20 @@ INTERNAL_METADATA_KEY = '__metadata'
 GATEWAY_URL_ENV_NAME = 'OPENAI_API_BASE_URL'
 
 
+# Said once at import and again on every dropped carrier, because the two
+# failure modes look identical in a log otherwise and only one of them is a
+# total outage.
+GATEWAY_UNSET_MESSAGE = (
+    'hive (#1578): %s is not set, so this container declares no Hive gateway of its own. '
+    'Every chat completion that would have carried the signed-in user credential now has '
+    'it dropped here and is then rejected by edge-api with 401 UNAUTHENTICATED, which is '
+    'a total chat outage rather than a degraded one. Set %s; docker-compose.yml sets it '
+    "to http://edge-api:8080/v1. Upstream's plural OPENAI_API_BASE_URLS is deliberately "
+    'not read here, so a deployment configured only through that name lands in exactly '
+    'this state.'
+)
+
+
 def _normalize(url) -> str:
     """A base URL reduced to the form both sides of the comparison share."""
     if not isinstance(url, str):
@@ -154,21 +194,59 @@ def strip_internal_metadata(payload, url, environ=None):
         carried = payload[INTERNAL_METADATA_KEY]
         # Field NAMES only. The values are the thing being kept out of reach.
         fields = sorted(carried) if isinstance(carried, dict) else [type(carried).__name__]
-        log.warning(
-            'hive (#1578): dropped the internal %s carrier (fields: %s) from a request '
-            'bound for %s, which is not a Hive gateway connection. Nothing internal to '
-            'Hive, including the signed-in user credential, is forwarded to a '
-            'third-party connection.',
-            INTERNAL_METADATA_KEY,
-            fields,
-            _safe_destination(url),
-        )
+        if hive_gateway_base_url(environ):
+            # Working as designed: a real vendor connection, refused a carrier
+            # that was never meant for it.
+            log.warning(
+                'hive (#1578): dropped the internal %s carrier (fields: %s) from a request '
+                'bound for %s, which is not a Hive gateway connection. Nothing internal to '
+                'Hive, including the signed-in user credential, is forwarded to a '
+                'third-party connection.',
+                INTERNAL_METADATA_KEY,
+                fields,
+                _safe_destination(url),
+            )
+        else:
+            # Misconfiguration, not design. Distinct message and ERROR level, so
+            # a total chat outage does not read like the routine vendor case.
+            log.error(
+                GATEWAY_UNSET_MESSAGE + ' Dropped %s (fields: %s) from a request bound for %s.',
+                GATEWAY_URL_ENV_NAME,
+                GATEWAY_URL_ENV_NAME,
+                INTERNAL_METADATA_KEY,
+                fields,
+                _safe_destination(url),
+            )
         return {k: v for k, v in payload.items() if k != INTERNAL_METADATA_KEY}
     except Exception:  # pragma: no cover - defensive, see docstring
         log.exception('hive (#1578): failed to inspect the outgoing payload; dropping the carrier')
         if isinstance(payload, dict):
             return {k: v for k, v in payload.items() if k != INTERNAL_METADATA_KEY}
         return payload
+
+
+def without_internal_metadata(payload):
+    """`payload` with the carrier removed, unconditionally and with no destination.
+
+    Two seams have no destination URL to compare against and so cannot use the
+    boundary above, and both are patched into `utils/chat.py`:
+
+      * `generate_direct_chat_completion` relays its payload to the caller's own
+        browser over socket.io. A server-resolved OAuth token in page JavaScript
+        is a downgrade whatever the connection settings say, and there is no URL
+        on that arm at all;
+      * `generate_chat_completion`'s DEBUG log line interpolated the whole
+        payload, which on the main chat path runs after the Filter has written
+        the bearer into the carrier. A credential in a shipped log is an egress
+        with a different exit.
+
+    Returns the input object unchanged when there is nothing to remove, so a
+    caller can compare by identity; otherwise a new dict, leaving the caller's
+    own payload intact.
+    """
+    if not isinstance(payload, dict) or INTERNAL_METADATA_KEY not in payload:
+        return payload
+    return {k: v for k, v in payload.items() if k != INTERNAL_METADATA_KEY}
 
 
 def strip_internal_metadata_body(body, url, environ=None):
@@ -181,10 +259,45 @@ def strip_internal_metadata_body(body, url, environ=None):
     JSON, including an empty body, is returned untouched.
     """
     try:
-        payload = json.loads(body)
+        # utf-8-sig, not utf-8. `json.loads` refuses a UTF-8 byte order mark
+        # outright ("Unexpected UTF-8 BOM"), and returning the body untouched on
+        # that would be the one place in this module that fails OPEN: a body
+        # that really does carry the field, forwarded verbatim because of three
+        # leading bytes. The sibling above fails closed on every exception and
+        # the two postures should not differ.
+        decoded = body.decode('utf-8-sig') if isinstance(body, (bytes, bytearray)) else body
+        payload = json.loads(decoded)
     except Exception:
+        # Genuinely not JSON: a passthrough body this module has no opinion
+        # about. Relayed verbatim, which is the point of a passthrough.
         return body
     sanitized = strip_internal_metadata(payload, url, environ)
     if sanitized is payload:
         return body
     return json.dumps(sanitized).encode()
+
+
+def announce_if_unconfigured(environ=None) -> bool:
+    """Say it once, at import, so the cause is in the boot log and not only in
+    the first rejected conversation.
+
+    Deliberately NOT a refusal to boot, which is what the review asked for. Two
+    reasons, both concrete. This repository has already taken chat down once
+    with a boot guard that was reverted as an incident (`INCIDENT REVERT: undo
+    PR #1582's boot guard, chat is down`), and a guard here would be the same
+    shape. And the variable is not universally required even after this change:
+    a deployment whose models all route through the Ollama or pipe arms never
+    reaches this boundary at all, so refusing to start would break a
+    configuration that works. An ERROR at boot naming the variable, plus an
+    ERROR on every drop, gives the diagnosability the review is asking for
+    without inventing a new way to be down.
+
+    Returns whether it complained, so the regression test can assert it does.
+    """
+    if hive_gateway_base_url(environ):
+        return False
+    log.error(GATEWAY_UNSET_MESSAGE, GATEWAY_URL_ENV_NAME, GATEWAY_URL_ENV_NAME)
+    return True
+
+
+announce_if_unconfigured()

@@ -23,10 +23,13 @@ Behaviourally, both legs, against the real vendored source, with TWO
 OpenAI-compatible connections configured (Hive's own gateway and a vendor):
 
   * the PRE-FIX leg drives a completion at the vendor connection and OBSERVES
-    the bearer token arriving in the outbound body. That leg is the "remove the
-    strip and watch it go red" check issue #1578 asks for, run every time
-    rather than by hand: it executes the unpatched vendored source, which is
-    exactly the fix removed;
+    the bearer token arriving in the outbound body. It is a CONTROL, not the
+    mutation detector: it runs the unpatched vendored source, which does not
+    change when the fix changes, so it stays green whatever is done to the
+    patch. Its job is to prove the recorder can see a token at all, which is
+    what stops the post-fix leg from being a green that cannot go red. The
+    checks that actually go red when the strip is removed are named at the
+    bottom of this docstring;
   * the POST-FIX leg drives the same completion and observes no `__metadata`
     at all in the vendor's body, while the same completion to Hive's own
     gateway still carries it byte for byte, so the #1567 credential path and
@@ -74,6 +77,21 @@ Structurally:
     vendored tree, which the image does not run for the backend;
   * `make test-scripts` runs this file, which is what makes it a required check.
 
+WHAT ACTUALLY GOES RED WHEN THE FIX IS REMOVED
+----------------------------------------------
+Established by running the mutations, not by reasoning about them. Written down
+because whoever trims this file later will keep whatever the docstring calls
+load bearing:
+
+  * neutering `is_hive_gateway` to `return True`, which passes every structural
+    check in this file, turns the behavioural and helper legs red;
+  * deleting the chat-completions strip fails the patch's own placement
+    assertion, and since a non-zero patch exit raises `SystemExit` here, the
+    whole file aborts loudly rather than reporting a partial pass;
+  * adding a sixth outbound body under a new variable name fails the patch's
+    AST count. That one is not a manual mutation at all any more: this file
+    performs it on every run, under "the boundary is the whole boundary".
+
 No framework, no network, no database. Every credential in here is an obvious
 synthetic literal.
 Run: python3 scripts/test_owui_internal_metadata_boundary.py
@@ -103,6 +121,7 @@ PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
 MAKEFILE = REPO_ROOT / "Makefile"
 PINNED_OPENAI_DIGEST = REPO_ROOT / "deploy/docker/owui-patches/pinned-openai-digest.json"
+PINNED_CHAT_DIGEST = REPO_ROOT / "deploy/docker/owui-patches/pinned-chat-digest.json"
 
 PATCH = "apply_internal_metadata_boundary_1578_patch.py"
 HELPER_MODULE = "hive_internal_metadata.py"
@@ -157,28 +176,86 @@ def load_helper():
     return module
 
 
-def router_source(apply_patch: bool) -> str:
-    """routers/openai.py as the image runs it, with or without the #1578 patch."""
+def stage_backend(tmp: Path, router_text: str | None = None) -> Path:
+    """A minimal backend tree holding the two files the patch rewrites."""
+    (tmp / "routers").mkdir(parents=True, exist_ok=True)
+    (tmp / "utils").mkdir(parents=True, exist_ok=True)
+    router = tmp / "routers/openai.py"
+    if router_text is None:
+        shutil.copy(VENDORED_BACKEND / "routers/openai.py", router)
+    else:
+        router.write_text(router_text, encoding="utf-8")
+    shutil.copy(VENDORED_BACKEND / "utils/chat.py", tmp / "utils/chat.py")
+    return router
+
+
+def run_patch(tmp: Path):
+    """Run the patch against a staged tree. Returns the CompletedProcess."""
+    patch_path = PATCHES / PATCH
+    if not patch_path.exists():
+        raise SystemExit(f"FAIL: patch missing: {patch_path}")
+    env = dict(os.environ)
+    env["HIVE_OWUI_BACKEND_DIR"] = str(tmp)
+    return subprocess.run(
+        [sys.executable, str(patch_path)], env=env, capture_output=True, text=True
+    )
+
+
+def patched_sources(apply_patch: bool) -> tuple[str, str]:
+    """routers/openai.py and utils/chat.py as the image runs them."""
     with tempfile.TemporaryDirectory(prefix="owui-metadata-boundary-") as tmpdir:
         tmp = Path(tmpdir)
-        routers = tmp / "routers"
-        routers.mkdir()
-        shutil.copy(VENDORED_BACKEND / "routers/openai.py", routers / "openai.py")
+        stage_backend(tmp)
         if apply_patch:
-            patch_path = PATCHES / PATCH
-            if not patch_path.exists():
-                raise SystemExit(f"FAIL: patch missing: {patch_path}")
-            env = dict(os.environ)
-            env["HIVE_OWUI_BACKEND_DIR"] = str(tmp)
-            result = subprocess.run(
-                [sys.executable, str(patch_path)],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            result = run_patch(tmp)
             if result.returncode != 0:
                 raise SystemExit(f"FAIL: {PATCH} failed:\n{result.stdout}{result.stderr}")
-        return (routers / "openai.py").read_text(encoding="utf-8")
+        return (
+            (tmp / "routers/openai.py").read_text(encoding="utf-8"),
+            (tmp / "utils/chat.py").read_text(encoding="utf-8"),
+        )
+
+
+def router_source(apply_patch: bool) -> str:
+    return patched_sources(apply_patch)[0]
+
+
+def load_patch_module():
+    """The patch script imported as a module, for its AST counters.
+
+    Imported rather than restated. The first version of this file carried its
+    own copy of the outbound-body count as string literals, which is how both
+    ends of the same blind spot shipped together: an independent review added a
+    sixth route spelled `data=outgoing,` and the patch and this file agreed,
+    wrongly, that there were still five. One definition now, in the patch, used
+    by both.
+    """
+    path = PATCHES / PATCH
+    spec = importlib.util.spec_from_file_location("hive_1578_patch", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# A plausible sixth outbound body, spelled so that no substring count of the two
+# existing variable names can see it. This is the review's own experiment, run
+# on every pull request rather than once by hand.
+SIXTH_ROUTE = """
+
+@router.post('/hive-sixth-route-for-the-test')
+async def hive_sixth_route(request: Request, form_data: dict, user=Depends(get_verified_user)):
+    url, key, api_config = await get_openai_connection(0)
+    outgoing = json.dumps(form_data)
+    headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
+    session = await get_session()
+    return await session.request(
+        method='POST',
+        url=f'{url}/anything',
+        data=outgoing,
+        headers=headers,
+        cookies=cookies,
+    )
+"""
 
 
 SIBLING_PATCH = "apply_task_nonstreaming_response_1600_patch.py"
@@ -198,10 +275,7 @@ def both_patches_applied() -> str:
     """
     with tempfile.TemporaryDirectory(prefix="owui-both-patches-") as tmpdir:
         tmp = Path(tmpdir)
-        routers = tmp / "routers"
-        routers.mkdir()
-        target = routers / "openai.py"
-        shutil.copy(VENDORED_BACKEND / "routers/openai.py", target)
+        target = stage_backend(tmp)
 
         env = dict(os.environ)
         env["HIVE_OWUI_BACKEND_DIR"] = str(tmp)
@@ -516,6 +590,15 @@ def main() -> int:
         "the vendored routers/openai.py is byte-identical to the pinned image's "
         "copy, so the patch is exercised against the source the container runs",
     )
+    # The patch rewrites a second file now, so the same claim has to cover it.
+    # pinned-chat-digest.json was taken from the image by #1567.
+    chat_fixture = json.loads(PINNED_CHAT_DIGEST.read_text(encoding="utf-8"))
+    check(
+        hashlib.sha256((VENDORED_BACKEND / "utils/chat.py").read_bytes()).hexdigest()
+        == chat_fixture["sha256"],
+        "and so is the vendored utils/chat.py, where the direct-connection arm and "
+        "the DEBUG log line live",
+    )
 
     helper = load_helper()
     # The helper's own warnings are asserted on further down, with a handler
@@ -531,7 +614,7 @@ def main() -> int:
     os.environ.pop("OPENAI_API_BASE_URLS", None)
 
     unpatched = router_source(apply_patch=False)
-    patched = router_source(apply_patch=True)
+    patched, patched_chat = patched_sources(apply_patch=True)
 
     check(MARKER not in unpatched, "the vendored routers/openai.py carries no #1578 marker of its own")
     check(
@@ -733,20 +816,132 @@ def main() -> int:
     )
 
     print("\nthe boundary is the whole boundary")
+    patch_module = load_patch_module()
+    vendored_router = (VENDORED_BACKEND / "routers/openai.py").read_text(encoding="utf-8")
     check(
-        patched.count("data=payload,") + patched.count("data=body,") == 5
-        and patched.count("hive_strip_internal_metadata(")
-        + patched.count("hive_strip_internal_metadata_body(")
-        == 5,
-        "routers/openai.py sends exactly five bodies and has exactly five "
-        "sanitiser call sites, so speech and proxy are covered too and a sixth "
-        "added upstream fails the patch rather than becoming a hole",
+        patch_module.outbound_body_calls(vendored_router) == [389, 1258, 1410, 1535, 1656],
+        "an AST walk of the vendored router finds exactly the five calls that hand "
+        "a body to the HTTP session, by call shape rather than by argument "
+        "spelling, and ignores the same-named keyword on publish_event",
     )
     check(
-        "body = json.dumps(form_data)\n" not in patched
-        and "body = json.dumps(payload)\n" not in patched,
+        patch_module.unsanitised_outbound_functions(patched) == [],
+        "after patching, every function that sends a body also calls the boundary, "
+        "paired per function so five guards on four requests plus one unguarded "
+        "request elsewhere cannot pass",
+    )
+    check(
+        patch_module.unsanitised_outbound_functions(vendored_router)
+        == ["embeddings", "generate_chat_completion", "proxy", "responses", "speech"],
+        "and before patching all five are unguarded, so that check is not vacuous",
+    )
+    check(
+        "\n    body = json.dumps(form_data)\n" not in patched
+        and "\n    body = json.dumps(payload)\n" not in patched,
         "neither body is serialised before its connection is resolved any more, so "
         "no sanitiser is comparing against a destination it does not know",
+    )
+
+    # The review's experiment, mechanised. A sixth route whose body variable is
+    # named neither `payload` nor `body` used to sail through: the patch exited
+    # 0, this file printed all checks passed, and an unsanitised body shipped.
+    with tempfile.TemporaryDirectory(prefix="owui-sixth-route-") as tmpdir:
+        tmp = Path(tmpdir)
+        stage_backend(tmp, router_text=vendored_router + SIXTH_ROUTE)
+        sixth = run_patch(tmp)
+        # Read inside the context manager. Reading after it would compare
+        # against a deleted directory and pass for the wrong reason.
+        left_behind = (tmp / "routers/openai.py").read_text(encoding="utf-8")
+    check(
+        sixth.returncode != 0 and "expected 5" in (sixth.stdout + sixth.stderr),
+        "a sixth outbound body added under a new variable name really does fail "
+        "the patch, which is the claim this change has been making all along",
+    )
+    check(
+        "hive_strip_internal_metadata" not in left_behind,
+        "and it fails before writing anything, so a rejected build leaves no "
+        "half-patched file behind",
+    )
+
+    print("\nthe two seams in utils/chat.py that are not connections")
+    unpatched_chat = (VENDORED_BACKEND / "utils/chat.py").read_text(encoding="utf-8")
+    check(
+        "form_data.pop('metadata', {})\n\n    user_id" in unpatched_chat,
+        "pre-fix, the direct-connection arm pops the upstream metadata key and "
+        "goes straight on to relay the payload, carrier and all, to the browser",
+    )
+    check(
+        "    metadata = form_data.pop('metadata', {})\n    " + MARKER in patched_chat
+        and "form_data = hive_without_internal_metadata(form_data)" in patched_chat,
+        "post-fix, the direct-connection arm drops the carrier immediately after "
+        "that pop, unconditionally, because a payload bound for the caller's own "
+        "browser has no destination URL to compare against",
+    )
+    check(
+        "log.debug(f'generate_chat_completion: {form_data}')" not in patched_chat,
+        "the DEBUG log no longer interpolates the raw payload, which on the main "
+        "chat path runs after the Filter has already written the bearer into it",
+    )
+    check(
+        "log.debug('generate_chat_completion: %s', hive_without_internal_metadata(form_data))"
+        in patched_chat,
+        "and logs the payload without the carrier, lazily, so nothing is built "
+        "when DEBUG is off",
+    )
+    check(
+        patched_chat.count(MARKER) == 3,
+        "utils/chat.py carries exactly three #1578 markers, which the Dockerfile "
+        "pins as well",
+    )
+    carrier_payload = {"model": HIVE_MODEL, "__metadata": {"upstream_auth": FAKE_TOKEN}}
+    check(
+        helper.without_internal_metadata(carrier_payload) == {"model": HIVE_MODEL}
+        and carrier_payload["__metadata"]["upstream_auth"] == FAKE_TOKEN,
+        "without_internal_metadata drops the carrier with no destination argument "
+        "at all and leaves the caller's dict alone",
+    )
+
+    print("\nthe raw-body variant fails closed, like its sibling")
+    bom = b"\xef\xbb\xbf" + json.dumps(
+        {"a": 1, "__metadata": {"upstream_auth": FAKE_TOKEN}}
+    ).encode()
+    check(
+        FAKE_TOKEN
+        not in helper.strip_internal_metadata_body(bom, VENDOR_URL, gateway_env()).decode(
+            "utf-8-sig"
+        ),
+        "a byte order mark no longer makes json.loads refuse the body and the "
+        "carrier ride out verbatim, which was the one fail-open in this module",
+    )
+
+    print("\nan unconfigured gateway is loud, not silent")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    helper.log.addHandler(handler)
+    try:
+        complained = helper.announce_if_unconfigured({})
+        helper.strip_internal_metadata(
+            {"__metadata": {"upstream_auth": FAKE_TOKEN}}, GATEWAY_URL, {}
+        )
+        quiet = helper.announce_if_unconfigured(gateway_env())
+    finally:
+        helper.log.removeHandler(handler)
+    unconfigured_log = stream.getvalue()
+    check(
+        complained is True and quiet is False,
+        "the module says so at import when OPENAI_API_BASE_URL is unset, and says "
+        "nothing when it is set",
+    )
+    check(
+        unconfigured_log.count("OPENAI_API_BASE_URL") >= 2
+        and "total chat outage" in unconfigured_log,
+        "both the boot line and the per-request line name the missing variable and "
+        "the consequence, so a total outage does not read like the routine "
+        "vendor-strip case",
+    )
+    check(
+        FAKE_TOKEN not in unconfigured_log,
+        "and neither of them carries the credential",
     )
 
     print("\ncoexistence with the other patch that rewrites this same file")
@@ -782,6 +977,11 @@ def main() -> int:
         f"'{MARKER}' /app/backend/open_webui/routers/openai.py)\" -eq {EXPECTED_MARKERS}" in dockerfile,
         f"and pins the marker count at {EXPECTED_MARKERS}, so a digest bump that "
         "drops the fix fails the build instead of reopening the egress",
+    )
+    check(
+        f"'{MARKER}' /app/backend/open_webui/utils/chat.py)\" -eq 3" in dockerfile,
+        "and pins utils/chat.py's three markers as well, so the direct-connection "
+        "drop and the log-line fix cannot be lost separately from the router's",
     )
     check(
         "test_owui_internal_metadata_boundary.py" in MAKEFILE.read_text(encoding="utf-8"),

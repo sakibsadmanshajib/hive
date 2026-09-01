@@ -633,8 +633,14 @@ RUN python3 /tmp/apply_task_upstream_auth_patch.py \
 # So the strip is at the connection boundary rather than at the two writers: a
 # writer-side guard has to be remembered by the next writer, and the carrier is
 # a plain dict key. All five requests that leave routers/openai.py with a body
-# are covered, and the patch asserts that count so a sixth added upstream fails
-# this build instead of quietly becoming a hole. The auth boundary itself does
+# are covered, and the patch asserts that count, by walking the AST for calls
+# that hand a body to the HTTP session rather than by grepping for argument
+# spellings, so a sixth added upstream fails this build instead of quietly
+# becoming a hole. Two further seams in utils/chat.py have no destination to
+# compare against and drop the carrier outright: the direct-connection arm,
+# which relays its payload to the user's own browser, and a DEBUG log line that
+# interpolated the whole payload after the credential was already in it. The
+# auth boundary itself does
 # not move: requiresPerUserAuth, the shim key and edge-api are all untouched,
 # and the Hive arm's behaviour is unchanged. Behaviour is covered by
 # scripts/test_owui_internal_metadata_boundary.py.
@@ -642,7 +648,9 @@ COPY deploy/docker/owui-patches/hive_internal_metadata.py /app/backend/open_webu
 COPY deploy/docker/owui-patches/apply_internal_metadata_boundary_1578_patch.py /tmp/apply_internal_metadata_boundary_1578_patch.py
 RUN python3 /tmp/apply_internal_metadata_boundary_1578_patch.py \
     && test "$(grep -c '# hive (#1578)' /app/backend/open_webui/routers/openai.py)" -eq 6 \
+    && test "$(grep -c '# hive (#1578)' /app/backend/open_webui/utils/chat.py)" -eq 3 \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/openai.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/chat.py').read_text())" \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_internal_metadata.py').read_text())" \
     && python3 -c "import sys; sys.path.insert(0, '/app/backend/open_webui/utils'); import hive_internal_metadata as m; assert m.strip_internal_metadata({'__metadata': {'upstream_auth': 'SYNTHETIC'}}, 'https://vendor.invalid/v1', {}) == {}, 'the boundary does not strip'"
 

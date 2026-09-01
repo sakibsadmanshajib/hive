@@ -68,9 +68,10 @@ import pathlib
 BACKEND = pathlib.Path(os.environ.get('HIVE_OWUI_BACKEND_DIR', '/app/backend/open_webui'))
 
 MARKER = '# hive (#1578)'
-TARGET = 'routers/openai.py'
+ROUTER = 'routers/openai.py'
+CHAT = 'utils/chat.py'
 
-EDITS = [
+ROUTER_EDITS = [
     # 1. The import. The helper reads only os.environ and the standard library,
     #    so it closes no cycle wherever it is imported from.
     (
@@ -196,39 +197,161 @@ EDITS = [
     ),
 ]
 
-EXPECTED_MARKERS = 6
+ROUTER_MARKERS = 6
 
-# Every call into aiohttp from this module that carries a request body. The
-# count is the load-bearing part: it is what turns "all five outbound bodies
-# are sanitised" into a claim the build re-checks, instead of a claim that was
-# true on the day it was written. A digest bump that adds a sixth fails here.
-BODY_ARGUMENTS = ('data=payload,', 'data=body,')
-EXPECTED_BODY_ARGUMENTS = 5
+# utils/chat.py. Two places there hand the carrier to something outside this
+# process and neither has a destination URL to compare against, so both drop it
+# unconditionally rather than conditionally. See the module docstring.
+CHAT_EDITS = [
+    # 1. The import. The helper reads only os.environ and the standard library.
+    #    Anchored on the models import, which apply_task_upstream_auth_patch.py
+    #    (#1567) also anchors on and leaves in place, so this matches whether or
+    #    not that patch has already run.
+    (
+        'from open_webui.utils.models import check_model_access, get_all_models\n',
+        f'{MARKER}: the direct-connection arm and the debug log below each hand\n'
+        "# Hive's internal carrier, and so the signed-in user's bearer, to\n"
+        '# something outside this process. See owui-patches/hive_internal_metadata.py.\n'
+        'from open_webui.utils.hive_internal_metadata import (\n'
+        '    without_internal_metadata as hive_without_internal_metadata,\n'
+        ')\n'
+        'from open_webui.utils.models import check_model_access, get_all_models\n',
+        1,
+    ),
+    # 2. generate_direct_chat_completion. It pops the upstream `metadata` key
+    #    and leaves `__metadata`, then emits the whole payload over socket.io to
+    #    the user's own browser as `request:chat:completion`. The chat Filter
+    #    has already written the bearer into it by then, so the credential
+    #    leaves the Python process for page JavaScript.
+    #
+    #    Unconditional, not compared against a gateway: there is no destination
+    #    URL on this arm at all, the payload goes to a browser. This is the one
+    #    place a writer-side drop is the only honest option.
+    #
+    #    Two things stop it reaching a vendor today, and neither is a boundary:
+    #    ENABLE_DIRECT_CONNECTIONS defaults to False, and this fork's
+    #    +layout.svelte handler throws before forwarding. Both are one careless
+    #    edit away, which is the same shape of accident as the defect itself.
+    (
+        "    metadata = form_data.pop('metadata', {})\n",
+        "    metadata = form_data.pop('metadata', {})\n"
+        f'    {MARKER}: this payload is relayed to the caller\'s own browser over\n'
+        '    # socket.io, so there is no destination to compare against and the only\n'
+        '    # honest answer is to drop the carrier outright.\n'
+        '    form_data = hive_without_internal_metadata(form_data)\n',
+        1,
+    ),
+    # 3. The debug log. On the main chat path this line runs AFTER the Filter's
+    #    inlet, so an operator who raises GLOBAL_LOG_LEVEL to DEBUG to diagnose
+    #    something unrelated gets the signed-in user's bearer written into the
+    #    container log in full. utils/middleware.py's `log.debug(f'form_data:
+    #    {form_data}')` is the safe twin; it runs before the filter chain.
+    #
+    #    Also switched to lazy %s formatting, so nothing is built at all when
+    #    DEBUG is off, which is every deployment this repository ships.
+    (
+        "    log.debug(f'generate_chat_completion: {form_data}')\n",
+        f'    {MARKER}: the Filter has already written the bearer into the\n'
+        '    # carrier by the time this runs, so interpolating the whole payload\n'
+        '    # put a live credential in the container log at DEBUG.\n'
+        "    log.debug('generate_chat_completion: %s', hive_without_internal_metadata(form_data))\n",
+        1,
+    ),
+]
+
+CHAT_MARKERS = 3
+
+# Every call in routers/openai.py that hands a request body to the HTTP
+# session. This is the load-bearing count: it is what turns "all five outbound
+# bodies are sanitised" into a claim the build re-checks rather than a claim
+# that was true on the day it was written.
+#
+# It walks the AST rather than grepping for argument spellings. The first
+# version of this file counted the literals `data=payload,` and `data=body,`,
+# which is a count of two variable NAMES and not of calls. An independent
+# review proved the difference by appending a sixth route that wrote
+# `data=outgoing,`: the count stayed at five, this patch exited 0, the
+# regression test printed "all checks passed", and an unsanitised body would
+# have shipped. The asymmetry is what made it dangerous. Renaming an existing
+# variable dropped the count and failed loudly, while ADDING one under a new
+# name was silent, and addition is the direction that matters for a credential.
+SESSION_METHODS = ('request', 'post', 'put', 'patch')
+BODY_KEYWORDS = ('data', 'json')
+EXPECTED_BODY_CALLS = 5
 
 
-def main():
-    target = BACKEND / TARGET
+def outbound_body_calls(source: str):
+    """Every call that hands a request body to the HTTP session, by shape.
 
-    if target.read_text().count(MARKER) == EXPECTED_MARKERS:
-        print('apply_internal_metadata_boundary_1578_patch: already applied')
-        return
+    Returns the line numbers, so a failure can name where the new one is.
+    Matches on the attribute name plus a `data` or `json` keyword, which
+    excludes `publish_event(..., data=...)` and every other same-named keyword
+    on something that is not a session call.
+    """
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if not isinstance(function, ast.Attribute) or function.attr not in SESSION_METHODS:
+            continue
+        if any(keyword.arg in BODY_KEYWORDS for keyword in node.keywords):
+            found.append(node.lineno)
+    return sorted(found)
 
-    # Every edit is applied in memory and the file is written ONCE, at the end,
-    # so a drifted anchor cannot leave a half-patched file behind for a re-run
-    # to double-apply. Same reasoning as apply_task_upstream_auth_patch.py.
-    final = target.read_text()
 
-    outbound = sum(final.count(argument) for argument in BODY_ARGUMENTS)
-    assert outbound == EXPECTED_BODY_ARGUMENTS, (
-        f'{TARGET} makes {outbound} requests carrying a body, expected '
-        f'{EXPECTED_BODY_ARGUMENTS}. Upstream added or removed one; every one of '
-        'them has to be sanitised or the boundary has a hole. Patch needs updating.'
+SANITISERS = ('hive_strip_internal_metadata', 'hive_strip_internal_metadata_body')
+
+
+def _sanitiser_calls(node) -> int:
+    return sum(
+        1
+        for child in ast.walk(node)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Name)
+        and child.func.id in SANITISERS
     )
 
-    for old, new, expected in EDITS:
+
+def unsanitised_outbound_functions(source: str):
+    """Functions that send a body and never call the boundary.
+
+    Counting sanitiser call sites globally has the same blind spot from the
+    other side: five call sites and five requests can still be five guards on
+    four requests plus one unguarded one somewhere else. Pairing them per
+    function is what closes that, and it is what actually names the offender.
+    """
+    tree = ast.parse(source)
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        sends = [
+            child
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr in SESSION_METHODS
+            and any(keyword.arg in BODY_KEYWORDS for keyword in child.keywords)
+        ]
+        if sends and _sanitiser_calls(node) == 0:
+            offenders.append(node.name)
+    return sorted(offenders)
+
+
+def _apply(target, edits, marker_count, label):
+    """Apply one file's edits in memory and return the patched text.
+
+    Nothing is written by this function. Every post-condition runs against the
+    in-memory result, so a drifted anchor on the second file cannot leave the
+    first one half patched for a re-run to double-apply. Same reasoning as
+    apply_task_upstream_auth_patch.py.
+    """
+    final = target.read_text()
+    for old, new, expected in edits:
         found = final.count(old)
         assert found == expected, (
-            f'{TARGET}: anchor found {found} times, expected {expected}; upstream '
+            f'{label}: anchor found {found} times, expected {expected}; upstream '
             'open-webui source shifted, patch needs updating. Anchor head: '
             f'{old[:90]!r}'
         )
@@ -236,43 +359,72 @@ def main():
 
     ast.parse(final)  # fails the build if a rewrite produced invalid Python
 
-    assert final.count(MARKER) == EXPECTED_MARKERS, (
-        f'expected exactly {EXPECTED_MARKERS} {MARKER} markers in {TARGET} after '
+    assert final.count(MARKER) == marker_count, (
+        f'expected exactly {marker_count} {MARKER} markers in {label} after '
         f'patching, found {final.count(MARKER)}'
     )
+    return final
+
+
+def main():
+    router = BACKEND / ROUTER
+    chat = BACKEND / CHAT
+
+    if router.read_text().count(MARKER) == ROUTER_MARKERS and chat.read_text().count(MARKER) == CHAT_MARKERS:
+        print('apply_internal_metadata_boundary_1578_patch: already applied')
+        return
+
+    # Read BEFORE any edit: this is a statement about the upstream source, and
+    # the sanitiser calls this patch is about to add would otherwise satisfy it.
+    before = router.read_text()
+    sends = outbound_body_calls(before)
+    assert len(sends) == EXPECTED_BODY_CALLS, (
+        f'{ROUTER} makes {len(sends)} requests carrying a body (lines {sends}), '
+        f'expected {EXPECTED_BODY_CALLS}. Upstream added or removed one; every one '
+        'of them has to be sanitised or the boundary has a hole. Patch needs updating.'
+    )
+
+    final_router = _apply(router, ROUTER_EDITS, ROUTER_MARKERS, ROUTER)
+    final_chat = _apply(chat, CHAT_EDITS, CHAT_MARKERS, CHAT)
 
     # Placement, which a marker count cannot see. The strip has to be the line
     # immediately before the payload is frozen into JSON; anywhere earlier and a
     # later rewrite could reintroduce the carrier after the boundary had spoken.
     assert (
-        '    payload = hive_strip_internal_metadata(payload, url)\n    payload = json.dumps(payload)\n' in final
+        '    payload = hive_strip_internal_metadata(payload, url)\n    payload = json.dumps(payload)\n'
+        in final_router
     ), 'the chat-completions strip is no longer immediately above the json.dumps that freezes the payload'
 
     # Neither body may be serialised before its connection is resolved again.
-    assert 'body = json.dumps(form_data)\n' not in final, (
+    # Anchored on the leading newline and indentation, so an unrelated local
+    # whose name merely ENDS in `body` cannot trip this and send the next reader
+    # to the wrong function, which is what `req_body = json.dumps(form_data)`
+    # did to one reviewer.
+    assert '\n    body = json.dumps(form_data)\n' not in final_router, (
         'embeddings still serialises its body before get_openai_connection, so the '
         'sanitiser would be comparing against a destination it does not know'
     )
-    assert 'body = json.dumps(payload)\n' not in final, (
+    assert '\n    body = json.dumps(payload)\n' not in final_router, (
         'responses still serialises its body before get_openai_connection, so the '
         'sanitiser would be comparing against a destination it does not know'
     )
 
-    # Five outbound bodies, five sanitiser call sites. Counted as a pair so
-    # neither can drift without the other. The trailing parenthesis is what
-    # keeps the two import aliases out of the count.
-    sanitiser_calls = final.count('hive_strip_internal_metadata(') + final.count(
-        'hive_strip_internal_metadata_body('
+    # Every function that sends a body must call the boundary. Paired per
+    # function rather than by a global count, so five guards on four requests
+    # plus one unguarded request elsewhere is caught and named.
+    offenders = unsanitised_outbound_functions(final_router)
+    assert not offenders, (
+        f'{ROUTER}: {offenders} send a request body without calling the boundary; '
+        'every body that leaves this module must pass through it'
     )
-    assert sanitiser_calls == EXPECTED_BODY_ARGUMENTS, (
-        f'{TARGET} has {sanitiser_calls} sanitiser call sites for '
-        f'{EXPECTED_BODY_ARGUMENTS} outbound bodies; every body that leaves this '
-        'module must pass through the boundary'
+    assert len(outbound_body_calls(final_router)) == EXPECTED_BODY_CALLS, (
+        'the patch changed how many requests carry a body, which it must not'
     )
 
-    # Everything above ran against the in-memory result, so nothing is written
-    # until the whole rewrite is known to be good.
-    target.write_text(final)
+    # Everything above ran against the in-memory results, so nothing is written
+    # until both rewrites are known to be good.
+    router.write_text(final_router)
+    chat.write_text(final_chat)
 
     print('apply_internal_metadata_boundary_1578_patch: the internal carrier is stripped at the connection boundary')
 
