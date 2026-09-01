@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // =============================================================================
@@ -79,6 +81,16 @@ func NewCron(svc *Service, repo Repository, cfg CronConfig) *Cron {
 // Returns the count of invoices generated (or already present and unchanged).
 func (c *Cron) GenerateMonthlyInvoices(ctx context.Context, now time.Time) (int, error) {
 	period := PreviousMonth(now)
+
+	// Preflight the platform rate. Each invoice resolves its own rate (the
+	// account's FX snapshot first), but the fallback is common to all of them,
+	// and a malformed HIVE_USD_BDT_RATE would otherwise surface as one warning
+	// per workspace and a pass that reports zero invoices generated, which
+	// reads as "no billable traffic" rather than "misconfigured". Fail the pass
+	// once, naming the cause.
+	if _, err := payments.PlatformUSDBDTRate(); err != nil {
+		return 0, fmt.Errorf("invoices: usd to bdt rate: %w", err)
+	}
 
 	workspaceIDs, err := c.repo.ListActiveWorkspaces(ctx, period)
 	if err != nil {

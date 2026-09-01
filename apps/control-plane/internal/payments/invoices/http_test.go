@@ -3,7 +3,6 @@ package invoices
 import (
 	"context"
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,8 +35,8 @@ func setupHTTP(t *testing.T) (*Handler, *fakeRepo, *fakeStorage, *fakeAccess, uu
 	user := uuid.New()
 	ws := uuid.New()
 	access := &fakeAccess{allowed: map[string]bool{user.String() + "|" + ws.String(): true}}
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		return []InvoiceLineItem{{ModelID: "m", RequestCount: 1, BDTSubunits: big.NewInt(50_00)}}, big.NewInt(50_00), nil
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return []ModelCredits{{ModelID: "m", RequestCount: 1, Credits: spendCredits(50_00)}}, nil
 	}
 	svc := NewService(repo, storage, &stubPDF{}, access, &fakeNamer{}, nil)
 	period := Period{Start: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}

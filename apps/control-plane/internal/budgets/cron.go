@@ -8,13 +8,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // =============================================================================
 // Phase 14 — Spend alert cron evaluator.
 //
-// Walks workspaces with active budgets, computes month-to-date spend in BDT
-// subunits (math/big), compares against each configured alert threshold, and
+// Walks workspaces with active budgets, reads month-to-date spend in ledger
+// credits, converts it to BDT subunits at the platform rate (math/big),
+// compares the result against each configured alert threshold, and
 // fires the notifier exactly once per (alert, period). Idempotency is enforced
 // by stamping last_fired_period in the spend_alerts row.
 //
@@ -56,6 +59,34 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 	}
 	period := startOfMonthUTC(now)
 
+	// The caps are taka; the ledger is credits. Resolve the rate once for the
+	// whole pass so every workspace in it is measured against the same number,
+	// and refuse the pass outright if the rate is unusable rather than mail
+	// customers thresholds derived from a rate nobody configured (issue #1648).
+	//
+	// The platform rate, deliberately, and not each account's own FX snapshot
+	// the way an invoice does. An invoice is a document that has to reconcile
+	// against the receipt for the top-up that funded it; a soft-cap alert is a
+	// threshold heuristic on a mid-month running total, and one rate per pass
+	// keeps every workspace in that pass mutually comparable, which per-account
+	// snapshots would not.
+	//
+	// The gap is small but NOT symmetric, and the direction is the part worth
+	// knowing. A snapshot rate is the mid rate times payments.FXFeeRate, so it
+	// is about five percent higher than the platform rate, so the same credits
+	// convert to about five percent FEWER taka here than they will on the
+	// invoice. The alert therefore fires slightly LATER than the invoice's
+	// arithmetic implies, and late is the direction that serves the customer
+	// least on a spend warning. Small enough not to change the design over;
+	// stated so that whoever decides to close the gap knows what closing it
+	// buys.
+	rate, err := payments.PlatformUSDBDTRate()
+	if err != nil {
+		return 0, fmt.Errorf("budgets: usd to bdt rate: %w", err)
+	}
+	c.logger.InfoContext(ctx, "budget alert pass: usd to bdt rate resolved",
+		"rate", rate.Display, "source", rate.Source)
+
 	workspaceIDs, err := c.repo.ListWorkspacesWithBudget(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("budgets: list workspaces with budget: %w", err)
@@ -63,7 +94,7 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 
 	fired := 0
 	for _, wsID := range workspaceIDs {
-		n, err := c.evaluateWorkspace(ctx, wsID, now, period)
+		n, err := c.evaluateWorkspace(ctx, wsID, now, period, rate)
 		if err != nil {
 			// Per-workspace error isolation — log and continue.
 			c.logger.WarnContext(ctx, "budget cron: workspace evaluation failed",
@@ -75,7 +106,7 @@ func (c *CronEvaluator) EvaluateBudgets(ctx context.Context, now time.Time) (int
 	return fired, nil
 }
 
-func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, now, period time.Time) (int, error) {
+func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, now, period time.Time, rate payments.USDBDTRate) (int, error) {
 	budget, err := c.repo.GetBudget(ctx, wsID)
 	if err != nil {
 		return 0, fmt.Errorf("get budget: %w", err)
@@ -96,9 +127,16 @@ func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, n
 		return 0, nil
 	}
 
-	mtd, err := c.repo.MonthToDateSpendBDT(ctx, wsID, period)
+	mtdCredits, err := c.repo.MonthToDateSpendCredits(ctx, wsID, period)
 	if err != nil {
 		return 0, fmt.Errorf("mtd spend: %w", err)
+	}
+
+	// Convert before comparing: the cap the customer typed is in taka and the
+	// ledger total is in credits, one billionth of a USD each.
+	mtd, err := payments.CreditsToBDTSubunits(mtdCredits, rate.Rate)
+	if err != nil {
+		return 0, fmt.Errorf("mtd spend conversion: %w", err)
 	}
 
 	fired := 0

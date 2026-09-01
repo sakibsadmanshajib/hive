@@ -157,7 +157,7 @@ func (f *fakeWorkspaceRepo) StampAlertFired(_ context.Context, alertID uuid.UUID
 	return errors.New("alert not found")
 }
 
-func (f *fakeWorkspaceRepo) MonthToDateSpendBDT(_ context.Context, ws uuid.UUID, _ time.Time) (*big.Int, error) {
+func (f *fakeWorkspaceRepo) MonthToDateSpendCredits(_ context.Context, ws uuid.UUID, _ time.Time) (*big.Int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	v, ok := f.mtd[ws]
@@ -354,7 +354,7 @@ func TestEvaluateBudgets_FiresOncePerPeriod(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed alert: %v", err)
 	}
-	repo.mtd[wsID] = big.NewInt(500) // 50% exactly
+	repo.mtd[wsID] = spendCredits(500) // 50% exactly
 
 	cron := budgets.NewCronEvaluator(repo, notifier, nil)
 
@@ -398,7 +398,7 @@ func TestEvaluateBudgets_RefiresOnNextPeriod(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	repo.mtd[wsID] = big.NewInt(500)
+	repo.mtd[wsID] = spendCredits(500)
 
 	cron := budgets.NewCronEvaluator(repo, notifier, nil)
 

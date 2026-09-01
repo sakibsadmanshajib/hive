@@ -291,16 +291,19 @@ func (r *pgxRepository) StampAlertFired(ctx context.Context, alertID uuid.UUID, 
 	return nil
 }
 
-// MonthToDateSpendBDT sums usage_charge ledger entries since periodStart.
-// credits_delta is stored as a negative integer for charges; we negate to a
-// positive BDT subunit count.
+// MonthToDateSpendCredits sums usage_charge ledger entries since periodStart
+// and returns the total in CREDITS, the unit the ledger stores
+// (payments.CreditsPerUSD credits to the USD). credits_delta is negative for a
+// charge, so the sum is negated back to a positive quantity.
 //
-// NOTE on units: v1.0 ledger stores Hive credits, where 1 credit ≈ 1 BDT
-// subunit at the platform-fixed conversion rate (FX-clean for customer
-// surface). The Phase 17 ledger refactor will collapse credits → BDT-subunits
-// directly; for v1.1 we treat credits as the BDT-subunit unit. Documented in
-// 14-AUDIT Section A.6.
-func (r *pgxRepository) MonthToDateSpendBDT(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error) {
+// It is NOT a BDT subunit count. This function used to be called
+// MonthToDateSpendBDT and returned the same integer under the claim that one
+// credit was approximately one paisa "at the platform-fixed conversion rate".
+// That was true only under the pre-D-031 credit unit; since a credit became one
+// billionth of a USD it inflated every comparison against a taka-denominated
+// cap by about five orders of magnitude (issue #1648). Callers that need taka
+// convert explicitly through payments.CreditsToBDTSubunits.
+func (r *pgxRepository) MonthToDateSpendCredits(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*big.Int, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(-credits_delta), 0)::bigint
 		FROM public.credit_ledger_entries
@@ -309,15 +312,15 @@ func (r *pgxRepository) MonthToDateSpendBDT(ctx context.Context, workspaceID uui
 		  AND created_at >= $2
 	`, workspaceID, periodStart)
 
-	var subunits int64
-	if err := row.Scan(&subunits); err != nil {
+	var credits int64
+	if err := row.Scan(&credits); err != nil {
 		return nil, fmt.Errorf("budgets: scan mtd spend: %w", err)
 	}
-	if subunits < 0 {
+	if credits < 0 {
 		// guard against future ledger refactor surprises
-		subunits = 0
+		credits = 0
 	}
-	return big.NewInt(subunits), nil
+	return big.NewInt(credits), nil
 }
 
 func scanAlert(scanner thresholdScanner) (SpendAlert, error) {

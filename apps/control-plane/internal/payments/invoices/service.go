@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // =============================================================================
@@ -41,13 +43,13 @@ type WorkspaceNamer interface {
 
 // Service orchestrates invoice generation, retrieval, and PDF download.
 type Service struct {
-	repo     Repository
-	storage  storageBackend
-	pdf      PDFRenderer
-	access   AccessChecker
-	naming   WorkspaceNamer
-	logger   *slog.Logger
-	now      func() time.Time
+	repo    Repository
+	storage storageBackend
+	pdf     PDFRenderer
+	access  AccessChecker
+	naming  WorkspaceNamer
+	logger  *slog.Logger
+	now     func() time.Time
 }
 
 // storageBackend mirrors packages/storage.Storage but only the methods we use.
@@ -95,12 +97,44 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, fmt.Errorf("invoices: invalid period (end <= start)")
 	}
 
-	items, total, err := s.repo.AggregateByModel(ctx, workspaceID, period)
+	credited, err := s.repo.AggregateByModel(ctx, workspaceID, period)
 	if err != nil {
 		return nil, fmt.Errorf("invoices: aggregate: %w", err)
 	}
-	if total == nil {
-		total = new(big.Int)
+
+	// The ledger speaks credits (1 USD = payments.CreditsPerUSD of them); an
+	// invoice speaks taka. Crossing that boundary is an FX conversion, and it
+	// happens here, once, at a rate recorded on the row. Reading the credit
+	// count as a paisa count is what issue #1648 was.
+	rate, err := s.resolveRate(ctx, workspaceID, period)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]InvoiceLineItem, 0, len(credited))
+	total := new(big.Int)
+	for _, c := range credited {
+		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate.Rate)
+		if err != nil {
+			return nil, fmt.Errorf("invoices: convert %s credits: %w", c.ModelID, err)
+		}
+		items = append(items, InvoiceLineItem{
+			ModelID:      c.ModelID,
+			RequestCount: c.RequestCount,
+			BDTSubunits:  subunits,
+		})
+		// Total is the sum of the rendered lines, not a separately converted
+		// aggregate, so the document always adds up for the customer reading it.
+		total.Add(total, subunits)
+	}
+
+	// The column is a bigint, so a total that does not fit wraps on the way in
+	// and is rejected by its CHECK. Catch it here instead, before the PDF is
+	// rendered and uploaded, so the failure names the amount and leaves no
+	// orphan object in the bucket. Unreachable for any real workspace; cheap
+	// enough that "unreachable" does not have to be trusted.
+	if !total.IsInt64() {
+		return nil, fmt.Errorf("invoices: total %s subunits exceeds bigint storage", total)
 	}
 
 	// Render PDF first (cheap; lets us fail fast before any storage write).
@@ -118,6 +152,7 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		TotalBDTSubunits: total,
 		LineItems:        items,
 		GeneratedAt:      s.now(),
+		USDBDTRate:       rate.Display,
 	}
 
 	pdfBytes, err := s.pdf.Render(candidate, workspaceName)
@@ -140,6 +175,48 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, fmt.Errorf("invoices: persist: %w", err)
 	}
 	return saved, nil
+}
+
+// resolveRate picks the USD to BDT rate this invoice is denominated at.
+//
+// The account's own most recent FX snapshot taken before the period closed
+// wins, because that is the rate it bought its credits at (payments.FXService
+// writes the snapshot at checkout and service.go prices the rails quote from
+// the same number), so the invoice is denominated at a rate the customer has
+// seen. The platform rate is the fallback for an account that has never
+// transacted through a BDT rail.
+//
+// Every failure here is closed, not open. A stored rate that does not parse and
+// a lookup that errors both stop this invoice rather than quietly substituting
+// the platform rate. The pool answered AggregateByModel successfully a few
+// lines earlier, so an error here is not transient connectivity but something
+// structural (a missing table, a revoked grant, schema drift), and those are
+// exactly the cases where a silently different rate is worst: the row would be
+// materially different from every other invoice that account has received and
+// nothing on it would say so. The cron isolates per-workspace errors, so one
+// broken account does not stop the pass.
+func (s *Service) resolveRate(ctx context.Context, workspaceID uuid.UUID, period Period) (payments.USDBDTRate, error) {
+	snapshot, err := s.repo.LatestUSDBDTRate(ctx, workspaceID, period.End)
+	if err != nil {
+		return payments.USDBDTRate{}, fmt.Errorf("invoices: fx snapshot lookup: %w", err)
+	}
+	if snapshot != "" {
+		rate, perr := payments.ParseUSDBDTRate(snapshot, payments.RateSourceSnapshot)
+		if perr != nil {
+			return payments.USDBDTRate{}, fmt.Errorf("invoices: usd to bdt rate: %w", perr)
+		}
+		s.logger.InfoContext(ctx, "invoice rate resolved",
+			"workspace_id", workspaceID, "rate", rate.Display, "source", rate.Source)
+		return rate, nil
+	}
+
+	rate, perr := payments.PlatformUSDBDTRate()
+	if perr != nil {
+		return payments.USDBDTRate{}, fmt.Errorf("invoices: usd to bdt rate: %w", perr)
+	}
+	s.logger.InfoContext(ctx, "invoice rate resolved",
+		"workspace_id", workspaceID, "rate", rate.Display, "source", rate.Source)
+	return rate, nil
 }
 
 // Get returns one invoice by id, gated on workspace membership of the caller.

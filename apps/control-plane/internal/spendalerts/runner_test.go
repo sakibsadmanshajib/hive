@@ -210,7 +210,7 @@ func (r *inMemoryRepo) StampAlertFired(_ context.Context, alertID uuid.UUID, fir
 	return nil
 }
 
-func (r *inMemoryRepo) MonthToDateSpendBDT(_ context.Context, _ uuid.UUID, _ time.Time) (*big.Int, error) {
+func (r *inMemoryRepo) MonthToDateSpendCredits(_ context.Context, _ uuid.UUID, _ time.Time) (*big.Int, error) {
 	if r.mtd == nil {
 		return big.NewInt(0), nil
 	}
@@ -268,7 +268,7 @@ func TestEvaluator_FiresAt50PercentThreshold(t *testing.T) {
 		a.ID = id
 		repo.alerts[id] = a
 	}
-	repo.mtd = big.NewInt(500) // exactly 50%
+	repo.mtd = spendCredits(500) // exactly 50%
 
 	notifier := &recordingNotifier{}
 	cron := budgets.NewCronEvaluator(repo, notifier, quietLogger())
@@ -292,7 +292,7 @@ func TestEvaluator_NoFireBelowThreshold(t *testing.T) {
 	repo.budget = budgetWith(1000, 2000)
 	id := uuid.New()
 	repo.alerts[id] = budgets.SpendAlert{ID: id, WorkspaceID: repo.budget.WorkspaceID, ThresholdPct: 50}
-	repo.mtd = big.NewInt(499) // 49.9%
+	repo.mtd = spendCredits(499) // 49.9%
 
 	notifier := &recordingNotifier{}
 	cron := budgets.NewCronEvaluator(repo, notifier, quietLogger())
@@ -313,7 +313,7 @@ func TestEvaluator_IdempotentWithinPeriod(t *testing.T) {
 	repo.budget = budgetWith(1000, 2000)
 	id := uuid.New()
 	repo.alerts[id] = budgets.SpendAlert{ID: id, WorkspaceID: repo.budget.WorkspaceID, ThresholdPct: 80}
-	repo.mtd = big.NewInt(800) // exactly 80%
+	repo.mtd = spendCredits(800) // exactly 80%
 
 	notifier := &recordingNotifier{}
 	cron := budgets.NewCronEvaluator(repo, notifier, quietLogger())
@@ -338,7 +338,7 @@ func TestEvaluator_MultipleThresholdsFireIndependently(t *testing.T) {
 		id := uuid.New()
 		repo.alerts[id] = budgets.SpendAlert{ID: id, WorkspaceID: repo.budget.WorkspaceID, ThresholdPct: pct}
 	}
-	repo.mtd = big.NewInt(1000) // 100%
+	repo.mtd = spendCredits(1000) // 100%
 
 	notifier := &recordingNotifier{}
 	cron := budgets.NewCronEvaluator(repo, notifier, quietLogger())
@@ -359,7 +359,7 @@ func TestEvaluator_SoftCapZeroDisablesAlerts(t *testing.T) {
 	repo.budget = budgetWith(0, 5000) // soft=0, hard=5000 ⇒ alerts disabled
 	id := uuid.New()
 	repo.alerts[id] = budgets.SpendAlert{ID: id, WorkspaceID: repo.budget.WorkspaceID, ThresholdPct: 50}
-	repo.mtd = big.NewInt(2500)
+	repo.mtd = spendCredits(2500)
 
 	notifier := &recordingNotifier{}
 	cron := budgets.NewCronEvaluator(repo, notifier, quietLogger())
@@ -380,7 +380,7 @@ func TestEvaluator_NotifierFailureDoesNotStamp(t *testing.T) {
 	repo.budget = budgetWith(1000, 2000)
 	id := uuid.New()
 	repo.alerts[id] = budgets.SpendAlert{ID: id, WorkspaceID: repo.budget.WorkspaceID, ThresholdPct: 50}
-	repo.mtd = big.NewInt(500)
+	repo.mtd = spendCredits(500)
 
 	// Fail on first call, succeed on second (simulates retry on next pass).
 	notifier := &recordingNotifier{failOn: 1}

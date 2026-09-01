@@ -3,7 +3,6 @@ package invoices
 import (
 	"context"
 	"errors"
-	"math/big"
 	"testing"
 	"time"
 
@@ -35,8 +34,8 @@ func TestGenerateMonthlyInvoices_IsolatesPerWorkspaceErrors(t *testing.T) {
 	repo.activeFn = func(_ context.Context, _ Period) ([]uuid.UUID, error) {
 		return []uuid.UUID{wsOk1, wsBoom, wsOk2}, nil
 	}
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		return []InvoiceLineItem{{ModelID: "m", RequestCount: 1, BDTSubunits: big.NewInt(10_00)}}, big.NewInt(10_00), nil
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return []ModelCredits{{ModelID: "m", RequestCount: 1, Credits: spendCredits(10_00)}}, nil
 	}
 
 	storage := newFakeStorage()
@@ -63,8 +62,8 @@ func TestGenerateMonthlyInvoices_IsIdempotent(t *testing.T) {
 	repo.activeFn = func(_ context.Context, _ Period) ([]uuid.UUID, error) {
 		return []uuid.UUID{ws}, nil
 	}
-	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]InvoiceLineItem, *big.Int, error) {
-		return []InvoiceLineItem{{ModelID: "m", RequestCount: 1, BDTSubunits: big.NewInt(10_00)}}, big.NewInt(10_00), nil
+	repo.aggregateFn = func(_ context.Context, _ uuid.UUID, _ Period) ([]ModelCredits, error) {
+		return []ModelCredits{{ModelID: "m", RequestCount: 1, Credits: spendCredits(10_00)}}, nil
 	}
 
 	storage := newFakeStorage()

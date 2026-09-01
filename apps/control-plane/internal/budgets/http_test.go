@@ -80,7 +80,7 @@ func (s *workspaceRepoStub) StampAlertFired(_ context.Context, _ uuid.UUID, _, _
 	return nil
 }
 
-func (s *workspaceRepoStub) MonthToDateSpendBDT(_ context.Context, _ uuid.UUID, _ time.Time) (*big.Int, error) {
+func (s *workspaceRepoStub) MonthToDateSpendCredits(_ context.Context, _ uuid.UUID, _ time.Time) (*big.Int, error) {
 	return big.NewInt(0), nil
 }
 

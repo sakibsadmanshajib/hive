@@ -632,6 +632,16 @@ services:
       # enterprise override adds no environment block of its own for
       # control-plane, so local, cloud and enterprise all inherit it here.
       HIVE_BYOK_ENC_KEY: ${HIVE_BYOK_ENC_KEY:-}
+      # FALLBACK USD to BDT rate for turning ledger credits into taka (issue
+      # #1648). An invoice normally uses the account's own fx_snapshots
+      # effective_rate, the rate it bought its credits at, so it reconciles
+      # against that receipt; this covers accounts with no snapshot and the
+      # spend-alert cron. Unset falls back to payments.DefaultUSDBDTRate and the
+      # resolved rate and its source are logged. Anything that is not a plain
+      # positive decimal with at most six fractional digits makes invoice
+      # generation and the spend-alert pass refuse rather than bill at a rate
+      # nobody chose.
+      HIVE_USD_BDT_RATE: ${HIVE_USD_BDT_RATE:-}
       # RAG ingestion (#232). Without EMBEDDING_BASE_URL the ingest route is not
       # registered and uploaded documents stay "pending" forever. Must match the
       # edge-api query embedder (same model + same truncation) or search/chat

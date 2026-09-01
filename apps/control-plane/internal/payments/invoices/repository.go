@@ -52,17 +52,23 @@ func (r *pgxRepository) InsertOrFetch(ctx context.Context, in Invoice) (*Invoice
 		id = uuid.New()
 	}
 
+	var rate *string
+	if in.USDBDTRate != "" {
+		rate = &in.USDBDTRate
+	}
+
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.invoices (
 			id, workspace_id, period_start, period_end,
-			total_bdt_subunits, line_items, pdf_storage_key
+			total_bdt_subunits, line_items, pdf_storage_key, usd_bdt_rate
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric)
 		ON CONFLICT (workspace_id, period_start) DO NOTHING
 		RETURNING id, workspace_id, period_start, period_end,
-		          total_bdt_subunits, line_items, pdf_storage_key, generated_at
+		          total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		          usd_bdt_rate::text
 	`, id, in.WorkspaceID, in.PeriodStart, in.PeriodEnd,
-		in.TotalBDTSubunits.Int64(), itemsJSON, in.PDFStorageKey)
+		in.TotalBDTSubunits.Int64(), itemsJSON, in.PDFStorageKey, rate)
 
 	got, err := scanInvoice(row)
 	if err != nil {
@@ -78,7 +84,8 @@ func (r *pgxRepository) InsertOrFetch(ctx context.Context, in Invoice) (*Invoice
 func (r *pgxRepository) fetchByWorkspacePeriod(ctx context.Context, workspaceID uuid.UUID, periodStart time.Time) (*Invoice, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
-		       total_bdt_subunits, line_items, pdf_storage_key, generated_at
+		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		       usd_bdt_rate::text
 		FROM public.invoices
 		WHERE workspace_id = $1 AND period_start = $2
 	`, workspaceID, periodStart)
@@ -95,7 +102,8 @@ func (r *pgxRepository) fetchByWorkspacePeriod(ctx context.Context, workspaceID 
 func (r *pgxRepository) GetByID(ctx context.Context, id uuid.UUID) (*Invoice, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
-		       total_bdt_subunits, line_items, pdf_storage_key, generated_at
+		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		       usd_bdt_rate::text
 		FROM public.invoices
 		WHERE id = $1
 	`, id)
@@ -115,7 +123,8 @@ func (r *pgxRepository) ListByWorkspace(ctx context.Context, workspaceID uuid.UU
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
-		       total_bdt_subunits, line_items, pdf_storage_key, generated_at
+		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		       usd_bdt_rate::text
 		FROM public.invoices
 		WHERE workspace_id = $1
 		ORDER BY period_start DESC
@@ -168,18 +177,59 @@ func (r *pgxRepository) ListActiveWorkspaces(ctx context.Context, period Period)
 	return out, rows.Err()
 }
 
-// AggregateByModel sums usage_charge ledger entries grouped by metadata->>'model'.
+// LatestUSDBDTRate reads the effective rate off the account's newest FX snapshot
+// taken before `before`. public.fx_snapshots carries an index on
+// (account_id, created_at desc), so this is an index scan with a filter on the
+// two currency columns, which the index does not cover; both default to USD and
+// BDT and CreateSnapshot hardcodes them, so it is one row in practice.
 //
-// credits_delta is stored as a NEGATIVE integer for charges; we negate to a
-// positive BDT subunit count (matching budgets.MonthToDateSpendBDT semantics).
+// The `created_at < before` bound is what makes a closed month immutable.
+// Callers pass the invoice period end, so a top-up on the last day of the month
+// cannot re-denominate credits consumed on the second, and regenerating a
+// corrected invoice in October produces the figure the original run did rather
+// than October's rate.
+//
+// No rows is not an error: an account that has never paid through a BDT rail (a
+// granted or card-funded workspace) has no rate of its own, and the caller falls
+// back to the platform rate.
+func (r *pgxRepository) LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID, before time.Time) (string, error) {
+	var rate string
+	err := r.pool.QueryRow(ctx, `
+		SELECT effective_rate
+		FROM public.fx_snapshots
+		WHERE account_id = $1
+		  AND base_currency = 'USD'
+		  AND quote_currency = 'BDT'
+		  AND created_at < $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, workspaceID, before).Scan(&rate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("invoices: latest fx snapshot: %w", err)
+	}
+	return rate, nil
+}
+
+// AggregateByModel sums usage_charge ledger entries grouped by
+// metadata->>'model' and returns the result in CREDITS, the unit the ledger
+// actually stores.
+//
+// credits_delta is negative for a charge, so the sum is negated back to a
+// positive quantity. It is NOT a BDT subunit count: converting credits into
+// taka is an FX step and it belongs to the service, which records the rate it
+// used. This function used to alias the two units and the console rendered a
+// credit count as paisa (issue #1648).
 //
 // Unknown / missing model metadata buckets under the literal "unknown" key —
 // guards against legacy ledger rows without metadata.
-func (r *pgxRepository) AggregateByModel(ctx context.Context, workspaceID uuid.UUID, period Period) ([]InvoiceLineItem, *big.Int, error) {
+func (r *pgxRepository) AggregateByModel(ctx context.Context, workspaceID uuid.UUID, period Period) ([]ModelCredits, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT COALESCE(metadata->>'model', 'unknown') AS model_id,
 		       COUNT(*)::bigint                         AS request_count,
-		       COALESCE(SUM(-credits_delta), 0)::bigint AS bdt_subunits
+		       COALESCE(SUM(-credits_delta), 0)::bigint AS credits
 		FROM public.credit_ledger_entries
 		WHERE account_id = $1
 		  AND entry_type = 'usage_charge'
@@ -189,38 +239,33 @@ func (r *pgxRepository) AggregateByModel(ctx context.Context, workspaceID uuid.U
 		ORDER BY model_id ASC
 	`, workspaceID, period.Start, period.End)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invoices: aggregate by model: %w", err)
+		return nil, fmt.Errorf("invoices: aggregate by model: %w", err)
 	}
 	defer rows.Close()
 
-	var (
-		items []InvoiceLineItem
-		total = new(big.Int)
-	)
+	var out []ModelCredits
 	for rows.Next() {
 		var (
 			modelID  string
 			reqCount int64
-			subunits int64
+			credits  int64
 		)
-		if err := rows.Scan(&modelID, &reqCount, &subunits); err != nil {
-			return nil, nil, fmt.Errorf("invoices: scan aggregate row: %w", err)
+		if err := rows.Scan(&modelID, &reqCount, &credits); err != nil {
+			return nil, fmt.Errorf("invoices: scan aggregate row: %w", err)
 		}
-		if subunits < 0 {
-			subunits = 0
+		if credits < 0 {
+			credits = 0
 		}
-		item := InvoiceLineItem{
+		out = append(out, ModelCredits{
 			ModelID:      modelID,
 			RequestCount: reqCount,
-			BDTSubunits:  big.NewInt(subunits),
-		}
-		items = append(items, item)
-		total = total.Add(total, item.BDTSubunits)
+			Credits:      big.NewInt(credits),
+		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("invoices: rows err: %w", err)
+		return nil, fmt.Errorf("invoices: rows err: %w", err)
 	}
-	return items, total, nil
+	return out, nil
 }
 
 // =============================================================================
@@ -233,10 +278,11 @@ type rowScanner interface {
 
 func scanInvoice(row rowScanner) (Invoice, error) {
 	var (
-		inv             Invoice
-		totalSubunits   int64
-		lineItemsBytes  []byte
-		pdfStorageKey   *string
+		inv            Invoice
+		totalSubunits  int64
+		lineItemsBytes []byte
+		pdfStorageKey  *string
+		usdBDTRate     *string
 	)
 	if err := row.Scan(
 		&inv.ID,
@@ -247,12 +293,19 @@ func scanInvoice(row rowScanner) (Invoice, error) {
 		&lineItemsBytes,
 		&pdfStorageKey,
 		&inv.GeneratedAt,
+		&usdBDTRate,
 	); err != nil {
 		return Invoice{}, err
 	}
 	inv.TotalBDTSubunits = big.NewInt(totalSubunits)
 	if pdfStorageKey != nil {
 		inv.PDFStorageKey = *pdfStorageKey
+	}
+	// NULL means a row generated before issue #1648: its amounts are a raw
+	// credit count, not taka. Left empty rather than defaulted so the two are
+	// distinguishable.
+	if usdBDTRate != nil {
+		inv.USDBDTRate = *usdBDTRate
 	}
 	items, err := decodeLineItems(lineItemsBytes)
 	if err != nil {
