@@ -78,10 +78,23 @@ func creditsForGrant(subunits *big.Int) (int64, payments.USDBDTRate, error) {
 		return 0, payments.USDBDTRate{}, fmt.Errorf("grants: convert grant amount: %w", err)
 	}
 
+	// A positive grant that rounds to nothing must not answer 201 Created.
+	// D-034: never claim an entitlement delivered unless the accounting step
+	// actually succeeded, and a zero-credit row delivers nothing. Unreachable
+	// at any sane rate (one paisa is about eighty thousand credits at 123.13),
+	// which is precisely why it should be a refusal rather than a silent zero:
+	// reaching it means the configured rate is wrong by nine or more orders of
+	// magnitude, and that should stop the grant instead of hiding inside it.
+	if credits.Sign() == 0 && subunits.Sign() > 0 {
+		return 0, payments.USDBDTRate{}, fmt.Errorf(
+			"grants: %s subunits at %s BDT per USD rounds to zero credits, refusing to record a grant worth nothing",
+			subunits, rate.Display)
+	}
+
 	if !credits.IsInt64() {
 		return 0, payments.USDBDTRate{}, fmt.Errorf(
-			"grants: %s subunits at %s BDT per USD is %s credits, which overflows the credit_ledger_entries.credits_delta bigint column",
-			subunits, rate.Display, credits)
+			"%w: %s subunits at %s BDT per USD is %s credits, which overflows the credit_ledger_entries.credits_delta bigint column",
+			ErrAmountTooLarge, subunits, rate.Display, credits)
 	}
 
 	return credits.Int64(), rate, nil

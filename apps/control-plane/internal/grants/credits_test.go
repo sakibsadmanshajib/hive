@@ -1,6 +1,7 @@
 package grants
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"testing"
@@ -113,6 +114,21 @@ func TestCreditsForGrantFailsClosed(t *testing.T) {
 		}
 	})
 
+	// A positive grant that rounds away to nothing must not answer 201
+	// Created over an empty ledger row. Reaching this means the configured
+	// rate is wrong by nine or more orders of magnitude, which should stop
+	// the grant rather than hide inside it (D-034).
+	t.Run("a grant that rounds to zero credits", func(t *testing.T) {
+		t.Setenv(payments.USDBDTRateEnvVar, "999999999999")
+		credits, _, err := creditsForGrant(big.NewInt(1))
+		if err == nil {
+			t.Fatalf("expected a refusal, got %d credits", credits)
+		}
+		if credits != 0 {
+			t.Fatalf("expected no value alongside the error, got %d", credits)
+		}
+	})
+
 	// The overflow arm is the reason this returns an error rather than an
 	// int64 taken from big.Int.Int64(). A subunit amount that fits the
 	// credit_grants bigint column becomes a credit quantity roughly ten
@@ -129,6 +145,12 @@ func TestCreditsForGrantFailsClosed(t *testing.T) {
 		}
 		if credits != 0 {
 			t.Fatalf("expected no value alongside the error, got %d", credits)
+		}
+		// The sentinel is what earns this a 400 instead of a 500: the value
+		// came from the request body, and an admin who typed extra zeros is
+		// owed "too large", not a generic server failure.
+		if !errors.Is(err, ErrAmountTooLarge) {
+			t.Fatalf("error = %v, want it to wrap ErrAmountTooLarge", err)
 		}
 	})
 }

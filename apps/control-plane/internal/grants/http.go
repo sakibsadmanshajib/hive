@@ -189,6 +189,11 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, errBody("insufficient permissions"))
 		case errors.Is(err, ErrInvalidAmount):
 			writeJSON(w, http.StatusBadRequest, errBody("amount_bdt_subunits must be positive"))
+		case errors.Is(err, ErrAmountTooLarge):
+			// Client input, so 400 rather than the generic 500 below. The
+			// message names no column and no rate: an admin needs to know the
+			// amount is refused, not how the ledger is stored.
+			writeJSON(w, http.StatusBadRequest, errBody("amount_bdt_subunits is too large to grant"))
 		case errors.Is(err, ErrInvalidGrantee):
 			writeJSON(w, http.StatusBadRequest, errBody("grantee user_id and workspace_id required"))
 		default:

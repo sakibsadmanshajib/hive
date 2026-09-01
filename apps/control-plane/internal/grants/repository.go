@@ -59,8 +59,11 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	}
 
 	// Validate that subunits fits int64 (BDT subunits column is bigint).
+	// Strictly weaker than the credits check inside creditsForGrant below, but
+	// it guards its own narrowing on the next line, so it stays.
 	if !input.AmountBDTSubunits.IsInt64() {
-		return CreateResult{}, fmt.Errorf("grants: amount overflows int64 bigint storage")
+		return CreateResult{}, fmt.Errorf("%w: %s overflows the credit_grants.amount_bdt_subunits bigint column",
+			ErrAmountTooLarge, input.AmountBDTSubunits)
 	}
 	subunits := input.AmountBDTSubunits.Int64()
 

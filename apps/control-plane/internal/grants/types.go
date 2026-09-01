@@ -77,6 +77,19 @@ var (
 	// or negative.
 	ErrInvalidAmount = errors.New("grants: amount must be positive")
 
+	// ErrAmountTooLarge is returned when the amount is a well-formed positive
+	// integer that no ledger row can hold: either the taka figure itself
+	// overflows the credit_grants bigint column, or the credit quantity it
+	// converts to overflows credit_ledger_entries.credits_delta. The second is
+	// the binding one, since a credit is a billionth of a USD and the step
+	// between the two columns is about ten million (issue #1659).
+	//
+	// It is a separate sentinel from ErrInvalidAmount because the handler owes
+	// this a 400 and not a 500: the value comes from the request body, and an
+	// admin who typed five extra zeros should be told the amount is too large
+	// rather than shown a generic server failure that reads like an outage.
+	ErrAmountTooLarge = errors.New("grants: amount is too large to grant")
+
 	// ErrInvalidGrantee is returned when grantee user/workspace ids are zero.
 	ErrInvalidGrantee = errors.New("grants: grantee user_id and workspace_id required")
 )
