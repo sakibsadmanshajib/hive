@@ -66,13 +66,24 @@ var nonGlobalPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
 	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
 	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, includes 255.255.255.255
-	netip.MustParsePrefix("::/128"),          // unspecified
-	netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use NAT64
-	netip.MustParsePrefix("100::/64"),        // discard-only
-	netip.MustParsePrefix("2001::/32"),       // Teredo
-	netip.MustParsePrefix("2001:2::/48"),     // benchmarking
-	netip.MustParsePrefix("2001:db8::/32"),   // documentation
-	netip.MustParsePrefix("2002::/16"),       // 6to4, embeds an arbitrary v4 address
+	// ::/96 is IPv4-compatible IPv6, which subsumes the unspecified address
+	// and makes ::127.0.0.1 (that is, ::7f00:1) expressible. Is4In6 matches
+	// only the ::ffff: mapped form, so Unmap never runs on this shape and
+	// IsLoopback is false for it. Python excludes the whole of ::/8.
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"), // IPv4-translated, RFC 6052 SIIT
+	// Both NAT64 prefixes, not just the local-use one. The well-known /96
+	// embeds an arbitrary v4 address, so 64:ff9b::a9fe:a9fe is the AWS
+	// metadata endpoint anywhere a translator sits on the path. Same argument
+	// the 6to4 row below already accepts.
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
+	netip.MustParsePrefix("100::/64"),       // discard-only
+	netip.MustParsePrefix("2001::/32"),      // Teredo
+	netip.MustParsePrefix("2001:2::/48"),    // benchmarking
+	netip.MustParsePrefix("2001:db8::/32"),  // documentation
+	netip.MustParsePrefix("2002::/16"),      // 6to4, embeds an arbitrary v4 address
+	netip.MustParsePrefix("fec0::/10"),      // deprecated site-local, outside Go's IsPrivate
 }
 
 // addrAllowed reports whether a is an address this gateway will connect to on

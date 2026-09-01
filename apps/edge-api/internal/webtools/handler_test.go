@@ -176,7 +176,7 @@ func TestQueryLimitCountsCharactersNotBytes(t *testing.T) {
 // budget map and deny every other tenant. Refusing past the cap would do
 // exactly that, so the map evicts instead.
 func TestBudgetMapCannotBeFilledToDenyAnotherTenant(t *testing.T) {
-	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts)}
+	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)}
 	noisy := uuid.New()
 	for i := 0; i < maxTrackedTurns*2; i++ {
 		b.take(noisy, "turn-"+strconv.Itoa(i), ToolWebSearch, SearchBudgetPerTurn)
@@ -184,8 +184,8 @@ func TestBudgetMapCannotBeFilledToDenyAnotherTenant(t *testing.T) {
 	if len(b.turns) > maxTrackedTurns {
 		t.Fatalf("the budget map grew to %d entries, over the %d cap", len(b.turns), maxTrackedTurns)
 	}
-	if !b.take(uuid.New(), "victim-turn", ToolWebSearch, SearchBudgetPerTurn) {
-		t.Fatal("an unrelated tenant was refused after another tenant filled the map")
+	if v := b.take(uuid.New(), "victim-turn", ToolWebSearch, SearchBudgetPerTurn); v != budgetOK {
+		t.Fatalf("an unrelated tenant got verdict %v after another tenant flooded the map", v)
 	}
 }
 
@@ -324,6 +324,99 @@ func TestSearchAndFetchBudgetsAreIndependent(t *testing.T) {
 	}
 }
 
+// The second half of spec section 7 item 10. The per-turn budget alone bounds
+// nothing across turns, because the turn is a client-supplied header: a caller
+// that increments it gets an unbounded call rate. This asserts the escape is
+// closed, by doing exactly what an injected loop would do.
+func TestTenantRateLimitBoundsTurnIdentifierChurn(t *testing.T) {
+	search := &stubSearcher{hits: okHits()}
+	h := newTestHandler(t, Deps{Search: search})
+
+	allowed := 0
+	var lastCode any
+	for i := 0; i < TenantCallsPerMinute*3; i++ {
+		// A fresh turn every call, which defeats the per-turn budget entirely.
+		rr := post(t, h, "/v1/tools/web_search", "turn-"+strconv.Itoa(i), map[string]any{"query": "q"})
+		if rr.Code == http.StatusOK {
+			allowed++
+			continue
+		}
+		if rr.Code != http.StatusTooManyRequests {
+			t.Fatalf("call %d answered %d, want 200 or 429, body = %s", i+1, rr.Code, rr.Body)
+		}
+		lastCode = decodeEnvelope(t, rr)["code"]
+	}
+	if allowed != TenantCallsPerMinute {
+		t.Fatalf("%d calls were served, want exactly %d", allowed, TenantCallsPerMinute)
+	}
+	if search.calls != TenantCallsPerMinute {
+		t.Fatalf("the backend ran %d times, want %d", search.calls, TenantCallsPerMinute)
+	}
+	// The two refusals mean different things and must not collapse: this one
+	// is "you are calling too fast", not "this turn is done".
+	if lastCode != CodeRateLimited {
+		t.Fatalf("code = %v, want %q", lastCode, CodeRateLimited)
+	}
+}
+
+// The window is per tenant, so one tenant exhausting it must not refuse
+// another. A shared counter here would be a cross-tenant denial of service.
+func TestTenantRateLimitIsPerTenant(t *testing.T) {
+	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)}
+	noisy, quiet := uuid.New(), uuid.New()
+	for i := 0; i < TenantCallsPerMinute*2; i++ {
+		b.take(noisy, "turn-"+strconv.Itoa(i), ToolWebSearch, SearchBudgetPerTurn)
+	}
+	if v := b.take(quiet, "turn-1", ToolWebSearch, SearchBudgetPerTurn); v != budgetOK {
+		t.Fatalf("an unrelated tenant got verdict %v after another tenant exhausted its window", v)
+	}
+}
+
+// A refused per-turn call must not also spend the tenant's minute, or a turn
+// that hits its own small budget would silently eat the larger allowance.
+func TestTurnRefusalDoesNotSpendTheTenantWindow(t *testing.T) {
+	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)}
+	tenant := uuid.New()
+	for i := 0; i < SearchBudgetPerTurn+5; i++ {
+		b.take(tenant, "one-turn", ToolWebSearch, SearchBudgetPerTurn)
+	}
+	if got := b.tenants[tenant].calls; got != SearchBudgetPerTurn {
+		t.Fatalf("the tenant window recorded %d calls, want %d: refused calls are being charged", got, SearchBudgetPerTurn)
+	}
+}
+
+// Eviction under pressure must spend the flooder's own entries before a
+// neighbour's. Deleting arbitrary keys is not a denial of service, but it does
+// reset another tenant's injected-loop bound, which is the protection the
+// budget exists to provide.
+func TestEvictionSpendsTheFloodersOwnEntriesFirst(t *testing.T) {
+	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)}
+	victim, flooder := uuid.New(), uuid.New()
+
+	// The victim spends its turn budget, so its counter is worth protecting.
+	for i := 0; i < SearchBudgetPerTurn; i++ {
+		b.take(victim, "victim-turn", ToolWebSearch, SearchBudgetPerTurn)
+	}
+	victimKey := victim.String() + "\x00" + "victim-turn"
+	if _, ok := b.turns[victimKey]; !ok {
+		t.Fatal("the victim's counter was not recorded")
+	}
+
+	// The flooder churns turn identifiers well past the cap. Its own tenant
+	// window will refuse most of these, which is fine: the map pressure is
+	// what this test is about, so drive it through evict directly.
+	for i := 0; i < maxTrackedTurns*2; i++ {
+		b.turns[flooder.String()+"\x00"+"flood-"+strconv.Itoa(i)] = turnCounts{expires: time.Now().Add(turnTTL)}
+		if len(b.turns) >= maxTrackedTurns {
+			b.evict(time.Now(), flooder.String()+"\x00")
+		}
+	}
+
+	if _, ok := b.turns[victimKey]; !ok {
+		t.Fatal("the victim's live counter was evicted while the flooder still held entries of its own")
+	}
+}
+
 // B2 through the route. Admission runs before anything else the fetch path
 // would do, so a refused URL is refused identically whether or not the fetch
 // pipeline exists yet.
@@ -389,6 +482,46 @@ func TestWebFetchDelegatesToTheFetcherWhenWired(t *testing.T) {
 	}
 	if got != "https://example.com/a" {
 		t.Fatalf("the fetcher received %q", got)
+	}
+}
+
+// The invariant has to hold at the boundary the value crosses to the client,
+// not only inside the constructor. FetchResult has exported fields, so a
+// future pipeline can return one the constructor would have refused, and a
+// nil error means errors.Is cannot catch it. Each row here is a shape that
+// would otherwise reach the client as a 200 carrying no sources, which is
+// precisely the #1609 defect reached around the constructor rather than
+// through it.
+func TestWebFetchRefusesANonConformingEnvelopeFromThePipeline(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result FetchResult
+	}{
+		{"zero value, the forgot-to-set-an-error shape", FetchResult{}},
+		{"ok status with no parts", FetchResult{Status: StatusOK, URL: "https://example.com/a"}},
+		{"ok status with an empty parts slice", FetchResult{Status: StatusOK, Parts: []Part{}}},
+		{"parts but no status", FetchResult{Parts: []Part{{Text: "body", End: 4}}}},
+		{"error status leaking through the success path", FetchResult{Status: StatusError, Parts: []Part{{Text: "x", End: 1}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHandler(t, Deps{
+				Search: &stubSearcher{},
+				Fetch: FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+					return tc.result, nil
+				}),
+			})
+			rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": "https://example.com/a"})
+			if rr.Code == http.StatusOK {
+				t.Fatalf("a non-conforming envelope was served as a success: %s", rr.Body)
+			}
+			env := decodeEnvelope(t, rr)
+			if env["status"] != StatusError {
+				t.Fatalf("status = %v, want %q", env["status"], StatusError)
+			}
+			if _, present := env["parts"]; present {
+				t.Fatalf("the refusal carries a parts field: %s", rr.Body)
+			}
+		})
 	}
 }
 

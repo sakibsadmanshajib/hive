@@ -1,6 +1,8 @@
 package webtools
 
 import (
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -22,6 +24,10 @@ func TestAdmitRejects(t *testing.T) {
 		{"link local aws metadata", "http://169.254.169.254/latest/meta-data/"},
 		{"ipv6 unique local", "http://[fd00::1]/"},
 		{"ipv6 ec2 metadata", "http://[fd00:ec2::254]/latest/meta-data/"},
+		{"ipv4-compatible ipv6 loopback", "http://[::7f00:1]/"},
+		{"ipv4-translated rfc6052", "http://[::ffff:0:7f00:1]/"},
+		{"well-known nat64 metadata", "http://[64:ff9b::a9fe:a9fe]/latest/meta-data/"},
+		{"deprecated site-local", "http://[fec0::1]/"},
 		{"gcp metadata by name", "http://metadata.google.internal/computeMetadata/v1/"},
 		{"azure metadata by name", "http://metadata.azure.com/metadata/instance"},
 		{"alibaba metadata", "http://100.100.100.200/latest/meta-data/"},
@@ -65,6 +71,30 @@ func TestAdmitAllowsOrdinaryPublicURLs(t *testing.T) {
 		if got == nil || got.Host == "" {
 			t.Fatalf("Admit(%q) returned %v", raw, got)
 		}
+	}
+}
+
+// Dotted-decimal shorthand ("127.1") is admitted here and refused later at
+// connect time, and this test pins the reason so the split is not mistaken for
+// a gap. Neither net.ParseIP nor netip.ParseAddr accepts the shorthand, so it
+// is not treated as a literal by either parser; it contains a dot, so the
+// dotless rule does not catch it; and the OS resolver is what expands it at
+// dial time, which is exactly where the dialer screens the result.
+//
+// The practical consequence is bounded: nothing is reachable, but such a hit
+// could be carried into a search envelope as a citation. Dropping it by
+// comparing the two parsers, which is the obvious one-line fix, would catch
+// nothing, and this test is what says so.
+func TestDottedShorthandIsNotTreatedAsALiteral(t *testing.T) {
+	const shorthand = "127.1"
+	if ip := net.ParseIP(shorthand); ip != nil {
+		t.Fatalf("net.ParseIP(%q) = %v; the comparison fix would be viable after all", shorthand, ip)
+	}
+	if addr, err := netip.ParseAddr(shorthand); err == nil {
+		t.Fatalf("netip.ParseAddr(%q) = %v, want a parse error", shorthand, addr)
+	}
+	if _, err := Admit("http://" + shorthand + "/"); err != nil {
+		t.Fatalf("Admit refused %q at admission; this test's premise no longer holds: %v", shorthand, err)
 	}
 }
 

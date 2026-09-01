@@ -54,6 +54,7 @@ const (
 const (
 	CodeInvalidRequest         = "invalid_request"
 	CodeBudgetExhausted        = "budget_exhausted"
+	CodeRateLimited            = "rate_limited"
 	CodeNotImplemented         = "not_implemented"
 	CodeSearchUnavailable      = "search_unavailable"
 	CodeURLRejected            = "url_rejected"

@@ -46,17 +46,21 @@ func TestDescriptorsAreExactlyTheTwoTools(t *testing.T) {
 	}
 }
 
-// The fetch description must tell the model that returned page content is
-// data, not instructions (spec section 7, prompt injection containment).
-func TestFetchDescriptorMarksContentUntrusted(t *testing.T) {
+// Both descriptions must tell the model that what comes back is data, not
+// instructions (spec section 7, prompt injection containment). Search matters
+// here as much as fetch: a snippet is engine-supplied text whose content is
+// whatever the indexed page says, and seeding one is ordinary search engine
+// optimisation rather than an exotic attack.
+func TestBothDescriptorsMarkContentUntrusted(t *testing.T) {
+	seen := 0
 	for _, d := range Descriptors() {
-		if d.Function.Name != ToolWebFetch {
-			continue
-		}
 		if !strings.Contains(strings.ToLower(d.Function.Description), "untrusted") {
-			t.Fatalf("web_fetch description does not mark its content untrusted: %q", d.Function.Description)
+			t.Errorf("%s description does not mark its content untrusted: %q",
+				d.Function.Name, d.Function.Description)
 		}
-		return
+		seen++
 	}
-	t.Fatal("no web_fetch descriptor")
+	if seen != 2 {
+		t.Fatalf("checked %d descriptors, want 2", seen)
+	}
 }

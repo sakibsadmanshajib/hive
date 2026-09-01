@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -44,6 +45,34 @@ const (
 	// third of its length and could split a rune in half on the way out.
 	maxSnippetChars = 500
 )
+
+// stripInvisible removes characters that carry no legible meaning but do carry
+// meaning to a model: the C category (control, format, surrogate, private use,
+// unassigned), the zero-width and directional-mark block U+200B to U+200F, the
+// bidi overrides U+202A to U+202E, the bidi isolates U+2066 to U+2069, and the
+// byte-order mark. Ordinary whitespace is kept.
+//
+// These are the standard way to hide an instruction from whoever reviews the
+// text while leaving it perfectly legible to the model reading it. A search
+// snippet is attacker-influenceable text entering the model's context, and
+// seeding one is ordinary search engine optimisation rather than an exotic
+// attack, so this runs on the search path in this slice rather than waiting
+// for the fetch pipeline. That pipeline reuses this function for its own
+// extracted text (criterion B10).
+func stripInvisible(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\ufeff', // byte order mark
+			r >= '\u200b' && r <= '\u200f', // zero width and directional marks
+			r >= '\u202a' && r <= '\u202e', // bidi overrides
+			r >= '\u2066' && r <= '\u2069': // bidi isolates
+			return -1
+		case unicode.In(r, unicode.C):
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // truncateRunes shortens s to at most n runes, never splitting one.
 func truncateRunes(s string, n int) string {
@@ -169,12 +198,19 @@ func (s *SearXNG) Search(ctx context.Context, query string, n int) ([]Hit, int, 
 	var hits []Hit
 	dropped := 0
 	for _, item := range raw {
-		title := strings.TrimSpace(item.Title)
-		snippet := strings.TrimSpace(item.Content)
+		// Stripped before the emptiness test, so a title made entirely of
+		// zero-width characters is dropped rather than carried as a hit whose
+		// title renders as nothing.
+		title := strings.TrimSpace(stripInvisible(item.Title))
+		snippet := strings.TrimSpace(stripInvisible(item.Content))
 		// A hit the envelope could not carry is counted, never silently
 		// rounded away: a partial loss has to read as a partial loss.
-		// Admit is applied here too, so the model is never shown a URL
-		// web_fetch would refuse.
+		//
+		// Admit is applied here so the model is not shown a URL web_fetch
+		// would refuse outright. It is deliberately not equivalent to what
+		// web_fetch accepts: Admit does no resolution, so a public hostname
+		// that resolves to a private address passes here and is refused later
+		// at connect time, which is the intended split rather than a gap.
 		if title == "" || snippet == "" {
 			dropped++
 			continue

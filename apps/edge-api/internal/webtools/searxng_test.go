@@ -142,6 +142,62 @@ func TestSearchTrimsSnippetsOnCharacterBoundaries(t *testing.T) {
 	}
 }
 
+// A snippet is attacker-influenceable text entering the model's context, and
+// invisible characters are the standard way to hide an instruction from a
+// human reviewer while leaving it legible to the model. Issue #1640 is exactly
+// this channel.
+func TestSearchStripsInvisibleCharactersFromHits(t *testing.T) {
+	// Zero width space, zero width non-joiner, right-to-left override,
+	// left-to-right isolate, byte order mark and a NUL, interleaved with the
+	// text a reader would actually see. Written as JSON escapes rather than Go
+	// ones: the decoder is what turns them into real characters, and an
+	// unescaped control character would make the fixture invalid JSON.
+	payload := `{"results":[{"url":"https://example.com/a",` +
+		`"title":"Real\u200btitle\u200c with\u202e hidden\u2066 text\ufeff",` +
+		`"content":"Snippet\u200b with\u202e marks","score":1}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	hits, _, err := NewSearXNG(srv.URL).Search(context.Background(), "q", 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	for _, field := range []string{hits[0].Title, hits[0].Snippet} {
+		for _, r := range field {
+			if r == '\u200b' || r == '\u200c' || r == '\u202e' || r == '\u2066' || r == '\ufeff' || r == 0 {
+				t.Fatalf("invisible character %U survived in %q", r, field)
+			}
+		}
+	}
+	// The legible text has to survive, or stripping has eaten the result.
+	if !strings.Contains(hits[0].Title, "Real") || !strings.Contains(hits[0].Title, "text") {
+		t.Fatalf("stripping removed visible text: %q", hits[0].Title)
+	}
+}
+
+// A hit whose title is nothing but invisible characters carries no title at
+// all once stripped, so it is dropped rather than shown as a blank citation.
+func TestSearchDropsHitsThatAreInvisibleOnly(t *testing.T) {
+	payload := `{"results":[{"url":"https://example.com/a","title":"\u200b\u200c","content":"real","score":1}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	hits, dropped, err := NewSearXNG(srv.URL).Search(context.Background(), "q", 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 0 || dropped != 1 {
+		t.Fatalf("hits = %d, dropped = %d, want 0, 1", len(hits), dropped)
+	}
+}
+
 // A4. An unavailable backend is an error, never an empty result set. This is
 // the rule apply_web_search_ratelimit_patch.py already established.
 func TestSearchBackendErrorIsNotAnEmptyResultSet(t *testing.T) {

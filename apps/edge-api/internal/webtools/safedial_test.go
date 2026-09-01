@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -192,6 +193,38 @@ func TestSafeClientAppliesTotalTimeout(t *testing.T) {
 	}
 }
 
+// Every value leaving this file names a class and carries no address. The raw
+// *net.OpError from a failed dial stringifies as "dial tcp 93.184.216.34:80:
+// connect: connection refused", so the one path that returns a live dial
+// failure is the one that would otherwise break the rule the sentinels follow.
+// The address belongs in the log, not in the value a caller may surface.
+func TestDialFailureCarriesNoAddress(t *testing.T) {
+	// A server that is closed immediately, so the port is real, admissible
+	// under the test hook, and refuses the connection.
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	target := srv.URL
+	srv.Close()
+
+	client := SafeClient(ClientConfig{allowAddr: allowAnyAddrForTest, Timeout: 2 * time.Second})
+	resp, err := client.Get(target)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("a connection to a closed port succeeded")
+	}
+	if !errors.Is(err, ErrDialFailed) {
+		t.Fatalf("error = %v, want ErrDialFailed", err)
+	}
+	// url.Error wraps our sentinel and adds the request URL, which is the
+	// caller's own input. What must not appear is the resolved address.
+	if strings.Contains(ErrDialFailed.Error(), "127.0.0.1") {
+		t.Fatalf("the sentinel itself carries an address: %q", ErrDialFailed)
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		t.Fatalf("the raw dial error is still reachable through the chain: %v", opErr)
+	}
+}
+
 // The client must not honour HTTP_PROXY and friends: a proxy would carry the
 // request past the dialer that does the address checking.
 func TestSafeClientIgnoresProxyEnvironment(t *testing.T) {
@@ -230,6 +263,26 @@ func TestAddrAllowed(t *testing.T) {
 		{"::ffff:127.0.0.1", false},
 		{"::ffff:10.0.0.1", false},
 		{"2001:db8::1", false},
+		// IPv4-compatible IPv6. ::127.0.0.1 is ::7f00:1, and Is4In6 matches
+		// only the ::ffff: mapped form, so Unmap never runs and IsLoopback is
+		// false for this shape.
+		{"::7f00:1", false},
+		{"::a00:1", false},
+		// IPv4-translated, RFC 6052 SIIT.
+		{"::ffff:0:7f00:1", false},
+		// Well-known NAT64, which embeds an arbitrary v4 address. The last
+		// row is the AWS metadata endpoint behind a translator.
+		{"64:ff9b::7f00:1", false},
+		{"64:ff9b::a9fe:a9fe", false},
+		// Local-use NAT64.
+		{"64:ff9b:1::1", false},
+		// Deprecated site-local, outside Go's IsPrivate.
+		{"fec0::1", false},
+		{"feff::1", false},
+		// A global address adjacent to the ranges above must still pass, so
+		// these prefixes cannot quietly swallow the public internet.
+		{"64:ff9c::1", true},
+		{"2001:4860:4860::8888", true},
 	} {
 		got := addrAllowed(mustAddr(t, tc.addr))
 		if got != tc.want {

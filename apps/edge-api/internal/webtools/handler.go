@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,12 +51,32 @@ const (
 	// cannot be grown by a caller.
 	maxTurnIDChars = 128
 
-	// SearchBudgetPerTurn and FetchBudgetPerTurn are spec section 7 item 10.
-	// Without them an injected page can walk the model through an unbounded
-	// tool loop, and since a URL carries a query string, an unbounded fetch
-	// loop is an exfiltration channel rather than merely a cost.
+	// SearchBudgetPerTurn and FetchBudgetPerTurn are the first half of spec
+	// section 7 item 10. Without them an injected page can walk the model
+	// through an unbounded tool loop, and since a URL carries a query string,
+	// an unbounded fetch loop is an exfiltration channel rather than merely a
+	// cost.
 	SearchBudgetPerTurn = 2
 	FetchBudgetPerTurn  = 3
+
+	// TenantCallsPerMinute is the second half of that item, and it is the half
+	// that actually bounds a tenant. The per-turn budget alone bounds nothing
+	// across turns: the turn is a client-supplied header, so any holder of a
+	// session JWT, including the shim itself if an injected page walks it
+	// there, gets an unbounded call rate by incrementing the header. Two per
+	// turn times unlimited turns is unlimited.
+	//
+	// The number is deliberately generous against real use (a turn spends at
+	// most 2 searches and 3 fetches, so this is roughly six full turns a
+	// minute) and ruinous against a loop.
+	//
+	// Live consequence if this is absent: unbounded SearXNG queries from this
+	// box's single egress IP, which is the same surface that forced the engine
+	// list down to three in issue #1576 and PR #1585. Armed consequence: once
+	// the fetch pipeline lands, the same loop is an unbounded outbound relay.
+	TenantCallsPerMinute = 30
+	// tenantWindow is the window TenantCallsPerMinute is counted over.
+	tenantWindow = time.Minute
 
 	// turnTTL is how long a turn's counters are remembered. Longer than any
 	// assistant turn, short enough that the map does not accumulate.
@@ -72,6 +93,7 @@ const (
 const (
 	msgNoTurn          = "This tool call carries no turn identifier, so its per-turn budget cannot be applied."
 	msgBudget          = "This turn has already used its allowance of web tool calls."
+	msgRateLimited     = "Too many web tool calls in the last minute. Try again shortly."
 	msgBadBody         = "The tool arguments could not be read."
 	msgNoQuery         = "A non-empty query string is required."
 	msgQueryTooLong    = "The query is too long."
@@ -127,7 +149,7 @@ func NewHandler(d Deps) *Handler {
 	return &Handler{
 		search: d.Search,
 		fetch:  d.Fetch,
-		budget: &turnBudget{now: now, turns: make(map[string]turnCounts)},
+		budget: &turnBudget{now: now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)},
 	}
 }
 
@@ -177,8 +199,8 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.budget.take(user.TenantID, turn, ToolWebSearch, SearchBudgetPerTurn) {
-		writeEnvelope(w, http.StatusTooManyRequests, NewError(CodeBudgetExhausted, msgBudget, 0))
+	if verdict := h.budget.take(user.TenantID, turn, ToolWebSearch, SearchBudgetPerTurn); verdict != budgetOK {
+		writeBudgetRefusal(w, verdict)
 		return
 	}
 
@@ -242,8 +264,8 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.budget.take(user.TenantID, turn, ToolWebFetch, FetchBudgetPerTurn) {
-		writeEnvelope(w, http.StatusTooManyRequests, NewError(CodeBudgetExhausted, msgBudget, 0))
+	if verdict := h.budget.take(user.TenantID, turn, ToolWebFetch, FetchBudgetPerTurn); verdict != budgetOK {
+		writeBudgetRefusal(w, verdict)
 		return
 	}
 
@@ -256,6 +278,23 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("webtools: web_fetch failed: %v", err)
 		writeEnvelope(w, http.StatusBadGateway, NewError(fetchCode(err), msgFetchFailed, 0))
+		return
+	}
+	// The invariant is enforced here, at the boundary the value crosses to
+	// the client, and not only in NewFetchResult.
+	//
+	// FetchResult has exported fields, so the constructor is not the only
+	// route to one. A pipeline that returns FetchResult{} with a nil error,
+	// which is what a path that forgot to set an error returns, would
+	// otherwise be written verbatim as a 200 carrying {"status":"","parts":
+	// null}. That is the #1609 shape reached around the constructor rather
+	// than through it, and errors.Is on a nil error cannot catch it. The
+	// pipeline is written in a later slice by someone who will reasonably
+	// assume the envelope cannot lie, so the check belongs on this side.
+	if result.Status != StatusOK || len(result.Parts) == 0 {
+		log.Printf("webtools: web_fetch pipeline returned a non-conforming envelope (status=%q parts=%d)",
+			result.Status, len(result.Parts))
+		writeEnvelope(w, http.StatusBadGateway, NewError(CodeExtractEmpty, msgFetchFailed, result.Dropped))
 		return
 	}
 	writeEnvelope(w, http.StatusOK, result)
@@ -272,6 +311,11 @@ func fetchCode(err error) string {
 		return CodeFetchBlockedRedirect
 	case errors.Is(err, ErrBlockedAddress), errors.Is(err, ErrResolveFailed):
 		return CodeURLRejected
+	case errors.Is(err, ErrDialFailed):
+		// The address was admissible and simply would not answer. That is a
+		// failed fetch, not a refused URL, and collapsing the two would tell
+		// the model the address was forbidden when it was not.
+		return CodeFetchFailed
 	case errors.Is(err, context.DeadlineExceeded):
 		return CodeFetchTimeout
 	case errors.Is(err, ErrEmptyResult):
@@ -329,6 +373,19 @@ func decodeBody(w http.ResponseWriter, r *http.Request, into any) bool {
 	return true
 }
 
+// writeBudgetRefusal answers a refused call. The two limits get different
+// codes because they mean different things to the caller: one turn has spent
+// its allowance and the next turn will work, versus this tenant is calling
+// too fast and needs to wait.
+func writeBudgetRefusal(w http.ResponseWriter, verdict budgetVerdict) {
+	if verdict == budgetTenantRateLimited {
+		w.Header().Set("Retry-After", strconv.Itoa(int(tenantWindow.Seconds())))
+		writeEnvelope(w, http.StatusTooManyRequests, NewError(CodeRateLimited, msgRateLimited, 0))
+		return
+	}
+	writeEnvelope(w, http.StatusTooManyRequests, NewError(CodeBudgetExhausted, msgBudget, 0))
+}
+
 func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -353,24 +410,50 @@ type turnCounts struct {
 	expires  time.Time
 }
 
-// turnBudget bounds tool calls per assistant turn.
-//
-// ponytail: one in-memory map, per process. The ceiling is that budgets are
-// not shared across edge-api replicas, so N replicas allow up to N times the
-// budget for one turn. That is acceptable while edge-api runs single-replica
-// on the demo box and the box is the only deployment; the upgrade path if it
-// ever runs multi-replica is the same Redis this process already talks to for
-// the budget gate.
-type turnBudget struct {
-	mu    sync.Mutex
-	now   func() time.Time
-	turns map[string]turnCounts
+// budgetVerdict distinguishes the two ways a call can be refused, so the
+// envelope names which one happened rather than collapsing them.
+type budgetVerdict int
+
+const (
+	budgetOK budgetVerdict = iota
+	budgetTurnExhausted
+	budgetTenantRateLimited
+)
+
+// tenantCounts is one tenant's calls in the current fixed window.
+type tenantCounts struct {
+	calls   int
+	expires time.Time
 }
 
-// take consumes one call of the given tool against the turn's budget and
-// reports whether it was within it.
-func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
-	key := tenant.String() + "\x00" + turn
+// turnBudget bounds tool calls two ways: per assistant turn, and per tenant
+// per minute. Both halves are needed and neither substitutes for the other.
+// The turn budget stops an injected page looping within one turn, where the
+// caller fixes the identifier. The tenant window stops that same loop escaping
+// the bound by incrementing the identifier, which any client can do freely
+// because the turn arrives in a header.
+//
+// ponytail: two in-memory maps under one mutex, per process. Two ceilings,
+// both deliberate. Budgets are not shared across edge-api replicas, so N
+// replicas allow N times the limit; that is fine while edge-api runs
+// single-replica on the demo box, and the upgrade path is the Redis this
+// process already talks to for the budget gate. And the tenant window is
+// fixed rather than sliding, so a caller can spend two windows' worth across
+// a boundary; that costs one extra window, not an unbounded rate, which is
+// the property this exists for.
+type turnBudget struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	turns   map[string]turnCounts
+	tenants map[uuid.UUID]tenantCounts
+}
+
+// take consumes one call of the given tool and reports whether it was allowed.
+// The per-turn budget is checked first, so a turn that has already spent its
+// allowance does not also spend the tenant's minute.
+func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) budgetVerdict {
+	prefix := tenant.String() + "\x00"
+	key := prefix + turn
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -379,7 +462,7 @@ func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
 	entry, known := b.turns[key]
 	if !known || now.After(entry.expires) {
 		if len(b.turns) >= maxTrackedTurns {
-			b.evict(now)
+			b.evict(now, prefix)
 		}
 		entry = turnCounts{expires: now.Add(turnTTL)}
 	}
@@ -387,16 +470,54 @@ func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
 	switch tool {
 	case ToolWebSearch:
 		if entry.searches >= limit {
-			return false
+			return budgetTurnExhausted
 		}
-		entry.searches++
 	default:
 		if entry.fetches >= limit {
-			return false
+			return budgetTurnExhausted
 		}
+	}
+
+	if !b.takeTenant(tenant, now) {
+		return budgetTenantRateLimited
+	}
+
+	if tool == ToolWebSearch {
+		entry.searches++
+	} else {
 		entry.fetches++
 	}
 	b.turns[key] = entry
+	return budgetOK
+}
+
+// takeTenant consumes one call against the tenant's fixed window. Called under
+// b.mu.
+func (b *turnBudget) takeTenant(tenant uuid.UUID, now time.Time) bool {
+	if b.tenants == nil {
+		b.tenants = make(map[uuid.UUID]tenantCounts)
+	}
+	window, known := b.tenants[tenant]
+	if !known || now.After(window.expires) {
+		// Keys here are authenticated tenant ids, not client-supplied
+		// strings, so a caller cannot grow this map the way it can grow the
+		// turn map. Sweeping expired entries only keeps it from accumulating
+		// every tenant the process has ever served.
+		if len(b.tenants) >= maxTrackedTurns {
+			for id, w := range b.tenants {
+				if now.After(w.expires) {
+					delete(b.tenants, id)
+				}
+			}
+		}
+		b.tenants[tenant] = tenantCounts{calls: 1, expires: now.Add(tenantWindow)}
+		return true
+	}
+	if window.calls >= TenantCallsPerMinute {
+		return false
+	}
+	window.calls++
+	b.tenants[tenant] = window
 	return true
 }
 
@@ -413,17 +534,29 @@ func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
 // through a loop within one assistant turn, where the identifier is fixed by
 // the caller, not to ration a tenant across turns.
 //
+// The residual, and why the caller's own prefix is passed in: map iteration
+// order gives no preference to anybody, so evicting arbitrary keys let a
+// tenant that floods the map delete other tenants' live counters as a side
+// effect. That is not a denial of service, but it does reset a neighbour's
+// injected-loop bound, which is the one protection the budget provides. The
+// flooder now pays for its own flood first and only spills onto neighbours
+// once its own entries are exhausted, which needs it to hold the whole map.
+//
 // Called under b.mu.
-func (b *turnBudget) evict(now time.Time) {
+func (b *turnBudget) evict(now time.Time, tenantPrefix string) {
 	for key, entry := range b.turns {
 		if now.After(entry.expires) {
 			delete(b.turns, key)
 		}
 	}
-	for key := range b.turns {
-		if len(b.turns) < maxTrackedTurns {
-			return
+	for _, own := range []bool{true, false} {
+		for key := range b.turns {
+			if len(b.turns) < maxTrackedTurns {
+				return
+			}
+			if strings.HasPrefix(key, tenantPrefix) == own {
+				delete(b.turns, key)
+			}
 		}
-		delete(b.turns, key)
 	}
 }

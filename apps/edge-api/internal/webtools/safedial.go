@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -48,6 +49,17 @@ var (
 	// deliberately generic: the resolver's own message can carry search
 	// domains and internal suffixes.
 	ErrResolveFailed = errors.New("webtools: could not resolve host")
+	// ErrDialFailed is returned when every admitted address refused the
+	// connection. Distinct from ErrBlockedAddress because "we would not talk
+	// to that address" and "that address would not talk to us" are different
+	// facts, and fetchCode maps them to different envelope classes.
+	//
+	// It exists mainly so no value leaving this file carries an address. The
+	// raw *net.OpError from a failed dial stringifies as "dial tcp
+	// 93.184.216.34:80: connect: connection refused", and that is the one
+	// value here that would otherwise break the rule the other four sentinels
+	// follow. The real cause still reaches the log; only the value is scrubbed.
+	ErrDialFailed = errors.New("webtools: could not connect to host")
 )
 
 // Resolver is the lookup surface the safe dialer needs. *net.Resolver
@@ -164,7 +176,9 @@ func (d *safeDialer) DialContext(ctx context.Context, network, address string) (
 		dialErr = err
 	}
 	if dialErr != nil {
-		return nil, dialErr
+		// Logged with the address, returned without it.
+		log.Printf("webtools: dial failed: %v", dialErr)
+		return nil, ErrDialFailed
 	}
 	return nil, ErrBlockedAddress
 }
