@@ -323,6 +323,72 @@ func TestReduceFencesEveryPartWithAPerCallToken(t *testing.T) {
 	}
 }
 
+// The per-call character bound has to be the bound that was stated, and what
+// is returned is the fenced text, so the fence counts against it. Before the
+// fence was counted, six parts returned 12,544 runes against a stated 12,000.
+// This constant is doing injection containment work, so the stated bound and
+// the shipped bound are one number.
+func TestReduceHonoursThePerCallBudgetIncludingTheFence(t *testing.T) {
+	for _, focus := range []string{"credits", ""} {
+		name := "ranked"
+		if focus == "" {
+			name = "head window"
+		}
+		t.Run(name, func(t *testing.T) {
+			parts, _, _, err := newTestReducer(t, &stubEmbedder{}).Reduce(
+				context.Background(), Doc{Text: syntheticPage(200)}, focus)
+			if err != nil {
+				t.Fatalf("Reduce: %v", err)
+			}
+			if len(parts) > MaxParts {
+				t.Fatalf("returned %d parts, over the %d cap", len(parts), MaxParts)
+			}
+			total := 0
+			for _, p := range parts {
+				total += utf8.RuneCountInString(p.Text)
+			}
+			if total > MaxCallChars {
+				t.Fatalf("returned %d characters, over the stated %d cap", total, MaxCallChars)
+			}
+		})
+	}
+}
+
+// The overlap exists so a sentence straddling a chunk boundary stays whole for
+// ranking. It should not be spent twice out of the returned budget: adjacent
+// chunks score alike, so ranking routinely picks neighbours and each pair then
+// showed the model the same 200 characters twice.
+func TestReduceDoesNotReturnOverlappingSpans(t *testing.T) {
+	for _, focus := range []string{"credits", ""} {
+		parts, _, _, err := newTestReducer(t, &stubEmbedder{}).Reduce(
+			context.Background(), Doc{Text: syntheticPage(200)}, focus)
+		if err != nil {
+			t.Fatalf("Reduce: %v", err)
+		}
+		for i := 1; i < len(parts); i++ {
+			if parts[i].Start < parts[i-1].End {
+				t.Fatalf("part %d starts at %d, inside part %d which ends at %d: the overlap is returned twice",
+					i, parts[i].Start, i-1, parts[i-1].End)
+			}
+		}
+		// And the offsets still describe the text they carry, which is what a
+		// trim done by cutting the string rather than re-slicing the page
+		// would have broken.
+		for i, p := range parts {
+			inner := strings.TrimPrefix(p.Text, fenceOpenPrefix)
+			if idx := strings.Index(inner, "\n"); idx >= 0 {
+				inner = inner[idx+1:]
+			}
+			if idx := strings.LastIndex(inner, "\n"); idx >= 0 {
+				inner = inner[:idx]
+			}
+			if got, want := utf8.RuneCountInString(inner), p.End-p.Start; got > want {
+				t.Fatalf("part %d carries %d runes for an offset span of %d", i, got, want)
+			}
+		}
+	}
+}
+
 // Zero concurrency means no bound at all, which is the defect the bound
 // exists to prevent, so it is refused rather than obeyed.
 func TestNewReducerRefusesANonPositiveConcurrency(t *testing.T) {

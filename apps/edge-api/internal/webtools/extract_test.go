@@ -148,6 +148,73 @@ func TestExtractHTMLKeepsTextAndDropsScriptStyleAndMarkup(t *testing.T) {
 	if !strings.Contains(doc.Text, "The gateway meters every call.") {
 		t.Fatalf("inline markup was not joined into readable text: %q", doc.Text)
 	}
+	// Exact, not Contains. Every assertion above is true of text whose block
+	// boundaries have been deleted, which is precisely how this file shipped a
+	// version that glued "Home" onto "Rates & limits" with nothing between
+	// them and passed its whole suite. A substring assertion cannot see that
+	// defect; the full string can.
+	const want = "Home\n\nRates & limits\n\nThe gateway meters every call."
+	if doc.Text != want {
+		t.Fatalf("extracted text =\n%q\nwant\n%q", doc.Text, want)
+	}
+}
+
+// The regression guard for the block-structure defect itself, separate from
+// the fixture above so it names one property and fails for one reason.
+//
+// stripInvisible removes the whole of unicode.C, and Go's unicode.C is the
+// union of Cc, Cf, Co and Cs. U+000A and U+0009 are Cc. Removing them deleted
+// every boundary htmlToText had just produced, made collapseWhitespace dead
+// code (it splits on newlines, and there were none left to split on), and
+// glued adjacent words together with no separator at all.
+func TestExtractKeepsBlockBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		in          string
+		glued       string
+		wantText    string
+	}{
+		{"two paragraphs", "text/html", "<html><body><p>a</p><p>b</p></body></html>", "ab", "a\n\nb"},
+		{"list items", "text/html",
+			"<html><body><ul><li>First item</li><li>Second item</li></ul></body></html>",
+			"First itemSecond item", "First item\n\nSecond item"},
+		{"heading then paragraph", "text/html",
+			"<html><body><h1>Rates</h1><p>One credit.</p></body></html>",
+			"RatesOne credit.", "Rates\n\nOne credit."},
+		{"csv rows", "text/csv", "alias,price\nhive-free,0\n", "pricehive-free", "alias,price\nhive-free,0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := testExtractor(nil).Extract(context.Background(), tc.contentType, "/a", strings.NewReader(tc.in))
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if doc.Text != tc.wantText {
+				t.Fatalf("text = %q, want %q", doc.Text, tc.wantText)
+			}
+			if strings.Contains(doc.Text, tc.glued) && tc.wantText != tc.glued {
+				t.Fatalf("block boundary was annihilated, %q ran together: %q", tc.glued, doc.Text)
+			}
+		})
+	}
+}
+
+// The converter returns markdown, so the binary branch is hit hardest by a
+// strip that eats newlines: headings, paragraphs and list items all run into
+// one line and the model is handed a sentence none of them said.
+func TestExtractKeepsConvertedMarkdownStructure(t *testing.T) {
+	const markdown = "# Rates\n\nOne credit per million tokens.\n\n- alpha\n- beta"
+	conv := &stubConverter{markdown: markdown}
+	doc, err := testExtractor(conv).Extract(context.Background(), "application/pdf", "/a.pdf", strings.NewReader("BINARY"))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if doc.Text != markdown {
+		t.Fatalf("converted markdown =\n%q\nwant it preserved\n%q", doc.Text, markdown)
+	}
+	if strings.Contains(doc.Text, "RatesOne") || strings.Contains(doc.Text, "alpha- beta") {
+		t.Fatalf("markdown structure was glued together: %q", doc.Text)
+	}
 }
 
 // B9. A page that parses fine and yields no text is extract_empty, and it is
@@ -190,6 +257,38 @@ func TestExtractStripsInvisibleCharacters(t *testing.T) {
 	}
 	if !strings.Contains(doc.Text, "visibletext and more") {
 		t.Fatalf("stripping mangled the legible text: %q", doc.Text)
+	}
+}
+
+// The strip's coverage, one row per smuggling channel, because "the whole C
+// category" is a weaker claim than it sounds: Go's unicode.C is Cc, Cf, Co and
+// Cs, and two of the three published successors to tag-character smuggling sit
+// outside it. Variation selectors are Mn; the blank-rendering fillers are Lo
+// and So.
+func TestStripInvisibleCoversTheSmugglingChannels(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"unicode tag block", "a\U000e0041\U000e0042b", "ab"},
+		{"variation selectors", "a\ufe00\ufe0fb", "ab"},
+		{"variation selectors supplement", "a\U000e0100\U000e01efb", "ab"},
+		{"hangul fillers", "a\u115f\u1160\u3164b", "ab"},
+		{"braille blank", "a\u2800b", "ab"},
+		{"zero width and bidi", "a\u200b\u202e\u2066\ufeffb", "ab"},
+		{"soft hyphen", "a\u00adb", "ab"},
+		// The other half of the claim: what must survive.
+		{"newline and tab", "a\nb\tc", "a\nb\tc"},
+		{"bangla with combining marks", "বাংলা", "বাংলা"},
+		{"devanagari with combining marks", "हिन्दी", "हिन्दी"},
+		{"emoji", "ok \U0001f41d", "ok \U0001f41d"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripInvisible(tc.in); got != tc.want {
+				t.Fatalf("stripInvisible(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -237,6 +336,18 @@ func TestExtractConverterFailureIsExtractFailed(t *testing.T) {
 	_, err := testExtractor(conv).Extract(context.Background(), "application/pdf", "/a.pdf", strings.NewReader("BINARY"))
 	if !errors.Is(err, ErrExtractFailed) {
 		t.Fatalf("error = %v, want ErrExtractFailed", err)
+	}
+}
+
+// The third instance of the order-dependent errors.Is shape, guarded here
+// rather than left to depend on rag.ConversionError not having an Unwrap. A
+// converter that times out is an extract failure, and telling the user the
+// page was slow would be false about a page that answered.
+func TestExtractConverterTimeoutIsNotReportedAsAPageTimeout(t *testing.T) {
+	conv := &stubConverter{err: context.DeadlineExceeded}
+	_, err := testExtractor(conv).Extract(context.Background(), "application/pdf", "/a.pdf", strings.NewReader("BINARY"))
+	if got := fetchCode(err); got != CodeExtractFailed {
+		t.Fatalf("fetchCode = %q, want %q (err %v)", got, CodeExtractFailed, err)
 	}
 }
 

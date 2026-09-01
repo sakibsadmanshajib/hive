@@ -270,6 +270,45 @@ func TestWebFetchRouteKeepsEachFailureClassDistinct(t *testing.T) {
 	}
 }
 
+// The exfiltration channel is bounded on the fetch route, and only there: a
+// search hit carrying a long tracking query is a legitimate result, so Admit
+// must keep accepting it.
+func TestWebFetchRefusesAnOverlongQueryStringButSearchAdmissionDoesNot(t *testing.T) {
+	long := "https://example.com/a?c=" + strings.Repeat("x", MaxFetchQueryChars+1)
+
+	var reached bool
+	h := newTestHandler(t, Deps{
+		Search: &stubSearcher{},
+		Fetch: FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+			reached = true
+			return FetchResult{}, errors.New("must not run")
+		}),
+	})
+	rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": long})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rr.Code, rr.Body)
+	}
+	if decodeEnvelope(t, rr)["code"] != CodeURLRejected {
+		t.Fatalf("code = %v, want %q", decodeEnvelope(t, rr)["code"], CodeURLRejected)
+	}
+	if reached {
+		t.Fatal("the pipeline ran for a refused URL")
+	}
+
+	// The same URL is still admissible in general, so web_search does not
+	// start dropping hits over it.
+	if _, err := Admit(long); err != nil {
+		t.Fatalf("Admit refused a long query string: %v", err)
+	}
+
+	// And a query string inside the cap still fetches.
+	ok := "https://example.com/a?c=" + strings.Repeat("x", MaxFetchQueryChars-32)
+	rr = post(t, h, "/v1/tools/web_fetch", "turn-2", map[string]any{"url": ok})
+	if rr.Code == http.StatusBadRequest {
+		t.Fatalf("a query string inside the cap was refused: %s", rr.Body)
+	}
+}
+
 // B11, over the pipeline's own failures. No value that leaves this package
 // names an internal service or an address, including on the paths where the
 // underlying error is full of them.

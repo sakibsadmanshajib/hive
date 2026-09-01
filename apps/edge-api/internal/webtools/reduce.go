@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -55,6 +56,35 @@ const (
 
 	// MaxChunksPerPage caps the embedding request's input array. A page
 	// needing more than this is not a page the model should be reading whole.
+	// The figure is the spec's (section 8).
+	//
+	// Two consequences, both stated rather than left to be discovered.
+	//
+	// The backend must accept an input array this long in one request. At
+	// ChunkChars = 2000 that is up to 512,000 characters in a single POST to
+	// /v1/embeddings. Several OpenAI-compatible backends cap inputs per
+	// request well below 256, or cap total request tokens, and LiteLLM passes
+	// the provider's refusal straight through, so on such a backend every
+	// large page fails with embed_unavailable while every small page works.
+	// That shape is hard to read from outside, so the refusal is logged with
+	// the input count (see embedFailure) and the first thing to check is this
+	// number against the backend's own per-request limit. There is
+	// deliberately no automatic split-and-retry: it would be untested against
+	// any backend we actually run, and a retry path that only ever executes
+	// during an outage is a retry path nobody has seen work.
+	//
+	// The embedding is not metered. It goes through the same client and the
+	// same LiteLLM master key as a RAG query embedding, which also takes no
+	// hold, but the volume is different in kind: a RAG query embeds one short
+	// string, and this embeds up to 512,000 characters per large page. With
+	// TenantCallsPerMinute at 30 that is roughly 15 million characters of
+	// embedding input per tenant per minute, absorbed rather than billed, and
+	// bounded only by that rate limit. That is a deliberate decision for this
+	// slice and not an oversight: metering it needs a hold and a settlement on
+	// a path that has neither, which is its own change. Given D-031 through
+	// D-034, an unstated money assumption is the thing to avoid here, so it is
+	// stated. Revisit when web_fetch is advertised to the API-key surface,
+	// where the volume stops being bounded by one chat deployment.
 	MaxChunksPerPage = 256
 
 	// DefaultEmbedConcurrency bounds concurrent embedding calls across all
@@ -116,7 +146,10 @@ func (r *Reducer) Reduce(ctx context.Context, doc Doc, focus string) ([]Part, bo
 		return nil, false, 0, ErrExtractEmpty
 	}
 
-	token := fenceToken()
+	token, err := fenceToken()
+	if err != nil {
+		return nil, false, 0, err
+	}
 
 	if len(runes) <= MaxCallChars {
 		return []Part{fenced(Part{Text: string(runes), Start: 0, End: len(runes)}, token)}, false, 0, nil
@@ -130,6 +163,9 @@ func (r *Reducer) Reduce(ctx context.Context, doc Doc, focus string) ([]Part, bo
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		selected, dropped := takeInOrder(chunks)
+		// Head-window chunks are adjacent by construction, so every pair
+		// repeats ChunkOverlapChars until this runs.
+		selected = trimOverlap(runes, selected)
 		if len(selected) == 0 {
 			// Not reachable while a chunk is narrower than the per-call
 			// ceiling, which chunkRunes guarantees. Guarded anyway, because
@@ -162,7 +198,13 @@ func (r *Reducer) Reduce(ctx context.Context, doc Doc, focus string) ([]Part, bo
 	spent := 0
 	for _, idx := range ranked {
 		part := windowed[idx]
-		width := part.End - part.Start
+		// The fence is counted. What is returned is fenced(part), so a budget
+		// spent on the raw window width is not the budget the caller was told
+		// about: six parts overshot MaxCallChars by 544 runes before this,
+		// and this constant is doing injection containment work in its own
+		// comment, so the stated bound and the shipped bound should be one
+		// number.
+		width := part.End - part.Start + fenceOverheadChars
 		if len(picked) >= MaxParts || spent+width > MaxCallChars {
 			continue
 		}
@@ -176,8 +218,48 @@ func (r *Reducer) Reduce(ctx context.Context, doc Doc, focus string) ([]Part, bo
 	// order is how they are read, and a model quoting a page it was shown
 	// backwards quotes it badly.
 	sort.SliceStable(picked, func(a, b int) bool { return picked[a].Start < picked[b].Start })
+	picked = trimOverlap(runes, picked)
+	if len(picked) == 0 {
+		return nil, false, 0, ErrReduceEmpty
+	}
 
 	return fenceAll(picked, token), true, windowDropped + len(windowed) - len(picked), nil
+}
+
+// trimOverlap removes the duplicated head of any selected part that starts
+// inside its predecessor.
+//
+// ChunkOverlapChars exists so a sentence straddling a boundary stays whole in
+// one chunk, which is right for ranking and wrong for the returned span:
+// neighbouring text scores alike, so ranking usually picks adjacent chunks and
+// each adjacent pair then repeats the overlap. Measured on a 50,000 rune page
+// that was 1,000 of the 12,000 character budget spent showing the model text
+// it had already been shown.
+//
+// The trim re-slices the original rune slice rather than cutting the chunk's
+// own Text, so Start stays exactly the offset the text begins at. Cutting the
+// string would have been approximate, because chunkRunes trims whitespace off
+// each window and the string is therefore not always End minus Start long.
+func trimOverlap(runes []rune, parts []Part) []Part {
+	out := make([]Part, 0, len(parts))
+	prevEnd := 0
+	for _, p := range parts {
+		if p.Start < prevEnd {
+			p.Start = prevEnd
+		}
+		if p.Start >= p.End {
+			// Fully covered by its predecessor. Dropping it is right; the
+			// caller counts it in dropped like any other unselected chunk.
+			continue
+		}
+		p.Text = strings.TrimSpace(string(runes[p.Start:p.End]))
+		if p.Text == "" {
+			continue
+		}
+		prevEnd = p.End
+		out = append(out, p)
+	}
+	return out
 }
 
 // score embeds the focus string and every chunk, in exactly two requests, and
@@ -204,6 +286,10 @@ func (r *Reducer) score(ctx context.Context, chunks []Part, focus string) ([]flo
 	if err != nil || len(focusVecs) != 1 {
 		return nil, embedFailure(err, len(focusVecs), 1)
 	}
+	// From here the failure could be the backend refusing an input array of
+	// this length rather than being down, and the two are indistinguishable in
+	// the client message by design (criterion B11). The log is where they are
+	// told apart, so the count goes in it.
 
 	texts := make([]string, len(chunks))
 	for i, c := range chunks {
@@ -211,6 +297,8 @@ func (r *Reducer) score(ctx context.Context, chunks []Part, focus string) ([]flo
 	}
 	chunkVecs, err := r.embed.EmbedBatch(ctx, texts)
 	if err != nil || len(chunkVecs) != len(chunks) {
+		log.Printf("webtools: embedding a batch of %d chunks failed; if small pages work and large ones do not, check this count against the backend's per-request input limit: %v",
+			len(texts), err)
 		return nil, embedFailure(err, len(chunkVecs), len(chunks))
 	}
 
@@ -323,7 +411,9 @@ func takeInOrder(chunks []Part) ([]Part, int) {
 	var picked []Part
 	spent := 0
 	for _, c := range chunks {
-		width := c.End - c.Start
+		// The fence counted, as on the ranked path, so both paths spend the
+		// same budget on the same thing.
+		width := c.End - c.Start + fenceOverheadChars
 		if len(picked) >= MaxParts || spent+width > MaxCallChars {
 			break
 		}
@@ -348,17 +438,32 @@ const (
 	fenceOpenPrefix  = "[BEGIN UNTRUSTED WEB CONTENT "
 	fenceClosePrefix = "[END UNTRUSTED WEB CONTENT "
 	fenceSuffix      = "]"
+	// fenceTokenBytes is the token width. Hex encoded, so the token is twice
+	// this many characters.
+	fenceTokenBytes = 8
 )
 
-func fenceToken() string {
-	var b [8]byte
+// fenceOverheadChars is what fencing adds to a part, in characters. Every
+// component is ASCII, so bytes and runes agree. Counted against MaxCallChars
+// so the budget covers what is actually returned.
+const fenceOverheadChars = len(fenceOpenPrefix) + len(fenceClosePrefix) +
+	4*fenceTokenBytes + 2*len(fenceSuffix) + 2 // two tokens hex encoded, two newlines
+
+// fenceToken draws one call's fence token.
+//
+// It returns an error rather than degrading to a constant. A previous version
+// fell back to the literal "unavailable", which is guessable, and a guessable
+// token is not a fence: a page carrying the matching close marker escapes it
+// and addresses the model from outside, which is the single property the fence
+// exists to deny. Unreachable in practice, since crypto/rand.Read does not
+// fail on any platform this runs on, but the safe failure for a security
+// primitive is to fail rather than to weaken.
+func fenceToken() (string, error) {
+	var b [fenceTokenBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand does not fail in practice, and a predictable token is
-		// worse than no token, so this degrades to a fence that says so
-		// rather than to a guessable one.
-		return "unavailable"
+		return "", fmt.Errorf("webtools: no random source for the content fence: %w", err)
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
 }
 
 func fenced(p Part, token string) Part {

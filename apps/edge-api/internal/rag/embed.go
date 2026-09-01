@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -103,6 +104,27 @@ type embedReq struct {
 	Input []string `json:"input"`
 }
 
+const (
+	// maxNativeEmbeddingDim is the widest native vector this client will
+	// budget a response for. Not a validation rule and not a configuration
+	// value: the dimension check below still requires EmbeddingDimension
+	// exactly. It exists only to size the response read ceiling against the
+	// width that actually crosses the wire, which on an MRL deployment is the
+	// backend's native width rather than the reduced one. 4096 covers every
+	// model in the selectable set today.
+	maxNativeEmbeddingDim = 4096
+	// bytesPerJSONFloat is a generous allowance per dimension for a float32
+	// serialised as JSON with a comma. Measured at about 14; 20 leaves room.
+	bytesPerJSONFloat = 20
+)
+
+// embedResponseCeiling is how many response bytes a batch of n inputs is
+// allowed. Extracted so the sizing can be asserted directly rather than only
+// through an eleven megabyte fixture.
+func embedResponseCeiling(n int) int64 {
+	return int64(n)*maxNativeEmbeddingDim*bytesPerJSONFloat + 4*1024*1024
+}
+
 // embedVector is one element of an embeddings response. Named rather than
 // anonymous so a test can build one without restating the shape, which is
 // what makes adding a field here a one-line change instead of five.
@@ -175,12 +197,30 @@ func (e *HTTPEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 
 	// The response carries one vector per input, so the ceiling scales with
 	// the batch rather than being a fixed figure a legitimate batch can
-	// exceed. Roughly 20 bytes per dimension of JSON float, plus headroom.
-	// A fixed 4 MiB would have refused a 256-chunk page at 1024 dimensions,
-	// which is exactly what web_fetch sends.
-	maxResponseBytes := int64(len(texts))*int64(EmbeddingDimension)*20 + 4*1024*1024
+	// exceed. A fixed 4 MiB refuses a 256-chunk page outright, which is
+	// exactly what web_fetch sends.
+	//
+	// Sized off maxNativeEmbeddingDim, NOT off EmbeddingDimension. The wire
+	// carries the backend's NATIVE width and EmbeddingDimension is the
+	// post-reduction width, and those differ on precisely the deployments
+	// where reduceTo > 0, since reduceEmbedding runs client-side on a
+	// native-width vector. Measured: 256 inputs at a native 3584 is about
+	// 10.2 MB and at 4096 about 11.7 MB, both past a ceiling sized on a
+	// reduced 1024. That deployment would then fail every large page
+	// permanently, and indistinguishably from a real outage.
+	maxResponseBytes := embedResponseCeiling(len(texts))
+	// A LimitedReader rather than io.LimitReader, so N can be read back
+	// afterwards: a decode failure with the budget exhausted is a response
+	// too large, which is a configuration fact, and a decode failure with
+	// budget left is a transport or protocol fault. Collapsing the two is how
+	// the first version of this would have reported a permanent misfit as an
+	// intermittent outage.
+	limited := &io.LimitedReader{R: resp.Body, N: maxResponseBytes}
 	var result embedResp
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
+	if err := json.NewDecoder(limited).Decode(&result); err != nil {
+		if limited.N <= 0 {
+			log.Printf("rag: embedding response exceeded %d bytes for %d inputs; the backend's native vector width is wider than this ceiling allows", maxResponseBytes, len(texts))
+		}
 		return nil, fmt.Errorf("rag: embedding service unavailable")
 	}
 

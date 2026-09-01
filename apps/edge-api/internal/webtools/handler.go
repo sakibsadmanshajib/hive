@@ -46,6 +46,12 @@ const (
 	// unit there.
 	MaxQueryChars = 512
 	MaxURLChars   = 2048
+	// MaxFetchQueryChars caps the query-string portion of a fetch URL, which
+	// is the exfiltration channel an injected page would use. Well below
+	// MaxURLChars, and comfortably above what an article URL with tracking
+	// parameters carries. Bytes, since a URL is percent-encoded ASCII on the
+	// wire.
+	MaxFetchQueryChars = 512
 	// MaxFocusChars caps the focus string web_fetch ranks against, in runes.
 	MaxFocusChars = 512
 	// maxTurnIDChars bounds the turn identifier so the budget map's keys
@@ -261,6 +267,22 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	// identically whether or not the pipeline behind it exists.
 	admitted, err := Admit(raw)
 	if err != nil {
+		writeEnvelope(w, http.StatusBadRequest, NewError(CodeURLRejected, msgURLRejected, 0))
+		return
+	}
+	// The exfiltration channel, narrowed. An injected page can plausibly
+	// instruct the model to fetch an attacker-chosen URL, and a URL carries a
+	// query string, so the channel is real and this slice does not close it.
+	// What it does is bound it: without this the bound was MaxURLChars, 2048
+	// bytes per URL times three fetches a turn, about 6 KB of conversation per
+	// turn and 61 KB a minute per tenant. This cuts the per-URL figure by four.
+	//
+	// Deliberately here rather than in Admit. Admit also screens web_search
+	// hits, and a search result with a long tracking query is a legitimate
+	// result rather than an exfiltration attempt; refusing it there would drop
+	// hits for a reason that does not apply to them. The channel is the fetch
+	// tool, so the cap is on the fetch route.
+	if len(admitted.RawQuery) > MaxFetchQueryChars {
 		writeEnvelope(w, http.StatusBadRequest, NewError(CodeURLRejected, msgURLRejected, 0))
 		return
 	}

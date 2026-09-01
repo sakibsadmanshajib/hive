@@ -164,7 +164,23 @@ func (e Extractor) Extract(ctx context.Context, contentType, urlPath string, bod
 		}
 		markdown, err := e.Converter.Convert(ctx, name, mediaType, data)
 		if err != nil {
-			return Doc{}, fmt.Errorf("%w: %w", ErrExtractFailed, err)
+			// %v for the cause, not %w. This is the third instance of one
+			// failure shape in this package: fetchCode is a switch over
+			// errors.Is, so it is order-dependent, and any error that wraps
+			// two classifiable sentinels resolves to whichever arm is written
+			// first. context.DeadlineExceeded is asked before ErrExtractFailed
+			// there, so wrapping a converter timeout would tell the user "that
+			// page took too long to answer" about a page that answered fine
+			// and a sidecar that did not.
+			//
+			// It did not fire while it was written with %w, but only because
+			// rag.ConversionError carries its cause as a formatted string and
+			// has no Unwrap, so the chain stopped there. A defect held off by
+			// the absence of a method is one refactor from being live, and
+			// nothing in the rag package owes this file that method. Keeping
+			// the foreign class out of the chain is the fix that does not
+			// depend on anyone else's type.
+			return Doc{}, fmt.Errorf("%w: %v", ErrExtractFailed, err)
 		}
 		return finishDoc(Doc{Text: markdown, Title: strings.TrimSuffix(name, path.Ext(name))})
 

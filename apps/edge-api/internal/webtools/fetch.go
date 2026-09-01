@@ -24,6 +24,13 @@ import (
 // MaxFetchWallClock bounds one whole web_fetch call: the GET, the document
 // conversion and the embedding, together. Generous against a real large PDF
 // and ruinous against a stage that has stopped answering.
+//
+// It happens to equal rag.HTTPEmbedder's own client timeout, so today a slow
+// embed trips both at about the same moment. That is a coincidence rather than
+// a design, and it is harmless only because both land on ErrEmbedUnavailable:
+// the embedder's own deadline is reported that way by score's %v treatment of
+// the cause. If either constant moves, check that pairing again rather than
+// assuming it still holds.
 const MaxFetchWallClock = 60 * time.Second
 
 // ErrFetchStatus is an upstream non-2xx. Its own class, carrying the status,
@@ -157,6 +164,38 @@ func (p *Pipeline) Fetch(ctx context.Context, target, focus string) (FetchResult
 	req.Header.Set("Accept-Language", "en,*;q=0.5")
 	req.Header.Set("User-Agent", "Hive web_fetch")
 
+	// CodeQL raises go/request-forgery here, correctly: the URL is
+	// model-supplied, which is what this tool is for. Alert 38 is dismissed
+	// rather than suppressed in configuration, so a second client.Do, or a
+	// move of this one, raises a fresh alert instead of landing inside a
+	// silenced query.
+	//
+	// The dismissal rests on controls CodeQL cannot see, because they live in
+	// a custom net.Dialer and in CheckRedirect rather than on the URL string:
+	// connect-time address screening against a Go equivalent of Python's
+	// is_global, dialing the screened literal so there is no rebinding window,
+	// per-hop redirect re-admission, Proxy nil, DisableKeepAlives, a scheme
+	// allowlist, a content-type allowlist and a byte cap.
+	//
+	// What would make that dismissal wrong, so the next person changing this
+	// inherits a checklist rather than a verdict. Any of these means the alert
+	// must be re-examined rather than assumed still answered:
+	//
+	//   - An *http.Client, http.RoundTripper or http.Transport field appearing
+	//     on PipelineConfig, or Pipeline.client becoming exported. The whole
+	//     posture is that SafeClient is the only way to get a client here.
+	//   - Proxy becoming non-nil in SafeClient, or DisableKeepAlives being
+	//     turned off: a proxy carries the request past the dialer, and a
+	//     pooled connection skips DialContext and so skips the address check.
+	//   - allowAddr gaining a setter, an exported name or an environment
+	//     variable. That is what holds spec section 7 item 11.
+	//   - MaxRedirectHops or the CheckRedirect body changing, since per-hop
+	//     re-admission is the half of the control outside the dialer.
+	//   - A second Fetcher implementation wired into webtools.Deps.Fetch. That
+	//     field is an exported interface and nothing in this package refuses a
+	//     fetcher that never touches SafeClient. It fails safe in that CodeQL
+	//     would raise a new alert against the new implementation, but it is
+	//     the one legitimate route to a pipeline this comment does not cover.
 	resp, err := p.client.Do(req)
 	if err != nil {
 		// The sentinels safedial.go returns survive *url.Error's Unwrap, so
