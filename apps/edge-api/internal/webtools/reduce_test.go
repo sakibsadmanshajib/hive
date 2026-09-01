@@ -160,6 +160,51 @@ func TestReduceEmbedFailureIsEmbedUnavailableAndNeverASuccess(t *testing.T) {
 	}
 }
 
+// A deadline on the embedding side is embedding pressure, never "the page was
+// slow". Both are context.DeadlineExceeded underneath, and fetchCode asks for
+// that class before it asks for ErrEmbedUnavailable, so wrapping the context
+// error with %w here would report an embedding queue that could not be
+// entered as a page timeout. That is the same class collapse as the redirect
+// ordering, reached from the other direction, and this is what keeps it fixed.
+func TestReduceEmbedDeadlineIsNotReportedAsAPageTimeout(t *testing.T) {
+	t.Run("the call itself times out", func(t *testing.T) {
+		e := &stubEmbedder{err: context.DeadlineExceeded}
+		_, _, _, err := newTestReducer(t, e).Reduce(context.Background(), Doc{Text: syntheticPage(200)}, "credits")
+		if got := fetchCode(err); got != CodeEmbedUnavailable {
+			t.Fatalf("fetchCode = %q, want %q (err %v)", got, CodeEmbedUnavailable, err)
+		}
+	})
+
+	t.Run("waiting for the bound times out", func(t *testing.T) {
+		// One permit, held by a call that never returns, so the second call
+		// can only leave through the ctx.Done arm of the semaphore wait.
+		e := &stubEmbedder{hold: make(chan struct{})}
+		r, err := NewReducer(e, 1)
+		if err != nil {
+			t.Fatalf("NewReducer: %v", err)
+		}
+		blocked := make(chan struct{})
+		go func() {
+			defer close(blocked)
+			_, _, _, _ = r.Reduce(context.Background(), Doc{Text: syntheticPage(200)}, "credits")
+		}()
+		for i := 0; i < 10000; i++ {
+			if e.calls() > 0 {
+				break
+			}
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _, _, err = r.Reduce(ctx, Doc{Text: syntheticPage(200)}, "credits")
+		if got := fetchCode(err); got != CodeEmbedUnavailable {
+			t.Fatalf("fetchCode = %q, want %q (err %v)", got, CodeEmbedUnavailable, err)
+		}
+		close(e.hold)
+		<-blocked
+	})
+}
+
 // A deployment with no embedding backend wired fails loudly on a page too
 // large to hand over whole. Returning the first N characters instead would be
 // a silent degradation dressed as a result, and this repository has already
@@ -322,6 +367,25 @@ func TestReduceBoundsConcurrentEmbeddingCalls(t *testing.T) {
 	if peak > 2 {
 		t.Fatalf("peak concurrent embedding calls = %d, want at most 2", peak)
 	}
+}
+
+// fenceTokenOf reports the fence token a part carries, if it is fenced. It
+// lives here rather than beside the fence itself because nothing in
+// production reads a fence back: the model does, and the tests do.
+func fenceTokenOf(text string) (string, bool) {
+	if !strings.HasPrefix(text, fenceOpenPrefix) {
+		return "", false
+	}
+	rest := text[len(fenceOpenPrefix):]
+	end := strings.Index(rest, fenceSuffix)
+	if end < 0 {
+		return "", false
+	}
+	token := rest[:end]
+	if !strings.HasSuffix(strings.TrimRight(text, "\n"), fenceClosePrefix+token+fenceSuffix) {
+		return "", false
+	}
+	return token, true
 }
 
 // syntheticPage returns text that chunks into roughly n chunks.

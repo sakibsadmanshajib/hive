@@ -116,9 +116,6 @@ var mediaTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]{0,48}/[a-z0-9][a
 type Doc struct {
 	Text  string
 	Title string
-	// MediaType is the normalised type the content was read as. Reported for
-	// logs and for the unsupported-type message; never a raw header value.
-	MediaType string
 }
 
 // Extractor turns a response body into a Doc.
@@ -169,7 +166,7 @@ func (e Extractor) Extract(ctx context.Context, contentType, urlPath string, bod
 		if err != nil {
 			return Doc{}, fmt.Errorf("%w: %w", ErrExtractFailed, err)
 		}
-		return finishDoc(Doc{Text: markdown, MediaType: mediaType, Title: strings.TrimSuffix(name, path.Ext(name))})
+		return finishDoc(Doc{Text: markdown, Title: strings.TrimSuffix(name, path.Ext(name))})
 
 	default:
 		// Refused before a single byte is read from body. This is the whole
@@ -189,9 +186,9 @@ func (e Extractor) max() int64 {
 func (e Extractor) extractText(mediaType, raw string) (Doc, error) {
 	if htmlMediaTypes[mediaType] {
 		title, text := htmlToText(raw)
-		return finishDoc(Doc{Text: text, Title: title, MediaType: mediaType})
+		return finishDoc(Doc{Text: text, Title: title})
 	}
-	return finishDoc(Doc{Text: raw, MediaType: mediaType})
+	return finishDoc(Doc{Text: raw})
 }
 
 // finishDoc applies the two rules every branch shares: invisible characters

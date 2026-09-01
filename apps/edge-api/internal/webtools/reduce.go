@@ -130,6 +130,14 @@ func (r *Reducer) Reduce(ctx context.Context, doc Doc, focus string) ([]Part, bo
 	focus = strings.TrimSpace(focus)
 	if focus == "" {
 		selected, dropped := takeInOrder(chunks)
+		if len(selected) == 0 {
+			// Not reachable while a chunk is narrower than the per-call
+			// ceiling, which chunkRunes guarantees. Guarded anyway, because
+			// the alternative is returning zero parts with a nil error, and
+			// "no content, reported as success" is the one shape this package
+			// exists to make unrepresentable.
+			return nil, false, 0, ErrReduceEmpty
+		}
 		return fenceAll(selected, token), true, dropped, nil
 	}
 
@@ -179,7 +187,15 @@ func (r *Reducer) score(ctx context.Context, chunks []Part, focus string) ([]flo
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %w", ErrEmbedUnavailable, ctx.Err())
+		// The cause is named with %v, not wrapped with %w, deliberately.
+		// Wrapping puts context.DeadlineExceeded in the chain, and fetchCode
+		// asks for that before it asks for ErrEmbedUnavailable, so waiting
+		// too long for the embedding bound would be reported as fetch_timeout
+		// and the user would be told the page was slow when the page had
+		// already arrived. Same class collapse as the redirect ordering above
+		// it; the fix is to keep the class out of the chain rather than to
+		// keep reordering the switch.
+		return nil, fmt.Errorf("%w: waiting for the embedding bound: %v", ErrEmbedUnavailable, ctx.Err())
 	}
 
 	// The focus first, and alone: it is the cheap call, so a backend that is
@@ -215,7 +231,10 @@ func (r *Reducer) score(ctx context.Context, chunks []Part, focus string) ([]flo
 // reaches the client (criterion B11).
 func embedFailure(err error, got, want int) error {
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrEmbedUnavailable, err)
+		// %v rather than %w, for the reason given at the semaphore wait: an
+		// embedding call that timed out is embed_unavailable, and wrapping
+		// its context.DeadlineExceeded would report it as the page being slow.
+		return fmt.Errorf("%w: %v", ErrEmbedUnavailable, err)
 	}
 	return fmt.Errorf("%w: got %d vectors for %d inputs", ErrEmbedUnavailable, got, want)
 }
@@ -347,28 +366,16 @@ func fenced(p Part, token string) Part {
 	return p
 }
 
+// fenceAll wraps every part with the call's token.
+//
+// Note for anyone reading FetchResult.RetrievedChars: it counts what is
+// returned, fences included, because NewFetchResult counts the runes of
+// Part.Text and the fence is part of that text. The overhead is a fixed few
+// dozen characters per part.
 func fenceAll(parts []Part, token string) []Part {
 	out := make([]Part, len(parts))
 	for i, p := range parts {
 		out[i] = fenced(p, token)
 	}
 	return out
-}
-
-// fenceTokenOf reports the fence token a part carries, if it is fenced. Used
-// by the tests that assert the fence exists and is per call.
-func fenceTokenOf(text string) (string, bool) {
-	if !strings.HasPrefix(text, fenceOpenPrefix) {
-		return "", false
-	}
-	rest := text[len(fenceOpenPrefix):]
-	end := strings.Index(rest, fenceSuffix)
-	if end < 0 {
-		return "", false
-	}
-	token := rest[:end]
-	if !strings.HasSuffix(strings.TrimRight(text, "\n"), fenceClosePrefix+token+fenceSuffix) {
-		return "", false
-	}
-	return token, true
 }

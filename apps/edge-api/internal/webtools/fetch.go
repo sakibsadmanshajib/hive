@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
@@ -19,6 +20,11 @@ import (
 // visible to the model, and no stage can hand the next one an empty success.
 // A page that produced nothing is an error class naming which stage produced
 // nothing, never a 200 carrying no content, which is the shape of #1609.
+
+// MaxFetchWallClock bounds one whole web_fetch call: the GET, the document
+// conversion and the embedding, together. Generous against a real large PDF
+// and ruinous against a stage that has stopped answering.
+const MaxFetchWallClock = 60 * time.Second
 
 // ErrFetchStatus is an upstream non-2xx. Its own class, carrying the status,
 // because "the page said 404" and "the page had no readable text" are
@@ -74,11 +80,17 @@ func mediaTypeOf(err error) string {
 // except Embedder, whose absence makes a large page an explicit
 // embed_unavailable rather than a silently truncated answer.
 type PipelineConfig struct {
-	// Client is the HTTP client for agent-supplied URLs. Nil means a fresh
-	// SafeClient, which is the only client this pipeline should ever use in
-	// production: it resolves and screens at connect time and re-admits every
-	// redirect hop.
-	Client *http.Client
+	// Transport configures the HTTP client this pipeline builds. It is a
+	// ClientConfig rather than an *http.Client on purpose: the pipeline
+	// constructs its own client through SafeClient and there is no field a
+	// caller can use to hand it an unscreened one.
+	//
+	// That distinction is the whole SSRF posture. An *http.Client field would
+	// accept http.DefaultClient, which resolves without screening, follows
+	// redirects without re-admitting them and honours HTTP_PROXY, and every
+	// guarantee in safedial.go would be one careless call site away from
+	// being off. The zero value here is the safe client.
+	Transport ClientConfig
 	// Converter is the markitdown sidecar for the binary branch.
 	Converter rag.Converter
 	// Embedder is the batched embedding backend for the ranking path.
@@ -99,10 +111,7 @@ type Pipeline struct {
 
 // NewPipeline builds the web_fetch pipeline.
 func NewPipeline(cfg PipelineConfig) (*Pipeline, error) {
-	client := cfg.Client
-	if client == nil {
-		client = SafeClient(ClientConfig{})
-	}
+	client := SafeClient(cfg.Transport)
 	concurrency := cfg.EmbedConcurrency
 	if concurrency == 0 {
 		concurrency = DefaultEmbedConcurrency
@@ -127,6 +136,17 @@ func NewPipeline(cfg PipelineConfig) (*Pipeline, error) {
 // place for the policy to live and a seam a test would want opened, and an
 // SSRF policy with an openable seam is worth less than one without.
 func (p *Pipeline) Fetch(ctx context.Context, target, focus string) (FetchResult, error) {
+	// One deadline over the whole call, not just the GET. SafeClient's
+	// timeout bounds the fetch, but the two stages after it reach services
+	// with their own far more generous clients: the markitdown sidecar allows
+	// 180 seconds for a large document and the embedding client 60. Without
+	// this a single tool call could hold a connection for minutes, which the
+	// per-turn budget does not bound because the budget counts calls rather
+	// than time. Both downstream clients build their requests with the
+	// context, so this deadline reaches them.
+	ctx, cancel := context.WithTimeout(ctx, MaxFetchWallClock)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("%w: building request: %w", ErrURLRejected, err)
@@ -153,8 +173,9 @@ func (p *Pipeline) Fetch(ctx context.Context, target, focus string) (FetchResult
 	}
 
 	// A declared length past the cap is refused before the body is read at
-	// all. It is only ever a hint (the header is the server's claim, and this
-	// one lies in the test that proves it), so the read stays capped too.
+	// all, so the honest oversized case costs nothing. It is only a hint: the
+	// header is the server's claim about its own body and most dynamic pages
+	// send none at all, so the read below stays capped regardless.
 	if maxBytes := p.extract.max(); resp.ContentLength > maxBytes {
 		return FetchResult{}, ErrTooLarge
 	}

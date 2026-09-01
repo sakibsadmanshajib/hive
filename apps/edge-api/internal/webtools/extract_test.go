@@ -219,6 +219,12 @@ func TestExtractRoutesDocumentsToTheConverter(t *testing.T) {
 			if conv.gotBytes != len("BINARY") {
 				t.Fatalf("converter received %d bytes, want %d", conv.gotBytes, len("BINARY"))
 			}
+			// The normalised type, not the raw header: the sidecar keys its
+			// own handling off this and a header's charset parameter would
+			// make it miss.
+			if conv.gotType != tc.contentType {
+				t.Fatalf("converter content type = %q, want %q", conv.gotType, tc.contentType)
+			}
 			if !strings.Contains(doc.Text, "One credit per million tokens.") {
 				t.Fatalf("converted text = %q", doc.Text)
 			}

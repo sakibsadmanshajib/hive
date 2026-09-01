@@ -19,8 +19,8 @@ import (
 // still exercising the pipeline against a real HTTP server.
 func newTestPipeline(t *testing.T, cfg PipelineConfig) *Pipeline {
 	t.Helper()
-	if cfg.Client == nil {
-		cfg.Client = SafeClient(ClientConfig{Timeout: 5 * time.Second, allowAddr: allowAnyAddrForTest})
+	if cfg.Transport.allowAddr == nil {
+		cfg.Transport = ClientConfig{Timeout: 5 * time.Second, allowAddr: allowAnyAddrForTest}
 	}
 	if cfg.MaxBytes == 0 {
 		cfg.MaxBytes = MaxFetchBytes
