@@ -867,6 +867,15 @@ jobs:
       # reporting "no running containers matched these compose flags" for what
       # was a missing variable. Guarded here because both halves of the break
       # are workflow-and-compose-only, which no test suite reaches.
+      #
+      # Self-check first, the same order lint:go-db-test-wiring uses. A
+      # CodeRabbit pass on the pull request that added this lint found that its
+      # shell-assignment arm counted `# NAME=value` inside a COMMENT, so a
+      # workflow could name the variable in prose, supply compose with nothing
+      # and still be reported compliant. The fixture pins that case and four
+      # others, including that an empty intersection fails rather than passes.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:compose-required-vars:test
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:compose-required-vars
       # Drive-by, found while checking the wiring above: this lint existed in

@@ -54,11 +54,30 @@ const DEPLOY_WORKFLOW = "deploy-demo-box.yml";
 // supplies its own value and can never fail interpolation.
 const REQUIRED_VAR = /\$\{([A-Za-z_][A-Za-z0-9_]*):\?/g;
 
-// A YAML mapping key (`NAME: value`, so an env entry) or a shell assignment
-// (`NAME=value`). A bare mention in prose or a `printenv NAME` does not count.
+// A YAML mapping key: `NAME: value`, which in these files means an `env:`
+// entry. Anchored to the start of a line with only whitespace in front, so a
+// mention in prose or a commented-out example does not count.
+//
+// This is the predicate used on the DEPLOY workflow, and it is deliberately
+// the strict one. What makes a variable this lint's business is that the
+// deploy passes it as workflow env; a `NAME=$(grep ... .env)` line inside a
+// `run:` block means the opposite, that the value is being read OUT of the
+// box's .env, which is the case this lint must stay out of.
+const passedAsWorkflowEnv = (text, name) =>
+  new RegExp(`^\\s*${name}\\s*:`, "m").test(text);
+
+// The same, or a shell assignment at the start of a line (`NAME=value`,
+// optionally exported), which does supply compose when it sits in the same
+// `run:` block. Used on the CONSUMER workflows, where either shape is a real
+// answer.
+//
+// Both arms are line-anchored. `# WEBUI_SECRET_KEY=value` in a comment
+// supplies compose with nothing, and counting it would let this lint report
+// success over a workflow that still cannot run: that exact hole was found by
+// a CodeRabbit pass on PR #1642 and is pinned by case 1 of the self-check.
 const assigns = (text, name) =>
-  new RegExp(`^\\s*${name}\\s*:`, "m").test(text) ||
-  new RegExp(`(^|[^A-Za-z0-9_])${name}=`, "m").test(text);
+  passedAsWorkflowEnv(text, name) ||
+  new RegExp(`^\\s*(?:export\\s+)?${name}=`, "m").test(text);
 
 const errors = [];
 const workflowText = new Map();
@@ -85,7 +104,7 @@ for (const file of readdirSync(COMPOSE_DIR).sort()) {
   const names = new Set(
     [...text.matchAll(REQUIRED_VAR)]
       .map((match) => match[1])
-      .filter((name) => assigns(deployText, name)),
+      .filter((name) => passedAsWorkflowEnv(deployText, name)),
   );
   if (names.size > 0) guarded.set(file, names);
 }

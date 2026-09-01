@@ -21,6 +21,7 @@
     "lint:sync-child-process": "node tools/lint-no-sync-child-process-in-tests.mjs",
     "lint:deploy-diagnosability": "node tools/lint-deploy-diagnosability.mjs",
     "lint:compose-required-vars": "node tools/lint-compose-required-vars.mjs",
+    "lint:compose-required-vars:test": "node tools/lint-compose-required-vars.test.mjs",
     "lint:spec-wiring": "node tools/verify-spec-wiring.mjs",
     "lint:spec-wiring:test": "node tools/verify-spec-wiring.test.mjs",
     "lint:go-db-test-wiring": "node tools/lint-go-db-test-wiring.mjs",
