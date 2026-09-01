@@ -245,3 +245,180 @@ func TestParseUSDBDTRateNormalisesToStoredScale(t *testing.T) {
 		t.Fatal("expected a rate beyond numeric(18, 6) to be refused")
 	}
 }
+
+// =============================================================================
+// The inverse: BDT subunits to credits (issue #1659)
+// =============================================================================
+
+// TestBDTSubunitsToCreditsRejectsUnitConflation pins the magnitude from issue
+// #1659, the write-side twin of the defect at the top of this file.
+//
+// grants.CreateWithLedger wrote input.AmountBDTSubunits.Int64() straight into
+// public.credit_ledger_entries.credits_delta. A platform admin granting 100,000
+// subunits, that is 1,000 taka or about eight USD, posted 100,000 credits,
+// which at 1,000,000,000 credits to the USD is 0.0001 USD of inference. The
+// grant was short by about seven orders of magnitude.
+//
+// The expected value is a LITERAL on purpose. Deriving it from CreditsPerUSD
+// and SubunitsPerBDT would make this assertion the exact algebraic inverse of
+// the function under test: the round trip would then hold for any value of
+// either constant and the assertion would go blind. That was measured on issue
+// #1648, where a hundredfold error in SubunitsPerBDT left a whole package
+// green.
+func TestBDTSubunitsToCreditsRejectsUnitConflation(t *testing.T) {
+	t.Parallel()
+
+	subunits := big.NewInt(100_000) // 1,000 taka
+	rate := big.NewRat(12313, 100)  // 123.13 BDT per USD
+
+	got, err := BDTSubunitsToCredits(subunits, rate)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+
+	want := big.NewInt(8_121_497_604) // about 8.12 USD of credits
+	if got.Cmp(want) != 0 {
+		t.Fatalf("credits = %s, want %s", got, want)
+	}
+	if got.Cmp(subunits) == 0 {
+		t.Fatalf("subunits were reinterpreted as credits: %s", got)
+	}
+}
+
+// TestBDTSubunitsToCreditsArithmetic covers the conversion contract: the credit
+// unit, the subunit factor, rounding, and the degenerate inputs. Every want is
+// a literal, for the reason given above.
+func TestBDTSubunitsToCreditsArithmetic(t *testing.T) {
+	t.Parallel()
+
+	beyondInt64, ok := new(big.Int).SetString("10000000000000000000", 10)
+	if !ok {
+		t.Fatal("test fixture does not parse")
+	}
+
+	cases := []struct {
+		name     string
+		subunits *big.Int
+		rate     *big.Rat
+		want     *big.Int
+	}{
+		{
+			// 123.13 taka is one USD at the live rate, so it is exactly one
+			// USD of credits and nothing rounds.
+			name:     "one usd of taka at the live rate",
+			subunits: big.NewInt(12_313),
+			rate:     big.NewRat(12313, 100),
+			want:     big.NewInt(1_000_000_000),
+		},
+		{
+			// 1,000 taka at 100 BDT per USD is ten USD.
+			name:     "a round rate",
+			subunits: big.NewInt(100_000),
+			rate:     big.NewRat(100, 1),
+			want:     big.NewInt(10_000_000_000),
+		},
+		{
+			name:     "one paisa at a round rate",
+			subunits: big.NewInt(1),
+			rate:     big.NewRat(100, 1),
+			want:     big.NewInt(100_000),
+		},
+		{
+			// One paisa at 1,280 BDT per USD is exactly 7,812.5 credits. The
+			// rate is chosen because it is the smallest plausibly-shaped one
+			// that lands on an exact half; the rule under test is the rounding
+			// direction, not the rate.
+			name:     "exact half rounds up",
+			subunits: big.NewInt(1),
+			rate:     big.NewRat(1280, 1),
+			want:     big.NewInt(7_813),
+		},
+		{
+			name:     "zero subunits",
+			subunits: big.NewInt(0),
+			rate:     big.NewRat(12313, 100),
+			want:     big.NewInt(0),
+		},
+		{
+			// Credits are a billion to the USD, so a grant large enough to be
+			// refused by the int64 ledger column is still exact here. The
+			// caller is the one that has to refuse it, and does.
+			name:     "beyond int64 stays exact",
+			subunits: big.NewInt(100_000_000_000_000),
+			rate:     big.NewRat(100, 1),
+			want:     beyondInt64,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := BDTSubunitsToCredits(tc.subunits, tc.rate)
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if got.Cmp(tc.want) != 0 {
+				t.Fatalf("credits = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBDTSubunitsToCreditsRejectsUnusableInput keeps the WRITE side fail-closed.
+//
+// This is where it differs from CreditsToBDTSubunits deliberately. That one
+// clamps a negative aggregate to zero, because it renders a display figure from
+// a ledger read and a corrupt read must not print a negative invoice line. This
+// one posts money into an append-only ledger, so a negative amount is refused
+// rather than silently turned into a grant of nothing.
+func TestBDTSubunitsToCreditsRejectsUnusableInput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		subunits *big.Int
+		rate     *big.Rat
+	}{
+		{name: "nil subunits", subunits: nil, rate: big.NewRat(123, 1)},
+		{name: "negative subunits", subunits: big.NewInt(-100_000), rate: big.NewRat(123, 1)},
+		{name: "nil rate", subunits: big.NewInt(1), rate: nil},
+		{name: "zero rate", subunits: big.NewInt(1), rate: big.NewRat(0, 1)},
+		{name: "negative rate", subunits: big.NewInt(1), rate: big.NewRat(-123, 1)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := BDTSubunitsToCredits(tc.subunits, tc.rate)
+			if err == nil {
+				t.Fatalf("expected an error, got credits %v", got)
+			}
+			if got != nil {
+				t.Fatalf("expected no value alongside the error, got %v", got)
+			}
+		})
+	}
+}
+
+// TestBDTSubunitsToCreditsIsNotTheIdentity states the invariant in its own
+// right, across the whole plausible rate band rather than at one pinned rate.
+// No rate a human would configure makes a subunit count and a credit count the
+// same number, so any implementation that returns its input fails here.
+func TestBDTSubunitsToCreditsIsNotTheIdentity(t *testing.T) {
+	t.Parallel()
+
+	subunits := big.NewInt(100_000)
+	for _, raw := range []string{"1", "80", "123.13", "150", "1000"} {
+		rate, ok := new(big.Rat).SetString(raw)
+		if !ok {
+			t.Fatalf("fixture rate %q does not parse", raw)
+		}
+		got, err := BDTSubunitsToCredits(subunits, rate)
+		if err != nil {
+			t.Fatalf("convert at %s: %v", raw, err)
+		}
+		if got.Cmp(subunits) == 0 {
+			t.Fatalf("at rate %s the conversion returned its input: %s", raw, got)
+		}
+	}
+}

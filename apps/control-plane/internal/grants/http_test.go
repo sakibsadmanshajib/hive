@@ -392,3 +392,54 @@ func TestService_DirectCreateForbidden(t *testing.T) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
 }
+
+// TestHandlerCreate_AmountTooLargeIsABadRequest pins the status code for an
+// amount the ledger cannot hold (issue #1659).
+//
+// The refusal is raised by the repository, so without its own sentinel it lands
+// in the generic arm and answers 500. The value comes from the request body: an
+// admin who typed five extra zeros is owed "that amount is too large", not what
+// reads like a server outage. The threshold is also lower than it looks, since
+// a credit is a billionth of a USD and the taka figure is multiplied by about
+// ten million on its way to credits_delta.
+func TestHandlerCreate_AmountTooLargeIsABadRequest(t *testing.T) {
+	t.Parallel()
+	adminID := uuid.New()
+	svc, repo, admins := newTestService(adminID)
+	repo.injectErr = grants.ErrAmountTooLarge
+	h := grants.NewHandler(svc)
+	mux := adminGate(admins, h.AdminMux())
+
+	body := map[string]any{
+		"granted_to_user_id":      uuid.New().String(),
+		"granted_to_workspace_id": uuid.New().String(),
+		"amount_bdt_subunits":     "100000000000000000",
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/credit-grants", bytes.NewReader(bodyBytes))
+	req = req.WithContext(auth.WithViewer(req.Context(), auth.Viewer{UserID: adminID}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.grants) != 0 {
+		t.Fatalf("expected zero grants persisted on a refusal, got %d", len(repo.grants))
+	}
+
+	// Provider-blind and storage-blind: the reply names the field, never the
+	// column, the rate, or the credit unit.
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp["error"] != "amount_bdt_subunits is too large to grant" {
+		t.Fatalf("error = %q, want the field-level message", resp["error"])
+	}
+	for _, leak := range []string{"credits_delta", "credit_ledger_entries", "bigint", "BDT per USD"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Fatalf("response leaks internal detail %q: %s", leak, rec.Body.String())
+		}
+	}
+}

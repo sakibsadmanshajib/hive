@@ -486,7 +486,13 @@ jobs:
             # suites run against real Postgres for the first time; a suite
             # that has never run is not known to pass, which is exactly what
             # this step proves.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/audit/... ./internal/auditarchive/... ./internal/auditverifier/... ./internal/auditworker/... ./internal/licensing/... ./tests/compliance/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/... ./internal/marketplace/... ./internal/usage/... ./internal/tenant/...
+            # ./internal/grants/... joins with issue #1659: a discretionary
+            # grant writes a taka amount and a credit amount into two columns
+            # in one transaction, and only real SQL can catch the two being
+            # swapped back into one unit. The package's other suites go through
+            # a fake repository and never reach that write at all, which is how
+            # the defect survived them.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/accounting/... ./internal/grants/... ./internal/audit/... ./internal/auditarchive/... ./internal/auditverifier/... ./internal/auditworker/... ./internal/licensing/... ./tests/compliance/... ./internal/budgets/... ./internal/byok/... ./internal/ledger/... ./internal/agentsched/... ./internal/agenttask/... ./internal/usermemories/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform ./internal/platform/db/... ./internal/marketplace/... ./internal/usage/... ./internal/tenant/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),

@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 )
 
 // Repository is the narrow data-access port for the grants service.
@@ -57,10 +59,13 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	}
 
 	// Validate that subunits fits int64 (BDT subunits column is bigint).
+	// Strictly weaker than the credits check inside creditsForGrant below, but
+	// it guards its own narrowing on the next line, so it stays.
 	if !input.AmountBDTSubunits.IsInt64() {
-		return CreateResult{}, fmt.Errorf("grants: amount overflows int64 bigint storage")
+		return CreateResult{}, fmt.Errorf("%w: %s overflows the credit_grants.amount_bdt_subunits bigint column",
+			ErrAmountTooLarge, input.AmountBDTSubunits)
 	}
-	creditsDelta := input.AmountBDTSubunits.Int64()
+	subunits := input.AmountBDTSubunits.Int64()
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -137,12 +142,49 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 		return CreateResult{Grant: existingGrant, LedgerEntryID: existingLedger}, nil
 	}
 
+	// The grant is taka; the ledger is credits. Convert, do not reinterpret
+	// (issue #1659).
+	//
+	// Placed AFTER the replay branch above, deliberately. A replay of an
+	// already-committed grant returns the stored result and writes nothing, so
+	// it must not depend on the rate being resolvable: converting first would
+	// make the admin console's retry-after-a-network-blip answer 500 whenever
+	// HIVE_USD_BDT_RATE had been broken since the original call, turning a safe
+	// replay into a failure. Placing it here costs nothing on the refusal path,
+	// because `defer tx.Rollback(ctx)` unwinds the idempotency key claim too, so
+	// a refused grant still leaves no grant row, no ledger entry and no claimed
+	// key.
+	creditsDelta, rate, err := creditsForGrant(input.AmountBDTSubunits)
+	if err != nil {
+		return CreateResult{}, err
+	}
+
 	// Step 2: insert the ledger entry (entry_type='grant', positive credits).
+	//
+	// The conversion inputs are recorded alongside the result so the row
+	// reproduces its own amounts: the taka the admin authorised, the rate, and
+	// where that rate came from. Without them a ledger entry and its grant row
+	// state two numbers in two units with nothing joining them, which is how
+	// issue #1659 stayed invisible.
+	//
+	// credit_unit is the stamp migration 20260823_40_credit_unit_rescale_
+	// billion.sql relies on. Its straggler detector treats any nonzero
+	// credits_delta WITHOUT that key as a pre-rescale row needing a x10000
+	// correction, and this writer has never set it, so every discretionary
+	// grant written since the rescale is a false positive waiting for someone
+	// to follow that runbook. ledger.Repository.PostEntry stamps its own rows
+	// the same way; this path bypasses it deliberately (it needs the grant and
+	// the ledger append in one transaction) and so has to carry the stamp
+	// itself.
 	metadata := map[string]any{
 		"reason_note":         input.ReasonNote,
 		"granted_by_user_id":  input.GrantedByUserID.String(),
 		"granted_to_user_id":  input.GrantedToUserID.String(),
 		"source":              "discretionary_grant",
+		"credit_unit":         ledger.CreditUnitV2,
+		"amount_bdt_subunits": input.AmountBDTSubunits.String(),
+		"usd_bdt_rate":        rate.Display,
+		"usd_bdt_rate_source": rate.Source,
 	}
 	metadataBytes, err := json.Marshal(metadata)
 	if err != nil {
@@ -183,7 +225,7 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 		          granted_to_workspace_id, amount_bdt_subunits, COALESCE(reason_note,''),
 		          ledger_entry_id, currency, created_at
 	`, input.GrantedByUserID, input.GrantedToUserID, input.GrantedToWorkspaceID,
-		creditsDelta, nullableString(input.ReasonNote), ledgerID).Scan(
+		subunits, nullableString(input.ReasonNote), ledgerID).Scan(
 		&grantRow.ID,
 		&grantRow.GrantedByUserID,
 		&grantRow.GrantedToUserID,

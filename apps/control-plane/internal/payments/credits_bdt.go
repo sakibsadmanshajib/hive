@@ -174,3 +174,50 @@ func ratRoundHalfUp(r *big.Rat) *big.Int {
 	den := new(big.Int).Lsh(r.Denom(), 1) // 2d
 	return num.Div(num, den)
 }
+
+// BDTSubunitsToCredits converts a BDT subunit amount into a credit quantity at
+// the supplied rate, the exact inverse of CreditsToBDTSubunits:
+//
+//	credits = subunits / SubunitsPerBDT / rate * CreditsPerUSD
+//
+// The whole expression is one exact rational, rounded half up exactly once at
+// the end, so no intermediate step can round and drift.
+//
+// This is the WRITE direction (issue #1659). A caller is posting money into an
+// append-only ledger rather than rendering a figure on a screen, so it is
+// stricter than its inverse in one deliberate way: a negative amount is an
+// error here, where a negative aggregate on the read side clamps to zero. A
+// negative credit posted as a "grant" is a debit wearing the wrong entry_type,
+// and no caller has one; clamping it to zero would instead post a grant of
+// nothing and report success. Zero is allowed through as zero, since the only
+// caller has already rejected a zero amount with its own error and a second
+// opinion here would just be a different message for the same refusal.
+//
+// The result is a *big.Int and not an int64 on purpose. Credits are a billion
+// to the USD, so a subunit amount well inside the credit_grants bigint column
+// converts to a credit quantity CreditsPerUSD / SubunitsPerBDT / rate times
+// larger, that is 1e7/rate, about 81,215 at a rate of 123.13. It is NOT a flat
+// 1e7: that is the constant part with the FX divisor dropped, and a caller that
+// sized its own overflow guard on it would size it two orders of magnitude
+// wrong. Whether the result still fits the ledger's own bigint is the caller's
+// decision to make explicitly. Narrowing here through big.Int.Int64() would return an undefined
+// value with no error on overflow, which is the defect tracked in issue #1547.
+func BDTSubunitsToCredits(subunits *big.Int, rate *big.Rat) (*big.Int, error) {
+	if subunits == nil {
+		return nil, fmt.Errorf("payments: bdt subunits must be non-nil")
+	}
+	if subunits.Sign() < 0 {
+		return nil, fmt.Errorf("payments: bdt subunits must not be negative, got %s", subunits)
+	}
+	if rate == nil || rate.Sign() <= 0 {
+		return nil, fmt.Errorf("payments: usd to bdt rate must be positive")
+	}
+	if subunits.Sign() == 0 {
+		return new(big.Int), nil
+	}
+
+	exact := new(big.Rat).SetInt(subunits)
+	exact.Quo(exact, rate)
+	exact.Mul(exact, new(big.Rat).SetFrac64(CreditsPerUSD, SubunitsPerBDT))
+	return ratRoundHalfUp(exact), nil
+}
